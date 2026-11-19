@@ -291,7 +291,9 @@ function FieldEditor({ field, value, onEdit, options, onImport, imported, errorI
     "aria-describedby": description || undefined };
   return <div className={"science-field" + (compact ? " science-field--compact" : "")}>
     <div className="science-field-heading">
-      <label htmlFor={id}>{field.label}{dimensioned && <> <span className="science-field-unit">({unit})</span></>}</label>
+      {/* A bare dimensionless unit ("1") reads like a count or footnote in a
+          label ("Observations (1)"); the help still states it. */}
+      <label htmlFor={id}>{field.label}{dimensioned && unit !== "1" && <> <span className="science-field-unit">({unit})</span></>}</label>
       {(field.description || dimensioned) && <button type="button" className="science-help-toggle"
         aria-label={"Input and unit help for " + field.label} aria-expanded={helpOpen}
         aria-controls={helpOpen ? id + "-help" : undefined} onClick={() => setHelpOpen(!helpOpen)}>?</button>}

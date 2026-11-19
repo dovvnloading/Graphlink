@@ -86,8 +86,10 @@ test("imports measurements, analyzes a connected column, and reopens the reprodu
   await reopenSavedGraph(page);
   await expect(mean).toHaveText("12");
   await latest.getByText("Inputs and provenance", { exact: true }).click();
-  await expect(latest.locator("pre")).toContainText(result.provenance.resultHash);
-  await expect(latest.locator("pre")).toContainText(result.provenance.sources.observations.resultHash);
+  // "Units used" has its own <pre>; the receipt lives in the provenance one.
+  const provenance = latest.locator("details", { hasText: "Inputs and provenance" }).locator("pre");
+  await expect(provenance).toContainText(result.provenance.resultHash);
+  await expect(provenance).toContainText(result.provenance.sources.observations.resultHash);
 });
 
 test("reviews concurrent edits in two views and enforces grant changes on a connected source", async ({ page, context }) => {
