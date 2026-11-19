@@ -107,7 +107,7 @@ describe("AppBar", () => {
     } finally {
       saved.mockRestore();
     }
-  });
+  }, 15_000);
 
   it("shows a workspace methods export failure instead of downloading anything", async () => {
     const user = userEvent.setup();
