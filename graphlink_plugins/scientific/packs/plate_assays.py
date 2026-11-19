@@ -14,6 +14,9 @@ from decimal import Decimal, localcontext
 from graphlink_plugins.scientific.core import Citation, Field, Operation
 from graphlink_plugins.scientific.packs.fitting import _normal_solve, _original_nonlinear
 from graphlink_plugins.scientific.result_views import check_result_views
+from graphlink_plugins.scientific.packs.plate_assays_molecular import (
+    a260_quantification, digital_pcr, qpcr_relative_expression, qpcr_standard_curve,
+)
 
 
 def _label(value: str, name: str) -> str:
@@ -319,5 +322,89 @@ OPERATIONS = (
                  "%CV=100×SD/|mean|. Undefined denominators are reported as text, not NaN."),
         citations=(Citation("NCBI Assay Validation: Z′ and signal window",
                             "https://www.ncbi.nlm.nih.gov/books/NBK83783/"),),
+    ),
+    Operation(
+        "qpcr_standard_curve", "qPCR Ct standard curve and amplification efficiency",
+        "Regress Ct on log10(initial template quantity) and estimate per-cycle amplification efficiency.",
+        (Field("standard_quantities", "Known starting template quantities", "vector", unit="1"),
+         Field("standard_cts", "Measured standard threshold cycles (Ct/Cq)", "vector", unit="1"),
+         Field("quantity_unit", "Template quantity unit label", "text", unit="label")),
+        {"standard_quantities": [1, 10, 100, 1000],
+         "standard_cts": [30, 26.67807190511264, 23.35614381022528, 20.03421571533791],
+         "quantity_unit": "copies/reaction"},
+        qpcr_standard_curve,
+        methods=("Ordinary least squares Ct=intercept+slope×log10(starting quantity). "
+                 "Amplification factor per cycle E=10^(−1/slope), efficiency (%)=100(E−1). "
+                 "Requires positive quantities and a negative slope. The regression R², residuals "
+                 "and measured calibration interval are reported; no amplification quality pass/fail is inferred."),
+        citations=(Citation("Pfaffl (2001), Nucleic Acids Research",
+                            "https://doi.org/10.1093/nar/29.9.e45"),),
+    ),
+    Operation(
+        "qpcr_relative_expression", "qPCR ΔΔCt and efficiency-corrected Pfaffl ratio",
+        "Compare sample versus calibrator using one or more reference genes, with geometric-mean normalization.",
+        (Field("target_ct_sample", "Target Ct in sample", "number", unit="1"),
+         Field("target_ct_calibrator", "Target Ct in calibrator", "number", unit="1"),
+         Field("reference_cts_sample", "Reference-gene Cts in sample (ordered)", "vector", unit="1"),
+         Field("reference_cts_calibrator", "Same reference-gene Cts in calibrator", "vector", unit="1"),
+         Field("target_efficiency", "Target amplification factor E (2.0 = 100%)", "number", unit="1"),
+         Field("reference_efficiencies", "Each reference-gene amplification factor E", "vector", unit="1")),
+        {"target_ct_sample": 22, "target_ct_calibrator": 25,
+         "reference_cts_sample": [19, 21], "reference_cts_calibrator": [19, 21],
+         "target_efficiency": 1.95, "reference_efficiencies": [2, 1.9]},
+        qpcr_relative_expression,
+        methods=("Conventional ΔCt=Ct(target)−mean(Ct(reference genes)); "
+                 "ΔΔCt=ΔCt(sample)−ΔCt(calibrator), fold change=2^(−ΔΔCt). "
+                 "Efficiency-corrected Pfaffl sample/calibrator ratio = "
+                 "E_target^(Ct_target,cal−Ct_target,sample) divided by the geometric mean "
+                 "of E_ref,i^(Ct_ref,i,cal−Ct_ref,i,sample). Each gene requires a matched "
+                 "pair and its own amplification factor, not a percent efficiency."),
+        citations=(Citation("Pfaffl (2001), Nucleic Acids Research",
+                            "https://doi.org/10.1093/nar/29.9.e45"),
+                   Citation("Vandesompele et al. (2002), Genome Biology",
+                            "https://doi.org/10.1186/gb-2002-3-7-research0034")),
+    ),
+    Operation(
+        "digital_pcr", "Digital PCR Poisson copy concentration",
+        "Estimate copies per partition and per µL from positive/negative counts; correct sample dilution.",
+        (Field("positive_partitions", "Positive partitions", "integer", unit="1"),
+         Field("total_partitions", "Accepted partitions total", "integer", unit="1"),
+         Field("partition_volume_nl", "Individual partition volume", "number", unit="nL"),
+         Field("dilution_factor", "Reciprocal sample dilution", "number", unit="1")),
+        {"positive_partitions": 100, "total_partitions": 1000,
+         "partition_volume_nl": 0.85, "dilution_factor": 2},
+        digital_pcr,
+        methods=("Assume independent, uniformly loaded partitions with perfect positive/negative classification. "
+                 "λ=−ln(N_negative/N_total), copies/µL measured=λ/(partition volume in µL), "
+                 "copies/µL original=measured×reciprocal dilution. "
+                 "An approximate 95% interval transforms the Wilson binomial occupancy interval. "
+                 "All-positive wells are saturated and cannot be finitely quantified."),
+        citations=(Citation("Bio-Rad Droplet Digital PCR Applications Guide, p. 55",
+                            "https://www.bio-rad.com/sites/default/files/webroot/web/pdf/lsr/literature/Bulletin_6407.pdf"),),
+    ),
+    Operation(
+        "a260_quantification", "A260 nucleic-acid concentration and purity",
+        "Blank-correct A260/A280/A230, account for optical path and dilution, and report mass/purity.",
+        (Field("nucleic_acid_type", "Nucleic acid type", "choice", choices=("dsDNA", "ssDNA", "RNA")),
+         Field("a260", "Measured absorbance at 260 nm", "number", unit="1"),
+         Field("a280", "Measured absorbance at 280 nm", "number", unit="1"),
+         Field("a230", "Measured absorbance at 230 nm", "number", unit="1"),
+         Field("blank_a260", "Blank absorbance at 260 nm", "number", unit="1"),
+         Field("blank_a280", "Blank absorbance at 280 nm", "number", unit="1"),
+         Field("blank_a230", "Blank absorbance at 230 nm", "number", unit="1"),
+         Field("path_length_cm", "Optical path length of supplied absorbances", "number", unit="cm"),
+         Field("dilution_factor", "Reciprocal sample dilution", "number", unit="1")),
+        {"nucleic_acid_type": "dsDNA", "a260": 0.55, "a280": 0.30, "a230": 0.25,
+         "blank_a260": 0.05, "blank_a280": 0.05, "blank_a230": 0.05,
+         "path_length_cm": 1, "dilution_factor": 10},
+        a260_quantification,
+        methods=("Subtract wavelength-matched blanks first. 1-cm A260=(sample A260−blank A260)/path(cm). "
+                 "Measured ng/µL=(1-cm A260)×50 (dsDNA), 33 (ssDNA), or 40 (RNA); "
+                 "original ng/µL=measured×reciprocal dilution. "
+                 "Purity A260/A280 and A260/A230 use blank-corrected values; "
+                 "nonpositive denominators are explicitly undefined, not zero or NaN. "
+                 "Absorbances already normalized to 1 cm require path_length_cm=1."),
+        citations=(Citation("Thermo Scientific NanoDrop Lite Plus User Guide",
+                            "https://assets.thermofisher.com/TFS-Assets/MSD/Product-Guides/nanodrop-lite-plus-user-guide-en-s120.pdf"),),
     ),
 )

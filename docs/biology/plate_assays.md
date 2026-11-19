@@ -11,6 +11,10 @@ Enable **Plate Assays** in Settings → Plugins, then choose **Plugins → Biolo
 | **plate_layout** | plate_format (96/384); wells_json (well → number, short string or null); reading_label | Labeled 8×12 or 16×24 plate-map view, sparse well table, recorded/empty counts |
 | **standard_curve** | model (linear, quadratic, 4pl, 5pl); paired standard_concentrations / standard_signals; unknown_signals and matching dilution_factors; concentration_unit and signal_unit | Fitted curve plot, coefficients, standard recovery, unknown concentration and dilution-corrected original sample concentration, status table |
 | **assay_quality** | positive_controls and negative_controls signal vectors, signal_unit | Sample mean, SD, %CV, Z′-factor, absolute and normalized signal window, replicate table |
+| **qpcr_standard_curve** | standard_quantities, standard_cts, quantity_unit | Ct/log10(quantity) regression, slope, R², amplification factor and efficiency (%) |
+| **qpcr_relative_expression** | target Cts, aligned reference Cts, target and reference amplification factors | ΔCt, ΔΔCt, 2^-ΔΔCt, Pfaffl ratio, geometric mean reference normalization |
+| **digital_pcr** | positive/total partitions, volume per partition (nL), dilution | Poisson copies/partition, copies/µL, Wilson-based approximate 95% interval |
+| **a260_quantification** | type, sample/blank A260/A280/A230, optical path, dilution | Blank-corrected concentration (ng/µL), A260/A280 and A260/A230 purity ratios |
 
 Concentrations and signals are supplied in **consistent chosen units** (the two unit fields are labels, not automatic conversions). Dilution factors are **reciprocal**: a 1:10 dilution uses 10; undiluted material uses 1.
 
@@ -73,9 +77,75 @@ When a mean is exactly zero, %CV is reported as **undefined (zero mean)**. When 
 
 **Worked example:** positive [98,100,102,100], negative [9,10,11,10] RFU. Their means are 100 and 10; sample SDs are approximately 1.633 and 0.816. Z′ ≈ 0.91835; positive %CV ≈ 1.633%, negative %CV ≈ 8.165%, and absolute signal window ≈ 82.652 RFU.
 
+### 4. qPCR Ct standard curve and efficiency (qpcr_standard_curve)
+
+Inputs are paired `standard_quantities` (strictly positive, in one consistent chosen unit), `standard_cts` (detected Ct/Cq values), and a free-form `quantity_unit` label. At least **three observations at three distinct quantities** are required. The ordinary least-squares model fits **Ct against log10(starting quantity)**:
+
+\[
+Ct_i=a+b\log_{10}(Q_i),\qquad E=10^{-1/b},\qquad \mathrm{efficiency}_{\%}=100(E-1).
+\]
+
+A valid curve has a **negative slope** (more starting template gives fewer cycles). Here \(E\) is the amplification **factor per cycle**; ideal doubling is \(E=2\), or **100% amplification efficiency**. The operation reports intercept, slope, R², standard range, Ct residual table and fitted-Ct plot. Efficiency outside an expected assay-specific range is still reported instead of being silently clamped or certified. This estimates efficiency of the supplied calibration; it does not establish that the assay passes MIQE-style controls or determine limits of detection.
+
+**Worked example:** starting quantities [1, 10, 100, 1000] copies/reaction with Cts [30, 26.6780719051, 23.3561438102, 20.0342157153] give \(b\approx-3.321928\), \(E\approx2\), efficiency ≈100%, and R²≈1. A nondecreasing Ct calibration, zero quantity, missing pair or constant Ct fails validation.
+
+### 5. qPCR relative expression (qpcr_relative_expression)
+
+Provide detected `target_ct_sample` and `target_ct_calibrator`, aligned vectors `reference_cts_sample` and `reference_cts_calibrator` (**one position per reference gene**), `target_efficiency`, and aligned `reference_efficiencies`. At least one reference gene is required. Each efficiency is the **per-cycle factor E** (e.g., 1.95 for 95% amplification efficiency), **not** the percentage 95. The target and references may have distinct efficiencies. Factors must be >1 and ≤3; Cts must be between 0 and 100.
+
+Conventional relative expression assumes \(E=2\) for **all** assays. Define a reference mean Ct over the supplied genes in each condition, equivalent to the **geometric mean of their \(2^{-Ct}\) relative quantities**:
+
+\[
+\begin{aligned}
+\Delta Ct_s &= Ct_{t,s}-\frac{1}{n}\sum_i Ct_{r_i,s},\\
+\Delta Ct_c &= Ct_{t,c}-\frac{1}{n}\sum_i Ct_{r_i,c},\\
+\Delta\Delta Ct &=\Delta Ct_s-\Delta Ct_c,\\
+R_{\Delta\Delta Ct}&=2^{-\Delta\Delta Ct}.
+\end{aligned}
+\]
+
+The efficiency-corrected **Pfaffl sample/calibrator ratio** instead normalizes the target relative quantity by the **geometric mean of the reference relative quantities**:
+
+\[
+R_{\mathrm{Pfaffl}}=
+\frac{E_t^{Ct_{t,c}-Ct_{t,s}}}
+{\left[\prod_{i=1}^{n}E_{r_i}^{Ct_{r_i,c}-Ct_{r_i,s}}\right]^{1/n}}.
+\]
+
+Subscripts \(s\) and \(c\) mean sample and calibrator. Calculations use log-space products for numerical stability and report both fold changes, ΔCt, ΔΔCt, each gene's sample/calibrator ratio and the geometric-mean reference normalizer. **Example:** target Ct 23 (sample), 25 (calibrator), two reference genes 18→20 and 20→19 (sample→calibrator), and factors \(E_t=1.9\), \(E_{r_1}=2\), \(E_{r_2}=1.8\). Then ΔΔCt = −1.5 and conventional fold change is \(2^{1.5}\approx2.8284\); the corrected Pfaffl ratio is \(1.9^2/\sqrt{4/1.8}\approx2.4217\). Reference stability must be established experimentally; the operation does **not** rank reference genes or impute undetected Cts.
+
+### 6. Digital PCR Poisson quantification (digital_pcr)
+
+Inputs: exact integer `positive_partitions`, `total_partitions` (accepted partitions), `partition_volume_nl` (volume of **each** partition in nanoliters), and `dilution_factor` (reciprocal sample dilution, ≥1). Let \(p=k/N\) be the positive fraction, \(v\) the partition volume in µL and \(D\) the reciprocal dilution. Assuming random independent template occupancy and correctly classified partitions:
+
+\[
+\lambda=-\ln(1-p)=-\ln(N_{negative}/N),\qquad
+C_{measured}=\frac{\lambda}{v},\qquad C_{original}=D C_{measured}.
+\]
+
+Outputs include positive and negative counts, positive fraction, copies per partition, copies/µL measured, copies/µL original and a **95% approximate interval** from the Wilson binomial interval on \(p\), transformed monotonically through the same Poisson equation. This interval represents **partition counting uncertainty only**, not volume calibration, false positives, template linkage or other biases. Zero positives yield a zero point estimate with a positive upper confidence bound. All-positive partitions are **saturated** and rejected because no finite Poisson concentration can be inferred. Counts must be nonnegative exact integers with \(0\le k<N\), and the volume must be positive.
+
+**Worked example:** 250 positive of 1000 accepted partitions, 0.5 nL per partition, 1:4 sample dilution gives \(\lambda=-\ln(0.75)\approx0.28768\) and \(C_{original}\approx2301.46\) copies/µL.
+
+### 7. A260 nucleic-acid quantification (a260_quantification)
+
+Inputs: `nucleic_acid_type` (`dsDNA`, `ssDNA`, `RNA`), sample absorbances `a260`, `a280`, `a230`, matching blanks `blank_a260`, `blank_a280`, `blank_a230`, `path_length_cm` and reciprocal `dilution_factor`. All absorbances must be measured on the **same path-length basis**. Subtract blanks independently at each wavelength. For \(A_{260,c}=A_{260,sample}-A_{260,blank}\) and optical path \(l\) cm:
+
+\[
+A_{260,1cm}=\frac{A_{260,c}}{l},\qquad
+C_{measured}\;(\mathrm{ng/\mu L})=f A_{260,1cm},\qquad
+C_{original}=D C_{measured}.
+\]
+
+Conventional nucleic-acid conversion factor \(f\) is **50** for dsDNA, **33** for ssDNA and **40** for RNA (ng/µL for A260=1 at 1 cm). Purity ratios are **blank-corrected** \(A_{260,c}/A_{280,c}\) and \(A_{260,c}/A_{230,c}\); path length cancels. If a corrected denominator is zero/negative, the ratio is returned as **undefined**, never infinity, NaN or a misleading pass. Negative corrected A260, zero/negative path and dilution factors below one are rejected. If the instrument **already reports 1-cm-normalized absorbance**, use `path_length_cm=1`, not its physical short path a second time.
+
+**Worked example:** dsDNA A260/A280/A230 = 0.55/0.30/0.25, wavelength-matched blank = 0.05 each, 1-cm normalized reading, 1:10 dilution gives corrected A260=0.50, measured concentration 25 ng/µL, original concentration **250 ng/µL**, A260/A280=2.0 and A260/A230=2.5. UV absorbance may include other nucleic acids and contaminants: purity ratios are screening indicators and are **not** a sample-identity or assay-quality certificate.
+
+**Primary method references:** [Pfaffl, Nucleic Acids Research (2001)](https://doi.org/10.1093/nar/29.9.e45); [Vandesompele et al., Genome Biology (2002)](https://doi.org/10.1186/gb-2002-3-7-research0034); [Bio-Rad Droplet Digital PCR Applications Guide, p. 55](https://www.bio-rad.com/sites/default/files/webroot/web/pdf/lsr/literature/Bulletin_6407.pdf); [Thermo Scientific NanoDrop Lite Plus User Guide, p. 12](https://assets.thermofisher.com/TFS-Assets/MSD/Product-Guides/nanodrop-lite-plus-user-guide-en-s120.pdf).
+
 ## Boundaries and references
 
-- All three operations require the usual plugin grant and explicit Run action. The nonlinear calibration operation allows a 45-second isolated worker budget. Standard Workbench input and 512-KiB receipt limits apply.
+- All seven operations require the usual plugin grant and explicit Run action. The nonlinear calibration operation allows a 45-second isolated worker budget. Standard Workbench input and 512-KiB receipt limits apply.
 - Invalid well addresses or duplicates, nonfinite inputs, ambiguous quadratic turning points, unequal vectors, invalid dilution factors, and insufficient calibration/control data fail closed. No nonfinite or out-of-range quantitative value is exported.
 - Tables, plots and plate-map views are included in the tamper-evident scientific result receipt. Results can be reopened and validated without rerunning measurements.
 - **Sources:** [Bio-Rad Bio-Plex 4PL/5PL guide](https://www.bio-rad.com/webroot/web/pdf/lsr/literature/10022815.pdf); [NCBI HTS Assay Validation](https://www.ncbi.nlm.nih.gov/books/NBK83783/); [Guidelines for Reporting Non-Clinical Data](https://www.ncbi.nlm.nih.gov/books/NBK550206/).

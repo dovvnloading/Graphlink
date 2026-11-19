@@ -20,6 +20,8 @@ def test_registered_in_biology_family_with_runnable_examples():
     assert PACK_FAMILIES["plate_assays"] == "biology"
     assert {operation.id for operation in operations("plate_assays")} == {
         "plate_layout", "standard_curve", "assay_quality",
+        "qpcr_standard_curve", "qpcr_relative_expression", "digital_pcr",
+        "a260_quantification",
     }
     for operation in operations("plate_assays"):
         output = run_operation("plate_assays", operation, operation.example)
