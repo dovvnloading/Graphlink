@@ -7,6 +7,8 @@ Each biology pack has its own reference page and its own explicit Settings → P
 - [Biology and Ecology](biology.md) — community surveys, ecological modelling, growth and enzyme fits, genetics, survival and biodiversity (`science_biology`).
 - [Cell Culture](cell_culture.md) — hemocytometer viability, CFU plate counts, MPN, growth-curve fits, doubling time, seeding, serial dilutions and centrifuge conversion (`science_cell_culture`).
 
+- [Genetics](genetics.md) — Mendelian segregation tests, exact Hardy–Weinberg equilibrium, Haldane/Kosambi distances, three-point testcrosses and two-point LOD scores (`science_genetics`).
+
 ## Add a biology pack using new files only
 
 Choose a unique lowercase pack ID such as `population_genetics`. Add these **new** files; no edits to `catalog.py`, `backend/plugins.py`, the picker or this index are required:
