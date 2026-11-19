@@ -212,7 +212,7 @@ def roc_curve_auc(data):
     observations.reverse()
     tp = fp = 0
     prior_fpr = prior_tpr = area = 0.0
-    rows = [["No predicted positives", 0, 0, 0.0, 0.0, 1.0]]
+    rows = [["No predicted positives", 0, 0, 0.0, 0.0, 0.0]]
     # The (0, 0) ROC origin has J = 0 and is an eligible threshold. Without
     # it, a non-discriminating test can return a misleading numeric cutoff.
     best_j, best_threshold = 0.0, "No predicted positives"
