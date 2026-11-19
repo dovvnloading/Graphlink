@@ -1,7 +1,7 @@
 export interface ScienceField {
   key: string;
   label: string;
-  kind: "number" | "integer" | "vector" | "matrix" | "text" | "choice";
+  kind: "number" | "integer" | "vector" | "matrix" | "text" | "choice" | "table" | "column";
   unit: string;
   description: string;
   default_unit?: string;
@@ -10,6 +10,10 @@ export interface ScienceField {
   column_dimensions?: string[];
   /** Allowed literal values for a categorical dropdown (kind: choice). */
   choices?: string[];
+  /** For a column picker, the sibling typed-table input whose columns it selects. */
+  table_field?: string;
+  /** Optional allowed kinds; absent/empty means every typed-table column kind. */
+  column_types?: ScientificColumnType[];
   /** Sibling input whose text sets this field's unit (e.g. value <- from_unit). */
   unit_field?: string;
 }
@@ -219,7 +223,7 @@ const matrix = (value: unknown): value is number[][] => Array.isArray(value) && 
 
 function isField(value: unknown): value is ScienceField {
   return record(value) && ["key", "label", "unit", "description"].every((key) => typeof value[key] === "string")
-    && ["number", "integer", "vector", "matrix", "text", "choice"].includes(String(value.kind))
+    && ["number", "integer", "vector", "matrix", "text", "choice", "table", "column"].includes(String(value.kind))
     && (value.kind === "choice"
       ? Array.isArray(value.choices) && value.choices.length > 0
         && value.choices.every((choice: unknown) => typeof choice === "string" && !!choice
@@ -230,7 +234,13 @@ function isField(value: unknown): value is ScienceField {
     && (value.dimension === undefined || typeof value.dimension === "string")
     && (value.column_units === undefined || strings(value.column_units))
     && (value.column_dimensions === undefined || strings(value.column_dimensions))
-    && (value.unit_field === undefined || typeof value.unit_field === "string");
+    && (value.unit_field === undefined || typeof value.unit_field === "string")
+    && (value.table_field === undefined || typeof value.table_field === "string")
+    && (value.column_types === undefined || Array.isArray(value.column_types)
+      && new Set(value.column_types).size === value.column_types.length
+      && value.column_types.every((kind: unknown) =>
+        ["numeric", "text", "categorical", "datetime", "boolean"].includes(String(kind))))
+    && (value.kind !== "column" || typeof value.table_field === "string" && value.table_field.length > 0);
 }
 
 function isOperation(value: unknown): value is ScienceOperation {
@@ -356,7 +366,7 @@ function editableNumber(value: number): string {
 }
 
 export function fieldText(field: ScienceField, value: unknown): string {
-  if (value === undefined) return "";
+  if (value == null) return "";
   if (field.kind === "text" || field.kind === "choice") return String(value);
   if (typeof value === "number") return editableNumber(value);
   if (Array.isArray(value)) return "[" + value.map((part) => typeof part === "string" ? JSON.stringify(part) : fieldText(field, part)).join(",") + "]";
@@ -375,11 +385,14 @@ function accepts(kind: ScienceField["kind"], value: unknown): boolean {
     case "matrix": return matrix(value);
     case "text": return typeof value === "string";
     case "choice": return typeof value === "string";
+    case "table": return isImportedTable(value);
+    case "column": return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
   }
 }
 
 const expected = { number: "a finite number", integer: "a whole number", vector: "an array of numbers, such as [1,2,3]",
-  matrix: "a rectangular numeric array, such as [[1,2],[3,4]]", text: "text", choice: "an allowed choice" };
+  matrix: "a rectangular numeric array, such as [[1,2],[3,4]]", text: "text", choice: "an allowed choice",
+  table: "a connected typed table", column: "a column from the selected table" };
 
 export class FieldError extends Error {
   constructor(readonly key: string, message: string) { super(message); }
@@ -433,7 +446,7 @@ function parseMeasurement(token: string, field: ScienceField): number {
 }
 
 export function parseInputs(op: ScienceOperation, draft: Record<string, string>, limits = V1_LIMITS): Record<string, unknown> {
-  return Object.fromEntries(op.fields.map((field) => {
+  const values = Object.fromEntries(op.fields.map((field) => {
     const raw = draft[field.key] ?? "";
     const invalid = (message: string): never => { throw new FieldError(field.key, message); };
     if (!raw || (field.kind !== "text" && !raw.trim())) invalid(`Enter a value for ${field.label}.`);
@@ -445,6 +458,12 @@ export function parseInputs(op: ScienceOperation, draft: Record<string, string>,
     } else if (field.kind === "choice") {
       if (!field.choices?.includes(raw)) invalid(`${field.label} must be one of: ${(field.choices ?? []).join(", ")}.`);
       value = raw;
+    } else if (field.kind === "table") {
+      try { value = JSON.parse(raw); } catch { invalid(`Select a connected typed table for ${field.label}.`); }
+      if (!isImportedTable(value)) invalid(`Select a valid connected typed table for ${field.label}.`);
+    } else if (field.kind === "column") {
+      if (!/^(0|[1-9][0-9]*)$/.test(raw.trim())) invalid(`Select a column for ${field.label}.`);
+      value = Number(raw.trim());
     } else if (field.kind === "integer") {
       // Decimal/exponent conversion through Number first silently rounds e.g. 9007199254740990.5.
       if (!/^[+-]?\d+$/.test(raw.trim()) && !unitLiteral(raw)) invalid(`${field.label} must be a whole number written in integer notation.`);
@@ -470,6 +489,34 @@ export function parseInputs(op: ScienceOperation, draft: Record<string, string>,
     }
     return [field.key, value];
   }));
+  for (const field of op.fields) {
+    if (field.kind !== "column") continue;
+    const table = values[field.table_field ?? ""];
+    const index = values[field.key];
+    if (!isImportedTable(table) || typeof index !== "number" || !Number.isSafeInteger(index)
+        || index < 0 || index >= table.columns.length) {
+      throw new FieldError(field.key, `Select a column from the connected table for ${field.label}.`);
+    }
+    const kind = table.columns[index].type;
+    if (field.column_types?.length && !field.column_types.includes(kind)) {
+      throw new FieldError(field.key, `${field.label} requires a ${field.column_types.join(", ")} column, not ${kind}.`);
+    }
+  }
+  return values;
+}
+
+/** Typed-table column indices are stable even when unit-bearing headers share names. */
+export function columnChoices(field: ScienceField, draft: Record<string, string>): Array<{
+  index: number; label: string; type: ScientificColumnType;
+}> {
+  if (field.kind !== "column" || !field.table_field) return [];
+  let table: unknown;
+  try { table = JSON.parse(draft[field.table_field] ?? ""); } catch { return []; }
+  if (!isImportedTable(table)) return [];
+  return table.columns.flatMap((column, index) => (
+    !field.column_types?.length || field.column_types.includes(column.type)
+      ? [{ index, label: column.label, type: column.type }] : []
+  ));
 }
 
 export function sourceOptions(parents: ScienceParent[], maxPoints = V1_LIMITS.points): SourceOption[] {
@@ -514,6 +561,15 @@ export function sourceOptions(parents: ScienceParent[], maxPoints = V1_LIMITS.po
     }
     if (state.table) {
       const table = state.table;
+      options.push({
+        label: `${title} · Whole typed table (${table.rowCount} rows, ${table.columnCount} columns)`,
+        value: table,
+        reference: {
+          nodeId: parent.nodeId, ...(state.nodeKey && { sourceKey: state.nodeKey }),
+          resultHash: table.asset_ref, receiptHash: table.provenance.receiptHash,
+          selector: ["typed_table"],
+        },
+      });
       table.columns.forEach((col, column) => {
         if (col.type !== "numeric") return;
         // Existing calculation inputs still have their historical maximum.
@@ -558,6 +614,9 @@ export function compatibleOptions(field: ScienceField, options: SourceOption[], 
   // A unit selector (from_unit, time_unit, ...) is the analyst's declaration,
   // not measured data: no upstream text output is a meaningful unit for it.
   if (field.kind === "text" && /(?:^|_)unit$/.test(field.key)) return [];
+  // A table-relative column picker is driven by the selected table schema,
+  // never by an arbitrary numeric scalar from another scientific result.
+  if (field.kind === "column") return [];
   return options.filter(({ value, tableColumn, uncertainty, unpropagatable }) => {
     // Neither an explicitly unpropagatable result nor MC marginal moments
     // can be used as a new Gaussian measurement. The server rejects both.
