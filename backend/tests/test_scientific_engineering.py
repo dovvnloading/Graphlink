@@ -29,7 +29,7 @@ def test_legacy_three_unchanged_and_new_example_receipts():
         before = json.dumps(op.example)
         result = run_operation("engineering", op, op.example)
         assert result["operationId"] == op.id
-        assert result["provenance"]["packVersion"] == "1.1.0"
+        assert result["provenance"]["packVersion"] == "1.2.0"
         assert readable_result({"version": 1, "latest": result}, "engineering")
         assert json.dumps(op.example) == before
         json.dumps(result, allow_nan=False)

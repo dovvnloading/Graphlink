@@ -452,6 +452,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
             previous = latest["provenance"]
             if (previous["resultHash"] == result["provenance"]["resultHash"]
                     and previous.get("inputUnits") == result["provenance"].get("inputUnits")
+                    and previous.get("referenceData") == result["provenance"].get("referenceData")
                     and latest.get("uncertainty") == result.get("uncertainty")
                     and _same_sources(previous.get("sources", {}), sources)):
                 return {"ok": True}

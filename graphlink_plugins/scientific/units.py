@@ -131,6 +131,8 @@ _UNITS.update({
     "pc": _PC, "AU": _UNITS["au"],
     "M": mol / _UNITS["L"],  # molarity, e.g. mM and nM
     "u": Unit(kg.dimensions, Fraction(Decimal("1.66053906660e-27"))),
+    "Da": Unit(kg.dimensions, Fraction(Decimal("1.66053906660e-27"))),  # Dalton = unified atomic mass unit
+    "U": Unit((mol / s).dimensions, Fraction(1, 60_000_000)),  # enzyme unit: 1 µmol/min
     "Jy": Unit((0, 1, -2, 0, 0, 0, 0), Fraction(1, 10**26)),
     "solar radii": Unit(m.dimensions, Fraction(695_700_000)),
     "solar masses": Unit(kg.dimensions, Fraction(Decimal("1.98847e30"))),
@@ -155,7 +157,7 @@ _UNITS.update({
     "MPa√m": Unit(tuple(Fraction(a) + Fraction(b, 2) for a, b in zip(Pa.dimensions, m.dimensions)), Fraction(10**6)),
     "GPa√m": Unit(tuple(Fraction(a) + Fraction(b, 2) for a, b in zip(Pa.dimensions, m.dimensions)), Fraction(10**9)),
 })
-_PREFIXABLE = _PREFIXABLE | {"M", "Jy", "pc", "yr", "year"}
+_PREFIXABLE = _PREFIXABLE | {"M", "Jy", "pc", "yr", "year", "Da", "U"}
 
 # Standalone temperature points are affine; intervals have explicit delta
 # names. Composites use interval K (or delta_degC/F), never affine points.

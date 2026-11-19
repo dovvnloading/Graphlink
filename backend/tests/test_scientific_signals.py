@@ -91,7 +91,7 @@ def test_original_operation_ids_and_results_are_unchanged():
         result = run_operation("signals", operation, operation.example)
         assert result["operationId"] == operation.id
         assert result["provenance"]["packId"] == "signals"
-        assert result["provenance"]["packVersion"] == "1.1.0"
+        assert result["provenance"]["packVersion"] == "1.2.0"
 
 
 def sampled(function, size, rate):

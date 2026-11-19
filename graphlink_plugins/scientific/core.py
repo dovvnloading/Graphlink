@@ -15,13 +15,13 @@ from typing import Any
 
 from .units import parse_unit, dimension_name, convert_decimal_measurement, interval_temperature_unit
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 MAX_POINTS = 1024
 MAX_COLUMNS = 32
 MAX_CELLS = 4096
 MAX_TEXT = 65536
 MAX_RESULT_BYTES = 512 * 1024
-# Legacy operation schemas and result receipts are deliberately unchanged.
+# Legacy 1.0.0 and 1.1.0 receipts remain readable without rewriting.
 # Typed imported tables have independent, larger storage limits.
 TABLE_MAX_ROWS = 100_000
 TABLE_MAX_COLUMNS = 256
@@ -394,12 +394,15 @@ def calculate_result(pack: str, operation: Operation, inputs: dict, sources: dic
         result_hash = fingerprint([pack, VERSION, operation.id, input_hash, output])
     except ArithmeticError:
         raise ValueError("These inputs exceed the numerical range of this operation.") from None
+    from .reference_data import references_for_operation
+    reference_data = references_for_operation(pack, operation.id, inputs)
     result = {
         **output, "operationId": operation.id, "inputs": inputs,
         "provenance": {
             "packId": pack, "packVersion": VERSION, "operationId": operation.id,
             "inputHash": input_hash, "resultHash": result_hash,
             "createdAt": datetime.now(UTC).isoformat(), "sources": sources or {},
+            "referenceData": reference_data,
             **({"inputUnits": input_units} if input_units is not None else {}),
         },
     }
@@ -466,6 +469,10 @@ def readable_result(data: dict, pack: str) -> bool:
         # Original 1.0.0 receipts only protected measurements and output.
         if "receiptHash" not in receipt:
             return version == "1.0.0"
+        if tuple(map(int, version.split("."))) >= (1, 2, 0):
+            from .reference_data import references_match
+            if not references_match(pack, result["operationId"], result["inputs"], receipt.get("referenceData")):
+                return False
         return receipt["receiptHash"] == fingerprint({k: v for k, v in receipt.items() if k != "receiptHash"})
     except (KeyError, TypeError, IndexError, ValueError, OverflowError, AttributeError, RecursionError):
         return False

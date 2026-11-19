@@ -33,7 +33,7 @@ For example, polynomial evaluation allows at most 128 coefficients and 256 sampl
 
 Enter `72 km/h` where a field expects `m/s` (normalized to 20 m/s), `2.4e-3 mol/L` for concentration, `20 °C` for absolute temperature, or `18 delta_degF` for a temperature difference (normalized to `10 delta_K`). Bare numeric values are interpreted in the field's declared/default unit. `convert_unit` takes `value` in the named `from_unit` and produces its output in `to_unit`. The runtime stores both normalized inputs and the units the user supplied in `provenance.inputUnits`. Text selectors such as `time_unit` and `abundance_unit` can determine a numerical field's effective unit; the inventory prints the **literal declared** `Field.unit`, even for these dynamic cases.
 
-The dimensional parser in [`units.py`](../graphlink_plugins/scientific/units.py) uses seven SI base dimensions (m, kg, s, A, K, mol, cd), exact rational scales and dimensional compatibility checks. It recognizes named base/derived symbols `m, kg, s, A, K, mol, cd, g, rad, sr, Hz, N, Pa, J, W, C, V, F, ohm/Ω, S, Wb, T, H, lm, lx, Bq, Gy, Sv, kat`; `L, min, h, d, t, ha, au, eV, Wh, bar, atm`; and registered domain symbols such as `deg/°, arcmin, arcsec, mas, %, ppm, ppb, day, yr, Ma, pc, AU, M, u, Jy, mag, solar masses, solar radii` and `MPa√m`. Case-sensitive SI prefixes (including 2022 quetta/ronna/ronto/quecto) are supported; `µ`, `μ` and ASCII `u` can denote micro. For mass use prefixes on `g`, not `kg`.
+The dimensional parser in [`units.py`](../graphlink_plugins/scientific/units.py) uses seven SI base dimensions (m, kg, s, A, K, mol, cd), exact rational scales and dimensional compatibility checks. It recognizes named base/derived symbols `m, kg, s, A, K, mol, cd, g, rad, sr, Hz, N, Pa, J, W, C, V, F, ohm/Ω, S, Wb, T, H, lm, lx, Bq, Gy, Sv, kat`; `L, min, h, d, t, ha, au, eV, Wh, bar, atm`; and registered domain symbols such as `deg/°, arcmin, arcsec, mas, %, ppm, ppb, day, yr, Ma, pc, AU, M, u, Da, kDa, U, mU, Jy, mag, solar masses, solar radii` and `MPa√m`. Case-sensitive SI prefixes (including 2022 quetta/ronna/ronto/quecto) are supported; `µ`, `μ` and ASCII `u` can denote micro. For mass use prefixes on `g`, not `kg`.
 
 Compound units accept `*`, `·`, `⋅`, `×`, `/`, space-separated multiplication, `^` or `**` integer powers, parentheses and superscript exponents: `m²/s²`, `kg*m/s^2`, `W/(m*K)`. Exponents are −24 to +24; expressions are capped at 128 characters, 96 tokens and 12 parentheses levels. Names are case-sensitive; e.g. `M` is molarity while `m` is a metre. Conversion requires matching physical dimensions and temperature kinds, **not** just a visually similar unit label. Dimensional equivalence alone does not certify identical physical quantities (Hz and Bq share dimensions). Pack labels that are not registered parser symbols are metadata, not arbitrary convertible tokens.
 
@@ -331,9 +331,42 @@ Each row below is generated from the **actual** registered `Operation` declarati
 
 A running node offers **Cancel calculation**. A second concurrent calculation on that node is rejected as `busy`. Cancellation and timeout yield an unsuccessful response (usually `ok:false`, `errorType` `cancelled` or `timeout`, `elapsedMs` and a message); invalid inputs and worker errors are typed where applicable. Failure creates **no new successful receipt or undo command**, and never replaces the previous result. If a source changes, the node is edited/deleted, or a grant is revoked during execution, the result is rejected instead of committing stale measurements. See [`execution.py`](../graphlink_plugins/scientific/execution.py) and [`workbench.py`](../graphlink_plugins/scientific/workbench.py).
 
+## Versioned bundled reference datasets
+
+New Scientific Workbench results (pack version `1.2.0` and later) record
+`provenance.referenceData`: an array of `{id, version, checksum}` entries
+for **exactly the bundled reference datasets used by the calculation**.
+Results that consume no bundled dataset record `referenceData: []`.
+The SHA-256 checksum covers the actual in-tree dataset values, including
+table row and mapping order, not merely the standard's citation.
+
+The versioned registry is in
+[`reference_data.py`](../graphlink_plugins/scientific/reference_data.py).
+`list_reference_datasets()` lists each dataset's ID, version, checksum and
+source. The initial registry covers CIAAW 2024 atomic weights, EPA 2024
+AQI breakpoints, Briggs rural/urban dispersion coefficients, ASTM E140
+Tables 1/2, WGS84 ellipsoid parameters, the 1976 ISA atmosphere
+profile, and the ICRS/J2000 Galactic rotation matrix. Results using
+a selectable table (e.g. hardness, dispersion terrain) record only that
+table; the Galactic matrix is recorded only when a Galactic frame is used.
+User-supplied measurements and imported tables have their own linked
+`provenance.sources` receipts and are not mislabeled as bundled data.
+
+The existing `receiptHash` authenticates `referenceData`, and saved
+results check each dataset's registered ID, version and checksum (including
+archived versions) to reject substituted/missing references even with a
+recomputed receipt hash. To revise a reference dataset, assign a new version
+and retain an ordered snapshot of the previous values for historical receipts. Existing
+1.0.0 and 1.1.0 receipts remain readable using their original policy.
+
+Units now include the enzyme unit `U` (exactly `1 µmol/min`, or
+`1/60,000,000 kat`) and dalton `Da` (equivalent to unified atomic
+mass unit `u`, using `1.66053906660 × 10⁻²⁷ kg`). Both support SI
+prefixes (`mU`, `kU`, `kDa`) and compound units like `U/mL`.
+
 ## Results, persistence and charts
 
-An ordinary result contains `summary`, scalar/text entries in `values`, optional rectangular `table` and paired `plot`, `operationId`, normalized `inputs` and `provenance`. The latter records `packId`, `packVersion` (currently `1.1.0`), `operationId`, a UTC `createdAt` timestamp, SHA-256 `inputHash`, `resultHash` and `receiptHash`, `inputUnits` and the linked `sources` (stable `sourceKey`, selector, result/receipt hash). The result fingerprint omits the timestamp; the receipt hash authenticates time and lineage. Previously saved `1.0.0` receipts open under their original verification policy rather than being silently recomputed. Identical repeated operations with identical units/source lineage preserve their existing receipt; changed successful runs are one undoable graph edit.
+An ordinary result contains `summary`, scalar/text entries in `values`, optional rectangular `table` and paired `plot`, `operationId`, normalized `inputs` and `provenance`. The latter records `packId`, `packVersion` (currently `1.2.0`), `operationId`, a UTC `createdAt` timestamp, SHA-256 `inputHash`, `resultHash` and `receiptHash`, `inputUnits` and the linked `sources` (stable `sourceKey`, selector, result/receipt hash). The result fingerprint omits the timestamp; the receipt hash authenticates time and lineage. Previously saved `1.0.0` receipts open under their original verification policy rather than being silently recomputed. Identical repeated operations with identical units/source lineage preserve their existing receipt; changed successful runs are one undoable graph edit.
 
 Compact results persist in graph state; when an asset store is available, state ≥8 KiB is stored as content-addressed JSON. Workspace save/archive includes referenced assets. A disabled pack retains passive saved nodes/results but cannot execute or supply verified connected inputs until re-enabled. Missing assets or damaged receipt hashes produce visible errors rather than invented outputs.
 

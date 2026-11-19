@@ -82,6 +82,7 @@ def _plot(data):
 _SYMBOLS = (
     "Case-sensitive SI base units (m, kg, s, A, K, mol, cd), SI prefixes, "
     "derived units (N, Pa, J, W, Hz, C, V, ohm/Ω, Wb, T, F, H, L, eV), "
+    "enzyme activity (U = µmol/min) and atomic mass (Da = u, kDa), "
     "and min, h, bar, Wh. Examples: km/h, kWh, MJ, m³, W/(m*K). "
     "Use *, /, ^, parentheses and superscript powers. Absolute temperatures: "
     "K, degC/°C, degF/°F. Temperature differences: delta_K, delta_degC, "

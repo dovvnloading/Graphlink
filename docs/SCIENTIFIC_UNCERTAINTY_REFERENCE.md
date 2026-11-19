@@ -1,6 +1,6 @@
 # Measurement Uncertainty: GUM propagation reference
 
-The independent **Measurement Uncertainty** pack (`science_uncertainty`) adds one Scientific Workbench operation, `propagate_uncertainty`. Enable it in **Settings → Plugins**, then choose **Plugins → Scientific Workbench → Measurement Uncertainty**. It uses the standard Scientific Workbench operation/result/receipt protocol (version 1.1.0), requires `graph.read` and `graph.mutate`, and performs all work locally using Python's standard library. The Student *t* quantile is reused from `graphlink_plugins.scientific.packs.fitting` rather than importing a new statistics library.
+The independent **Measurement Uncertainty** pack (`science_uncertainty`) adds one Scientific Workbench operation, `propagate_uncertainty`. Enable it in **Settings → Plugins**, then choose **Plugins → Scientific Workbench → Measurement Uncertainty**. It uses the standard Scientific Workbench operation/result/receipt protocol (version 1.2.0), requires `graph.read` and `graph.mutate`, and performs all work locally using Python's standard library. The Student *t* quantile is reused from `graphlink_plugins.scientific.packs.fitting` rather than importing a new statistics library.
 
 ## Entering a measurement model
 

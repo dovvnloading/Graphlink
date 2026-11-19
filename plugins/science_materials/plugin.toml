@@ -2,7 +2,7 @@
 id = "science_materials"
 name = "Materials Science"
 description = "Analyze tensile tests, plasticity, fatigue, fracture, thermal response, composites, hardness and diffusion."
-version = "1.1.0"
+version = "1.2.0"
 sdk_api_version = 1
 entry_point = "plugin:register"
 
