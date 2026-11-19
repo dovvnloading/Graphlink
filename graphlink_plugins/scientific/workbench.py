@@ -18,7 +18,7 @@ from .catalog import PACKS, PACK_FAMILIES, operations
 from .core import INPUT_LIMITS, _effective_unit, canonical_bytes, fingerprint, finite, readable_result, validated_inputs_with_units
 from .data_table import (
     TableState, decode_input, numeric_column, parse_table, persist_table,
-    stage_from_saved, table_metadata_valid,
+    stage_from_saved, table_metadata_valid, table_csv_chunk,
 )
 from .execution import ExecutionFailure, execute_in_process, execution_timeout
 from .units import convert_decimal_measurement, parse_unit
@@ -53,6 +53,16 @@ class ConfigureRunnerArgs:
 @dataclass
 class ExportArgs:
     node_id: str
+    expected_run: str | None = None
+
+
+@dataclass
+class ExportTableCsvArgs:
+    WIRE_OMITS_DEFAULTS: ClassVar[bool] = True
+
+    node_id: str
+    table_source: str = "result"
+    offset: int = 0
     expected_run: str | None = None
 
 
@@ -97,6 +107,7 @@ class TableColumnArgs:
     end: int | None = None
     expected_hash: str | None = None
     expected_receipt: str | None = None
+    table_source: str = "import"
 
 
 def _run_token(data: dict) -> str:
@@ -189,6 +200,32 @@ def _verify_sources(document, node, inputs: dict, sources: dict, granted,
             raise ValueError("Enable the source pack before using its result.")
         if not readable_result(source.state.data, plugin_id.removeprefix("science_")):
             raise ValueError("The source scientific result is unavailable or damaged.")
+        # A generated table is part of the producing run's receipt; changing
+        # that run invalidates both whole-table and bounded-column links.
+        if selector == ["result_table"] or (
+                len(selector) == 5 and selector[0] == "result_table_column"):
+            latest = source.state.data.get("latest")
+            table = latest.get("tableAsset") if isinstance(latest, dict) else None
+            if not table_metadata_valid(table):
+                raise ValueError("The connected source has no readable result table.")
+            receipt = latest["provenance"]
+            if (citation.get("resultHash") != receipt["resultHash"]
+                    or citation.get("receiptHash") != receipt["receiptHash"]):
+                raise ValueError("The connected result table changed. Select its current table.")
+            if selector == ["result_table"]:
+                if fields.get(key) is None or fields[key].kind != "table" or inputs[key] != table:
+                    raise ValueError("The supplied result table differs from the connected table.")
+            else:
+                _, column, policy, start, end = selector
+                if numeric_column(table, column, policy, start, end) != inputs[key]:
+                    raise ValueError("The supplied measurements differ from the selected result column.")
+            verified[key] = {
+                "nodeId": source_id, "sourceKey": source.state.data.get("nodeKey"),
+                "resultHash": receipt["resultHash"], "receiptHash": receipt["receiptHash"],
+                "selector": selector, "packId": receipt["packId"],
+                "operationId": latest["operationId"],
+            }
+            continue
         # Imported tables have their own immutable, content-addressed receipt,
         # independent of the source node's last numerical calculation.
         if selector == ["typed_table"]:
@@ -358,7 +395,9 @@ def register_pack(host: HostContext, pack_id: str) -> None:
 
     def deserialize(data):
         recovered = {"nodeKey": uuid4().hex, **data}
-        if "table" in recovered:
+        if "table" in recovered or (
+                isinstance(recovered.get("latest"), dict)
+                and "tableAsset" in recovered["latest"]):
             stage_from_saved(recovered)
             return TableState.from_data(recovered)
         return PluginStateSnapshot.from_data(recovered)
@@ -505,9 +544,9 @@ def register_pack(host: HostContext, pack_id: str) -> None:
                 saved["runner"] = state.data["runner"]
             if "table" in state.data:
                 saved["table"] = state.data["table"]
-                node.state = TableState.from_data(saved)
-            else:
-                node.state = PluginStateSnapshot.from_data(saved)
+            node.state = (TableState.from_data(saved)
+                          if "table" in saved or "tableAsset" in result
+                          else PluginStateSnapshot.from_data(saved))
             node.content = result["summary"]
 
         document.record_command(f"science:{pack_id}:{op.id}", "user", save_result,
@@ -533,6 +572,28 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         if result is None:
             return {"ok": False, "error": "Run a calculation before exporting its result."}
         return {"ok": True, "json": canonical_bytes(result).decode("ascii")}
+
+    async def export_table_csv(document, ctx, request):
+        node, error = _current_state(document, request.node_id, kind, request.expected_run)
+        if error:
+            return error
+        if request.table_source not in ("result", "import"):
+            return {"ok": False, "error": "Choose a result or imported typed table."}
+        state = node.state
+        latest = state.data.get("latest")
+        meta = (latest.get("tableAsset") if isinstance(latest, dict) else None
+                ) if request.table_source == "result" else state.data.get("table")
+        if not table_metadata_valid(meta):
+            return {"ok": False, "error": "No complete typed table is available to export."}
+        try:
+            page = await asyncio.to_thread(table_csv_chunk, meta, request.offset)
+        except (ValueError, OSError) as exc:
+            return {"ok": False, "error": str(exc)}
+        if document.nodes.get(node.id) is not node or node.state is not state:
+            return {"ok": False, "conflict": True, "error": "The table changed during export."}
+        if ctx.is_plugin_granted is None or not ctx.is_plugin_granted(ctx.plugin_id):
+            return {"ok": False, "error": "The scientific pack was disabled during export."}
+        return {"ok": True, **page}
 
     async def import_table(document, ctx, request):
         node, error = _current_state(document, request.node_id, kind, request.expected_run)
@@ -578,12 +639,26 @@ def register_pack(host: HostContext, pack_id: str) -> None:
                 or type(source.state) not in STATE_TYPES
                 or not readable_result(source.state.data, source_pack)):
             return {"ok": False, "error": "The source pack or result is unavailable."}
-        meta = source.state.data.get("table")
+        if request.table_source not in ("import", "result"):
+            return {"ok": False, "error": "Choose an imported or result table."}
+        latest = source.state.data.get("latest")
+        if request.table_source == "result":
+            meta = latest.get("tableAsset") if isinstance(latest, dict) else None
+            receipt = latest["provenance"] if isinstance(latest, dict) else {}
+            expected_hash = receipt.get("resultHash")
+            expected_receipt = receipt.get("receiptHash")
+            selector_name = "result_table_column"
+        else:
+            meta = source.state.data.get("table")
+            receipt = meta.get("provenance", {}) if isinstance(meta, dict) else {}
+            expected_hash = meta.get("asset_ref") if isinstance(meta, dict) else None
+            expected_receipt = receipt.get("receiptHash")
+            selector_name = "table_column"
         if not table_metadata_valid(meta):
             return {"ok": False, "error": "The connected source has no readable typed table."}
-        if ((request.expected_hash is not None and request.expected_hash != meta["asset_ref"])
+        if ((request.expected_hash is not None and request.expected_hash != expected_hash)
                 or (request.expected_receipt is not None
-                    and request.expected_receipt != meta["provenance"]["receiptHash"])):
+                    and request.expected_receipt != expected_receipt)):
             return {"ok": False, "conflict": True, "error": "The table changed; select its current column."}
         source_state = source.state
         target_state = target.state
@@ -603,13 +678,12 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         if (ctx.is_plugin_granted is None or not ctx.is_plugin_granted(ctx.plugin_id)
                 or not ctx.is_plugin_granted(source.kind.split(".", 1)[0])):
             return {"ok": False, "error": "The scientific pack was disabled during selection."}
-        receipt = meta["provenance"]
         return {
             "ok": True, "values": values,
             "reference": {
                 "nodeId": source_id, "sourceKey": source_state.data.get("nodeKey"),
-                "resultHash": meta["asset_ref"], "receiptHash": receipt["receiptHash"],
-                "selector": ["table_column", request.column, request.policy, request.start,
+                "resultHash": expected_hash, "receiptHash": expected_receipt,
+                "selector": [selector_name, request.column, request.policy, request.start,
                              meta["rowCount"] if request.end is None else request.end],
             },
         }
@@ -626,5 +700,6 @@ def register_pack(host: HostContext, pack_id: str) -> None:
     host.register_intent("run", run, args_schema=RunArgs, expose_to_builder=False)
     host.register_intent("cancel", cancel, args_schema=CancelArgs, expose_to_builder=False)
     host.register_intent("export_result", export_result, args_schema=ExportArgs, expose_to_builder=False)
+    host.register_intent("export_table_csv", export_table_csv, args_schema=ExportTableCsvArgs, expose_to_builder=False)
     host.register_intent("import_table", import_table, args_schema=ImportTableArgs, expose_to_builder=False)
     host.register_intent("table_column", table_column, args_schema=TableColumnArgs, expose_to_builder=False)
