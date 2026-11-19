@@ -1,3 +1,7 @@
+import { isScienceResultView, type ScienceResultView } from "./scientificResultViews";
+
+export type { ScienceResultView } from "./scientificResultViews";
+
 export interface ScienceField {
   key: string;
   label: string;
@@ -165,6 +169,8 @@ export interface ScienceResult {
   /** Complete generated rows live in an immutable asset, never in the scene wire. */
   tableAsset?: ScientificImportedTable;
   plot?: SciencePlot;
+  /** Typed layouts supplement (rather than replace) legacy tables and plots. */
+  views?: ScienceResultView[];
   uncertainty?: ScientificUncertainty;
   provenance: Record<string, unknown> & { resultHash: string; receiptHash?: string; sources?: Sources };
 }
@@ -314,7 +320,9 @@ function isResult(value: unknown): value is ScienceResult {
           return !isMeasurement(item) || !finite(outputValue) || item.value !== outputValue;
         })) return false;
   }
-  const { table, tableAsset, plot } = value;
+  const { table, tableAsset, plot, views } = value;
+  if (views !== undefined && (!Array.isArray(views) || views.length < 1 || views.length > 4 ||
+      !views.every(isScienceResultView))) return false;
   if (table !== undefined && !(record(table) && strings(table.columns) && Array.isArray(table.rows)
       && table.rows.every((row) => Array.isArray(row) && row.length === (table.columns as string[]).length))) return false;
   if (tableAsset !== undefined && (table !== undefined || !isImportedTable(tableAsset))) return false;
