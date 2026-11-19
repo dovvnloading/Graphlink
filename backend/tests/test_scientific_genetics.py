@@ -9,7 +9,6 @@ import pytest
 
 from graphlink_plugins.scientific.catalog import PACKS, PACK_FAMILIES, operations
 from graphlink_plugins.scientific.core import VERSION, readable_result, run_operation
-from graphlink_plugins.scientific.packs import genetics
 
 
 def _run(operation_id, **inputs):
