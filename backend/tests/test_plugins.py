@@ -11,7 +11,7 @@ from pathlib import Path
 from backend.canvas import SceneDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
-from backend.plugin_sdk import discover_plugins
+from backend.plugin_sdk import PluginRegistry, discover_plugins
 from backend.plugins import get_plugin_categories, plugins_payload, register_plugins
 from graphlink_settings_store import SettingsManager
 
@@ -49,7 +49,14 @@ def _fresh_settings_manager() -> SettingsManager:
 
 
 def test_get_plugin_categories_groups_in_category_order_and_skips_empty():
-    grouped = get_plugin_categories(discover_plugins())
+    # Discovery caches a mutable registry. A preceding test may have activated
+    # a grant-gated science/biology pack on that same registry; those picker
+    # categories belong in the real app, but cannot change the curated
+    # built-in-only category invariant this test was written to pin.
+    discovered = discover_plugins()
+    baseline = PluginRegistry()
+    baseline.builtin_actions.update(discovered.builtin_actions)
+    grouped = get_plugin_categories(baseline)
     names = [category["name"] for category in grouped]
 
     # "Validation & Delivery" holds Review Lens (the first post-migration
