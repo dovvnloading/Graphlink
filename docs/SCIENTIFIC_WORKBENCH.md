@@ -352,10 +352,10 @@ User-supplied measurements and imported tables have their own linked
 `provenance.sources` receipts and are not mislabeled as bundled data.
 
 The existing `receiptHash` authenticates `referenceData`, and saved
-results also check each registered dataset's current ID, version and
-checksum to reject substituted/missing references even with a recomputed
-receipt hash. To revise a reference dataset, assign a new version and
-retain old dataset values for verifying historical receipts. Existing
+results check each dataset's registered ID, version and checksum (including
+archived versions) to reject substituted/missing references even with a
+recomputed receipt hash. To revise a reference dataset, assign a new version
+and retain an ordered snapshot of the previous values for historical receipts. Existing
 1.0.0 and 1.1.0 receipts remain readable using their original policy.
 
 Units now include the enzyme unit `U` (exactly `1 µmol/min`, or

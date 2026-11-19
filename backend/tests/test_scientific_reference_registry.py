@@ -1,5 +1,6 @@
 """Scientific reference registry and exact enzyme/mass unit regression tests."""
 from copy import deepcopy
+from dataclasses import replace
 from fractions import Fraction
 
 import pytest
@@ -75,6 +76,29 @@ def test_forged_reference_rejected_even_with_rehashed_receipt(mutation):
         refs.append(reference_receipt("earth.wgs84_ellipsoid"))
     receipt["receiptHash"] = fingerprint({k: v for k, v in receipt.items() if k != "receiptHash"})
     assert not readable("chemistry", result)
+
+
+def test_archived_dataset_version_keeps_old_receipts_readable(monkeypatch):
+    from graphlink_plugins.scientific import reference_data
+    from graphlink_plugins.scientific.packs import chemistry
+
+    original = run("chemistry", "molar_mass")
+    saved = original["provenance"]["referenceData"][0]
+    dataset_id, version = saved["id"], saved["version"]
+    current = reference_data._REGISTRY[(dataset_id, version)]
+    snapshot = [["_ATOMIC_WEIGHTS", reference_data._ordered(chemistry._ATOMIC_WEIGHTS)]]
+    monkeypatch.setitem(reference_data._REGISTRY, (dataset_id, version),
+                        replace(current, snapshot=snapshot))
+    monkeypatch.setitem(reference_data._REGISTRY, (dataset_id, "2025.0.0"),
+                        replace(current, version="2025.0.0", snapshot=[
+                            ["_ATOMIC_WEIGHTS", [["H", 2.0]]]
+                        ]))
+    monkeypatch.setitem(reference_data._ACTIVE, dataset_id, "2025.0.0")
+    # The current version has different data; the saved receipt must still
+    # validate against the archived version it actually used.
+    assert reference_data.reference_receipt(dataset_id)["checksum"] != saved["checksum"]
+    assert readable("chemistry", original)
+    assert references_for_operation("chemistry", "molar_mass", original["inputs"])[0]["version"] == "2025.0.0"
 
 
 def test_old_110_receipts_remain_readable():

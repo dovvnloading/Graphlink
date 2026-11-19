@@ -19,10 +19,14 @@ class Dataset:
     pack: str
     symbols: tuple[str, ...]
     source: str
+    # Historical versions archive their values here when the live pack changes.
+    # Structure matches the same [symbol, ordered-value] pairs as current data.
+    snapshot: object | None = None
 
 
-# To update a standard, bump its dataset version and retain a snapshot of the
-# old data for historical receipts; a dataset ID must never be silently reused.
+# Append a new version when a bundled standard changes. Archive the old
+# version's ordered payload in Dataset.snapshot before changing the live
+# tables: old receipts must continue to validate against their own version.
 _DATASETS = (
     Dataset("astronomy.iau_galactic_rotation", "1.0.0", "astronomy", ("_EQ_TO_GAL",),
             "Astronomical Almanac ICRS/J2000 Galactic rotation"),
@@ -47,7 +51,8 @@ _DATASETS = (
 )
 _REGISTRY = {(item.id, item.version): item for item in _DATASETS}
 _ACTIVE = {item.id: item.version for item in _DATASETS}
-assert len(_REGISTRY) == len(_DATASETS) == len(_ACTIVE)
+if len(_REGISTRY) != len(_DATASETS):
+    raise ValueError("Duplicate scientific reference dataset ID and version.")
 
 _OPERATION_DATASETS = {
     ("chemistry", "molar_mass"): ("chemistry.ciaaw_abridged_atomic_weights",),
@@ -68,9 +73,13 @@ def _ordered(value):
 
 
 def reference_receipt(dataset_id: str, version: str | None = None) -> dict[str, str]:
-    item = _REGISTRY[(dataset_id, version or _ACTIVE[dataset_id])]
-    module = import_module(f".packs.{item.pack}", __package__)
-    values = [[name, _ordered(getattr(module, name))] for name in item.symbols]
+    resolved = version if version is not None else _ACTIVE[dataset_id]
+    item = _REGISTRY[(dataset_id, resolved)]
+    if item.snapshot is not None:
+        values = item.snapshot
+    else:
+        module = import_module(f".packs.{item.pack}", __package__)
+        values = [[name, _ordered(getattr(module, name))] for name in item.symbols]
     return {"id": item.id, "version": item.version, "checksum": fingerprint(values)}
 
 
@@ -101,7 +110,23 @@ def references_for_operation(pack: str, operation_id: str, inputs: dict) -> list
 
 
 def references_match(pack: str, operation_id: str, inputs: dict, actual: object) -> bool:
+    """Verify exact dependencies and registered historical versions.
+
+    Old receipts stay readable after a newer dataset becomes active. They must
+    refer to the same dataset IDs that the operation used, and their versioned
+    checksum must match a retained snapshot (or unchanged live values).
+    """
     try:
-        return type(actual) is list and actual == references_for_operation(pack, operation_id, inputs)
+        current = references_for_operation(pack, operation_id, inputs)
+        if type(actual) is not list or len(actual) != len(current):
+            return False
+        for saved, expected in zip(actual, current):
+            if (type(saved) is not dict or set(saved) != {"id", "version", "checksum"}
+                    or type(saved.get("id")) is not str or saved["id"] != expected["id"]
+                    or type(saved.get("version")) is not str):
+                return False
+            if saved != reference_receipt(saved["id"], saved["version"]):
+                return False
+        return True
     except (KeyError, ValueError, TypeError, AttributeError):
         return False
