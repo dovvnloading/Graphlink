@@ -96,6 +96,10 @@ Enable **Scientific Core** and a domain pack in **Settings → Plugins**. Open *
 
 ![Creating a Chemistry node from Plugins, choosing Convert transmission to absorbance, loading the example scan, running it, and turning the absorbance spectrum into a chart with Chart this.](assets/gifs/scientific-workbench.gif)
 
+### Biology Workbench
+
+Ten biology packs sit under **Plugins → Biology Workbench**: Biology and Ecology, Plate Assays, Cell Culture, Enzyme Kinetics, Genetics, Epidemiology and Biostatistics, Pharmacokinetics, Physiology, Gene Expression and Phylogenetics. Each is enabled separately in **Settings → Plugins**. They cover quantitative work such as 4PL/5PL standard curves, qPCR ΔΔCt and Pfaffl ratios, inhibition model selection, Kaplan–Meier and Cox survival analysis, differential expression with volcano plots, population projection and tree building. Results carry verifiable receipts and typed views (plate maps, survival curves, forest plots, trees, volcano plots), and any result can be discussed in chat or turned into a methods paragraph. The packs analyse the numbers you supply; they do not fetch data from biological databases. [Biology Workbench user guide with five end-to-end workflows](docs/BIOLOGY_WORKBENCH.md) · [Pack reference pages](docs/biology/README.md).
+
 ## API providers
 
 The directory includes **26 named providers** and a **Custom endpoint** for OpenAI Chat Completions-compatible servers. Search by service or model family, such as Claude, Grok, Kimi, or Qwen. You can browse another provider’s settings while your current connection stays active.
