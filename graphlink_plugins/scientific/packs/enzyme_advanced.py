@@ -260,7 +260,9 @@ def _morrison_prediction(x, theta):
     bottom, log_delta, log_ki = theta
     delta, ki = math.exp(log_delta), math.exp(log_ki)
     total = 1 + x + ki
-    disc = math.sqrt(total * total - 4 * x)
+    # Equivalent to sqrt((1+x+Ki)^2 - 4*x), without cancellation when
+    # inhibitor and active enzyme are nearly equal and Ki is very small.
+    disc = math.sqrt((1 - x) ** 2 + ki * (2 * (1 + x) + ki))
     bound = 2 * x / (total + disc)
     free = 1 - bound
     return bottom + delta * free, [1, delta * free, delta * bound * ki / disc]
