@@ -4,6 +4,8 @@ import * as download from "../canvas/downloadTextFile";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { AppBar } from "./AppBar";
+// Preload the lazy overflow chunk: these tests exercise actions, not module-load timing.
+import "./AppBarOverflowMenu";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
 import { SceneStore } from "../canvas/sceneStore";
 import type { WsTransport } from "../../lib/ws/transport";
