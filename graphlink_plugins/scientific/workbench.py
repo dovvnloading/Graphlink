@@ -144,7 +144,7 @@ def _extract(result: dict, selector: list):
 
 def _verify_sources(document, node, inputs: dict, sources: dict, granted,
                     uncertainty_inputs: dict | None = None, *,
-                    operation=None, input_units: dict | None = None) -> dict:
+                    operation=None) -> dict:
     """Verify cited outputs and normalize linked measurements into input units.
 
     Only an immutable, receipt-validated source determines a linked value's
@@ -153,6 +153,8 @@ def _verify_sources(document, node, inputs: dict, sources: dict, granted,
     (affine temperature offsets never change a standard uncertainty).
     """
     fields = {field.key: field for field in operation.fields} if operation else {}
+    if not isinstance(sources, dict):
+        raise ValueError("Linked sources must be an object keyed by input field.")
     if not sources:
         return {}
     if set(sources) - set(inputs):
@@ -351,10 +353,10 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         if operation is None:
             return {"ok": False, "error": "Choose an operation registered for this pack."}
         try:
-            inputs, input_units = validated_inputs_with_units(operation, request.inputs)
+            inputs, _input_units = validated_inputs_with_units(operation, request.inputs)
             sources = _verify_sources(
-                document, node, inputs, request.sources or {}, ctx.is_plugin_granted,
-                operation=operation, input_units=input_units,
+                document, node, inputs, request.sources if request.sources is not None else {}, ctx.is_plugin_granted,
+                operation=operation,
             )
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
@@ -402,9 +404,9 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         try:
             inputs, input_units = validated_inputs_with_units(op, request.inputs)
             uncertainty_inputs: dict = {}
-            sources = _verify_sources(document, node, inputs, request.sources or {},
+            sources = _verify_sources(document, node, inputs, request.sources if request.sources is not None else {},
                                       ctx.is_plugin_granted, uncertainty_inputs,
-                                      operation=op, input_units=input_units)
+                                      operation=op)
             if request.uncertainty_method not in ("auto", "gum", "monte_carlo"):
                 raise ValueError("Uncertainty method must be auto, gum or monte_carlo.")
             budget = execution_timeout(op)
@@ -431,7 +433,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
             if sources:
                 latest_uncertainty: dict = {}
                 _verify_sources(document, node, inputs, sources, ctx.is_plugin_granted,
-                                latest_uncertainty, operation=op, input_units=input_units)
+                                latest_uncertainty, operation=op)
                 if latest_uncertainty != uncertainty_inputs:
                     return {"ok": False, "conflict": True,
                             "error": "The connected uncertainty changed while calculating. Run again."}
@@ -564,6 +566,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
                     and request.expected_receipt != meta["provenance"]["receiptHash"])):
             return {"ok": False, "conflict": True, "error": "The table changed; select its current column."}
         source_state = source.state
+        target_state = target.state
         try:
             values = await asyncio.to_thread(
                 numeric_column, meta, request.column, request.policy, request.start, request.end,
@@ -572,6 +575,14 @@ def register_pack(host: HostContext, pack_id: str) -> None:
             return {"ok": False, "error": str(exc)}
         if document.nodes.get(source_id) is not source or source.state is not source_state:
             return {"ok": False, "conflict": True, "error": "The source table changed during selection."}
+        if (document.nodes.get(target.id) is not target or target.state is not target_state
+                or not any(edge.source == source_id and edge.target == target.id
+                           for edge in document.edges.values())):
+            return {"ok": False, "conflict": True,
+                    "error": "The target node or its connection changed during selection."}
+        if (ctx.is_plugin_granted is None or not ctx.is_plugin_granted(ctx.plugin_id)
+                or not ctx.is_plugin_granted(source.kind.split(".", 1)[0])):
+            return {"ok": False, "error": "The scientific pack was disabled during selection."}
         receipt = meta["provenance"]
         return {
             "ok": True, "values": values,

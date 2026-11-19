@@ -256,7 +256,7 @@ def test_unit_aware_connected_metric_keeps_converted_value_and_shared_uncertaint
     attached = {}
     sources = _verify_sources(
         document, target, inputs, {"distance": ref}, lambda _: True, attached,
-        operation=target_op, input_units=input_units,
+        operation=target_op,
     )
     assert attached["distance"]["value"] == pytest.approx(0.025)
     assert attached["distance"]["sourceValue"] == 25

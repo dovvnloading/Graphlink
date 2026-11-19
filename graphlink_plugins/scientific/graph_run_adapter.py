@@ -226,7 +226,7 @@ def prepare(document: Any, node: Any, granted: Any) -> tuple[Any, dict, dict, st
     try:
         inputs, input_units = validated_inputs_with_units(operation, raw)
         sources = _verify_sources(document, node, inputs, references, granted,
-                                  operation=operation, input_units=input_units)
+                                  operation=operation)
     except (ValueError, IndexError, TypeError, KeyError) as exc:
         raise SceneError(str(exc)) from exc
     current = node.state.data.get("latest")

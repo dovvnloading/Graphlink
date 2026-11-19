@@ -21,7 +21,7 @@ export interface ScienceOperation {
 export interface SourceReference {
   nodeId: string;
   resultHash: string;
-  sourceKey?: string;
+  sourceKey?: string | null;
   receiptHash?: string;
   selector: (string | number)[];
 }
@@ -214,13 +214,41 @@ function isOperation(value: unknown): value is ScienceOperation {
     && value.fields.every(isField);
 }
 
+function isSourceReference(value: unknown): value is SourceReference {
+  return record(value) && typeof value.nodeId === "string" && value.nodeId.length > 0
+    && typeof value.resultHash === "string"
+    && (value.sourceKey == null || typeof value.sourceKey === "string")
+    && (value.receiptHash === undefined || typeof value.receiptHash === "string")
+    && Array.isArray(value.selector) && value.selector.every((part) =>
+      typeof part === "string" || typeof part === "number" && Number.isSafeInteger(part));
+}
+
+function isSources(value: unknown): value is Sources {
+  return record(value) && Object.values(value).every(isSourceReference);
+}
+
+function isBudgetEntry(value: unknown): boolean {
+  return record(value) && typeof value.input === "string"
+    && (value.kind === "input" || value.kind === "covariance")
+    && finite(value.variance)
+    && (value.unit === undefined || typeof value.unit === "string")
+    && (value.standardUncertainty === undefined || finite(value.standardUncertainty))
+    && (value.sensitivity === undefined || finite(value.sensitivity))
+    && (value.signedContribution === undefined || finite(value.signedContribution));
+}
+
 function isMeasurement(value: unknown): value is ScientificMeasurement {
   return record(value) && finite(value.value) && finite(value.standardUncertainty)
     && value.standardUncertainty >= 0 && finite(value.coverageFactor) && value.coverageFactor > 0
     && typeof value.unit === "string"
     && (value.coverageProbability === undefined || (finite(value.coverageProbability) && value.coverageProbability > 0 && value.coverageProbability < 1))
     && (value.interval === undefined || (Array.isArray(value.interval) && value.interval.length === 2 && value.interval.every(finite)))
-    && (value.components === undefined || (record(value.components) && Object.values(value.components).every(finite)));
+    && (value.components === undefined || (record(value.components) && Object.values(value.components).every(finite)))
+    && (value.budget === undefined || (Array.isArray(value.budget) && value.budget.every(isBudgetEntry)))
+    && (value.budgetNote === undefined || typeof value.budgetNote === "string")
+    && (value.method === undefined || value.method === "gum" || value.method === "monte_carlo")
+    && (value.monteCarloMean === undefined || finite(value.monteCarloMean))
+    && (value.monteCarloTrials === undefined || Number.isSafeInteger(value.monteCarloTrials));
 }
 
 function isResult(value: unknown): value is ScienceResult {
@@ -230,16 +258,14 @@ function isResult(value: unknown): value is ScienceResult {
       (value.provenance.receiptHash !== undefined && typeof value.provenance.receiptHash !== "string")) return false;
   const resultValues = value.values;
   const sources = value.provenance.sources;
-  if (sources !== undefined && (!record(sources) || !Object.values(sources).every((source) =>
-    record(source) && typeof source.nodeId === "string" && typeof source.resultHash === "string" &&
-    (source.sourceKey == null || typeof source.sourceKey === "string") &&
-    (source.receiptHash === undefined || typeof source.receiptHash === "string") &&
-    Array.isArray(source.selector) && source.selector.every((key) => typeof key === "string" || Number.isInteger(key))))) return false;
+  if (sources !== undefined && !isSources(sources)) return false;
   if (value.uncertainty !== undefined) {
     const data = value.uncertainty;
     if (!record(data) || !["gum", "monte_carlo"].includes(String(data.method))
         || !record(data.inputs) || !record(data.outputs)
         || !Object.values(data.inputs).every(isMeasurement)
+        || (data.unsupportedOutputs !== undefined && (!record(data.unsupportedOutputs) ||
+          !Object.values(data.unsupportedOutputs).every((reason) => typeof reason === "string")))
         || Object.entries(data.outputs).some(([key, item]) => {
           const outputValue = resultValues[key];
           return !isMeasurement(item) || !finite(outputValue) || item.value !== outputValue;
@@ -255,15 +281,21 @@ function isResult(value: unknown): value is ScienceResult {
 
 function isImportedTable(value: unknown): value is ScientificImportedTable {
   if (!record(value) || value.version !== 1 || typeof value.asset_ref !== "string"
-      || typeof value.rowCount !== "number" || !Number.isSafeInteger(value.rowCount)
-      || value.rowCount < 1 || !Array.isArray(value.columns) || value.columnCount !== value.columns.length
-      || !Array.isArray(value.preview) || !record(value.provenance)
-      || typeof value.provenance.fileHash !== "string" || typeof value.provenance.receiptHash !== "string"
-      || !record(value.provenance.parseOptions)) return false;
+      || !Number.isSafeInteger(value.rowCount) || (value.rowCount as number) < 1
+      || !Array.isArray(value.columns) || !Number.isSafeInteger(value.columnCount)
+      || value.columnCount !== value.columns.length || value.columns.length < 1
+      || !Number.isSafeInteger(value.previewColumns) || (value.previewColumns as number) !== Math.min(value.columns.length, 8)
+      || !Array.isArray(value.preview) || value.preview.length < 1
+      || value.preview.length > Math.min(value.rowCount as number, 8)
+      || typeof value.sourceName !== "string" || !record(value.provenance)
+      || typeof value.provenance.fileHash !== "string" || typeof value.provenance.tableHash !== "string"
+      || typeof value.provenance.receiptHash !== "string" || !record(value.provenance.parseOptions)) return false;
   return value.columns.every((col) => record(col) && typeof col.name === "string"
     && typeof col.label === "string" && typeof col.unit === "string"
     && ["numeric", "text", "categorical", "datetime", "boolean"].includes(String(col.type))
-    && Number.isSafeInteger(col.missingCount) && Number(col.missingCount) >= 0);
+    && Number.isSafeInteger(col.missingCount) && Number(col.missingCount) >= 0)
+    && value.preview.every((row) => Array.isArray(row) && row.length === value.previewColumns
+      && row.every((cell) => cell === null || typeof cell === "string" || typeof cell === "boolean" || finite(cell)));
 }
 
 /** Plugin state crosses the generic SDK wire as string values. Decode once per revision. */
@@ -280,7 +312,7 @@ export function readScienceState(raw: string): ScienceState | null {
         value.operations.every(isOperation) &&
         (value.runner == null || (record(value.runner) && value.runner.version === 1 &&
           typeof value.runner.operationId === "string" && record(value.runner.inputs) &&
-          record(value.runner.sources))) &&
+          isSources(value.runner.sources))) &&
         (value.table == null || isImportedTable(value.table)) &&
         (value.latest === null || isResult(value.latest))) return value as unknown as ScienceState;
   } catch { /* A missing plugin or unsupported saved version still leaves the card visible. */ }

@@ -124,6 +124,8 @@ def _options(fmt: str, missing: list[str] | None, hints: dict[str, str] | None) 
     ):
         raise ValueError("Column type overrides must use numeric, text, categorical, datetime or boolean.")
     if "" not in missing:
+        if len(missing) == 32:
+            raise ValueError("Missing-value tokens must be a list of up to 32 short strings, including blank.")
         missing = ["", *missing]
     return {
         "format": fmt, "delimiter": "," if fmt == "csv" else "\t",
@@ -228,17 +230,33 @@ def table_metadata_valid(data: object) -> bool:
     if not isinstance(data, dict):
         return False
     try:
-        if data["version"] != 1 or not _REF.fullmatch(data["asset_ref"]) or data["mime_type"] != "application/json":
+        if type(data["version"]) is not int or data["version"] != 1 or not _REF.fullmatch(data["asset_ref"]) or data["mime_type"] != "application/json":
             return False
         cols = data["columns"]
         rows = data["rowCount"]
-        if not isinstance(cols, list) or not 1 <= len(cols) == data["columnCount"] <= TABLE_MAX_COLUMNS:
+        if (not isinstance(cols, list) or type(data["columnCount"]) is not int
+                or not 1 <= len(cols) == data["columnCount"] <= TABLE_MAX_COLUMNS):
             return False
         if type(rows) is not int or not 1 <= rows <= TABLE_MAX_ROWS or rows * len(cols) > TABLE_MAX_CELLS:
             return False
-        if any(c.get("type") not in KINDS or not isinstance(c.get("label"), str) or
-               not isinstance(c.get("unit"), str) or type(c.get("missingCount")) is not int or
-               not 0 <= c["missingCount"] <= rows for c in cols):
+        if any(not isinstance(c, dict) or c.get("type") not in KINDS
+               or not isinstance(c.get("name"), str) or not 0 < len(c["name"]) <= 256
+               or not isinstance(c.get("label"), str) or not 0 < len(c["label"]) <= 256
+               or not isinstance(c.get("unit"), str) or len(c["unit"]) > 256
+               or type(c.get("missingCount")) is not int
+               or not 0 <= c["missingCount"] <= rows for c in cols):
+            return False
+        preview_width = data["previewColumns"]
+        preview = data["preview"]
+        if (type(preview_width) is not int or preview_width != min(len(cols), 8)
+                or not isinstance(preview, list) or not 1 <= len(preview) <= min(rows, 8)
+                or not isinstance(data.get("sourceName"), str) or len(data["sourceName"]) > 128):
+            return False
+        if any(not isinstance(row, list) or len(row) != preview_width
+               or any(cell is not None and type(cell) not in (str, int, float, bool)
+                      or isinstance(cell, str) and len(cell) > 81
+                      or type(cell) in (int, float) and not math.isfinite(cell) for cell in row)
+               for row in preview):
             return False
         receipt = data["provenance"]
         if (not _REF.fullmatch(receipt["fileHash"]) or receipt["tableHash"] != data["asset_ref"]
@@ -289,17 +307,39 @@ def read_table(meta: dict) -> dict:
         raise ValueError("The scientific table asset is missing. Restore the workspace asset and reopen.")
     try:
         table = json.loads(raw)
-        if (table["version"] != 1 or len(table["rows"]) != meta["rowCount"]
-                or table["columns"] != meta["columns"]):
+        if (not isinstance(table, dict) or type(table.get("version")) is not int
+                or table["version"] != 1 or table.get("columns") != meta["columns"]
+                or not isinstance(table.get("rows"), list)
+                or len(table["rows"]) != meta["rowCount"]):
             raise ValueError
-    except (TypeError, ValueError, KeyError):
+        columns = meta["columns"]
+        missing_counts = [0] * len(columns)
+        for row in table["rows"]:
+            if not isinstance(row, list) or len(row) != len(columns):
+                raise ValueError
+            for index, value in enumerate(row):
+                if value is None:
+                    missing_counts[index] += 1
+                elif columns[index]["type"] == "numeric":
+                    if type(value) not in (int, float) or not math.isfinite(value):
+                        raise ValueError
+                elif columns[index]["type"] == "boolean":
+                    if type(value) is not bool:
+                        raise ValueError
+                elif not isinstance(value, str) or len(value) > TABLE_MAX_CELL_CHARS:
+                    raise ValueError
+        if any(count != col["missingCount"] for count, col in zip(missing_counts, columns)):
+            raise ValueError
+    except (TypeError, ValueError, KeyError, OverflowError):
         raise ValueError("The scientific table asset is damaged.") from None
     return table
 
 
 def numeric_column(meta: dict, column: int, missing_policy: str = "reject",
                    start: int = 0, end: int | None = None) -> list[float]:
-    if type(column) is not int or not 0 <= column < meta.get("columnCount", -1):
+    if not table_metadata_valid(meta):
+        raise ValueError("The scientific table's import receipt is damaged.")
+    if type(column) is not int or not 0 <= column < meta["columnCount"]:
         raise ValueError("Choose an existing table column.")
     if meta["columns"][column]["type"] != "numeric":
         raise ValueError("Only numeric table columns can supply numerical operation inputs.")
@@ -327,6 +367,8 @@ def decode_input(*, text: str | None, encoded_file: str | None) -> bytes:
     if text is not None:
         if not isinstance(text, str):
             raise ValueError("Pasted data must be text.")
+        if len(text) > TABLE_MAX_SOURCE_BYTES:
+            raise ValueError("Scientific table source must be between 1 byte and 64 MiB.")
         encoded = text.encode("utf-8")
     else:
         if not isinstance(encoded_file, str) or len(encoded_file) > TABLE_MAX_SOURCE_BYTES * 4 // 3 + 8:

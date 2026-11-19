@@ -110,6 +110,14 @@ describe("typed table metadata and numeric column choices", () => {
       receiptHash: "c".repeat(64), parseOptions: { format: "tsv", missingValues: ["", "NA"] } },
   };
 
+  it("rejects malformed saved previews before the node view can index their rows", () => {
+    const base: ScienceState = { scienceVersion: 1, packId: "core",
+      operations: [{ id: "numeric_csv", title: "Import", description: "", fields: [], example: {} }],
+      latest: null, table };
+    expect(readScienceState(JSON.stringify({ ...base, table: { ...table, preview: [null] } }))).toBeNull();
+    expect(readScienceState(JSON.stringify({ ...base, table: { ...table, previewColumns: 100000 } }))).toBeNull();
+  });
+
   it("reads the typed schema independently of any legacy result", () => {
     const state: ScienceState = { scienceVersion: 1, packId: "core",
       operations: [{ id: "numeric_csv", title: "Import numeric CSV", description: "", fields: [], example: {} }],
@@ -208,5 +216,43 @@ describe("saved Graph Runner unit literals", () => {
     expect(draft.samples).toBe('["25 mm",2]');
     expect(draft.grid).toBe('[["1 cm",3]]');
     expect(parseInputs(op, draft)).toEqual(inputs);
+  });
+});
+
+describe("saved Workbench wire safety", () => {
+  const base: ScienceState = {
+    scienceVersion: 1, packId: "core",
+    operations: [{ id: "convert_unit", title: "Convert", description: "", fields: [], example: {} }],
+    latest: null,
+  };
+
+  it("rejects incomplete legacy runner references rather than crashing on selector.length", () => {
+    const damaged = { ...base, runner: {
+      version: 1, operationId: "convert_unit", inputs: {}, sources: {
+        measurement: { nodeId: "source", resultHash: "digest" },
+      },
+    } };
+    expect(readScienceState(JSON.stringify(damaged))).toBeNull();
+  });
+
+  it("rejects malformed uncertainty budget arrays and non-text diagnostics", () => {
+    const measurement = { value: 4, standardUncertainty: 1, coverageFactor: 2, unit: "" };
+    const result: ScienceResult = {
+      operationId: "convert_unit", inputs: {}, summary: "ok", values: { answer: 4 },
+      provenance: { resultHash: "digest" },
+      uncertainty: { method: "gum", inputs: {}, outputs: { answer: measurement } },
+    };
+    expect(readScienceState(JSON.stringify({
+      ...base, latest: { ...result,
+        uncertainty: { ...result.uncertainty, outputs: {
+          answer: { ...measurement, budget: { bogus: true } },
+        } },
+      },
+    }))).toBeNull();
+    expect(readScienceState(JSON.stringify({
+      ...base, latest: { ...result,
+        uncertainty: { ...result.uncertainty, unsupportedOutputs: { answer: { invalid: true } } },
+      },
+    }))).toBeNull();
   });
 });
