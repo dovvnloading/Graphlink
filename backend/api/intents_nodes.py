@@ -63,6 +63,45 @@ def _science_discussion_context(source_id: str, result: dict) -> str:
     return heading + "Result excerpts (inspect the source Workbench for complete data):\n" + "\n".join(sections)
 
 
+
+def _create_scientific_discussion(
+    document: SceneDocument, source_node_id: str,
+    expected_result_hash: str, expected_receipt_hash: str,
+) -> str:
+    """Start a chat from the authoritative, receipt-validated result, not browser JSON."""
+    source = document.nodes.get(source_node_id)
+    if source is None or not re.fullmatch(r"science_[a-z0-9_]+\.workbench", source.kind):
+        raise SceneError("Select a Scientific Workbench result to discuss.")
+    pack = source.kind.removeprefix("science_").removesuffix(".workbench")
+    data = getattr(source.state, "data", None)
+    if not isinstance(data, dict) or not readable_result(data, pack):
+        raise SceneError("The scientific result is unavailable or its receipt is damaged.")
+    result = data.get("latest")
+    if not isinstance(result, dict):
+        raise SceneError("Run a calculation before discussing its result.")
+    receipt = result["provenance"]
+    if (receipt["resultHash"] != expected_result_hash
+            or receipt.get("receiptHash", receipt["resultHash"]) != expected_receipt_hash):
+        raise SceneError("The scientific result changed. Review the current run before discussing it.")
+
+    context = _science_discussion_context(source_node_id, result)
+
+    def create_chat():
+        x, y = document.place_child(source_node_id, "chat", prefer="right")
+        chat = document.add_chat_node(x, y, context, is_user=True)
+        # A visible provenance link, NOT a structural chat ancestor:
+        # the chat's own snapshot contains the result exactly once.
+        edge = document.connect(source_node_id, chat.id)
+        document.set_edge_role(edge.id, "reference")
+        document.last_chat_node_id = chat.id
+        return chat
+
+    chat, _command = document.record_command(
+        "discussScientificResult", "user", create_chat, node_ids=[source_node_id],
+    )
+    return chat.id
+
+
 def _capture_live_run_teardown(document: SceneDocument, ids: list[str]):
     """What remove_nodes must tear down for a set of about-to-be-deleted
     nodes, captured BEFORE document.remove_nodes pops them (afterward
@@ -177,39 +216,11 @@ def register_node_intents(
         return node.id
 
     async def discuss_scientific_result(source_node_id, expected_result_hash, expected_receipt_hash):
-        """Start a chat from the authoritative, receipt-validated result, not browser JSON."""
-        source = document.nodes.get(source_node_id)
-        if source is None or not re.fullmatch(r"science_[a-z0-9_]+\.workbench", source.kind):
-            raise SceneError("Select a Scientific Workbench result to discuss.")
-        pack = source.kind.removeprefix("science_").removesuffix(".workbench")
-        data = getattr(source.state, "data", None)
-        if not isinstance(data, dict) or not readable_result(data, pack):
-            raise SceneError("The scientific result is unavailable or its receipt is damaged.")
-        result = data.get("latest")
-        if not isinstance(result, dict):
-            raise SceneError("Run a calculation before discussing its result.")
-        receipt = result["provenance"]
-        if (receipt["resultHash"] != expected_result_hash
-                or receipt.get("receiptHash", receipt["resultHash"]) != expected_receipt_hash):
-            raise SceneError("The scientific result changed. Review the current run before discussing it.")
-
-        context = _science_discussion_context(source_node_id, result)
-
-        def create_chat():
-            x, y = document.place_child(source_node_id, "chat", prefer="right")
-            chat = document.add_chat_node(x, y, context, is_user=True)
-            # A visible provenance link, NOT a structural chat ancestor:
-            # the chat's own snapshot contains the result exactly once.
-            edge = document.connect(source_node_id, chat.id)
-            document.set_edge_role(edge.id, "reference")
-            document.last_chat_node_id = chat.id
-            return chat
-
-        chat, _command = document.record_command(
-            "discussScientificResult", "user", create_chat, node_ids=[source_node_id],
+        chat_id = _create_scientific_discussion(
+            document, source_node_id, expected_result_hash, expected_receipt_hash,
         )
         await publish_scene()
-        return chat.id
+        return chat_id
 
     async def add_code_node(x, y, code, language, parent_id=None):
         node, _command = document.record_command(
