@@ -22,7 +22,7 @@ Every operation has declared Workbench inputs, a runnable example, method citati
 
 Denote treated/exposed events by a, treated non-events by b, control/unexposed events by c, and control non-events by d. Require a+b > 0 and c+d > 0. The **observed** group risks are pT=a/(a+b) and pC=c/(c+d); RR=pT/pC, OR=ad/(bc), RD=pT−pC, and ARR=pC−pT=−RD.
 
-RR 95% CI is exp(log(RR) ± 1.95996398454·SE), with SE²=1/a−1/(a+b)+1/c−1/(c+d). OR 95% CI is exp(log(OR) ± 1.95996398454·SE), with SE²=1/a+1/b+1/c+1/d. **If any cell is zero**, the implementation adds 0.5 to *each* cell when calculating **both** point estimates and their ratio CIs; observed risks, RD and ARR remain uncorrected. Ratio intervals are log-normal approximations, and sparse counts may warrant a different analysis.
+RR 95% CI is exp(log(RR) ± 1.95996398454·SE), with SE²=1/a−1/(a+b)+1/c−1/(c+d). OR 95% CI is exp(log(OR) ± 1.95996398454·SE), with SE²=1/a+1/b+1/c+1/d. **If exactly one (or otherwise not both equivalent) event/outcome arm is sparse**, the implementation adds 0.5 to *each* cell when a zero cell occurs, for **both** relative-effect point estimates and their ratio CIs; observed risks, RD and ARR remain uncorrected. When **both groups have no events** (a=c=0) or **both groups consist entirely of events** (b=d=0), neither relative-effect estimate nor its CI is reported: the observed table contains no information about the direction or magnitude of a comparative effect. These values are explicitly marked **undefined**, with RD and its confidence interval still available. Correcting such tables would produce a spurious relative effect driven solely by allocation imbalance. Ratio intervals are log-normal approximations, and sparse counts may warrant a different analysis.
 
 RD uses Newcombe's unpooled Wilson-score interval. For Wilson limits (LT,UT) on pT and (LC,UC) on pC, RD lower is RD−sqrt((pT−LT)²+(UC−pC)²), and upper is RD+sqrt((UT−pT)²+(pC−LC)²), clipped to [−1,1]. This avoids naive Wald intervals at the boundaries. The absolute reciprocal 1/|ARR| is labeled **NNT** for a positive ARR and **NNH** for a negative ARR, reported as a continuous value rather than silently rounding. Invert the ARR 95% interval to get the NNT/NNH 95% interval only when that interval lies entirely on one side of zero. If it includes zero, the reciprocal confidence set is unbounded (possibly containing benefit and harm branches), and output bounds are explicitly marked unbounded. Equal risks produce undefined NNT.
 
@@ -100,6 +100,7 @@ The associated tests, `backend/tests/test_scientific_epidemiology.py` and `backe
 - Newcombe (1998), confidence intervals for independent proportions: https://pubmed.ncbi.nlm.nih.gov/9595617/
 - Wilson (1927), binomial score inference: https://doi.org/10.1080/01621459.1927.10502953
 - Altman (1998), intervals for number needed to treat: https://www.bmj.com/content/317/7168/1309
+- Cochrane Handbook, Chapter 6 (relative effect measures and double-zero/all-event tables): https://www.cochrane.org/authors/handbooks-and-manuals/handbook/current/chapter-06
 - Hanley & McNeil (1982), ROC AUC interpretation: https://pubmed.ncbi.nlm.nih.gov/7063747/
 - Garwood (1936), exact Poisson confidence limits: https://doi.org/10.1093/biomet/28.3-4.437
 - Fay & Feuer (1997), gamma intervals for directly standardized rates: https://pubmed.ncbi.nlm.nih.gov/9131766/
