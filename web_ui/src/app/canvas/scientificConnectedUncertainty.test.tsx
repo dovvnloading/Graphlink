@@ -213,7 +213,43 @@ describe("uncertainty-aware Scientific Workbench connections", () => {
     expect(screen.getByLabelText("Measured value (mm)")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Source unit"), { target: { value: "km" } });
     expect(screen.getByLabelText("Measured value (km)")).toBeInTheDocument();
-    expect(screen.getByText("Unit: km, set by Source unit.")).toBeVisible();
+    expect(screen.queryByText(/Unit: km, set by Source unit/)).not.toBeInTheDocument();
+    const help = screen.getByRole("button", { name: "Input and unit help for Measured value" });
+    expect(help).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(help);
+    expect(help).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText(/Unit: km, set by Source unit/)).toBeVisible();
+    fireEvent.click(help);
+    expect(screen.queryByText(/Unit: km, set by Source unit/)).not.toBeInTheDocument();
+  });
+
+  it("keeps input guidance and operation methods behind accessible disclosures", () => {
+    const documented = { ...convert,
+      description: "Convert a measured quantity with explicit units.",
+      methods: "Multiply by the exact SI conversion factor.",
+      citations: [{ label: "Unit reference", url: "https://example.org/units" }],
+      fields: [
+        { ...convert.fields[0], default_unit: "mm", dimension: "length",
+          description: "Enter the measurement in its source unit." },
+        ...convert.fields.slice(1),
+      ],
+    };
+    mount(JSON.stringify({ ...core, operations: [documented] }));
+    expect(screen.getByRole("combobox", { name: "Operation" })).toHaveValue("convert_unit");
+    expect(screen.getByRole("group", { name: "Inputs" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Measured value (mm)").closest(".science-input-grid")).toBeInTheDocument();
+    expect(screen.queryByText("Enter the measurement in its source unit.")).not.toBeInTheDocument();
+    const help = screen.getByRole("button", { name: "Input and unit help for Measured value" });
+    fireEvent.click(help);
+    expect(screen.getByText("Enter the measurement in its source unit.")).toBeVisible();
+    expect(screen.getByText(/Default unit: mm · length/)).toBeVisible();
+
+    const details = screen.getByText("About & methods").closest("details");
+    expect(details).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByText("About & methods"));
+    expect(details).toHaveAttribute("open");
+    expect(screen.getByText("Multiply by the exact SI conversion factor.")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Unit reference" })).toHaveAttribute("href", "https://example.org/units");
   });
 
   it("offers no connected results to unit selectors", () => {
