@@ -23,10 +23,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from backend.asset_store import _CONTENT_REF_RE, assets_dir_for
+from backend.asset_store import AssetStore, _CONTENT_REF_RE, assets_dir_for
 from backend.db_backup import _valid_backup, list_backups
 from backend.instance_lock import exclusive_data_directory
-from backend.workspace_archive import _collect_asset_refs
+from backend.workspace_archive import _collect_asset_refs, _collect_externalized_plugin_refs
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ class AssetGcReport:
     dry_run: bool
 
 
-def _read_references(database: Path, *, immutable: bool) -> set[str]:
+def _read_references(database: Path, *, immutable: bool, asset_store: AssetStore | None = None) -> set[str]:
     """Read all graph payloads or fail closed; unknown/corrupt rows are unsafe."""
     uri = database.resolve().as_uri() + ("?mode=ro&immutable=1" if immutable else "?mode=ro")
     refs: set[str] = set()
@@ -66,6 +66,11 @@ def _read_references(database: Path, *, immutable: bool) -> set[str]:
                     f"Graphlink database has an unreadable graph payload: {database}"
                 ) from exc
             _collect_asset_refs(parsed, refs)
+            if asset_store is not None:
+                # A large plugin state can itself be an asset pointing to a
+                # typed scientific table. Fail closed if its refs cannot be
+                # inspected: pruning an unknown dependency is never safe.
+                _collect_externalized_plugin_refs(parsed, refs, asset_store, strict=True)
     return refs
 
 
@@ -112,16 +117,17 @@ def collect_unreferenced_assets(
     if not 0 <= min_age_days <= 36500:
         raise ValueError("min_age_days must be between zero and 36500")
     with exclusive_data_directory(db_path):
-        refs = _read_references(db_path, immutable=False)
+        root = assets_dir_for(db_path)
+        store = AssetStore(root)
+        refs = _read_references(db_path, immutable=False, asset_store=store)
         for backup in list_backups(db_path):
             if not _valid_backup(backup, required_table=_CHAT_TABLES):
                 raise RuntimeError(
                     f"Cannot safely clean assets: a retained backup is invalid ({backup}). "
                     "Repair or quarantine backups before attempting deletion."
                 )
-            refs.update(_read_references(backup, immutable=True))
+            refs.update(_read_references(backup, immutable=True, asset_store=store))
 
-        root = assets_dir_for(db_path)
         cutoff = time.time() - (min_age_days * 86400)
         candidates = _candidate_files(root, refs, cutoff)
         deleted_assets = 0

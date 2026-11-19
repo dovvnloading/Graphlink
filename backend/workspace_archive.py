@@ -53,6 +53,7 @@ from graphlink_version import APP_VERSION
 
 from backend import asset_store as asset_store_module
 from backend.asset_store import AssetStore, extension_for_mime
+from backend.plugin_sdk import MAX_PLUGIN_STATE_BYTES
 from backend.secret_scrub import scrub
 
 logger = logging.getLogger(__name__)
@@ -172,6 +173,59 @@ def _mime_by_ref(value: Any, mapping: dict[str, str]) -> None:
             _mime_by_ref(item, mapping)
 
 
+def _collect_externalized_plugin_refs(
+    value: Any, found: set[str], store: AssetStore, *,
+    mimes: dict[str, str] | None = None, strict: bool = False,
+    seen: set[str] | None = None,
+) -> None:
+    """Follow only verified externalized plugin-state JSON to its nested assets.
+
+    Scientific typed tables and other assets can be referenced *inside* a
+    plugin-state asset when the plugin metadata exceeds the inline threshold.
+    Reading the outer chat JSON alone would miss these blobs during archive
+    export and (more dangerously) offline asset garbage collection. Do not
+    parse arbitrary binary assets as JSON or follow unbounded references.
+    """
+    visited = set() if seen is None else seen
+    if isinstance(value, dict):
+        if "plugin_state_asset" in value:
+            descriptor = value["plugin_state_asset"]
+            ref = descriptor.get("asset_ref") if isinstance(descriptor, dict) else None
+            if not isinstance(ref, str) or not ref:
+                if strict:
+                    raise RuntimeError("Cannot safely scan an invalid externalized plugin-state reference.")
+            elif ref not in visited:
+                visited.add(ref)
+                raw = store.get(ref, max_bytes=MAX_PLUGIN_STATE_BYTES)
+                if raw is None:
+                    if strict:
+                        raise RuntimeError("Cannot safely clean assets: an externalized plugin state is unavailable.")
+                else:
+                    try:
+                        nested = json.loads(raw)
+                    except (TypeError, ValueError):
+                        if strict:
+                            raise RuntimeError(
+                                "Cannot safely clean assets: an externalized plugin state is unreadable."
+                            ) from None
+                    else:
+                        _collect_asset_refs(nested, found)
+                        if mimes is not None:
+                            _mime_by_ref(nested, mimes)
+                        _collect_externalized_plugin_refs(
+                            nested, found, store, mimes=mimes, strict=strict, seen=visited,
+                        )
+        for item in value.values():
+            _collect_externalized_plugin_refs(
+                item, found, store, mimes=mimes, strict=strict, seen=visited,
+            )
+    elif isinstance(value, list):
+        for item in value:
+            _collect_externalized_plugin_refs(
+                item, found, store, mimes=mimes, strict=strict, seen=visited,
+            )
+
+
 def export_archive(
     archive_path: Path,
     chats: list[dict[str, Any]],
@@ -256,6 +310,7 @@ def export_archive(
                 _collect_asset_refs(payload["data"], refs)
                 mimes: dict[str, str] = {}
                 _mime_by_ref(payload["data"], mimes)
+                _collect_externalized_plugin_refs(payload["data"], refs, live_assets, mimes=mimes)
                 for ref in sorted(refs):
                     if ref in written_refs:
                         continue

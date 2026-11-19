@@ -70,14 +70,14 @@ function csvCell(value: unknown): string {
 
 const PREVIEW_ROWS = 30;
 
-function Results({ result, title, exportJson, onChart, onRefresh, charts }: {
-  result: ScienceResult; title: string; exportJson: () => Promise<string>;
+function Results({ result, title, exportJson, exportCsv, onChart, onRefresh, charts }: {
+  result: ScienceResult; title: string; exportJson: () => Promise<string>; exportCsv: () => Promise<Blob>;
   onChart: (type: ScienceChartType) => void; onRefresh: (chart: ScienceChartLink) => void;
   charts: ScienceChartLink[];
 }) {
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
-  const { table, plot, provenance } = result;
+  const { table, tableAsset, plot, provenance } = result;
   const chartTypes = chartableScienceTypes(result);
   const [chartType, setChartType] = useState<ScienceChartType>(chartTypes[0] ?? "scatter");
   const baseName = `${provenance.packId}-${result.operationId}`;
@@ -117,6 +117,16 @@ function Results({ result, title, exportJson, onChart, onRefresh, charts }: {
       </table>
       {table.rows.length > PREVIEW_ROWS && <small>Showing {PREVIEW_ROWS} of {table.rows.length} rows. Export CSV for all rows.</small>}
     </div>}
+    {tableAsset && <div className="science-table">
+      <p role="status">Saved result table · {tableAsset.rowCount.toLocaleString()} rows · {tableAsset.columnCount} typed columns</p>
+      <table aria-label="Generated result table preview">
+        <thead><tr>{tableAsset.columns.slice(0, tableAsset.previewColumns).map((col, i) =>
+          <th key={i} scope="col" title={col.type + ", " + col.missingCount + " missing"}>{col.label}<small>{col.type}{col.missingCount ? " · " + col.missingCount + " missing" : ""}</small></th>)}</tr></thead>
+        <tbody>{tableAsset.preview.map((row, i) =>
+          <tr key={i}>{row.map((cell, j) => <td key={j}>{cell === null ? "—" : display(cell)}</td>)}</tr>)}</tbody>
+      </table>
+      <small>Preview: {tableAsset.preview.length} of {tableAsset.rowCount.toLocaleString()} rows. Export CSV for the full table or connect this node to use its typed columns.</small>
+    </div>}
     {provenance.inputUnits != null && <details><summary>Units used</summary>
       <pre>{JSON.stringify(provenance.inputUnits, null, 2)}</pre>
     </details>}
@@ -131,8 +141,19 @@ function Results({ result, title, exportJson, onChart, onRefresh, charts }: {
         catch (e) { setError(e instanceof Error ? e.message : "Export failed."); }
         finally { setExporting(false); }
       }}>Export JSON</button>
-      <button type="button" onClick={() => saveText(writeTableCsv([csv.columns.map(csvCell), ...csv.rows.map((row) => row.map(csvCell))]),
-        `${baseName}.csv`, "text/csv;charset=utf-8")}>Export CSV</button>
+      <button type="button" disabled={exporting} onClick={async () => {
+        setError("");
+        setExporting(true);
+        try {
+          if (tableAsset) {
+            downloadBlob(await exportCsv(), `${baseName}.csv`);
+          } else {
+            saveText(writeTableCsv([csv.columns.map(csvCell), ...csv.rows.map((row) => row.map(csvCell))]),
+              `${baseName}.csv`, "text/csv;charset=utf-8");
+          }
+        } catch (e) { setError(e instanceof Error ? e.message : "CSV export failed."); }
+        finally { setExporting(false); }
+      }}>Export CSV</button>
       {chartTypes.length > 0 && <>
         <label>Chart type
           <select aria-label="Chart type" value={chartTypes.includes(chartType) ? chartType : chartTypes[0]}
@@ -236,6 +257,7 @@ function TableEditor({ state, nodeId, pluginId, store }: {
   const [overrides, setOverrides] = useState("{}");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [exporting, setExporting] = useState(false);
   const table = state.table;
   const rowsLimit = state.limits?.tableRows ?? 100000;
   const cellsLimit = state.limits?.tableCells ?? 1000000;
@@ -323,6 +345,15 @@ function TableEditor({ state, nodeId, pluginId, store }: {
         </table>
       </div>
       <small>Preview: {table.preview.length} rows, {table.previewColumns} columns. Connect this workbench to another to use the complete typed table with text, categorical and numeric column pickers, or select a bounded numeric vector.</small>
+      <button type="button" disabled={exporting} onClick={async () => {
+        setError("");
+        setExporting(true);
+        try {
+          downloadBlob(await store.exportScientificTableCsv(pluginId, nodeId, "import", state.runToken),
+            `${table.sourceName.replace(/[^a-zA-Z0-9._-]/g, "_")}.csv`);
+        } catch (e) { setError(e instanceof Error ? e.message : "CSV export failed."); }
+        finally { setExporting(false); }
+      }}>Export full table CSV</button>
       <details><summary>Import receipt and parsing options</summary>
         <pre>{JSON.stringify(table.provenance, null, 2)}</pre>
       </details>
@@ -520,9 +551,9 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
   </form>;
 }
 
-function Workbench({ session, state, options, run, configure, cancel, fetchTableColumn, exportJson, charts, onChart, onRefresh, tableEditor }: {
+function Workbench({ session, state, options, run, configure, cancel, fetchTableColumn, exportJson, exportCsv, charts, onChart, onRefresh, tableEditor }: {
   session: ScienceEditorSession; state: ScienceState; options: SourceOption[]; run: Run; configure: Run; cancel: Cancel; fetchTableColumn: FetchTableColumn;
-  exportJson: () => Promise<string>; tableEditor: ReactNode;
+  exportJson: () => Promise<string>; exportCsv: () => Promise<Blob>; tableEditor: ReactNode;
   charts: ScienceChartLink[]; onChart: (type: ScienceChartType) => void; onRefresh: (chart: ScienceChartLink) => void;
 }) {
   const [selected, setSelected] = useState(session.selected ?? state.runner?.operationId ?? state.latest?.operationId ?? state.operations[0].id);
@@ -539,7 +570,7 @@ function Workbench({ session, state, options, run, configure, cancel, fetchTable
       options={options} run={run} configure={configure} cancel={cancel} fetchTableColumn={fetchTableColumn}
       busy={busy} setBusy={setBusy} />
     {tableEditor}
-    {state.latest && <Results key={revision} result={state.latest} exportJson={exportJson}
+    {state.latest && <Results key={revision} result={state.latest} exportJson={exportJson} exportCsv={exportCsv}
       charts={charts} onChart={onChart} onRefresh={onRefresh} title={
       state.operations.find((candidate) => candidate.id === state.latest?.operationId)?.title ?? state.latest.operationId
     } />}
@@ -556,12 +587,14 @@ export const ScientificNodeView = memo(function ScientificNodeView({ data, id, s
       : state?.error ? <p role="alert">{state.error}</p> : state && data.pluginId === "science_" + state.packId
       ? <Workbench key={state.nodeKey ?? id} session={data.store.scientificEditor(id, state.nodeKey)} state={state} options={options}
         exportJson={() => data.store.exportScientificResult(data.pluginId, id, state.runToken)}
+        exportCsv={() => data.store.exportScientificTableCsv(data.pluginId, id, "result", state.runToken)}
         tableEditor={<TableEditor state={state} nodeId={id} pluginId={data.pluginId} store={data.store} />}
         fetchTableColumn={async (option) => {
           if (!option.tableColumn) throw new Error("Choose a typed table column.");
           const { nodeId, column, policy, start, end } = option.tableColumn;
           const answer = await tableIntent(data.store, data.pluginId, "table_column", {
             node_id: id, source_node_id: nodeId, column, policy, start, end,
+            table_source: option.tableColumn.source ?? "import",
             expected_hash: option.reference.resultHash, expected_receipt: option.reference.receiptHash,
           });
           if (!Array.isArray(answer.values) || !answer.values.every((n) => typeof n === "number" && Number.isFinite(n))

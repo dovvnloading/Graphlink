@@ -174,3 +174,29 @@ def test_storage_failure_keeps_live_state_and_allows_retry(tmp_path, registered,
             _save(document, registry, store)
     descriptor = _save(document, registry, store)["nodes"][0]["plugin_state_asset"]
     assert content_ref(store.get(descriptor["asset_ref"])) == descriptor["asset_ref"]
+
+
+def test_archive_follows_nested_typed_table_asset_in_externalized_plugin_state(tmp_path):
+    """A wide scientific table's metadata may itself exceed the 8 KiB inline limit."""
+    source = AssetStore(tmp_path / "assets")
+    table_ref = source.put(b'{"version":1,"columns":[],"rows":[]}')
+    state = {"latest": {"tableAsset": {
+        "asset_ref": table_ref, "mime_type": "application/json",
+    }}}
+    state_ref = source.put(json.dumps(state).encode("utf-8"))
+    saved = {"nodes": [{"node_type": KIND, "plugin_state_asset": {
+        "asset_ref": state_ref, "mime_type": "application/json",
+    }}]}
+    # The ordinary walk can only see the outer descriptor, but export must
+    # follow the verified plugin-state JSON to include the actual table.
+    refs = set()
+    _collect_asset_refs(saved, refs)
+    assert refs == {state_ref}
+
+    archive = export_archive(
+        tmp_path / "nested.graphlink", [{"title": "Table", "data": saved}], live_assets=source,
+    )
+    target = AssetStore(tmp_path / "imported")
+    imported = import_archive(archive, target_assets=target)
+    assert imported[0]["data"] == saved
+    assert target.verify(state_ref) and target.verify(table_ref)

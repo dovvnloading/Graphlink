@@ -106,3 +106,48 @@ def test_active_graphlink_instance_prevents_asset_cleanup(tmp_path):
     with exclusive_data_directory(db):
         with pytest.raises(DataDirectoryInUse):
             collect_unreferenced_assets(db, apply=True)
+
+
+def test_externalized_plugin_state_protects_nested_table_assets_from_gc(tmp_path):
+    db = _db(tmp_path / "chats.db")
+    store = store_for(db)
+    table_ref = store.put(b"full typed table payload")
+    state_ref = store.put(json.dumps({"latest": {"tableAsset": {
+        "asset_ref": table_ref, "mime_type": "application/json",
+    }}}).encode("utf-8"))
+    for ref in (table_ref, state_ref):
+        _age(store._path_for(ref))
+    with sqlite3.connect(db) as conn:
+        conn.execute("INSERT INTO graphs (data) VALUES (?)", (json.dumps({
+            "nodes": [{"node_type": "science_statistics.workbench", "plugin_state_asset": {
+                "asset_ref": state_ref, "mime_type": "application/json",
+            }}],
+        }),))
+    report = collect_unreferenced_assets(db, apply=True, min_age_days=0)
+    assert report.deleted_assets == 0
+    assert report.referenced_assets == 2
+    assert store.verify(table_ref) and store.verify(state_ref)
+
+    with sqlite3.connect(db) as conn:
+        conn.execute("DELETE FROM graphs")
+    assert collect_unreferenced_assets(db, apply=True, min_age_days=0).deleted_assets == 2
+
+
+def test_asset_gc_fails_closed_when_externalized_plugin_state_is_missing(tmp_path):
+    db = _db(tmp_path / "chats.db")
+    store = store_for(db)
+    table_ref = store.put(b"dependent typed table")
+    state_ref = store.put(json.dumps({"latest": {
+        "tableAsset": {"asset_ref": table_ref},
+    }}).encode("utf-8"))
+    _age(store._path_for(table_ref))
+    with sqlite3.connect(db) as conn:
+        conn.execute("INSERT INTO graphs (data) VALUES (?)", (json.dumps({
+            "nodes": [{"node_type": "science_statistics.workbench", "plugin_state_asset": {
+                "asset_ref": state_ref, "mime_type": "application/json",
+            }}],
+        }),))
+    store._path_for(state_ref).unlink()
+    with pytest.raises(RuntimeError, match="plugin state is unavailable"):
+        collect_unreferenced_assets(db, apply=True, min_age_days=0)
+    assert store.verify(table_ref)

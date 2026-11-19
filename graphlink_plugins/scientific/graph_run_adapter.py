@@ -201,6 +201,21 @@ def prepare(document: Any, node: Any, granted: Any) -> tuple[Any, dict, dict, st
                 raise SceneError("The connected typed table selection is invalid.") from exc
             result_hash = table["asset_ref"]
             receipt_hash = table["provenance"]["receiptHash"]
+        elif selector == ["result_table"] or (
+                len(selector) == 5 and selector[0] == "result_table_column"):
+            latest = source_data.get("latest")
+            table = latest.get("tableAsset") if isinstance(latest, dict) else None
+            if not isinstance(table, dict) or not table_metadata_valid(table):
+                raise SceneError("The connected result table is unavailable.")
+            if selector == ["result_table"]:
+                value = table
+            else:
+                try:
+                    value = numeric_column(table, *selector[1:])
+                except (ValueError, IndexError, KeyError, TypeError) as exc:
+                    raise SceneError("The connected result column is unavailable.") from exc
+            result_hash = latest["provenance"]["resultHash"]
+            receipt_hash = latest["provenance"]["receiptHash"]
         else:
             latest = source_data.get("latest")
             if not isinstance(latest, dict):

@@ -1681,8 +1681,9 @@ export class SceneStore {
     // The server kills each worker by 600 s at the latest. Do not let the
     // transport's generic 10 s timeout abandon a longer scientific run.
     const call = [pluginId, name, args];
-    const answer = name === "run"
-      ? await this.transport.request("app-plugins", "invokePluginIntent", call, 615_000)
+    const answer = name === "run" || name === "export_table_csv"
+      ? await this.transport.request("app-plugins", "invokePluginIntent", call,
+        name === "run" ? 615_000 : 120_000)
       : await this.transport.request("app-plugins", "invokePluginIntent", call);
     if (answer && typeof answer === "object" && "ok" in answer && answer.ok === true) return answer;
     if (answer && typeof answer === "object" && "error" in answer && typeof answer.error === "string") {
@@ -1717,6 +1718,46 @@ export class SceneStore {
     });
     if (!("json" in answer) || typeof answer.json !== "string") throw new Error("The result export could not be read.");
     return answer.json;
+  }
+
+  /** Download every row without putting a large dataset on the scene wire. */
+  async exportScientificTableCsv(pluginId: string, nodeId: string,
+    tableSource: "result" | "import", expectedRun?: string): Promise<Blob> {
+    const chunks: ArrayBuffer[] = [];
+    let offset = 0;
+    let expectedTotal: number | undefined;
+    for (;;) {
+      const answer = await this.scientificIntent(pluginId, "export_table_csv", {
+        node_id: nodeId, table_source: tableSource, offset,
+        ...(expectedRun && { expected_run: expectedRun }),
+      }) as Record<string, unknown>;
+      if (typeof answer.chunk !== "string" || typeof answer.nextOffset !== "number"
+          || typeof answer.totalBytes !== "number" || typeof answer.done !== "boolean"
+          || !Number.isSafeInteger(answer.nextOffset) || !Number.isSafeInteger(answer.totalBytes)
+          || answer.totalBytes < 1 || answer.nextOffset <= offset
+          || answer.nextOffset > answer.totalBytes
+          || (expectedTotal !== undefined && answer.totalBytes !== expectedTotal)) {
+        throw new Error("The CSV export returned an invalid page.");
+      }
+      let bytes: Uint8Array;
+      try {
+        bytes = Uint8Array.from(atob(answer.chunk), (char) => char.charCodeAt(0));
+      } catch {
+        throw new Error("The CSV export returned invalid encoded bytes.");
+      }
+      if (offset + bytes.byteLength !== answer.nextOffset
+          || (answer.done && answer.nextOffset !== answer.totalBytes)
+          || (!answer.done && answer.nextOffset === answer.totalBytes)) {
+        throw new Error("The CSV export returned an incomplete page.");
+      }
+      // BlobPart requires ArrayBuffer rather than a possibly shared typed-array buffer.
+      const copy = new Uint8Array(bytes.byteLength);
+      copy.set(bytes);
+      chunks.push(copy.buffer);
+      offset = answer.nextOffset;
+      expectedTotal = answer.totalBytes;
+      if (answer.done) return new Blob(chunks, { type: "text/csv;charset=utf-8" });
+    }
   }
 
   addTable(): void {

@@ -344,3 +344,63 @@ describe("formatScienceNumber", () => {
     expect(formatScienceNumber(Number.NaN)).toBe("NaN");
   });
 });
+
+
+describe("generated typed-table result sources", () => {
+  const asset = {
+    version: 1 as const, asset_ref: "a".repeat(64), mime_type: "application/json",
+    rowCount: 12000, columnCount: 3, previewColumns: 3, sourceName: "statistics.generated result",
+    columns: [
+      { name: "Index", label: "Index", unit: "", type: "numeric" as const, missingCount: 0 },
+      { name: "Group", label: "Group", unit: "", type: "categorical" as const, missingCount: 0 },
+      { name: "Value", label: "Value (m)", unit: "m", type: "numeric" as const, missingCount: 3 },
+    ],
+    preview: [[0, "A", 1.2], [1, "B", null]],
+    provenance: { fileHash: "b".repeat(64), tableHash: "a".repeat(64),
+      receiptHash: "c".repeat(64), parseOptions: { source: "operation" } },
+  };
+  const result: ScienceResult = {
+    operationId: "generated", inputs: {}, values: {}, summary: "complete",
+    tableAsset: asset, provenance: { resultHash: "d".repeat(64), receiptHash: "e".repeat(64) },
+  };
+  const raw = JSON.stringify({
+    scienceVersion: 1, packId: "statistics", nodeKey: "f".repeat(32),
+    operations: [{ id: "generated", title: "Generate", description: "", fields: [], example: {} }],
+    latest: result,
+  });
+
+  it("parses compact generated metadata and rejects conflicting inline or corrupt data", () => {
+    expect(readScienceState(raw)?.latest?.tableAsset).toEqual(asset);
+    expect(readScienceState(JSON.stringify({
+      ...JSON.parse(raw), latest: { ...result, table: { columns: ["x"], rows: [[1]] } },
+    }))).toBeNull();
+    expect(readScienceState(JSON.stringify({
+      ...JSON.parse(raw), latest: { ...result, tableAsset: { ...asset, preview: [[1]] } },
+    }))).toBeNull();
+  });
+
+  it("provides a whole result table plus explicit bounded numeric column selectors", () => {
+    const options = sourceOptions([{ nodeId: "producer", title: "Source", raw }], 1024);
+    const whole = options.find((option) => option.reference.selector[0] === "result_table")!;
+    expect(whole.value).toEqual(asset);
+    expect(whole.reference).toMatchObject({
+      sourceKey: "f".repeat(32), resultHash: result.provenance.resultHash,
+      receiptHash: result.provenance.receiptHash,
+    });
+    expect(compatibleOptions({
+      key: "table", label: "Table", kind: "table", unit: "", description: "",
+    }, options)).toEqual([whole]);
+    const columns = options.filter((option) => option.reference.selector[0] === "result_table_column");
+    expect(columns).toHaveLength(3);
+    expect(columns[0].tableColumn).toEqual({
+      nodeId: "producer", column: 0, policy: "reject", start: 0, end: 1024, source: "result",
+    });
+    expect(columns[1].tableColumn?.column).toBe(2);
+    expect(columns[2].tableColumn?.policy).toBe("drop");
+    expect(columns[1].reference.resultHash).toBe(result.provenance.resultHash);
+    expect(compatibleOptions({
+      key: "vector", label: "Vector", kind: "vector", unit: "", description: "",
+    }, options)).toEqual(columns);
+    expect(matchesSource(whole, { ...whole.reference, resultHash: "outdated" })).toBe(false);
+  });
+});

@@ -22,7 +22,7 @@ MAX_CELLS = 4096
 MAX_TEXT = 65536
 MAX_RESULT_BYTES = 512 * 1024
 # Legacy 1.0.0 and 1.1.0 receipts remain readable without rewriting.
-# Typed imported tables have independent, larger storage limits.
+# Imported and generated typed tables have independent, larger storage limits.
 TABLE_MAX_ROWS = 100_000
 TABLE_MAX_COLUMNS = 256
 TABLE_MAX_CELLS = 1_000_000
@@ -383,16 +383,33 @@ def check_artifact(data: dict) -> None:
         if not isinstance(table, dict) or not isinstance(table.get("columns"), list) or not isinstance(table.get("rows"), list):
             raise ValueError("Table columns and rows must be arrays.")
         columns, rows = table["columns"], table["rows"]
-        if not columns or len(columns) > MAX_COLUMNS or len(rows) > MAX_POINTS or len(rows) * len(columns) > MAX_CELLS:
-            raise ValueError("Result table exceeds the supported dimensions.")
+        if (not columns or len(columns) > TABLE_MAX_COLUMNS or len(rows) > TABLE_MAX_ROWS
+                or len(rows) * len(columns) > TABLE_MAX_CELLS):
+            raise ValueError("Result table exceeds 100,000 rows, 256 columns or 1,000,000 cells.")
+        legacy_inline = (len(columns) <= MAX_COLUMNS and len(rows) <= MAX_POINTS
+                         and len(rows) * len(columns) <= MAX_CELLS)
+        # Do not retrospectively invalidate pre-existing small-table receipts,
+        # whose headers/cells were constrained by the 512 KiB result limit.
         if not all(isinstance(c, str) for c in columns):
             raise ValueError("Table headers must be text.")
+        if not legacy_inline and not all(0 < len(c) <= 256 for c in columns):
+            raise ValueError("Typed table headers must be nonempty text of at most 256 characters.")
         for row in rows:
             if not isinstance(row, list) or len(row) != len(columns):
                 raise ValueError("Result table contains a row with the wrong number of cells.")
             for cell in row:
-                if not isinstance(cell, str):
+                if legacy_inline:
+                    if not isinstance(cell, str):
+                        finite(cell, "Table cell")
+                elif isinstance(cell, str):
+                    if len(cell) > 65_536:
+                        raise ValueError("Result table cells may not exceed 65,536 characters.")
+                elif cell is not None and type(cell) is not bool:
                     finite(cell, "Table cell")
+    if "tableAsset" in data:
+        from .data_table import table_metadata_valid
+        if "table" in data or not table_metadata_valid(data["tableAsset"]):
+            raise ValueError("Result requires one valid typed table asset or an inline table.")
     if "uncertainty" in data:
         from .propagation import check_uncertainty
         check_uncertainty(data["uncertainty"], data["values"])
@@ -430,6 +447,19 @@ def calculate_result(pack: str, operation: Operation, inputs: dict, sources: dic
             output = {**output, "uncertainty": propagate(
                 operation, inputs, output, uncertainty_inputs, uncertainty_method)}
             check_artifact(output)
+        # Keep historical small-table results (and their hashes) unchanged.
+        # Large outputs must not cross the worker pipe, graph wire or 512 KiB
+        # receipt boundary. Store their complete rows as a verified typed asset.
+        table = output.get("table")
+        if table is not None and (
+                len(table["rows"]) > MAX_POINTS or len(table["columns"]) > MAX_COLUMNS
+                or len(table["rows"]) * len(table["columns"]) > MAX_CELLS
+                or len(canonical_bytes(output)) > MAX_RESULT_BYTES):
+            from .data_table import stage_result_table
+            metadata = stage_result_table(table, pack=pack, operation_id=operation.id)
+            output = {**{key: value for key, value in output.items() if key != "table"},
+                      "tableAsset": metadata}
+            check_artifact(output)
         input_hash = fingerprint(inputs)
         result_hash = fingerprint([pack, VERSION, operation.id, input_hash, output])
     except ArithmeticError:
@@ -463,11 +493,11 @@ def _source_valid(ref: dict) -> bool:
     if ref.get("sourceKey") is not None and not _NODE_KEY.fullmatch(ref["sourceKey"]):
         return False
     match ref.get("selector"):
-        case ["plot", "x" | "y"] | ["table"] | ["typed_table"] | ["values", str()]:
+        case ["plot", "x" | "y"] | ["table"] | ["typed_table"] | ["result_table"] | ["values", str()]:
             return True
         case ["column", int(index)]:
             return type(index) is int and 0 <= index < MAX_COLUMNS
-        case ["table_column", int(index), ("reject" | "drop"), int(start), int(end)]:
+        case ["table_column" | "result_table_column", int(index), ("reject" | "drop"), int(start), int(end)]:
             return (type(index) is int and 0 <= index < TABLE_MAX_COLUMNS
                     and type(start) is int and type(end) is int
                     and 0 <= start < end <= TABLE_MAX_ROWS and end - start <= MAX_POINTS)
@@ -497,7 +527,7 @@ def readable_result(data: dict, pack: str) -> bool:
         if (not isinstance(sources, dict) or sources.keys() - result["inputs"].keys()
                 or not all(_source_valid(ref) for ref in sources.values())):
             return False
-        output = {k: result[k] for k in ("summary", "values", "table", "plot", "uncertainty") if k in result}
+        output = {k: result[k] for k in ("summary", "values", "table", "tableAsset", "plot", "uncertainty") if k in result}
         check_artifact(output)
         inputs_hash = fingerprint(result["inputs"])
         version = receipt["packVersion"]
