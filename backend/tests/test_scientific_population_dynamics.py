@@ -156,16 +156,19 @@ def test_matrix_projection_fibonacci_leslie_and_perron_oracle():
 
 
 def test_matrix_periodic_and_zero_population_edge_cases():
-    # A period-two matrix does not generally converge to stage proportions
-    # under power iteration; still return its exact finite projections.
+    # A period-two matrix still has a Perron root (sqrt(2 * 0.5) = 1) and
+    # eigenvector (2:1); its stage proportions cycle instead of converging.
     periodic = run("matrix_population_projection",
                    projection_matrix=[[0, 2], [.5, 0]],
                    initial_population=[1, 1], steps=4, time_step_unit="months")
     assert [row[-1] for row in periodic["table"]["rows"]] == pytest.approx(
         [2, 2.5, 2, 2.5, 2])
-    assert "undefined" in periodic["values"]["asymptotic_growth_factor_per_step"]
+    assert periodic["values"]["asymptotic_growth_factor_per_step"] == pytest.approx(1, rel=1e-9)
     assert periodic["values"]["finite_horizon_growth_factor_per_step"] == pytest.approx(1)
-    assert "stable_stage_1_fraction" not in periodic["values"]
+    assert periodic["values"]["stable_stage_1_fraction"] == pytest.approx(2 / 3, rel=1e-9)
+    assert periodic["values"]["stable_stage_2_fraction"] == pytest.approx(1 / 3, rel=1e-9)
+    assert periodic["values"]["stage_structure_behaviour"].startswith("periodic")
+    assert "cycle" in periodic["summary"]
 
     zero = run("matrix_population_projection",
                projection_matrix=[[0, 0], [0, 0]],
@@ -174,6 +177,28 @@ def test_matrix_periodic_and_zero_population_edge_cases():
     assert zero["values"]["finite_horizon_growth_factor_per_step"] == 0
     assert zero["values"]["asymptotic_growth_factor_per_step"] == 0
     assert "stable_stage_1_fraction" not in zero["values"]
+
+
+def test_semelparous_leslie_matrix_reports_perron_root():
+    # Only the last age class breeds, so the matrix is periodic (period 3).
+    # The Perron root is (F s1 s2)^(1/3) and the eigenvector is
+    # proportional to (1, s1/lambda, s1 s2/lambda^2).
+    fertility, s1, s2 = 6.0, 0.5, 0.5
+    result = run("matrix_population_projection",
+                 projection_matrix=[[0, 0, fertility], [s1, 0, 0], [0, s2, 0]],
+                 initial_population=[10, 0, 0], steps=9, time_step_unit="years")
+    v = result["values"]
+    lam = (fertility * s1 * s2) ** (1 / 3)
+    assert v["asymptotic_growth_factor_per_step"] == pytest.approx(lam, rel=1e-9)
+    assert v["asymptotic_log_growth_rate"] == pytest.approx(math.log(lam), rel=1e-8)
+    weights = [1, s1 / lam, s1 * s2 / lam**2]
+    for i, weight in enumerate(weights, start=1):
+        assert v[f"stable_stage_{i}_fraction"] == pytest.approx(weight / sum(weights), rel=1e-9)
+    assert v["stage_structure_behaviour"].startswith("periodic")
+    # The primitive Fibonacci matrix keeps converging behaviour.
+    primitive = run("matrix_population_projection", projection_matrix=[[1, 1], [1, 0]],
+                    initial_population=[1, 0], steps=5, time_step_unit="years")
+    assert primitive["values"]["stage_structure_behaviour"].startswith("converges")
 
 
 @pytest.mark.parametrize("override", [
