@@ -77,9 +77,11 @@ def reference_receipt(dataset_id: str, version: str | None = None) -> dict[str, 
 
 
 def list_reference_datasets() -> tuple[dict[str, str], ...]:
-    from .catalog import PACKS
+    from .catalog import PINNED_PACKS
 
-    for pack in sorted(PACKS):
+    # Include bundled built-ins plus previously activated dynamic packs.
+    # Never import a newly discovered, unapproved plugin merely to list data.
+    for pack in sorted(PINNED_PACKS):
         _load_pack_datasets(pack)
     return tuple(
         {**reference_receipt(item.id, item.version), "source": item.source}

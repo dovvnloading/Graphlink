@@ -172,3 +172,19 @@ def test_new_pack_declares_its_own_reference_data_without_registry_edits(monkeyp
         reference_data._REGISTRY.pop((dataset_id, "1.0.0"), None)
         reference_data._ACTIVE.pop(dataset_id, None)
 
+
+def test_reference_inventory_does_not_import_unapproved_discovered_pack(monkeypatch):
+    from graphlink_plugins.scientific import catalog, reference_data
+
+    pack = "unapproved_references"
+    monkeypatch.setitem(catalog.PACKS, pack, ("Unapproved references", "Fixture"))
+    original_import = reference_data.import_module
+
+    def guarded_import(name, package):
+        if name == f".packs.{pack}":
+            raise AssertionError("Reference listing imported an unapproved pack")
+        return original_import(name, package)
+
+    monkeypatch.setattr(reference_data, "import_module", guarded_import)
+    assert len(list_reference_datasets()) >= 9
+
