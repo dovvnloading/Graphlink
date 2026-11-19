@@ -34,6 +34,21 @@ function setup(selectedIds: string[] = [], sceneNodes: Array<Record<string, unkn
 }
 
 describe("Graph Runner", () => {
+  it("formats scientific summaries in Graph Runner without changing checkpointed results", async () => {
+    const summary = "Active-site turnover kcat=1200 1/min; kcat/Km=1e+06 M⁻¹ s⁻¹.";
+    const scientific: GraphRun = { ...run, steps: [{
+      ...run.steps[0], kind: "scientific", operation: "catalytic_constants",
+      scientificResult: { operationId: "catalytic_constants", summary, inputs: {},
+        values: { kcat_over_km_si: 1000000 }, provenance: { resultHash: "a".repeat(64) } },
+    }] };
+    const { user, request } = setup();
+    request.mockResolvedValueOnce(scientific);
+    await user.click(screen.getByRole("button", { name: "Open runner" }));
+    const latest = await screen.findByRole("region", { name: "Latest run" });
+    expect(latest).toHaveTextContent("kcat/Km=1,000,000 M⁻¹ s⁻¹");
+    expect(scientific.steps[0].scientificResult?.summary).toBe(summary);
+  });
+
   it("previews the selected nodes and discards the preview when the scope changes", async () => {
     const { user, request } = setup(["source", "other"]);
     request.mockResolvedValueOnce(null)
