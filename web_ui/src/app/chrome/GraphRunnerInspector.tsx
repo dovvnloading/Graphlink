@@ -37,6 +37,9 @@ export function GraphRunnerInspectorContent({ trace, names, onSelect, statuses, 
           label={`Step ${step.index} · ${nodeName(step.destinationNodeId)} · ${statuses[step.status] ?? step.status}`}
           onToggle={() => onSelect(step.destinationNodeId)}>
           <div>Source: <strong>{nodeName(step.sourceNodeId)}</strong> <code>{step.sourceNodeId || "Unavailable"}</code></div>
+          {step.kind === "scientific" && !!step.sourceNodeIds?.length && <div>
+            Connected typed inputs: {step.sourceNodeIds.map(nodeName).join(", ")}
+          </div>}
           <div>Destination: <strong>{nodeName(step.destinationNodeId)}</strong> <code>{step.destinationNodeId || "Unavailable"}</code></div>
           <div>Operation: {operations[step.operation] ?? step.operation}</div>
           <div>Model: {step.model ? `${step.provider ?? "Provider not recorded"} · ${step.model}` : "Not recorded"}</div>
@@ -53,6 +56,14 @@ export function GraphRunnerInspectorContent({ trace, names, onSelect, statuses, 
           <div>Started: {traceTime(step.startedAt)}</div>
           <div>Finished: {traceTime(step.finishedAt)}</div>
           <div>Duration: {traceDuration(step.durationMs)}</div>
+          {step.kind === "scientific" && <>
+            <div>Scientific worker elapsed: {traceDuration(step.elapsedMs ?? null)}</div>
+            {step.errorType && <div>Typed error: {step.errorType}</div>}
+            {step.scientificResult && <div className="runner-fingerprints">
+              <div>Result SHA-256: <code>{hash(step.scientificResult.resultHash)}</code></div>
+              <div>Scientific receipt SHA-256: <code>{hash(step.scientificResult.receiptHash)}</code></div>
+            </div>}
+          </>}
           <div className="runner-attempts">
             <strong>Attempt history ({step.attempts.length})</strong>
             {step.attempts.length ? <ol>

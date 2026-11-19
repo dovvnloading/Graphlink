@@ -474,6 +474,7 @@ def test_args_schema_is_scoped_to_the_known_intents():
             # Graph Runner pins preview, execute, inspect and resume request shapes.
             ("scene", "previewGraphRun"),
             ("scene", "getGraphRun"),
+            ("scene", "cancelGraphRun"),
             ("scene", "executeGraphRun"),
             ("scene", "resumeGraphRun"),
             ("scene", "previewGraphModel"),

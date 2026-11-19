@@ -29,7 +29,7 @@ import type { DragSpeedState } from "../../lib/bridge-core/generated/drag-speed-
 import type { FontControlState } from "../../lib/bridge-core/generated/font-control-state";
 import type { ScenePatch, StreamListener, WsTransport } from "../../lib/ws/transport";
 import type { BridgeRejection } from "../../lib/bridge-core/islandState";
-import type { EditorDraft, Sources } from "./scientificWorkbench";
+import type { EditorDraft, Sources, ScienceResult } from "./scientificWorkbench";
 import { announce } from "../announcer";
 import { describeNodeRunTransition } from "./nodeRunAnnouncements";
 
@@ -173,6 +173,7 @@ export interface GraphRunExternalAttempt {
 export interface GraphRunStep {
   nodeId: string;
   sourceId: string;
+  sourceIds?: string[];
   label: string;
   kind: string;
   operation: string;
@@ -180,6 +181,9 @@ export interface GraphRunStep {
   detail: string;
   inputHash?: string;
   outputHash?: string;
+  elapsedMs?: number;
+  errorType?: "timeout" | "cancelled" | "invalid_input" | "worker_error" | "validation" | "conflict";
+  scientificResult?: ScienceResult;
   externalAttempt?: GraphRunExternalAttempt;
 }
 
@@ -1587,16 +1591,27 @@ export class SceneStore {
     ) as Promise<GraphRun>;
   }
 
-  executeGraphRun(nodeIds: string[], previewToken: string, operationId: string): Promise<GraphRun> {
-    return this.transport.request("scene", "executeGraphRun", [nodeIds, previewToken, operationId]) as Promise<GraphRun>;
+  executeGraphRun(nodeIds: string[], previewToken: string, operationId: string, scientific = false): Promise<GraphRun> {
+    const args = [nodeIds, previewToken, operationId];
+    // A Scientific Workbench operation may use its full 600-second isolated
+    // worker budget. The ordinary graph timeout is unchanged for other runs.
+    return (scientific
+      ? this.transport.request("scene", "executeGraphRun", args, 3_600_000)
+      : this.transport.request("scene", "executeGraphRun", args)) as Promise<GraphRun>;
   }
 
   getGraphRun(): Promise<LatestGraphRun | null> {
     return this.transport.request("scene", "getGraphRun", []) as Promise<LatestGraphRun | null>;
   }
 
-  resumeGraphRun(runId: string): Promise<GraphRun> {
-    return this.transport.request("scene", "resumeGraphRun", [runId]) as Promise<GraphRun>;
+  resumeGraphRun(runId: string, scientific = false): Promise<GraphRun> {
+    return (scientific
+      ? this.transport.request("scene", "resumeGraphRun", [runId], 3_600_000)
+      : this.transport.request("scene", "resumeGraphRun", [runId])) as Promise<GraphRun>;
+  }
+
+  cancelGraphRun(runId: string): Promise<{ ok: boolean }> {
+    return this.transport.request("scene", "cancelGraphRun", [runId]) as Promise<{ ok: boolean }>;
   }
 
   /** Request the current server-side layout without changing the canvas. */
@@ -1674,6 +1689,13 @@ export class SceneStore {
       throw new Error(answer.error);
     }
     throw new Error("Check this pack’s grant in Settings and the notification banner.");
+  }
+
+  async configureScientificRunner(pluginId: string, nodeId: string, operationId: string,
+    inputs: Record<string, unknown>, sources: Sources, expectedRun?: string): Promise<void> {
+    await this.scientificIntent(pluginId, "configure_runner", {
+      node_id: nodeId, operation_id: operationId, inputs, sources, ...(expectedRun && { expected_run: expectedRun }),
+    });
   }
 
   async runScientificOperation(pluginId: string, nodeId: string, operationId: string,

@@ -132,6 +132,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
 
     Classified("scene", "previewGraphRun", "B", "read-only: previews bound transforms on a projected graph"),
     Classified("scene", "getGraphRun", "B", "read-only: inspects saved run history"),
+    Classified("scene", "cancelGraphRun", "B", "run control: cancels active tasks and checkpoints the terminal receipt; no undo command"),
     Classified("scene", "executeGraphRun", "A", "content: records each completed output with its run id"),
     Classified("scene", "resumeGraphRun", "A", "content: records remaining output changes under the original run id"),
     Classified("scene", "getGraphModelBindings", "B", "read-only: inspect saved typed model ports and freshness"),

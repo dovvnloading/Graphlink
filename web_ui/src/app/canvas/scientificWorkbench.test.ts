@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chartableScienceTypes, compatibleOptions, fieldText, matchesSource, parseInputs, readScienceState, sourceOptions, type ScienceField, type ScienceResult, type ScienceState } from "./scientificWorkbench";
+import { chartableScienceTypes, compatibleOptions, draftInputs, fieldText, matchesSource, parseInputs, readScienceState, sourceOptions, type ScienceField, type ScienceResult, type ScienceState } from "./scientificWorkbench";
 
 const limits = { points: 3, columns: 2, cells: 4, text: 3 };
 function parse(kind: ScienceField["kind"], raw: string) {
@@ -171,5 +171,20 @@ describe("unit-aware scientific drafts", () => {
     expect(() => parseInputs(operation, {
       distance: "1 m", temperature: "300", samples: "[1]", grid: "[[1]]", count: "2.0",
     })).toThrow(/integer notation/);
+  });
+});
+
+describe("saved Graph Runner unit literals", () => {
+  it("quotes suffixed vector and matrix entries when restoring a saved configuration", () => {
+    const fields: ScienceField[] = [
+      { key: "samples", label: "Samples", kind: "vector", unit: "m", description: "" },
+      { key: "grid", label: "Grid", kind: "matrix", unit: "m", description: "" },
+    ];
+    const op = { id: "units", title: "Units", description: "", example: {}, fields };
+    const inputs = { samples: ["25 mm", 2], grid: [["1 cm", 3]] };
+    const draft = draftInputs(op, inputs);
+    expect(draft.samples).toBe('["25 mm",2]');
+    expect(draft.grid).toBe('[["1 cm",3]]');
+    expect(parseInputs(op, draft)).toEqual(inputs);
   });
 });

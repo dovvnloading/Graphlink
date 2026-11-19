@@ -10,7 +10,7 @@ import { createLinearScale } from "./charts/chartScales";
 import {
   chartableScienceTypes, compatibleOptions, connectedInputText, draftInputs, FieldError, fieldText, formatMeasurement, matchesSource, parseInputs, readScienceState, resultMeasurement, sourceOptions,
   type EditorDraft, type ScienceField, type ScienceLimits, type ScienceOperation, type ScienceParent, type SciencePlot, type ScienceResult,
-  type ScienceChartLink, type ScienceChartType, type ScienceState, type Sources, type SourceOption, type SourceReference,
+  type ScienceChartLink, type ScienceChartType, type ScienceState, type ScienceRunnerConfiguration, type Sources, type SourceOption, type SourceReference,
 } from "./scientificWorkbench";
 import "./ScientificNodeView.css";
 
@@ -301,9 +301,10 @@ type Run = (operationId: string, inputs: Record<string, unknown>, sources: Sourc
   method?: "auto" | "gum" | "monte_carlo") => Promise<void>;
 type Cancel = (operationId: string) => Promise<void>;
 function restoreDraft(op: ScienceOperation, result: ScienceResult | null, revision: string,
-  options: SourceOption[] = []): EditorDraft {
-  const sources = result?.provenance.sources ?? {};
-  const values = draftInputs(op, result?.inputs ?? op.example);
+  options: SourceOption[] = [], configured?: ScienceRunnerConfiguration | null): EditorDraft {
+  const runner = configured?.operationId === op.id ? configured : null;
+  const sources = runner?.sources ?? result?.provenance.sources ?? {};
+  const values = draftInputs(op, runner?.inputs ?? result?.inputs ?? op.example);
   // Restore the linked scalar in its source units instead of reusing the
   // normalized solver value and losing the original input-unit provenance.
   for (const field of op.fields) {
@@ -316,23 +317,26 @@ function restoreDraft(op: ScienceOperation, result: ScienceResult | null, revisi
   return { values, sources, revision, dirty: false };
 }
 
-function OperationEditor({ session, op, result, revision, runToken, limits, options, run, cancel, fetchTableColumn, busy, setBusy }: {
-  session: ScienceEditorSession; op: ScienceOperation; result: ScienceResult | null; revision: string; runToken?: string; limits?: ScienceLimits;
-  options: SourceOption[]; run: Run; cancel: Cancel; fetchTableColumn: FetchTableColumn; busy: boolean; setBusy: (busy: boolean) => void;
+function OperationEditor({ session, op, result, configured, revision, runToken, limits, options, run, configure, cancel, fetchTableColumn, busy, setBusy }: {
+  session: ScienceEditorSession; op: ScienceOperation; result: ScienceResult | null;
+  configured?: ScienceRunnerConfiguration | null; revision: string; runToken?: string; limits?: ScienceLimits;
+  options: SourceOption[]; run: Run; configure: Run; cancel: Cancel; fetchTableColumn: FetchTableColumn;
+  busy: boolean; setBusy: (busy: boolean) => void;
 }) {
-  const [draft, setDraft] = useState(() => session.drafts.get(op.id) ?? restoreDraft(op, result, revision, options));
+  const [draft, setDraft] = useState(() => session.drafts.get(op.id) ?? restoreDraft(op, result, revision, options, configured));
   useLayoutEffect(() => {
     if (draft.dirty) session.drafts.set(op.id, draft);
     else session.drafts.delete(op.id);
   }, [session, op.id, draft]);
   const [error, setError] = useState<{ message: string; field?: string } | null>(null);
   const [running, setRunning] = useState(false);
+  const [configuring, setConfiguring] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [uncertaintyMethod, setUncertaintyMethod] = useState<"auto" | "gum" | "monte_carlo">("auto");
   const errorId = useId();
   const changed = draft.revision !== revision;
   if (changed && !draft.dirty) {
-    setDraft(restoreDraft(op, result, revision, options));
+    setDraft(restoreDraft(op, result, revision, options, configured));
     setError(null);
   }
   const conflict = changed && draft.dirty;
@@ -361,6 +365,26 @@ function OperationEditor({ session, op, result, revision, runToken, limits, opti
       setDraft((old) => ({ ...old, dirty: false }));
     } catch (e) { setError({ message: e instanceof Error ? e.message : "The calculation failed." }); }
     finally { pending.current = false; setRunning(false); setBusy(false); }
+  }
+
+  async function saveForRunner() {
+    if (pending.current || conflict || stale) return;
+    setError(null);
+    let inputs: Record<string, unknown>;
+    try { inputs = parseInputs(op, draft.values, limits); }
+    catch (e) {
+      setError({ message: e instanceof Error ? e.message : "Check the inputs.",
+        field: e instanceof FieldError ? e.key : undefined });
+      return;
+    }
+    pending.current = true;
+    setConfiguring(true);
+    setBusy(true);
+    try {
+      await configure(op.id, inputs, draft.sources, runToken);
+      setDraft((old) => ({ ...old, dirty: false }));
+    } catch (e) { setError({ message: e instanceof Error ? e.message : "Could not save the runner configuration." }); }
+    finally { pending.current = false; setConfiguring(false); setBusy(false); }
   }
 
   return <form onSubmit={submit}>
@@ -413,19 +437,23 @@ function OperationEditor({ session, op, result, revision, runToken, limits, opti
         <p role="alert">The saved run changed while you were editing. Your inputs are still here.</p>
         <div className="science-actions">
           <button type="button" onClick={() => { setDraft({ ...draft, revision }); setError(null); }}>Keep my inputs</button>
-          <button type="button" onClick={() => { setDraft(restoreDraft(op, result, revision, options)); setError(null); }}>
+          <button type="button" onClick={() => { setDraft(restoreDraft(op, result, revision, options, configured)); setError(null); }}>
             {result ? "Load saved inputs" : "Reset to example"}
           </button>
         </div>
       </div>}
       <div className="science-actions">
         <button className="science-run" type="submit" disabled={busy || conflict || stale}>Run calculation</button>
+        <button type="button" disabled={busy || conflict || stale} onClick={() => void saveForRunner()}>
+          Save for Graph Runner
+        </button>
         <button type="button" onClick={() => {
           setDraft({ ...restoreDraft(op, null, revision), dirty: true }); setError(null);
         }}>Load example</button>
       </div>
+      {configured?.operationId === op.id && <small role="status">Saved as an explicit Graph Runner step.</small>}
     </fieldset>
-    {busy && <p role="status">{running ? "Running calculation…" : "Loading selected table column…"}</p>}
+    {busy && <p role="status">{running ? "Running calculation…" : configuring ? "Saving Graph Runner configuration…" : "Loading selected table column…"}</p>}
     {/* Outside the disabled fieldset; only real calculations can be cancelled, not table-column imports. */}
     {running && <div className="science-actions">
       <button type="button" className="science-cancel" disabled={cancelling} onClick={async () => {
@@ -439,22 +467,24 @@ function OperationEditor({ session, op, result, revision, runToken, limits, opti
   </form>;
 }
 
-function Workbench({ session, state, options, run, cancel, fetchTableColumn, exportJson, charts, onChart, onRefresh, tableEditor }: {
-  session: ScienceEditorSession; state: ScienceState; options: SourceOption[]; run: Run; cancel: Cancel; fetchTableColumn: FetchTableColumn;
+function Workbench({ session, state, options, run, configure, cancel, fetchTableColumn, exportJson, charts, onChart, onRefresh, tableEditor }: {
+  session: ScienceEditorSession; state: ScienceState; options: SourceOption[]; run: Run; configure: Run; cancel: Cancel; fetchTableColumn: FetchTableColumn;
   exportJson: () => Promise<string>; tableEditor: ReactNode;
   charts: ScienceChartLink[]; onChart: (type: ScienceChartType) => void; onRefresh: (chart: ScienceChartLink) => void;
 }) {
-  const [selected, setSelected] = useState(session.selected ?? state.latest?.operationId ?? state.operations[0].id);
+  const [selected, setSelected] = useState(session.selected ?? state.runner?.operationId ?? state.latest?.operationId ?? state.operations[0].id);
   const [busy, setBusy] = useState(false);
   const op = state.operations.find((candidate) => candidate.id === selected) ?? state.operations[0];
   const result = state.latest?.operationId === op.id ? state.latest : null;
-  const revision = state.runToken ?? JSON.stringify(state.latest?.provenance ?? null);
+  const revision = (state.runToken ?? JSON.stringify(state.latest?.provenance ?? null)) + "|" + JSON.stringify(state.runner ?? null);
   return <>
     <label>Operation<select value={op.id} disabled={busy} onChange={(e) => { session.selectOperation(e.target.value); setSelected(e.target.value); }}>
       {state.operations.map((operation) => <option key={operation.id} value={operation.id}>{operation.title}</option>)}
     </select></label>
-    <OperationEditor key={op.id} session={session} op={op} result={result} revision={revision} runToken={state.runToken} limits={state.limits}
-      options={options} run={run} cancel={cancel} fetchTableColumn={fetchTableColumn} busy={busy} setBusy={setBusy} />
+    <OperationEditor key={op.id} session={session} op={op} result={result} configured={state.runner}
+      revision={revision} runToken={state.runToken} limits={state.limits}
+      options={options} run={run} configure={configure} cancel={cancel} fetchTableColumn={fetchTableColumn}
+      busy={busy} setBusy={setBusy} />
     {tableEditor}
     {state.latest && <Results key={revision} result={state.latest} exportJson={exportJson}
       charts={charts} onChart={onChart} onRefresh={onRefresh} title={
@@ -490,6 +520,7 @@ export const ScientificNodeView = memo(function ScientificNodeView({ data, id, s
         onChart={(chartType) => data.store.generateChart(id, chartType)}
         onRefresh={(chart) => data.store.generateChart(chart.id, chart.chartType)}
         run={(operationId, inputs, sources, token, method) => data.store.runScientificOperation(data.pluginId, id, operationId, inputs, sources, token, method)}
+        configure={(operationId, inputs, sources, token) => data.store.configureScientificRunner(data.pluginId, id, operationId, inputs, sources, token)}
         cancel={(operationId) => data.store.cancelScientificOperation(data.pluginId, id, operationId)} />
       : <p role="alert">This workbench version could not be loaded. Check the plugin in Settings.</p>}
   </NodeShell>;

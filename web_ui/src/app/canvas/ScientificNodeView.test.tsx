@@ -412,3 +412,25 @@ describe("unit-aware scientific node inputs and receipts", () => {
     }));
   });
 });
+
+describe("explicit Scientific Graph Runner configuration", () => {
+  it("saves unit-aware inputs without executing and restores the saved operation", async () => {
+    const { request, refresh } = mount(JSON.stringify({ ...state, runToken: "token" }), []);
+    const input = screen.getByRole("textbox", { name: "Samples (m)" });
+    fireEvent.change(input, { target: { value: '["25 mm",2]' } });
+    fireEvent.click(screen.getByRole("button", { name: "Save for Graph Runner" }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("app-plugins", "invokePluginIntent", [
+      "science_mathematics", "configure_runner", {
+        node_id: "target", operation_id: "integral", inputs: { samples: ["25 mm", 2] },
+        sources: {}, expected_run: "token",
+      },
+    ]));
+    expect(request.mock.calls.some((args) => args[2]?.[1] === "run")).toBe(false);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save for Graph Runner" })).toBeEnabled());
+    refresh(JSON.stringify({ ...state, runToken: "token", runner: {
+      version: 1, operationId: "integral", inputs: { samples: ["25 mm", 2] }, sources: {},
+    } }));
+    expect(screen.getByRole("textbox", { name: "Samples (m)" })).toHaveValue('["25 mm",2]');
+    expect(screen.getByText("Saved as an explicit Graph Runner step.")).toBeVisible();
+  });
+});
