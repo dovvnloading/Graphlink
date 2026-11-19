@@ -126,6 +126,7 @@ function Results({ result, title, exportJson, exportCsv, exportMethods, onChart,
   const uncertaintyUnavailable = headline && result.uncertainty?.unsupportedOutputs?.[headline[0]];
   const formattedSummary = formatScienceSummary(result.summary);
   const longSummary = formattedSummary.length > 170;
+  const tableRows = tableAsset?.rowCount ?? table?.rows.length ?? 0;
   return <section className="science-results" aria-label="Latest result">
     <div className="science-result-head">
       <h4>Last successful run · {title}</h4>
@@ -135,7 +136,7 @@ function Results({ result, title, exportJson, exportCsv, exportMethods, onChart,
           : measurement ? formatMeasurement(measurement) : display(headline[1])}</strong>
       </div> : (table || tableAsset) && <div className="science-result-highlight">
         <span>Result table</span>
-        <strong>{(tableAsset?.rowCount ?? table?.rows.length ?? 0).toLocaleString()} rows</strong>
+        <strong>{tableRows.toLocaleString()} ${tableRows === 1 ? "row" : "rows"}</strong>
       </div>}
       <p role="status" className={`science-result-summary${longSummary ? " science-result-summary--clamped" : ""}`}>
         {formattedSummary}
@@ -175,7 +176,7 @@ function Results({ result, title, exportJson, exportCsv, exportMethods, onChart,
         {result.views && <ScientificResultViews views={result.views} />}
         {plot && !result.views?.some((view) => view.type === "survival_curve") && <Plot plot={plot} />}
       </ResultDisclosure>}
-      {(table || tableAsset) && <ResultDisclosure label={`Tables · ${(tableAsset?.rowCount ?? table?.rows.length ?? 0).toLocaleString()} rows`}>
+      {(table || tableAsset) && <ResultDisclosure label={`Tables · ${tableRows.toLocaleString()} ${tableRows === 1 ? "row" : "rows"}`}>
         <div className="science-result-table-content">
           {table && <div className="science-table">
       <table aria-label="Result table"><thead><tr>{table.columns.map((col, i) => <th key={i} scope="col">{col}</th>)}</tr></thead>
