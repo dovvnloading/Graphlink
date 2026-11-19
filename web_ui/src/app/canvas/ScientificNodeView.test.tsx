@@ -48,7 +48,7 @@ describe("scientific workbench card", () => {
       methods: "Four-parameter logistic fit, with relative potency at the response midpoint.",
       citations: [{ label: "Sebaugh (2011)", url: "https://doi.org/10.1002/pst.426" }],
     };
-    const { request } = mount(JSON.stringify({ ...state, packId: "biology", operations: [choiceOp] }));
+    const { request } = mount(JSON.stringify({ ...state, operations: [choiceOp] }));
     const metric = screen.getByRole("combobox", { name: "Potency metric" });
     expect(metric).toHaveValue("EC50");
     expect(within(metric).getAllByRole("option")).toHaveLength(2);
