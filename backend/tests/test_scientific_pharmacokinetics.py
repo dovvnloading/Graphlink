@@ -40,6 +40,7 @@ def test_manifest_pack_discovery_examples_and_receipts():
     assert PACK_FAMILIES[PACK] == "biology"
     assert [op.id for op in operations(PACK)] == [
         "noncompartmental_analysis", "one_compartment_fit", "two_compartment_fit",
+        "multiple_dose_prediction", "human_equivalent_dose", "drug_combination_analysis",
     ]
     for op in operations(PACK):
         assert all(field.unit for field in op.fields)
@@ -169,3 +170,182 @@ def test_compartment_fits_reject_invalid_designs(name, data, pattern):
     base = _inputs(list(range(9)), _profile(range(9), 10, 0.25))
     with pytest.raises(ValueError, match=pattern):
         _run(name, **{**base, **data})
+
+
+
+def _repeated_inputs():
+    return {"dose": 100, "central_volume": 10, "elimination_rate": math.log(2),
+            "dosing_interval": 1, "number_of_doses": 5}
+
+
+def _combination_inputs():
+    return {"concentration_unit": "mg/L", "dose_a": 1, "median_effect_dose_a": 2,
+            "slope_a": 1, "dose_b": 2, "median_effect_dose_b": 4, "slope_b": 1,
+            "observed_combination_effect": 0.75, "interaction_model": "exclusive"}
+
+
+def test_multiple_dose_accumulation_and_steady_state_analytic_oracles():
+    result = _run("multiple_dose_prediction", **_repeated_inputs())
+    v = result["values"]
+    assert v["terminal_half_life"] == pytest.approx(1)
+    assert v["accumulation_ratio_after_n_doses"] == pytest.approx(1.9375)
+    assert v["steady_state_accumulation_ratio"] == pytest.approx(2)
+    assert v["peak_after_last_dose"] == pytest.approx(19.375)
+    assert v["trough_after_last_interval"] == pytest.approx(9.6875)
+    assert v["steady_state_peak"] == pytest.approx(20)
+    assert v["steady_state_trough"] == pytest.approx(10)
+    assert v["steady_state_average"] == pytest.approx(10 / math.log(2))
+    assert v["fraction_of_steady_state_peak_after_n_doses"] == pytest.approx(31/32)
+    assert v["time_to_95_percent_envelope"] == pytest.approx(math.log(20) / math.log(2))
+    assert result["table"]["rows"][0] == pytest.approx([1, 0, 0, 10, 5, 1])
+    assert result["table"]["rows"][-1][1] == 4
+    assert result["table"]["rows"][-1][3:] == pytest.approx([19.375, 9.6875, 1.9375])
+    # At each administration, time is duplicated to model a discontinuous IV bolus.
+    assert result["plot"]["x"][:3] == [0, 0, 1]
+    assert result["plot"]["y"][:3] == pytest.approx([0, 10, 5])
+    assert len(result["plot"]["x"]) == 15
+
+    one = _run("multiple_dose_prediction", **{**_repeated_inputs(), "number_of_doses": 1})
+    assert one["values"]["accumulation_ratio_after_n_doses"] == pytest.approx(1)
+    assert one["values"]["peak_after_last_dose"] == pytest.approx(10)
+    assert one["values"]["trough_after_last_interval"] == pytest.approx(5)
+    many = _run("multiple_dose_prediction", **{**_repeated_inputs(), "number_of_doses": 200})
+    assert len(many["table"]["rows"]) == 200
+    assert len(many["plot"]["x"]) == 600
+    assert many["values"]["peak_after_last_dose"] == pytest.approx(20)
+
+
+def test_multiple_dose_field_units_convert_and_short_intervals_are_stable():
+    base = _run("multiple_dose_prediction", **{
+        "dose": 100, "central_volume": 10, "elimination_rate": 12,
+        "dosing_interval": 1, "number_of_doses": 3,
+    })["values"]
+    converted = _run("multiple_dose_prediction", **{
+        "dose": "100000 ug", "central_volume": "10000 mL",
+        "elimination_rate": "0.2 1/min", "dosing_interval": "60 min",
+        "number_of_doses": "3",
+    })["values"]
+    for field in ("peak_after_last_dose", "steady_state_peak", "steady_state_average"):
+        assert converted[field] == pytest.approx(base[field])
+    short = _run("multiple_dose_prediction", **{
+        **_repeated_inputs(), "elimination_rate": 1e-8,
+    })["values"]
+    assert short["accumulation_ratio_after_n_doses"] == pytest.approx(5, rel=1e-7)
+    assert short["steady_state_accumulation_ratio"] == pytest.approx(1e8, rel=1e-7)
+
+
+@pytest.mark.parametrize("change,pattern", [
+    ({"dose": 0}, "must be positive"),
+    ({"central_volume": -2}, "must be positive"),
+    ({"elimination_rate": 0}, "must be positive"),
+    ({"dosing_interval": 0}, "must be positive"),
+    ({"number_of_doses": 0}, "from 1 to 200"),
+    ({"number_of_doses": 201}, "from 1 to 200"),
+    ({"dosing_interval": 1e-320}, "numeric range"),
+])
+def test_multiple_dose_invalid_inputs(change, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        _run("multiple_dose_prediction", **{**_repeated_inputs(), **change})
+
+
+@pytest.mark.parametrize("species,km", [
+    ("mouse", 3), ("hamster", 5), ("rat", 6), ("guinea_pig", 8),
+    ("rabbit", 12), ("dog", 20), ("monkey", 12), ("mini_pig", 35),
+])
+def test_human_equivalent_dose_uses_fda_reference_km(species, km):
+    v = _run("human_equivalent_dose", species=species, animal_dose=100, human_weight=60)["values"]
+    assert v["animal_km"] == km
+    assert v["human_km"] == 37
+    assert v["bsa_conversion_factor"] == pytest.approx(km/37)
+    assert v["human_equivalent_dose"] == pytest.approx(100*km/37)
+    assert v["human_total_equivalent"] == pytest.approx(6000*km/37)
+    assert "not a human starting dose" in v["warnings"]
+
+
+def test_hed_input_unit_conversion_and_reference_weight_warning():
+    original = _run("human_equivalent_dose", species="mouse", animal_dose=100, human_weight=60)
+    converted = _run("human_equivalent_dose", species="mouse",
+                     animal_dose="100000 ug/kg", human_weight="60000 g")
+    assert converted["values"]["human_equivalent_dose"] == pytest.approx(
+        original["values"]["human_equivalent_dose"])
+    assert len(original["table"]["rows"]) == 5
+    assert original["plot"]["x"][-1] == 100
+    different_weight = _run("human_equivalent_dose", species="mouse",
+                            animal_dose=100, human_weight=70)["values"]
+    assert different_weight["human_equivalent_dose"] == pytest.approx(
+        original["values"]["human_equivalent_dose"])
+    assert "not individualized BSA" in different_weight["warnings"]
+
+
+@pytest.mark.parametrize("change,pattern", [
+    ({"animal_dose": 0}, "must be positive"),
+    ({"human_weight": -1}, "must be positive"),
+    ({"species": "elephant"}, "must be one of"),
+    ({"animal_dose": "5 mg/L"}, "Incompatible units"),
+])
+def test_hed_invalid_inputs(change, pattern):
+    base = {"species": "rat", "animal_dose": 25, "human_weight": 60}
+    with pytest.raises(ValueError, match=pattern):
+        _run("human_equivalent_dose", **{**base, **change})
+
+
+def test_bliss_and_chou_talalay_oracles_and_model_switch():
+    result = _run("drug_combination_analysis", **_combination_inputs())
+    v = result["values"]
+    assert v["single_agent_effect_a"] == pytest.approx(1/3)
+    assert v["single_agent_effect_b"] == pytest.approx(1/3)
+    assert v["bliss_expected_effect"] == pytest.approx(5/9)
+    assert v["bliss_excess_effect"] == pytest.approx(0.75 - 5/9)
+    assert v["equieffective_single_agent_dose_a"] == pytest.approx(6)
+    assert v["equieffective_single_agent_dose_b"] == pytest.approx(12)
+    assert v["dose_fraction_a"] == pytest.approx(1/6)
+    assert v["dose_fraction_b"] == pytest.approx(1/6)
+    assert v["ci_exclusive"] == pytest.approx(1/3)
+    assert v["ci_nonexclusive"] == pytest.approx(13/36)
+    assert v["combination_index"] == pytest.approx(1/3)
+    assert v["bliss_direction"] == "above"
+    assert v["ci_direction"] == "below 1"
+    assert result["plot"]["y"][0] == 0
+    assert result["plot"]["y"][-1] == pytest.approx(5/9)
+
+    nonexclusive = _run("drug_combination_analysis", **{
+        **_combination_inputs(), "interaction_model": "nonexclusive",
+    })["values"]
+    assert nonexclusive["combination_index"] == pytest.approx(13/36)
+    # A CI of one in the exclusive model need not imply a zero Bliss excess:
+    # the null models have distinct mathematical assumptions.
+    additive_ci = _run("drug_combination_analysis", **{
+        **_combination_inputs(), "observed_combination_effect": 0.5,
+    })["values"]
+    assert additive_ci["combination_index"] == pytest.approx(1)
+    assert additive_ci["bliss_excess_effect"] == pytest.approx(0.5 - 5/9)
+
+
+def test_combination_supports_mass_and_molar_concentration_units():
+    base = _run("drug_combination_analysis", **_combination_inputs())["values"]
+    converted = _run("drug_combination_analysis", **{
+        **_combination_inputs(), "dose_a": "1000 ug/L",
+        "median_effect_dose_a": "2000 ug/L",
+        "dose_b": "2 ug/mL", "median_effect_dose_b": "4 ug/mL",
+    })["values"]
+    molar = _run("drug_combination_analysis", **{
+        **_combination_inputs(), "concentration_unit": "uM",
+    })["values"]
+    for field in ("bliss_expected_effect", "bliss_excess_effect", "combination_index"):
+        assert converted[field] == pytest.approx(base[field])
+        assert molar[field] == pytest.approx(base[field])
+    assert molar["equieffective_dose_unit"] == "uM"
+
+
+@pytest.mark.parametrize("change,pattern", [
+    ({"dose_a": 0}, "must be positive"),
+    ({"median_effect_dose_b": 0}, "must be positive"),
+    ({"slope_a": -0.5}, "must be positive"),
+    ({"observed_combination_effect": 0}, "strictly between zero and one"),
+    ({"observed_combination_effect": 1}, "strictly between zero and one"),
+    ({"concentration_unit": "s"}, "mass/volume or amount/volume"),
+    ({"interaction_model": "both"}, "must be one of"),
+])
+def test_combination_rejects_undefined_or_incompatible_inputs(change, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        _run("drug_combination_analysis", **{**_combination_inputs(), **change})
