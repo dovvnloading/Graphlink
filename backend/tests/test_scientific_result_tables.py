@@ -210,7 +210,9 @@ def test_generated_table_links_exports_and_survives_workspace_restore(session, m
         document, asset_store=store, plugin_registry=registry, settings_manager=settings,
     )
     assert store.verify(meta["asset_ref"])
-    assert "=SUM(1,2)" not in json.dumps(saved)
+    # A bounded eight-row preview is intentionally saved, but later rows
+    # remain exclusively in the external asset rather than the graph JSON.
+    assert "sample-11999" not in json.dumps(saved)
     restore_chat_into_document(
         document, {"data": saved}, [], [], asset_store=store,
         plugin_registry=registry, settings_manager=settings,
