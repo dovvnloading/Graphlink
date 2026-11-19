@@ -109,6 +109,38 @@ def _state_data(node: SceneNode) -> dict[str, Any]:
         raise SceneError("The scientific node has no saved plugin state.")
     return node.state.data
 
+
+def _adopt_scientific_result(
+    document: SceneDocument, step: dict[str, Any], by_node_id: dict[str, Any],
+    *, detail: str, elapsed_ms: int,
+) -> bool:
+    """Recover a committed result when its run receipt was not checkpointed.
+
+    Check live inputs, configuration, ancestor receipts and the output before
+    claiming completion. Used after dispatch, on resume, and when cancellation
+    races with a calculation that has already committed.
+    """
+    try:
+        validate_graph_run_ancestors(document, step, by_node_id)
+        node = _matching_node(document, step)
+        live = step.copy()
+        _inspect(document, live)
+        if (live["status"] != "current" or live["configHash"] != step["configHash"]
+                or (step["inputHash"] and live["inputHash"] != step["inputHash"])):
+            return False
+        latest = _state_data(node).get("latest")
+        if not isinstance(latest, dict):
+            return False
+        step.update(
+            status="completed", detail=detail, inputHash=live["inputHash"],
+            outputHash=_output_digest(node), scientificResult=latest,
+            elapsedMs=elapsed_ms,
+        )
+        return True
+    except SceneError:
+        return False
+
+
 async def _run_model_step(
     document: SceneDocument, confirmed_checkpoint: Callable[[], Awaitable[bool]],
     run: dict[str, Any], step: dict[str, Any], by_node_id: dict[str, Any],
@@ -208,13 +240,11 @@ async def _run_scientific_step(
     # A successful calculation may have committed just before an
     # interrupted receipt checkpoint. Do not repeat it on resume.
     if live["status"] == "current":
-        latest = _state_data(node).get("latest")
-        if not isinstance(latest, dict):
-            raise SceneError("The scientific result receipt is missing.")
-        step.update(
-            status="completed", detail="Verified existing scientific result; not replayed.",
-            outputHash=_output_digest(node), scientificResult=latest, elapsedMs=elapsed(),
-        )
+        if not _adopt_scientific_result(
+            document, step, by_node_id,
+            detail="Verified existing scientific result; not replayed.", elapsed_ms=elapsed(),
+        ):
+            raise SceneError("The committed scientific result could not be verified.")
         return
     if live["status"] != "ready" or live["targetHash"] != step["targetHash"]:
         raise SceneError("The scientific output changed since preview.")
@@ -237,7 +267,7 @@ async def _run_scientific_step(
     ])
     if not isinstance(answer, dict) or answer.get("ok") is not True:
         failure = answer if isinstance(answer, dict) else {}
-        error_type = failure.get("errorType", "validation")
+        error_type = failure.get("errorType", "conflict" if failure.get("conflict") is True else "validation")
         if error_type not in {"timeout", "cancelled", "invalid_input", "worker_error", "validation", "conflict"}:
             error_type = "validation"
         measured = failure.get("elapsedMs")
@@ -248,21 +278,11 @@ async def _run_scientific_step(
         )
         return
 
-    node = _matching_node(document, step)
-    updated = step.copy()
-    _inspect(document, updated)
-    if updated["status"] != "current" or any(
-        updated[key] != step[key] for key in ("inputHash", "configHash")
+    if not _adopt_scientific_result(
+        document, step, by_node_id, detail="Scientific result recorded.",
+        elapsed_ms=elapsed(),
     ):
         raise SceneError("The scientific result or its input changed during execution.")
-    latest = _state_data(node).get("latest")
-    if not isinstance(latest, dict):
-        raise SceneError("The scientific worker returned no committed result.")
-    step.update(
-        status="completed", detail="Scientific result recorded.",
-        outputHash=_output_digest(node), scientificResult=latest,
-        elapsedMs=elapsed(),
-    )
 
 def _make_graph_checkpoint(save_checkpoint: Callable[[], Awaitable[bool]]) -> Callable[[], Awaitable[None]]:
     """Serialize and shield all graph/journal SQLite checkpoint writes."""
@@ -404,7 +424,20 @@ def register_graph_runner(
                 finally:
                     await bus.publish("scene")
             except asyncio.CancelledError:
-                if (cancel_requested and "externalAttempt" not in step
+                # The plugin can commit synchronously just before its awaited
+                # dispatch returns. Never save a cancelled receipt over an
+                # already committed scientific result, even on a user cancel.
+                committed_science = (
+                    step["kind"] == "scientific"
+                    and _adopt_scientific_result(
+                        document, step, by_node_id,
+                        detail="Committed before cancellation; result preserved.",
+                        elapsed_ms=max(0, int((time.monotonic() - started_clock) * 1000)),
+                    )
+                )
+                if committed_science:
+                    step["finishedAt"] = datetime.now(timezone.utc).isoformat()
+                elif (cancel_requested and "externalAttempt" not in step
                         and step["status"] not in {"completed", "current"}):
                     step.update(
                         status="cancelled", detail="Graph run cancelled by the user.",

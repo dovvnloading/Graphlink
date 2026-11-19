@@ -91,7 +91,13 @@ export function connectedInputText(field: ScienceField, option: SourceOption): s
 
 /** Format values without discarding the standard uncertainty or its units. */
 export function formatMeasurement(measurement: ScientificMeasurement): string {
-  return `${measurement.value} ± ${measurement.standardUncertainty}${measurement.unit ? " " + measurement.unit : ""}`;
+  const unit = measurement.unit ? " " + measurement.unit : "";
+  // A nonlinear Monte Carlo PDF is not centered at the nominal f(E[X]).
+  // Never present its sampled standard deviation as an error bar about f(E[X]).
+  if (measurement.method === "monte_carlo" && finite(measurement.monteCarloMean)) {
+    return `nominal ${measurement.value}; Monte Carlo mean ${measurement.monteCarloMean} ± ${measurement.standardUncertainty}${unit}`;
+  }
+  return `${measurement.value} ± ${measurement.standardUncertainty}${unit}`;
 }
 
 /** Also understand pre-existing pack outputs without changing their receipts. */
@@ -100,6 +106,9 @@ export function resultMeasurement(result: ScienceResult, name: string): Scientif
   if (!finite(value)) return undefined;
   const attached = result.uncertainty?.outputs[name];
   if (attached) return attached;
+  // An operation's native standard error cannot be treated as the propagated
+  // standard error when its covariance with connected inputs is unknown.
+  if (result.uncertainty?.unsupportedOutputs?.[name]) return undefined;
   let sigma: unknown;
   let factor: unknown = 1.959963984540054;
   if (name === "estimate" && finite(result.values.combined_standard_uncertainty)) {
@@ -160,6 +169,7 @@ export interface SourceOption {
   label: string; value: unknown; reference: SourceReference; tableColumn?: ScientificTableSelection;
   uncertainty?: ScientificMeasurement;
   unit?: string;
+  unpropagatable?: string;
 }
 
 
@@ -440,12 +450,16 @@ export function sourceOptions(parents: ScienceParent[], maxPoints = V1_LIMITS.po
     if (result) {
       const add = (name: string, value: unknown, selector: SourceReference["selector"]) => {
         const uncertainty = selector[0] === "values" ? resultMeasurement(result, name) : undefined;
+        const unsupported = selector[0] === "values" ? result.uncertainty?.unsupportedOutputs?.[name] : undefined;
         const interval = selector[0] === "values" ? intervalOnly(result, name) : undefined;
-        const detail = uncertainty ? " · " + formatMeasurement(uncertainty) :
+        const detail = unsupported ? " · uncertainty unavailable: " + unsupported :
+          uncertainty ? " · " + formatMeasurement(uncertainty)
+          + (uncertainty.method === "monte_carlo" ? " · downstream propagation requires the unavailable joint PDF" : "") :
           interval ? ` · interval [${interval[0]}, ${interval[1]}] · cannot propagate without a standard uncertainty` : "";
         const unit = selector[0] === "values" ? uncertainty?.unit || resultUnit(name) : "";
         options.push({ label: `${title} · ${name}${detail}`, value,
           ...(uncertainty && { uncertainty }),
+          ...(unsupported && { unpropagatable: unsupported }),
           ...(unit && { unit }),
           reference: { nodeId: parent.nodeId, ...(state.nodeKey && { sourceKey: state.nodeKey }), resultHash: result.provenance.resultHash,
             ...(result.provenance.receiptHash && { receiptHash: result.provenance.receiptHash }), selector } });
@@ -507,7 +521,10 @@ export function sourceOptions(parents: ScienceParent[], maxPoints = V1_LIMITS.po
 }
 
 export function compatibleOptions(field: ScienceField, options: SourceOption[], limits = V1_LIMITS): SourceOption[] {
-  return options.filter(({ value, tableColumn }) => {
+  return options.filter(({ value, tableColumn, uncertainty, unpropagatable }) => {
+    // Neither an explicitly unpropagatable result nor MC marginal moments
+    // can be used as a new Gaussian measurement. The server rejects both.
+    if (field.kind === "number" && (unpropagatable || uncertainty?.method === "monte_carlo")) return false;
     if (tableColumn) return field.kind === "vector" && tableColumn.end - tableColumn.start <= limits.points;
     if (!accepts(field.kind, value)) return false;
     if (typeof value === "string") return value.length > 0 && (value.length <= limits.text || Array.from(value).length <= limits.text);

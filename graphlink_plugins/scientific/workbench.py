@@ -105,7 +105,13 @@ def _run_token(data: dict) -> str:
     # Preserve all legacy run tokens for nodes without an imported table.
     original = [data.get("nodeKey"), receipt.get("receiptHash") or fingerprint(receipt)]
     table = data.get("table")
-    return fingerprint([*original, table["provenance"]["receiptHash"]]) if isinstance(table, dict) and table_metadata_valid(table) else fingerprint(original)
+    token = (fingerprint([*original, table["provenance"]["receiptHash"]])
+             if isinstance(table, dict) and table_metadata_valid(table) else fingerprint(original))
+    # A saved runner configuration is independently undoable. Include it in
+    # the optimistic token so an older editor cannot overwrite a newer save
+    # just because the last *calculation* has not changed.
+    runner = data.get("runner")
+    return fingerprint([token, runner]) if isinstance(runner, dict) else token
 
 
 def _current_state(document, node_id: str, kind: str, expected_run: str | None):
@@ -232,7 +238,13 @@ def _verify_sources(document, node, inputs: dict, sources: dict, granted,
                 raise ValueError(f"Connected input '{key}' has incompatible units: {exc}") from None
         if (type(normalized_source) in (int, float) and type(inputs[key]) in (int, float)
                 and target_unit and source_unit):
-            matched = math.isclose(normalized_source, inputs[key], rel_tol=1e-13, abs_tol=1e-14)
+            # Accept only binary64 roundoff from decimal unit normalization,
+            # not a source value changed by many measurement standard deviations.
+            # A relative 1e-13 tolerance incorrectly accepted modified values,
+            # and a fixed 1e-14 tolerance incorrectly accepted zero for tiny ones.
+            source_ulp = math.ulp(float(normalized_source))
+            input_ulp = math.ulp(float(inputs[key]))
+            matched = abs(normalized_source - inputs[key]) <= 2 * max(source_ulp, input_ulp)
         else:
             matched = normalized_source == inputs[key]
         if not matched:
@@ -344,6 +356,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
             inputs, _input_units = validated_inputs_with_units(operation, request.inputs)
             sources = _verify_sources(
                 document, node, inputs, request.sources if request.sources is not None else {}, ctx.is_plugin_granted,
+                operation=operation,
             )
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}

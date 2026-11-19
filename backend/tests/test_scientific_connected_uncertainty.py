@@ -142,7 +142,7 @@ def test_jcgm101_gaussian_sum_table2_first_order_and_requested_monte_carlo():
     mc = run_operation("test", op, inputs, uncertainty_inputs=connected,
                        uncertainty_method="monte_carlo")["uncertainty"]["outputs"]["y"]
     assert mc["method"] == "monte_carlo"
-    assert mc["monteCarloTrials"] == 16384
+    assert mc["monteCarloTrials"] == 200_000
     assert mc["standardUncertainty"] == pytest.approx(2, abs=.07)
     assert mc["interval"] == pytest.approx([-3.92, 3.92], abs=.18)
     assert mc["monteCarloMean"] == pytest.approx(0, abs=.08)
