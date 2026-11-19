@@ -61,7 +61,7 @@ def test_no_register_function_exceeds_the_300_line_cap():
 # Below this much headroom, report it. A cap that everything sits just under
 # is a cap that will bind on whoever happens to touch one of those functions
 # next, for a reason that has nothing to do with their change - the same
-# erosion web_ui/scripts/check-bundle-size.mjs kept suffering, where a ratchet
+# erosion the old web_ui bundle-size ratchet kept suffering, where a ratchet
 # with 323 bytes left "passed" right up until an unrelated two-line bug fix
 # tripped it. 10% of the cap (30 lines) is enough warning to split
 # deliberately rather than under duress.
@@ -71,7 +71,7 @@ HEADROOM_WARN_LINES = MAX_REGISTER_FUNCTION_LINES // 10
 def test_the_number_of_register_functions_near_the_cap_is_not_growing():
     """A cap everything sits just under will bind on whoever happens to touch
     one of those functions next, for a reason that has nothing to do with
-    their change. That is the erosion web_ui/scripts/check-bundle-size.mjs
+    their change. That is the erosion the old web_ui bundle-size ratchet
     kept suffering - a ratchet with 323 bytes left "passed" right up until an
     unrelated two-line bug fix tripped it.
 

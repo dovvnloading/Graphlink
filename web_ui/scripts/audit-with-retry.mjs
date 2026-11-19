@@ -24,8 +24,8 @@
 // would be worse than passing loudly.
 //
 // Run from web_ui/ by the frontend-checks job. Node rather than a shell blob
-// with jq: that job already has node, and it matches check-bundle-size.mjs's
-// own shape. classifyAuditRun is exported and unit-tested
+// with jq: that job already has node, matching the other node tooling.
+// classifyAuditRun is exported and unit-tested
 // (audit-with-retry.test.mjs) because it is the part that decides whether a
 // merge is blocked, and a guard nobody tested is how this gate got its
 // reputation in the first place.
