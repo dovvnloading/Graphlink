@@ -183,6 +183,16 @@ function Runner({ store }: { store: SceneStore }) {
     </div>;
   }
 
+  function cancelButton(run: GraphRun) {
+    if (run.status !== "running") return null;
+    return <div className="runner-commit">
+      <button type="button" className="appbar-btn" disabled={cancellingRun}
+        onClick={() => void cancelActiveRun(run.runId)}>
+        {cancellingRun ? "Stopping run…" : "Cancel run"}
+      </button>
+    </div>;
+  }
+
   function previewRun() {
     void perform("Preparing preview…", async () => {
       setPreview(null);
@@ -377,12 +387,7 @@ function Runner({ store }: { store: SceneStore }) {
         <span role="status" data-status={latest.status}>{statuses[latest.status] ?? latest.status}</span>
       </header>
       <div className="runner-note">{runDate(latest)}</div>
-      {latest.status === "running" && <div className="runner-commit">
-        <button type="button" className="appbar-btn" disabled={cancellingRun}
-          onClick={() => void cancelActiveRun(latest.runId)}>
-          {cancellingRun ? "Stopping run…" : "Cancel run"}
-        </button>
-      </div>}
+      {cancelButton(latest)}
       <RunSteps steps={latest.steps} names={names} />
       <RunInspector run={latest} names={names} onSelect={selectInspectorNode} />
       {latest.status === "reconciliation-required" && <p className="runner-note" role="alert">One or more external requests have an uncertain outcome. Graph Runner will not retry them automatically.</p>}
@@ -391,6 +396,7 @@ function Runner({ store }: { store: SceneStore }) {
         {latest.history.map((run) => <Disclosure key={run.runId} label={`${runDate(run)} · ${statuses[run.status] ?? run.status}`}>
           <RunSteps steps={run.steps} names={names} />
           <RunInspector run={run} names={names} onSelect={selectInspectorNode} />
+          {cancelButton(run)}
           {resumeButton(run)}
         </Disclosure>)}
       </Disclosure>}
