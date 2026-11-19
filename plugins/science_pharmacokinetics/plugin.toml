@@ -1,7 +1,7 @@
 [plugin]
 id = "science_pharmacokinetics"
 name = "Pharmacokinetics"
-description = "Analyze single-dose concentration-time profiles by NCA or one- and two-compartment IV bolus nonlinear fits."
+description = "Analyze single- and multiple-dose PK, BSA human-equivalent dose scaling, and Bliss/Chou-Talalay drug combinations."
 version = "1.2.0"
 sdk_api_version = 1
 entry_point = "plugin:register"

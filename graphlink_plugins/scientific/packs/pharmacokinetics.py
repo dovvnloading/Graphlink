@@ -1,4 +1,4 @@
-"""Single-dose pharmacokinetics: NCA and IV-bolus compartment fits.
+"""Pharmacokinetics: single/repeated doses, BSA scaling, and drug combinations.
 
 All methods are local, deterministic, and use the Workbench's existing
 bounded nonlinear least-squares solver. No numerical third-party dependency.
@@ -302,6 +302,259 @@ def two_compartment_fit(data):
     return _fit_compartment(data, "two")
 
 
+
+
+def multiple_dose_prediction(data):
+    """Equal, instantaneous IV boluses with linear one-compartment elimination."""
+    dose, volume = data["dose"], data["central_volume"]
+    rate, interval, count = data["elimination_rate"], data["dosing_interval"], data["number_of_doses"]
+    if any(not math.isfinite(v) or v <= 0 for v in (dose, volume, rate, interval)):
+        raise ValueError("Dose, central volume, elimination rate and dosing interval must be positive.")
+    if type(count) is not int or not 1 <= count <= 200:
+        raise ValueError("Number of doses must be an integer from 1 to 200.")
+
+    exponent = rate * interval
+    start_concentration = dose / volume
+    last_time = count * interval
+    if not all(math.isfinite(v) and v > 0 for v in (exponent, start_concentration, last_time)):
+        raise ValueError("Multiple-dose parameters exceed the supported numeric range.")
+
+    # expm1 avoids cancellation for intervals much shorter than a half-life.
+    one_minus_decay = -math.expm1(-exponent)
+    decay = math.exp(-exponent)
+    accumulation_ss = 1 / one_minus_decay
+    peak_ss = start_concentration * accumulation_ss
+    trough_ss = peak_ss * decay
+    average_ss = start_concentration / exponent
+    half_life = math.log(2) / rate
+    time_95_envelope = math.log(20) / rate
+    fraction_last = -math.expm1(-count * exponent)
+    accumulation_last = fraction_last / one_minus_decay
+    peak_last = start_concentration * accumulation_last
+    trough_last = peak_last * decay
+    scalars = (accumulation_ss, peak_ss, trough_ss, average_ss, half_life,
+               time_95_envelope, fraction_last, accumulation_last, peak_last, trough_last)
+    if not all(math.isfinite(v) for v in scalars):
+        raise ValueError("Multiple-dose predictions exceed the supported numeric range.")
+
+    rows, plot_x, plot_y = [], [], []
+    for number in range(1, count + 1):
+        time = (number - 1) * interval
+        accumulation = -math.expm1(-number * exponent) / one_minus_decay
+        peak = start_concentration * accumulation
+        pre_dose = max(0.0, peak - start_concentration)
+        trough = peak * decay
+        rows.append([number, time, pre_dose, peak, trough, accumulation])
+        # Duplicate dose timestamps model the actual bolus concentration jump.
+        plot_x.extend([time, time, time + interval])
+        plot_y.extend([pre_dose, peak, trough])
+    if not all(math.isfinite(value) for value in plot_x + plot_y):
+        raise ValueError("Multiple-dose profile exceeds the supported numeric range.")
+
+    return {
+        "summary": (
+            f"After {count} equal IV boluses every {interval:.6g} h, predicted peak "
+            f"{peak_last:.6g} mg/L and end-interval trough {trough_last:.6g} mg/L; "
+            f"steady-state peak {peak_ss:.6g} mg/L, trough {trough_ss:.6g} mg/L "
+            f"(accumulation factor {accumulation_ss:.6g}). "
+            "One-compartment, instantaneous IV dosing and linear elimination are assumed."
+        ),
+        "values": {
+            "dose": dose, "dose_unit": "mg", "central_volume": volume, "central_volume_unit": "L",
+            "elimination_rate": rate, "elimination_rate_unit": "1/h",
+            "dosing_interval": interval, "dosing_interval_unit": "h",
+            "number_of_doses": count,
+            "terminal_half_life": half_life, "terminal_half_life_unit": "h",
+            "accumulation_ratio_after_n_doses": accumulation_last,
+            "steady_state_accumulation_ratio": accumulation_ss,
+            "peak_after_last_dose": peak_last, "trough_after_last_interval": trough_last,
+            "steady_state_peak": peak_ss, "steady_state_trough": trough_ss,
+            "steady_state_average": average_ss, "concentration_unit": "mg/L",
+            "fraction_of_steady_state_peak_after_n_doses": fraction_last,
+            "time_to_95_percent_envelope": time_95_envelope, "time_to_95_percent_envelope_unit": "h",
+            "warnings": "Idealized IV bolus; the continuous 95% envelope is not a scheduled dose time",
+        },
+        "table": {
+            "columns": ["Dose number", "Administration time (h)", "Predose (mg/L)",
+                        "Postdose peak (mg/L)", "End-interval trough (mg/L)", "Accumulation factor"],
+            "rows": rows,
+        },
+        "plot": {
+            "title": "Repeated IV bolus concentration profile (including dose jumps)",
+            "xLabel": "Time (h)", "yLabel": "Plasma concentration (mg/L)",
+            "x": plot_x, "y": plot_y,
+        },
+    }
+
+
+# Fixed reference factors from FDA (2005) Table 3; adult-human Km=37 at 60 kg.
+_ANIMAL_KM = {
+    "mouse": 3, "hamster": 5, "rat": 6, "guinea_pig": 8,
+    "rabbit": 12, "dog": 20, "monkey": 12, "mini_pig": 35,
+}
+_HUMAN_KM = 37
+
+
+def human_equivalent_dose(data):
+    """BSA-normalized animal-to-adult-human dose equivalence, not a safe dose."""
+    species = data["species"]
+    if species not in _ANIMAL_KM:
+        raise ValueError("Unsupported species for reference Km conversion.")
+    dose, human_weight = data["animal_dose"], data["human_weight"]
+    if not math.isfinite(dose) or dose <= 0 or not math.isfinite(human_weight) or human_weight <= 0:
+        raise ValueError("Animal dose and human weight must be positive.")
+    factor = _ANIMAL_KM[species] / _HUMAN_KM
+    hed = dose * factor
+    total = hed * human_weight
+    if not all(math.isfinite(v) and v > 0 for v in (hed, total)):
+        raise ValueError("Scaled dose exceeds the supported numeric range.")
+    sample_doses = [dose * fraction for fraction in (0, 0.25, 0.5, 0.75, 1)]
+    sample_heds = [value * factor for value in sample_doses]
+    warnings = (
+        "HED is a surface-area conversion, not a human starting dose: "
+        "no NOAEL, safety factor, exposure, route or species relevance was assessed"
+    )
+    if human_weight != 60:
+        warnings += "; fixed adult-human Km=37 is referenced to 60 kg, not individualized BSA"
+    return {
+        "summary": (
+            f"{species.replace('_', ' ').title()} {dose:.6g} mg/kg at Km={_ANIMAL_KM[species]} "
+            f"corresponds to adult-reference HED {hed:.6g} mg/kg (Km=37); "
+            f"{total:.6g} mg is the arithmetic equivalent for {human_weight:.6g} kg, "
+            "not a clinical dose recommendation."
+        ),
+        "values": {
+            "species": species, "animal_dose": dose, "animal_dose_unit": "mg/kg",
+            "animal_km": _ANIMAL_KM[species], "human_km": _HUMAN_KM,
+            "bsa_conversion_factor": factor,
+            "human_equivalent_dose": hed, "human_equivalent_dose_unit": "mg/kg",
+            "human_weight": human_weight, "human_weight_unit": "kg",
+            "human_total_equivalent": total, "human_total_equivalent_unit": "mg",
+            "warnings": warnings,
+        },
+        "table": {
+            "columns": ["Animal dose (mg/kg)", "Adult-reference HED (mg/kg)",
+                        f"Arithmetic total for {human_weight:g} kg (mg)"],
+            "rows": [[animal, scaled, scaled * human_weight]
+                     for animal, scaled in zip(sample_doses, sample_heds)],
+        },
+        "plot": {
+            "title": f"FDA Km-based BSA scaling: {species.replace('_', ' ')} to adult",
+            "xLabel": "Animal dose (mg/kg)", "yLabel": "Adult-reference HED (mg/kg)",
+            "x": sample_doses, "y": sample_heds,
+        },
+    }
+
+
+def _median_effect_fraction(dose, median_dose, slope):
+    """Stable rising median-effect response f/(1-f)=(dose/Dm)**m."""
+    if dose == 0:
+        return 0.0
+    log_odds = slope * (math.log(dose) - math.log(median_dose))
+    if log_odds >= 0:
+        return 1 / (1 + math.exp(-log_odds))
+    odds = math.exp(log_odds)
+    return odds / (1 + odds)
+
+
+def _single_agent_equieffective_dose(median_dose, slope, fraction):
+    log_dose = math.log(median_dose) + (math.log(fraction) - math.log1p(-fraction)) / slope
+    try:
+        amount = math.exp(log_dose)
+    except OverflowError:
+        amount = math.inf
+    if not math.isfinite(amount) or amount <= 0:
+        raise ValueError("Single-agent dose at the observed effect exceeds the supported numeric range.")
+    return amount
+
+
+def drug_combination_analysis(data):
+    """Bliss excess and Chou-Talalay CI from independently fitted median-effect curves."""
+    unit = _label(data["concentration_unit"], "Concentration")
+    try:
+        convert_decimal_measurement("1", unit, "mg/L")
+    except ValueError:
+        try:
+            convert_decimal_measurement("1", unit, "mol/L")
+        except ValueError:
+            raise ValueError("Concentration unit must represent mass/volume or amount/volume.") from None
+    dose_a, dose_b = data["dose_a"], data["dose_b"]
+    median_a, median_b = data["median_effect_dose_a"], data["median_effect_dose_b"]
+    slope_a, slope_b = data["slope_a"], data["slope_b"]
+    effect = data["observed_combination_effect"]
+    if any(not math.isfinite(v) or v <= 0 for v in
+           (dose_a, dose_b, median_a, median_b, slope_a, slope_b)):
+        raise ValueError("Doses, median-effect doses and slopes must be positive.")
+    if not math.isfinite(effect) or not 0 < effect < 1:
+        raise ValueError("Observed combination effect must be strictly between zero and one for CI.")
+    model = data["interaction_model"]
+    if model not in ("exclusive", "nonexclusive"):
+        raise ValueError("Interaction model must be exclusive or nonexclusive.")
+
+    single_a = _median_effect_fraction(dose_a, median_a, slope_a)
+    single_b = _median_effect_fraction(dose_b, median_b, slope_b)
+    bliss = single_a + single_b - single_a * single_b
+    excess = effect - bliss
+
+    # Dx is the standalone concentration required to reproduce the observed
+    # combination effect, not the standalone response at its combination dose.
+    dx_a = _single_agent_equieffective_dose(median_a, slope_a, effect)
+    dx_b = _single_agent_equieffective_dose(median_b, slope_b, effect)
+    fraction_a, fraction_b = dose_a / dx_a, dose_b / dx_b
+    exclusive_ci = fraction_a + fraction_b
+    nonexclusive_ci = exclusive_ci + fraction_a * fraction_b
+    ci = exclusive_ci if model == "exclusive" else nonexclusive_ci
+    if not all(math.isfinite(v) for v in
+               (single_a, single_b, bliss, excess, fraction_a, fraction_b,
+                exclusive_ci, nonexclusive_ci, ci)):
+        raise ValueError("Combination predictions exceed the supported numeric range.")
+
+    scales = [0, 0.25, 0.5, 0.75, 1]
+    rows = []
+    for scale in scales:
+        a = _median_effect_fraction(dose_a * scale, median_a, slope_a)
+        b = _median_effect_fraction(dose_b * scale, median_b, slope_b)
+        rows.append([scale, dose_a * scale, dose_b * scale, a, b, a + b - a * b])
+    if not all(math.isfinite(v) for row in rows for v in row):
+        raise ValueError("Combination response profile exceeds the supported numeric range.")
+
+    return {
+        "summary": (
+            f"Bliss independent-action expectation {bliss:.6g} versus observed affected "
+            f"fraction {effect:.6g} (excess {excess:+.6g}); Chou-Talalay CI "
+            f"{ci:.6g} ({model} model) at the observed effect. "
+            "References are model-based, not statistical tests of synergy."
+        ),
+        "values": {
+            "concentration_unit": unit, "observed_combination_effect": effect,
+            "single_agent_effect_a": single_a, "single_agent_effect_b": single_b,
+            "bliss_expected_effect": bliss, "bliss_excess_effect": excess,
+            "bliss_direction": "above" if excess > 0 else "below" if excess < 0 else "equal",
+            "equieffective_single_agent_dose_a": dx_a,
+            "equieffective_single_agent_dose_b": dx_b, "equieffective_dose_unit": unit,
+            "dose_fraction_a": fraction_a, "dose_fraction_b": fraction_b,
+            "ci_exclusive": exclusive_ci, "ci_nonexclusive": nonexclusive_ci,
+            "combination_index": ci, "interaction_model": model,
+            "ci_direction": "below 1" if ci < 1 else "above 1" if ci > 1 else "equal to 1",
+            "warnings": ("Interpretation depends on independently fitted single-agent median-effect "
+                         "curves and a matched endpoint/time; no replicate uncertainty or clinical "
+                         "significance was assessed"),
+        },
+        "table": {
+            "columns": ["Fixed-ratio scale", f"Drug A ({unit})", f"Drug B ({unit})",
+                        "Single A effect", "Single B effect", "Bliss expected effect"],
+            "rows": rows,
+        },
+        "plot": {
+            "title": "Modeled Bliss expectation along the fixed-ratio dose ray",
+            "xLabel": "Fraction of tested combination doses", "yLabel": "Expected affected fraction",
+            "x": scales, "y": [row[-1] for row in rows],
+        },
+    }
+
+
+
+
 _FIELDS = (
     Field("time", "Time since dose", "vector", unit="selected time unit"),
     Field("concentration", "Plasma concentration", "vector", unit="selected response unit"),
@@ -359,5 +612,73 @@ OPERATIONS = (
                 "Vc=Dose/(A+B), Vss=CL*MRT, Vz=CL/beta, MRT=(A/alpha²+B/beta²)/AUC. "
                 "Local standard errors are Jacobian-linearized, and weak phase separation is flagged.",
         citations=_COMP_CITES,
+    ),
+
+    Operation(
+        "multiple_dose_prediction", "Predict repeated IV-bolus concentrations",
+        "Accumulation through repeated one-compartment doses and asymptotic peak, trough and average steady state.",
+        (Field("dose", "Dose per IV bolus", "number", unit="mg"),
+         Field("central_volume", "Central distribution volume", "number", unit="L"),
+         Field("elimination_rate", "First-order elimination rate", "number", unit="1/h"),
+         Field("dosing_interval", "Interval between doses", "number", unit="h"),
+         Field("number_of_doses", "Number of doses to simulate", "integer", unit="1")),
+        {"dose": 100, "central_volume": 10, "elimination_rate": 0.2,
+         "dosing_interval": 8, "number_of_doses": 8},
+        multiple_dose_prediction,
+        methods="One-compartment equal IV boluses: Cmax,n=(Dose/V)*(1-exp(-n*k*tau))/(1-exp(-k*tau)); "
+                "Cmin,n=Cmax,n*exp(-k*tau). Rss=1/(1-exp(-k*tau)); "
+                "Css,avg=Dose/(V*k*tau). Numerically stable expm1 for short intervals; "
+                "continuous 95% accumulation envelope occurs at ln(20)/k, distinct from actual dose times. "
+                "Assumes linear, time-invariant, first-order IV-bolus elimination.",
+        citations=(Citation("McGraw Hill: multiple-dose pharmacokinetic models",
+                            "https://accesspharmacy.mhmedical.com/content.aspx?bookid=2577&sectionid=234135883"),),
+    ),
+    Operation(
+        "human_equivalent_dose", "Scale animal dose to adult human by BSA",
+        "FDA reference Km-factor animal-to-human equivalence in mg/kg and arithmetic adult total.",
+        (Field("species", "Animal species (FDA reference factor)", "choice", unit="category (dimensionless)",
+               choices=tuple(_ANIMAL_KM)),
+         Field("animal_dose", "Animal administered dose", "number", unit="mg/kg"),
+         Field("human_weight", "Illustrative adult human body weight", "number", unit="kg")),
+        {"species": "mouse", "animal_dose": 100, "human_weight": 60},
+        human_equivalent_dose,
+        methods="Adult-reference HED(mg/kg)=animal dose(mg/kg)*animal Km/37, using FDA (2005) "
+                "Table 3 species reference Km factors, with adult human Km=37 at 60 kg. "
+                "The total is HED times supplied adult weight, not a safe starting dose, "
+                "MRSD or recommendation; no toxicity, exposure, route, species selection or "
+                "safety factor is considered.",
+        citations=(Citation("FDA 2005 guidance: BSA scaling, Table 3",
+                            "https://www.fda.gov/regulatory-information/search-fda-guidance-documents/estimating-maximum-safe-starting-dose-initial-clinical-trials-therapeutics-adult-healthy-volunteers"),),
+    ),
+    Operation(
+        "drug_combination_analysis", "Bliss and Chou-Talalay drug combination analysis",
+        "Compare combined effect with Bliss independence and compute Chou-Talalay CI from fitted single-agent median-effect curves.",
+        (Field("concentration_unit", "Shared dose/concentration unit (e.g. mg/L or uM)",
+               "text", unit="unit label"),
+         Field("dose_a", "Drug A combination concentration", "number", unit="selected concentration unit", default_unit="mg/L"),
+         Field("median_effect_dose_a", "Drug A fitted median-effect concentration (Dm)", "number",
+               unit="selected concentration unit", default_unit="mg/L"),
+         Field("slope_a", "Drug A fitted median-effect slope (m)", "number", unit="1"),
+         Field("dose_b", "Drug B combination concentration", "number", unit="selected concentration unit", default_unit="mg/L"),
+         Field("median_effect_dose_b", "Drug B fitted median-effect concentration (Dm)", "number",
+               unit="selected concentration unit", default_unit="mg/L"),
+         Field("slope_b", "Drug B fitted median-effect slope (m)", "number", unit="1"),
+         Field("observed_combination_effect", "Observed affected fraction (0–1)", "number", unit="1"),
+         Field("interaction_model", "Chou-Talalay interaction model", "choice",
+               unit="category (dimensionless)", choices=("exclusive", "nonexclusive"))),
+        {"concentration_unit": "mg/L", "dose_a": 1, "median_effect_dose_a": 2,
+         "slope_a": 1, "dose_b": 2, "median_effect_dose_b": 4, "slope_b": 1,
+         "observed_combination_effect": 0.75, "interaction_model": "exclusive"},
+        drug_combination_analysis,
+        methods="From independently fitted single-agent median-effect curves fa/(1-fa)=(D/Dm)^m, "
+                "compute single-agent responses at the tested doses and Bliss E_A+E_B-E_A*E_B. "
+                "For observed 0<fa<1, Dx_j=Dm_j*(fa/(1-fa))^(1/m_j). "
+                "Chou-Talalay exclusive CI=D_A/Dx_A+D_B/Dx_B; nonexclusive CI additionally "
+                "includes (D_A/Dx_A)*(D_B/Dx_B). Effects require the same endpoint and time; "
+                "CI and Bliss excess are descriptive, without uncertainty testing.",
+        citations=(Citation("Chou (2006), Pharmacological Reviews",
+                            "https://pubmed.ncbi.nlm.nih.gov/16968952/"),
+                   Citation("Review: drug combination reference models and Bliss independence",
+                            "https://pmc.ncbi.nlm.nih.gov/articles/PMC9127325/")),
     ),
 )
