@@ -78,6 +78,33 @@ function csvCell(value: unknown): string {
 
 const PREVIEW_ROWS = 30;
 
+/** Favor an actual result over bookkeeping fields; never put vectors or objects
+ * into the headline of a 390px canvas node. The complete values remain below. */
+function headlineScienceValue(result: ScienceResult): [string, unknown] | undefined {
+  const scalars = Object.entries(result.values).filter(([, value]) =>
+    (typeof value === "number" && Number.isFinite(value)) ||
+    (typeof value === "string" && value.length > 0 && value.length <= 80) ||
+    typeof value === "boolean");
+  const numeric = scalars.filter(([, value]) => typeof value === "number");
+  const choices = numeric.length ? numeric : scalars;
+  const rank = (name: string) =>
+    /^(?:estimate|mean|median|result|value|distance|total)(?=$|[_ (])/i.test(name) ? 0 :
+    /^(?:n|count|sample_count|iterations|steps|coverage_|standard_error|standard_uncertainty)/i.test(name) ? 2 : 1;
+  return choices.reduce<[string, unknown] | undefined>((best, entry) =>
+    !best || rank(entry[0]) < rank(best[0]) ? entry : best, undefined);
+}
+
+/** Closed disclosures do not mount wide plots, tables or thousands of cells. */
+function ResultDisclosure({ label, children, className = "" }: {
+  label: string; children: ReactNode; className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  return <details className={`science-result-disclosure ${className}`.trim()} open={open}>
+    <summary onClick={(event) => { event.preventDefault(); setOpen((previous) => !previous); }}>{label}</summary>
+    {open && children}
+  </details>;
+}
+
 function Results({ result, title, exportJson, exportCsv, exportMethods, onChart, onRefresh, onDiscuss, charts }: {
   result: ScienceResult; title: string; exportJson: () => Promise<string>; exportCsv: () => Promise<Blob>;
   exportMethods: () => Promise<string>;
@@ -93,16 +120,40 @@ function Results({ result, title, exportJson, exportCsv, exportMethods, onChart,
   const [chartType, setChartType] = useState<ScienceChartType>(chartTypes[0] ?? "scatter");
   const baseName = `${provenance.packId}-${result.operationId}`;
   const csv = table ?? (plot ? { columns: [plot.xLabel, plot.yLabel], rows: plot.x.map((v, i) => [v, plot.y[i]]) } : { columns: ["Metric", "Value"], rows: Object.entries(result.values) });
+  const values = Object.entries(result.values);
+  const headline = headlineScienceValue(result);
+  const measurement = headline && resultMeasurement(result, headline[0]);
+  const uncertaintyUnavailable = headline && result.uncertainty?.unsupportedOutputs?.[headline[0]];
+  const formattedSummary = formatScienceSummary(result.summary);
+  const longSummary = formattedSummary.length > 170;
   return <section className="science-results" aria-label="Latest result">
-    <h4>Last successful run · {title}</h4>
-    <p role="status">{formatScienceSummary(result.summary)}</p>
-    <dl>{Object.entries(result.values).map(([label, value]) => {
-      const measured = resultMeasurement(result, label);
-      const unpropagatable = result.uncertainty?.unsupportedOutputs?.[label];
-      return <div key={label}><dt>{label}</dt><dd>{unpropagatable ? `${display(value)} · uncertainty unavailable` : measured ? formatMeasurement(measured) : display(value)}</dd></div>;
-    })}</dl>
-    {result.uncertainty && <details className="science-uncertainty-budget">
-      <summary>Propagated uncertainty budget · {result.uncertainty.method === "gum" ? "first-order GUM" : "Monte Carlo"}</summary>
+    <div className="science-result-head">
+      <h4>Last successful run · {title}</h4>
+      {headline ? <div className="science-result-highlight">
+        <span>{headline[0]}</span>
+        <strong>{uncertaintyUnavailable ? `${display(headline[1])} · uncertainty unavailable`
+          : measurement ? formatMeasurement(measurement) : display(headline[1])}</strong>
+      </div> : (table || tableAsset) && <div className="science-result-highlight">
+        <span>Result table</span>
+        <strong>{(tableAsset?.rowCount ?? table?.rows.length ?? 0).toLocaleString()} rows</strong>
+      </div>}
+      <p role="status" className={`science-result-summary${longSummary ? " science-result-summary--clamped" : ""}`}>
+        {formattedSummary}
+      </p>
+    </div>
+    <div className="science-result-sections">
+      {longSummary && <ResultDisclosure label="Read full summary">
+        <p>{formattedSummary}</p>
+      </ResultDisclosure>}
+      {values.length > 0 && <ResultDisclosure label={`All values · ${values.length}`}>
+        <dl className="science-result-values">{values.map(([label, value]) => {
+          const measured = resultMeasurement(result, label);
+          const unpropagatable = result.uncertainty?.unsupportedOutputs?.[label];
+          return <div key={label}><dt>{label}</dt><dd>{unpropagatable ? `${display(value)} · uncertainty unavailable` : measured ? formatMeasurement(measured) : display(value)}</dd></div>;
+        })}</dl>
+      </ResultDisclosure>}
+      {result.uncertainty && <ResultDisclosure className="science-uncertainty-budget"
+        label={`Propagated uncertainty budget · ${result.uncertainty.method === "gum" ? "first-order GUM" : "Monte Carlo"}`}>
       {Object.entries(result.uncertainty.outputs).map(([name, measured]) =>
         <section key={name}>
           <h5>{name} · {formatMeasurement(measured)}</h5>
@@ -119,17 +170,21 @@ function Results({ result, title, exportJson, exportCsv, exportMethods, onChart,
         </section>)}
       {Object.entries(result.uncertainty.unsupportedOutputs ?? {}).map(([name, why]) =>
         <p role="note" key={name}>Uncertainty propagation unavailable for {name}: {why}</p>)}
-    </details>}
-    {result.views && <ScientificResultViews views={result.views} />}
-    {plot && !result.views?.some((view) => view.type === "survival_curve") && <Plot plot={plot} />}
-    {table && <div className="science-table">
+      </ResultDisclosure>}
+      {(!!result.views?.length || !!plot) && <ResultDisclosure label="Plots & views">
+        {result.views && <ScientificResultViews views={result.views} />}
+        {plot && !result.views?.some((view) => view.type === "survival_curve") && <Plot plot={plot} />}
+      </ResultDisclosure>}
+      {(table || tableAsset) && <ResultDisclosure label={`Tables · ${(tableAsset?.rowCount ?? table?.rows.length ?? 0).toLocaleString()} rows`}>
+        <div className="science-result-table-content">
+          {table && <div className="science-table">
       <table aria-label="Result table"><thead><tr>{table.columns.map((col, i) => <th key={i} scope="col">{col}</th>)}</tr></thead>
         <tbody>{table.rows.slice(0, PREVIEW_ROWS).map((row, i) =>
           <tr key={i}>{row.map((cell, j) => <td key={j}>{display(cell)}</td>)}</tr>)}</tbody>
       </table>
       {table.rows.length > PREVIEW_ROWS && <small>Showing {PREVIEW_ROWS} of {table.rows.length} rows. Export CSV for all rows.</small>}
-    </div>}
-    {tableAsset && <div className="science-table">
+          </div>}
+          {tableAsset && <div className="science-table">
       <p role="status">Saved result table · {tableAsset.rowCount.toLocaleString()} rows · {tableAsset.columnCount} typed columns</p>
       <table aria-label="Generated result table preview">
         <thead><tr>{tableAsset.columns.slice(0, tableAsset.previewColumns).map((col, i) =>
@@ -138,14 +193,17 @@ function Results({ result, title, exportJson, exportCsv, exportMethods, onChart,
           <tr key={i}>{row.map((cell, j) => <td key={j}>{cell === null ? "—" : display(cell)}</td>)}</tr>)}</tbody>
       </table>
       <small>Preview: {tableAsset.preview.length} of {tableAsset.rowCount.toLocaleString()} rows. Export CSV for the full table or connect this node to use its typed columns.</small>
-    </div>}
-    {provenance.inputUnits != null && <details><summary>Units used</summary>
+          </div>}
+        </div>
+      </ResultDisclosure>}
+      {provenance.inputUnits != null && <details className="science-result-disclosure"><summary>Units used</summary>
       <pre>{JSON.stringify(provenance.inputUnits, null, 2)}</pre>
     </details>}
-    <details><summary>Inputs and provenance</summary>
+      <details className="science-result-disclosure"><summary>Inputs and provenance</summary>
       <pre>{JSON.stringify({ inputs: result.inputs, provenance }, null, 2)}</pre>
     </details>
-    <div className="science-actions">
+      <ResultDisclosure label="Actions & exports">
+        <div className="science-actions">
       <button type="button" disabled={copying} onClick={async () => {
         setError("");
         setCopied(false);
@@ -201,7 +259,9 @@ function Results({ result, title, exportJson, exportCsv, exportMethods, onChart,
         <button type="button" disabled={!chart.stale} onClick={() => onRefresh(chart)}>Refresh chart</button>
       </div>)}
     </section>}
-    {error && <p role="alert">{error}</p>}
+        {error && <p role="alert">{error}</p>}
+      </ResultDisclosure>
+    </div>
   </section>;
 }
 
