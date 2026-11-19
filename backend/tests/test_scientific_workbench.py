@@ -275,6 +275,85 @@ def test_export_and_optimistic_edits_are_bound_to_the_visible_run(session):
     assert envelope(document, node) == latest
 
 
+def test_methods_export_is_receipt_bound_and_does_not_change_the_graph(session):
+    document, bus, _, _ = session
+    grant(bus, "core")
+    node = dispatch(bus, "executePlugin", "Scientific Core")
+    first_token = envelope(document, node)["runToken"]
+    example = operations("core")[1].example
+    assert run(bus, "core", node, "convert_unit", example, expected_run=first_token)["ok"]
+    current = envelope(document, node)
+    receipt = current["latest"]["provenance"]
+    before_commands = len(document.command_log)
+
+    def export(token):
+        return dispatch(bus, "invokePluginIntent", "science_core", "export_methods",
+                        {"node_id": node, "expected_run": token})
+
+    assert export(first_token)["conflict"]
+    report = export(current["runToken"])["markdown"]
+    assert "### Method" in report
+    assert "### Recorded inputs" in report
+    assert "### Connected input provenance" in report
+    assert receipt["inputHash"] in report
+    assert receipt["resultHash"] in report
+    assert receipt["receiptHash"] in report
+    assert "convert_unit" in report
+    assert envelope(document, node) == current
+    assert len(document.command_log) == before_commands
+
+    # A revoked grant cannot use the plugin export intent, even for a
+    # previously successful run whose result remains saved.
+    dispatch(bus, "setPluginGrant", "science_core", False)
+    response = export(current["runToken"])
+    assert not response or response.get("ok") is not True
+
+
+def test_workspace_methods_export_validates_every_saved_receipt_and_grant(session):
+    import copy
+
+    from backend.api.intents_nodes import _workspace_scientific_methods
+    from backend.domain.model import SceneError
+    from backend.domain.node_states import PluginStateSnapshot
+
+    document, bus, _, _ = session
+    grant(bus, "core")
+    grant(bus, "statistics")
+    core_node = dispatch(bus, "executePlugin", "Scientific Core")
+    statistics_node = dispatch(bus, "executePlugin", "Statistics")
+    unused = dispatch(bus, "executePlugin", "Scientific Core")
+    assert run(bus, "core", core_node, "convert_unit", operations("core")[1].example)["ok"]
+    assert run(bus, "statistics", statistics_node, "describe",
+               operations("statistics")[0].example)["ok"]
+
+    first = _workspace_scientific_methods(document)
+    assert first.startswith("# Graphlink workspace — scientific methods")
+    assert first.count("### Recorded inputs") == 2
+    assert core_node in first and statistics_node in first
+    assert unused not in first
+    assert envelope(document, core_node)["latest"]["provenance"]["receiptHash"] in first
+
+    # The report is a read-only snapshot; revoking a pack immediately hides
+    # its result without affecting the other enabled pack.
+    dispatch(bus, "setPluginGrant", "science_statistics", False)
+    reduced = _workspace_scientific_methods(document)
+    assert reduced.count("### Recorded inputs") == 1
+    assert core_node in reduced and statistics_node not in reduced
+
+    saved = copy.deepcopy(document.nodes[core_node].state.data)
+    name = next(iter(saved["latest"]["values"]))
+    saved["latest"]["values"][name] = "tampered"
+    document.nodes[core_node].state = PluginStateSnapshot.from_data(saved)
+    with pytest.raises(SceneError, match="receipt|damaged"):
+        _workspace_scientific_methods(document)
+
+    # A corrupted receipt is never silently replaced with an unverified
+    # methods section and is not included even when another node is valid.
+    dispatch(bus, "setPluginGrant", "science_statistics", True)
+    with pytest.raises(SceneError, match="receipt|damaged"):
+        _workspace_scientific_methods(document)
+
+
 def test_receipt_integrity_legacy_data_and_structure():
     import copy
     from graphlink_plugins.scientific.core import fingerprint, readable_result

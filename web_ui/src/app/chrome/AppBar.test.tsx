@@ -1,8 +1,11 @@
 import { ReactFlowProvider } from "@xyflow/react";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import * as download from "../canvas/downloadTextFile";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { AppBar } from "./AppBar";
+// Preload the lazy overflow chunk: these tests exercise actions, not module-load timing.
+import "./AppBarOverflowMenu";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
 import { SceneStore } from "../canvas/sceneStore";
 import type { WsTransport } from "../../lib/ws/transport";
@@ -86,6 +89,64 @@ describe("AppBar", () => {
     expect(spy).toHaveBeenCalledOnce();
   });
 
+  it("exports verified workspace methods from the visible desktop toolbar", async () => {
+    const user = userEvent.setup();
+    const store = makeStore();
+    const verified = "# Graphlink workspace — scientific methods\n\n## Saved result\n";
+    const request = vi.spyOn(store, "exportWorkspaceMethods").mockResolvedValue(verified);
+    const downloadSpy = vi.spyOn(download, "downloadBlob").mockImplementation(() => {});
+    try {
+      renderAppBar(store);
+      const action = screen.getByRole("button", { name: "Export methods" });
+      expect(action.closest(".appbar-tier")).toBeInTheDocument();
+      await user.click(action);
+      await waitFor(() => expect(downloadSpy).toHaveBeenCalledOnce());
+      expect(request).toHaveBeenCalledOnce();
+      expect(downloadSpy.mock.calls[0][1]).toBe("graphlink-workspace-methods.md");
+      expect(await downloadSpy.mock.calls[0][0].text()).toBe(verified);
+    } finally {
+      downloadSpy.mockRestore();
+    }
+  });
+
+  it("downloads the server-verified workspace methods Markdown from the overflow menu", async () => {
+    const user = userEvent.setup();
+    const store = makeStore();
+    const methods = "# Graphlink workspace — scientific methods\n\n## Result\n";
+    const request = vi.spyOn(store, "exportWorkspaceMethods").mockResolvedValue(methods);
+    const saved = vi.spyOn(download, "downloadBlob").mockImplementation(() => {});
+    try {
+      renderAppBar(store);
+      await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
+      const action = await within(screen.getByRole("dialog")).findByRole("button",
+        { name: "Export methods" }, { timeout: 5_000 });
+      await user.click(action);
+      await waitFor(() => expect(saved).toHaveBeenCalledOnce());
+      expect(request).toHaveBeenCalledOnce();
+      expect(saved.mock.calls[0][1]).toBe("graphlink-workspace-methods.md");
+      expect(await saved.mock.calls[0][0].text()).toBe(methods);
+      expect(screen.queryByRole("dialog")).toBeNull();
+    } finally {
+      saved.mockRestore();
+    }
+  }, 15_000);
+
+  it("shows a workspace methods export failure instead of downloading anything", async () => {
+    const user = userEvent.setup();
+    const store = makeStore();
+    vi.spyOn(store, "exportWorkspaceMethods").mockRejectedValue(new Error("A receipt is damaged."));
+    const saved = vi.spyOn(download, "downloadBlob").mockImplementation(() => {});
+    try {
+      renderAppBar(store);
+      await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
+      await user.click(await within(screen.getByRole("dialog")).findByRole("button", { name: "Export methods" }));
+      expect(await within(screen.getByRole("dialog")).findByRole("alert")).toHaveTextContent("A receipt is damaged.");
+      expect(saved).not.toHaveBeenCalled();
+    } finally {
+      saved.mockRestore();
+    }
+  });
+
   it("Settings toggles real overlay-open state, not latched click state (audit B6)", async () => {
     const user = userEvent.setup();
     renderAppBar();
@@ -142,6 +203,7 @@ describe("AppBar", () => {
 
       for (const label of [
         "Export PNG",
+        "Export methods",
         "Pins",
         "Organize",
         "View",
@@ -232,6 +294,7 @@ describe("AppBar", () => {
         "Organize",
         "Pins",
         "Export PNG",
+        "Export methods",
         "View",
         "Plugins",
         "Global Search",

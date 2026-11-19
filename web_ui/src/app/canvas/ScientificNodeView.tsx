@@ -78,12 +78,15 @@ function csvCell(value: unknown): string {
 
 const PREVIEW_ROWS = 30;
 
-function Results({ result, title, exportJson, exportCsv, onChart, onRefresh, onDiscuss, charts }: {
+function Results({ result, title, exportJson, exportCsv, exportMethods, onChart, onRefresh, onDiscuss, charts }: {
   result: ScienceResult; title: string; exportJson: () => Promise<string>; exportCsv: () => Promise<Blob>;
+  exportMethods: () => Promise<string>;
   onChart: (type: ScienceChartType) => void; onRefresh: (chart: ScienceChartLink) => void;
   onDiscuss: (result: ScienceResult) => void; charts: ScienceChartLink[];
 }) {
   const [exporting, setExporting] = useState(false);
+  const [copying, setCopying] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
   const { table, tableAsset, plot, provenance } = result;
   const chartTypes = chartableScienceTypes(result);
@@ -143,6 +146,21 @@ function Results({ result, title, exportJson, exportCsv, onChart, onRefresh, onD
       <pre>{JSON.stringify({ inputs: result.inputs, provenance }, null, 2)}</pre>
     </details>
     <div className="science-actions">
+      <button type="button" disabled={copying} onClick={async () => {
+        setError("");
+        setCopied(false);
+        setCopying(true);
+        try {
+          const methods = await exportMethods();
+          if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable.");
+          await navigator.clipboard.writeText(methods);
+          setCopied(true);
+        } catch (e) {
+          setError(e instanceof Error ? e.message : "Could not copy methods.");
+        } finally {
+          setCopying(false);
+        }
+      }}>{copying ? "Copying…" : copied ? "Copied methods" : "Copy methods"}</button>
       <button type="button" onClick={() => onDiscuss(result)}>Discuss in chat</button>
       <button type="button" disabled={exporting} onClick={async () => {
         setError("");
@@ -561,9 +579,9 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
   </form>;
 }
 
-function Workbench({ session, state, options, run, configure, cancel, fetchTableColumn, exportJson, exportCsv, charts, onChart, onRefresh, onDiscuss, tableEditor }: {
+function Workbench({ session, state, options, run, configure, cancel, fetchTableColumn, exportJson, exportCsv, exportMethods, charts, onChart, onRefresh, onDiscuss, tableEditor }: {
   session: ScienceEditorSession; state: ScienceState; options: SourceOption[]; run: Run; configure: Run; cancel: Cancel; fetchTableColumn: FetchTableColumn;
-  exportJson: () => Promise<string>; exportCsv: () => Promise<Blob>; tableEditor: ReactNode;
+  exportJson: () => Promise<string>; exportCsv: () => Promise<Blob>; exportMethods: () => Promise<string>; tableEditor: ReactNode;
   charts: ScienceChartLink[]; onChart: (type: ScienceChartType) => void; onRefresh: (chart: ScienceChartLink) => void;
   onDiscuss: (result: ScienceResult) => void;
 }) {
@@ -581,7 +599,7 @@ function Workbench({ session, state, options, run, configure, cancel, fetchTable
       options={options} run={run} configure={configure} cancel={cancel} fetchTableColumn={fetchTableColumn}
       busy={busy} setBusy={setBusy} />
     {tableEditor}
-    {state.latest && <Results key={revision} result={state.latest} exportJson={exportJson} exportCsv={exportCsv}
+    {state.latest && <Results key={revision} result={state.latest} exportJson={exportJson} exportCsv={exportCsv} exportMethods={exportMethods}
       charts={charts} onChart={onChart} onRefresh={onRefresh} onDiscuss={onDiscuss} title={
       state.operations.find((candidate) => candidate.id === state.latest?.operationId)?.title ?? state.latest.operationId
     } />}
@@ -598,6 +616,7 @@ export const ScientificNodeView = memo(function ScientificNodeView({ data, id, s
       : state?.error ? <p role="alert">{state.error}</p> : state && data.pluginId === "science_" + state.packId
       ? <Workbench key={state.nodeKey ?? id} session={data.store.scientificEditor(id, state.nodeKey)} state={state} options={options}
         exportJson={() => data.store.exportScientificResult(data.pluginId, id, state.runToken)}
+        exportMethods={() => data.store.exportScientificMethods(data.pluginId, id, state.runToken)}
         exportCsv={() => data.store.exportScientificTableCsv(data.pluginId, id, "result", state.runToken)}
         tableEditor={<TableEditor state={state} nodeId={id} pluginId={data.pluginId} store={data.store} />}
         fetchTableColumn={async (option) => {

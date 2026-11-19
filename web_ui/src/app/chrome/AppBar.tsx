@@ -1,6 +1,7 @@
 import { useReactFlow } from "@xyflow/react";
 import { lazy, Suspense, useSyncExternalStore } from "react";
 import type { SceneStore } from "../canvas/sceneStore";
+import { downloadBlob } from "../canvas/downloadTextFile";
 import { Popover, useOverlays } from "../overlays/overlays";
 import { AppBarIcon, type AppBarIconName } from "./AppBarIcon";
 
@@ -253,6 +254,11 @@ export function AppBar({ store }: { store: SceneStore }) {
   const chip = (surface: string) =>
     "appbar-btn appbar-btn-checkable" + (overlays.isOpen(surface) ? " checked" : "");
 
+  const exportMethods = async () => {
+    const markdown = await store.exportWorkspaceMethods();
+    downloadBlob(new Blob([markdown], { type: "text/markdown;charset=utf-8" }),
+      "graphlink-workspace-methods.md");
+  };
   const exportPng = async () => {
     const { exportCanvasAsPng } = await import("../canvas/exportCanvasPng");
     await exportCanvasAsPng(
@@ -313,7 +319,7 @@ export function AppBar({ store }: { store: SceneStore }) {
         />
       </div>
 
-      {/* ARRANGE - acts on the graph's layout and landmarks. */}
+      {/* ARRANGE & EXPORT - canvas tools visible at normal desktop widths. */}
       <div className="appbar-group appbar-tier">
         <BarIconButton
           icon="organize"
@@ -334,6 +340,14 @@ export function AppBar({ store }: { store: SceneStore }) {
           label="Export PNG"
           className="appbar-btn"
           onClick={exportPng}
+        />
+        <BarIconButton
+          icon="methods"
+          label="Export methods"
+          className="appbar-btn"
+          onClick={() => void exportMethods().catch((error: unknown) => {
+            store.showInfoNotification(error instanceof Error ? error.message : "Methods export failed.");
+          })}
         />
       </div>
 
@@ -386,7 +400,7 @@ export function AppBar({ store }: { store: SceneStore }) {
             <p role="status">Loading toolbar actions…</p>
           </Popover>
         }>
-          <LazyAppBarOverflowMenu store={store} exportPng={exportPng} />
+          <LazyAppBarOverflowMenu store={store} exportPng={exportPng} exportMethods={exportMethods} />
         </Suspense>
       )}
 

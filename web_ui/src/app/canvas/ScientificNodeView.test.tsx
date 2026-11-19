@@ -190,6 +190,42 @@ describe("scientific workbench card", () => {
     } finally { save.mockRestore(); }
   });
 
+  it("copies methods returned from the verified export intent, not from the browser result", async () => {
+    const oldClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    try {
+      const { request } = mount(JSON.stringify({ ...state, latest: result, runToken: "current" }));
+      request.mockResolvedValueOnce({ ok: true, markdown: "## Verified methods\nReceipt: abc\n" });
+      fireEvent.click(screen.getByRole("button", { name: "Copy methods" }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith("## Verified methods\nReceipt: abc\n"));
+      expect(request).toHaveBeenCalledWith("app-plugins", "invokePluginIntent", [
+        "science_mathematics", "export_methods", { node_id: "target", expected_run: "current" },
+      ]);
+      expect(screen.getByRole("button", { name: "Copied methods" })).toBeInTheDocument();
+    } finally {
+      if (oldClipboard) Object.defineProperty(navigator, "clipboard", oldClipboard);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
+  it("copies nothing when the saved result changed before methods verification", async () => {
+    const oldClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const writeText = vi.fn();
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    try {
+      const { request } = mount(JSON.stringify({ ...state, latest: result, runToken: "before" }));
+      request.mockResolvedValueOnce({ ok: false, conflict: true, error: "The result changed." });
+      fireEvent.click(screen.getByRole("button", { name: "Copy methods" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent("The result changed.");
+      expect(writeText).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "Copy methods" })).toBeEnabled();
+    } finally {
+      if (oldClipboard) Object.defineProperty(navigator, "clipboard", oldClipboard);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
   it("formats scientific summaries and plot captions without modifying stored values", () => {
     const scientific = { ...result,
       summary: "2e+06 viable cells/mL; kcat/Km=1e+06 M⁻¹ s⁻¹.",

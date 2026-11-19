@@ -24,6 +24,7 @@ from backend.domain.node_states import CodeSandboxState, HarnessState
 from backend.events import SessionBus
 from graphlink_scratch_dirs import HARNESS_WORKSPACE_ROOT, remove_scratch_dir_for_id
 from graphlink_plugins.scientific.core import readable_result
+from graphlink_plugins.scientific.methods import render_result_methods
 
 
 def _science_discussion_context(source_id: str, result: dict) -> str:
@@ -100,6 +101,40 @@ def _create_scientific_discussion(
         "discussScientificResult", "user", create_chat, node_ids=[source_node_id],
     )
     return chat.id
+
+
+def _workspace_scientific_methods(document: SceneDocument) -> str:
+    """Aggregate current saved receipts, obeying the per-pack live grant gate.
+
+    A damaged receipt fails the entire export instead of silently omitting it.
+    """
+    sections = []
+    for node in sorted(document.nodes.values(), key=lambda item: (item.y, item.x, item.id)):
+        match = re.fullmatch(r"science_([a-z0-9_]+)\.workbench", node.kind)
+        if match is None or not document._plugin_state_wire(node).get("science"):
+            continue
+        data = getattr(node.state, "data", None)
+        if not isinstance(data, dict):
+            raise SceneError("A scientific node has unreadable saved state.")
+        if data.get("latest") is None:
+            continue
+        if getattr(node.state, "unresolved_asset_ref", None):
+            raise SceneError("A scientific result asset is unavailable; restore it before exporting.")
+        try:
+            sections.append(render_result_methods(
+                match.group(1), data, node_id=node.id, title=node.title,
+            ))
+        except ValueError as exc:
+            raise SceneError(f"Could not export methods for node {node.id}: {exc}") from exc
+
+    if not sections:
+        raise SceneError("No verified Scientific Workbench results from enabled packs are available.")
+    return (
+        "# Graphlink workspace — scientific methods\n\n"
+        f"{len(sections)} verified saved result(s) from enabled Scientific Workbench packs. "
+        "Unrun nodes are omitted. Methods are a snapshot, not a recalculation.\n\n"
+        + "\n---\n\n".join(section.rstrip() for section in sections) + "\n"
+    )
 
 
 def _capture_live_run_teardown(document: SceneDocument, ids: list[str]):
@@ -221,6 +256,9 @@ def register_node_intents(
         )
         await publish_scene()
         return chat_id
+
+    def export_scientific_workspace_methods():
+        return _workspace_scientific_methods(document)
 
     async def add_code_node(x, y, code, language, parent_id=None):
         node, _command = document.record_command(
@@ -445,6 +483,7 @@ def register_node_intents(
     bus.register_intent("scene", "addNode", add_node)
     bus.register_intent("scene", "addChatNode", add_chat_node)
     bus.register_intent("scene", "discussScientificResult", discuss_scientific_result)
+    bus.register_intent("scene", "exportScientificWorkspaceMethods", export_scientific_workspace_methods)
     bus.register_intent("scene", "addCodeNode", add_code_node)
     bus.register_intent("scene", "addDocumentNode", add_document_node)
     bus.register_intent("scene", "addThinkingNode", add_thinking_node)

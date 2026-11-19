@@ -33,6 +33,7 @@ export type AppBarIconName =
   | "organize"
   | "pin"
   | "export"
+  | "methods"
   | "search"
   | "knowledge"
   | "builder"
@@ -102,6 +103,13 @@ export function AppBarIcon({ name }: { name: AppBarIconName }) {
           <path d="M12 4v10" />
           <path d="m8 10 4 4 4-4" />
           <path d="M5 17v2a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2" />
+        </svg>
+      );
+    case "methods":
+      return (
+        <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
+          <path d="M6 3h9l3 3v15H6z" />
+          <path d="M14 3v4h4M9 12h6M9 16h6" />
         </svg>
       );
     case "search":

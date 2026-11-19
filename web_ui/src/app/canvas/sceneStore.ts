@@ -1740,6 +1740,24 @@ export class SceneStore {
     return answer.json;
   }
 
+  /** Methods must come from a server-verified saved result, not the SPA's wire JSON. */
+  async exportScientificMethods(pluginId: string, nodeId: string, expectedRun?: string): Promise<string> {
+    const answer = await this.scientificIntent(pluginId, "export_methods", {
+      node_id: nodeId, ...(expectedRun && { expected_run: expectedRun }),
+    });
+    if (!("markdown" in answer) || typeof answer.markdown !== "string")
+      throw new Error("The methods export could not be read.");
+    return answer.markdown;
+  }
+
+  /** Workspace-wide snapshot: the scene checks every enabled pack and receipt. */
+  async exportWorkspaceMethods(): Promise<string> {
+    const answer: unknown = await this.transport.request("scene", "exportScientificWorkspaceMethods", []);
+    if (typeof answer !== "string" || !answer.startsWith("# Graphlink workspace"))
+      throw new Error("The workspace methods export could not be read.");
+    return answer;
+  }
+
   /** Download every row without putting a large dataset on the scene wire. */
   async exportScientificTableCsv(pluginId: string, nodeId: string,
     tableSource: "result" | "import", expectedRun?: string): Promise<Blob> {
