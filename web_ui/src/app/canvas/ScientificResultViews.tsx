@@ -14,7 +14,9 @@ const DASHES = ["", "6 3", "2 3", "9 2 2 2"];
 function PlateMap({ view }: { view: SciencePlateMapView }) {
   const rowCount = view.format === 96 ? 8 : 16;
   const colCount = view.format === 96 ? 12 : 24;
-  const values = new Map(view.wells.map(({ well, value }) => [well, value]));
+  const values = new Map<string, number | string | null>(
+    view.wells.map(({ well, value }): [string, number | string | null] => [well, value]),
+  );
   const numeric = view.wells.flatMap(({ value }) => typeof value === "number" ? [value] : []);
   const minimum = numeric.length ? Math.min(...numeric) : 0;
   const maximum = numeric.length ? Math.max(...numeric) : 0;
@@ -35,11 +37,14 @@ function PlateMap({ view }: { view: SciencePlateMapView }) {
               const number = typeof value === "number";
               const label = empty ? "empty" : number ? formatScienceNumber(value) : value;
               const description = well + ": " + label + (number && view.unit ? " " + view.unit : "");
-              const ratio = number ? maximum === minimum ? 0.5 : (value - minimum) / (maximum - minimum) : 0;
+              const range = maximum - minimum;
+              const ratio = number ? maximum === minimum ? 0.5 :
+                Number.isFinite(range) ? (value - minimum) / range :
+                  (value / 2 - minimum / 2) / (maximum / 2 - minimum / 2) : 0;
               const fill: CSSProperties | undefined = number
                 ? { backgroundColor: `hsl(209 78% ${87 - ratio * 47}%)`, color: ratio >= 0.57 ? "#fff" : "#14304e" }
                 : undefined;
-              return <td key={well} aria-label={description} title={description}
+              return <td key={well} tabIndex={empty ? -1 : 0} aria-label={description} title={description}
                 className={empty ? "science-well-empty" : number ? "science-well-number" : "science-well-text"}>
                 <span style={fill}>{empty ? "·" : number ? "●" : String(value).slice(0, 2)}</span>
               </td>;
