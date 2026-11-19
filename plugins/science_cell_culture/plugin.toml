@@ -1,7 +1,7 @@
 [plugin]
 id = "science_cell_culture"
 name = "Cell Culture"
-description = "Calculate hemocytometer counts and viability, seeding and serial-dilution plans, and centrifuge RCF/rpm."
+description = "Calculate cell counts, CFU plate counts, MPN, growth curves and doubling time, plus seeding, dilutions and centrifuge conversion."
 version = "1.2.0"
 sdk_api_version = 1
 entry_point = "plugin:register"
