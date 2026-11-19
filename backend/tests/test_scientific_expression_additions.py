@@ -136,3 +136,72 @@ def test_enrichment_rejects_out_of_universe_selection_duplicates_and_bad_sets():
     ):
         with pytest.raises(ValueError):
             _run("over_representation_enrichment", **change)
+
+
+def test_enrichment_rejects_duplicate_json_set_names_before_testing():
+    # A JSON decoder's default last-key-wins behavior silently removes a
+    # hypothesis, changing both its overlap and the BH test family.
+    with pytest.raises(ValueError, match="Duplicate gene-set name"):
+        _run("over_representation_enrichment",
+             gene_sets='{"pathway_alpha":["A","B"],"pathway_alpha":["X"],"pathway_beta":["C"]}')
+
+
+def test_empty_background_set_has_undefined_fold_not_false_depletion():
+    result = _run("over_representation_enrichment",
+                  gene_sets='{"outside":["X","Y"],"inside":["A","B","D"]}')
+    outside, inside = result["table"]["rows"]
+    assert outside[:5] == ["outside", 0, 0, 0, "undefined"]
+    assert outside[5:7] == ["not tested", "not tested"]
+    assert outside[-1] == "not_in_universe"
+    assert inside[4] == pytest.approx(16 / 9)
+    assert inside[6] == pytest.approx(inside[5])  # Only one eligible test.
+    assert result["values"]["tested_sets"] == 1
+
+
+def test_pca_retains_resolvable_low_variance_second_component():
+    # Independent small-singular-value oracle: two orthogonal sample
+    # contrasts, then subtract the strong contrast from the weak one.
+    # The previous 1e-12*total eigenvalue cutoff incorrectly erased PC2.
+    base, major, minor = 1_000_000_000, 10_000_000, 5
+    counts = [
+        [base - major, base + major, base - major, base + major],
+        [base - minor, base - minor, base + minor, base + minor],
+        [base + major + minor, base - major + minor,
+         base + major - minor, base - major - minor],
+    ]
+    result = _run("expression_pca", gene_ids='["major","minor","balance"]',
+                  sample_ids='["s1","s2","s3","s4"]',
+                  counts=counts, method="cpm", pseudocount=1)
+    totals = [sum(row[j] for row in counts) for j in range(4)]
+    features = [[math.log2(1e6 * row[j] / totals[j] + 1) for j in range(4)]
+                for row in counts]
+    centered = [[value - math.fsum(row) / 4 for value in row] for row in features]
+    strong_axis = (-0.5, 0.5, -0.5, 0.5)
+    weak_axis = (-0.5, -0.5, 0.5, 0.5)
+    strong = [math.fsum(x*y for x, y in zip(row, strong_axis)) for row in centered]
+    weak = [math.fsum(x*y for x, y in zip(row, weak_axis)) for row in centered]
+    mix = math.fsum(x*y for x, y in zip(strong, weak)) / math.fsum(x*x for x in strong)
+    oracle = math.fsum((x - mix*y)**2 for x, y in zip(weak, strong)) / 3
+    values = result["values"]
+    assert 1e-17 < oracle < 1e-15
+    assert values["pc2_variance"] == pytest.approx(oracle, rel=0.01, abs=0)
+    assert values["pc2_explained_fraction"] > 1e-13
+    scores = [row[2] for row in result["table"]["rows"]]
+    assert math.fsum(score*score for score in scores) / 3 == pytest.approx(
+        values["pc2_variance"], rel=1e-9, abs=0)
+
+
+def test_correlation_antipodal_profiles_cluster_at_distance_two():
+    result = _run("sample_correlation", gene_ids='["up","down"]',
+                  counts=[[1, 100, 1], [100, 1, 100]],
+                  sample_ids='["s1","s2","s3"]', method="cpm", pseudocount=1)
+    rows = result["table"]["rows"]
+    columns = result["table"]["columns"]
+    assert [row[0] for row in rows] == ["s1", "s3", "s2"]
+    assert columns == ["sample_id", "correlation_to_s1",
+                       "correlation_to_s3", "correlation_to_s2"]
+    assert rows[0][2] == pytest.approx(1)
+    assert rows[0][3] == pytest.approx(-1)
+    linkage = json.loads(result["values"]["linkage"])
+    assert linkage[0][2] == pytest.approx(0)
+    assert linkage[1][2] == pytest.approx(2)

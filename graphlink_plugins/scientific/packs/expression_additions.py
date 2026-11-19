@@ -146,7 +146,9 @@ def expression_pca(data: dict) -> dict:
     total = math.fsum(max(0.0, value) for value in eigenvalues)
     if total <= 0:
         raise ValueError("Expression PCA needs variation between the normalized samples.")
-    tolerance = 1e-12 * total
+    # A blanket 1e-12 relative cutoff discarded real, numerically resolvable
+    # lower-variance PCs. Suppress only roundoff-scale Gram eigenvalues.
+    tolerance = 64 * math.ulp(1.0) * total
     variances = [max(0.0, value) if value > tolerance else 0.0 for value in eigenvalues]
     scores = [[0.0, 0.0] for _ in range(width)]
     for pc in range(2):
@@ -173,10 +175,20 @@ def expression_pca(data: dict) -> dict:
     }
 
 
+def _unique_gene_set_names(pairs: list[tuple[str, object]]) -> dict:
+    """Reject JSON duplicate keys rather than silently changing the BH test family."""
+    result = {}
+    for name, members in pairs:
+        if name in result:
+            raise ValueError(f"Duplicate gene-set name {name!r} in JSON.")
+        result[name] = members
+    return result
+
+
 def _gene_sets(text: str) -> dict[str, list[str]]:
     try:
-        gene_sets = json.loads(text)
-    except (ValueError, TypeError):
+        gene_sets = json.loads(text, object_pairs_hook=_unique_gene_set_names)
+    except (json.JSONDecodeError, TypeError):
         raise ValueError("Gene sets must be a JSON object mapping set names to arrays of gene IDs.") from None
     if not isinstance(gene_sets, dict) or not 1 <= len(gene_sets) <= 128:
         raise ValueError("Supply 1–128 named gene sets as a JSON object.")
@@ -227,7 +239,7 @@ def over_representation_enrichment(data: dict) -> dict:
         size, count = len(background_members), len(overlap)
         expected = len(selected) * size / len(universe)
         records.append({"name": name, "size": size, "count": count, "expected": expected,
-                        "fold": count / expected if size else 0.0,
+                        "fold": count / expected if size else None,
                         "overlap": [gene for gene in selected if gene in overlap],
                         "status": "tested" if size else "not_in_universe",
                         "p": _hypergeometric_right_tail(len(universe), size, len(selected), count)
@@ -238,7 +250,8 @@ def over_representation_enrichment(data: dict) -> dict:
         "summary": (f"One-sided hypergeometric over-representation of {len(selected)} selected genes "
                     f"among {len(universe)} user-supplied background genes, with BH correction "
                     "across sets having at least one in-universe gene. "
-                    "Unrecognized set members are excluded from the background."),
+                    "Unrecognized set members are excluded from the background; "
+                    "sets with no in-universe genes have undefined fold enrichment."),
         "values": {"universe_genes": len(universe), "selected_genes": len(selected),
                    "gene_sets": len(sets), "tested_sets": len(tested),
                    "out_of_universe_sets": len(records) - len(tested),
@@ -246,7 +259,8 @@ def over_representation_enrichment(data: dict) -> dict:
         "table": {"columns": ["gene_set", "background_set_size", "selected_overlap",
                               "expected_overlap", "fold_enrichment", "p_value", "bh_fdr",
                               "overlap_gene_ids", "status"],
-                  "rows": [[r["name"], r["size"], r["count"], r["expected"], r["fold"],
+                  "rows": [[r["name"], r["size"], r["count"], r["expected"],
+                            r["fold"] if r["fold"] is not None else "undefined",
                             r["p"] if r["p"] is not None else "not tested",
                             r["q"] if r["q"] is not None else "not tested",
                             json.dumps(r["overlap"]), r["status"]] for r in records]},
@@ -317,7 +331,8 @@ EXTRA_OPERATIONS: tuple[Operation, ...] = (
         example=_SAMPLE_EXAMPLE,
         calculate=expression_pca,
         methods="Center each log2(normalized count+p) gene across samples; no gene variance scaling. "
-                "Eigen-decompose sample Gram covariance, report PC scores and explained fractions.",
+                "Eigen-decompose sample Gram covariance, report PC scores and explained fractions; "
+                "values within 64 machine eps of total variance are treated as unresolved noise.",
         citations=(_EXPRESSION_CITES[2],),
     ),
     Operation(
@@ -342,7 +357,8 @@ EXTRA_OPERATIONS: tuple[Operation, ...] = (
         },
         calculate=over_representation_enrichment,
         methods="Right-tail hypergeometric Pr[X≥observed] under fixed background/set/selection sizes; "
-                "intersect user sets with explicit universe; BH across nonempty in-universe sets.",
+                "intersect user sets with explicit universe; zero-size sets have undefined "
+                "fold enrichment and are excluded from BH correction.",
         citations=_EXPRESSION_CITES[3:],
     ),
 )
