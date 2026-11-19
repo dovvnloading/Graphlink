@@ -28,17 +28,34 @@ const parent = { title: "Samples", nodeId: "parent", raw: JSON.stringify({ ...st
 
 function mount(raw = JSON.stringify(state), parents = [parent], charts: ScienceChartLink[] = []) {
   const request = vi.fn<WsTransport["request"]>().mockResolvedValue({ ok: true });
-  const store = new SceneStore({ request } as unknown as WsTransport);
+  const fireIntent = vi.fn<WsTransport["fireIntent"]>();
+  const store = new SceneStore({ request, fireIntent } as unknown as WsTransport);
   const generateChart = vi.spyOn(store, "generateChart").mockImplementation(() => {});
   function draw(value: string, currentParents = parents, currentCharts = charts) {
     const props = { id: "target", data: { title: "Mathematics", raw: value, pluginId: "science_mathematics", parents: currentParents, charts: currentCharts, store } } as NodeProps<ScientificFlowNode>;
     return <ScientificNodeView {...props} />;
   }
   const view = render(draw(raw), { wrapper: ReactFlowProvider });
-  return { request, generateChart, remount: (value: string) => { view.unmount(); render(draw(value), { wrapper: ReactFlowProvider }); }, refresh: (value: string, currentParents = parents, currentCharts = charts) => view.rerender(draw(value, currentParents, currentCharts)) };
+  return { request, fireIntent, generateChart, remount: (value: string) => { view.unmount(); render(draw(value), { wrapper: ReactFlowProvider }); }, refresh: (value: string, currentParents = parents, currentCharts = charts) => view.rerender(draw(value, currentParents, currentCharts)) };
 }
 
 describe("scientific workbench card", () => {
+  it("discusses only a saved result and sends its receipt, not unverified browser data", () => {
+    const mounted = mount();
+    expect(screen.queryByRole("button", { name: "Discuss in chat" })).not.toBeInTheDocument();
+
+    mounted.refresh(JSON.stringify({
+      ...state, latest: { ...result, provenance: { ...result.provenance, receiptHash: "receipt-123" } },
+    }));
+    fireEvent.click(screen.getByRole("button", { name: "Discuss in chat" }));
+    expect(mounted.fireIntent).toHaveBeenCalledWith(
+      "scene", "discussScientificResult", ["target", "abc", "receipt-123"],
+      undefined, false, undefined, expect.any(Function),
+    );
+    mounted.refresh(JSON.stringify({ ...state, latest: null }));
+    expect(screen.queryByRole("button", { name: "Discuss in chat" })).not.toBeInTheDocument();
+  });
+
   it("renders categorical choices as a dropdown with linked methods and citations", async () => {
     const choiceOp = {
       id: "potency", title: "Potency fit", description: "Fit a response curve.",

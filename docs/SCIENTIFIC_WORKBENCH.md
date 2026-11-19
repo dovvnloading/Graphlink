@@ -12,6 +12,12 @@ Connected uncertainty propagation and explicit Graph Runner steps are both part 
 4. To reuse an upstream measurement, draw a direct edge from the source node to the destination Scientific Workbench node. On the destination's field choose **Use connected result…**, select an appropriate numerical metric, plot axis, numeric result column or rectangular table. The runtime checks the live upstream checksum, grant, edge, selected values and source identity. A manual edit of a bound field detaches the link; after an upstream change, reselect the latest result and rerun.
 5. Save the workspace to persist the nodes, links and verified receipts. A changed successful calculation is one undoable graph edit; unchanged identical repeated submissions do not replace the original receipt. See [Results, persistence and charts](#results-persistence-and-charts).
 
+### Discuss a verified result in chat
+
+After a successful run, choose **Discuss in chat** in **Latest result**. This opens a new, undoable chat node beside the Workbench, connected by a reference link to the source. Its opening message contains a **snapshot of the verified result** (including the operation, inputs, outputs and provenance); very large tables, plots or typed views are explicitly excerpted to keep chat context bounded. The backend validates the stored result checksum and the exact receipt selected in the UI. If the calculation has changed or its receipt is damaged, no chat is created.
+
+Type a question in the chat composer and send it to continue from that result snapshot. Opening the chat does **not** automatically call a model. Future Workbench runs do not silently replace the chat's earlier snapshot; inspect or export the source result for complete large datasets.
+
 ## Input validation and resource limits
 
 The shared [`core.py`](../graphlink_plugins/scientific/core.py) validator accepts **exactly** the fields declared in the catalog, rejecting unknown or omitted keys. Limits are independent of the stricter, method-specific mathematical restrictions in the linked references. Each operation may additionally provide `methods` (text describing the implemented procedure and assumptions) and `citations` (labeled HTTPS references), displayed under **Methods and citations** in the editor. These are catalog metadata, not part of result fingerprints or receipts.

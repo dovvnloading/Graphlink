@@ -305,8 +305,9 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # 242 -> 243: read-only scene/exportPublicationChart publication file export.
     # 243 -> 244: undoable scene/setChartAnalysis persists chart axis locks and annotations.
     # 244 -> 245: scene/cancelGraphRun cancels active Graph Runner steps.
-    assert len(real) == 245, (
-        f"expected exactly 245 real registered intents, found {len(real)} - "
+    # 245 -> 246: scene/discussScientificResult creates an undoable chat from a verified result.
+    assert len(real) == 246, (
+        f"expected exactly 246 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"

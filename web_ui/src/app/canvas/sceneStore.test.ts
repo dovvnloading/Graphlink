@@ -901,6 +901,43 @@ describe("SceneStore", () => {
     ]);
   });
 
+  it("opens a scientific discussion using only the source and receipt identity", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.discussScientificResult("science-node", "hash-1", "receipt-1");
+    store.discussScientificResult("legacy-node", "legacy-hash");
+    expect(intents).toEqual([
+      { topic: "scene", intent: "discussScientificResult", args: ["science-node", "hash-1", "receipt-1"] },
+      { topic: "scene", intent: "discussScientificResult", args: ["legacy-node", "legacy-hash", "legacy-hash"] },
+    ]);
+  });
+
+  it("makes the new scientific chat the next composer target on success, but not on failure", () => {
+    const { transport, fireIntentSettlers } = makeFakeTransport({ autoSettleFireIntent: false });
+    const store = new SceneStore(transport);
+    store.setReplyTargetNodeId("earlier-branch");
+    store.discussScientificResult("science", "hash", "receipt");
+    expect(store.getReplyTargetNodeId()).toBe("earlier-branch");
+    fireIntentSettlers[0](false);
+    expect(store.getReplyTargetNodeId()).toBe("earlier-branch");
+
+    store.discussScientificResult("science", "hash", "receipt");
+    fireIntentSettlers[1](true);
+    expect(store.getReplyTargetNodeId()).toBeNull();
+
+    store.setSynthesizeTargetNodeIds(["branch-1", "branch-2"]);
+    store.discussScientificResult("science", "hash", "receipt");
+    fireIntentSettlers[2](true);
+    expect(store.getSynthesizeTargetNodeIds()).toBeNull();
+
+    // An unrelated pick made while the create was pending takes precedence.
+    store.setReplyTargetNodeId("old");
+    store.discussScientificResult("science", "hash", "receipt");
+    store.setReplyTargetNodeId("new");
+    fireIntentSettlers[3](true);
+    expect(store.getReplyTargetNodeId()).toBe("new");
+  });
+
   it("collapseAllNodes sends the scene-topic collapseAllNodes intent with no args", () => {
     const { transport, intents } = makeFakeTransport();
     const store = new SceneStore(transport);

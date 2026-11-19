@@ -793,6 +793,26 @@ export class SceneStore {
     this.transport.fireIntent("scene", "deleteChatNode", [id]);
   }
 
+  /** The server reads and checks the result receipt; never send browser-owned result JSON. */
+  discussScientificResult(nodeId: string, resultHash: string, receiptHash = resultHash): void {
+    // The new discussion becomes the backend's active chat tip. An earlier
+    // composer "Replying to" / "Synthesizing" pick must not override it on
+    // the next Send. Only clear after the create succeeds, and never erase
+    // a newer selection made while the request was in flight.
+    const replyTarget = this.replyTargetNodeId;
+    const synthesisTargets = this.synthesizeTargetNodeIds;
+    this.transport.fireIntent(
+      "scene", "discussScientificResult", [nodeId, resultHash, receiptHash],
+      undefined, false, undefined, (succeeded) => {
+        if (succeeded && (replyTarget !== null || synthesisTargets !== null)
+            && this.replyTargetNodeId === replyTarget
+            && this.synthesizeTargetNodeIds === synthesisTargets) {
+          this.setReplyTargetNodeId(null);
+        }
+      },
+    );
+  }
+
   // R3.5: real code nodes - deletion has no dedicated intent (code nodes are
   // never branch points/reparented, so the generic removeNodes intent below
   // already covers it).
