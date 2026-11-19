@@ -51,6 +51,7 @@ def test_manifest_discovery_metadata_and_example_receipts():
     assert [op.id for op in operations(PACK)] == [
         "inhibition_model_fit", "inhibition_model_compare", "catalytic_constants",
         "hill_fit", "cheng_prusoff_ki",
+        "binding_isotherm_fit", "morrison_tight_binding_fit", "schild_analysis", "thermal_shift_tm",
     ]
     for operation in operations(PACK):
         assert operation.methods and operation.citations
