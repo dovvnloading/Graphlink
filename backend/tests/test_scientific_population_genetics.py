@@ -6,7 +6,7 @@ import random
 import pytest
 
 from graphlink_plugins.scientific.catalog import operations
-from graphlink_plugins.scientific.core import readable_result, run_operation
+from graphlink_plugins.scientific.core import run_operation
 
 
 def _run(operation_id, **inputs):
