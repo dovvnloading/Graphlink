@@ -171,3 +171,15 @@ def test_volcano_view_contract_rejects_forged_significance_and_unbounded_points(
     ):
         with pytest.raises(ValueError):
             check_result_views([bad])
+
+
+def test_cpm_denominator_is_supplied_gene_panel_not_full_library():
+    partial = _run("normalize_counts", gene_ids='["A","B"]',
+                   counts=[[5, 10], [5, 10]], method="cpm")
+    expanded = _run("normalize_counts", gene_ids='["A","B","background"]',
+                    counts=[[5, 10], [5, 10], [90, 180]], method="cpm")
+    assert partial["values"]["sample_1_library_total"] == 10
+    assert expanded["values"]["sample_1_library_total"] == 100
+    assert partial["table"]["rows"][0][1:] == pytest.approx([500_000, 500_000])
+    assert expanded["table"]["rows"][0][1:] == pytest.approx([50_000, 50_000])
+    assert "input matrix" in partial["summary"]

@@ -84,7 +84,8 @@ def normalize_counts(data: dict) -> dict:
     return {
         "summary": (f"Normalized {len(genes)} genes across {width} samples using "
                     f"{data['method']}; output is counts per million for CPM or "
-                    "raw counts divided by median-ratio size factors."),
+                    "raw counts divided by median-ratio size factors. "
+                    "CPM totals cover only genes in this input matrix, not an external whole-library read count."),
         "values": {
             "genes": len(genes), "samples": width,
             "median_ratio_reference_genes": references,
@@ -173,7 +174,8 @@ def differential_expression(data: dict) -> dict:
         "summary": (f"Exploratory two-sided Welch t tests on log2({data['method']} normalized counts "
                     f"+ {pseudo}) for {a_name} (n={len(a)}) vs {b_name} (n={len(b)}); "
                     "Benjamini–Hochberg correction across tested genes. "
-                    "Not a negative-binomial RNA-seq differential-expression model."),
+                    "Not a negative-binomial RNA-seq differential-expression model; "
+                    "CPM totals, when selected, cover only the supplied gene rows."),
         "values": {
             "genes": len(genes), "tested_genes": len(tested),
             "low_count_genes": sum(r["status"] == "low_count" for r in results),
@@ -223,7 +225,8 @@ OPERATIONS: tuple[Operation, ...] = (
                  "counts": [[10, 20, 40, 80], [20, 40, 80, 160], [30, 60, 120, 240]],
                  "method": "cpm"},
         calculate=normalize_counts,
-        methods="CPM: 10^6*c_ij / sum_i(c_ij); median_ratio: geometric mean per all-positive gene, "
+        methods="CPM: 10^6*c_ij / sum_i(c_ij) over supplied genes (not whole-library CPM for a "
+                "partial gene panel); median_ratio: geometric mean per all-positive gene, "
                 "median of per-sample ratios, size factors centered to geometric mean 1. No length correction.",
         citations=(_CITES[0],),
     ),
@@ -254,7 +257,8 @@ OPERATIONS: tuple[Operation, ...] = (
         methods="For each eligible gene, Welch's unequal-variance two-sided t test on log2(normalized "
                 "count + pseudocount), with Satterthwaite degrees of freedom. BH adjusts tested p values; "
                 "genes below the minimum count or with zero within-group variance are untested. "
-                "Effect is difference of mean log2 counts (B-A), not a count likelihood estimate.",
+                "Effect is difference of mean log2 counts (B-A), not a count likelihood estimate. "
+                "CPM library totals are sums over the supplied gene rows only.",
         citations=_CITES,
     ),
 )
