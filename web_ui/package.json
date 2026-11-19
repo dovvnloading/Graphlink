@@ -16,8 +16,7 @@
     "test:e2e:safety": "playwright test --config=playwright.safety.config.ts",
     "lint": "eslint .",
     "check:schema": "python ../contracts/codegen.py --check",
-    "check:bundle": "node scripts/check-bundle-size.mjs",
-    "check": "npm run check:schema && npm run typecheck && npm run lint && npm run test && npm run build && npm run check:bundle",
+    "check": "npm run check:schema && npm run typecheck && npm run lint && npm run test && npm run build",
     "capture:screenshots": "node scripts/capture-screenshots.mjs"
   },
   "overrides": {

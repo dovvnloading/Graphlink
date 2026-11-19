@@ -50,7 +50,7 @@ export default tseslint.config(
     },
   },
   {
-    // ADR-019 stage 19.2: build-tooling scripts (check-bundle-size.mjs) run
+    // Build-tooling scripts under scripts/ run
     // under Node, not the browser - same globals carve-out the test files
     // above already get.
     files: ["scripts/**/*.mjs"],

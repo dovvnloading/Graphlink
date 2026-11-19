@@ -86,3 +86,93 @@ python -m pytest -n0 backend/tests/test_scientific_workbench.py backend/tests/te
 ```
 
 The general `test_scientific_workbench.py` suite discovers packs from the same catalog and plugin directory conventions, so it checks the new manifest, grants, example run, provenance and saved result integration without needing changes to existing tests.
+
+
+## Propagation through connected Scientific Workbench results
+
+A Scientific Workbench input linked from a scalar result retains its **numeric
+value unchanged** in the operation's existing numeric field. The connection is
+authenticated against the source node's current result and receipt before the
+calculation starts and rechecked after the isolated worker completes. If the
+selected scalar has a standard uncertainty, the new result additionally
+contains an optional, receipt-protected top-level `uncertainty` section.
+There is no new graph/schema version and no migration. Unlinked runs and
+inputs whose sources are exact retain their original result and receipt
+formats, calculation behavior, and exported JSON shape.
+
+A connected measurement records `value`, `standardUncertainty` (1σ),
+`coverageFactor`, `coverageProbability`, the known `unit`, and a map of
+**signed standard-uncertainty components keyed by immutable source identity**.
+That map is preserved through every downstream scientific calculation.
+For each numeric scalar output, the default first-order GUM law uses
+sensitivity coefficients \(c_i=\partial f/\partial x_i\) and forms
+
+\[
+  u_c(y)=\sqrt{\sum_{r}\left(\sum_i c_i a_{ir}\right)^2},
+\]
+
+where \(a_{ir}\) is input \(i\)'s signed 1σ contribution from independent
+source root \(r\). Summing *before* squaring automatically includes the
+correct covariance terms. It means connecting **the same upstream result
+twice** gives \(u(x+x)=2u(x)\) and \(u(x-x)=0\); following that result through
+separate branches does not manufacture new independent random variables.
+The `budget` of every propagated scalar names the contributing input
+fields, their units, standard uncertainties, sensitivities, signed
+contributions and diagonal variance terms, with separate signed covariance
+rows for shared sources. The UI displays “value ± standard uncertainty” for
+connected inputs and calculated metrics, plus the budget and coverage interval.
+
+The existing Measurement Uncertainty pack's *standalone* operation remains
+the analytic first-order GUM expression engine described above. For
+*downstream connected results*, operations with arbitrary numeric scalar
+models use bounded, scale-aware central-difference sensitivities. If curvature
+over one standard uncertainty is strong, **automatic** propagation switches
+to Monte Carlo; users can also select **First-order GUM** or explicitly
+request **Monte Carlo (JCGM 101)** in the node. Monte Carlo uses deterministic,
+jointly sampled Gaussian source components (16,384 trials), preserving
+shared-source correlations, and reports its simulated standard deviation,
+mean, and quantile coverage interval. The first-order budget remains an
+attribution of input sensitivity; it is labeled as such when Monte Carlo
+supplies the final uncertainty. The deterministic seed is derived from the
+operation and inputs, not the clock.
+
+**Limitations that are surfaced, not hidden:** Interval-only estimates such
+as BCa/bootstrap intervals, correlation confidence limits, and odds-ratio
+confidence intervals do not specify a Gaussian 1σ input; connecting such an
+estimate to a downstream numerical operation is rejected with an explanatory
+error rather than treated as exact. Native standard-error pairs (for example
+fit coefficient standard errors and radiometric-age standard uncertainties)
+are recognized. When an operation also reports an *intrinsic* output
+uncertainty, its covariance with a linked uncertain input may be unknown:
+that output is explicitly marked unpropagatable rather than silently
+combining or double-counting the two contributions. Numeric vectors,
+matrices, and discrete inputs do not currently have elementwise covariance
+models and are not automatically propagated. Mismatched declared units and
+unsupported sensitivities or nonphysical Monte Carlo draws also raise
+actionable errors. No PDF is inferred from a confidence interval. Ordinary
+native standard errors without an independently specified coverage model
+use an approximate Gaussian coverage factor for their propagated interval;
+mixed coverage probabilities are rejected, and for shared probability with
+different factors the most conservative input factor is retained rather
+than assuming infinite degrees of freedom. This is **not** a general
+multivariate covariance inference engine or a substitute for assessing
+distributional assumptions.
+
+### Connected reference oracles
+
+`backend/tests/test_scientific_connected_uncertainty.py` checks:
+
+- **JCGM 100:2008 H.1:** first-order end-gauge length
+  **50.000838 mm, u ≈ 32 nm**, linked into a unit conversion to meters
+  with its standard uncertainty, k, source identity and named budget intact.
+- **JCGM 100:2008, Eq. (13):** repeated linked sources and independent graph
+  branches yield \(u(x+x)=2u(x)\), \(u(x-x)=0\), with explicitly signed
+  covariance budget rows.
+- **JCGM 101:2008 §9.2.2, Table 2:** four independent standard Gaussian
+  inputs summed give \(u=2\) and 95% coverage approximately
+  **[−3.92, +3.92]**, for both linear GUM and deterministic Monte Carlo.
+  A square-law stationary-point test requires Monte Carlo under the
+  automatic nonlinear decision, rather than a misleading zero 1σ output.
+
+See [JCGM 101:2008, *Propagation of distributions using a Monte Carlo method*](https://www.bipm.org/documents/20126/2071204/JCGM_101_2008_E.pdf),
+clauses 7 and 9.2.
