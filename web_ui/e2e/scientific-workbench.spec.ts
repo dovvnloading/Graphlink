@@ -54,7 +54,7 @@ test("imports measurements, analyzes a connected column, and reopens the reprodu
   await statistics.getByRole("button", { name: "Run calculation" }).click();
   const latest = statistics.getByRole("region", { name: "Latest result" });
   const mean = latest.locator(".science-result-highlight strong");
-  await expect(latest.locator(".science-result-highlight")).toContainText("mean");
+  await expect(latest.locator(".science-result-highlight")).toContainText("Mean");
   await expect(mean).toHaveText("12");
   await expect(latest.locator("dl")).toHaveCount(0);
   await latest.getByText("Actions & exports").click();

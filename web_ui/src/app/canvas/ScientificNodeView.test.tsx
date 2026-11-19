@@ -39,6 +39,10 @@ function mount(raw = JSON.stringify(state), parents = [parent], charts: ScienceC
   return { request, fireIntent, generateChart, remount: (value: string) => { view.unmount(); render(draw(value), { wrapper: ReactFlowProvider }); }, refresh: (value: string, currentParents = parents, currentCharts = charts) => view.rerender(draw(value, currentParents, currentCharts)) };
 }
 
+function openImporter() {
+  fireEvent.click(screen.getByText(/^(Import a data table|Replace data table)$/));
+}
+
 function expandResult(label: string | RegExp) {
   const latest = screen.getByRole("region", { name: "Latest result" });
   fireEvent.click(within(latest).getByText(label));
@@ -53,7 +57,7 @@ describe("scientific workbench card", () => {
     mount(JSON.stringify({ ...state, latest: latestResult }));
     const latest = screen.getByRole("region", { name: "Latest result" });
     const headline = latest.querySelector(".science-result-highlight")!;
-    expect(headline).toHaveTextContent("mean");
+    expect(headline).toHaveTextContent("Mean");
     expect(headline).toHaveTextContent("12");
     expect(within(latest).getByRole("status")).toHaveTextContent("Described 3 observations.");
     expect(within(latest).queryByText("spread")).not.toBeInTheDocument();
@@ -653,6 +657,7 @@ describe("typed table import and numeric selections", () => {
     const { request } = mount(JSON.stringify({ ...state, limits: {
       points: 1024, columns: 32, cells: 4096, text: 65536, tableSourceBytes: 5,
     } }));
+    openImporter();
     fireEvent.change(screen.getByLabelText("Pasted table text"), { target: { value: "x\n😀" } });
     fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("exceeds the import size limit");
@@ -661,6 +666,7 @@ describe("typed table import and numeric selections", () => {
 
   it("imports pasted TSV with explicit missing markers and type overrides", async () => {
     const { request } = mount();
+    openImporter();
     fireEvent.change(screen.getByLabelText("Table format"), { target: { value: "tsv" } });
     fireEvent.change(screen.getByLabelText("Pasted table text"), { target: { value: "X\tFlag\n1\ttrue" } });
     fireEvent.change(screen.getByLabelText("Missing-value markers"), { target: { value: "NA,missing" } });
@@ -676,6 +682,7 @@ describe("typed table import and numeric selections", () => {
 
   it("imports file bytes rather than decoding and repasting CSV into the field", async () => {
     const { request } = mount();
+    openImporter();
     fireEvent.change(screen.getByLabelText("Table data source"), { target: { value: "file" } });
     const file = new File(["Time (s)\tValue\n0\t1"], "samples.tsv", { type: "text/tab-separated-values" });
     Object.defineProperty(file, "arrayBuffer", { value: async () => new TextEncoder().encode("Time (s)\tValue\n0\t1").buffer });
@@ -695,6 +702,7 @@ describe("typed table import and numeric selections", () => {
       ...state, nodeKey: "d".repeat(32), latest: null, table: meta,
     }) };
     const { request } = mount(JSON.stringify({ ...state, table: meta }), [parentTable]);
+    fireEvent.click(screen.getByText("Table preview and export"));
     expect(screen.getByRole("table", { name: "Imported typed table preview" })).toHaveTextContent("Temperature (degC)");
     expect(screen.getByText("numeric · 1 missing")).toBeVisible();
     expect(screen.getByText(/samples.tsv · 3 rows · 2 columns/)).toBeVisible();
