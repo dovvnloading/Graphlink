@@ -191,3 +191,194 @@ def meta_analysis(data):
     }
 
 
+def multi_group_kaplan_meier(data):
+    """KM by 2–12 coded groups and multivariate hypergeometric log-rank test."""
+    times, events, codes = data["follow_up_time"], data["event_observed"], data["group"]
+    n = len(times)
+    if len(events) != n or len(codes) != n or n < 2:
+        raise ValueError("Survival analysis needs matching follow-up, event and group observations.")
+    if any(t < 0 for t in times) or any(e not in (0, 1) for e in events):
+        raise ValueError("Follow-up must be nonnegative; event indicators must be 0/1.")
+    if any(g != int(g) or not 1 <= g <= 12 for g in codes):
+        raise ValueError("Group codes must be whole numbers from 1 to 12.")
+    ids = sorted(set(map(int, codes)))
+    k = len(ids)
+    if not 2 <= k <= 12:
+        raise ValueError("Kaplan–Meier comparison needs 2–12 observed groups.")
+    unit = data["time_unit"].strip()
+    if not 1 <= len(unit) <= 40 or any(ord(ch) < 32 for ch in unit):
+        raise ValueError("Time unit must have 1–40 printable characters.")
+    lookup = {code: i for i, code in enumerate(ids)}
+    samples = [Counter() for _ in ids]
+    sizes = [0]*k
+    for t, e, code in zip(times, events, codes):
+        g = lookup[int(code)]
+        samples[g][(t, int(e))] += 1
+        sizes[g] += 1
+    at_risk = sizes[:]
+    survival = [1.0]*k
+    greenwood = [0.0]*k
+    median = ["not reached"]*k
+    observed, expected = [0.0]*k, [0.0]*k
+    covariance = [[0.0]*k for _ in ids]
+    curves = [{"label": f"Group {code}", "times": [0.0],
+               "survival": [1.0], "censored": []} for code in ids]
+    rows = []
+    for t in sorted({t for sample in samples for t, _ in sample}):
+        deaths = [sample[(t, 1)] for sample in samples]
+        censored = [sample[(t, 0)] for sample in samples]
+        n_risk, d = sum(at_risk), sum(deaths)
+        if d:
+            for g in range(k):
+                observed[g] += deaths[g]
+                expected[g] += d * at_risk[g] / n_risk
+            if n_risk > 1:
+                factor = d * (n_risk - d) / (n_risk*n_risk*(n_risk - 1))
+                for g in range(k):
+                    for h in range(k):
+                        covariance[g][h] += factor * at_risk[g] * (
+                            (n_risk - at_risk[g]) if g == h else -at_risk[h])
+        for g in range(k):
+            if deaths[g]:
+                survivors = at_risk[g] - deaths[g]
+                survival[g] *= survivors / at_risk[g]
+                if survivors:
+                    greenwood[g] += deaths[g] / (at_risk[g] * survivors)
+                if median[g] == "not reached" and survival[g] <= .5:
+                    median[g] = t
+            if deaths[g] or censored[g]:
+                curves[g]["times"].append(t)
+                curves[g]["survival"].append(survival[g])
+                if censored[g]:
+                    curves[g]["censored"].append(t)
+                rows.append([t, ids[g], at_risk[g], deaths[g], censored[g], survival[g]])
+            at_risk[g] -= deaths[g] + censored[g]
+    # Drop the last group's contrast, since sum(O-E)=0 and V is singular.
+    contrast = [observed[i] - expected[i] for i in range(k-1)]
+    try:
+        solution, _ = _positive_solve([row[:k-1] for row in covariance[:k-1]], contrast)
+        chi = max(0.0, _number(math.fsum(c*v for c, v in zip(contrast, solution)), "Log-rank chi-square"))
+        p = _gamma_q((k-1)/2, chi/2)
+        df = k - 1
+    except ValueError:
+        chi = p = "undefined (singular log-rank covariance)"
+        df = 0
+    summary = (f"Kaplan–Meier product-limit survival for {k} groups ({n} subjects); "
+               f"events precede censoring at tied times. "
+               f"Multigroup log-rank chi-square uses hypergeometric covariance "
+               f"({df} estimable degrees of freedom).")
+    group_values = {}
+    for i, group_id in enumerate(ids):
+        group_values[f"group_{group_id}_subjects"] = sizes[i]
+        group_values[f"group_{group_id}_median_survival"] = median[i]
+        group_values[f"group_{group_id}_final_survival"] = survival[i]
+        group_values[f"group_{group_id}_greenwood_se"] = (
+            survival[i] * math.sqrt(greenwood[i]) if survival[i] else 0.0)
+    return {
+        "summary": summary,
+        "values": {**group_values, "median_survival_unit": unit,
+                   "greenwood_se_unit": "1 (probability)",
+                   "subjects": n, "groups": k, "events": int(sum(events)),
+                   "subject_unit": "subjects", "event_unit": "events",
+                   "logrank_chi_square": chi, "logrank_p_value": p,
+                   "logrank_degrees_of_freedom": df,
+                   "chi_square_unit": "1 (dimensionless)", "p_value_unit": "1 (probability)",
+                   "survival_unit": "1 (probability)", "time_unit": unit},
+        "table": {"columns": [f"Follow-up time ({unit})", "Group code", "At risk", "Events",
+                              "Censored", "KM survival"], "rows": rows},
+        "views": [{"type": "survival_curve", "title": "Multi-group Kaplan–Meier survival",
+                   "xLabel": f"Follow-up time ({unit})", "groups": curves}],
+    }
+
+
+def _positive_solve(matrix, rhs):
+    """Cholesky solve and inverse; fail closed on (nearly) singular information."""
+    p = len(rhs)
+    if not p:
+        raise ValueError("A covariance matrix needs at least one dimension.")
+    diagonal = max(matrix[i][i] for i in range(p))
+    if diagonal <= 0 or not math.isfinite(diagonal):
+        raise ValueError("The information matrix is singular.")
+    floor = 1e-10 * diagonal
+    lower = [[0.0]*p for _ in range(p)]
+    for i in range(p):
+        for j in range(i+1):
+            residual = matrix[i][j] - math.fsum(lower[i][h]*lower[j][h] for h in range(j))
+            if i == j:
+                if residual <= floor:
+                    raise ValueError("The information matrix is singular or rank deficient.")
+                lower[i][j] = math.sqrt(residual)
+            else:
+                lower[i][j] = residual / lower[j][j]
+
+    def solve(y):
+        forward = [0.0]*p
+        for i in range(p):
+            forward[i] = (y[i] - math.fsum(lower[i][j]*forward[j] for j in range(i))) / lower[i][i]
+        result = [0.0]*p
+        for i in reversed(range(p)):
+            result[i] = (forward[i] - math.fsum(lower[j][i]*result[j] for j in range(i+1,p))) / lower[i][i]
+        return result
+    result = solve(rhs)
+    inverse = [solve([float(i==j) for i in range(p)]) for j in range(p)]
+    # inverse[j][i] contains column j, so transpose to get rows.
+    return result, [[inverse[j][i] for j in range(p)] for i in range(p)]
+
+
+def _cox_statistics(beta, ordered, x, times, events, ties):
+    """Log partial likelihood, score and observed information, descending risk sweep."""
+    p = len(beta)
+    n = len(times)
+    eta = [math.fsum(b*v for b, v in zip(beta, row)) for row in x]
+    if any(not math.isfinite(v) for v in eta):
+        raise ValueError("Cox linear predictor overflows.")
+    score, info = [0.0]*p, [[0.0]*p for _ in range(p)]
+    risk1, risk2 = [0.0]*p, [[0.0]*p for _ in range(p)]
+    risk0, shift, log_likelihood = 0.0, -math.inf, 0.0
+    cursor = 0
+    while cursor < n:
+        stop = cursor + 1
+        t = times[ordered[cursor]]
+        while stop < n and times[ordered[stop]] == t:
+            stop += 1
+        at_time = ordered[cursor:stop]
+        for i in at_time:
+            if eta[i] > shift:
+                factor = math.exp(shift - eta[i])
+                risk0 *= factor
+                risk1 = [v*factor for v in risk1]
+                risk2 = [[v*factor for v in row] for row in risk2]
+                shift = eta[i]
+            w = math.exp(eta[i] - shift)
+            risk0 += w
+            for j in range(p):
+                risk1[j] += w*x[i][j]
+                for h in range(p):
+                    risk2[j][h] += w*x[i][j]*x[i][h]
+        dying = [i for i in at_time if events[i] == 1]
+        d = len(dying)
+        if d:
+            event0 = math.fsum(math.exp(eta[i] - shift) for i in dying)
+            event1 = [math.fsum(math.exp(eta[i] - shift)*x[i][j] for i in dying) for j in range(p)]
+            event2 = [[math.fsum(math.exp(eta[i] - shift)*x[i][j]*x[i][h] for i in dying)
+                       for h in range(p)] for j in range(p)]
+            log_likelihood += math.fsum(eta[i] for i in dying)
+            for j in range(p):
+                score[j] += math.fsum(x[i][j] for i in dying)
+            for tie_index in range(d if ties == "efron" else 1):
+                fraction = tie_index/d if ties == "efron" else 0.0
+                multiplicity = 1 if ties == "efron" else d
+                denom = risk0 - fraction*event0
+                if denom <= 0 or not math.isfinite(denom):
+                    raise ValueError("Cox risk-set denominator is numerically degenerate.")
+                log_likelihood -= multiplicity * (shift + math.log(denom))
+                means = [(risk1[j] - fraction*event1[j])/denom for j in range(p)]
+                for j in range(p):
+                    score[j] -= multiplicity * means[j]
+                    for h in range(p):
+                        info[j][h] += multiplicity * (
+                            (risk2[j][h] - fraction*event2[j][h])/denom - means[j]*means[h])
+        cursor = stop
+    return _number(log_likelihood, "Cox log likelihood"), score, info
+
+
