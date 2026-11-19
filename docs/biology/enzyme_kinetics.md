@@ -79,7 +79,7 @@ Example: `IC50=15 uM`, `[S]=8 uM`, `Km=4 uM` yields `Ki=5 uM`. The classic corre
 
 ### Equilibrium binding isotherms
 
-The three choices of \`binding_isotherm_fit\` measure response \`Y\` against **total ligand concentration** \`L\`, assuming ligand depletion is negligible:
+The three choices of `binding_isotherm_fit` measure response `Y` against **total ligand concentration** `L`, assuming ligand depletion is negligible:
 
 \[
 \begin{aligned}
@@ -91,7 +91,7 @@ Y &= Y_0+B_1\frac{L}{K_{d1}+L}+B_2\frac{L}{K_{d2}+L}.
 \end{aligned}
 \]
 
-Fitting is unweighted and direct in measured signal, with multi-start damped least squares, log-positive Kd and amplitude magnitudes, and a freely fitted baseline. A **falling** signal has negative fitted amplitudes (and negative nonspecific slope); negative signals after background subtraction are permitted. In two-site fits, \`Kd1 < Kd2\` is the reporting order, not independent physical site identification. Minimum designs: 9 observations and 7 distinct concentrations for one-site fits; 12 observations and 10 distinct concentrations for two-site fits. A ligand-free control and points on both sides of each transition are strongly recommended. Similar affinities, missing plateaus, or inseparable nonspecific uptake make site counts and Kd values unreliable; parameter-bound and overlapping-affinity warnings are shown. Approximate standard errors are local linearized covariance estimates, not confidence in a physical stoichiometry.
+Fitting is unweighted and direct in measured signal, with multi-start damped least squares, log-positive Kd and amplitude magnitudes, and a freely fitted baseline. A **falling** signal has negative fitted amplitudes (and negative nonspecific slope); negative signals after background subtraction are permitted. In two-site fits, `Kd1 < Kd2` is the reporting order, not independent physical site identification. Minimum designs: 9 observations and 7 distinct concentrations for one-site fits; 12 observations and 10 distinct concentrations for two-site fits. A ligand-free control and points on both sides of each transition are strongly recommended. Similar affinities, missing plateaus, or inseparable nonspecific uptake make site counts and Kd values unreliable; parameter-bound and overlapping-affinity warnings are shown. Approximate standard errors are local linearized covariance estimates, not confidence in a physical stoichiometry.
 
 ### Morrison tight-binding inhibition
 
@@ -105,7 +105,7 @@ f_{\mathrm{bound}}
 v([I]_T)=v_{\rm bottom}+(v_{\rm top}-v_{\rm bottom})(1-f_{\mathrm{bound}}).
 \]
 
-The fit estimates \`ki_app\`, \`top\` and \`bottom\` from at least nine background-corrected, nonnegative activities at seven distinct inhibitor doses. The experimental series must include an inhibitor-free control and doses **at or above** the total active enzyme concentration. Reported Ki is *apparent* for that assay; competitive substrate effects and other mechanisms may require additional analysis before inferring an intrinsic Ki. Use enzyme **active-site molarity**, not nominal protein mass. This is a reversible equilibrium model, not a model for irreversible or time-dependent inactivation.
+The fit estimates `ki_app`, `top` and `bottom` from at least nine background-corrected, nonnegative activities at seven distinct inhibitor doses. The experimental series must include an inhibitor-free control and doses **at or above** the total active enzyme concentration. Reported Ki is *apparent* for that assay; competitive substrate effects and other mechanisms may require additional analysis before inferring an intrinsic Ki. Use enzyme **active-site molarity**, not nominal protein mass. This is a reversible equilibrium model, not a model for irreversible or time-dependent inactivation.
 
 ### Schild analysis
 
@@ -116,7 +116,7 @@ y=\log_{10}(DR-1)=m\,\log_{10}([B]/\mathrm{M})+b,\qquad
 pA_2=b/m=-\log_{10}\bigl([B]_{DR=2}/\mathrm{M}\bigr).
 \]
 
-All antagonist concentrations are converted to molarity **before** logarithms, so nanomolar, micromolar and millimolar inputs give the same \`pa2\`. At least five points at five distinct positive antagonist concentrations are needed, and a nonpositive fitted slope is rejected. Results include OLS standard errors for slope/intercept and a delta-method standard error for \`pa2\`; residuals are in log₁₀(DR−1) units. A slope near unity is *consistent* with simple competitive antagonism but does not prove the mechanism. When \(m\neq 1\), \`pa2\` is still the extrapolated concentration at DR=2 but should **not** be interpreted automatically as an equilibrium \(pK_B\); the Workbench warns when the slope departs substantially from unity or DR=2 requires extrapolation.
+All antagonist concentrations are converted to molarity **before** logarithms, so nanomolar, micromolar and millimolar inputs give the same `pa2`. At least five points at five distinct positive antagonist concentrations are needed, and a nonpositive fitted slope is rejected. Results include OLS standard errors for slope/intercept and a delta-method standard error for `pa2`; residuals are in log₁₀(DR−1) units. A slope near unity is *consistent* with simple competitive antagonism but does not prove the mechanism. When \(m\neq 1\), `pa2` is still the extrapolated concentration at DR=2 but should **not** be interpreted automatically as an equilibrium \(pK_B\); the Workbench warns when the slope departs substantially from unity or DR=2 requires extrapolation.
 
 ### Thermal-shift melting temperature
 
@@ -127,7 +127,7 @@ F(T)=F_{\rm low}+\frac{F_{\rm high}-F_{\rm low}}
 {1+\exp[(T_m-T)/w]},\qquad w>0.
 \]
 
-The fitted \`tm\` is the **fluorescence midpoint**, constrained to the measured temperature range; \`transition_width\` is the positive logistic width. Supply at least 10 paired observations at nine distinct temperatures with a clear transition. Selected absolute-temperature units are °C, K or °F; individual typed values can use a compatible different unit, e.g. \`"330 K"\` in a °C series. Width units are differences (\`delta_degC\`, \`delta_K\`, etc.), **not** absolute temperature points. The operation outputs low/high fluorescence plateaus and local SEs. Multiple transitions, baseline drift, dye artifacts, aggregation, and incomplete unfolding can invalidate a four-parameter sigmoid; thermal-shift Tm alone does not provide a binding affinity.
+The fitted `tm` is the **fluorescence midpoint**, constrained to the measured temperature range; `transition_width` is the positive logistic width. Supply at least 10 paired observations at nine distinct temperatures with a clear transition. Selected absolute-temperature units are °C, K or °F; individual typed values can use a compatible different unit, e.g. `"330 K"` in a °C series. Width units are differences (`delta_degC`, `delta_K`, etc.), **not** absolute temperature points. The operation outputs low/high fluorescence plateaus and local SEs. Multiple transitions, baseline drift, dye artifacts, aggregation, and incomplete unfolding can invalidate a four-parameter sigmoid; thermal-shift Tm alone does not provide a binding affinity.
 
 ## Numerical validation and references
 
