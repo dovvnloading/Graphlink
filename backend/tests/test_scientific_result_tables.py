@@ -22,6 +22,7 @@ from graphlink_plugins.scientific.data_table import (
     CSV_CHUNK_BYTES, numeric_column, read_table, table_csv_chunk, table_metadata_valid,
 )
 from graphlink_plugins.scientific.execution import execute_in_process
+from graphlink_plugins.scientific.graph_run_adapter import prepare
 
 
 ROW_COUNT = 12_000
@@ -177,6 +178,17 @@ def test_generated_table_links_exports_and_survives_workspace_restore(session, m
     assert grouped["values"]["row_count"] == ROW_COUNT
     assert grouped["values"]["group_count"] == 2
     assert grouped["provenance"]["sources"]["table"]["selector"] == ["result_table"]
+    assert dispatch(bus, "invokePluginIntent", "science_statistics", "configure_runner", {
+        "node_id": target, "operation_id": "grouped_table_summary",
+        "inputs": {"table": meta, "value_column": 2, "group_column": 1},
+        "sources": {"table": citation},
+    })["ok"]
+    op, resolved_inputs, resolved_sources, digest, same = prepare(
+        document, document.nodes[target], lambda _: True,
+    )
+    assert op.id == "grouped_table_summary" and resolved_inputs["table"] == meta
+    assert resolved_sources["table"]["selector"] == ["result_table"]
+    assert digest and same
 
     third = dispatch(bus, "executePlugin", "Statistics", source)
     chosen = dispatch(bus, "invokePluginIntent", "science_statistics", "table_column", {
@@ -208,3 +220,16 @@ def test_generated_table_links_exports_and_survives_workspace_restore(session, m
     assert run(bus, "statistics", restored_target, "grouped_table_summary", {
         "table": meta, "value_column": 2, "group_column": 1,
     }, sources={"table": citation}) == {"ok": True}
+    op, restored_inputs, restored_sources, digest, _ = prepare(
+        document, document.nodes[restored_target], lambda _: True,
+    )
+    assert op.id == "grouped_table_summary" and restored_inputs["table"] == meta
+    assert restored_sources["table"]["selector"] == ["result_table"] and digest
+    # A new source run invalidates the pinned generated-table receipt.
+    assert run(bus, "statistics", restored_source, "describe", {
+        "observations": [1.0, 2.0, 3.0],
+    }) == {"ok": True}
+    stale = run(bus, "statistics", restored_target, "grouped_table_summary", {
+        "table": meta, "value_column": 2, "group_column": 1,
+    }, sources={"table": citation})
+    assert stale["ok"] is False and "result table" in stale["error"]
