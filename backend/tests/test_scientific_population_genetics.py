@@ -1,6 +1,5 @@
 """Independent numeric oracles and boundaries for the Genetics population extensions."""
 
-import math
 import random
 
 import pytest
