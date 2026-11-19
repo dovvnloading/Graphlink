@@ -1033,7 +1033,6 @@ def test_discuss_scientific_result_rejects_stale_or_damaged_receipts_without_mut
     grant(bus, "core")
     source_id = dispatch(bus, "executePlugin", "Scientific Core")
     example = operations("core")[1].example
-    old = envelope(document, source_id)
     with pytest.raises(SceneError, match="Run a calculation"):
         asyncio.run(bus.dispatch_intent(
             "scene", "discussScientificResult", [source_id, "not-run", "not-run"],
