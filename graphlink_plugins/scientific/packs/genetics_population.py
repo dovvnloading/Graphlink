@@ -130,6 +130,12 @@ def linkage_disequilibrium(data):
 
 
 def _selected_frequency(p, w_aa, w_ab, w_bb):
+    # In the absence of mutation, absent alleles cannot reappear. Handle the
+    # absorbing boundaries before scaling: if the fitness of the only present
+    # genotype underflows relative to an absent genotype, its frequency is
+    # still exactly zero or one, not an undefined mean fitness.
+    if p == 0 or p == 1:
+        return p
     # Relative fitness scaling avoids overflowing wbar at large positive fitness.
     maximum = max(w_aa, w_ab, w_bb)
     aa, ab, bb = w_aa / maximum, w_ab / maximum, w_bb / maximum
