@@ -63,14 +63,18 @@ export function ContextInspectorLauncher({
     <div className="context-inspector-launcher">
       <button
         type="button"
-        className="composer-control context-inspector-toggle"
+        className="composer-icon-button context-inspector-toggle"
         disabled={!nodeId}
         aria-expanded={isOpen}
         aria-controls="context-inspector-panel"
+        aria-label="Context Inspector"
         onClick={() => setIsOpen((open) => !open)}
         title={nodeId ? "Preview sources for the next chat send" : "Add a chat message to inspect its context"}
       >
-        Context Inspector
+        {/* Stacked layers: the sources that make up the next send. */}
+        <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
+          <path d="m12 4 8 4-8 4-8-4 8-4Zm-8 8 8 4 8-4M4 16l8 4 8-4" />
+        </svg>
       </button>
       {isOpen && nodeId && (
         <Suspense fallback={
