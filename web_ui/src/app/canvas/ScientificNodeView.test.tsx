@@ -39,7 +39,58 @@ function mount(raw = JSON.stringify(state), parents = [parent], charts: ScienceC
   return { request, fireIntent, generateChart, remount: (value: string) => { view.unmount(); render(draw(value), { wrapper: ReactFlowProvider }); }, refresh: (value: string, currentParents = parents, currentCharts = charts) => view.rerender(draw(value, currentParents, currentCharts)) };
 }
 
+function expandResult(label: string | RegExp) {
+  const latest = screen.getByRole("region", { name: "Latest result" });
+  fireEvent.click(within(latest).getByText(label));
+}
+
 describe("scientific workbench card", () => {
+  it("shows one meaningful headline and keeps full data and actions on demand", () => {
+    const latestResult: ScienceResult = {
+      ...result, summary: "Described 3 observations.", values: { count: 3, mean: 12, spread: [8, 10, 18] },
+      provenance: { ...result.provenance, inputUnits: { samples: "mm" } },
+    };
+    mount(JSON.stringify({ ...state, latest: latestResult }));
+    const latest = screen.getByRole("region", { name: "Latest result" });
+    const headline = latest.querySelector(".science-result-highlight")!;
+    expect(headline).toHaveTextContent("mean");
+    expect(headline).toHaveTextContent("12");
+    expect(within(latest).getByRole("status")).toHaveTextContent("Described 3 observations.");
+    expect(within(latest).queryByText("spread")).not.toBeInTheDocument();
+    expect(within(latest).queryByRole("table")).not.toBeInTheDocument();
+    expect(within(latest).queryByRole("img")).not.toBeInTheDocument();
+    expect(within(latest).queryByRole("button", { name: "Export JSON" })).not.toBeInTheDocument();
+
+    expandResult(/All values · 3/);
+    expect(within(latest).getByText("spread")).toBeVisible();
+    expect(within(latest).getByText("[8, 10, 18]")).toBeVisible();
+    expandResult(/All values · 3/);
+    expect(within(latest).queryByText("spread")).not.toBeInTheDocument();
+    expandResult("Tables · 3 rows");
+    expect(within(latest).getByRole("table", { name: "Result table" })).toBeVisible();
+    expandResult("Plots & views");
+    expect(within(latest).getByRole("img")).toBeVisible();
+    expandResult("Units used");
+    expect(within(latest).getByText(/"mm"/)).toBeVisible();
+    expandResult("Inputs and provenance");
+    expect(within(latest).getByText(/"resultHash": "abc"/)).toBeVisible();
+    expandResult("Actions & exports");
+    expect(within(latest).getByRole("button", { name: "Export JSON" })).toBeVisible();
+  });
+
+  it("lets long scientific summaries expand and shows table-only results without guessing a metric", () => {
+    const long = "Fit diagnostics and model assumptions. ".repeat(9);
+    mount(JSON.stringify({ ...state, latest: {
+      ...result, values: {}, plot: undefined, summary: long,
+    } }));
+    const latest = screen.getByRole("region", { name: "Latest result" });
+    expect(latest.querySelector(".science-result-highlight")).toHaveTextContent("3 rows");
+    expect(latest.querySelector(".science-result-summary")).toHaveClass("science-result-summary--clamped");
+    expandResult("Read full summary");
+    expect(within(latest).getByText(long)).toBeVisible();
+    expect(within(latest).queryByRole("table")).not.toBeInTheDocument();
+  });
+
   it("renders a volcano scatter with BH thresholds, categories and clipped zero q-values", () => {
     const volcano = { type: "volcano_plot", title: "Volcano: drug vs control",
       xLabel: "log2 fold change (drug / control)", fdrThreshold: 0.05, log2FoldChangeThreshold: 1,
@@ -49,6 +100,7 @@ describe("scientific workbench card", () => {
         { gene: "GeneOther", log2FoldChange: 0.5, qValue: 0.3 },
       ] };
     mount(JSON.stringify({ ...state, latest: { ...result, plot: undefined, views: [volcano] } }));
+    expandResult("Plots & views");
     const svg = screen.getByRole("img", { name: /volcano scatter of 3 genes/ });
     expect(svg.querySelectorAll(".science-volcano-point")).toHaveLength(3);
     expect(svg.querySelector(".science-volcano-up title")?.textContent).toContain("GeneUp");
@@ -71,6 +123,7 @@ describe("scientific workbench card", () => {
     mounted.refresh(JSON.stringify({
       ...state, latest: { ...result, provenance: { ...result.provenance, receiptHash: "receipt-123" } },
     }));
+    expandResult("Actions & exports");
     fireEvent.click(screen.getByRole("button", { name: "Discuss in chat" }));
     expect(mounted.fireIntent).toHaveBeenCalledWith(
       "scene", "discussScientificResult", ["target", "abc", "receipt-123"],
@@ -113,6 +166,7 @@ describe("scientific workbench card", () => {
       receiptHash: "b".repeat(64), stale: true,
     }];
     const { generateChart } = mount(JSON.stringify({ ...state, latest: result }), [parent], charts);
+    expandResult("Actions & exports");
     expect(screen.getByRole("button", { name: "Chart this" })).toBeEnabled();
     expect(screen.getByRole("combobox", { name: "Chart type" })).toHaveValue("scatter");
     fireEvent.click(screen.getByRole("button", { name: "Chart this" }));
@@ -177,10 +231,13 @@ describe("scientific workbench card", () => {
       request.mockResolvedValueOnce({ ok: true, json: canonical });
       expect(screen.getByLabelText("Samples (m)")).toHaveValue("[10,20,30]");
       expect(screen.getByRole("status")).toHaveTextContent("Computed 3 samples.");
+      expandResult("Plots & views");
       expect(screen.getByRole("img").querySelectorAll("circle")[1].getAttribute("cx")).toBe("70");
-      expect(screen.getByRole("table")).toBeInTheDocument();
+      expandResult("Tables · 3 rows");
+      expect(screen.getByRole("table", { name: "Result table" })).toBeInTheDocument();
       fireEvent.click(screen.getByText("Inputs and provenance"));
       expect(screen.getByText(/"resultHash": "abc"/)).toBeVisible();
+      expandResult("Actions & exports");
       fireEvent.click(screen.getByText("Export JSON"));
       await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
       fireEvent.click(screen.getByText("Export CSV"));
@@ -200,6 +257,7 @@ describe("scientific workbench card", () => {
     try {
       const { request } = mount(JSON.stringify({ ...state, latest: result, runToken: "current" }));
       request.mockResolvedValueOnce({ ok: true, markdown: "## Verified methods\nReceipt: abc\n" });
+      expandResult("Actions & exports");
       fireEvent.click(screen.getByRole("button", { name: "Copy methods" }));
       await waitFor(() => expect(writeText).toHaveBeenCalledWith("## Verified methods\nReceipt: abc\n"));
       expect(request).toHaveBeenCalledWith("app-plugins", "invokePluginIntent", [
@@ -219,6 +277,7 @@ describe("scientific workbench card", () => {
     try {
       const { request } = mount(JSON.stringify({ ...state, latest: result, runToken: "before" }));
       request.mockResolvedValueOnce({ ok: false, conflict: true, error: "The result changed." });
+      expandResult("Actions & exports");
       fireEvent.click(screen.getByRole("button", { name: "Copy methods" }));
       expect(await screen.findByRole("alert")).toHaveTextContent("The result changed.");
       expect(writeText).not.toHaveBeenCalled();
@@ -237,6 +296,7 @@ describe("scientific workbench card", () => {
     mount(JSON.stringify({ ...state, latest: scientific }));
     expect(screen.getByRole("status"))
       .toHaveTextContent("2,000,000 viable cells/mL; kcat/Km=1,000,000 M⁻¹ s⁻¹.");
+    expandResult("Plots & views");
     expect(screen.getByText("Length (m) · 5.89506 to 88.8137")).toBeVisible();
     expect(screen.getByText("Time (s) · 0 to 88.8137")).toBeVisible();
     expect(screen.getByRole("img").querySelector("circle title"))
@@ -255,7 +315,9 @@ describe("scientific workbench card", () => {
     mount(JSON.stringify({ ...state, latest: scientific }));
     expect(screen.getByRole("status")).toHaveTextContent(
       "500,000 CFU/mL; 100,000 person-years; Fick flux 2 × 10⁻⁶ mol/(m²·s); net 4 × 10⁻⁸ mol.");
+    expandResult(/All values · 3/);
     expect(screen.getByText("[500,000, 4 × 10⁻⁸]")).toBeVisible();
+    expandResult("Tables · 2 rows");
     const table = screen.getByRole("table", { name: "Result table" });
     expect(within(table).getByText("58.3279")).toBeVisible();
     expect(within(table).getByRole("columnheader", { name: "Time (ms)" })).toBeVisible();
@@ -271,6 +333,7 @@ describe("scientific workbench card", () => {
     mount(JSON.stringify({ ...state, latest: { ...result,
       table: { columns, rows: [columns.map((_name, i) => i + .123456789)] },
     } }));
+    expandResult("Tables · 1 rows");
     const table = screen.getByRole("table", { name: "Result table" });
     expect(within(table).getAllByRole("columnheader")).toHaveLength(8);
     expect(table.closest(".science-table")).toBeInTheDocument();
@@ -370,6 +433,7 @@ describe("scientific workbench card", () => {
     const latest = { ...result, plot: { ...result.plot!, x: [-Number.MAX_VALUE, 0, Number.MAX_VALUE],
       y: [1, 1.0000000000000002, 1] } };
     mount(JSON.stringify({ ...state, latest }));
+    expandResult("Plots & views");
     expect(screen.getByRole("img").querySelector("polyline")).toHaveAttribute("points", "10,98 160,8 310,98");
     expect(screen.getByText("Length (m) · 1 to 1.0000000000000002")).toBeVisible();
     expect(screen.getByText("Time (s) · -1.79769 × 10³⁰⁸ to 1.79769 × 10³⁰⁸")).toBeVisible();
@@ -380,7 +444,9 @@ describe("scientific workbench card", () => {
     try {
       const rows = Array.from({ length: 42 }, (_, i) => [i === 41 ? -Number.MIN_VALUE : i, i === 41 ? 'a,"b"' : "=formula"]);
       mount(JSON.stringify({ ...state, latest: { ...result, table: { columns: ["Measurement", "Label"], rows } } }));
+      expandResult("Tables · 42 rows");
       expect(screen.getAllByRole("row")).toHaveLength(31);
+      expandResult("Actions & exports");
       fireEvent.click(screen.getByText("Export CSV"));
       const csv = await save.mock.calls[0][0].text();
       expect(csv.split("\r\n")).toHaveLength(43);
@@ -452,6 +518,7 @@ describe("scientific workbench card", () => {
     const plate = { type: "plate_map", title: "Plate readings", format: 96, unit: "RFU",
       wells: [{ well: "A1", value: "control" }, { well: "A2", value: 0 }, { well: "H12", value: 12.4 }] };
     const mounted = mount(JSON.stringify({ ...state, latest: { ...result, views: [plate] } }));
+    expandResult("Plots & views");
     const map = screen.getByRole("table", { name: "96-well plate map" });
     expect(within(map).getAllByRole("row")).toHaveLength(9);
     expect(within(map).getByRole("cell", { name: "A1: control" })).toHaveTextContent("co");
@@ -463,6 +530,7 @@ describe("scientific workbench card", () => {
     mounted.remount(JSON.stringify({ ...state, latest: { ...result, views: [
       { ...plate, format: 384, wells: [{ well: "P24", value: 5 }] },
     ] } }));
+    expandResult("Plots & views");
     const large = screen.getByRole("table", { name: "384-well plate map" });
     expect(within(large).getAllByRole("row")).toHaveLength(17);
     expect(within(large).getByRole("cell", { name: "P24: 5 RFU" })).toBeInTheDocument();
@@ -476,6 +544,8 @@ describe("scientific workbench card", () => {
         { label: "C", times: [0, 3], survival: [1, .8] },
       ] };
     mount(JSON.stringify({ ...state, latest: { ...result, views: [survival] } }));
+    expandResult("Plots & views");
+    expandResult("Tables · 3 rows");
     const svg = screen.getByRole("img", { name: /Kaplan–Meier by arm: survival curves for A, B, C/ });
     expect(svg.querySelectorAll("path")).toHaveLength(4); // Axes + one step path for each group.
     expect([...svg.querySelectorAll("path")].slice(1).every((path) =>
@@ -496,6 +566,7 @@ describe("scientific workbench card", () => {
       pooled: { label: "Pooled effect", estimate: .1, lower: -.1, upper: .3 },
     };
     const mounted = mount(JSON.stringify({ ...state, latest: { ...result, views: [forest] } }));
+    expandResult("Plots & views");
     const svg = screen.getByRole("img", { name: /Treatment effects: forest plot with 2 studies.*linear/ });
     expect(svg.querySelectorAll(".science-forest-study")).toHaveLength(2);
     expect(svg.querySelectorAll(".science-forest-study rect")).toHaveLength(2);
@@ -515,6 +586,7 @@ describe("scientific workbench card", () => {
       ],
       pooled: { estimate: 1.05, lower: .9, upper: 1.2 },
     }] } }));
+    expandResult("Plots & views");
     const logPlot = screen.getByRole("img", { name: /forest plot with 2 studies.*log axis/ });
     const squares = [...logPlot.querySelectorAll(".science-forest-study rect")];
     expect(squares[0].getAttribute("x")).not.toBe(squares[1].getAttribute("x"));
@@ -532,6 +604,7 @@ describe("scientific workbench card", () => {
       ] },
     };
     const mounted = mount(JSON.stringify({ ...state, latest: { ...result, views: [phylogeny] } }));
+    expandResult("Plots & views");
     const rectangular = screen.getByRole("img", { name: /Three-taxon tree: rectangular phylogram of 3 taxa/ });
     expect(rectangular.querySelectorAll("line.science-tree-branch")).toHaveLength(6);
     expect(rectangular.textContent).toContain("Species A");
@@ -544,6 +617,7 @@ describe("scientific workbench card", () => {
     mounted.remount(JSON.stringify({ ...state, latest: { ...result, views: [{
       ...phylogeny, layout: "circular", mode: "cladogram",
     }] } }));
+    expandResult("Plots & views");
     const circular = screen.getByRole("img", { name: /Three-taxon tree: circular cladogram of 3 taxa/ });
     expect(circular.querySelectorAll("path.science-tree-branch").length).toBeGreaterThan(0);
     expect(circular.querySelectorAll("line.science-tree-branch")).toHaveLength(4);
