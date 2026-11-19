@@ -15,7 +15,7 @@ import threading
 import time
 from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
-from typing import Literal
+from typing import Any, Literal, Protocol
 
 from .core import Operation, calculate_result, readable_result
 
@@ -94,7 +94,14 @@ def _stop_worker(process: BaseProcess) -> None:
     process.close()
 
 
-def _receive_in_daemon_thread(reader: Connection) -> asyncio.Future[tuple[object | None, Exception | None]]:
+class _Receiver(Protocol):
+    """The one pipe method the receiver needs. Context.Pipe() returns a
+    Connection on POSIX but a PipeConnection on Windows."""
+
+    def recv(self) -> Any: ...
+
+
+def _receive_in_daemon_thread(reader: _Receiver) -> asyncio.Future[tuple[object | None, Exception | None]]:
     """Receive without letting an uninterruptible pipe read hold up shutdown.
 
     On Windows, terminating the writer and closing pipe handles need not wake
