@@ -24,8 +24,16 @@ export interface SciencePhylogeneticTreeView {
   type: "phylogenetic_tree"; title: string; layout: "rectangular" | "circular";
   mode: "phylogram" | "cladogram"; tree: SciencePhylogeneticNode;
 }
+export interface ScienceVolcanoPoint {
+  gene: string; log2FoldChange: number; qValue: number;
+}
+export interface ScienceVolcanoPlotView {
+  type: "volcano_plot"; title: string; xLabel: string;
+  fdrThreshold: number; log2FoldChangeThreshold: number; points: ScienceVolcanoPoint[];
+}
+
 export type ScienceResultView =
-  SciencePlateMapView | ScienceSurvivalCurveView | ScienceForestPlotView | SciencePhylogeneticTreeView;
+  SciencePlateMapView | ScienceSurvivalCurveView | ScienceForestPlotView | SciencePhylogeneticTreeView | ScienceVolcanoPlotView;
 
 const record = (v: unknown): v is Record<string, unknown> =>
   v !== null && typeof v === "object" && !Array.isArray(v);
@@ -97,6 +105,22 @@ function phylogeneticView(v: Record<string, unknown>): boolean {
     taxa.size >= 2 && (v.mode !== "phylogram" || positiveLength);
 }
 
+function volcanoView(v: Record<string, unknown>): boolean {
+  if (!keys(v, ["type", "title", "xLabel", "fdrThreshold", "log2FoldChangeThreshold", "points"]) ||
+      !label(v.xLabel) || !finite(v.fdrThreshold) || v.fdrThreshold <= 0 || v.fdrThreshold >= 1 ||
+      !finite(v.log2FoldChangeThreshold) || v.log2FoldChangeThreshold < 0 ||
+      v.log2FoldChangeThreshold > 100 || !Array.isArray(v.points) || v.points.length > 1024) return false;
+  const seen = new Set<string>();
+  for (const point of v.points) {
+    if (!record(point) || Object.keys(point).length !== 3 ||
+        !keys(point, ["gene", "log2FoldChange", "qValue"]) ||
+        !label(point.gene, 80) || seen.has(point.gene) || !finite(point.log2FoldChange) ||
+        !finite(point.qValue) || point.qValue < 0 || point.qValue > 1) return false;
+    seen.add(point.gene);
+  }
+  return true;
+}
+
 export function isScienceResultView(v: unknown): v is ScienceResultView {
   if (!record(v) || !label(v.title)) return false;
   if (v.type === "plate_map") {
@@ -119,6 +143,7 @@ export function isScienceResultView(v: unknown): v is ScienceResultView {
     }
     return true;
   }
+  if (v.type === "volcano_plot") return volcanoView(v);
   if (v.type === "forest_plot") return forestView(v);
   if (v.type === "phylogenetic_tree") return phylogeneticView(v);
   if (v.type !== "survival_curve" ||

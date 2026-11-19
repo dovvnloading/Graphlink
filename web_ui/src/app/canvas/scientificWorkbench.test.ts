@@ -397,6 +397,31 @@ describe("saved Workbench wire safety", () => {
     expect(read([{ ...tree, tree: { children: [] } }])).toBeNull();
   });
 
+  it("accepts a bounded volcano scatter but rejects malformed q-values and injected fields", () => {
+    const latest: ScienceResult = {
+      operationId: "convert_unit", inputs: {}, summary: "ok", values: {},
+      provenance: { resultHash: "digest" },
+    };
+    const volcano = { type: "volcano_plot", title: "Genes", xLabel: "log2 fold change",
+      fdrThreshold: 0.05, log2FoldChangeThreshold: 1,
+      points: [{ gene: "GeneA", log2FoldChange: 2, qValue: 0.01 },
+               { gene: "GeneB", log2FoldChange: -1, qValue: 1 }] };
+    const valid = readScienceState(JSON.stringify({ ...base, latest: { ...latest, views: [volcano] } }));
+    expect(valid?.latest?.views).toHaveLength(1);
+    const bad = (view: unknown) => readScienceState(JSON.stringify({
+      ...base, latest: { ...latest, views: [view] },
+    }));
+    expect(bad({ ...volcano, fdrThreshold: 0 })).toBeNull();
+    expect(bad({ ...volcano, fdrThreshold: 1 })).toBeNull();
+    expect(bad({ ...volcano, log2FoldChangeThreshold: -1 })).toBeNull();
+    expect(bad({ ...volcano, points: [{ gene: "GeneA", log2FoldChange: 2, qValue: -0.1 }] })).toBeNull();
+    expect(bad({ ...volcano, points: [{ gene: "GeneA", log2FoldChange: 2, qValue: 1.1 }] })).toBeNull();
+    expect(bad({ ...volcano, points: [...volcano.points, volcano.points[0]] })).toBeNull();
+    expect(bad({ ...volcano, points: Array.from({ length: 1025 }, (_, i) =>
+      ({ gene: `G${i}`, log2FoldChange: 0, qValue: 1 })) })).toBeNull();
+    expect(bad({ ...volcano, html: "<script>" })).toBeNull();
+    expect(bad({ ...volcano, points: [] })?.latest?.views).toHaveLength(1);
+  });
   it("rejects malformed uncertainty budget arrays and non-text diagnostics", () => {
     const measurement = { value: 4, standardUncertainty: 1, coverageFactor: 2, unit: "" };
     const result: ScienceResult = {

@@ -213,6 +213,35 @@ def _phylogenetic_tree(view: dict) -> None:
         raise ValueError("Phylograms need at least one positive branch length.")
 
 
+MAX_VOLCANO_POINTS = 1024
+
+
+def _volcano_plot(view: dict) -> None:
+    """A typed scatter, never an arbitrary SVG path or untrusted color."""
+    if set(view) != {"type", "title", "xLabel", "fdrThreshold", "log2FoldChangeThreshold", "points"}:
+        raise ValueError("Volcano plots require labeled axes, thresholds and points.")
+    _label(view["xLabel"], "Volcano x-axis label")
+    fdr, fold = view["fdrThreshold"], view["log2FoldChangeThreshold"]
+    if not _number(fdr) or not 0 < fdr < 1:
+        raise ValueError("Volcano FDR threshold must be strictly between zero and one.")
+    if not _number(fold) or not 0 <= fold <= 100:
+        raise ValueError("Volcano absolute log2 fold-change threshold must be between zero and 100.")
+    points = view["points"]
+    if not isinstance(points, list) or len(points) > MAX_VOLCANO_POINTS:
+        raise ValueError("Volcano plots support at most 1,024 tested genes.")
+    seen: set[str] = set()
+    for point in points:
+        if not isinstance(point, dict) or set(point) != {"gene", "log2FoldChange", "qValue"}:
+            raise ValueError("Volcano points need a gene, log2 fold change and BH q-value.")
+        _label(point["gene"], "Volcano gene ID", 80)
+        if point["gene"] in seen:
+            raise ValueError("Volcano plot gene IDs must be distinct.")
+        seen.add(point["gene"])
+        if not _number(point["log2FoldChange"]):
+            raise ValueError("Volcano log2 fold changes must be finite.")
+        if not _number(point["qValue"]) or not 0 <= point["qValue"] <= 1:
+            raise ValueError("Volcano BH q-values must be between zero and one.")
+
 def check_result_views(views) -> None:
     """Validate every supported typed view before storing or trusting a receipt."""
     if not isinstance(views, list) or not 1 <= len(views) <= MAX_VIEWS:
@@ -230,5 +259,7 @@ def check_result_views(views) -> None:
             _forest_plot(view)
         elif kind == "phylogenetic_tree":
             _phylogenetic_tree(view)
+        elif kind == "volcano_plot":
+            _volcano_plot(view)
         else:
             raise ValueError("Unsupported typed scientific result view.")

@@ -36,3 +36,15 @@
 .science-view-data table { width: 100%; border-collapse: collapse; font-size: .81em; font-variant-numeric: tabular-nums; }
 .science-view-data th, .science-view-data td { border-bottom: 1px solid var(--gl-surface-border); padding: 3px 6px; text-align: left; }
 .science-view-data th { font-weight: 600; }
+
+/* Typed volcano scatter: never connect unordered genes with line segments. */
+.science-volcano svg { display: block; width: 100%; height: auto; overflow: visible; }
+.science-volcano-axis { fill: currentColor; font: 10px sans-serif; }
+.science-volcano-point { stroke: var(--gl-surface-window); stroke-width: .65; }
+.science-volcano-up { fill: var(--gl-status-info); background: var(--gl-status-info); }
+.science-volcano-down { fill: var(--gl-status-danger); background: var(--gl-status-danger); }
+.science-volcano-other { fill: var(--gl-surface-text-secondary); background: var(--gl-surface-text-secondary); }
+.science-volcano-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px;
+  list-style: none; margin: 0; padding: 0; font-size: .83em; }
+.science-volcano-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.science-volcano-key { display: inline-block; width: 9px; height: 9px; border-radius: 50%; }

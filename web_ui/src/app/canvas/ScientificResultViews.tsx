@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import { formatScienceNumber } from "./scientificWorkbench";
-import type { ScienceForestPlotView, SciencePhylogeneticNode, SciencePhylogeneticTreeView, SciencePlateMapView, ScienceResultView, ScienceSurvivalCurveView } from "./scientificViewTypes";
+import type { ScienceForestPlotView, SciencePhylogeneticNode, SciencePhylogeneticTreeView, SciencePlateMapView, ScienceResultView, ScienceSurvivalCurveView, ScienceVolcanoPlotView, ScienceVolcanoPoint } from "./scientificViewTypes";
 import "./ScientificResultViews.css";
 
 const ROWS = "ABCDEFGHIJKLMNOP";
@@ -105,6 +105,68 @@ function SurvivalCurve({ view }: { view: ScienceSurvivalCurveView }) {
   </figure>;
 }
 
+
+/** A volcano plot is a scatter: joining features into a polyline would imply ordering. */
+function VolcanoPlot({ view }: { view: ScienceVolcanoPlotView }) {
+  const points = view.points;
+  const xExtent = Math.max(1, view.log2FoldChangeThreshold,
+    ...points.map((point) => Math.abs(point.log2FoldChange))) * 1.12;
+  // q=0 represents underflow, not an infinite SVG coordinate.
+  const negLogQ = (q: number) => -Math.log10(Math.max(q, 1e-300));
+  const yExtent = Math.max(1, negLogQ(view.fdrThreshold),
+    ...points.map((point) => negLogQ(point.qValue))) * 1.08;
+  const x = (fold: number) => 39 + (fold / xExtent + 1) * 156;
+  const y = (q: number) => 187 - (negLogQ(q) / yExtent) * 160;
+  const category = (point: ScienceVolcanoPoint): "up" | "down" | "other" => {
+    if (point.qValue > view.fdrThreshold) return "other";
+    if (point.log2FoldChange > 0 && point.log2FoldChange >= view.log2FoldChangeThreshold) return "up";
+    if (point.log2FoldChange < 0 && point.log2FoldChange <= -view.log2FoldChangeThreshold) return "down";
+    return "other";
+  };
+  const counts = {
+    up: points.filter((point) => category(point) === "up").length,
+    down: points.filter((point) => category(point) === "down").length,
+    other: points.filter((point) => category(point) === "other").length,
+  };
+  const floorUsed = points.some((point) => point.qValue === 0);
+
+  return <figure className="science-typed-view science-volcano">
+    <figcaption>{view.title}</figcaption>
+    <small>Welch tests · BH-adjusted q-values · {points.length} tested features</small>
+    <svg viewBox="0 0 390 240" role="img" aria-label={
+      `${view.title}: volcano scatter of ${points.length} genes, ${view.xLabel} versus negative log10 adjusted p-value.`
+    }>
+      <path d="M39 27V187H351" fill="none" stroke="currentColor" opacity=".55" />
+      <line className="science-volcano-zero" x1={x(0)} x2={x(0)} y1="27" y2="187"
+        stroke="currentColor" opacity=".25" />
+      {[view.log2FoldChangeThreshold, -view.log2FoldChangeThreshold].map((threshold, i) =>
+        <line className="science-volcano-fold-threshold" key={i} x1={x(threshold)} x2={x(threshold)}
+          y1="27" y2="187" stroke="currentColor" opacity=".6" strokeDasharray="4 4" />)}
+      <line className="science-volcano-fdr-threshold" x1="39" x2="351"
+        y1={y(view.fdrThreshold)} y2={y(view.fdrThreshold)}
+        stroke="currentColor" opacity=".6" strokeDasharray="4 4" />
+      {points.map((point) => <circle key={point.gene}
+        className={`science-volcano-point science-volcano-${category(point)}`}
+        cx={x(point.log2FoldChange)} cy={y(point.qValue)} r="3.1">
+        <title>{point.gene}: log2FC {formatScienceNumber(point.log2FoldChange)}, BH q {formatScienceNumber(point.qValue)}</title>
+      </circle>)}
+      <text x="34" y="190" textAnchor="end" className="science-volcano-axis">0</text>
+      <text x="34" y="30" textAnchor="end" className="science-volcano-axis">{formatScienceNumber(yExtent)}</text>
+      <text x="39" y="201" textAnchor="middle" className="science-volcano-axis">−{formatScienceNumber(xExtent)}</text>
+      <text x={x(0)} y="201" textAnchor="middle" className="science-volcano-axis">0</text>
+      <text x="351" y="201" textAnchor="middle" className="science-volcano-axis">{formatScienceNumber(xExtent)}</text>
+      <text x="195" y="228" textAnchor="middle" className="science-volcano-axis">{view.xLabel}</text>
+      <text x="43" y="18" className="science-volcano-axis">−log10(BH q)</text>
+    </svg>
+    <ul className="science-volcano-legend" aria-label="Volcano significance counts">
+      <li><span className="science-volcano-key science-volcano-up" />Up in B: {counts.up}</li>
+      <li><span className="science-volcano-key science-volcano-down" />Down in B: {counts.down}</li>
+      <li><span className="science-volcano-key science-volcano-other" />Other tested: {counts.other}</li>
+    </ul>
+    <small>Dashed lines: q ≤ {formatScienceNumber(view.fdrThreshold)} and |log2FC| ≥ {formatScienceNumber(view.log2FoldChangeThreshold)}. Untested genes are excluded.</small>
+    {floorUsed && <small>Underflowed q=0 plotted at 1e−300 (capped at −log10(q)=300).</small>}
+  </figure>;
+}
 
 const forestNumber = (value: number) => formatScienceNumber(value);
 
@@ -348,6 +410,7 @@ export function ScientificResultViews({ views }: { views: ScienceResultView[] })
         case "plate_map": return <PlateMap key={index} view={view} />;
         case "survival_curve": return <SurvivalCurve key={index} view={view} />;
         case "forest_plot": return <ForestPlot key={index} view={view} />;
+        case "volcano_plot": return <VolcanoPlot key={index} view={view} />;
         case "phylogenetic_tree": return <PhylogeneticTree key={index} view={view} />;
       }
     })}
