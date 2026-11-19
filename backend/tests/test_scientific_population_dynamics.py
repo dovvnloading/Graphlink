@@ -16,9 +16,10 @@ def run(op_id, **kwargs):
 def test_append_only_catalog_examples_and_signed_receipts():
     ids = [op.id for op in operations("biology")]
     assert ids[:3] == ["community_diversity", "quadrat_density", "community_overlap"]
-    assert ids[-3:] == ["mark_recapture", "cohort_life_table", "matrix_population_projection"]
-    assert len(ids) == len(set(ids)) == 14
-    for op in operations("biology")[-3:]:
+    assert ids[11:14] == ["mark_recapture", "cohort_life_table", "matrix_population_projection"]
+    assert ids[14:] == ["hill_numbers", "beta_diversity", "species_accumulation"]
+    assert len(ids) == len(set(ids)) == 17
+    for op in operations("biology")[11:14]:
         assert op.methods and op.citations
         assert all(f.unit for f in op.fields)
         artifact = run(op.id, **op.example)
