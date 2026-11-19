@@ -101,7 +101,7 @@ def test_ready_order_typed_fan_in_and_receipts_without_sleep(tmp_path, monkeypat
         both_entered = asyncio.Event()
         release = asyncio.Event()
 
-        async def controlled(pack, operation, inputs, sources, *, timeout_s, cancel_event, input_units=None):
+        async def controlled(pack, operation, inputs, sources, *, timeout_s, cancel_event, input_units=None, **_uncertainty):
             calls.append((pack, operation.id, inputs, sources, timeout_s, cancel_event))
             if waiting and operation.id == "numeric_csv":
                 if len([row for row in calls if row[1] == "numeric_csv"]) >= 4:
@@ -229,7 +229,7 @@ def test_restart_resume_does_not_replay_committed_science(tmp_path, monkeypatch)
         })
         calls = 0
 
-        async def controlled(pack, operation, inputs, sources, *, timeout_s, cancel_event, input_units=None):
+        async def controlled(pack, operation, inputs, sources, *, timeout_s, cancel_event, input_units=None, **_uncertainty):
             nonlocal calls
             calls += 1
             return calculate_result(pack, operation, inputs, sources, input_units=input_units)
@@ -286,7 +286,7 @@ def test_mixed_model_and_science_run_keeps_operation_dispatch_separate(tmp_path,
             model_calls.append((args, kwargs))
             return {"message": {"content": "Local result"}}
 
-        async def scientific_result(pack, operation, inputs, sources, *, timeout_s, cancel_event, input_units=None):
+        async def scientific_result(pack, operation, inputs, sources, *, timeout_s, cancel_event, input_units=None, **_uncertainty):
             scientific_calls.append((pack, operation.id))
             return calculate_result(pack, operation, inputs, sources, input_units=input_units)
 
@@ -310,7 +310,7 @@ def test_runner_retains_unit_aware_inputs_and_receipt(tmp_path, monkeypatch):
         document, bus, scene = open_session(tmp_path / "graph.db", settings_for(tmp_path))
         target = await node(bus, "Scientific Core")
 
-        async def controlled(pack, operation, inputs, sources, *, timeout_s, cancel_event, input_units=None):
+        async def controlled(pack, operation, inputs, sources, *, timeout_s, cancel_event, input_units=None, **_uncertainty):
             return calculate_result(pack, operation, inputs, sources, input_units=input_units)
 
         monkeypatch.setattr(workbench, "execute_in_process", controlled)
