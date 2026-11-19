@@ -394,7 +394,7 @@ def check_artifact(data: dict) -> None:
                 if isinstance(cell, str):
                     if len(cell) > 65_536:
                         raise ValueError("Result table cells may not exceed 65,536 characters.")
-                elif cell is not None:
+                elif cell is not None and type(cell) is not bool:
                     finite(cell, "Table cell")
     if "tableAsset" in data:
         from .data_table import table_metadata_valid
