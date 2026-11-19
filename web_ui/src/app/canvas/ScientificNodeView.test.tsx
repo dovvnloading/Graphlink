@@ -50,6 +50,7 @@ describe("scientific workbench card", () => {
     fireEvent.click(screen.getByRole("button", { name: "Discuss in chat" }));
     expect(mounted.fireIntent).toHaveBeenCalledWith(
       "scene", "discussScientificResult", ["target", "abc", "receipt-123"],
+      undefined, false, undefined, expect.any(Function),
     );
     mounted.refresh(JSON.stringify({ ...state, latest: null }));
     expect(screen.queryByRole("button", { name: "Discuss in chat" })).not.toBeInTheDocument();
