@@ -14,6 +14,7 @@ from graphlink_plugins.scientific.catalog import PACKS, operations
 from graphlink_plugins.scientific.core import VERSION, Operation, fingerprint, readable_result, validated_inputs_with_units
 from graphlink_plugins.scientific.data_table import numeric_column, table_metadata_valid
 from graphlink_plugins.scientific.propagation import connected_measurement, result_unit
+from graphlink_plugins.scientific.reference_data import references_for_operation
 from graphlink_plugins.scientific.workbench import (
     SCIENCE_KINDS, STATE_TYPES, _extract, _same_sources, _verify_sources,
 )
@@ -229,6 +230,8 @@ def prepare(document: Any, node: Any, granted: Any) -> tuple[Any, dict, dict, st
                                   operation=operation)
     except (ValueError, IndexError, TypeError, KeyError) as exc:
         raise SceneError(str(exc)) from exc
+    pack = node.kind.removeprefix("science_").split(".", 1)[0]
+    references = references_for_operation(pack, operation.id, inputs)
     current = node.state.data.get("latest")
     if isinstance(current, dict) and node.content != current["summary"]:
         raise SceneError("The scientific output has manual edits; review them before running.")
@@ -237,9 +240,10 @@ def prepare(document: Any, node: Any, granted: Any) -> tuple[Any, dict, dict, st
         and current["operationId"] == operation.id
         and current["inputs"] == inputs
         and current["provenance"].get("inputUnits") == input_units
+        and current["provenance"].get("referenceData") == references
         and _same_sources(current["provenance"].get("sources", {}), sources)
     )
     # Dispatch the original validated literals so the worker retains submitted
     # units in provenance; pin the normalized values AND unit choices for replay.
-    digest = fingerprint([VERSION, operation.id, inputs, input_units, _stable_sources(sources)])
+    digest = fingerprint([VERSION, operation.id, inputs, input_units, _stable_sources(sources), references])
     return operation, raw, sources, digest, same

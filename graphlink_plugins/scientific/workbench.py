@@ -21,6 +21,7 @@ from .data_table import (
     stage_from_saved, table_metadata_valid,
 )
 from .execution import ExecutionFailure, execute_in_process, execution_timeout
+from .reference_data import references_for_operation
 from .units import convert_decimal_measurement, parse_unit
 
 STATE_TYPES = (PersistedPluginState, PluginStateSnapshot, TableState)
@@ -452,6 +453,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
             previous = latest["provenance"]
             if (previous["resultHash"] == result["provenance"]["resultHash"]
                     and previous.get("inputUnits") == result["provenance"].get("inputUnits")
+                    and previous.get("referenceData") == result["provenance"].get("referenceData")
                     and latest.get("uncertainty") == result.get("uncertainty")
                     and _same_sources(previous.get("sources", {}), sources)):
                 return {"ok": True}
