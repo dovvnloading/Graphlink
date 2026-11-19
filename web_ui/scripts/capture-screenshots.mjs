@@ -31,7 +31,7 @@ import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
 
-// Lives under web_ui/scripts/ (beside check-bundle-size.mjs) because that is
+// Lives under web_ui/scripts/ because that is
 // where this repo's node tooling resolves its dependencies from - Playwright
 // is a web_ui devDependency, and an ESM bare import resolves against the
 // SCRIPT's directory, not the working directory.
