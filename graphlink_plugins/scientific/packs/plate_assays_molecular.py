@@ -139,22 +139,28 @@ def digital_pcr(data: dict) -> dict:
         raise ValueError("Provide total > 0 partitions and 0 <= positive < total; all-positive is saturated.")
     if volume_nl <= 0 or dilution < 1:
         raise ValueError("Partition volume must be positive and reciprocal dilution at least one.")
+    negative = total - positive
     p = positive / total
-    lam = -math.log1p(-p)
-    # Wilson score interval for binomial partition positivity, then monotone
-    # Poisson transformation. This is an approximate occupancy interval.
+    q = negative / total
+    # Use the smaller fraction for log1p when positivity is low, and the
+    # negative fraction directly near saturation to avoid rounding p to 1.
+    lam = -math.log1p(-p) if p <= 0.5 else -math.log(q)
+    # Wilson interval on the negative fraction q, transformed by -ln(q).
+    # q_high uses addition; obtain q_low from the product of the Wilson
+    # roots, q**2 / den, to avoid cancellation (especially when q == 1,
+    # i.e. zero positive partitions). Both bounds remain finite for q > 0.
     z = 1.959963984540054
     z2 = z * z
     den = 1 + z2 / total
-    middle = (p + z2 / (2 * total)) / den
-    half = z * math.sqrt(p * (1 - p) / total + z2 / (4 * total * total)) / den
-    p_low, p_high = max(0.0, middle - half), min(1.0, middle + half)
+    middle = (q + z2 / (2 * total)) / den
+    half = z * math.sqrt(q * (1 - q) / total + z2 / (4 * total * total)) / den
+    q_high = min(1.0, middle + half)
+    q_low = q * q / (den * q_high)
     volume_ul = volume_nl / 1000
     measured = _checked(lam / volume_ul, "dPCR concentration")
     corrected = _checked(measured * dilution, "Original-sample dPCR concentration")
-    lower = _checked(-math.log1p(-p_low) / volume_ul * dilution, "dPCR interval lower")
-    upper = (_checked(-math.log1p(-p_high) / volume_ul * dilution, "dPCR interval upper")
-             if p_high < 1 else "unbounded (upper occupancy interval saturated)")
+    lower = _checked(-math.log(q_high) / volume_ul * dilution, "dPCR interval lower")
+    upper = _checked(-math.log(q_low) / volume_ul * dilution, "dPCR interval upper")
     return {
         "summary": (f"{positive} of {total} partitions positive; Poisson loading "
                     f"λ={lam:.5g} copies/partition; corrected concentration "

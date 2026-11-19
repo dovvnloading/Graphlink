@@ -134,6 +134,17 @@ def test_dpcr_zero_positives_is_zero_point_estimate_with_upper_bound():
     assert values["ci95_upper_copies_per_ul_original"] > 0
 
 
+def test_dpcr_wilson_interval_stays_finite_near_saturation():
+    # Even the largest exactly representable partition counts must not
+    # round a non-saturated observation into an infinite occupancy estimate.
+    for positives, total in ((999, 1000), (2**53 - 2, 2**53 - 1)):
+        values = _run("digital_pcr", positive_partitions=positives,
+                      total_partitions=total)["values"]
+        assert (0 < values["ci95_lower_copies_per_ul_original"]
+                < values["copies_per_ul_original"]
+                < values["ci95_upper_copies_per_ul_original"])
+
+
 @pytest.mark.parametrize("changes", [
     {"positive_partitions": -1}, {"positive_partitions": 1000},
     {"positive_partitions": 1001}, {"positive_partitions": 0.5},
