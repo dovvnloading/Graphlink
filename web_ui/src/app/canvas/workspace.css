@@ -111,66 +111,127 @@
   display: flex;
   justify-content: center;
   z-index: var(--gl-z-app-layer);
-  background: var(--gl-graph-surface);
-  border-top: 1px solid var(--gl-graph-border);
+  padding: 6px 16px 14px;
+  /* The canvas colour, so the card floats on the canvas rather than sitting
+     in a separate band. */
+  background: var(--gl-graph-canvas);
 }
 
+/* The composer is one card: staged context, the draft, then one toolbar -
+   secondary tools as quiet icons on the left, the model and reasoning chips
+   and the single primary action on the right. */
 .composer-dock {
   position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-  gap: 6px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   box-sizing: border-box;
-  width: min(100%, 1360px);
-  padding: 8px 16px;
+  width: min(100%, 760px);
+  padding: 8px 8px 6px 12px;
+  background: var(--gl-surface-node-body);
+  border: 1px solid var(--gl-graph-border);
+  border-radius: 14px;
+  box-shadow: 0 6px 22px var(--gl-composer-shell-shadow-drop),
+    inset 0 1px 0 var(--gl-composer-shell-shadow-inset);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
 }
 
-.composer-reply-target,
-.composer-synthesize-target,
-.composer-attachment-chips { grid-column: 1 / -1; }
+.composer-dock:focus-within {
+  border-color: var(--gl-surface-text-muted);
+  box-shadow: 0 6px 22px var(--gl-composer-shell-focus-shadow-drop),
+    inset 0 1px 0 var(--gl-composer-shell-shadow-inset);
+}
 
-.composer-input-wrap { grid-column: 1; min-width: 0; }
+.composer-input-wrap { min-width: 0; }
 
 .composer-input {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  min-height: 34px;
-  padding: 7px 10px;
-  border: 1px solid var(--gl-graph-border);
-  border-radius: 4px;
-  background: var(--gl-graph-canvas);
-  line-height: 18px;
+  min-height: 28px;
+  max-height: 200px;
+  padding: 4px 4px 2px 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  font-size: 14px;
+  line-height: 20px;
 }
 
-.composer-input:focus {
-  outline: 1px solid var(--gl-graph-selection);
-  outline-offset: -1px;
-}
+.composer-input:focus { outline: none; }
 
 .composer-controls {
-  grid-column: 2;
+  display: flex;
+  align-items: center;
+  gap: 2px;
   min-width: 0;
-  min-height: 34px;
+  min-height: 32px;
   padding-top: 0;
+  margin-left: -6px;
 }
 
-.composer-control { min-width: 0; border-radius: 4px; }
-.composer-icon-button { flex: none; }
+.composer-controls-start {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.composer-rail-end {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  margin-left: auto;
+}
+
+.composer-icon-button { flex: none; width: 30px; height: 30px; border-radius: 8px; }
+.composer-icon-button .icon { width: 16px; height: 16px; }
+
+.composer-control {
+  min-width: 0;
+  height: 30px;
+  gap: 5px;
+  padding: 0 8px;
+  border-radius: 8px;
+  color: var(--gl-surface-text-muted);
+}
+
+.composer-control:hover:enabled,
+.composer-control[aria-pressed="true"] { color: var(--gl-surface-text-primary); }
+
+.composer-control-value { font-size: 12px; font-weight: 500; }
 .composer-control-value-reasoning { width: auto; }
-.composer-control-value-model { width: auto; max-width: 150px; }
-.composer-send-button { border-radius: 4px; }
-.composer-controls .token-counter-trigger { flex: none; }
+.composer-control-value-model { width: auto; max-width: 180px; }
+.composer-reasoning-chip .icon:first-child { width: 14px; height: 14px; }
 
-@container graph-workspace (max-width: 780px) {
-  .composer-dock { grid-template-columns: minmax(0, 1fr); gap: 3px; padding: 8px 10px 6px; }
-  .composer-controls { grid-column: 1; gap: 2px; }
+.composer-compare-button { position: relative; }
+.composer-compare-button[aria-pressed="true"] { background-color: var(--gl-neutral-button-hover); }
+
+.composer-compare-count {
+  position: absolute;
+  top: 2px;
+  right: 1px;
+  box-sizing: border-box;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 13px;
+  text-align: center;
+  color: var(--gl-surface-window);
+  background: var(--gl-surface-text-bright, var(--gl-surface-text-muted));
+  border-radius: 999px;
 }
+
+.composer-controls .token-counter-trigger { flex: none; }
+.composer-controls .token-counter-summary { padding: 0 6px; gap: 3px; }
+
+.composer-send-button { flex: none; width: 32px; height: 32px; margin-left: 4px; border-radius: 50%; }
 
 @container graph-workspace (max-width: 480px) {
-  .composer-control { padding-inline: 5px; gap: 3px; }
-  .composer-control-value-model { max-width: 18cqw; }
+  .composer-dock { padding: 6px 6px 4px 10px; }
+  .composer-control-value-model { max-width: 28cqw; }
 }
 
 /* A selected group remains underneath the cards contained in it. */

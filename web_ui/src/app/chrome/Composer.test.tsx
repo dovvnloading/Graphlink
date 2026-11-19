@@ -452,7 +452,9 @@ describe("Composer", () => {
     expect(screen.queryByText("High")).toBeNull();
   });
 
-  it("Reasoning trigger is disabled when reasoningSelection is false", () => {
+  it("hides the Reasoning chip when the provider and model expose no reasoning selection", () => {
+    // An always-disabled chip was clutter; the model picker still names the
+    // provider, so nothing is lost by leaving the control out.
     const { store } = makeStore({
       composer: {
         capabilities: { ...initialComposerState.capabilities, reasoningSelection: false },
@@ -465,7 +467,7 @@ describe("Composer", () => {
         <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
       </OverlayProvider>,
     );
-    expect(container.querySelector('[data-overlay-trigger="reasoning"]')).toBeDisabled();
+    expect(container.querySelector('[data-overlay-trigger="reasoning"]')).toBeNull();
   });
 
   it("Reasoning trigger is disabled while a request is busy even when reasoningSelection is true", () => {
@@ -492,25 +494,6 @@ describe("Composer", () => {
     expect(container.querySelector('[data-overlay-trigger="reasoning"]')).not.toBeDisabled();
   });
 
-  it("R8a finding #11: Reasoning trigger explains itself via title when disabled for provider reasons", () => {
-    const { store } = makeStore({
-      composer: {
-        capabilities: { ...initialComposerState.capabilities, reasoningSelection: false },
-        request: { ...initialComposerState.request, canSend: true },
-      },
-    });
-    const { container } = render(
-      <OverlayProvider>
-        {/* @ts-expect-error - test double */}
-        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
-      </OverlayProvider>,
-    );
-    expect(container.querySelector('[data-overlay-trigger="reasoning"]')).toHaveAttribute(
-      "title",
-      "This provider and model do not expose adjustable reasoning in Graphlink",
-    );
-  });
-
   it("R8a finding #11: Reasoning trigger explains itself via title when disabled because a request is busy", () => {
     const { store } = makeStore();
     const { container } = render(
@@ -525,7 +508,7 @@ describe("Composer", () => {
     );
   });
 
-  it("R8a finding #11: Reasoning trigger has no title at all when it is enabled - nothing to explain", () => {
+  it("the enabled Reasoning chip names its level for assistive tech and shows a plain tooltip", () => {
     const { store } = makeStore({
       composer: { request: { ...initialComposerState.request, canSend: true } },
     });
@@ -535,7 +518,9 @@ describe("Composer", () => {
         <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
       </OverlayProvider>,
     );
-    expect(container.querySelector('[data-overlay-trigger="reasoning"]')).not.toHaveAttribute("title");
+    const trigger = container.querySelector('[data-overlay-trigger="reasoning"]');
+    expect(trigger).toHaveAttribute("title", "Reasoning level");
+    expect(trigger).toHaveAttribute("aria-label", `Reasoning: ${store.getComposer().route.reasoning.label}`);
   });
 
   it("the Attach button is disabled when capabilities.attachments is false, even with canSend true", () => {

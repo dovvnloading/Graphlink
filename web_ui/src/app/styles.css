@@ -2962,10 +2962,22 @@ body {
   cursor: default;
 }
 
+/* Send is a stroked up-arrow; Stop (the same slot mid-reply) a filled square. */
 .composer-send-button .icon {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.composer-send-button[aria-label="Cancel response"] .icon {
+  width: 12px;
+  height: 12px;
   fill: currentColor;
+  stroke: none;
 }
 
 .reasoning-popover {

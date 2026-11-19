@@ -39,13 +39,15 @@ const LazyModelComparisonPicker = lazy(() =>
   import("./ModelComparisonPicker").then((m) => ({ default: m.ModelComparisonPicker })),
 );
 
-function Icon({ name }: { name: "attach" | "send" | "chevron" | "stop" }) {
+function Icon({ name }: { name: "attach" | "send" | "chevron" | "stop" | "compare" | "reasoning" }) {
   const paths: Record<string, string> = {
     attach:
       "M12 5.5 6.4 11.1a3.6 3.6 0 0 0 5.1 5.1l6-6a2.5 2.5 0 0 0-3.5-3.5l-6.1 6.1a1.35 1.35 0 0 0 1.9 1.9l5.5-5.5",
-    send: "M3.5 4.6 20.5 12 3.5 19.4l2.2-6.2L15 12 5.7 10.8 3.5 4.6Z",
+    send: "M12 19V5m-6 6 6-6 6 6",
     chevron: "m7 10 5 5 5-5",
     stop: "M7 7h10v10H7z",
+    compare: "M9 8V5.5A1.5 1.5 0 0 1 10.5 4h8A1.5 1.5 0 0 1 20 5.5v8a1.5 1.5 0 0 1-1.5 1.5H16M5.5 9h8A1.5 1.5 0 0 1 15 10.5v8a1.5 1.5 0 0 1-1.5 1.5h-8A1.5 1.5 0 0 1 4 18.5v-8A1.5 1.5 0 0 1 5.5 9Z",
+    reasoning: "M12 3.5v2m0 13v2M3.5 12h2m13 0h2M6 6l1.4 1.4m9.2 9.2L18 18M6 18l1.4-1.4m9.2-9.2L18 6M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z",
   };
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
@@ -252,6 +254,10 @@ export function Composer({
         />
       </div>
 
+      {/* One toolbar inside the card: secondary tools as quiet icons on the
+          left, the routing chips and the single primary action on the right.
+          Every control keeps its accessible name; only the visible text was
+          trimmed to what a user scans for (the model name, the level). */}
       <div className="composer-controls">
         {composer.request.state === "generating" && (
           <div className="composer-stream-preview" role="status" aria-live="polite">
@@ -259,97 +265,89 @@ export function Composer({
           </div>
         )}
 
-        {/* R8a: real now - opens a native file dialog (backend/native_dialogs.py)
-            and stages whatever is picked. Was hard-disabled with an
-            "aren't available yet" title and nothing behind it. */}
-        <button
-          type="button"
-          className="composer-icon-button"
-          disabled={!composer.capabilities.attachments || !composer.request.canSend}
-          title="Attach a file (image, audio, or a text/PDF/DOCX document)"
-          aria-label="Attach context"
-          onClick={() => store.attachFile()}
-        >
-          <Icon name="attach" />
-        </button>
+        <div className="composer-controls-start">
+          {/* R8a: real now - opens a native file dialog (backend/native_dialogs.py)
+              and stages whatever is picked. */}
+          <button
+            type="button"
+            className="composer-icon-button"
+            disabled={!composer.capabilities.attachments || !composer.request.canSend}
+            title="Attach a file (image, audio, or a text/PDF/DOCX document)"
+            aria-label="Attach context"
+            onClick={() => store.attachFile()}
+          >
+            <Icon name="attach" />
+          </button>
 
-        {contextInspector}
+          {contextInspector}
 
-        <button
-          type="button"
-          className="composer-control"
-          data-overlay-trigger="reasoning"
-          aria-haspopup="dialog"
-          aria-pressed={overlays.isOpen("reasoning")}
-          disabled={!composer.capabilities.reasoningSelection || !composer.request.canSend}
-          /* R8a (UI/UX issue list finding #11): its two disabled-reason
-             neighbours (Attach, Model) both explain themselves via title -
-             this button had none at all, so a greyed-out Reasoning chip in
-             API mode looked like just another broken control rather than a
-             provider limitation. */
-          title={
-            !composer.capabilities.reasoningSelection
-              ? "This provider and model do not expose adjustable reasoning in Graphlink"
-              : !composer.request.canSend
-                ? "Wait for the current response to finish"
-                : undefined
-          }
-          onClick={() => overlays.toggle("reasoning", "popover")}
-        >
-          <span className="composer-control-label">Reasoning</span>
-          <span className="composer-control-value composer-control-value-reasoning">
-            {composer.route.reasoning.label}
-          </span>
-          <Icon name="chevron" />
-        </button>
-
-        {/* R8a: a REAL model picker. This was `disabled` with a "not available
-            yet" title and an always-empty option list, so it rendered as a
-            dropdown that could never be opened - reported, correctly, as
-            "does not work at all and is locked up". It now enables exactly
-            when the backend says there is something to choose
-            (capabilities.modelSelection, derived from the resolved provider's
-            real model list) and writes through the same per-task assignment
-            the Settings > Ollama page edits. */}
-        <button
-          type="button"
-          className="composer-control"
-          data-overlay-trigger="model"
-          aria-haspopup="dialog"
-          aria-pressed={overlays.isOpen("model")}
-          disabled={!composer.capabilities.modelSelection || !composer.request.canSend}
-          title={
-            composer.capabilities.modelSelection
-              ? `Choose the ${composer.route.provider} model for chat`
-              : "Choose a model in Settings for this provider"
-          }
-          onClick={() => overlays.toggle("model", "popover")}
-        >
-          <span className="composer-control-label">{composer.route.provider}</span>
-          <span className="composer-control-value composer-control-value-model" title={modelLabel}>
-            {modelLabel}
-          </span>
-          <Icon name="chevron" />
-        </button>
-
-        <button
-          type="button"
-          className="composer-control"
-          data-overlay-trigger="model-comparison"
-          aria-haspopup="dialog"
-          aria-pressed={comparisonMode}
-          disabled={!composer.request.canSend || isSynthesizing}
-          title="Send one message to two to four models in parallel"
-          onClick={() => { void openComparisonPicker(); }}
-        >
-          <span className="composer-control-label">Compare</span>
-          <span className="composer-control-value">
-            {comparisonMode ? `${selectedComparisonModels.length} models` : "Single"}
-          </span>
-          <Icon name="chevron" />
-        </button>
+          <button
+            type="button"
+            className="composer-icon-button composer-compare-button"
+            data-overlay-trigger="model-comparison"
+            aria-haspopup="dialog"
+            aria-pressed={comparisonMode}
+            aria-label={comparisonMode ? `Compare models: ${selectedComparisonModels.length} selected` : "Compare models"}
+            disabled={!composer.request.canSend || isSynthesizing}
+            title="Send one message to two to four models in parallel"
+            onClick={() => { void openComparisonPicker(); }}
+          >
+            <Icon name="compare" />
+            {comparisonMode && (
+              <span className="composer-compare-count" aria-hidden="true">
+                {selectedComparisonModels.length}
+              </span>
+            )}
+          </button>
+        </div>
 
         <div className="composer-rail-end">
+          {/* R8a: a REAL model picker; it enables exactly when the backend
+              says there is something to choose (capabilities.modelSelection)
+              and writes through the same per-task assignment Settings edits.
+              The provider stays in the accessible name and tooltip. */}
+          <button
+            type="button"
+            className="composer-control composer-model-chip"
+            data-overlay-trigger="model"
+            aria-haspopup="dialog"
+            aria-pressed={overlays.isOpen("model")}
+            aria-label={`${composer.route.provider} model: ${modelLabel}`}
+            disabled={!composer.capabilities.modelSelection || !composer.request.canSend}
+            title={
+              composer.capabilities.modelSelection
+                ? `Choose the ${composer.route.provider} model for chat`
+                : "Choose a model in Settings for this provider"
+            }
+            onClick={() => overlays.toggle("model", "popover")}
+          >
+            <span className="composer-control-value composer-control-value-model">{modelLabel}</span>
+            <Icon name="chevron" />
+          </button>
+
+          {/* Shown only when the provider and model expose adjustable
+              reasoning; an always-disabled chip was clutter. While a reply is
+              in flight it stays visible but disabled, and says why. */}
+          {composer.capabilities.reasoningSelection && (
+            <button
+              type="button"
+              className="composer-control composer-reasoning-chip"
+              data-overlay-trigger="reasoning"
+              aria-haspopup="dialog"
+              aria-pressed={overlays.isOpen("reasoning")}
+              aria-label={`Reasoning: ${composer.route.reasoning.label}`}
+              disabled={!composer.request.canSend}
+              title={!composer.request.canSend ? "Wait for the current response to finish" : "Reasoning level"}
+              onClick={() => overlays.toggle("reasoning", "popover")}
+            >
+              <Icon name="reasoning" />
+              <span className="composer-control-value composer-control-value-reasoning">
+                {composer.route.reasoning.label}
+              </span>
+              <Icon name="chevron" />
+            </button>
+          )}
+
           {showTokenCounter && <TokenCounter store={store} />}
 
           {composer.request.canCancel ? (
