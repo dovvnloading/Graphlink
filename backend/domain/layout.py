@@ -78,8 +78,20 @@ KIND_FALLBACK_FOOTPRINTS: dict[str, tuple[float, float]] = {
     "harness": (440.0, 420.0),
     "chart": (600.0, 440.0),
     "placeholder": (220.0, 120.0),
+    # Scientific Workbench packs register "<pack plugin>.workbench"; the card
+    # is 390px wide (ScientificNodeView.css) with a 550px scrolling body.
+    "workbench": (392.0, 612.0),
 }
 DEFAULT_FALLBACK_FOOTPRINT = (360.0, 240.0)
+
+
+def _kind_fallback(kind: str) -> tuple[float, float]:
+    """The estimate for `kind`, then for a plugin kind's local name
+    ("science_core.workbench" -> "workbench"), then the default."""
+    return KIND_FALLBACK_FOOTPRINTS.get(
+        kind,
+        KIND_FALLBACK_FOOTPRINTS.get(kind.rpartition(".")[2], DEFAULT_FALLBACK_FOOTPRINT),
+    )
 
 # find_free_position's hard defensive ceiling on top of the obstacle-count
 # bound it actually uses (see that function's own comment) - a scene would
@@ -139,7 +151,7 @@ class LayoutOps(SceneDocumentParts):
             elif is_node_of(node, ("frame", "container"), GroupSizedState):
                 width, height = node.state.group_width, node.state.group_height
         if not (width and width > 0) or not (height and height > 0):
-            fw, fh = KIND_FALLBACK_FOOTPRINTS.get(node.kind, DEFAULT_FALLBACK_FOOTPRINT)
+            fw, fh = _kind_fallback(node.kind)
             if isinstance(node.state, NoteState) and node.state.is_table_source:
                 fw = 350.0  # Fixed card width in TableWorkflow.css, until measured.
             width = width if (width and width > 0) else fw
@@ -149,7 +161,7 @@ class LayoutOps(SceneDocumentParts):
     def kind_fallback_footprint(self, kind: str) -> tuple[float, float]:
         """The pre-creation footprint estimate for a node that does not
         exist yet (place_child sizes the child before add_*_node runs)."""
-        return KIND_FALLBACK_FOOTPRINTS.get(kind, DEFAULT_FALLBACK_FOOTPRINT)
+        return _kind_fallback(kind)
 
     def _placement_obstacles(
         self, exclude_ids: frozenset[str] | set[str] = frozenset(),

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useMemo, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { SceneStore } from "../canvas/sceneStore";
 import { Popover, useOverlays } from "../overlays/overlays";
 import type { ComparisonModel, ComposerStore } from "./composerStore";
@@ -58,10 +58,14 @@ export function Composer({
   store,
   sceneStore,
   showTokenCounter = true,
+  contextInspector,
 }: {
   store: ComposerStore;
   sceneStore: SceneStore;
   showTokenCounter?: boolean;
+  /** Rendered in the control rail beside Attach, so it never floats over
+   * the canvas HUD (it used to sit on top of the minimap). */
+  contextInspector?: ReactNode;
 }) {
   const composer = useSyncExternalStore(store.subscribe, store.getComposer);
   const streamText = useSyncExternalStore(store.subscribe, store.getStreamText);
@@ -268,6 +272,8 @@ export function Composer({
         >
           <Icon name="attach" />
         </button>
+
+        {contextInspector}
 
         <button
           type="button"

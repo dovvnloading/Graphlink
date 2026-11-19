@@ -1,12 +1,13 @@
+/* Lives in the composer control rail (Composer.tsx's contextInspector slot)
+   and takes the shared .composer-control look. The launcher stays unpositioned
+   so the panel anchors to .composer-dock: it opens upward, right-aligned with
+   the composer at every width, whether or not the control rail has wrapped. */
 .context-inspector-launcher {
-  position: fixed;
-  right: 20px;
-  bottom: 118px;
-  z-index: 30;
+  flex: none;
   font-size: 12px;
   color: var(--gl-surface-text-primary);
 }
-.context-inspector-toggle,
+.context-inspector-toggle[aria-expanded="true"] { background-color: var(--gl-neutral-button-hover); }
 .context-inspector-heading button {
   border: 1px solid var(--gl-surface-border);
   border-radius: 5px;
@@ -15,11 +16,10 @@
   color: inherit;
   cursor: pointer;
 }
-.context-inspector-toggle:disabled { opacity: 0.5; cursor: default; }
 .context-inspector-panel {
   position: absolute;
   bottom: calc(100% + 9px);
-  right: 0;
+  right: 16px;
   width: min(460px, calc(100vw - 34px));
   max-height: min(520px, 67vh);
   overflow: auto;

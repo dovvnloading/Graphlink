@@ -71,7 +71,11 @@ def test_manifest_to_canvas_and_run_for_every_example(session):
         grant(bus, pack)
         node_id = dispatch(bus, "executePlugin", title, None, 110, 90)
         node = document.nodes[node_id]
-        assert (node.x, node.y) == (110, 90)
+        if len(document.nodes) == 1:
+            assert (node.x, node.y) == (110, 90)
+        else:
+            # Same viewport centre, so each later pack steps clear to the right.
+            assert node.y == 90 and node.x > 110
         state = envelope(document, node_id)
         assert state["latest"] is None
         assert [o["id"] for o in state["operations"]] == [o.id for o in operations(pack)]
@@ -81,6 +85,10 @@ def test_manifest_to_canvas_and_run_for_every_example(session):
             assert result["operationId"] == op["id"] and result["provenance"]["packVersion"] == VERSION
             assert result["summary"] == node.content
             assert len(result["provenance"]["resultHash"]) == 64
+    rects = [(n.x, n.y, *document.node_footprint(n)) for n in document.nodes.values()]
+    for index, (ax, ay, aw, ah) in enumerate(rects):
+        for bx, by, bw, bh in rects[index + 1:]:
+            assert ax + aw <= bx or bx + bw <= ax or ay + ah <= by or by + bh <= ay
     assert plan_graph_run(document, list(document.nodes)) == []
     assert register_plugin_tools(ToolRegistry(), registry, settings, document) == ()
     categories = plugins_payload(registry, settings)["categories"]
@@ -159,6 +167,24 @@ def test_unit_conversion_and_data_bounds():
     for invalid_matrix in ([[1], [1, 2]], [[True]], [[1] * 33], [1]):
         with pytest.raises(ValueError):
             run_operation("mathematics", solve, {"matrix": invalid_matrix, "rhs": [1]})
+
+
+def test_described_fields_name_the_sibling_that_sets_their_unit():
+    def described(pack, operation_id):
+        op = next(o for o in operations(pack) if o.id == operation_id)
+        return {f["key"]: f for f in op.describe()["fields"]}
+
+    convert = described("core", "convert_unit")
+    assert convert["value"]["unit_field"] == "from_unit"
+    assert "unit_field" not in convert["from_unit"]
+    # Every advertised setter is a real text input with a usable example value.
+    for pack in PACKS:
+        for op in operations(pack):
+            keys = {f.key: f for f in op.fields}
+            for field in op.describe()["fields"]:
+                if "unit_field" in field:
+                    assert keys[field["unit_field"]].kind == "text"
+                    assert isinstance(op.example.get(field["unit_field"]), str)
 
 
 def test_damaged_receipt_is_visible_and_preserved(session):

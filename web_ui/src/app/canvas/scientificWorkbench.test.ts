@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chartableScienceTypes, compatibleOptions, draftInputs, fieldText, matchesSource, parseInputs, readScienceState, sourceOptions, type ScienceField, type ScienceResult, type ScienceState } from "./scientificWorkbench";
+import { chartableScienceTypes, compatibleOptions, draftInputs, fieldText, formatScienceNumber, matchesSource, parseInputs, readScienceState, sourceOptions, type ScienceField, type ScienceResult, type ScienceState } from "./scientificWorkbench";
 
 const limits = { points: 3, columns: 2, cells: 4, text: 3 };
 function parse(kind: ScienceField["kind"], raw: string) {
@@ -254,5 +254,21 @@ describe("saved Workbench wire safety", () => {
         uncertainty: { ...result.uncertainty, unsupportedOutputs: { answer: { invalid: true } } },
       },
     }))).toBeNull();
+  });
+});
+
+describe("formatScienceNumber", () => {
+  it("drops binary floating-point noise but keeps real precision", () => {
+    expect(formatScienceNumber(50.000837999999995)).toBe("50.000838");
+    expect(formatScienceNumber(0.05000083799999999)).toBe("0.050000838");
+    expect(formatScienceNumber(9.409000000000001e-11)).toBe("9.409e-11");
+    expect(formatScienceNumber(0.6989700043360187)).toBe("0.698970004336");
+    expect(formatScienceNumber(2.681585351992652e-8)).toBe("2.68158535199e-8");
+  });
+
+  it("leaves integers and non-finite values exactly as they are", () => {
+    expect(formatScienceNumber(5400)).toBe("5400");
+    expect(formatScienceNumber(1e21)).toBe("1e+21");
+    expect(formatScienceNumber(Number.NaN)).toBe("NaN");
   });
 });
