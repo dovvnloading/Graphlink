@@ -1,0 +1,19 @@
+[plugin]
+id = "science_phylogenetics"
+name = "Phylogenetics"
+description = "Infer UPGMA and neighbor-joining trees; parse and reroot Newick, compare topologies, measure paths and build consensus trees."
+version = "1.2.0"
+sdk_api_version = 1
+entry_point = "plugin:register"
+
+[scopes]
+grants = ["graph.read", "graph.mutate"]
+
+[frontend]
+view = "generic"
+
+[persistence]
+passive_node_kinds = ["workbench"]
+
+[scientific]
+family = "biology"
