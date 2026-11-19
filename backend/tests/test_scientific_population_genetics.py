@@ -66,6 +66,22 @@ def test_ld_coupling_repulsion_independence_and_complete_association():
     assert "undefined" in fixed["d_prime_signed"] and "undefined" in fixed["r_squared"]
 
 
+def test_ld_unequal_marginals_use_sign_specific_d_prime_bounds():
+    # Both examples have p_A=0.5 and p_B=0.3. For D>0 the upper bound is
+    # min(p_A(1-p_B), (1-p_A)p_B)=0.15; for D<0 the bound is
+    # min(p_A p_B, (1-p_A)(1-p_B))=0.15.
+    coupled = _run("linkage_disequilibrium",
+                   haplotype_counts=[20, 30, 10, 40])["values"]
+    assert coupled["d"] == pytest.approx(0.05)
+    assert coupled["d_prime_signed"] == pytest.approx(1 / 3)
+    assert coupled["r_squared"] == pytest.approx(1 / 21)
+    repulsion = _run("linkage_disequilibrium",
+                     haplotype_counts=[5, 45, 25, 25])["values"]
+    assert repulsion["d"] == pytest.approx(-0.1)
+    assert repulsion["d_prime_signed"] == pytest.approx(-2 / 3)
+    assert repulsion["r_squared"] == pytest.approx(4 / 21)
+
+
 def test_wright_fisher_viability_selection_equation_and_seeded_sampling():
     inputs = dict(population_size=10, initial_a_copies=10, generations=4,
                   fitness_aa=1.2, fitness_ab=1.1, fitness_bb=1, seed=7)
@@ -100,6 +116,22 @@ def test_wright_fisher_neutral_drift_and_absorbing_boundaries():
         result = _run("wright_fisher_drift_selection", **{**neutral, "initial_a_copies": copies})
         assert result["values"]["fixation_generation"] == 0
         assert result["plot"]["y"] == [copies / 6] * 9
+
+
+def test_wright_fisher_fixed_alleles_remain_absorbing_with_extreme_fitness():
+    # Scaling by the largest *unobserved* genotype's fitness can underflow
+    # mean fitness, although fixation or loss must remain an absorbing state.
+    for copies, fitness, frequency in (
+        (0, (1e308, 1e-300, 1e-300), 0),
+        (8, (1e-300, 1e-300, 1e308), 1),
+    ):
+        r = _run("wright_fisher_drift_selection", population_size=4,
+                 initial_a_copies=copies, generations=3,
+                 fitness_aa=fitness[0], fitness_ab=fitness[1],
+                 fitness_bb=fitness[2], seed=7)
+        assert r["values"]["fixation_generation"] == 0
+        assert r["plot"]["y"] == [frequency] * 4
+        assert [row[1] for row in r["table"]["rows"]] == [frequency] * 3
 
 
 def test_heritability_from_variance_components_is_not_a_regression_estimate():
