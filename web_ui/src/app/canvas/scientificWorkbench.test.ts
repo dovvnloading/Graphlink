@@ -382,6 +382,9 @@ describe("saved Workbench wire safety", () => {
       { name: "A", length: -1 }, { name: "B", length: 2 },
     ] } }])).toBeNull();
     expect(read([{ ...tree, tree: { children: [
+      { name: "A", length: null }, { name: "B", length: 2 },
+    ] } }])).toBeNull();
+    expect(read([{ ...tree, tree: { children: [
       { name: "A" }, { name: "B", length: 2 },
     ] } }])).toBeNull();
     expect(read([{ ...tree, tree: { children: [

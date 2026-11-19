@@ -179,12 +179,12 @@ def _phylogenetic_tree(view: dict) -> None:
             if "length" in node or "support" in node:
                 raise ValueError("Root nodes cannot have incoming branch annotations.")
         else:
-            length = node.get("length")
-            if length is not None:
+            if "length" in node:
+                length = node["length"]
                 if not _number(length) or length < 0:
                     raise ValueError("Phylogenetic branch lengths must be finite and nonnegative.")
                 positive_length |= length > 0
-            if view["mode"] == "phylogram" and "length" not in node:
+            elif view["mode"] == "phylogram":
                 raise ValueError("Phylograms require a length on every branch.")
             if "support" in node and (
                 not _number(node["support"]) or not 0 <= node["support"] <= 100

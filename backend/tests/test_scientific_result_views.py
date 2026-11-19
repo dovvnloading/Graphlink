@@ -243,6 +243,9 @@ def test_phylogenetic_views_validate_layouts_and_branch_annotations(layout, mode
     if mode == "cladogram":
         view["tree"]["children"][0].pop("length")
         check_result_views([view])
+        view["tree"]["children"][0]["length"] = None
+        with pytest.raises(ValueError):
+            check_result_views([view])
 
 
 @pytest.mark.parametrize("mutate", [
@@ -253,6 +256,7 @@ def test_phylogenetic_views_validate_layouts_and_branch_annotations(layout, mode
     lambda v: v["tree"].update(children=[]),
     lambda v: v["tree"]["children"][0].update(length=-.1),
     lambda v: v["tree"]["children"][0].update(length=float("nan")),
+    lambda v: v["tree"]["children"][0].update(length=None),
     lambda v: v["tree"]["children"][0].update(support=101),
     lambda v: v["tree"]["children"][0].update(support=True),
     lambda v: v["tree"]["children"][0].update(children=[{"name": "A", "length": 1}]),
