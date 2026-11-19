@@ -1,0 +1,19 @@
+[plugin]
+id = "science_pharmacokinetics"
+name = "Pharmacokinetics"
+description = "Analyze single-dose concentration-time profiles by NCA or one- and two-compartment IV bolus nonlinear fits."
+version = "1.2.0"
+sdk_api_version = 1
+entry_point = "plugin:register"
+
+[scopes]
+grants = ["graph.read", "graph.mutate"]
+
+[frontend]
+view = "generic"
+
+[persistence]
+passive_node_kinds = ["workbench"]
+
+[scientific]
+family = "biology"
