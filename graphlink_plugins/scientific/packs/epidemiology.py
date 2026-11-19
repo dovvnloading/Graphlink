@@ -487,3 +487,9 @@ OPERATIONS = (
                             "https://support.sas.com/documentation/cdl/en/statug/67523/HTML/default/statug_stdrate_details14.htm")),
     ),
 )
+
+
+# Advanced epidemiology extends (rather than renumbers) existing operations.
+from graphlink_plugins.scientific.packs.epidemiology_advanced import OPERATIONS as _ADVANCED_OPERATIONS
+
+OPERATIONS += _ADVANCED_OPERATIONS
