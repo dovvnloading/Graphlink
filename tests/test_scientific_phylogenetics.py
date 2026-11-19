@@ -185,3 +185,100 @@ def test_bounds_on_taxa_forest_and_label_lengths():
         phy.parse_newick({"tree": f"({'X' * 129},B);"})
     with pytest.raises(ValueError):
         phy.consensus_tree({"trees": "(A,B);" * 101, "method": "majority"})
+
+
+def test_newick_unquoted_underscores_are_spaces_but_quoted_underscores_are_literal():
+    # Olsen/Newick 8:45: underscores in unquoted names represent blanks.
+    original = "(A_B,'A_B','A,B','O''Brien');"
+    normalized = phy.parse_newick({"tree": original})["values"]["newick"]
+    assert "'A B'" in normalized
+    assert "'A_B'" in normalized
+    assert "'A,B'" in normalized
+    assert "'O''Brien'" in normalized
+    assert phy._leaves(phy._parse(normalized)) == ("A B", "A,B", "A_B", "O'Brien")
+    assert phy.parse_newick({"tree": normalized})["values"]["newick"] == normalized
+    assert phy.compare_trees({
+        "tree_a": "((A_B,C),(D,E));",
+        "tree_b": "(('A B',C),(D,E));",
+        "mode": "rooted",
+    })["values"]["robinson_foulds"] == 0
+
+
+@pytest.mark.parametrize("tree", ["(A]B,C);", "(A'B,C);"])
+def test_newick_rejects_unquoted_reserved_punctuation(tree):
+    with pytest.raises(ValueError):
+        phy.parse_newick({"tree": tree})
+    assert phy.parse_newick({"tree": "('A]B',C);"})["values"]["taxa_count"] == 2
+
+
+def test_newick_branch_lengths_roundtrip_without_double_precision_loss():
+    length = 1.2345678901234567
+    normalized = phy.parse_newick({"tree": f"(A:{length!r},B:0);"})["values"]["newick"]
+    assert pairs(normalized) == {("A", "B"): length}
+    with pytest.raises(ValueError, match="underflows"):
+        phy.parse_newick({"tree": "(A:1e-999,B:1);"})
+    # A literal zero, including an exponent, remains a valid zero-length edge.
+    assert pairs("(A:0e-999,B:1);") == {("A", "B"): 1.0}
+
+
+@pytest.mark.parametrize("a, b", [(0, 1e-12), (1e-12, 1.1e-12)])
+def test_tiny_asymmetric_distances_are_not_accepted_by_absolute_floor(a, b):
+    for infer in (phy.upgma, phy.neighbor_joining):
+        with pytest.raises(ValueError, match="symmetric"):
+            infer({"taxa": '["A", "B"]', "distances": [[0, a], [b, 0]]})
+    # A genuine relative difference below 1e-10 is allowed at the same scale.
+    phy.upgma({
+        "taxa": '["A", "B"]',
+        "distances": [[0, 1e-12], [1e-12 * (1 + 5e-11), 0]],
+    })
+
+
+def test_inferred_tree_fit_reports_independent_pairwise_distance_residuals():
+    # UPGMA averages cross-cluster distances: fitted AC and BC are both 4.5.
+    input_upgma = [[0, 2, 4], [2, 0, 5], [4, 5, 0]]
+    upgma = phy.upgma({"taxa": '["A", "B", "C"]', "distances": input_upgma})
+    assert upgma["values"]["maximum_absolute_distance_residual"] == pytest.approx(0.5)
+    assert upgma["values"]["root_mean_square_distance_residual"] == pytest.approx(
+        math.sqrt((0.5 ** 2 + 0.5 ** 2) / 3)
+    )
+    assert upgma["values"]["maximum_absolute_distance_residual"] == pytest.approx(
+        max(abs(pairs(upgma["values"]["newick"])[(a, b)] - input_upgma[i][j])
+            for i, a in enumerate("ABC") for j, b in enumerate("ABC") if i < j)
+    )
+
+    # Nonadditive quartet with all *positive* NJ limbs: clipping alone cannot
+    # diagnose incomplete distance reproduction.
+    input_nj = [[0, 3, 4, 5], [3, 0, 6, 6], [4, 6, 0, 2], [5, 6, 2, 0]]
+    nj = phy.neighbor_joining({"taxa": '["A", "B", "C", "D"]', "distances": input_nj})
+    assert nj["values"]["negative_limbs_clipped"] == 0
+    assert nj["values"]["maximum_absolute_distance_residual"] == pytest.approx(0.25)
+    residuals = [
+        pairs(nj["values"]["newick"])[(a, b)] - input_nj[i][j]
+        for i, a in enumerate("ABCD") for j, b in enumerate("ABCD") if i < j
+    ]
+    assert nj["values"]["root_mean_square_distance_residual"] == pytest.approx(
+        math.sqrt(sum(residual ** 2 for residual in residuals) / len(residuals))
+    )
+    for infer in (phy.upgma, phy.neighbor_joining):
+        exact = infer({"taxa": '["A", "B", "C", "D"]', "distances": MATRIX})
+        assert exact["values"]["maximum_absolute_distance_residual"] == pytest.approx(0, abs=1e-12)
+
+
+def test_every_negative_neighbor_joining_limb_is_counted_even_at_tiny_scale():
+    scale = 1e-12
+    nonmetric = [[0, scale, scale], [scale, 0, 10 * scale], [scale, 10 * scale, 0]]
+    result = phy.neighbor_joining({"taxa": '["A", "B", "C"]', "distances": nonmetric})
+    assert result["values"]["negative_limbs_clipped"] == 1
+    assert result["values"]["maximum_absolute_distance_residual"] > 0
+    assert all(distance >= 0 for distance in pairs(result["values"]["newick"]).values())
+
+
+def test_clade_and_split_tables_disambiguate_punctuation_in_taxon_names():
+    tree = "(('A,B',C),(A,'B,C'));"
+    comparison = phy.compare_trees({"tree_a": tree, "tree_b": tree, "mode": "rooted"})
+    names = [row[0] for row in comparison["table"]["rows"]]
+    assert len(names) == len(set(names)) == 2
+    assert any("'A,B'" in name for name in names)
+    assert any("'B,C'" in name for name in names)
+    consensus = phy.consensus_tree({"trees": tree + tree, "method": "strict"})
+    assert len({row[0] for row in consensus["table"]["rows"]}) == 2
