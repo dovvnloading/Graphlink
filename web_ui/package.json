@@ -15,8 +15,9 @@
     "test:e2e": "playwright test",
     "test:e2e:safety": "playwright test --config=playwright.safety.config.ts",
     "lint": "eslint .",
+    "check:paths": "python ../tools/check_case_collisions.py",
     "check:schema": "python ../contracts/codegen.py --check",
-    "check": "npm run check:schema && npm run typecheck && npm run lint && npm run test && npm run build",
+    "check": "npm run check:paths && npm run check:schema && npm run typecheck && npm run lint && npm run test && npm run build",
     "capture:screenshots": "node scripts/capture-screenshots.mjs",
     "capture:gifs": "node scripts/capture-gifs.mjs"
   },

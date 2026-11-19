@@ -155,6 +155,23 @@ jobs:
       - name: mypy (scoped rule set - see pyproject.toml's own [tool.mypy])
         run: python -m mypy
 
+      # The Linux frontend build cannot reveal source-file collisions on NTFS.
+      # Build the production bundle on an actual case-insensitive Windows checkout.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: web_ui/.nvmrc
+          cache: npm
+          cache-dependency-path: web_ui/package-lock.json
+
+      - name: Windows Vite production build (case-insensitive filesystem)
+        working-directory: web_ui
+        run: |
+          npm ci
+          npm run check:paths
+          npm run build
+          # Keep the checkout unbuilt for desktop tests that exercise missing SPA assets.
+          Remove-Item -Recurse -Force dist
+
       - name: Run pytest (with coverage floor - see pyproject.toml's own [tool.coverage])
         run: python -m pytest -q --cov --cov-report=term-missing --ignore=backend/tests/perf
 

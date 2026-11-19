@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import { formatScienceNumber } from "./scientificWorkbench";
-import type { SciencePlateMapView, ScienceResultView, ScienceSurvivalCurveView } from "./scientificResultViews";
+import type { SciencePlateMapView, ScienceResultView, ScienceSurvivalCurveView } from "./scientificViewTypes";
 import "./ScientificResultViews.css";
 
 const ROWS = "ABCDEFGHIJKLMNOP";
