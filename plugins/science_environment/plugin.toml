@@ -2,7 +2,7 @@
 id = "science_environment"
 name = "Environmental Science"
 description = "EPA AQI, plume dispersion, river oxygen, pollutant decay, runoff, FAO-56 evapotranspiration and trends."
-version = "1.1.0"
+version = "1.2.0"
 sdk_api_version = 1
 entry_point = "plugin:register"
 

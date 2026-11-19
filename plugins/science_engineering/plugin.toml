@@ -2,7 +2,7 @@
 id = "science_engineering"
 name = "Engineering"
 description = "Analyze beams, stresses, pipe flow, heat exchangers, transfer functions and PID control alongside circuit and thermal calculations."
-version = "1.1.0"
+version = "1.2.0"
 sdk_api_version = 1
 entry_point = "plugin:register"
 
