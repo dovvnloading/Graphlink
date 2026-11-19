@@ -136,7 +136,7 @@ function Results({ result, title, exportJson, exportCsv, exportMethods, onChart,
           : measurement ? formatMeasurement(measurement) : display(headline[1])}</strong>
       </div> : (table || tableAsset) && <div className="science-result-highlight">
         <span>Result table</span>
-        <strong>{tableRows.toLocaleString()} ${tableRows === 1 ? "row" : "rows"}</strong>
+        <strong>{tableRows.toLocaleString()} {tableRows === 1 ? "row" : "rows"}</strong>
       </div>}
       <p role="status" className={`science-result-summary${longSummary ? " science-result-summary--clamped" : ""}`}>
         {formattedSummary}
