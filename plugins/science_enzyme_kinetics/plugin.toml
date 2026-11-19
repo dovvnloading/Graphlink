@@ -1,7 +1,7 @@
 [plugin]
 id = "science_enzyme_kinetics"
 name = "Enzyme Kinetics"
-description = "Fit competitive, uncompetitive, noncompetitive and mixed inhibition; compare models; calculate kcat, Hill saturation and Cheng-Prusoff Ki."
+description = "Fit enzyme inhibition, binding isotherms, Morrison tight binding, Schild antagonism and thermal-shift Tm; calculate kcat, Hill saturation and Cheng-Prusoff Ki."
 version = "1.2.0"
 sdk_api_version = 1
 entry_point = "plugin:register"
