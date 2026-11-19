@@ -41,9 +41,9 @@
 .science-volcano svg { display: block; width: 100%; height: auto; overflow: visible; }
 .science-volcano-axis { fill: currentColor; font: 10px sans-serif; }
 .science-volcano-point { stroke: var(--gl-surface-window); stroke-width: .65; }
-.science-volcano-up { fill: #227ba5; background: #227ba5; }
-.science-volcano-down { fill: #ce623a; background: #ce623a; }
-.science-volcano-other { fill: #767d84; background: #767d84; }
+.science-volcano-up { fill: var(--gl-status-info); background: var(--gl-status-info); }
+.science-volcano-down { fill: var(--gl-status-danger); background: var(--gl-status-danger); }
+.science-volcano-other { fill: var(--gl-surface-text-secondary); background: var(--gl-surface-text-secondary); }
 .science-volcano-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px;
   list-style: none; margin: 0; padding: 0; font-size: .83em; }
 .science-volcano-legend li { display: inline-flex; align-items: center; gap: 6px; }
