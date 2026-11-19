@@ -28,7 +28,7 @@ Source concordance: [Physics/Engineering SI and published oracles](SCIENTIFIC_QU
 
 ### Biology — 11 operations
 
-Sources: [Biology reference and numeric oracles](SCIENTIFIC_BIOLOGY_REFERENCE.md), Hurlbert (1971), Chao (1984), original Michaelis–Menten/logistic/Gompertz/HWE/KM/logrank equations and standard NLS covariance.
+Sources: [Biology reference and numeric oracles](biology/biology.md), Hurlbert (1971), Chao (1984), original Michaelis–Menten/logistic/Gompertz/HWE/KM/logrank equations and standard NLS covariance.
 
 | Operation | Formula and output units audited | Finding |
 | --- | --- | --- |

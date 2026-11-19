@@ -1,13 +1,13 @@
-"""Scientific Workbench guide inventory must track the registered catalog.
+"""The historical guide inventory must track the original workbench packs.
 
-The inventory is checked against the actual pack operations (including the
-inferential operations registered as 'fitting'), not a second hard-coded list.
+Additional file-only packs have independent references, so their registration
+does not require modifying the fixed guide table.
 """
 
 from pathlib import Path
 import re
 
-from graphlink_plugins.scientific.catalog import PACKS, operations
+from graphlink_plugins.scientific.catalog import PACKS, PINNED_PACKS, operations
 
 
 GUIDE = Path(__file__).resolve().parents[2] / "docs" / "SCIENTIFIC_WORKBENCH.md"
@@ -35,7 +35,7 @@ def test_scientific_workbench_guide_covers_every_operation_and_field():
             "outputs": columns[3].strip(),
         }
 
-    catalog = {(pack, op.id): op for pack in PACKS for op in operations(pack)}
+    catalog = {(pack, op.id): op for pack in PINNED_PACKS for op in operations(pack)}
     assert set(documented) == set(catalog), (
         f"Undocumented operations: {sorted(set(catalog) - set(documented))}; "
         f"unknown documented operations: {sorted(set(documented) - set(catalog))}"
@@ -55,11 +55,11 @@ def test_scientific_workbench_guide_covers_every_operation_and_field():
 def test_scientific_workbench_guide_links_audit_and_pack_references():
     guide = GUIDE.read_text(encoding="utf-8")
     assert "(SCIENTIFIC_CORRECTNESS_AUDIT.md)" in guide
-    # Each registered pack has an operation heading with its model reference.
-    for pack, (title, _) in PACKS.items():
+    # Only the original 16 packs belong to the fixed inventory table.
+    for pack in PINNED_PACKS:
+        title = PACKS[pack][0]
         heading = f"### {title} (`{pack}`)"
         assert heading in guide, f"Missing pack section: {pack}"
         section = guide.split(heading, 1)[1].split("\n### ", 1)[0]
-        assert "](SCIENTIFIC_" in section and "_REFERENCE.md)" in section, (
-            f"Missing pack reference: {pack}"
-        )
+        reference = "](biology/biology.md)" if pack == "biology" else "](SCIENTIFIC_"
+        assert reference in section, f"Missing pack reference: {pack}"

@@ -14,3 +14,6 @@ view = "generic"
 
 [persistence]
 passive_node_kinds = ["workbench"]
+
+[scientific]
+family = "biology"
