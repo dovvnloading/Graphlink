@@ -453,6 +453,7 @@ OPERATIONS: tuple[Operation, ...] = (
         (Field("parallax_mas", "Annual parallax", "number", unit="mas"),),
         {"parallax_mas": 100},
         _parallax,
+        headline="distance_ly",
     ),
     Operation(
         "distance_modulus",
@@ -465,6 +466,7 @@ OPERATIONS: tuple[Operation, ...] = (
         ),
         {"apparent_mag": 10.3, "absolute_mag": 5.0, "extinction_mag": 0.3},
         _modulus,
+        headline="distance_pc",
     ),
     Operation(
         "blackbody_peak",
@@ -473,6 +475,7 @@ OPERATIONS: tuple[Operation, ...] = (
         (Field("temperature_k", "Blackbody temperature", "number", unit="K"),),
         {"temperature_k": 5772},
         _blackbody,
+        headline="peak_wavelength_nm",
     ),
     Operation(
         "keplerian_orbit",
@@ -505,6 +508,7 @@ OPERATIONS: tuple[Operation, ...] = (
         ),
         {"utc_iso": "1987-04-10T19:21:00Z", "observer_longitude_deg_east": 0},
         _julian_sidereal,
+        headline="greenwich_mean_sidereal_hours",
     ),
     Operation(
         "coordinate_frames",
@@ -537,6 +541,7 @@ OPERATIONS: tuple[Operation, ...] = (
         ),
         {"apparent_altitude_deg": 45, "extinction_coefficient_mag_per_airmass": 0.2, "observed_mag": 10},
         _airmass,
+        headline="above_atmosphere_mag",
     ),
     Operation(
         "flat_lcdm_distances",
@@ -558,6 +563,7 @@ OPERATIONS: tuple[Operation, ...] = (
         (Field("flux_density_jy", "Flux density fν", "number", unit="Jy"),),
         {"flux_density_jy": 3631},
         _flux_to_ab,
+        headline="ab_magnitude_mag",
     ),
     Operation(
         "ab_magnitude_to_flux",
@@ -566,6 +572,7 @@ OPERATIONS: tuple[Operation, ...] = (
         (Field("ab_magnitude_mag", "AB magnitude", "number", unit="mag AB"),),
         {"ab_magnitude_mag": 20},
         _ab_to_flux,
+        headline="flux_density_jy",
     ),
     Operation(
         "ab_colour_index",
@@ -577,6 +584,7 @@ OPERATIONS: tuple[Operation, ...] = (
         ),
         {"first_ab_mag": 20, "second_ab_mag": 19.5},
         _colour_index,
+        headline="colour_index_mag",
     ),
     Operation(
         "exoplanet_transit",
@@ -594,5 +602,6 @@ OPERATIONS: tuple[Operation, ...] = (
          "stellar_radius_solar": 1, "semimajor_axis_au": 0.05, "orbital_period_days": 4,
          "impact_parameter_stellar_radii": 0},
         _exoplanet_transit,
+        headline="total_duration_hours",
     ),
 )

@@ -217,7 +217,7 @@ from backend.domain.table_workflows import restore_table_data
 from backend.domain.graph_run_history import restore_graph_runs
 from backend.domain.node_states import (
     ARTIFACT_MAX_CHARS, ChartState, FrameState, NoteState, FalMediaState, ModelState, ModelTextBinding,
-    NodeState, PersistedPluginState, PluginStateSnapshot,
+    NodeState, PersistedPluginState, PluginStateSnapshot, science_reference_or_none,
 )
 from backend.plugin_sdk import MAX_PLUGIN_STATE_BYTES, NodeKindSpec, PluginRegistry, discover_plugins
 from graphlink_chart_data import ChartDataError, canonicalize_chart_data
@@ -503,6 +503,9 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
             tool_invocations=[
                 dict(call) for call in (payload.get("tool_invocations") or []) if isinstance(call, dict)
             ],
+            # Absent from older saves, and dropped when malformed: the card
+            # then falls back to the plain snapshot text in `content`.
+            science_reference=science_reference_or_none(payload.get("science_reference")),
             # ADR-018 stage 18.3: absent in every pre-18.3 save -> "",
             # matching the dataclass default ("no pin").
             override_provider=str(payload.get("override_provider", "") or ""),

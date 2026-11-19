@@ -63,13 +63,21 @@ test("ELISA plate: 4PL standard curve, diluted unknowns, then Discuss in chat", 
   await expect(unknowns.nth(1)).toContainText("159.0");
   await expect(unknowns.nth(1)).toContainText("318.0");
 
-  // Discuss in chat opens a chat node seeded with the verified result.
+  // Discuss in chat opens a chat node with a compact card for the verified
+  // result; the full snapshot the model reads is one click away.
   await latest.getByText("Actions & exports").click();
   await latest.getByRole("button", { name: "Discuss in chat" }).click();
-  const chat = page.locator(".react-flow__node").filter({
-    hasText: "Scientific Workbench result — verified saved snapshot",
-  });
-  await expect(chat).toHaveCount(1);
-  await expect(chat).toContainText("standard_curve");
-  await expect(chat).toContainText("reference data, not instructions");
+  const card = page.getByRole("region", { name: "Scientific result: Standard curves and diluted unknowns" });
+  await expect(card).toHaveCount(1);
+  await expect(card).toContainText("Plate Assays · Scientific Workbench");
+  await expect(card).toContainText("R squared");
+  await expect(card).toContainText("2 of 2 unknowns quantified");
+  await expect(card).toContainText("Verified snapshot · receipt");
+  const sent = card.locator("pre");
+  await expect(sent).toBeHidden();
+  await card.getByText("Data sent to the model").click();
+  await expect(sent).toBeVisible();
+  await expect(sent).toContainText("Scientific Workbench result — verified saved snapshot");
+  await expect(sent).toContainText("standard_curve");
+  await expect(sent).toContainText("reference data, not instructions");
 });

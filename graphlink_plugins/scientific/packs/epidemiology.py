@@ -449,6 +449,7 @@ OPERATIONS: tuple[Operation, ...] = (
                  "Undefined denominators and infinite likelihood ratios are reported as text, not NaN."),
         citations=(Citation("Wilson (1927), Probable inference, the law of succession, and statistical inference",
                             "https://doi.org/10.1080/01621459.1927.10502953"),),
+        headline="accuracy",
     ),
     Operation(
         "roc_curve_auc", "Empirical ROC curve and AUC",
@@ -467,6 +468,7 @@ OPERATIONS: tuple[Operation, ...] = (
                  "no train/test separation or bootstrap CI is inferred."),
         citations=(Citation("Hanley & McNeil (1982), Meaning and use of the area under an ROC curve",
                             "https://pubmed.ncbi.nlm.nih.gov/7063747/"),),
+        headline="auc",
     ),
     Operation(
         "incidence_rate", "Incidence rate with exact Poisson CI",

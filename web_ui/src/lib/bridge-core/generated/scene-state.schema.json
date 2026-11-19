@@ -1419,6 +1419,51 @@
             "default": false,
             "type": "boolean"
           },
+          "scienceReference": {
+            "additionalProperties": false,
+            "default": null,
+            "properties": {
+              "headlineKey": {
+                "type": "string"
+              },
+              "headlineValueJson": {
+                "type": "string"
+              },
+              "operationId": {
+                "type": "string"
+              },
+              "operationTitle": {
+                "type": "string"
+              },
+              "packId": {
+                "type": "string"
+              },
+              "packTitle": {
+                "type": "string"
+              },
+              "receiptHash": {
+                "type": "string"
+              },
+              "resultHash": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "packId",
+              "packTitle",
+              "operationId",
+              "operationTitle",
+              "summary",
+              "headlineKey",
+              "headlineValueJson",
+              "resultHash",
+              "receiptHash"
+            ],
+            "type": "object"
+          },
           "synthesisInstructions": {
             "default": "",
             "type": "string"

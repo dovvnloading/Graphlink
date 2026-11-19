@@ -90,6 +90,7 @@ OPERATIONS: tuple[Operation, ...] = (
         (Field("resistance_ohm", "Resistances", "vector", unit="Ω", description="Zero represents an ideal short."),),
         {"resistance_ohm": [100, 200, 300]},
         _resistance,
+        headline="parallel_ohm",
     ),
     Operation(
         "rc_step",
@@ -705,5 +706,6 @@ OPERATIONS += (
         {"plant_gain_1": 1, "plant_tau_s": 2, "kp_1": 2, "ki_per_s": 1,
          "kd_s": 0.2, "setpoint_1": 1, "time_s": [0, 0.2, 0.5, 1, 2, 3, 5, 8, 12]},
         pid_closed_loop,
+        headline="closed_loop_damping_ratio_1",
     ),
 )

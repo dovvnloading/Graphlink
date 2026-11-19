@@ -288,6 +288,10 @@ def _serialize_chat_node(raw_node: SceneNode) -> dict[str, Any]:
         # boundary in graph.py's scene_payload()), so the saved session file
         # keeps it structured too.
         "tool_invocations": [dict(call) for call in node.state.tool_invocations],
+        # Discuss in chat: the result card's verified source summary.
+        "science_reference": (
+            dict(node.state.science_reference) if node.state.science_reference else None
+        ),
         # ADR-018 stage 18.3: the model pin - survives save/load like
         # provider/model above, but is the opposite direction (input
         # routing, not output provenance) - see ChatState's own comment.

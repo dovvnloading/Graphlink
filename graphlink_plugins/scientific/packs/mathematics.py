@@ -137,6 +137,7 @@ OPERATIONS = (
         ),
         {"coefficients": [1, -2, 1], "points": [-2, -1, 0, 1, 2, 3]},
         _polynomial,
+        headline="samples",
     ),
     Operation(
         "trapezoid",
@@ -145,6 +146,7 @@ OPERATIONS = (
         (Field("x", "Sample coordinates", "vector"), Field("y", "Measured values", "vector")),
         {"x": [0, 0.5, 1, 2], "y": [1, 2, 3, 5]},
         _integrate,
+        headline="integral",
     ),
     Operation(
         "linear_system",
@@ -153,5 +155,6 @@ OPERATIONS = (
         (Field("matrix", "Coefficient matrix A", "matrix"), Field("rhs", "Right-hand side b", "vector")),
         {"matrix": [[2, 1], [1, -1]], "rhs": [5, 1]},
         _solve,
+        headline="max_absolute_residual",
     ),
 )

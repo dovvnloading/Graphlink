@@ -507,6 +507,46 @@ describe("ChatNodeView Branch from Here (ADR-002 Workstream 1)", () => {
   });
 });
 
+describe("ChatNodeView Discuss in chat result card", () => {
+  const snapshot = "Scientific Workbench result — verified saved snapshot\nResult JSON:\n{\"values\": {\"r_squared\": 0.99998}}";
+  const reference = {
+    packId: "plate_assays", packTitle: "Plate Assays", operationId: "standard_curve",
+    operationTitle: "Standard curves and diluted unknowns",
+    summary: "4PL standard curve fitted to 7 standards; 2 of 2 unknowns quantified.",
+    headlineKey: "r_squared", headlineValueJson: "0.999984123",
+    resultHash: "f8ef2bd8b5d87c8f", receiptHash: "2bc2674106ebade3bc929bb0",
+  };
+
+  it("shows the verified result as a compact card and keeps the model's data on demand", async () => {
+    const user = userEvent.setup();
+    renderChatNode({ isUser: true, content: snapshot, scienceReference: reference });
+    const card = screen.getByRole("region", { name: "Scientific result: Standard curves and diluted unknowns" });
+    expect(card).toHaveTextContent("Plate Assays · Scientific Workbench");
+    expect(screen.getByTitle("r_squared")).toHaveTextContent("R squared");
+    expect(card).toHaveTextContent("0.999984");
+    expect(card).toHaveTextContent("2 of 2 unknowns quantified");
+    expect(screen.getByText(/Verified snapshot/)).toHaveTextContent("Verified snapshot · receipt 2bc26741");
+    // The raw snapshot is not the visible message body.
+    expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
+    const sent = screen.getByText("Data sent to the model");
+    expect(sent.closest("details")).not.toHaveAttribute("open");
+    await user.click(sent);
+    expect(sent.closest("details")).toHaveAttribute("open");
+    expect(card.querySelector("pre")).toHaveTextContent("Result JSON:");
+  });
+
+  it("omits the headline when the operation declares none and keeps ordinary messages unchanged", () => {
+    const { rerenderWithData } = renderChatNode({
+      isUser: true, content: snapshot, scienceReference: { ...reference, headlineKey: "", headlineValueJson: "" },
+    });
+    expect(screen.queryByTitle("r_squared")).toBeNull();
+    expect(screen.getByRole("region", { name: /Scientific result/ })).toHaveTextContent("2 of 2 unknowns quantified");
+    rerenderWithData({ isUser: true, content: "Hello **world**", scienceReference: null });
+    expect(screen.queryByRole("region", { name: /Scientific result/ })).toBeNull();
+    expect(screen.getByText("world").tagName).toBe("STRONG");
+  });
+});
+
 // ADR-002 Workstream 1 ("Synthesize Branches"): the result node's own
 // provenance badge/label - both absent for every ordinary chat node (the
 // vast majority), rendered only when the node actually carries them.

@@ -555,5 +555,5 @@ OPERATIONS = (
                Field("left_slope", "Left endpoint first derivative (clamped)", "number"),
                Field("right_slope", "Right endpoint first derivative (clamped)", "number")),
               {"x": [0, 1, 2], "y": [0, 1, 2], "queries": [.5, 1.5],
-               "boundary": "natural", "left_slope": 0.0, "right_slope": 0.0}, _spline),
+               "boundary": "natural", "left_slope": 0.0, "right_slope": 0.0}, _spline, headline="estimated_roundoff_error"),
 )

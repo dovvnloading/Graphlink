@@ -96,6 +96,7 @@ OPERATIONS: tuple[Operation, ...] = (
         ),
         {"dry_mass_g": 37.5, "bulk_volume_cm3": 15},
         bulk_density,
+        headline="bulk_density_g_cm3",
     ),
     Operation(
         "tensile_response",
@@ -717,6 +718,7 @@ OPERATIONS += (
          Field("constant_geometry_factor_y", "Constant geometry factor Y", "number", unit="1")),
         {"fracture_toughness_mpa_sqrt_m": 40, "applied_tensile_stress_mpa": 300,
          "constant_geometry_factor_y": 1}, critical_crack_length,
+        headline="critical_crack_length_a_m",
     ),
     Operation(
         "paris_crack_growth", "Integrate Paris-law fatigue crack growth",
@@ -774,6 +776,7 @@ OPERATIONS += (
         {"e140_table": "table1_non_austenitic_hrc", "from_scale": "HRC", "to_scale": "HV",
          "hardness_reading": 38}, hardness_e140,
         reference_datasets=_hardness_reference_datasets,
+        headline="converted_hardness_hv",
     ),
     Operation(
         "arrhenius_diffusion_profile", "Compute Arrhenius diffusion and Fick II profile",

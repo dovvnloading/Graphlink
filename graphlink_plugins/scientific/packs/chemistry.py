@@ -87,6 +87,7 @@ OPERATIONS: tuple[Operation, ...] = (
         ),
         {"absorbance": 0.36, "molar_absorptivity": 12000, "path_length_cm": 1},
         beer_lambert,
+        headline="concentration_mol_l",
     ),
     Operation(
         "transmission_spectrum",
@@ -98,6 +99,7 @@ OPERATIONS: tuple[Operation, ...] = (
         ),
         {"wavelength_nm": [400, 450, 500, 550], "transmission_percent": [80, 50, 10, 70]},
         transmission_spectrum,
+        headline="peak_absorbance",
     ),
     Operation(
         "isotope_average",
@@ -110,6 +112,7 @@ OPERATIONS: tuple[Operation, ...] = (
         ),
         {"isotope_mass_u": [34.96885, 36.96590], "abundance_percent": [75.76, 24.24]},
         isotope_average,
+        headline="mean_atomic_mass_u",
     ),
 )
 
@@ -783,6 +786,7 @@ OPERATIONS += (
         {"temperature_k": [290, 300, 310, 320],
          "rate_constant": [0.00095, 0.00164, 0.00274, 0.00447], "rate_constant_unit": "s^-1"},
         arrhenius_fit,
+        headline="activation_energy_kj_mol",
     ),
     Operation(
         "rate_law_fit", "First/second-order integrated rate-law fit",
@@ -842,6 +846,7 @@ OPERATIONS += (
          Field("final_volume_ml", "Final solution volume", "number", unit="mL")),
         {"stock_concentration_mol_l": 2, "aliquot_volume_ml": 10, "final_volume_ml": 100},
         solution_dilution,
+        headline="diluent_volume_ml",
     ),
     Operation(
         "reaction_yield", "Limiting reagent and percent product yield",

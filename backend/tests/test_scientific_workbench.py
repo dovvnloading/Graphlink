@@ -237,20 +237,24 @@ def test_choice_fields_and_operation_metadata_are_validated_at_the_python_bounda
     assert "methods" not in operations("core")[0].describe()
 
 
-def test_declared_headlines_name_a_displayable_value_of_the_operation_result():
-    """A workbench node leads with the declared headline, so it must be a scalar
-    in the operation's real output, not a typo that silently falls back."""
-    declared = 0
+def test_every_operation_declares_a_displayable_headline():
+    """Workbench nodes and Discuss-in-chat cards lead with the declared
+    headline, so it must be a scalar in the operation's real output, not a
+    typo that silently falls back."""
+    # convert_unit's only value is keyed by the requested unit, e.g. "value (K)".
+    undeclared = set()
     for pack in PACKS:
         for op in operations(pack):
             if not op.headline:
                 assert "headline" not in op.describe()
+                undeclared.add(op.id)
                 continue
-            declared += 1
             assert op.describe()["headline"] == op.headline
+            if any(field.kind == "table" for field in op.fields):
+                continue  # Needs a connected typed table; there is no standalone example.
             value = run_operation(pack, op, op.example)["values"].get(op.headline)
             assert isinstance(value, (int, float, str)) and not isinstance(value, bool), (pack, op.id, value)
-    assert declared >= 140
+    assert undeclared == {"convert_unit"}
     with pytest.raises(ValueError, match="headline"):
         Operation("bad", "Bad", "", (), {}, lambda _: {}, headline=1)
 
@@ -1118,6 +1122,53 @@ def test_discuss_scientific_result_opens_undoable_chat_with_verified_snapshot(se
     assert chat_id in document.nodes
     assert document.last_chat_node_id == chat_id
     assert next(iter(document.edges.values())).role == "reference"
+    # convert_unit declares no headline (its value key names the unit).
+    reference = document.nodes[chat_id].state.science_reference
+    assert reference["operationTitle"] == operations("core")[1].title
+    assert reference["headlineKey"] == "" and reference["headlineValueJson"] == ""
+
+
+def test_discussion_card_reference_is_verified_on_the_wire_and_survives_save_load(session):
+    from backend.api.intents_nodes import register_node_intents
+    from backend.domain.node_states import SCIENCE_REFERENCE_KEYS, science_reference_or_none
+    from contracts.graphlink_scene_payload import ScienceReferenceRow
+    from dataclasses import fields
+
+    document, bus, registry, settings = session
+    register_node_intents(bus, document, None)
+    grant(bus, "statistics")
+    source_id = dispatch(bus, "executePlugin", "Statistics")
+    describe = operations("statistics")[0]
+    assert run(bus, "statistics", source_id, "describe", describe.example)["ok"]
+    latest = envelope(document, source_id)["latest"]
+    receipt = latest["provenance"]
+
+    chat_id = asyncio.run(bus.dispatch_intent(
+        "scene", "discussScientificResult", [source_id, receipt["resultHash"], receipt["receiptHash"]],
+    ))
+    chat = document.nodes[chat_id]
+    assert chat.state.science_reference == {
+        "packId": "statistics", "packTitle": PACKS["statistics"][0],
+        "operationId": "describe", "operationTitle": describe.title, "summary": latest["summary"],
+        "headlineKey": "mean", "headlineValueJson": json.dumps(latest["values"]["mean"]),
+        "resultHash": receipt["resultHash"], "receiptHash": receipt["receiptHash"],
+    }
+    assert chat.title == f"{describe.title} result"
+    # The model still reads the complete verified snapshot, not the card.
+    assert receipt["receiptHash"] in chat.content and latest["summary"] in chat.content
+    row = next(node for node in document.scene_payload()["nodes"] if node["id"] == chat_id)
+    assert row["scienceReference"] == chat.state.science_reference
+    assert set(SCIENCE_REFERENCE_KEYS) == {item.name for item in fields(ScienceReferenceRow)}
+
+    saved = build_chat_data(document, plugin_registry=registry, settings_manager=settings)
+    restore_chat_into_document(document, {"data": saved}, [], [], plugin_registry=registry, settings_manager=settings)
+    # Loading renumbers nodes; the source stays linked by the reference edge.
+    restored_chat = next(node for node in document.nodes.values() if node.kind == "chat")
+    assert restored_chat.state.science_reference == row["scienceReference"]
+    # A hand-edited save must not fail the scene: a malformed card is dropped.
+    for damaged in (None, [], {"packId": "statistics"}, {**row["scienceReference"], "summary": 3},
+                    {**row["scienceReference"], "extra": "x"}):
+        assert science_reference_or_none(damaged) is None
 
 
 def test_discuss_scientific_result_rejects_stale_or_damaged_receipts_without_mutating(session):

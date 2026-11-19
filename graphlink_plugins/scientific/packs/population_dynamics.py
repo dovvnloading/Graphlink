@@ -396,5 +396,6 @@ OPERATIONS = (
                      "Biometrika 33:183–212",
                      "https://doi.org/10.1093/biomet/33.3.183"),
         ),
+        headline="asymptotic_growth_factor_per_step",
     ),
 )

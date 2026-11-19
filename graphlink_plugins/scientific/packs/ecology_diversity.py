@@ -298,5 +298,6 @@ OPERATIONS: tuple[Operation, ...] = (
             "Gotelli & Colwell (2001), Quantifying Biodiversity: Procedures and Pitfalls, Ecology Letters 4:379–391",
             "https://doi.org/10.1046/j.1461-0248.2001.00230.x",
         ),),
+        headline="expected_richness_all_samples",
     ),
 )

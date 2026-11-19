@@ -23,6 +23,7 @@ from backend.domain.node_access import optional_node
 from backend.domain.node_states import CodeSandboxState, HarnessState
 from backend.events import SessionBus
 from graphlink_scratch_dirs import HARNESS_WORKSPACE_ROOT, remove_scratch_dir_for_id
+from graphlink_plugins.scientific.catalog import PACKS, operations
 from graphlink_plugins.scientific.core import readable_result
 from graphlink_plugins.scientific.methods import render_result_methods
 
@@ -64,6 +65,27 @@ def _science_discussion_context(source_id: str, result: dict) -> str:
     return heading + "Result excerpts (inspect the source Workbench for complete data):\n" + "\n".join(sections)
 
 
+def _science_reference(pack: str, result: dict) -> dict[str, str]:
+    """The chat card's summary of a verified result (ChatState.science_reference).
+
+    Titles come from the live catalog; an operation a newer version removed
+    keeps its id as the title and simply shows no headline."""
+    receipt = result["provenance"]
+    operation = next((op for op in operations(pack) if op.id == result["operationId"]), None)
+    value = result["values"].get(operation.headline) if operation and operation.headline else None
+    scalar = isinstance(value, (int, float, str)) and not isinstance(value, bool)
+    return {
+        "packId": pack,
+        "packTitle": PACKS[pack][0],
+        "operationId": result["operationId"],
+        "operationTitle": operation.title if operation else result["operationId"],
+        "summary": result["summary"],
+        "headlineKey": operation.headline if scalar else "",
+        "headlineValueJson": json.dumps(value, ensure_ascii=False) if scalar else "",
+        "resultHash": receipt["resultHash"],
+        "receiptHash": receipt.get("receiptHash", receipt["resultHash"]),
+    }
+
 
 def _create_scientific_discussion(
     document: SceneDocument, source_node_id: str,
@@ -86,10 +108,14 @@ def _create_scientific_discussion(
         raise SceneError("The scientific result changed. Review the current run before discussing it.")
 
     context = _science_discussion_context(source_node_id, result)
+    reference = _science_reference(pack, result)
 
     def create_chat():
         x, y = document.place_child(source_node_id, "chat", prefer="right")
         chat = document.add_chat_node(x, y, context, is_user=True)
+        # The model reads `context`; people see a compact card built from this.
+        chat.state.science_reference = reference
+        chat.title = f"{reference['operationTitle']} result"
         # A visible provenance link, NOT a structural chat ancestor:
         # the chat's own snapshot contains the result exactly once.
         edge = document.connect(source_node_id, chat.id)

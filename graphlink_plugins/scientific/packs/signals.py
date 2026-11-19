@@ -601,6 +601,7 @@ OPERATIONS = (
         ),
         {"samples": [2, 3, 8, 4, 3, 5, 7], "window": 3},
         moving_average,
+        headline="windows",
     ),
     Operation(
         "amplitude_spectrum",
@@ -628,6 +629,7 @@ OPERATIONS = (
         ),
         {"coordinates": [0, 2, 3.5], "samples": [1, 5, 2], "targets": [0, 1, 2, 2.5, 3.5]},
         linear_resample,
+        headline="observations",
     ),
 
     Operation(
@@ -682,6 +684,7 @@ OPERATIONS = (
          "sample_times_s": [i / 64 for i in range(64)],
          "filter_type": "lowpass", "order": 4, "cutoff_hz": [8]},
         butterworth_filter,
+        headline="cutoff_hz",
     ),
     Operation(
         "savitzky_golay",
@@ -697,6 +700,7 @@ OPERATIONS = (
         {"samples": [0, 1, 4, 9, 16, 25, 36], "sample_times_s": list(range(7)),
          "window_samples": 5, "polynomial_order": 2},
         savitzky_golay,
+        headline="output_samples",
     ),
     Operation(
         "detect_peaks",

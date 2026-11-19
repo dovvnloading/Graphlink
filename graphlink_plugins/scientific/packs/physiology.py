@@ -430,6 +430,7 @@ OPERATIONS = (
         nernst_potential,
         methods="Nernst E = RT/(zF) ln(Cout/Cin); ideal activities; voltage is inside minus outside.",
         citations=_CITES[2:3],
+        headline="equilibrium_potential_mv",
     ),
     Operation(
         "ghk_potential", "Goldman–Hodgkin–Katz potential",
@@ -526,5 +527,6 @@ OPERATIONS = (
         fick_diffusion,
         methods="Steady Fick J=-D(Cright-Cleft)/L; transferred mol=J A duration.",
         citations=_CITES[3:],
+        headline="flux_mol_m2_s",
     ),
 )

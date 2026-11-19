@@ -91,7 +91,7 @@ _SYMBOLS = (
 OPERATIONS = (
     Operation("numeric_csv", "Import numeric CSV", "Read comma-separated measurements with a header row.",
               (Field("csv", "CSV measurements", "text", description="Quoted headers and blank lines are accepted. Integer counts must be exactly representable."),),
-              {"csv": "Time (s),Distance (m)\n0,0\n1,2\n2,4"}, _numeric_csv),
+              {"csv": "Time (s),Distance (m)\n0,0\n1,2\n2,4"}, _numeric_csv, headline="rows"),
     Operation("convert_unit", "Convert a measurement", "Convert compatible SI dimensions, compound and prefixed units, and affine temperatures.",
               (Field("value", "Measured value", "number"), Field("from_unit", "Source unit", "text", description=_SYMBOLS),
                Field("to_unit", "Destination unit", "text", description=_SYMBOLS)),
@@ -99,5 +99,5 @@ OPERATIONS = (
     Operation("plot_xy", "Plot paired samples", "Connect measured samples in their original sequence.",
               (Field("x", "Horizontal coordinates", "vector"), Field("y", "Vertical coordinates", "vector"),
                Field("x_label", "Horizontal axis with units", "text"), Field("y_label", "Vertical axis with units", "text")),
-              {"x": [0, 1, 2], "y": [0, 2, 4], "x_label": "Time (s)", "y_label": "Distance (m)"}, _plot),
+              {"x": [0, 1, 2], "y": [0, 2, 4], "x_label": "Time (s)", "y_label": "Distance (m)"}, _plot, headline="samples"),
 )

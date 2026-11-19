@@ -434,6 +434,7 @@ OPERATIONS: tuple[Operation, ...] = (
         methods="Haldane 1919: −50 ln(1−2r); Kosambi 1944: 25 ln[(1+2r)/(1−2r)] in cM.",
         citations=(Citation("BatchMap: Haldane and Kosambi mapping functions",
                             "https://rdrr.io/cran/BatchMap/man/map_func.html"),),
+        headline="haldane_distance_cm",
     ),
     Operation(
         "three_point_cross", "Three-point testcross and interference",
@@ -444,6 +445,7 @@ OPERATIONS: tuple[Operation, ...] = (
         methods="Complementary parental and DCO pair inference; recombination fractions include DCO twice.",
         citations=(Citation("OpenStax Biology: Chromosomal theory and genetic linkage",
                             "https://openstax.org/books/biology-2e/pages/13-1-chromosomal-theory-and-genetic-linkage"),),
+        headline="coefficient_of_coincidence",
     ),
     Operation(
         "two_point_lod", "Two-point linkage LOD profile",
