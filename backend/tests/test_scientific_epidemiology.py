@@ -161,7 +161,7 @@ def test_empirical_roc_auc_independent_pairwise_oracle_ties_direction_and_thresh
     assert oracle == pytest.approx(5 / 6)
     assert v["values"]["auc"] == pytest.approx(oracle)
     rows = v["table"]["rows"]
-    assert rows[0][3:5] == [0, 0]
+    assert rows[0][3:6] == [0, 0, 0]
     assert rows[-1][3:5] == [1, 1]
     assert len(rows) == len(set(scores)) + 1
     assert v["values"]["best_youden_threshold"] == .55
@@ -177,6 +177,7 @@ def test_empirical_roc_auc_independent_pairwise_oracle_ties_direction_and_thresh
     assert len(all_ties["table"]["rows"]) == 2
     # A non-discriminating ROC has no positive J; the (0,0) origin is the
     # first/most stringent maximizer, not an arbitrary observed-score cutoff.
+    assert all_ties["table"]["rows"][0][-1] == 0
     assert all_ties["values"]["best_youden_j"] == 0
     assert all_ties["values"]["best_youden_threshold"] == "No predicted positives"
     inverted = _run("roc_curve_auc", scores=[4, 3, 2, 1],
