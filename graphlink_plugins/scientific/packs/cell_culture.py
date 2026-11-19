@@ -624,9 +624,14 @@ def doubling_time(data: dict) -> dict:
     elapsed = _positive(data, "elapsed_time")
     time_unit = _unit_label(data["time_unit"])
     abundance_unit = _unit_label(data["abundance_unit"])
-    log_increase = math.log(after) - math.log(before)
-    if log_increase <= 0:
+    if after <= before:
         raise ValueError("Doubling time requires a measurable increase in abundance.")
+    # log(N2) - log(N1) loses the entire growth signal when two large
+    # abundances differ by only a few ULPs. Use log1p for near-unity ratios
+    # without forming N2/N1 (which could overflow for widely separated data).
+    increase = after - before
+    log_increase = (math.log1p(increase / before) if increase <= before
+                    else math.log(after) - math.log(before))
     rate = _checked(log_increase / elapsed, "Specific growth rate")
     estimate = _checked(math.log(2) / rate, "Doubling time")
     return {
