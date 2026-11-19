@@ -5,7 +5,7 @@ Each biology pack has its own reference page and its own explicit Settings → P
 ## Pack references
 
 - [Biology and Ecology](biology.md) — community surveys, ecological modelling, growth and enzyme fits, genetics, survival and biodiversity (`science_biology`).
-- [Plate Assays](plate_assays.md) — 96/384-well assay layouts, linear/quadratic/4PL/5PL calibration, back-calculated diluted unknowns, Z′-factor, signal window and %CV (`science_plate_assays`).
+- [Plate Assays](plate_assays.md) — 96/384-well assay layouts, linear/quadratic/4PL/5PL calibration, back-calculated diluted unknowns, qPCR standard curves and ΔΔCt/Pfaffl multi-reference normalization, digital PCR Poisson quantification, A260 nucleic-acid purity, Z′-factor and %CV (`science_plate_assays`).
 - [Cell Culture](cell_culture.md) — hemocytometer viability, 96/384-well plate maps, CFU plate counts, MPN, growth-curve fits, doubling time, seeding, serial dilutions and centrifuge conversion (`science_cell_culture`).
 - [Enzyme Kinetics](enzyme_kinetics.md) — reversible inhibition, binding isotherms, Morrison tight-binding fits, Schild analysis, thermal-shift Tm, turnover and Hill saturation (`science_enzyme_kinetics`).
 - [Genetics](genetics.md) — Mendelian segregation, exact Hardy–Weinberg, map distances, testcrosses, LOD scores, F-statistics, linkage disequilibrium, Wright–Fisher drift/selection, heritability and effective population size (`science_genetics`).

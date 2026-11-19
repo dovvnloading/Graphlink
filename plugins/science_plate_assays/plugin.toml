@@ -1,7 +1,7 @@
 [plugin]
 id = "science_plate_assays"
 name = "Plate Assays"
-description = "Map 96/384-well assay plates, calibrate standards from linear to 5PL, quantify diluted unknowns and evaluate assay quality."
+description = "Analyze plate assays, qPCR standard curves and expression, digital PCR Poisson copies, and A260 nucleic-acid purity."
 version = "1.2.0"
 sdk_api_version = 1
 entry_point = "plugin:register"
