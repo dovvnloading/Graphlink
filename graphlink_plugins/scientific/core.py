@@ -385,13 +385,22 @@ def check_artifact(data: dict) -> None:
         if (not columns or len(columns) > TABLE_MAX_COLUMNS or len(rows) > TABLE_MAX_ROWS
                 or len(rows) * len(columns) > TABLE_MAX_CELLS):
             raise ValueError("Result table exceeds 100,000 rows, 256 columns or 1,000,000 cells.")
-        if not all(isinstance(c, str) and 0 < len(c) <= 256 for c in columns):
-            raise ValueError("Table headers must be nonempty text of at most 256 characters.")
+        legacy_inline = (len(columns) <= MAX_COLUMNS and len(rows) <= MAX_POINTS
+                         and len(rows) * len(columns) <= MAX_CELLS)
+        # Do not retrospectively invalidate pre-existing small-table receipts,
+        # whose headers/cells were constrained by the 512 KiB result limit.
+        if not all(isinstance(c, str) for c in columns):
+            raise ValueError("Table headers must be text.")
+        if not legacy_inline and not all(0 < len(c) <= 256 for c in columns):
+            raise ValueError("Typed table headers must be nonempty text of at most 256 characters.")
         for row in rows:
             if not isinstance(row, list) or len(row) != len(columns):
                 raise ValueError("Result table contains a row with the wrong number of cells.")
             for cell in row:
-                if isinstance(cell, str):
+                if legacy_inline:
+                    if not isinstance(cell, str):
+                        finite(cell, "Table cell")
+                elif isinstance(cell, str):
                     if len(cell) > 65_536:
                         raise ValueError("Result table cells may not exceed 65,536 characters.")
                 elif cell is not None and type(cell) is not bool:
@@ -444,7 +453,7 @@ def calculate_result(pack: str, operation: Operation, inputs: dict, sources: dic
         if table is not None and (
                 len(table["rows"]) > MAX_POINTS or len(table["columns"]) > MAX_COLUMNS
                 or len(table["rows"]) * len(table["columns"]) > MAX_CELLS
-                or len(canonical_bytes(output)) > MAX_RESULT_BYTES - 32 * 1024):
+                or len(canonical_bytes(output)) > MAX_RESULT_BYTES):
             from .data_table import stage_result_table
             metadata = stage_result_table(table, pack=pack, operation_id=operation.id)
             output = {**{key: value for key, value in output.items() if key != "table"},
