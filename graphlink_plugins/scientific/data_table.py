@@ -8,6 +8,8 @@ rehydrates this cache. The graph and scene wire carry only bounded metadata.
 from __future__ import annotations
 
 import base64
+import os
+import threading
 import binascii
 import csv
 import hashlib
@@ -16,6 +18,7 @@ import json
 import math
 import re
 import tempfile
+from collections import OrderedDict
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -39,6 +42,11 @@ _REF = re.compile(r"[0-9a-f]{64}")
 _STAGING_DIR = tempfile.TemporaryDirectory(prefix="graphlink-scientific-")
 _STAGING = AssetStore(Path(_STAGING_DIR.name))
 _WORKER_STORE: ContextVar[AssetStore | None] = ContextVar("scientific_table_worker_store", default=None)
+_CSV_DIR = tempfile.TemporaryDirectory(prefix="graphlink-scientific-csv-")
+_CSV_CACHE: OrderedDict[str, Path] = OrderedDict()
+_CSV_LOCK = threading.Lock()
+CSV_CHUNK_BYTES = 192 * 1024
+CSV_MAX_BYTES = 256 * 1024 * 1024
 
 
 def table_store_root() -> str:
@@ -244,6 +252,87 @@ def parse_table(source: bytes, *, fmt: str = "csv", missing: list[str] | None = 
     }
 
 
+
+def stage_result_table(table: dict, *, pack: str, operation_id: str) -> dict:
+    """Store a generated table with the same typed schema as an imported dataset.
+
+    Output values are already typed Python data: never guess that a *string*
+    containing digits is numeric. Mixed-type columns are represented as text.
+    The source hash protects the original output before normalization.
+    """
+    headers, original_rows = table["columns"], table["rows"]
+    if not original_rows:
+        raise ValueError("A generated typed table needs at least one row.")
+    if len(set(headers)) != len(headers) or any(
+        not label.strip() or "\\r" in label or "\\n" in label for label in headers
+    ):
+        raise ValueError("Generated table headers must be distinct, nonempty names.")
+    columns: list[dict] = []
+    rows = [list(row) for row in original_rows]
+    for index, label in enumerate(headers):
+        name, unit = split_column_header(label)
+        present = [row[index] for row in rows if row[index] is not None]
+        if present and all(type(value) in (int, float) for value in present):
+            kind = "numeric"
+            if any(type(value) is int and abs(value) > 2**53 - 1 for value in present):
+                raise ValueError("Generated numeric table contains an inexact integer count.")
+        elif present and all(type(value) is bool for value in present):
+            kind = "boolean"
+        elif present and all(isinstance(value, str) for value in present):
+            if all(_is_iso_datetime(value) for value in present):
+                kind = "datetime"
+            else:
+                distinct = len(set(present))
+                kind = ("categorical" if distinct < len(present)
+                        and distinct <= min(64, max(2, len(present) // 5)) else "text")
+        else:
+            kind = "text"
+            for row in rows:
+                value = row[index]
+                if value is not None and not isinstance(value, str):
+                    row[index] = ("true" if value is True else "false" if value is False
+                                  else str(value))
+        missing_count = sum(row[index] is None for row in rows)
+        columns.append({"name": name, "label": label, "unit": unit,
+                        "type": kind, "missingCount": missing_count})
+    payload = {"version": 1, "columns": columns, "rows": rows}
+    encoded = canonical_bytes(payload)
+    if len(encoded) > TABLE_MAX_ASSET_BYTES:
+        raise ValueError("The generated table asset exceeds 128 MiB.")
+    ref = (_WORKER_STORE.get() or _STAGING).put(encoded)
+    receipt = {
+        "fileHash": fingerprint(table),
+        "parseOptions": {"source": "operation", "packId": pack, "operationId": operation_id},
+        "tableHash": ref,
+    }
+    receipt["receiptHash"] = fingerprint(receipt)
+    return {
+        "version": 1, "asset_ref": ref, "mime_type": "application/json",
+        "rowCount": len(rows), "columnCount": len(columns), "columns": columns,
+        "previewColumns": min(len(columns), 8),
+        "preview": [[(value[:80] + "…" if isinstance(value, str) and len(value) > 80 else value)
+                     for value in row[:8]] for row in rows[:8]],
+        "sourceName": f"{pack}.{operation_id} result"[:128],
+        "provenance": receipt,
+    }
+
+
+def _is_iso_datetime(value: str) -> bool:
+    try:
+        return _datetime(value) == value
+    except ValueError:
+        return False
+
+
+def _tables_in_state(data: dict) -> list[dict]:
+    tables = []
+    if "table" in data:
+        tables.append(data["table"])
+    latest = data.get("latest")
+    if isinstance(latest, dict) and "tableAsset" in latest:
+        tables.append(latest["tableAsset"])
+    return tables
+
 def table_metadata_valid(data: object) -> bool:
     if not isinstance(data, dict):
         return False
@@ -286,34 +375,37 @@ def table_metadata_valid(data: object) -> bool:
 
 
 def stage_from_saved(data: dict) -> None:
-    """Copy verified imported bytes from the session's restore store to staging."""
+    """Restore both imported and generated tables from the workspace asset store."""
     from backend.session_load import _ACTIVE_ASSET_STORE
     store = _ACTIVE_ASSET_STORE.get()
-    table = data.get("table")
-    if store is not None and isinstance(table, dict) and table_metadata_valid(table):
-        raw = store.get(table["asset_ref"], max_bytes=TABLE_MAX_ASSET_BYTES)
-        if raw is not None:
-            _STAGING.put(raw)
+    if store is None:
+        return
+    for table in _tables_in_state(data):
+        if table_metadata_valid(table):
+            raw = store.get(table["asset_ref"], max_bytes=TABLE_MAX_ASSET_BYTES)
+            if raw is not None:
+                _STAGING.put(raw)
 
 
 def persist_table(data: dict) -> dict:
-    """Called only from serialize_saved, inside session_save's active store."""
-    table = data.get("table")
-    if table is None:
+    """Persist every verified table asset in the active session asset store."""
+    tables = _tables_in_state(data)
+    if not tables:
         return data
-    if not table_metadata_valid(table):
-        raise OSError("Scientific table metadata has a damaged import receipt.")
     from backend.session_save import _ACTIVE_SAVE_ASSET_STORE
     store = _ACTIVE_SAVE_ASSET_STORE.get()
     if store is None:
         raise OSError("Saving a scientific table requires the workspace asset store.")
-    ref = table["asset_ref"]
-    raw = _STAGING.get(ref, max_bytes=TABLE_MAX_ASSET_BYTES)
-    if raw is not None:
-        if store.put(raw) != ref:
-            raise OSError("Scientific table asset digest changed during save.")
-    elif not store.verify(ref):
-        raise OSError("The scientific table asset is unavailable; restore it before saving.")
+    for table in tables:
+        if not table_metadata_valid(table):
+            raise OSError("Scientific table metadata has a damaged receipt.")
+        ref = table["asset_ref"]
+        raw = _STAGING.get(ref, max_bytes=TABLE_MAX_ASSET_BYTES)
+        if raw is not None:
+            if store.put(raw) != ref:
+                raise OSError("Scientific table asset digest changed during save.")
+        elif not store.verify(ref):
+            raise OSError("The scientific table asset is unavailable; restore it before saving.")
     return data
 
 
@@ -351,6 +443,73 @@ def read_table(meta: dict) -> dict:
     except (TypeError, ValueError, KeyError, OverflowError):
         raise ValueError("The scientific table asset is damaged.") from None
     return table
+
+
+
+def table_csv_chunk(meta: dict, offset: int = 0) -> dict:
+    """Export *all* typed rows in bounded binary CSV pages, never a wire-sized table.
+
+    The verified table is converted once to a temporary CSV file per content
+    digest. Paging uses byte offsets, so even Unicode and very long quoted
+    cells round-trip without splitting a CSV record at transport boundaries.
+    """
+    if type(offset) is not int or offset < 0:
+        raise ValueError("CSV offset must be a nonnegative integer.")
+    if not table_metadata_valid(meta):
+        raise ValueError("The scientific table receipt is damaged.")
+    ref = meta["asset_ref"]
+    with _CSV_LOCK:
+        file = _CSV_CACHE.get(ref)
+        if file is None:
+            table = read_table(meta)
+            file = Path(_CSV_DIR.name) / (ref + ".csv")
+            temporary: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", newline="", dir=_CSV_DIR.name,
+                    suffix=".tmp", delete=False,
+                ) as handle:
+                    temporary = Path(handle.name)
+                    writer = csv.writer(handle, lineterminator="\\r\\n")
+                    writer.writerow([col["label"] for col in meta["columns"]])
+                    for row in table["rows"]:
+                        writer.writerow([_csv_cell(value) for value in row])
+                if temporary.stat().st_size > CSV_MAX_BYTES:
+                    raise ValueError("The CSV export exceeds 256 MiB.")
+                os.replace(temporary, file)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+            _CSV_CACHE[ref] = file
+            if len(_CSV_CACHE) > 2:
+                _, old_file = _CSV_CACHE.popitem(last=False)
+                old_file.unlink(missing_ok=True)
+        else:
+            _CSV_CACHE.move_to_end(ref)
+        total = file.stat().st_size
+        if offset > total:
+            raise ValueError("The CSV offset is beyond the end of the table.")
+        with file.open("rb") as source:
+            source.seek(offset)
+            part = source.read(CSV_CHUNK_BYTES)
+    next_offset = offset + len(part)
+    return {
+        "chunk": base64.b64encode(part).decode("ascii"),
+        "nextOffset": next_offset, "totalBytes": total, "done": next_offset == total,
+    }
+
+
+def _csv_cell(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        # Match the browser's CSV formula-injection defense.
+        return "'" + value if re.match(r"^(?:[\\t\\r\\n]|\\s*[=+@-])", value) else value
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    return str(value)
 
 
 def numeric_column(meta: dict, column: int, missing_policy: str = "reject",
