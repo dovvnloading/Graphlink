@@ -42,11 +42,11 @@ def main() -> int:
     paths = tracked_paths()
     conflicts = case_collisions(paths)
     if conflicts:
-        print("Git-tracked paths collide on case-insensitive filesystems:", file=sys.stderr)
+        sys.stderr.write("Git-tracked paths collide on case-insensitive filesystems:\n")
         for conflict in conflicts:
-            print("  " + "  <->  ".join(conflict), file=sys.stderr)
+            sys.stderr.write("  " + "  <->  ".join(conflict) + "\n")
         return 1
-    print(f"Checked {len(paths)} Git-tracked paths for case-insensitive collisions.")
+    sys.stdout.write(f"Checked {len(paths)} Git-tracked paths for case-insensitive collisions.\n")
     return 0
 
 
