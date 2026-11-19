@@ -793,6 +793,11 @@ export class SceneStore {
     this.transport.fireIntent("scene", "deleteChatNode", [id]);
   }
 
+  /** The server reads and checks the result receipt; never send browser-owned result JSON. */
+  discussScientificResult(nodeId: string, resultHash: string, receiptHash = resultHash): void {
+    this.transport.fireIntent("scene", "discussScientificResult", [nodeId, resultHash, receiptHash]);
+  }
+
   // R3.5: real code nodes - deletion has no dedicated intent (code nodes are
   // never branch points/reparented, so the generic removeNodes intent below
   // already covers it).
