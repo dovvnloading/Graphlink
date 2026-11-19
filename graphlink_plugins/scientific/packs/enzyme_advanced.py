@@ -264,7 +264,13 @@ def _morrison_prediction(x, theta):
     # inhibitor and active enzyme are nearly equal and Ki is very small.
     disc = math.sqrt((1 - x) ** 2 + ki * (2 * (1 + x) + ki))
     bound = 2 * x / (total + disc)
-    free = 1 - bound
+    # Free enzyme is the positive root of
+    # free**2 + (x - 1 + ki)*free - ki = 0.
+    # 1-bound loses a finite free fraction for ultratight inhibitors near or
+    # above stoichiometric dosing. Rationalize the positive root for x>=1-ki.
+    offset = x - 1 + ki
+    free = (2 * ki / (disc + offset) if offset >= 0
+            else (disc - offset) / 2)
     return bottom + delta * free, [1, delta * free, delta * bound * ki / disc]
 
 
