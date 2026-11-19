@@ -31,7 +31,7 @@ Given known concentrations \(x_i\) and observed signals \(y_i\), the models mini
 | Model | Equation | Minimum paired standards |
 | --- | --- | --- |
 | linear | \(y=a+bx\) | 2, at least 2 distinct concentrations |
-| quadratic | \(y=a+bx+cx^2\) | 3, at least 2 distinct concentrations, monotone in range |
+| quadratic | \(y=a+bx+cx^2\) | 3, at least 3 distinct concentrations, monotone in range |
 | 4pl | \(y=d+(a-d)/(1+(x/c)^b)\) | 6, at least 5 distinct **positive** concentrations |
 | 5pl | \(y=d+(a-d)/(1+(x/c)^b)^g\) | 7, at least 6 distinct **positive** concentrations |
 
