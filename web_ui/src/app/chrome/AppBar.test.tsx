@@ -1,5 +1,6 @@
 import { ReactFlowProvider } from "@xyflow/react";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import * as download from "../canvas/downloadTextFile";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { AppBar } from "./AppBar";
@@ -84,6 +85,43 @@ describe("AppBar", () => {
     const spy = vi.spyOn(store, "saveChat");
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(spy).toHaveBeenCalledOnce();
+  });
+
+  it("downloads the server-verified workspace methods Markdown from the overflow menu", async () => {
+    const user = userEvent.setup();
+    const store = makeStore();
+    const methods = "# Graphlink workspace — scientific methods\n\n## Result\n";
+    const request = vi.spyOn(store, "exportWorkspaceMethods").mockResolvedValue(methods);
+    const saved = vi.spyOn(download, "downloadBlob").mockImplementation(() => {});
+    try {
+      renderAppBar(store);
+      await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
+      const action = await within(screen.getByRole("dialog")).findByRole("button", { name: "Export methods" });
+      await user.click(action);
+      await waitFor(() => expect(saved).toHaveBeenCalledOnce());
+      expect(request).toHaveBeenCalledOnce();
+      expect(saved.mock.calls[0][1]).toBe("graphlink-workspace-methods.md");
+      expect(await saved.mock.calls[0][0].text()).toBe(methods);
+      expect(screen.queryByRole("dialog")).toBeNull();
+    } finally {
+      saved.mockRestore();
+    }
+  });
+
+  it("shows a workspace methods export failure instead of downloading anything", async () => {
+    const user = userEvent.setup();
+    const store = makeStore();
+    vi.spyOn(store, "exportWorkspaceMethods").mockRejectedValue(new Error("A receipt is damaged."));
+    const saved = vi.spyOn(download, "downloadBlob").mockImplementation(() => {});
+    try {
+      renderAppBar(store);
+      await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
+      await user.click(await within(screen.getByRole("dialog")).findByRole("button", { name: "Export methods" }));
+      expect(await within(screen.getByRole("dialog")).findByRole("alert")).toHaveTextContent("A receipt is damaged.");
+      expect(saved).not.toHaveBeenCalled();
+    } finally {
+      saved.mockRestore();
+    }
   });
 
   it("Settings toggles real overlay-open state, not latched click state (audit B6)", async () => {
