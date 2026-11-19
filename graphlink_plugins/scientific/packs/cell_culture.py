@@ -265,6 +265,350 @@ def centrifuge_rcf_rpm(data: dict) -> dict:
     }
 
 
+def plate_count_cfu(data: dict) -> dict:
+    """Pooled CFU/mL estimate from colony counts and original-sample exposure."""
+    counts = _counts(data["colony_counts"], "Colony counts")
+    dilutions = data["reciprocal_dilutions"]
+    if len(counts) != len(dilutions):
+        raise ValueError("Colony counts and reciprocal dilutions must have equal lengths.")
+    if any(not math.isfinite(d) or d < 1 for d in dilutions):
+        raise ValueError("Reciprocal dilution factors must be finite and at least 1.")
+    volume = _positive(data, "plated_volume_ml")
+
+    # A plate at reciprocal dilution D samples volume/D mL of original material.
+    # Pool exposures rather than averaging per-plate CFU/mL, which would give
+    # tiny exposures the same weight as plates with much greater exposure.
+    exposures = [_checked(volume / d, "Original-sample plate exposure") for d in dilutions]
+    if any(v <= 0 for v in exposures):
+        raise ValueError("A plate's original-sample exposure underflows the numeric range.")
+    total_exposure = _checked(sum(exposures), "Total original-sample exposure")
+    total = sum(counts)
+    estimate = _checked(total / total_exposure, "CFU concentration")
+    resolution = _checked(1 / total_exposure, "Single-colony concentration increment")
+    countable = sum(30 <= count <= 300 for count in counts)
+    rows = [
+        [i, count, factor, volume, exposure,
+         _checked(count / exposure, "Per-plate CFU concentration"),
+         "30–300" if 30 <= count <= 300 else "outside 30–300"]
+        for i, (count, factor, exposure) in enumerate(zip(counts, dilutions, exposures), 1)
+    ]
+    note = ("Zero colonies observed; 0 is the estimate, not proof of absence."
+            if not total else
+            f"{countable} of {len(counts)} plates are within the indicative 30–300 colony range.")
+    return {
+        "summary": (
+            f"Pooled plate-count estimate: {estimate:.6g} CFU/mL from {total} colonies "
+            f"across {len(counts)} plates (equivalent to {total_exposure:.6g} mL "
+            f"of undiluted sample). {note} Colony counting assumes independent "
+            "recoverable colony-forming units, not a count of individual cells."
+        ),
+        "values": {
+            "plates_counted": len(counts),
+            "colonies_counted": total,
+            "plates_in_30_to_300_range": countable,
+            "original_sample_exposure_ml": total_exposure,
+            "plated_volume_ml_per_plate": volume,
+            "cfu_per_ml": estimate,
+            "single_colony_increment_cfu_per_ml": resolution,
+            "concentration_unit": "CFU/mL",
+            "volume_unit": "mL",
+            "method": "pooled colony count / total original-sample exposure",
+        },
+        "table": {
+            "columns": [
+                "Plate", "Colonies (CFU)", "Reciprocal dilution",
+                "Plated (mL)", "Original sample (mL)",
+                "Estimated CFU/mL", "Indicative countable range",
+            ],
+            "rows": rows,
+        },
+    }
+
+
+def _mpn_score(relative_exposures: list[float], positives: list[int],
+               totals: list[int], scaled_concentration: float) -> float:
+    """Derivative of Poisson presence/absence log-likelihood, scaled by max exposure."""
+    terms = []
+    for exposure, positive, total in zip(relative_exposures, positives, totals):
+        z = scaled_concentration * exposure
+        # exposure/expm1(z) avoids catastrophic cancellation near zero. The
+        # Taylor limit avoids underflow when scaled dilutions are extremely small.
+        if not positive:
+            pos_term = 0.0
+        elif z < 1e-6:
+            pos_term = positive * (
+                1 / scaled_concentration - exposure / 2
+                + scaled_concentration * exposure * exposure / 12
+            )
+        elif z > 700:
+            pos_term = 0.0
+        else:
+            pos_term = positive * exposure / math.expm1(z)
+        terms.append(pos_term - (total - positive) * exposure)
+    return math.fsum(terms)
+
+
+def most_probable_number(data: dict) -> dict:
+    """Poisson MPN/mL from positive/total tubes at specified reciprocal dilutions."""
+    positives = _counts(data["positive_tubes"], "Positive tubes")
+    totals = _counts(data["total_tubes"], "Total tubes")
+    dilutions = data["reciprocal_dilutions"]
+    if len(positives) != len(totals) or len(positives) != len(dilutions):
+        raise ValueError("MPN positive, total and dilution vectors must have equal lengths.")
+    if any(total == 0 or positive > total for positive, total in zip(positives, totals)):
+        raise ValueError("Each dilution needs at least one tube and no more positives than total tubes.")
+    if sum(totals) > _MAX_EXACT_COUNT:
+        raise ValueError("Total MPN tubes exceed the exact-count limit (2^53 - 1).")
+    if any(not math.isfinite(d) or d < 1 for d in dilutions):
+        raise ValueError("Reciprocal dilutions must be finite and at least 1.")
+    if any(a >= b for a, b in zip(dilutions, dilutions[1:])):
+        raise ValueError("MPN reciprocal dilutions must increase strictly from level to level.")
+    volume = _positive(data, "inoculum_volume_ml")
+    exposures = [_checked(volume / d, "MPN original-sample exposure") for d in dilutions]
+    if any(exposure <= 0 for exposure in exposures):
+        raise ValueError("MPN tube exposure underflows the numeric range.")
+
+    observed_positive, observed_total = sum(positives), sum(totals)
+    if observed_positive == observed_total:
+        raise ValueError(
+            "Every MPN tube is positive; the Poisson estimate has no finite maximum. "
+            "Include a higher dilution with negative tubes."
+        )
+
+    if observed_positive == 0:
+        estimate = scaled = 0.0
+        probabilities = [0.0] * len(exposures)
+        note = "All tubes were negative: zero is the maximum-likelihood estimate, not proof of absence."
+    else:
+        # Write theta = concentration * max(original-sample exposure). Solving
+        # in theta keeps the likelihood stable for small inocula/dilutions.
+        maximum = max(exposures)
+        relative = [exposure / maximum for exposure in exposures]
+        if any(exposure <= 0 for exposure in relative):
+            raise ValueError("MPN dilution range is too wide for finite-precision fitting.")
+        lo, hi = 0.0, 1.0
+        while _mpn_score(relative, positives, totals, hi) > 0:
+            hi *= 2
+            if not math.isfinite(hi):
+                raise ValueError("MPN estimate exceeds the supported numeric range.")
+        for _ in range(180):
+            midpoint = lo + (hi - lo) / 2
+            if midpoint == lo or midpoint == hi:
+                break
+            if _mpn_score(relative, positives, totals, midpoint) > 0:
+                lo = midpoint
+            else:
+                hi = midpoint
+        scaled = lo + (hi - lo) / 2
+        estimate = _checked(scaled / maximum, "MPN concentration")
+        probabilities = [-math.expm1(-scaled * exposure) for exposure in relative]
+        note = "Poisson maximum-likelihood estimate; uncertainty and sampling assumptions matter."
+
+    rows = [
+        [i, factor, positive, total, exposure, probability,
+         _checked(total * probability, "Expected positive tubes")]
+        for i, (factor, positive, total, exposure, probability) in enumerate(
+            zip(dilutions, positives, totals, exposures, probabilities), 1
+        )
+    ]
+    return {
+        "summary": (
+            f"Most probable number: {estimate:.6g} MPN/mL from "
+            f"{observed_positive}/{observed_total} positive tubes across "
+            f"{len(dilutions)} dilution levels. {note}"
+        ),
+        "values": {
+            "mpn_per_ml": estimate,
+            "concentration_unit": "MPN/mL",
+            "dilution_levels": len(dilutions),
+            "positive_tubes": observed_positive,
+            "negative_tubes": observed_total - observed_positive,
+            "total_tubes": observed_total,
+            "inoculum_volume_ml_per_tube": volume,
+            "volume_unit": "mL",
+            "model": "independent Poisson presence/absence maximum likelihood",
+        },
+        "table": {
+            "columns": [
+                "Level", "Reciprocal dilution", "Positive tubes", "Total tubes",
+                "Original sample per tube (mL)", "Fitted positive probability",
+                "Expected positive tubes",
+            ],
+            "rows": rows,
+        },
+    }
+
+
+def growth_curve_parameters(data: dict) -> dict:
+    """Fit a three-parameter modified Gompertz curve to ln(N/N0)."""
+    time_unit = _unit_label(data["time_unit"])
+    abundance_unit = _unit_label(data["abundance_unit"])
+    time, abundance = data["time"], data["abundance"]
+    if len(time) != len(abundance) or not 6 <= len(time) <= 120:
+        raise ValueError("Growth-curve fitting requires 6–120 paired measurements.")
+    if any(value <= 0 for value in abundance):
+        raise ValueError("Growth-curve abundance must be strictly positive for natural logarithms.")
+    pairs = sorted(zip(time, abundance))
+    if any(b[0] <= a[0] for a, b in zip(pairs, pairs[1:])):
+        raise ValueError("Growth-curve measurement times must be distinct.")
+    times, counts = [p[0] for p in pairs], [p[1] for p in pairs]
+    start = times[0]
+    span = _checked(times[-1] - start, "Growth-curve time range")
+    if span <= 0:
+        raise ValueError("Growth-curve time range must be positive.")
+    normalized_time = [(t - start) / span for t in times]
+    log_counts = [math.log(n) for n in counts]
+    response = [value - log_counts[0] for value in log_counts]
+    amplitude = max(response)
+    if amplitude <= 0 or response[-1] <= 0:
+        raise ValueError("Growth fitting needs a net increase in abundance.")
+    slopes = [
+        (b - a) / (tx2 - tx1)
+        for a, b, tx1, tx2 in zip(response, response[1:], normalized_time, normalized_time[1:])
+    ]
+    peak_rate = max(slopes)
+    if peak_rate <= 0 or sum(slopes[-2:]) / 2 >= 0.9 * peak_rate:
+        raise ValueError(
+            "A lag/asymptote fit needs data approaching a plateau, "
+            "not only an increasing exponential-phase series."
+        )
+
+    # The modified Gompertz parameterization makes mu the maximum derivative
+    # of ln(N/N0), and lag the intersection of its inflection tangent with
+    # the zero-growth baseline. Normalizing the time axis aids conditioning.
+    peak_index = max(range(len(slopes)), key=lambda i: slopes[i])
+    inflection_guess = (normalized_time[peak_index] + normalized_time[peak_index + 1]) / 2
+    guesses = [
+        [amplitude * a, peak_rate * rate,
+         inflection_guess - amplitude * a / (math.e * peak_rate * rate)]
+        for a, rate in ((1.05, 1), (1.3, 0.7), (1.02, 1.6))
+    ]
+    from graphlink_plugins.scientific.packs.biology import _multi_nls
+
+    fitted, parameters, errors = _multi_nls(
+        "A*exp(-exp(1+mu*exp(1)*(lag-x)/A))",
+        ["A", "mu", "lag"], guesses,
+        [(1e-10, None), (1e-10, None), (None, None)],
+        normalized_time, response,
+    )
+    a, mu, lag = parameters["A"], parameters["mu"], parameters["lag"]
+    maximum_rate = _checked(mu / span, "Maximum specific growth rate")
+    lag_time = _checked(start + lag * span, "Lag time")
+    lag_duration = _checked(lag * span, "Lag duration")
+    def abundance_from_log(log_value: float, label: str) -> float:
+        try:
+            number = math.exp(log_value)
+        except OverflowError:
+            raise ValueError(f"{label} exceeds the supported numeric range.") from None
+        if number == 0:
+            raise ValueError(f"{label} underflows the supported numeric range.")
+        return _checked(number, label)
+
+    asymptote = abundance_from_log(log_counts[0] + a, "Asymptotic abundance")
+    doubling = _checked(math.log(2) / maximum_rate, "Fastest instantaneous doubling time")
+
+    def predicted_log(x: float) -> float:
+        exponent = 1 + mu * math.e * (lag - x) / a
+        return a * math.exp(-math.exp(exponent)) if exponent < 700 else 0.0
+
+    predicted = [
+        abundance_from_log(log_counts[0] + predicted_log(x), "Fitted abundance")
+        for x in normalized_time
+    ]
+    residuals = [obs - model for obs, model in zip(log_counts,
+                                                     (math.log(n) for n in predicted))]
+    sse = fitted["values"]["weighted_residual_sum_squares"]
+    average_log = math.fsum(response) / len(response)
+    total_ss = math.fsum((v - average_log) ** 2 for v in response)
+    r_squared = 1 - sse / total_ss
+    note = ("The lag-time tangent intercept is extrapolated before the first sample."
+            if lag < 0 else
+            "Lag is the fitted tangent intercept, not an observed onset of growth.")
+    return {
+        "summary": (
+            f"Modified Gompertz fit: lag={lag_time:.6g} {time_unit}, "
+            f"maximum specific growth rate={maximum_rate:.6g} 1/{time_unit}, "
+            f"asymptote={asymptote:.6g} {abundance_unit}; fastest instantaneous "
+            f"doubling time={doubling:.6g} {time_unit}. {note}"
+        ),
+        "values": {
+            "model": "modified Gompertz of ln(N/N0), unweighted least squares",
+            "observations": len(times),
+            "baseline_abundance": counts[0],
+            "abundance_unit": abundance_unit,
+            "lag_time": lag_time,
+            "lag_duration_from_first_sample": lag_duration,
+            "lag_time_standard_error": _checked(errors["lag"] * span, "Lag standard error"),
+            "lag_time_unit": time_unit,
+            "maximum_specific_growth_rate": maximum_rate,
+            "maximum_specific_growth_rate_standard_error": _checked(
+                errors["mu"] / span, "Growth-rate standard error"
+            ),
+            "growth_rate_unit": f"1/{time_unit}",
+            "asymptote_abundance": asymptote,
+            "asymptote_log_ratio": a,
+            "asymptote_log_ratio_standard_error": errors["A"],
+            "asymptote_unit": abundance_unit,
+            "doubling_time_at_max_growth": doubling,
+            "doubling_time_unit": time_unit,
+            "residual_sum_squares_log": sse,
+            "r_squared_log": r_squared,
+            "degrees_of_freedom": fitted["values"]["degrees_of_freedom"],
+        },
+        "table": {
+            "columns": [
+                f"Time ({time_unit})", f"Observed ({abundance_unit})",
+                f"Fitted ({abundance_unit})", "Ln(observed / fitted)",
+            ],
+            "rows": [
+                [t, observed, model, residual]
+                for t, observed, model, residual in zip(times, counts, predicted, residuals)
+            ],
+        },
+        "plot": {
+            "title": "Modified Gompertz growth curve",
+            "xLabel": f"Time ({time_unit})", "yLabel": f"Abundance ({abundance_unit})",
+            "x": times, "y": predicted,
+        },
+    }
+
+
+def doubling_time(data: dict) -> dict:
+    """Two-point exponential-phase doubling time from the log growth ratio."""
+    before = _positive(data, "initial_abundance")
+    after = _positive(data, "final_abundance")
+    elapsed = _positive(data, "elapsed_time")
+    time_unit = _unit_label(data["time_unit"])
+    abundance_unit = _unit_label(data["abundance_unit"])
+    log_increase = math.log(after) - math.log(before)
+    if log_increase <= 0:
+        raise ValueError("Doubling time requires a measurable increase in abundance.")
+    rate = _checked(log_increase / elapsed, "Specific growth rate")
+    estimate = _checked(math.log(2) / rate, "Doubling time")
+    return {
+        "summary": (
+            f"Exponential-phase doubling time: {estimate:.6g} {time_unit} "
+            f"({rate:.6g} 1/{time_unit}) from {before:.6g} to {after:.6g} "
+            f"{abundance_unit} over {elapsed:.6g} {time_unit}. "
+            "Assumes exponential growth between the two measurements."
+        ),
+        "values": {
+            "initial_abundance": before,
+            "final_abundance": after,
+            "abundance_unit": abundance_unit,
+            "elapsed_time": elapsed,
+            "time_unit": time_unit,
+            "specific_growth_rate": rate,
+            "specific_growth_rate_unit": f"1/{time_unit}",
+            "doublings_observed": log_increase / math.log(2),
+            "doubling_time": estimate,
+            "doubling_time_unit": time_unit,
+            "method": "two-point exponential growth; ln(2) * elapsed / ln(N2/N1)",
+        },
+    }
+
+
+
 OPERATIONS = (
     Operation(
         "cell_count_viability", "Hemocytometer count and viability",
@@ -328,5 +672,68 @@ OPERATIONS = (
         ),
         {"input_kind": "rpm", "input_value": 3000, "rotor_radius_cm": 10},
         centrifuge_rcf_rpm,
+    ),
+    Operation(
+        "plate_count_cfu", "Plate counts and CFU/mL",
+        "Pool colony counts from plates with known reciprocal dilutions and plated volume.",
+        (
+            Field("colony_counts", "Colonies on each plate", "vector", unit="CFU"),
+            Field("reciprocal_dilutions", "Reciprocal sample dilution for each plate", "vector", unit="1"),
+            Field("plated_volume_ml", "Sample plated on each plate", "number", unit="mL"),
+        ),
+        {"colony_counts": [45, 55], "reciprocal_dilutions": [1000, 1000],
+         "plated_volume_ml": 0.1},
+        plate_count_cfu,
+    ),
+    Operation(
+        "most_probable_number", "Most probable number (MPN/mL)",
+        "Estimate viable units from positive/negative dilution tubes using Poisson likelihood.",
+        (
+            Field("positive_tubes", "Positive tubes at each dilution", "vector", unit="tubes"),
+            Field("total_tubes", "Tubes tested at each dilution", "vector", unit="tubes"),
+            Field("reciprocal_dilutions", "Reciprocal dilution per tube group", "vector", unit="1"),
+            Field("inoculum_volume_ml", "Diluted sample inoculated into each tube", "number", unit="mL"),
+        ),
+        {"positive_tubes": [5, 3, 0], "total_tubes": [5, 5, 5],
+         "reciprocal_dilutions": [1, 10, 100], "inoculum_volume_ml": 1},
+        most_probable_number,
+    ),
+    Operation(
+        "growth_curve_parameters", "Culture growth-curve parameters",
+        "Fit modified Gompertz ln-abundance kinetics for lag, maximum specific growth rate, "
+        "asymptotic abundance and fastest instantaneous doubling time.",
+        (
+            Field("time", "Measurement times", "vector", unit="selected time unit"),
+            Field("abundance", "Viable counts or proportional culture abundance", "vector",
+                  unit="selected abundance unit"),
+            Field("time_unit", "Time unit label (e.g. h)", "text", unit="unit label"),
+            Field("abundance_unit", "Abundance unit label (e.g. CFU/mL)", "text", unit="unit label"),
+        ),
+        {
+            "time": list(range(0, 22, 2)),
+            "abundance": [
+                10_000 * math.exp(4 * math.exp(-math.exp(1 + (0.5 * math.e / 4) * (4 - t))))
+                for t in range(0, 22, 2)
+            ],
+            "time_unit": "h", "abundance_unit": "CFU/mL",
+        },
+        growth_curve_parameters,
+    ),
+    Operation(
+        "doubling_time", "Two-point culture doubling time",
+        "Estimate the exponential-phase specific growth rate and doubling time between two observations.",
+        (
+            Field("initial_abundance", "Initial count or culture abundance", "number",
+                  unit="selected abundance unit"),
+            Field("final_abundance", "Final count or culture abundance", "number",
+                  unit="selected abundance unit"),
+            Field("elapsed_time", "Elapsed time between observations", "number",
+                  unit="selected time unit"),
+            Field("time_unit", "Time unit label (e.g. h)", "text", unit="unit label"),
+            Field("abundance_unit", "Abundance unit label (e.g. CFU/mL)", "text", unit="unit label"),
+        ),
+        {"initial_abundance": 100_000, "final_abundance": 800_000,
+         "elapsed_time": 6, "time_unit": "h", "abundance_unit": "CFU/mL"},
+        doubling_time,
     ),
 )
