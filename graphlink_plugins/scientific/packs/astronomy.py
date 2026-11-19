@@ -527,7 +527,7 @@ OPERATIONS: tuple[Operation, ...] = (
         "Integrate flat matter+Λ cosmology with adjustable H₀ and Ωm; no radiation or curvature.",
         (
             Field("redshift", "Redshift", "number", unit="1"),
-            Field("h0_km_s_mpc", "Hubble constant H₀", "number", unit="km/s/Mpc"),
+            Field("h0_km_s_mpc", "Hubble constant H₀", "number", unit="km/(s·Mpc)"),
             Field("omega_matter", "Matter density Ωm", "number", unit="1"),
         ),
         {"redshift": 1.0, "h0_km_s_mpc": 70, "omega_matter": 0.3},

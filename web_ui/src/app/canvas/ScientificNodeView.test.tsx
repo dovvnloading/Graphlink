@@ -379,6 +379,16 @@ describe("typed table import and numeric selections", () => {
 });
 
 describe("unit-aware scientific node inputs and receipts", () => {
+  it("labels an absolute temperature distinctly from an interval and keeps mixed columns", () => {
+    const temperature = { ...operation2, fields: [{ ...operation2.fields[0],
+      label: "Temperature change", key: "temperature_change_k", unit: "K",
+      default_unit: "delta_K", dimension: "temperature (K)",
+    }], example: { temperature_change_k: 50 } };
+    mount(JSON.stringify({ ...state, operations: [temperature] }), []);
+    expect(screen.getByRole("textbox", { name: "Temperature change (delta_K)" })).toHaveValue("50");
+    expect(screen.getByText(/Default unit: delta_K/)).toBeVisible();
+  });
+
   it("renders the expected dimension and sends unit-suffixed values for backend conversion", async () => {
     const typed = { ...operation2, fields: [{
       ...operation2.fields[0], default_unit: "m", dimension: "length (m)",

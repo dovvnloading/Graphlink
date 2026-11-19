@@ -193,16 +193,14 @@ const decimal = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 const arrayTokens = /[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/g;
 // The backend verifies SI symbols, compatibility and exact decimal conversion.
 const measurementWithUnit = /^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)[ \t]*([^\s].*)$/;
-function unitLiteral(raw: string, field: ScienceField): boolean {
-  if (decimal.test(raw.trim())) return false;
-  const match = measurementWithUnit.exec(raw.trim());
-  if (!match) return false;
-  parseMeasurement(match[1], field);
-  return true;
+function unitLiteral(raw: string): boolean {
+  // The backend converts the written decimal before binary64 rounding; do
+  // not reject a prefixed value whose raw magnitude alone would overflow.
+  return !decimal.test(raw.trim()) && measurementWithUnit.test(raw.trim());
 }
-function unitArray(kind: ScienceField["kind"], value: unknown, field: ScienceField): boolean {
+function unitArray(kind: ScienceField["kind"], value: unknown): boolean {
   const cell = (item: unknown): boolean => typeof item === "number" && Number.isFinite(item)
-    || typeof item === "string" && unitLiteral(item, field);
+    || typeof item === "string" && unitLiteral(item);
   if (!Array.isArray(value)) return false;
   if (kind === "vector") return value.length > 0 && value.every(cell);
   if (kind === "matrix") return value.length > 0 && Array.isArray(value[0]) &&
@@ -250,17 +248,20 @@ export function parseInputs(op: ScienceOperation, draft: Record<string, string>,
       value = raw;
     } else if (field.kind === "integer") {
       // Decimal/exponent conversion through Number first silently rounds e.g. 9007199254740990.5.
-      if (!/^[+-]?\d+$/.test(raw.trim()) && !unitLiteral(raw, field)) invalid(`${field.label} must be a whole number written in integer notation.`);
+      if (!/^[+-]?\d+$/.test(raw.trim()) && !unitLiteral(raw)) invalid(`${field.label} must be a whole number written in integer notation.`);
       value = /^[+-]?\d+$/.test(raw.trim()) ? Number(raw) : raw.trim();
     } else if (field.kind === "number") {
       if (decimal.test(raw.trim())) value = parseMeasurement(raw.trim(), field);
-      else if (unitLiteral(raw, field)) value = raw.trim();
+      else if (unitLiteral(raw)) value = raw.trim();
     } else {
-      for (const match of raw.matchAll(arrayTokens)) parseMeasurement(match[0], field);
+      // Only bare JSON numeric tokens are rounded on the client. Quoted
+      // measurements must retain their decimal spelling for the SI converter.
+      const unquoted = raw.replace(/"(?:\\.|[^"\\])*"/g, '""');
+      for (const match of unquoted.matchAll(arrayTokens)) parseMeasurement(match[0], field);
       try { value = JSON.parse(raw); } catch { value = undefined; }
     }
     if (!accepts(field.kind, value) && !(typeof value === "string" && (field.kind === "number" || field.kind === "integer"))
-        && !unitArray(field.kind, value, field))
+        && !unitArray(field.kind, value))
       invalid(field.label + " must be " + expected[field.kind] + " (or unit-suffixed measurements); expected " +
         (field.dimension ?? field.default_unit ?? "the declared units") + ".");
     if (Array.isArray(value)) {

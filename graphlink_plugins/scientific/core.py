@@ -13,7 +13,7 @@ from decimal import Decimal
 from fractions import Fraction
 from typing import Any
 
-from .units import parse_unit, dimension_name, convert_decimal_measurement
+from .units import parse_unit, dimension_name, convert_decimal_measurement, interval_temperature_unit
 
 VERSION = "1.1.0"
 MAX_POINTS = 1024
@@ -38,6 +38,9 @@ _OPERATION_ID = re.compile(r"[a-z][a-z0-9_]*")
 
 
 _NUMERIC = frozenset(("number", "integer", "vector", "matrix"))
+_PARIS_UNIT = "m/cycle/(MPa√m)^m"
+_HARDNESS_UNIT = "HV, HBW, HBS, HRC or HRB (as selected)"
+_HARDNESS_SCALES = frozenset(("HV", "HBW", "HBS", "HRC", "HRB"))
 _NUMBER_UNIT = re.compile(r"^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)(?:\s*(\S.*?))?\s*$")
 _MATRIX_COLUMNS = re.compile(r"^col 1:\s*([^;]+);\s*col 2:\s*(.+)$")
 _DYNAMIC = {
@@ -65,11 +68,25 @@ class Field:
     def __post_init__(self):
         if self.kind == "matrix" and (columns := _MATRIX_COLUMNS.fullmatch(self.unit)):
             units = tuple(value.strip() for value in columns.groups())
-            dimensions = tuple(dimension_name(parse_unit(value).dimensions) for value in units)
+            parsed_units = [parse_unit(value) for value in units]
+            dimensions = tuple(dimension_name(value.dimensions, value.angle_power, value.kind) for value in parsed_units)
             object.__setattr__(self, "column_units", units)
             object.__setattr__(self, "column_dimensions", dimensions)
             object.__setattr__(self, "default_unit", "1")
             object.__setattr__(self, "dimension", "mixed: " + ", ".join(dimensions))
+            return
+        if self.kind == "number" and self.unit == _PARIS_UNIT:
+            # C has a different physical dimension for each fitted Paris exponent.
+            object.__setattr__(self, "default_unit", _PARIS_UNIT)
+            object.__setattr__(self, "dimension", "exponent-dependent: " + _PARIS_UNIT)
+            return
+        if self.kind == "number" and self.unit == _HARDNESS_UNIT:
+            # Empirical HRC/HV/etc scales cannot be converted by SI factors.
+            selected = self.default_unit or "HRC"
+            if selected not in _HARDNESS_SCALES:
+                raise ValueError("Unknown empirical hardness scale.")
+            object.__setattr__(self, "default_unit", selected)
+            object.__setattr__(self, "dimension", "empirical hardness scale (selected)")
             return
         if self.kind in _NUMERIC:
             unit = self.default_unit or self.unit or "1"
@@ -80,12 +97,15 @@ class Field:
                     raise  # Explicit declarations must be valid SI expressions.
                 unit, parsed = "1", parse_unit("1")
             object.__setattr__(self, "default_unit", unit)
-            object.__setattr__(self, "dimension", dimension_name(parsed.dimensions))
+            object.__setattr__(self, "dimension", dimension_name(parsed.dimensions, parsed.angle_power, parsed.kind))
 
 
 def _effective_unit(field: Field, raw: dict) -> str:
     name = field.unit
     unit: object
+    if name == _HARDNESS_UNIT:
+        selected = raw.get("from_scale")
+        return selected if isinstance(selected, str) and selected in _HARDNESS_SCALES else field.default_unit
     if name in ("1 / selected time unit", "1 / (predator × time unit)", "1 / (prey × time unit)"):
         time = raw.get("time_unit")
         unit = f"1/({time})" if isinstance(time, str) else ""
@@ -151,9 +171,14 @@ def finite(value, label: str) -> float:
 
 
 def _measurement(field: Field, value, target: str) -> tuple[float, str]:
-    expected = dimension_name(parse_unit(target).dimensions)
+    parsed_target = parse_unit(target)
+    expected = dimension_name(parsed_target.dimensions, parsed_target.angle_power, parsed_target.kind)
     if type(value) in (int, float):
-        return finite(value, field.label), target
+        number = finite(value, field.label)
+        if (parsed_target.kind == "absolute"
+                and Fraction(str(number)) * parsed_target.scale + parsed_target.offset < 0):
+            raise ValueError(f"{field.label}: Absolute temperature must be at least 0 K.")
+        return number, target
     if not isinstance(value, str) or len(value) > 256:
         raise ValueError(f"{field.label} requires a finite number; expected {expected} ({target}).")
     match = _NUMBER_UNIT.fullmatch(value)
@@ -161,12 +186,13 @@ def _measurement(field: Field, value, target: str) -> tuple[float, str]:
         raise ValueError(f"{field.label} needs a decimal and optional unit; expected {expected} ({target}).")
     decimal, suffix = match.groups()
     supplied = suffix or target
-    # A typed 'K' on an interval field is a kelvin difference, not an absolute point.
-    converted_from = "delta_K" if target.startswith("delta_") and supplied == "K" else supplied
+    # A kelvin symbol on an interval field denotes a difference, including
+    # SI-prefixed kelvins. degC/degF points require an explicit delta symbol.
+    converted_from = interval_temperature_unit(supplied) if target.startswith("delta_") else supplied
     try:
         number = convert_decimal_measurement(decimal, converted_from, target)
     except ValueError as exc:
-        raise ValueError(f"{field.label}: {exc} Expected {dimension_name(parse_unit(target).dimensions)} (default {target}).") from None
+        raise ValueError(f"{field.label}: {exc} Expected {expected} (default {target}).") from None
     if not suffix and Decimal(decimal) == Decimal(decimal).to_integral_value():
         if Fraction(number) != Fraction(Decimal(decimal)):
             raise ValueError(f"{field.label} contains an integer count that cannot be represented exactly.")
@@ -174,6 +200,18 @@ def _measurement(field: Field, value, target: str) -> tuple[float, str]:
 
 
 def _field_with_units(field: Field, value, unit: str):
+    if field.kind == "number" and field.unit in (_PARIS_UNIT, _HARDNESS_UNIT):
+        # Neither exponent-dependent Paris C nor empirical hardness readings
+        # are convertible through an SI dimensionless stand-in.
+        selected = unit if field.unit == _HARDNESS_UNIT else _PARIS_UNIT
+        if type(value) in (int, float):
+            return finite(value, field.label), selected
+        if isinstance(value, str) and (match := _NUMBER_UNIT.fullmatch(value)):
+            decimal, suffix = match.groups()
+            if suffix is None or (field.unit == _HARDNESS_UNIT and suffix == selected):
+                return _measurement(field, decimal, "1")[0], suffix or selected
+        raise ValueError(f"{field.label}: expected a numeric value in {selected}; "
+                         "different physical or empirical units cannot be converted.")
     if field.kind == "number":
         return _measurement(field, value, unit)
     if field.kind == "integer":

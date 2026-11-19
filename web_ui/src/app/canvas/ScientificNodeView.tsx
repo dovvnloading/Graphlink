@@ -133,7 +133,7 @@ function FieldEditor({ field, value, onEdit, options, onImport, imported, errorI
   const common = { id, name: field.key, value, "aria-invalid": errorId || stale ? true as const : undefined,
     "aria-describedby": description || undefined };
   return <div className="science-field">
-    <label htmlFor={id}>{field.kind !== "text" ? `${field.label} (${field.unit || field.default_unit || "1"})` : field.label}</label>
+    <label htmlFor={id}>{field.kind !== "text" ? `${field.label} (${field.column_units?.length ? field.unit : field.default_unit || field.unit || "1"})` : field.label}</label>
     {field.kind === "number" || field.kind === "integer"
       ? <input {...common} type="text" inputMode="text"
         onChange={(e) => onEdit(e.target.value)} />

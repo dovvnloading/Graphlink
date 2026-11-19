@@ -25,15 +25,27 @@ class Unit:
     offset: Fraction = Fraction(0)
     # A temperature point (absolute) is not a temperature interval (difference).
     kind: str = "linear"
+    # Auxiliary quantity kind: rad and sr are SI dimensionless, but their
+    # physical angle powers must not be confused with ratios or cycles/s.
+    angle_power: int = 0
 
     def __mul__(self, other: Unit) -> Unit:
-        return Unit(tuple(a + b for a, b in zip(self.dimensions, other.dimensions)), self.scale * other.scale)
+        if self.kind != "linear" or other.kind != "linear":
+            raise ValueError("Nonlinear unit quantities cannot be multiplied.")
+        return Unit(tuple(a + b for a, b in zip(self.dimensions, other.dimensions)),
+                    self.scale * other.scale, angle_power=self.angle_power + other.angle_power)
 
     def __truediv__(self, other: Unit) -> Unit:
-        return Unit(tuple(a - b for a, b in zip(self.dimensions, other.dimensions)), self.scale / other.scale)
+        if self.kind != "linear" or other.kind != "linear":
+            raise ValueError("Nonlinear unit quantities cannot be divided.")
+        return Unit(tuple(a - b for a, b in zip(self.dimensions, other.dimensions)),
+                    self.scale / other.scale, angle_power=self.angle_power - other.angle_power)
 
     def __pow__(self, power: int) -> Unit:
-        return Unit(tuple(a * power for a in self.dimensions), self.scale ** power)
+        if self.kind != "linear":
+            raise ValueError("Nonlinear unit quantities cannot be exponentiated.")
+        return Unit(tuple(a * power for a in self.dimensions), self.scale ** power,
+                    angle_power=self.angle_power * power)
 
 
 def _base(index: int) -> Unit:
@@ -60,11 +72,12 @@ _UNITS = {
     "1": Unit(_ZERO), "m": m, "kg": kg, "s": s, "A": A,
     "K": K, "mol": mol, "cd": cd,
     "g": Unit(kg.dimensions, Fraction(1, 1000)),
-    "rad": Unit(_ZERO), "sr": Unit(_ZERO),
+    "rad": Unit(_ZERO, angle_power=1), "sr": Unit(_ZERO, angle_power=2),
     "Hz": s**-1, "N": N, "Pa": Pa, "J": J, "W": W,
     "C": C, "V": V, "F": F, "ohm": Ohm, "Ω": Ohm, "Ω": Ohm,
     "S": S, "Wb": Wb, "T": T, "H": H,
-    "lm": cd, "lx": cd / m**2, "Bq": s**-1,
+    "lm": cd * Unit(_ZERO, angle_power=2),
+    "lx": cd * Unit(_ZERO, angle_power=2) / m**2, "Bq": s**-1,
     "Gy": J / kg, "Sv": J / kg, "kat": mol / s,
     "L": Unit((3, 0, 0, 0, 0, 0, 0), Fraction(1, 1000)),
     "l": Unit((3, 0, 0, 0, 0, 0, 0), Fraction(1, 1000)),
@@ -102,14 +115,14 @@ _PREFIXABLE = frozenset({
 # angles, concentrations, counts and calendar durations. All factors are exact
 # rational definitions of the stated decimal conventions (angles use a
 # high-precision rational approximation to pi, which is irrational).
-_DEGREE = Unit(_ZERO, Fraction(Decimal("0.017453292519943295769236907684886127134428718885417")))
+_DEGREE = Unit(_ZERO, Fraction(Decimal("0.017453292519943295769236907684886127134428718885417")), angle_power=1)
 _YEAR = Unit(s.dimensions, Fraction(31_557_600))  # Julian year (365.25 d)
 _PC = Unit(m.dimensions, Fraction(30_856_775_814_913_673))
 _UNITS.update({
     "deg": _DEGREE, "°": _DEGREE, "°N": _DEGREE, "°E": _DEGREE,
-    "arcmin": Unit(_ZERO, _DEGREE.scale / 60),
-    "arcsec": Unit(_ZERO, _DEGREE.scale / 3600),
-    "mas": Unit(_ZERO, _DEGREE.scale / 3_600_000),
+    "arcmin": Unit(_ZERO, _DEGREE.scale / 60, angle_power=1),
+    "arcsec": Unit(_ZERO, _DEGREE.scale / 3600, angle_power=1),
+    "mas": Unit(_ZERO, _DEGREE.scale / 3_600_000, angle_power=1),
     "%": Unit(_ZERO, Fraction(1, 100)), "wt%": Unit(_ZERO, Fraction(1, 100)),
     "ppm": Unit(_ZERO, Fraction(1, 10**6)), "ppb": Unit(_ZERO, Fraction(1, 10**9)),
     "day": Unit(s.dimensions, Fraction(86400)), "days": Unit(s.dimensions, Fraction(86400)),
@@ -125,8 +138,12 @@ _UNITS.update({
     "count": Unit(_ZERO), "samples": Unit(_ZERO), "individuals": Unit(_ZERO),
     "individuals per taxon": Unit(_ZERO), "steps (dimensionless)": Unit(_ZERO),
     "stellar radii": Unit(_ZERO), "relative flux": Unit(_ZERO),
-    "mag": Unit(_ZERO), "mag AB": Unit(_ZERO), "mag/airmass": Unit(_ZERO),
-    "Mw (1)": Unit(_ZERO), "1 (zone)": Unit(_ZERO),
+    "mag": Unit(_ZERO, kind="magnitude"),
+    "mag AB": Unit(_ZERO, kind="ab_magnitude"),
+    "mag/airmass": Unit(_ZERO, kind="extinction_magnitude"),
+    "Mw (1)": Unit(_ZERO, kind="moment_magnitude"),
+    "pKa": Unit(_ZERO, kind="pKa"),
+    "1 (zone)": Unit(_ZERO),
     "0/1 (dimensionless)": Unit(_ZERO), "JD (days)": Unit(s.dimensions, Fraction(86400)),
     "mol charge/L": mol / _UNITS["L"],
     "% activity": Unit(_ZERO, Fraction(1, 100)),
@@ -172,7 +189,7 @@ def _unit_atom(symbol: str) -> Unit:
         if suffix != symbol and suffix in _PREFIXABLE:
             factor = Fraction(10) ** _PREFIX_POWERS[prefix]
             unit = _UNITS[suffix]
-            return Unit(unit.dimensions, factor * unit.scale)
+            return Unit(unit.dimensions, factor * unit.scale, angle_power=unit.angle_power)
     raise ValueError(f"Unknown unit symbol '{symbol}' (unit symbols are case-sensitive).")
 
 
@@ -185,6 +202,20 @@ def _tokens(symbol: str) -> list[str]:
     tokens = _TOKEN.findall(expression)
     if not tokens or "".join(tokens) != expression or len(tokens) > 96:
         raise ValueError(f"Invalid unit expression '{symbol}'. Use symbols, *, /, parentheses and integer powers.")
+    # NIST SP 811 §6.1.7: a repeated solidus or an ungrouped denominator
+    # followed by multiplication is ambiguous, not an alternative notation.
+    depth, divisor_grouped = 0, {}
+    for index, token in enumerate(tokens):
+        if token == "(":
+            depth += 1
+        elif token == ")":
+            depth -= 1
+        elif token == "/":
+            if depth in divisor_grouped:
+                raise ValueError(f"Ambiguous unit expression '{symbol}': group the denominator with parentheses.")
+            divisor_grouped[depth] = index + 1 < len(tokens) and tokens[index + 1] == "("
+        elif token == "*" and depth in divisor_grouped and not divisor_grouped[depth]:
+            raise ValueError(f"Ambiguous unit expression '{symbol}': group the denominator with parentheses.")
     return tokens
 
 
@@ -252,7 +283,7 @@ def parse_unit(symbol: str) -> Unit:
     if position != len(tokens):
         raise ValueError(f"Invalid unit expression '{symbol}'. Use explicit multiplication and division.")
     if parsed.dimensions == _TEMPERATURE:
-        return Unit(parsed.dimensions, parsed.scale, kind="difference")
+        return Unit(parsed.dimensions, parsed.scale, kind="difference", angle_power=parsed.angle_power)
     return parsed
 
 
@@ -272,10 +303,14 @@ def convert_measurement(value: float, source: str, target: str) -> float:
             f"Incompatible SI dimensions: {source} ({dimension_string(from_unit.dimensions)}) "
             f"cannot be converted to {target} ({dimension_string(to_unit.dimensions)})."
         )
+    if from_unit.angle_power != to_unit.angle_power:
+        raise ValueError("Incompatible quantities: plane/solid angles and angular frequencies "
+                         "cannot be interchanged with ratios or cyclic frequencies.")
     if from_unit.kind != to_unit.kind:
         raise ValueError(
             f"Cannot convert {source} ({from_unit.kind}) to {target} ({to_unit.kind}): "
-            "absolute temperatures and temperature differences are distinct."
+            "absolute temperatures and temperature differences are distinct; "
+            "logarithmic quantities and linear ratios are also distinct."
         )
     if from_unit.kind == "absolute":
         # Written decimal measurements are converted using exact defined
@@ -317,8 +352,30 @@ _DIMENSION_NAMES = {
 }
 
 
-def dimension_name(dimensions: tuple[int | Fraction, ...]) -> str:
-    """A human-readable expected dimension for workbench input diagnostics."""
+def dimension_name(dimensions: tuple[int | Fraction, ...], angle_power: int = 0,
+                   kind: str = "linear") -> str:
+    """Human-readable SI dimensions, distinguishing angular and nonlinear quantities."""
+    nonlinear = {
+        "magnitude": "logarithmic magnitude (mag)",
+        "ab_magnitude": "AB logarithmic magnitude (mag AB)",
+        "extinction_magnitude": "logarithmic extinction per airmass (mag/airmass)",
+        "moment_magnitude": "logarithmic moment magnitude (Mw)",
+        "pKa": "logarithmic acid-dissociation index (pKa)",
+    }
+    if kind in nonlinear:
+        return nonlinear[kind]
+    if angle_power:
+        if dimensions == _ZERO and angle_power == 1:
+            return "plane angle (rad)"
+        if dimensions == _ZERO and angle_power == 2:
+            return "solid angle (sr)"
+        if dimensions == (s**-1).dimensions and angle_power == 1:
+            return "angular frequency (rad/s)"
+        if dimensions == cd.dimensions and angle_power == 2:
+            return "luminous flux (lm)"
+        if dimensions == (cd / m**2).dimensions and angle_power == 2:
+            return "illuminance (lx)"
+        return f"SI dimensions {dimension_string(dimensions)}, angular exponent {angle_power}"
     return _DIMENSION_NAMES.get(dimensions, f"SI dimensions {dimension_string(dimensions)}")
 
 
@@ -334,10 +391,16 @@ def convert_decimal_measurement(text: str, source: str, target: str) -> float:
             f"Incompatible units: {source} ({dimension_name(from_unit.dimensions)}) "
             f"cannot be converted to {target} ({dimension_name(to_unit.dimensions)})."
         )
+    if from_unit.angle_power != to_unit.angle_power:
+        raise ValueError("Incompatible quantities: plane/solid angles and angular frequencies "
+                         "cannot be interchanged with ratios or cyclic frequencies.")
     if from_unit.kind != to_unit.kind:
+        category = ("temperature" if {from_unit.kind, to_unit.kind}
+                    <= {"absolute", "difference", "linear"} else "quantity")
         raise ValueError(
-            f"Incompatible temperature kinds: {source} is {from_unit.kind}, "
-            f"but {target} is {to_unit.kind}; absolute temperature and differences cannot be mixed."
+            f"Incompatible {category} kinds: {source} is {from_unit.kind}, "
+            f"but {target} is {to_unit.kind}; affine temperatures, differences "
+            "and logarithmic quantities cannot be mixed with other kinds."
         )
     try:
         decimal = Decimal(text)
@@ -359,6 +422,13 @@ def convert_decimal_measurement(text: str, source: str, target: str) -> float:
     if exact and result == 0:
         raise ValueError("The converted measurement is below the numerical range.")
     return result
+
+
+def interval_temperature_unit(symbol: str) -> str:
+    """Kelvins (including prefixed kelvins) denote intervals on an interval field."""
+    if symbol == "K" or (symbol.endswith("K") and symbol[:-1] in _PREFIX_POWERS):
+        return "delta_" + symbol
+    return symbol
 
 
 _HEADER_UNIT = re.compile(r"^(.+?)\s+\(([^()\r\n]+)\)$")

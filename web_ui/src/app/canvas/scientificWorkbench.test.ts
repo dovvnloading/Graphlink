@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chartableScienceTypes, compatibleOptions, fieldText, matchesSource, parseInputs, readScienceState, sourceOptions, type ScienceField, type ScienceResult, type ScienceState } from "./scientificWorkbench";
+import { chartableScienceTypes, compatibleOptions, draftInputs, fieldText, matchesSource, parseInputs, readScienceState, sourceOptions, type ScienceField, type ScienceResult, type ScienceState } from "./scientificWorkbench";
 
 const limits = { points: 3, columns: 2, cells: 4, text: 3 };
 function parse(kind: ScienceField["kind"], raw: string) {
@@ -157,6 +157,28 @@ describe("unit-aware scientific drafts", () => {
       distance: "25 mm", temperature: "80 degF", samples: ["25 mm", 2, "1 cm"],
       grid: [["1.2 kPa", 3], [4, "500 Pa"]], count: "2 count",
     });
+  });
+
+  it("defers suffixed decimal rounding until after exact SI scaling on the backend", () => {
+    expect(parseInputs(operation, {
+      distance: "1e310 qm", temperature: "32 degF",
+      samples: '["9007199254740993 nm","1e310 qm",2]',
+      grid: '[["1e310 qPa","2 kPa"]]', count: "2 count",
+    })).toEqual({
+      distance: "1e310 qm", temperature: "32 degF",
+      samples: ["9007199254740993 nm", "1e310 qm", 2],
+      grid: [["1e310 qPa", "2 kPa"]], count: "2 count",
+    });
+    expect(() => parseInputs(operation, {
+      distance: "1e310", temperature: "300", samples: "[1]",
+      grid: "[[1]]", count: "2",
+    })).toThrow(/finite/);
+  });
+
+  it("restores normalized bare numbers from historical saved graph drafts", () => {
+    const normalized = { distance: 0.025, temperature: 273.15,
+      samples: [0.025, 0.02], grid: [[1200, 1]], count: 2 };
+    expect(parseInputs(operation, draftInputs(operation, normalized))).toEqual(normalized);
   });
 
   it("retains numerical bare values and catches malformed measurements", () => {

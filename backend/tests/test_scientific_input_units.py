@@ -24,10 +24,18 @@ def test_every_numeric_field_publishes_a_unit_and_dimension(pack):
             if field.column_units:
                 assert field.dimension.startswith("mixed:")
                 assert len(field.column_units) == len(field.column_dimensions)
-                assert all(dimension_name(parse_unit(unit).dimensions) == dimension
-                           for unit, dimension in zip(field.column_units, field.column_dimensions))
+                assert all(dimension_name(parsed.dimensions, parsed.angle_power, parsed.kind) == dimension
+                           for unit, dimension in zip(field.column_units, field.column_dimensions)
+                           for parsed in (parse_unit(unit),))
+            elif field.unit == "m/cycle/(MPa√m)^m":
+                assert field.default_unit == field.unit
+                assert field.dimension.startswith("exponent-dependent:")
+            elif field.unit == "HV, HBW, HBS, HRC or HRB (as selected)":
+                assert field.default_unit in {"HV", "HBW", "HBS", "HRC", "HRB"}
+                assert field.dimension == "empirical hardness scale (selected)"
             else:
-                assert field.dimension == dimension_name(parse_unit(field.default_unit).dimensions)
+                parsed = parse_unit(field.default_unit)
+                assert field.dimension == dimension_name(parsed.dimensions, parsed.angle_power, parsed.kind)
             published = next(item for item in schema["fields"] if item["key"] == field.key)
             assert published["default_unit"] == field.default_unit
             assert published["dimension"] == field.dimension
