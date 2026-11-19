@@ -442,5 +442,9 @@ describe("explicit Scientific Graph Runner configuration", () => {
     } }));
     expect(screen.getByRole("textbox", { name: "Samples (m)" })).toHaveValue('["25 mm",2]');
     expect(screen.getByText("Saved as an explicit Graph Runner step.")).toBeVisible();
+    // Undo drops the persisted configuration; the node view must stop
+    // advertising that the operation is still approved for Graph Runner.
+    refresh(JSON.stringify({ ...state, runToken: "restored-after-undo", runner: null }));
+    expect(screen.queryByText("Saved as an explicit Graph Runner step.")).toBeNull();
   });
 });

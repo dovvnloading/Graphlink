@@ -105,7 +105,13 @@ def _run_token(data: dict) -> str:
     # Preserve all legacy run tokens for nodes without an imported table.
     original = [data.get("nodeKey"), receipt.get("receiptHash") or fingerprint(receipt)]
     table = data.get("table")
-    return fingerprint([*original, table["provenance"]["receiptHash"]]) if isinstance(table, dict) and table_metadata_valid(table) else fingerprint(original)
+    token = (fingerprint([*original, table["provenance"]["receiptHash"]])
+             if isinstance(table, dict) and table_metadata_valid(table) else fingerprint(original))
+    # A saved runner configuration is independently undoable. Include it in
+    # the optimistic token so an older editor cannot overwrite a newer save
+    # just because the last *calculation* has not changed.
+    runner = data.get("runner")
+    return fingerprint([token, runner]) if isinstance(runner, dict) else token
 
 
 def _current_state(document, node_id: str, kind: str, expected_run: str | None):
@@ -339,9 +345,10 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         if operation is None:
             return {"ok": False, "error": "Choose an operation registered for this pack."}
         try:
-            inputs, _input_units = validated_inputs_with_units(operation, request.inputs)
+            inputs, input_units = validated_inputs_with_units(operation, request.inputs)
             sources = _verify_sources(
                 document, node, inputs, request.sources or {}, ctx.is_plugin_granted,
+                operation=operation, input_units=input_units,
             )
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}

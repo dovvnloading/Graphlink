@@ -237,6 +237,48 @@ describe("Graph Runner", () => {
     expect(request).toHaveBeenCalledWith("scene", "previewGraphRun", [[]]);
   });
 
+
+  it("shows science fan-in receipts without calculating from preview", async () => {
+    const { user, request } = setup([], [
+      { id: "alpha", title: "Source A", kind: "science_core.workbench" },
+      { id: "beta", title: "Source B", kind: "science_core.workbench" },
+      { id: "fitted", title: "Fit", kind: "science_statistics.workbench" },
+    ]);
+    request.mockResolvedValueOnce(null).mockResolvedValueOnce({
+      previewToken: "two-sources", steps: [{
+        ...step, nodeId: "fitted", kind: "scientific", operation: "linear_regression",
+        sourceId: "alpha", sourceIds: ["alpha", "beta"], status: "waiting",
+        detail: "Awaiting an upstream result.",
+      }],
+    });
+    await user.click(screen.getByRole("button", { name: "Open runner" }));
+    await user.click(screen.getByRole("button", { name: "Preview run" }));
+    const preview = await screen.findByRole("region", { name: "Run preview" });
+    expect(preview).toHaveTextContent("Source A, Source B");
+    expect(preview).toHaveTextContent("Waiting on upstream");
+    expect(request.mock.calls.filter(([, name]) => name === "executeGraphRun")).toHaveLength(0);
+  });
+
+  it("can cancel a scientific run resumed from history instead of only the newest run", async () => {
+    const { user, request } = setup();
+    const older: GraphRun = {
+      ...run, runId: "older-science-run", startedAt: "2026-11-06T11:00:00Z",
+      status: "running", steps: [{
+        ...step, nodeId: "science", sourceId: "", sourceIds: [], kind: "scientific",
+        operation: "convert_unit", status: "pending",
+      }],
+    };
+    request.mockResolvedValueOnce({ ...run, history: [older] })
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ...run, history: [{ ...older, status: "cancelled" }] });
+    await user.click(screen.getByRole("button", { name: "Open runner" }));
+    await user.click(await screen.findByText("Earlier runs (1)"));
+    await user.click(screen.getByText(/ · Running$/));
+    await user.click(screen.getByRole("button", { name: "Cancel run" }));
+    expect(request).toHaveBeenCalledWith("scene", "cancelGraphRun", ["older-science-run"]);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Cancel run" })).toBeNull());
+  });
+
   it("leaves blocked and up-to-date outputs alone", async () => {
     const { user, request } = setup();
     request.mockResolvedValueOnce(null).mockResolvedValueOnce({ previewToken: "x", steps: [
