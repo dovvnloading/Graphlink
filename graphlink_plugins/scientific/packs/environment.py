@@ -10,6 +10,25 @@ from fractions import Fraction
 from itertools import accumulate
 
 from graphlink_plugins.scientific.core import Field, Operation
+from graphlink_plugins.scientific.reference_data import Dataset
+
+REFERENCE_DATASETS = (
+    Dataset("environment.epa_aqi_breakpoints", "2024.0.0", "environment",
+            ("_AQI_INDEX_BANDS", "_AQI_BREAKPOINTS", "_AQI_UNITS", "_AQI_CATEGORIES"),
+            "US EPA-454/B-24-002 (May 2024), Table 6"),
+    Dataset("environment.briggs_pg_rural", "1.0.0", "environment", ("_PG_RURAL",),
+            "Briggs rural Pasquill–Gifford coefficients"),
+    Dataset("environment.briggs_pg_urban", "1.0.0", "environment", ("_PG_URBAN",),
+            "Briggs urban Pasquill–Gifford coefficients"),
+)
+
+
+def _plume_reference_datasets(inputs: dict) -> tuple[str, ...]:
+    terrain = inputs.get("terrain", "")
+    if isinstance(terrain, str) and terrain.strip().lower() in ("rural", "urban"):
+        return ("environment.briggs_pg_" + terrain.strip().lower(),)
+    return ()
+
 
 
 def flow_weighted_concentration(data):
@@ -564,6 +583,7 @@ OPERATIONS: tuple[Operation, ...] = (
          "pm10_24h_ug_m3": -1, "co_8h_ppm": 8.4, "so2_1h_ppb": -1,
          "so2_24h_ppb": -1, "no2_1h_ppb": -1},
         air_quality_index,
+        reference_datasets=("environment.epa_aqi_breakpoints",),
     ),
     Operation(
         "gaussian_plume",
@@ -585,6 +605,7 @@ OPERATIONS: tuple[Operation, ...] = (
          "crosswind_m": 0, "receptor_height_m": 0, "effective_stack_height_m": 50,
          "stability_class": "D", "terrain": "rural"},
         gaussian_plume,
+        reference_datasets=_plume_reference_datasets,
     ),
     Operation(
         "dissolved_oxygen_sag",

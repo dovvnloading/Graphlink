@@ -1,7 +1,7 @@
 [plugin]
 id = "science_biology"
 name = "Biology and Ecology"
-description = "Fit biological growth, enzyme and dose-response curves; simulate ecology; test genetics, survival and biodiversity."
+description = "Analyze community diversity and quadrat surveys; fit growth, enzyme and dose-response curves; model predator–prey ecology, genetics and survival."
 version = "1.2.0"
 sdk_api_version = 1
 entry_point = "plugin:register"

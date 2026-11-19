@@ -126,3 +126,49 @@ def test_u_and_da_units_with_prefixes_and_compounds():
     assert parse_unit("U/mL").dimensions == parse_unit("kat/L").dimensions
     with pytest.raises(ValueError, match="Incompatible SI dimensions"):
         convert_measurement(1, "Da", "U")
+
+def test_new_pack_declares_its_own_reference_data_without_registry_edits(monkeypatch):
+    """A newly discovered operation pins its own table without a shared mapping."""
+    from types import SimpleNamespace
+    from graphlink_plugins.scientific import catalog, reference_data
+    from graphlink_plugins.scientific.core import Field, Operation
+
+    pack = "fixture_local_references"
+    dataset_id = f"{pack}.lookup"
+    table = {"A": 2, "B": 3}
+    operation = Operation(
+        "lookup", "Look up a value", "Read a bundled fixture table.",
+        (Field("key", "Table key", "text"),), {"key": "A"},
+        lambda inputs: {"summary": "Lookup complete.", "values": {"value": table[inputs["key"]]}},
+        reference_datasets=(dataset_id,),
+    )
+    module = SimpleNamespace(
+        _LOOKUP=table, OPERATIONS=(operation,),
+        REFERENCE_DATASETS=(
+            reference_data.Dataset(dataset_id, "1.0.0", pack, ("_LOOKUP",), "Fixture data"),
+        ),
+    )
+    original_import = reference_data.import_module
+
+    def import_pack(name, package):
+        if name == f".packs.{pack}":
+            return module
+        return original_import(name, package)
+
+    monkeypatch.setattr(reference_data, "import_module", import_pack)
+    monkeypatch.setattr(catalog, "import_module", import_pack)
+    monkeypatch.setitem(catalog.PACKS, pack, ("Fixture pack", "Fixture description"))
+    try:
+        result = run_operation(pack, operation, operation.example)
+        expected = {
+            "id": dataset_id, "version": "1.0.0",
+            "checksum": fingerprint([["_LOOKUP", [["A", 2], ["B", 3]]]]),
+        }
+        assert result["provenance"]["referenceData"] == [expected]
+        assert readable(pack, result)
+        assert any(item["id"] == dataset_id for item in list_reference_datasets())
+    finally:
+        reference_data._PACK_DATASETS.pop(pack, None)
+        reference_data._REGISTRY.pop((dataset_id, "1.0.0"), None)
+        reference_data._ACTIVE.pop(dataset_id, None)
+
