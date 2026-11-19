@@ -1,7 +1,7 @@
 [plugin]
 id = "science_biology"
 name = "Biology and Ecology"
-description = "Analyze Hill numbers, beta diversity, species accumulation and quadrat surveys; fit growth, enzyme and dose-response curves; model predator–prey ecology, genetics and survival."
+description = "Analyze community diversity, Hill numbers, beta diversity, species accumulation and quadrat surveys; fit growth, enzyme and dose-response curves; model predator–prey ecology, genetics and survival."
 version = "1.2.0"
 sdk_api_version = 1
 entry_point = "plugin:register"
