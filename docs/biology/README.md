@@ -5,7 +5,7 @@ Each biology pack has its own reference page and its own explicit Settings → P
 ## Pack references
 
 - [Biology and Ecology](biology.md) — community surveys, ecological modelling, growth and enzyme fits, genetics, survival and biodiversity (`science_biology`).
-- [Cell Culture](cell_culture.md) — hemocytometer viability, CFU plate counts, MPN, growth-curve fits, doubling time, seeding, serial dilutions and centrifuge conversion (`science_cell_culture`).
+- [Cell Culture](cell_culture.md) — hemocytometer viability, 96/384-well plate maps, CFU plate counts, MPN, growth-curve fits, doubling time, seeding, serial dilutions and centrifuge conversion (`science_cell_culture`).
 - [Enzyme Kinetics](enzyme_kinetics.md) — reversible inhibition, binding isotherms, Morrison tight-binding fits, Schild analysis, thermal-shift Tm, turnover and Hill saturation (`science_enzyme_kinetics`).
 - [Genetics](genetics.md) — Mendelian segregation tests, exact Hardy–Weinberg equilibrium, Haldane/Kosambi distances, three-point testcrosses and two-point LOD scores (`science_genetics`).
 
