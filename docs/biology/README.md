@@ -6,6 +6,7 @@ Each biology pack has its own reference page and its own explicit Settings → P
 
 - [Biology and Ecology](biology.md) — community surveys, ecological modelling, growth and enzyme fits, genetics, survival and biodiversity (`science_biology`).
 - [Cell Culture](cell_culture.md) — hemocytometer counts and viability, viable-cell seeding, balanced serial dilutions, and centrifuge RCF/rpm (`science_cell_culture`).
+- [Enzyme Kinetics](enzyme_kinetics.md) — reversible inhibition, binding isotherms, Morrison tight-binding fits, Schild analysis, thermal-shift Tm, turnover and Hill saturation (`science_enzyme_kinetics`).
 
 ## Add a biology pack using new files only
 
