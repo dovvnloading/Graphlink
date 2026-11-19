@@ -1730,7 +1730,7 @@ export class SceneStore {
       const answer = await this.scientificIntent(pluginId, "export_table_csv", {
         node_id: nodeId, table_source: tableSource, offset,
         ...(expectedRun && { expected_run: expectedRun }),
-      });
+      }) as Record<string, unknown>;
       if (typeof answer.chunk !== "string" || typeof answer.nextOffset !== "number"
           || typeof answer.totalBytes !== "number" || typeof answer.done !== "boolean"
           || !Number.isSafeInteger(answer.nextOffset) || !Number.isSafeInteger(answer.totalBytes)
