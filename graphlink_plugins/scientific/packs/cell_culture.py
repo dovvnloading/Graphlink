@@ -495,7 +495,16 @@ def growth_curve_parameters(data: dict) -> dict:
     maximum_rate = _checked(mu / span, "Maximum specific growth rate")
     lag_time = _checked(start + lag * span, "Lag time")
     lag_duration = _checked(lag * span, "Lag duration")
-    asymptote = _checked(math.exp(log_counts[0] + a), "Asymptotic abundance")
+    def abundance_from_log(log_value: float, label: str) -> float:
+        try:
+            number = math.exp(log_value)
+        except OverflowError:
+            raise ValueError(f"{label} exceeds the supported numeric range.") from None
+        if number == 0:
+            raise ValueError(f"{label} underflows the supported numeric range.")
+        return _checked(number, label)
+
+    asymptote = abundance_from_log(log_counts[0] + a, "Asymptotic abundance")
     doubling = _checked(math.log(2) / maximum_rate, "Fastest instantaneous doubling time")
 
     def predicted_log(x: float) -> float:
@@ -503,7 +512,7 @@ def growth_curve_parameters(data: dict) -> dict:
         return a * math.exp(-math.exp(exponent)) if exponent < 700 else 0.0
 
     predicted = [
-        _checked(math.exp(log_counts[0] + predicted_log(x)), "Fitted abundance")
+        abundance_from_log(log_counts[0] + predicted_log(x), "Fitted abundance")
         for x in normalized_time
     ]
     residuals = [obs - model for obs, model in zip(log_counts,
