@@ -44,7 +44,7 @@ function PlateMap({ view }: { view: SciencePlateMapView }) {
               const fill: CSSProperties | undefined = number
                 ? { backgroundColor: `hsl(209 78% ${87 - ratio * 47}%)`, color: ratio >= 0.57 ? "#fff" : "#14304e" }
                 : undefined;
-              return <td key={well} tabIndex={empty ? -1 : 0} aria-label={description} title={description}
+              return <td key={well} aria-label={description} title={description}
                 className={empty ? "science-well-empty" : number ? "science-well-number" : "science-well-text"}>
                 <span style={fill}>{empty ? "·" : number ? "●" : String(value).slice(0, 2)}</span>
               </td>;
@@ -54,7 +54,7 @@ function PlateMap({ view }: { view: SciencePlateMapView }) {
     </div>
     {numeric.length > 0 && <small className="science-plate-key">Numeric scale: {formatScienceNumber(minimum)}
       {" – "}{formatScienceNumber(maximum)}{view.unit ? " " + view.unit : ""}. Colors encode the observed range.</small>}
-    <small>Hover or focus a well to read its full value; blank wells are not zero.</small>
+    <small>Hover a well for its full value; screen readers announce the well readings. Blank wells are not zero.</small>
   </figure>;
 }
 
