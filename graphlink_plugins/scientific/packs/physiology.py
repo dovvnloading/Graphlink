@@ -196,10 +196,11 @@ def _hh_step(state: tuple[float, float, float, float], current: float,
     k2 = _hh_derivative(tuple(x + dt * k / 2 for x, k in zip(state, k1)), current)
     k3 = _hh_derivative(tuple(x + dt * k / 2 for x, k in zip(state, k2)), current)
     k4 = _hh_derivative(tuple(x + dt * k for x, k in zip(state, k3)), current)
-    return tuple(
+    next_state = [
         x + dt * (a + 2 * b + 2 * c + d) / 6
         for x, a, b, c, d in zip(state, k1, k2, k3, k4)
-    )
+    ]
+    return next_state[0], next_state[1], next_state[2], next_state[3]
 
 
 def hodgkin_huxley(data: dict) -> dict:
