@@ -102,6 +102,22 @@ def test_exact_binomial_probability_order_not_doubled_tail():
     assert tiny["values"]["log10_two_sided_p_value"] == pytest.approx(5000 * math.log10(.25), rel=1e-10)
 
 
+def test_exact_binomial_handles_tiny_but_nonzero_class_probability():
+    # The dominant normalized probability rounds to 1, but the other class
+    # is still possible. The rare observation has probability (1e-17)^5.
+    rare = _run("segregation_exact_binomial", observed_counts=[0, 5],
+                expected_ratio=[1, 1e-17])
+    v = rare["values"]
+    assert v["class_2_expected_probability"] == pytest.approx(1e-17)
+    assert rare["table"]["rows"][1][2] > 0
+    assert v["two_sided_p_value"] == pytest.approx(1e-85, rel=1e-12)
+    assert v["log10_two_sided_p_value"] == pytest.approx(-85)
+    # Label inversion must not change the probability-ordered exact tail.
+    reverse = _run("segregation_exact_binomial", observed_counts=[5, 0],
+                   expected_ratio=[1e-17, 1])
+    assert reverse["values"]["two_sided_p_value"] == pytest.approx(1e-85, rel=1e-12)
+
+
 @pytest.mark.parametrize("genotypes", [(1,0,1), (2,1,1), (30,60,10), (298,489,213), (5,1,0)])
 def test_hwe_exact_probability_order_matches_independent_factorial_oracle(genotypes):
     aa, ab, bb = genotypes
@@ -199,6 +215,25 @@ def test_two_point_lod_profile_boundary_theta_and_unlinked_mle():
     unlinked = _run("two_point_lod", recombinants=7, nonrecombinants=3, theta=.5)
     assert unlinked["values"]["theta_mle"] == .5
     assert unlinked["values"]["maximum_lod"] == 0
+
+
+def test_lod_numerically_stable_just_below_independence_at_large_n():
+    theta = math.nextafter(0.5, 0.0)
+    u = 1 - 2 * theta
+    balanced = 2**52 - 1
+    r = _run("two_point_lod", recombinants=balanced,
+             nonrecombinants=balanced, theta=theta)["values"]
+    # Pair the logarithms analytically: balanced LOD = R log10(1-u^2).
+    expected = balanced * math.log1p(-u * u) / math.log(10)
+    assert r["lod_at_theta"] == pytest.approx(expected, rel=1e-12, abs=1e-25)
+    assert r["lod_at_theta"] < 0
+    assert r["maximum_lod"] == 0
+    all_nonrecombinant = _run("two_point_lod", recombinants=0,
+                              nonrecombinants=2**53 - 1, theta=theta)["values"]
+    # An ordinary log10(2*(1-theta)) rounds to zero here: the actual
+    # supported-sample score is decidedly positive.
+    expected = (2**53 - 1) * math.log1p(u) / math.log(10)
+    assert all_nonrecombinant["lod_at_theta"] == pytest.approx(expected, rel=1e-12)
 
 
 @pytest.mark.parametrize("op,inputs,pattern", [
