@@ -11,6 +11,7 @@ import math
 import multiprocessing
 import os
 import pickle
+import threading
 import time
 from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
@@ -93,15 +94,44 @@ def _stop_worker(process: BaseProcess) -> None:
     process.close()
 
 
+def _receive_in_daemon_thread(reader: Connection) -> asyncio.Future[tuple[object | None, Exception | None]]:
+    """Receive without letting an uninterruptible pipe read hold up shutdown.
+
+    On Windows, terminating the writer and closing pipe handles need not wake
+    a recv() already waiting for a partial frame. asyncio.to_thread uses the
+    loop's default executor, which asyncio.run() joins even after cancellation.
+    This dedicated daemon reader instead reports completion to the event loop;
+    a cancelled/timed-out run can discard it without waiting for that thread.
+    """
+    loop = asyncio.get_running_loop()
+    finished: asyncio.Future[tuple[object | None, Exception | None]] = loop.create_future()
+
+    def deliver(outcome: tuple[object | None, Exception | None]) -> None:
+        if not finished.done():
+            finished.set_result(outcome)
+
+    def receive() -> None:
+        try:
+            outcome: tuple[object | None, Exception | None] = (reader.recv(), None)
+        except Exception as exc:
+            outcome = (None, exc)
+        try:
+            loop.call_soon_threadsafe(deliver, outcome)
+        except RuntimeError:
+            # A cancelled run may already have closed its event loop.
+            pass
+
+    threading.Thread(target=receive, name="graphlink-science-pipe-recv", daemon=True).start()
+    return finished
+
+
 async def execute_in_process(pack_id: str, operation: Operation, inputs: dict, sources: dict | None,
                              *, timeout_s: float, cancel_event: asyncio.Event,
                              input_units: dict | None = None) -> dict:
-    """Run the calculation in a spawned, killable process with a hard deadline.
+    """Run a spawned, killable calculation, including during stalled pipe reads.
 
-    Pipe.poll() only means *some* bytes are available. recv() may still block
-    waiting for a large or incomplete frame. Receive on a thread while the
-    event loop independently watches cancellation and the wall-clock deadline.
-    The child is terminated and reaped before any run can finish.
+    A partial frame can leave Connection.recv() stuck even after cancellation.
+    The receiver must never prevent the deadline, worker reap or loop shutdown.
     """
     started = time.monotonic()
 
@@ -114,7 +144,7 @@ async def execute_in_process(pack_id: str, operation: Operation, inputs: dict, s
     context = multiprocessing.get_context("spawn")
     reader, writer = context.Pipe(duplex=False)
     worker: BaseProcess | None = None
-    receive_task: asyncio.Task | None = None
+    receive_future: asyncio.Future[tuple[object | None, Exception | None]] | None = None
     cancel_task: asyncio.Task | None = None
     try:
         try:
@@ -135,27 +165,30 @@ async def execute_in_process(pack_id: str, operation: Operation, inputs: dict, s
         finally:
             writer.close()
 
-        # A large frame may be only partially written even when poll() says
-        # readable. Do not call recv() on the session's event-loop thread.
-        receive_task = asyncio.create_task(asyncio.to_thread(reader.recv))
-        cancel_task = asyncio.create_task(cancel_event.wait())
         remaining = timeout_s - (time.monotonic() - started)
         if remaining <= 0:
             raise ExecutionFailure("timeout",
                                    f"Scientific calculation exceeded its {timeout_s:g} s budget ({elapsed_ms()} ms elapsed).",
                                    elapsed_ms())
+        # recv() runs outside the event loop and, crucially, outside the
+        # default executor whose non-daemon threads block asyncio.run() exit.
+        try:
+            receive_future = _receive_in_daemon_thread(reader)
+        except RuntimeError as exc:
+            raise ExecutionFailure("worker_error", "Unable to start the scientific pipe receiver.",
+                                   elapsed_ms()) from exc
+        cancel_task = asyncio.create_task(cancel_event.wait())
         done, _ = await asyncio.wait(
-            {receive_task, cancel_task}, timeout=remaining, return_when=asyncio.FIRST_COMPLETED,
+            {receive_future, cancel_task}, timeout=remaining, return_when=asyncio.FIRST_COMPLETED,
         )
         if cancel_event.is_set():
             raise ExecutionFailure("cancelled", f"Scientific calculation cancelled after {elapsed_ms()} ms.", elapsed_ms())
-        if receive_task not in done or time.monotonic() - started >= timeout_s:
+        if receive_future not in done or time.monotonic() - started >= timeout_s:
             raise ExecutionFailure("timeout",
                                    f"Scientific calculation exceeded its {timeout_s:g} s budget ({elapsed_ms()} ms elapsed).",
                                    elapsed_ms())
-        try:
-            answer = receive_task.result()
-        except (EOFError, OSError, ValueError, TypeError, pickle.UnpicklingError):
+        answer, receive_error = receive_future.result()
+        if receive_error is not None:
             raise ExecutionFailure("worker_error", "The scientific worker exited without a complete result.",
                                    elapsed_ms()) from None
         if not isinstance(answer, tuple) or len(answer) != 2:
@@ -176,17 +209,14 @@ async def execute_in_process(pack_id: str, operation: Operation, inputs: dict, s
     finally:
         if cancel_task is not None:
             cancel_task.cancel()
+        if receive_future is not None:
+            receive_future.cancel()
         try:
             if worker is not None:
                 _stop_worker(worker)
         finally:
-            # Kill/reap the sender before closing the receiver; its recv thread
-            # then gets either the complete frame or EOF on Windows and POSIX.
+            # Terminate/reap the sender and close *both* ends on every path,
+            # including process-start failures and external task cancellation.
+            # Never await/join a recv thread: Windows may not interrupt it.
             writer.close()
-            # Do not cancel receive_task: cancelling asyncio.to_thread only
-            # detaches its Python thread. With the worker reaped and all
-            # senders closed, recv must finish (message or EOF) before return.
-            pending = [task for task in (receive_task, cancel_task) if task is not None]
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
             reader.close()

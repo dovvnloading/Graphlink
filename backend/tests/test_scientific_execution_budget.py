@@ -9,6 +9,7 @@ import multiprocessing
 import os
 import threading
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -342,22 +343,22 @@ def test_concurrent_nodes_and_immediate_cancel_then_rerun_are_isolated(session, 
     asyncio.run(scenario())
 
 
-def test_cancel_interrupts_a_stalled_pipe_receive(monkeypatch):
-    # The worker can have sent a header while its frame remains incomplete.
-    # Simulate a delayed recv; cancel must wake the event loop *during* it.
+def _run_stalled_pipe_scenario(deadline: bool):
+    """Spawn-importable scenario: the outer test can kill an unresponsive loop."""
     real_context = multiprocessing.get_context("spawn")
     receiving = threading.Event()
+    release_receive = threading.Event()
+    pipe_ends = []
 
-    class SlowReader:
+    class StalledReader:
         def __init__(self, inner):
             self.inner = inner
 
-        def poll(self, *args):
-            return self.inner.poll(*args)
-
         def recv(self):
             receiving.set()
-            threading.Event().wait(0.35)
+            # A partial frame can strand recv indefinitely on Windows.
+            # Keep it deliberately stuck until AFTER the run returns.
+            release_receive.wait()
             return self.inner.recv()
 
         def close(self):
@@ -366,31 +367,53 @@ def test_cancel_interrupts_a_stalled_pipe_receive(monkeypatch):
     class ProxyContext:
         def Pipe(self, *, duplex):
             reader, writer = real_context.Pipe(duplex=duplex)
-            return SlowReader(reader), writer
+            pipe_ends.append((reader, writer))
+            return StalledReader(reader), writer
 
         def Process(self, **kwargs):
             return real_context.Process(**kwargs)
 
-    monkeypatch.setattr(execution.multiprocessing, "get_context", lambda name: ProxyContext())
-
     async def scenario():
         cancel_event = asyncio.Event()
-        loop = asyncio.get_running_loop()
-
-        def signal_on_receive():
-            if receiving.wait(10):
-                loop.call_soon_threadsafe(cancel_event.set)
-
-        notifier = threading.Thread(target=signal_on_receive)
-        notifier.start()
+        pending = asyncio.create_task(execute_in_process(
+            "core", FAST, {"quantity": 17}, None,
+            timeout_s=6 if deadline else 15, cancel_event=cancel_event,
+        ))
         try:
+            # Require that the receive is actually stalled before exercising
+            # either cancellation or the wall-clock deadline.
+            entered = await asyncio.wait_for(asyncio.to_thread(receiving.wait, 8), timeout=9)
+            assert entered, "the receiver never reached the stalled recv"
+            if not deadline:
+                cancel_event.set()
             with pytest.raises(ExecutionFailure) as error:
-                await execute_in_process("core", FAST, {"quantity": 17}, None,
-                                         timeout_s=20, cancel_event=cancel_event)
-            assert error.value.error_type == "cancelled"
+                await asyncio.wait_for(pending, timeout=9)
+            assert error.value.error_type == ("timeout" if deadline else "cancelled")
             assert _no_science_workers()
+            assert len(pipe_ends) == 1
+            assert all(reader.closed and writer.closed for reader, writer in pipe_ends)
         finally:
-            notifier.join(timeout=11)
-            assert not notifier.is_alive()
+            release_receive.set()
+            if not pending.done():
+                pending.cancel()
 
-    asyncio.run(scenario())
+    with patch.object(execution.multiprocessing, "get_context", lambda name: ProxyContext()):
+        asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("deadline", [False, True], ids=["cancel", "deadline"])
+def test_cancel_interrupts_a_stalled_pipe_receive(deadline):
+    # asyncio.wait_for alone cannot bound asyncio.run() shutting down its
+    # executor if recv() is hung. A disposable process bounds even that case.
+    context = multiprocessing.get_context("spawn")
+    harness = context.Process(target=_run_stalled_pipe_scenario, args=(deadline,))
+    try:
+        harness.start()
+        harness.join(timeout=22)
+        assert not harness.is_alive(), "stalled receive blocked cancellation/deadline or interpreter exit"
+        assert harness.exitcode == 0, f"stalled receive scenario exited with {harness.exitcode}"
+    finally:
+        if harness.is_alive():
+            harness.kill()
+            harness.join(timeout=3)
+        harness.close()
