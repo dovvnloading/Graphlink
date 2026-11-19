@@ -91,9 +91,10 @@ def references_for_operation(pack: str, operation_id: str, inputs: dict) -> list
         if isinstance(terrain, str) and terrain.strip().lower() in ("rural", "urban"):
             ids.append("environment.briggs_pg_" + terrain.strip().lower())
     elif (pack, operation_id) == ("materials", "hardness_e140"):
-        selected = {"table1_non_austenitic_hrc": "materials.astm_e140_table_1",
-                    "table2_non_austenitic_hrb": "materials.astm_e140_table_2"}.get(
-                        inputs.get("e140_table"))
+        table = inputs.get("e140_table")
+        selected = ({"table1_non_austenitic_hrc": "materials.astm_e140_table_1",
+                     "table2_non_austenitic_hrb": "materials.astm_e140_table_2"}.get(table)
+                    if isinstance(table, str) else None)
         if selected:
             ids.append(selected)
     return [reference_receipt(item) for item in sorted(ids)]

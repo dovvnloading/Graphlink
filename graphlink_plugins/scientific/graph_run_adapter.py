@@ -231,7 +231,7 @@ def prepare(document: Any, node: Any, granted: Any) -> tuple[Any, dict, dict, st
     except (ValueError, IndexError, TypeError, KeyError) as exc:
         raise SceneError(str(exc)) from exc
     pack = node.kind.removeprefix("science_").split(".", 1)[0]
-    references = references_for_operation(pack, operation.id, inputs)
+    reference_data = references_for_operation(pack, operation.id, inputs)
     current = node.state.data.get("latest")
     if isinstance(current, dict) and node.content != current["summary"]:
         raise SceneError("The scientific output has manual edits; review them before running.")
@@ -240,10 +240,10 @@ def prepare(document: Any, node: Any, granted: Any) -> tuple[Any, dict, dict, st
         and current["operationId"] == operation.id
         and current["inputs"] == inputs
         and current["provenance"].get("inputUnits") == input_units
-        and current["provenance"].get("referenceData") == references
+        and current["provenance"].get("referenceData") == reference_data
         and _same_sources(current["provenance"].get("sources", {}), sources)
     )
     # Dispatch the original validated literals so the worker retains submitted
     # units in provenance; pin the normalized values AND unit choices for replay.
-    digest = fingerprint([VERSION, operation.id, inputs, input_units, _stable_sources(sources), references])
+    digest = fingerprint([VERSION, operation.id, inputs, input_units, _stable_sources(sources), reference_data])
     return operation, raw, sources, digest, same
