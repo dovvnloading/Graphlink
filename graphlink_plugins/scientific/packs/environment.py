@@ -548,6 +548,7 @@ OPERATIONS: tuple[Operation, ...] = (
         ),
         {"rainfall_mm": 20, "area_km2": 1.5, "runoff_volume_m3": 9000},
         rainfall_runoff,
+        headline="runoff_depth_mm",
     ),
     Operation(
         "degree_days",
@@ -561,6 +562,7 @@ OPERATIONS: tuple[Operation, ...] = (
         ),
         {"daily_min_c": [6, 10, 12], "daily_max_c": [12, 18, 20], "base_c": 10},
         degree_days,
+        headline="growing_degree_days_c",
     ),
     Operation(
         "air_quality_index",
@@ -606,6 +608,7 @@ OPERATIONS: tuple[Operation, ...] = (
          "stability_class": "D", "terrain": "rural"},
         gaussian_plume,
         reference_datasets=_plume_reference_datasets,
+        headline="receptor_concentration_ug_m3",
     ),
     Operation(
         "dissolved_oxygen_sag",
@@ -626,6 +629,7 @@ OPERATIONS: tuple[Operation, ...] = (
          "deoxygenation_per_day": .2, "reaeration_per_day": .4,
          "velocity_m_s": .35, "reach_length_km": 45},
         dissolved_oxygen_sag,
+        headline="minimum_do_mg_l",
     ),
     Operation(
         "first_order_decay_fit",
@@ -658,6 +662,7 @@ OPERATIONS: tuple[Operation, ...] = (
         {"runoff_coefficient": .6, "rainfall_intensity_mm_h": 50,
          "area_ha": 20, "storm_duration_min": 30, "time_of_concentration_min": 20},
         rational_runoff,
+        headline="peak_runoff_m3_s",
     ),
     Operation(
         "scs_curve_number",
@@ -695,6 +700,7 @@ OPERATIONS: tuple[Operation, ...] = (
          "wind_speed_2m_m_s": 2, "elevation_m": 2,
          "net_radiation_mj_m2_day": 14.33, "soil_heat_flux_mj_m2_day": .14},
         fao56_evapotranspiration,
+        headline="reference_et0_mm_day",
     ),
     Operation(
         "mann_kendall_sen",
@@ -714,5 +720,6 @@ OPERATIONS: tuple[Operation, ...] = (
          "observations": [4.5, 4.3, 3.8, 3.9, 3.4, 3.1, 2.8, 2.7],
          "observation_unit": "mg/L", "significance_level": .05},
         mann_kendall_sen,
+        headline="sen_slope_per_year",
     ),
 )

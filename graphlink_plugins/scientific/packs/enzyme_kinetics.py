@@ -468,6 +468,7 @@ OPERATIONS = (
                                     unit="category (dimensionless)", choices=_MODELS),),
         {**_INHIBITION_EXAMPLE, "model": "competitive"}, inhibition_model_fit,
         methods=_INHIBITION_METHOD, citations=(_INHIBITION_CITATION,),
+        headline="ki",
     ),
     Operation(
         "inhibition_model_compare", "Compare enzyme inhibition models",
@@ -475,6 +476,7 @@ OPERATIONS = (
         _INHIBITION_FIELDS, _INHIBITION_EXAMPLE, inhibition_model_compare,
         methods=_INHIBITION_METHOD + " Rank on finite AICc, with delta AICc and normalized Akaike weights.",
         citations=(_INHIBITION_CITATION,),
+        headline="best_model",
     ),
     Operation(
         "catalytic_constants", "Catalytic turnover and efficiency",
@@ -494,6 +496,7 @@ OPERATIONS = (
                 "active catalytic sites, assuming one turnover is counted per active site.",
         citations=(Citation("IUPAC Gold Book, catalytic constant (turnover number)",
                             "https://goldbook.iupac.org/terms/view/C00846"),),
+        headline="kcat_per_second",
     ),
     Operation(
         "hill_fit", "Fit Hill saturation",
@@ -513,6 +516,7 @@ OPERATIONS = (
                 "The Hill exponent is phenomenological, not a count of binding sites.",
         citations=(Citation("Hill (1910), The possible effects of aggregation of the molecules of haemoglobin",
                             "https://doi.org/10.1113/jphysiol.1910.sp001386"),),
+        headline="hill_coefficient",
     ),
     Operation(
         "cheng_prusoff_ki", "Convert IC50 to competitive Ki",
@@ -529,5 +533,6 @@ OPERATIONS = (
                 "conversion for mixed, irreversible, tight-binding or non-equilibrium inhibitors.",
         citations=(Citation("Cheng and Prusoff (1973), Relationship between Ki and IC50",
                             "https://doi.org/10.1016/0006-2952(73)90196-2"),),
+        headline="ki",
     ),
 ) + ADVANCED_OPERATIONS

@@ -183,8 +183,13 @@ class Operation:
     citations: tuple[Citation, ...] = ()
     # Dataset IDs, or a selector for references conditional on validated inputs.
     reference_datasets: tuple[str, ...] | Callable[[dict], tuple[str, ...]] = ()
+    # The result value a 390px workbench node shows first, e.g. "km" for a
+    # Michaelis–Menten fit. Empty leaves the choice to the node.
+    headline: str = ""
 
     def __post_init__(self):
+        if not isinstance(self.headline, str):
+            raise ValueError("An operation headline must be a result value key.")
         for field in self.fields:
             if field.kind == "choice" and self.example.get(field.key) not in field.choices:
                 raise ValueError(f"Example for {field.key} must be an allowed choice.")
@@ -219,6 +224,8 @@ class Operation:
             description["methods"] = self.methods
         if self.citations:
             description["citations"] = [asdict(citation) for citation in self.citations]
+        if self.headline:
+            description["headline"] = self.headline
         return description
 
 

@@ -741,6 +741,7 @@ OPERATIONS += (
         {"family": "acid", "pka_values": [2.15, 7.20, 12.35],
          "formal_concentration_mol_l": 0.1, "spectator_charge_mol_l": 0},
         acid_base_speciation,
+        headline="ph",
     ),
     Operation(
         "buffer_ph_capacity", "Buffer pH and capacity: Henderson–Hasselbalch vs exact",
@@ -752,6 +753,7 @@ OPERATIONS += (
          Field("base_concentration_mol_l", "Conjugate-base salt analytical concentration", "number", unit="mol/L")),
         {"pka": 4.7447274948966935, "acid_concentration_mol_l": 0.1, "base_concentration_mol_l": 0.1},
         buffer_ph_capacity,
+        headline="ph_charge_balance",
     ),
     Operation(
         "titration_curve", "Polyprotic acid/base titration with equivalence points",
@@ -769,6 +771,7 @@ OPERATIONS += (
          "analyte_concentration_mol_l": 0.1, "analyte_volume_ml": 25,
          "titrant_concentration_mol_l": 0.1, "max_titrant_volume_ml": 50, "samples": 51},
         titration_curve,
+        headline="equivalence_1_volume_ml",
     ),
     Operation(
         "arrhenius_fit", "Arrhenius activation-energy regression",
@@ -791,6 +794,7 @@ OPERATIONS += (
         {"order": "first", "time_s": [0, 60, 120, 180],
          "concentration_mol_l": [0.2, 0.14816, 0.10976, 0.08131]},
         rate_law_fit,
+        headline="rate_constant_per_s",
     ),
     Operation(
         "gas_pressure", "Ideal and van der Waals gas pressure",
@@ -804,6 +808,7 @@ OPERATIONS += (
         {"amount_mol": 1, "temperature_k": 273.15, "volume_l": 22.41396954,
          "a_l2_bar_mol2": 3.59 * 1.01325, "b_l_mol": 0.0427},
         gas_pressure,
+        headline="van_der_waals_pressure_bar",
     ),
     Operation(
         "gas_volume", "Ideal and gas-branch van der Waals volume",
@@ -817,6 +822,7 @@ OPERATIONS += (
         {"amount_mol": 1, "temperature_k": 300, "pressure_bar": 1,
          "a_l2_bar_mol2": 3.59 * 1.01325, "b_l_mol": 0.0427},
         gas_volume,
+        headline="van_der_waals_gas_volume_l",
     ),
     Operation(
         "molar_mass", "Molar mass of grouped and hydrated formulas",
@@ -826,6 +832,7 @@ OPERATIONS += (
         {"formula": "CuSO4·5H2O"},
         molar_mass,
         reference_datasets=("chemistry.ciaaw_abridged_atomic_weights",),
+        headline="molar_mass_g_mol",
     ),
     Operation(
         "solution_dilution", "Prepare a dilution from stock solution",
@@ -850,5 +857,6 @@ OPERATIONS += (
          "reactant_molar_mass_g_mol": [2.016, 31.998], "product_coefficient": 2,
          "product_molar_mass_g_mol": 18.015, "actual_product_mass_g": 30},
         reaction_yield,
+        headline="percent_yield",
     ),
 )

@@ -312,6 +312,7 @@ EXTRA_OPERATIONS: tuple[Operation, ...] = (
         methods="Log2 of group mean normalized counts plus pseudocount; M=log2(B+p)-log2(A+p), "
                 "A=(log2(B+p)+log2(A+p))/2. Not the existing Welch test's mean-of-logs effect.",
         citations=(_EXPRESSION_CITES[2],),
+        headline="genes",
     ),
     Operation(
         id="sample_correlation", title="Sample correlation and hierarchical clustering",
@@ -323,6 +324,7 @@ EXTRA_OPERATIONS: tuple[Operation, ...] = (
                 "unweighted pair-group arithmetic-mean (average-linkage) clustering with stable ties. "
                 "Linkage indices 0..samples-1 refer to input sample order.",
         citations=_EXPRESSION_CITES[:2],
+        headline="samples",
     ),
     Operation(
         id="expression_pca", title="Expression PCA (sample scores)",
@@ -334,6 +336,7 @@ EXTRA_OPERATIONS: tuple[Operation, ...] = (
                 "Eigen-decompose sample Gram covariance, report PC scores and explained fractions; "
                 "values within 64 machine eps of total variance are treated as unresolved noise.",
         citations=(_EXPRESSION_CITES[2],),
+        headline="pc1_explained_fraction",
     ),
     Operation(
         id="over_representation_enrichment", title="Gene-set over-representation (hypergeometric / BH)",
@@ -360,5 +363,6 @@ EXTRA_OPERATIONS: tuple[Operation, ...] = (
                 "intersect user sets with explicit universe; zero-size sets have undefined "
                 "fold enrichment and are excluded from BH correction.",
         citations=_EXPRESSION_CITES[3:],
+        headline="significant_sets",
     ),
 )

@@ -83,6 +83,20 @@ describe("scientific workbench card", () => {
     expect(within(latest).getByRole("button", { name: "Export JSON" })).toBeVisible();
   });
 
+  it("leads with the operation's declared headline and falls back when that value is missing", () => {
+    const fit: ScienceResult = { ...result, values: { a: 0.05, degrees_of_freedom: 5, r_squared: 0.9998 } };
+    const declared = { ...state, operations: [{ ...operation, headline: "r_squared" }, operation2] };
+    mount(JSON.stringify({ ...declared, latest: fit }));
+    const headline = () => screen.getByRole("region", { name: "Latest result" }).querySelector(".science-result-highlight")!;
+    expect(headline()).toHaveTextContent("R squared");
+    expect(headline()).toHaveTextContent("0.9998");
+    document.body.innerHTML = "";
+    // An older result without the declared key keeps the generic choice.
+    mount(JSON.stringify({ ...declared, latest: { ...fit, values: { a: 0.05 } } }));
+    expect(headline()).toHaveTextContent("A");
+    expect(readScienceState(JSON.stringify({ ...state, operations: [{ ...operation, headline: 3 }] }))).toBeNull();
+  });
+
   it("lets long scientific summaries expand and shows table-only results without guessing a metric", () => {
     const long = "Fit diagnostics and model assumptions. ".repeat(9);
     mount(JSON.stringify({ ...state, latest: {

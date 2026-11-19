@@ -675,6 +675,7 @@ OPERATIONS = (
             "dilution_factor": 2, "counted_volume_ul": 0.1, "sample_volume_ml": 5,
         },
         cell_count_viability,
+        headline="viable_cells_per_ml",
     ),
     Operation(
         "seeding_plan", "Viable-cell seeding preparation",
@@ -691,6 +692,7 @@ OPERATIONS = (
             "vessels": 12, "final_volume_ml_per_vessel": 2, "overage_percent": 10,
         },
         seeding_plan,
+        headline="suspension_ml_per_vessel",
     ),
     Operation(
         "serial_dilution_plan", "Serial dilution with retained tube volumes",
@@ -710,6 +712,7 @@ OPERATIONS = (
             "step_dilution_factor": 10, "steps": 3, "retained_volume_ml": 1,
         },
         serial_dilution_plan,
+        headline="final_concentration",
     ),
     Operation(
         "centrifuge_rcf_rpm", "Centrifuge RCF ↔ rpm",
@@ -752,6 +755,7 @@ OPERATIONS = (
             "normalization. The 96-well grid has rows A–H and columns 1–12; the 384-well grid has "
             "rows A–P and columns 1–24. Omitted wells and explicit nulls are unmeasured, not zero."
         ),
+        headline="recorded_wells",
     ),
     Operation(
         "most_probable_number", "Most probable number (MPN/mL)",
@@ -765,6 +769,7 @@ OPERATIONS = (
         {"positive_tubes": [5, 3, 0], "total_tubes": [5, 5, 5],
          "reciprocal_dilutions": [1, 10, 100], "inoculum_volume_ml": 1},
         most_probable_number,
+        headline="mpn_per_ml",
     ),
     Operation(
         "growth_curve_parameters", "Culture growth-curve parameters",
@@ -786,6 +791,7 @@ OPERATIONS = (
             "time_unit": "h", "abundance_unit": "CFU/mL",
         },
         growth_curve_parameters,
+        headline="maximum_specific_growth_rate",
     ),
     Operation(
         "doubling_time", "Two-point culture doubling time",

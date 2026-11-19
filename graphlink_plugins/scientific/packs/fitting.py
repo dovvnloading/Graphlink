@@ -919,6 +919,7 @@ OPERATIONS = (
          Field("weights", "Relative inverse-variance weights", "vector")),
         {"predictors": [[1], [2], [3], [4], [5]], "response": [2.1, 4.2, 5.9, 8.0, 10.2],
          "weights": [1, 2, 1, 2, 1]}, _linear,
+        headline="r_squared",
     ),
     Operation(
         "nonlinear_least_squares", "Levenberg–Marquardt nonlinear fit",
@@ -931,6 +932,7 @@ OPERATIONS = (
         {"model": "saturating_exponential", "x": [1, 2, 3, 4, 5],
          "y": [1.8, 3.2, 4.3, 5.1, 5.6], "weights": [1, 1, 1, 1, 1],
          "initial_parameters": [8, 0.25]}, _nonlinear,
+        headline="parameter_0",
     ),
     Operation(
         "custom_nonlinear_least_squares", "Custom expression nonlinear least squares",
@@ -954,11 +956,13 @@ OPERATIONS = (
          "models": '[{"name":"linear","model":"polynomial","initial_parameters":[0,1]},'
                    '{"name":"quadratic","expression":"a+b*x+c*x^2",'
                    '"parameters":{"a":0,"b":1,"c":0.01}}]'}, _compare_models,
+        headline="best_model",
     ),
     Operation(
         "welch_t_test", "Welch two-sample t test", "Two-sided Welch t test; independent samples and unequal population variances.",
         (Field("sample_a", "Sample A", "vector"), Field("sample_b", "Sample B", "vector")),
         {"sample_a": [6, 8, 10, 7], "sample_b": [9, 11, 12, 10, 13]}, _welch,
+        headline="p_value",
     ),
     Operation(
         "chi_square_gof", "Chi-square goodness of fit",
@@ -966,5 +970,6 @@ OPERATIONS = (
         (Field("observed", "Observed category counts", "vector"),
          Field("expected", "Expected counts (fixed in advance)", "vector")),
         {"observed": [25, 30, 45], "expected": [30, 30, 40]}, _chi_square,
+        headline="p_value",
     ),
 )

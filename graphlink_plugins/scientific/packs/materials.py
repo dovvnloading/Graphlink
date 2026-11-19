@@ -115,6 +115,7 @@ OPERATIONS: tuple[Operation, ...] = (
             "gauge_length_mm": 50,
         },
         tensile_response,
+        headline="peak_measured_stress_mpa",
     ),
     Operation(
         "apparent_porosity",
@@ -128,6 +129,7 @@ OPERATIONS: tuple[Operation, ...] = (
         ),
         {"dry_mass_g": 80, "saturated_mass_g": 86, "suspended_mass_g": 56},
         apparent_porosity,
+        headline="apparent_open_porosity_percent",
     ),
 )
 
@@ -644,6 +646,7 @@ OPERATIONS += (
                                [0.002, 400], [0.003, 430], [0.004, 455], [0.006, 475],
                                [0.01, 490], [0.03, 500], [0.06, 480], [0.1, 440], [0.14, 400]],
          "elastic_limit_strain_mm_mm": 0.002}, stress_strain_analysis,
+        headline="young_modulus_mpa",
     ),
     Operation(
         "true_stress_strain", "Convert engineering and true stress–strain",
@@ -653,12 +656,14 @@ OPERATIONS += (
          Field("direction", "engineering_to_true | true_to_engineering", "text", unit="unitless code")),
         {"uniform_curve": [[0, 0], [0.02, 250], [0.1, 320]],
          "direction": "engineering_to_true"}, true_stress_strain,
+        headline="last_true_stress_mpa",
     ),
     Operation(
         "hollomon_fit", "Fit Hollomon work hardening", "Log-linear least-squares fit of σ_true=K ε_plastic^n.",
         (Field("true_plastic_curve", "[true plastic strain, true stress] rows", "matrix",
                unit="col 1: mm/mm; col 2: MPa"),),
         {"true_plastic_curve": [[0.01, 200], [0.04, 303.143313302], [0.09, 381.01817609]]}, hollomon_fit,
+        headline="strain_hardening_exponent_n_dimensionless",
     ),
     Operation(
         "ramberg_osgood_fit", "Fit Ramberg–Osgood plasticity",
@@ -668,6 +673,7 @@ OPERATIONS += (
          Field("young_modulus_mpa", "Measured Young modulus", "number", unit="MPa")),
         {"total_strain_stress_curve": [[0.002, 200], [0.005, 300], [0.01, 360], [0.02, 420]],
          "young_modulus_mpa": 200000}, ramberg_osgood_fit,
+        headline="ramberg_osgood_n_dimensionless",
     ),
     Operation(
         "fatigue_life", "Estimate Basquin and Coffin–Manson life",
@@ -688,6 +694,7 @@ OPERATIONS += (
          "young_modulus_mpa": 200000, "fatigue_strength_coefficient_mpa": 1000, "basquin_exponent_b": -0.1,
          "fatigue_ductility_coefficient_mm_mm": 0.5, "coffin_manson_exponent_c": -0.5,
          "mean_stress_correction": "goodman"}, fatigue_life,
+        headline="basquin_fatigue_life_cycles",
     ),
     Operation(
         "fracture_stress_intensity", "Compute mode-I stress intensity",
@@ -699,6 +706,7 @@ OPERATIONS += (
                unit="unitless code")),
         {"applied_tensile_stress_mpa": 200, "crack_length_a_m": 0.005,
          "plate_width_m": 0.1, "geometry": "finite_edge"}, fracture_stress_intensity,
+        headline="mode_i_stress_intensity_mpa_sqrt_m",
     ),
     Operation(
         "fracture_critical_length", "Compute critical crack length from toughness",
@@ -727,6 +735,7 @@ OPERATIONS += (
          "stress_range_mpa": 100, "constant_geometry_factor_y": 1,
          "paris_c_m_cycle_inv_mpa_sqrt_m_neg_m": 1e-12, "paris_exponent_m": 3,
          "load_ratio_r": 0.1, "fracture_toughness_mpa_sqrt_m": 50}, paris_crack_growth,
+        headline="paris_growth_cycles",
     ),
     Operation(
         "thermal_expansion_stress", "Thermal expansion and restrained stress",
@@ -739,6 +748,7 @@ OPERATIONS += (
         {"linear_expansion_per_k": 12e-6, "initial_length_mm": 1000,
          "temperature_change_k": 50, "young_modulus_mpa": 200000,
          "axial_restraint_fraction": 1}, thermal_expansion_stress,
+        headline="restrained_axial_stress_mpa",
     ),
     Operation(
         "composite_moduli", "Estimate aligned composite moduli",
@@ -750,6 +760,7 @@ OPERATIONS += (
          Field("halpin_tsai_shape_xi", "Halpin–Tsai reinforcement shape ξ", "number", unit="1")),
         {"fiber_volume_fraction": 0.6, "fiber_axial_modulus_gpa": 230, "fiber_transverse_modulus_gpa": 15,
          "matrix_modulus_gpa": 3.5, "halpin_tsai_shape_xi": 2}, composite_moduli,
+        headline="halpin_tsai_modulus_gpa",
     ),
     Operation(
         "hardness_e140", "Convert ASTM E140 steel hardness",
@@ -778,5 +789,6 @@ OPERATIONS += (
          "temperature_k": 1223.15, "elapsed_time_s": 25400,
          "depth_mm": [0, 0.25, 0.5, 0.75, 1],
          "initial_solute_wt_percent": 0.25, "surface_solute_wt_percent": 1.2}, arrhenius_diffusion_profile,
+        headline="diffusivity_m2_s",
     ),
 )

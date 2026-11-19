@@ -30,11 +30,19 @@
   padding: 4px 7px;
 }
 .science-body :is(input, textarea) { font-family: monospace; }
-.science-body textarea { resize: vertical; }
+/* Text, vector and matrix inputs fit their content: a one-word unit label is
+   one line, a long vector grows, and very long input scrolls past 12 lines. */
+.science-body textarea {
+  field-sizing: content;
+  min-height: calc(1.45em + 10px);
+  max-height: calc(12 * 1.45em + 10px);
+  line-height: 1.45;
+  resize: vertical;
+}
 .science-body button, .science-body summary { cursor: pointer; }
 .science-body button:disabled { opacity: .6; cursor: wait; }
 .science-body small, .science-body figcaption + span, .science-plot span { color: var(--gl-surface-text-secondary); }
-.science-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.science-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .science-actions .science-run { font-weight: 600; }
 .science-body [role="alert"] { color: var(--gl-status-danger, currentColor); }
 .science-results { padding-top: 9px; border-top: 1px solid var(--gl-surface-border); gap: 7px; }

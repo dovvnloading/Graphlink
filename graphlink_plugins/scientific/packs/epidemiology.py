@@ -432,6 +432,7 @@ OPERATIONS: tuple[Operation, ...] = (
                             "https://www.bmj.com/content/317/7168/1309"),
                    Citation("Cochrane Handbook, Choosing effect measures (double-zero studies)",
                             "https://www.cochrane.org/authors/handbooks-and-manuals/handbook/current/chapter-06")),
+        headline="risk_ratio",
     ),
     Operation(
         "diagnostic_test_accuracy", "Diagnostic test accuracy",
@@ -482,6 +483,7 @@ OPERATIONS: tuple[Operation, ...] = (
                  "CDF inversion without a normal approximation."),
         citations=(Citation("Garwood (1936), Fiducial limits for the Poisson distribution",
                             "https://doi.org/10.1093/biomet/28.3-4.437"),),
+        headline="incidence_rate",
     ),
     Operation(
         "direct_age_standardization", "Direct age standardization",
@@ -504,6 +506,7 @@ OPERATIONS: tuple[Operation, ...] = (
                             "https://pubmed.ncbi.nlm.nih.gov/9131766/"),
                    Citation("SAS/STAT, Direct standardization gamma confidence interval",
                             "https://support.sas.com/documentation/cdl/en/statug/67523/HTML/default/statug_stdrate_details14.htm")),
+        headline="standardized_rate",
     ),
 )
 

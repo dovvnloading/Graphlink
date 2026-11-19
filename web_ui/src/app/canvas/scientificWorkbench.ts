@@ -33,6 +33,8 @@ export interface ScienceOperation {
   /** Human-readable description of the implemented numerical procedure and limitations. */
   methods?: string;
   citations?: ScienceCitation[];
+  /** Result value key the node shows first, declared by the operation. */
+  headline?: string;
 }
 
 export interface SourceReference {
@@ -318,6 +320,7 @@ function isOperation(value: unknown): value is ScienceOperation {
     && typeof value.description === "string" && record(value.example) && Array.isArray(value.fields)
     && value.fields.every(isField)
     && (value.methods === undefined || typeof value.methods === "string")
+    && (value.headline === undefined || typeof value.headline === "string")
     && (value.citations === undefined || Array.isArray(value.citations)
       && value.citations.every((citation: unknown) => record(citation)
         && typeof citation.label === "string" && citation.label.trim().length > 0

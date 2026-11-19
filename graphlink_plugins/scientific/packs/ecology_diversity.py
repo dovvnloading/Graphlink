@@ -245,6 +245,7 @@ OPERATIONS: tuple[Operation, ...] = (
             "Hill (1973), Diversity and Evenness: A Unifying Notation and Its Consequences, Ecology 54:427–432",
             "https://doi.org/10.2307/1934352",
         ),),
+        headline="hill_selected",
     ),
     Operation(
         "beta_diversity", "Beta diversity across sites",
@@ -273,6 +274,7 @@ OPERATIONS: tuple[Operation, ...] = (
                 "https://doi.org/10.2307/1942268",
             ),
         ),
+        headline="whittaker_beta",
     ),
     Operation(
         "species_accumulation", "Species accumulation by sample",

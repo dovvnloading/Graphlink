@@ -103,6 +103,7 @@ OPERATIONS: tuple[Operation, ...] = (
         ),
         {"resistance_ohm": 1000, "capacitance_f": 0.001, "step_v": 5, "time_s": [0, 0.25, 0.5, 1, 2, 3, 5]},
         _rc_response,
+        headline="time_constant_s",
     ),
     Operation(
         "linear_expansion",
@@ -115,6 +116,7 @@ OPERATIONS: tuple[Operation, ...] = (
         ),
         {"length_m": 2, "coefficient_per_k": 0.000023, "temperature_change_k": 40},
         _expansion,
+        headline="length_change_m",
     ),
 )
 
@@ -601,6 +603,7 @@ OPERATIONS += (
          "second_moment_m4": 8e-6, "point_load_n": 1000, "point_location_m": 2,
          "uniform_load_n_m": 100, "position_m": [0, 1, 2, 3, 4]},
         beam_response,
+        headline="max_deflection_m",
     ),
     Operation(
         "combined_stress", "Axial, bending and von Mises yield check",
@@ -620,6 +623,7 @@ OPERATIONS += (
          "section_modulus_m3": 1e-4, "shear_force_n": 10000, "shear_area_m2": 0.004,
          "yield_strength_pa": 250e6, "safety_factor_1": 2},
         combined_stress,
+        headline="max_von_mises_pa",
     ),
     Operation(
         "pipe_flow", "Pipe Reynolds number and Darcy–Weisbach loss",
@@ -638,6 +642,7 @@ OPERATIONS += (
          "volume_flow_m3_s": 0.01, "density_kg_m3": 1000,
          "viscosity_pa_s": 0.001, "gravity_m_s2": 9.80665},
         pipe_flow,
+        headline="pressure_drop_pa",
     ),
     Operation(
         "heat_exchanger_sizing", "Size parallel/counterflow exchanger: LMTD and ε–NTU",
@@ -659,6 +664,7 @@ OPERATIONS += (
          "hot_cp_j_kg_k": 4000, "cold_cp_j_kg_k": 4000,
          "overall_u_w_m2_k": 500, "target_heat_w": 650000},
         heat_exchanger_sizing,
+        headline="required_area_lmtd_m2",
     ),
     Operation(
         "transfer_function_response", "First/second-order steps, Bode and stability margins",
@@ -680,6 +686,7 @@ OPERATIONS += (
          "time_s": [0, 0.25, 0.5, 1, 2, 3, 4, 6],
          "angular_frequency_rad_s": [0, 0.5, 1, 2, 3, 4, 6, 10, 30]},
         transfer_function_response,
+        headline="peak_overshoot_percent",
     ),
     Operation(
         "pid_closed_loop", "PID-controlled first-order plant closed-loop step",

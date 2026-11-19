@@ -78,13 +78,16 @@ function csvCell(value: unknown): string {
 
 const PREVIEW_ROWS = 30;
 
-/** Favor an actual result over bookkeeping fields; never put vectors or objects
- * into the headline of a 390px canvas node. The complete values remain below. */
-function headlineScienceValue(result: ScienceResult): [string, unknown] | undefined {
+/** The operation's declared headline wins; otherwise favor an actual result over
+ * bookkeeping fields. Never put vectors or objects into the headline of a 390px
+ * canvas node. The complete values remain below. */
+function headlineScienceValue(result: ScienceResult, declared?: string): [string, unknown] | undefined {
   const scalars = Object.entries(result.values).filter(([, value]) =>
     (typeof value === "number" && Number.isFinite(value)) ||
     (typeof value === "string" && value.length > 0 && value.length <= 80) ||
     typeof value === "boolean");
+  const preferred = declared ? scalars.find(([name]) => name === declared) : undefined;
+  if (preferred) return preferred;
   const numeric = scalars.filter(([, value]) => typeof value === "number");
   const choices = numeric.length ? numeric : scalars;
   const rank = (name: string) =>
@@ -112,8 +115,8 @@ function ResultDisclosure({ label, children, className = "" }: {
   </details>;
 }
 
-function Results({ result, title, exportJson, exportCsv, exportMethods, onChart, onRefresh, onDiscuss, charts }: {
-  result: ScienceResult; title: string; exportJson: () => Promise<string>; exportCsv: () => Promise<Blob>;
+function Results({ result, title, headlineKey, exportJson, exportCsv, exportMethods, onChart, onRefresh, onDiscuss, charts }: {
+  result: ScienceResult; title: string; headlineKey?: string; exportJson: () => Promise<string>; exportCsv: () => Promise<Blob>;
   exportMethods: () => Promise<string>;
   onChart: (type: ScienceChartType) => void; onRefresh: (chart: ScienceChartLink) => void;
   onDiscuss: (result: ScienceResult) => void; charts: ScienceChartLink[];
@@ -128,7 +131,7 @@ function Results({ result, title, exportJson, exportCsv, exportMethods, onChart,
   const baseName = `${provenance.packId}-${result.operationId}`;
   const csv = table ?? (plot ? { columns: [plot.xLabel, plot.yLabel], rows: plot.x.map((v, i) => [v, plot.y[i]]) } : { columns: ["Metric", "Value"], rows: Object.entries(result.values) });
   const values = Object.entries(result.values);
-  const headline = headlineScienceValue(result);
+  const headline = headlineScienceValue(result, headlineKey);
   const measurement = headline && resultMeasurement(result, headline[0]);
   const uncertaintyUnavailable = headline && result.uncertainty?.unsupportedOutputs?.[headline[0]];
   const formattedSummary = formatScienceSummary(result.summary);
@@ -249,13 +252,12 @@ function Results({ result, title, exportJson, exportCsv, exportMethods, onChart,
         finally { setExporting(false); }
       }}>Export CSV</button>
       {chartTypes.length > 0 && <>
-        <label>Chart type
-          <select aria-label="Chart type" value={chartTypes.includes(chartType) ? chartType : chartTypes[0]}
-            onChange={(e) => setChartType(e.target.value as ScienceChartType)}>
-            {chartTypes.map((type) =>
-              <option key={type} value={type}>{type === "boxplot" ? "Box plot" : type === "line" ? "Fitted line with 95% confidence envelope" : type === "heatmap" ? "Heatmap" : "Scatter"}</option>)}
-          </select>
-        </label>
+        {/* Inline with Chart this; the select carries its own accessible name. */}
+        <select aria-label="Chart type" value={chartTypes.includes(chartType) ? chartType : chartTypes[0]}
+          onChange={(e) => setChartType(e.target.value as ScienceChartType)}>
+          {chartTypes.map((type) =>
+            <option key={type} value={type}>{type === "boxplot" ? "Box plot" : type === "line" ? "Fitted line with 95% confidence envelope" : type === "heatmap" ? "Heatmap" : "Scatter"}</option>)}
+        </select>
         <button type="button" onClick={() => onChart(chartTypes.includes(chartType) ? chartType : chartTypes[0])}>Chart this</button>
       </>}
     </div>
@@ -685,6 +687,7 @@ function Workbench({ session, state, options, run, configure, cancel, fetchTable
   const operationId = useId();
   const op = state.operations.find((candidate) => candidate.id === selected) ?? state.operations[0];
   const result = state.latest?.operationId === op.id ? state.latest : null;
+  const latestOperation = state.operations.find((candidate) => candidate.id === state.latest?.operationId);
   const revision = (state.runToken ?? JSON.stringify(state.latest?.provenance ?? null)) + "|" + JSON.stringify(state.runner ?? null);
   return <>
     <div className="science-operation-picker">
@@ -699,9 +702,8 @@ function Workbench({ session, state, options, run, configure, cancel, fetchTable
       busy={busy} setBusy={setBusy} />
     {tableEditor}
     {state.latest && <Results key={revision} result={state.latest} exportJson={exportJson} exportCsv={exportCsv} exportMethods={exportMethods}
-      charts={charts} onChart={onChart} onRefresh={onRefresh} onDiscuss={onDiscuss} title={
-      state.operations.find((candidate) => candidate.id === state.latest?.operationId)?.title ?? state.latest.operationId
-    } />}
+      charts={charts} onChart={onChart} onRefresh={onRefresh} onDiscuss={onDiscuss}
+      title={latestOperation?.title ?? state.latest.operationId} headlineKey={latestOperation?.headline} />}
   </>;
 }
 

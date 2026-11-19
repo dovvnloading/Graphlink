@@ -135,6 +135,7 @@ OPERATIONS = (
         (Field("x", "Predictor", "vector"), Field("y", "Response", "vector")),
         {"x": [1, 2, 3, 4, 5], "y": [2, 4, 5, 8, 11]},
         _regression,
+        headline="slope",
     ),
     Operation(
         "weighted_summary",
@@ -143,6 +144,7 @@ OPERATIONS = (
         (Field("observations", "Observations", "vector"), Field("weights", "Relative weights", "vector")),
         {"observations": [2, 4, 10], "weights": [1, 2, 1]},
         _weighted,
+        headline="weighted_mean",
     ),
     Operation(
         "grouped_table_summary",
