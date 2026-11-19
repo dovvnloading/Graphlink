@@ -20,7 +20,12 @@ def _label(value, field: str, limit: int = 160) -> None:
 
 
 def _number(value) -> bool:
-    return type(value) in (int, float) and math.isfinite(value)
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _plate_map(view: dict) -> None:
