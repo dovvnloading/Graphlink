@@ -424,6 +424,7 @@ describe("scientific workbench card", () => {
     try {
       const { request } = mount(JSON.stringify({ ...state, latest: result, runToken: "before" }));
       request.mockResolvedValueOnce({ ok: false, error: "The run changed." });
+      expandResult("Actions & exports");
       fireEvent.click(screen.getByText("Export JSON"));
       expect(await screen.findByRole("alert")).toHaveTextContent("The run changed.");
       expect(save).not.toHaveBeenCalled();
