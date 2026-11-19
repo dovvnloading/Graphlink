@@ -154,6 +154,15 @@ def test_empirical_roc_auc_independent_pairwise_oracle_ties_direction_and_thresh
                     positive_direction="higher")
     assert all_ties["values"]["auc"] == .5
     assert len(all_ties["table"]["rows"]) == 2
+    # A non-discriminating ROC has no positive J; the (0,0) origin is the
+    # first/most stringent maximizer, not an arbitrary observed-score cutoff.
+    assert all_ties["values"]["best_youden_j"] == 0
+    assert all_ties["values"]["best_youden_threshold"] == "No predicted positives"
+    inverted = _run("roc_curve_auc", scores=[4, 3, 2, 1],
+                    disease_status=[0, 0, 1, 1], positive_direction="higher")
+    assert inverted["values"]["auc"] == 0
+    assert inverted["values"]["best_youden_j"] == 0
+    assert inverted["values"]["best_youden_threshold"] == "No predicted positives"
     perfect = _run("roc_curve_auc", scores=[9, 8, 2, 1], disease_status=[1, 1, 0, 0],
                    positive_direction="higher")
     assert perfect["values"]["auc"] == 1
