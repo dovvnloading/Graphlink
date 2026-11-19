@@ -371,7 +371,7 @@ describe("scientific workbench card", () => {
     expect(svg.querySelectorAll(".science-forest-study rect")).toHaveLength(2);
     expect(svg.querySelector(".science-forest-diamond")).toHaveAttribute("points", expect.stringContaining(","));
     expect(svg.querySelector(".science-forest-reference")).toHaveAttribute("stroke-dasharray", "4 4");
-    expect(screen.getByText("Pooled effect")).toBeVisible();
+    expect(within(svg).getByText("Pooled effect")).toBeVisible();
     fireEvent.click(screen.getByText("Exact estimates and confidence intervals"));
     const data = screen.getByRole("table", { name: "Treatment effects estimate data" });
     expect(within(data).getByRole("row", { name: /Study Alpha/ })).toHaveTextContent("-0.5");

@@ -31,7 +31,7 @@
 .science-forest-pooled { font-weight: 700; }
 .science-forest-axis, .science-tree-annotation { font: 10px sans-serif; fill: currentColor; }
 .science-tree-annotation { opacity: .85; }
-.science-tree-branch { stroke: var(--gl-status-info, #227ba5); stroke-width: 1.6; fill: none; }
+.science-tree-branch { stroke: var(--gl-status-info, currentColor); stroke-width: 1.6; fill: none; }
 .science-view-data summary { font-size: .83em; cursor: pointer; }
 .science-view-data table { width: 100%; border-collapse: collapse; font-size: .81em; font-variant-numeric: tabular-nums; }
 .science-view-data th, .science-view-data td { border-bottom: 1px solid var(--gl-surface-border); padding: 3px 6px; text-align: left; }

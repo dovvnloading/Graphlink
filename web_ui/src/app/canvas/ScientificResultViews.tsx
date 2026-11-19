@@ -130,7 +130,7 @@ function ForestPlot({ view }: { view: ScienceForestPlotView }) {
   const height = axisY + 52;
   const maxWeight = Math.max(1, ...studies.map((study) => study.weight ?? 1));
   const ticks = minimum === maximum ? [minimum] :
-    [0, .5, 1].map((part) => minimum + (maximum - minimum) * part);
+    [0, .5, 1].map((part) => minimum * (1 - part) + maximum * part);
   const fromScale = (value: number) => view.scale === "log" ? Math.exp(value) : value;
   const pooled = view.pooled;
   const pooledLabel = pooled.label ?? "Pooled";
@@ -155,12 +155,12 @@ function ForestPlot({ view }: { view: ScienceForestPlotView }) {
               <title>{study.label}</title>{study.label.slice(0, 24)}
             </text>
             <line x1={x(study.lower)} x2={x(study.upper)} y1={middle} y2={middle}
-              stroke="var(--gl-status-info, #227ba5)" strokeWidth="2"><title>{description}</title></line>
+              stroke="var(--gl-status-info, currentColor)" strokeWidth="2"><title>{description}</title></line>
             {[study.lower, study.upper].map((edge, i) =>
               <line key={i} x1={x(edge)} x2={x(edge)} y1={middle - 4} y2={middle + 4}
-                stroke="var(--gl-status-info, #227ba5)" strokeWidth="1.4" />)}
+                stroke="var(--gl-status-info, currentColor)" strokeWidth="1.4" />)}
             <rect x={x(study.estimate) - side / 2} y={middle - side / 2} width={side} height={side}
-              fill="var(--gl-status-info, #227ba5)"><title>{description}</title></rect>
+              fill="var(--gl-status-info, currentColor)"><title>{description}</title></rect>
           </g>;
         })}
         <line x1="8" x2="426" y1={pooledY - 14} y2={pooledY - 14}
@@ -169,7 +169,7 @@ function ForestPlot({ view }: { view: ScienceForestPlotView }) {
         <polygon className="science-forest-diamond"
           points={[x(pooled.lower) + "," + pooledY, x(pooled.estimate) + "," + (pooledY - 9),
             x(pooled.upper) + "," + pooledY, x(pooled.estimate) + "," + (pooledY + 9)].join(" ")}
-          fill="var(--gl-status-info, #227ba5)" stroke="currentColor" strokeWidth="1">
+          fill="var(--gl-status-info, currentColor)" stroke="currentColor" strokeWidth="1">
           <title>{pooledLabel + ": " + forestNumber(pooled.estimate) + " [" +
             forestNumber(pooled.lower) + ", " + forestNumber(pooled.upper) + "]"}</title>
         </polygon>
