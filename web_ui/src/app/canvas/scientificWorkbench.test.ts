@@ -23,6 +23,36 @@ describe("scientific catalog input and parent contracts", () => {
     expect(() => parse("vector", "[1e999]")).toThrow();
   });
 
+  it("accepts only declared choice values and validates optional methods and citations", () => {
+    const operation = {
+      id: "potency", title: "Potency", description: "Relative potency", example: { metric: "EC50" },
+      fields: [{ key: "metric", label: "Metric", kind: "choice" as const, unit: "category",
+        description: "", choices: ["EC50", "IC50"] }],
+      methods: "Fit a 4PL response and report the relative halfway concentration.",
+      citations: [{ label: "Sebaugh (2011)", url: "https://doi.org/10.1002/pst.426" }],
+    };
+    expect(parseInputs(operation, { metric: "IC50" })).toEqual({ metric: "IC50" });
+    expect(draftInputs(operation, { metric: "IC50" })).toEqual({ metric: "IC50" });
+    expect(() => parseInputs(operation, { metric: "ec50" })).toThrow(/must be one of/);
+    expect(() => parseInputs(operation, { metric: "Other" })).toThrow(/must be one of/);
+    const state = { scienceVersion: 1, packId: "biology", operations: [operation], latest: null };
+    expect(readScienceState(JSON.stringify(state))?.operations[0]).toEqual(operation);
+    expect(readScienceState(JSON.stringify({ ...state, operations: [
+      { ...operation, fields: [{ ...operation.fields[0], choices: [] }] },
+    ] }))).toBeNull();
+    expect(readScienceState(JSON.stringify({ ...state, operations: [
+      { ...operation, fields: [{ ...operation.fields[0], choices: ["EC50", "EC50"] }] },
+    ] }))).toBeNull();
+    expect(readScienceState(JSON.stringify({ ...state, operations: [
+      { ...operation, citations: [{ label: "Untrusted", url: "javascript:alert(1)" }] },
+    ] }))).toBeNull();
+    const linked = { nodeId: "previous", resultHash: "hash", selector: ["values", "metric"] };
+    expect(compatibleOptions(operation.fields[0], [
+      { label: "Supported", value: "IC50", reference: linked },
+      { label: "Unsupported", value: "Unknown", reference: linked },
+    ])).toHaveLength(1);
+  });
+
   it("validates numeric spellings before rounding or underflow in scalars and both array shapes", () => {
     for (const kind of ["number", "vector", "matrix"] as const) {
       const shaped = (s: string) => kind === "number" ? s : kind === "vector" ? "[" + s + "]" : "[[" + s + "]]";

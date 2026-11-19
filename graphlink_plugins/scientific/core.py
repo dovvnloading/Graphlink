@@ -64,8 +64,17 @@ class Field:
     dimension: str = ""
     column_units: tuple[str, ...] = ()
     column_dimensions: tuple[str, ...] = ()
+    choices: tuple[str, ...] = ()
 
     def __post_init__(self):
+        if self.kind == "choice":
+            if (not self.choices or any(
+                not isinstance(value, str) or not value or value.strip() != value
+                for value in self.choices
+            ) or len(set(self.choices)) != len(self.choices)):
+                raise ValueError("Choice fields require distinct, nonempty string values.")
+        elif self.choices:
+            raise ValueError("Only choice fields can declare allowed choices.")
         if self.kind == "matrix" and (columns := _MATRIX_COLUMNS.fullmatch(self.unit)):
             units = tuple(value.strip() for value in columns.groups())
             parsed_units = [parse_unit(value) for value in units]
@@ -138,6 +147,18 @@ def _unit_field(field: Field, raw: dict) -> str | None:
 
 
 @dataclass(frozen=True)
+class Citation:
+    label: str
+    url: str
+
+    def __post_init__(self):
+        if (not isinstance(self.label, str) or not self.label.strip()
+                or not isinstance(self.url, str)
+                or not re.fullmatch(r"https://[A-Za-z0-9.-]+(?:/[^\s]*)?", self.url)):
+            raise ValueError("Citations require a label and an HTTPS URL.")
+
+
+@dataclass(frozen=True)
 class Operation:
     id: str
     title: str
@@ -147,8 +168,13 @@ class Operation:
     calculate: Callable[[dict], dict]
     # Optional pack-level wall-clock override. None uses deployment configuration.
     timeout_s: float | None = None
+    methods: str = ""
+    citations: tuple[Citation, ...] = ()
 
     def __post_init__(self):
+        for field in self.fields:
+            if field.kind == "choice" and self.example.get(field.key) not in field.choices:
+                raise ValueError(f"Example for {field.key} must be an allowed choice.")
         # Expose a declared default unit and dimension for every numeric field.
         object.__setattr__(self, "fields", tuple(
             replace(f, default_unit=u) if (u := _effective_unit(f, self.example)) != f.default_unit else f
@@ -159,13 +185,20 @@ class Operation:
         fields = []
         for item in self.fields:
             described = asdict(item)
+            if not item.choices:
+                described.pop("choices")
             if (unit_field := _unit_field(item, self.example)) is not None:
                 described["unit_field"] = unit_field
             fields.append(described)
-        return {
+        description = {
             "id": self.id, "title": self.title, "description": self.description,
             "fields": fields, "example": self.example,
         }
+        if self.methods:
+            description["methods"] = self.methods
+        if self.citations:
+            description["citations"] = [asdict(citation) for citation in self.citations]
+        return description
 
 
 def canonical_bytes(value: Any) -> bytes:
@@ -249,6 +282,10 @@ def _field_with_units(field: Field, value, unit: str):
             if exact.denominator == 1 and abs(exact.numerator) <= 2**53 - 1 and number == exact.numerator:
                 return int(exact.numerator), used
         raise ValueError(f"{field.label} requires an exact integer in the supported range; expected {field.dimension}.")
+    if field.kind == "choice":
+        if not isinstance(value, str) or value not in field.choices:
+            raise ValueError(f"{field.label} must be one of: {', '.join(field.choices)}.")
+        return value, None
     if field.kind == "text":
         if not isinstance(value, str) or not 0 < len(value) <= MAX_TEXT:
             raise ValueError(f"{field.label} requires 1–{MAX_TEXT} characters.")

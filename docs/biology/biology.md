@@ -2,6 +2,12 @@
 
 The Biology pack retains the **three original operation IDs, fields, examples and exact outputs** (`community_diversity`, `quadrat_density`, `community_overlap`). Existing `science_biology.workbench` nodes, source bindings, saved receipts, and shared pack-version behavior have not changed. Eight additional operations are appended; none requires NumPy, SciPy, R, a web service, or any package beyond the Python standard library and Graphlink's existing scientific fitting core.
 
+## Operation methods, citations, and categorical inputs
+
+Every Biology and Ecology catalog entry now supplies a **Methods and citations** section in the Scientific Workbench card. The method describes the **implemented** estimator or numerical scheme and its limitations, with links to primary publications or an authoritative equation/reference description. These citations refer to the analytical methods, not to the origin of an individual user's data and are not an external validation or a guarantee that model assumptions hold.
+
+The `dose_response_4pl_fit` operation now declares `potency_metric` as a **choice** field, with exactly `EC50` and `IC50` as allowed values; the editor shows them in a dropdown and the calculation backend rejects other values. The example remains `EC50`. This selection is a **label for the relative half-maximal concentration** of the fitted four-parameter logistic curve, not a switch to a different fitting algorithm. Existing operation identifiers, other input keys, calculations, output fields and saved-result receipt formats are unchanged.
+
 ## Input, output, and statistical conventions
 
 Every new input is labeled with its physical unit, or explicitly says it is categorical/dimensionless. For instrument-specific units, enter a **unit label** alongside the data, e.g. `days`, `CFU/mL`, `µM`, `nmol/min/mg`, `% inhibition`. The program **does not convert between user-supplied unit labels**. Quantitative results, table headers, and graph axes use those units; scalar-value dictionaries carry companion `*_unit` fields. Rates use reciprocal time units, residual sums of squares use squared response units, and probabilities/Hill slopes/R²/chi-square values are dimensionless. Never mix different units in one input vector. The three original operations deliberately preserve their historical schemas and representations rather than retroactively rewriting saved results.
