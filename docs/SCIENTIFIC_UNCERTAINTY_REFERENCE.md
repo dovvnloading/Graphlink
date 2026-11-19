@@ -129,12 +129,18 @@ models use bounded, scale-aware central-difference sensitivities. If curvature
 over one standard uncertainty is strong, **automatic** propagation switches
 to Monte Carlo; users can also select **First-order GUM** or explicitly
 request **Monte Carlo (JCGM 101)** in the node. Monte Carlo uses deterministic,
-jointly sampled Gaussian source components (16,384 trials), preserving
-shared-source correlations, and reports its simulated standard deviation,
-mean, and quantile coverage interval. The first-order budget remains an
-attribution of input sensitivity; it is labeled as such when Monte Carlo
-supplies the final uncertainty. The deterministic seed is derived from the
-operation and inputs, not the clock.
+jointly sampled Gaussian source components, preserving shared-source
+correlations. The number of trials follows JCGM 101 clause 7.2.2's
+`10,000 / (1 - coverage_probability)` recommendation (at least 200,000
+trials and at most 1,000,000); unsupported higher-tail requests fail
+explicitly instead of reporting poorly resolved intervals. Monte Carlo
+reports the simulated standard deviation, mean, and equal-tail quantile
+coverage interval. The *nominal* result is not necessarily the Monte
+Carlo mean, and a symmetric input coverage factor is not a factor for
+an asymmetric Monte Carlo quantile interval. The first-order budget
+remains an attribution of input sensitivity; it is labeled as such when
+Monte Carlo supplies the final uncertainty. The deterministic seed is
+derived from the operation and inputs, not the clock.
 
 **Limitations that are surfaced, not hidden:** Interval-only estimates such
 as BCa/bootstrap intervals, correlation confidence limits, and odds-ratio
@@ -149,7 +155,11 @@ combining or double-counting the two contributions. Numeric vectors,
 matrices, and discrete inputs do not currently have elementwise covariance
 models and are not automatically propagated. Mismatched declared units and
 unsupported sensitivities or nonphysical Monte Carlo draws also raise
-actionable errors. No PDF is inferred from a confidence interval. Ordinary
+actionable errors. Only Monte Carlo *marginal moments* and intervals,
+not a joint output probability density, are retained; downstream use
+of a Monte Carlo-derived output as a Gaussian uncertainty is therefore
+rejected, rather than silently losing skew and covariance. No PDF
+is inferred from a confidence interval. Ordinary
 native standard errors without an independently specified coverage model
 use an approximate Gaussian coverage factor for their propagated interval;
 mixed coverage probabilities are rejected, and for shared probability with

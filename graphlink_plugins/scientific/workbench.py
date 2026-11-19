@@ -236,7 +236,13 @@ def _verify_sources(document, node, inputs: dict, sources: dict, granted,
                 raise ValueError(f"Connected input '{key}' has incompatible units: {exc}") from None
         if (type(normalized_source) in (int, float) and type(inputs[key]) in (int, float)
                 and target_unit and source_unit):
-            matched = math.isclose(normalized_source, inputs[key], rel_tol=1e-13, abs_tol=1e-14)
+            # Accept only binary64 roundoff from decimal unit normalization,
+            # not a source value changed by many measurement standard deviations.
+            # A relative 1e-13 tolerance incorrectly accepted modified values,
+            # and a fixed 1e-14 tolerance incorrectly accepted zero for tiny ones.
+            source_ulp = math.ulp(float(normalized_source))
+            input_ulp = math.ulp(float(inputs[key]))
+            matched = abs(normalized_source - inputs[key]) <= 2 * max(source_ulp, input_ulp)
         else:
             matched = normalized_source == inputs[key]
         if not matched:

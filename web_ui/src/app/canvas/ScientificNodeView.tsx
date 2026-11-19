@@ -77,14 +77,15 @@ function Results({ result, title, exportJson, onChart, onRefresh, charts }: {
     <p role="status">{result.summary}</p>
     <dl>{Object.entries(result.values).map(([label, value]) => {
       const measured = resultMeasurement(result, label);
-      return <div key={label}><dt>{label}</dt><dd>{measured ? formatMeasurement(measured) : display(value)}</dd></div>;
+      const unpropagatable = result.uncertainty?.unsupportedOutputs?.[label];
+      return <div key={label}><dt>{label}</dt><dd>{unpropagatable ? `${display(value)} · uncertainty unavailable` : measured ? formatMeasurement(measured) : display(value)}</dd></div>;
     })}</dl>
     {result.uncertainty && <details className="science-uncertainty-budget">
       <summary>Propagated uncertainty budget · {result.uncertainty.method === "gum" ? "first-order GUM" : "Monte Carlo"}</summary>
       {Object.entries(result.uncertainty.outputs).map(([name, measured]) =>
         <section key={name}>
           <h5>{name} · {formatMeasurement(measured)}</h5>
-          {measured.interval && <small>{Math.round((measured.coverageProbability ?? 0.95) * 100)}% coverage interval [{measured.interval[0]}, {measured.interval[1]}] · coverage factor k = {measured.coverageFactor}</small>}
+          {measured.interval && <small>{Math.round((measured.coverageProbability ?? 0.95) * 100)}% {measured.method === "monte_carlo" ? "Monte Carlo quantile coverage interval" : "coverage interval"} [{measured.interval[0]}, {measured.interval[1]}]{measured.method === "monte_carlo" ? " · Gaussian input model" : ` · coverage factor k = ${measured.coverageFactor}`}</small>}
           {measured.budgetNote && <small>{measured.budgetNote}</small>}
           {measured.budget && <table aria-label={`Uncertainty budget for ${name}`}>
             <thead><tr><th>Contributing input</th><th>Standard uncertainty</th><th>Sensitivity</th><th>Signed contribution</th><th>Variance / covariance</th></tr></thead>
