@@ -1723,7 +1723,7 @@ export class SceneStore {
   /** Download every row without putting a large dataset on the scene wire. */
   async exportScientificTableCsv(pluginId: string, nodeId: string,
     tableSource: "result" | "import", expectedRun?: string): Promise<Blob> {
-    const chunks: BlobPart[] = [];
+    const chunks: ArrayBuffer[] = [];
     let offset = 0;
     let expectedTotal: number | undefined;
     for (;;) {
@@ -1750,7 +1750,10 @@ export class SceneStore {
           || (!answer.done && answer.nextOffset === answer.totalBytes)) {
         throw new Error("The CSV export returned an incomplete page.");
       }
-      chunks.push(bytes);
+      // BlobPart requires ArrayBuffer rather than a possibly shared typed-array buffer.
+      const copy = new Uint8Array(bytes.byteLength);
+      copy.set(bytes);
+      chunks.push(copy.buffer);
       offset = answer.nextOffset;
       expectedTotal = answer.totalBytes;
       if (answer.done) return new Blob(chunks, { type: "text/csv;charset=utf-8" });
