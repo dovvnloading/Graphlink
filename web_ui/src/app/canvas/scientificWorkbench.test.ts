@@ -326,7 +326,10 @@ describe("saved Workbench wire safety", () => {
     expect(read([plate, survival])?.latest?.views).toHaveLength(2);
     expect(read([{ ...plate, wells: [{ well: "P25", value: 2 }] }])).toBeNull();
     expect(read([{ ...plate, wells: [{ well: "A1", value: 1 }, { well: "A1", value: 2 }] }])).toBeNull();
-    expect(read([{ ...plate, wells: [{ well: "A1", value: Infinity }] }])).toBeNull();
+    const overflowingWire = JSON.stringify({ ...base, latest: { ...latest,
+      views: [{ ...plate, wells: [{ well: "A1", value: 0 }] }],
+    } }).replace('"value":0', '"value":1e999');
+    expect(readScienceState(overflowingWire)).toBeNull();
     expect(read([{ ...plate, wells: [{ well: "A1", value: true }] }])).toBeNull();
     expect(read([{ ...survival, groups: [survival.groups[0]] }])).toBeNull();
     expect(read([{ ...survival, groups: [{ ...survival.groups[0], survival: [1, 1.1, 1] }, ...survival.groups.slice(1)] }])).toBeNull();
