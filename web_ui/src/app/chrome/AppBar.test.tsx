@@ -97,7 +97,7 @@ describe("AppBar", () => {
       renderAppBar(store);
       await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
       const action = await within(screen.getByRole("dialog")).findByRole("button",
-        { name: "Export methods" }, undefined, { timeout: 5_000 });
+        { name: "Export methods" }, { timeout: 5_000 });
       await user.click(action);
       await waitFor(() => expect(saved).toHaveBeenCalledOnce());
       expect(request).toHaveBeenCalledOnce();
