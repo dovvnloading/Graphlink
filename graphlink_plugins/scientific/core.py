@@ -21,7 +21,7 @@ MAX_COLUMNS = 32
 MAX_CELLS = 4096
 MAX_TEXT = 65536
 MAX_RESULT_BYTES = 512 * 1024
-# Legacy operation schemas and result receipts are deliberately unchanged.
+# Legacy 1.0.0 and 1.1.0 receipts remain readable without rewriting.
 # Typed imported tables have independent, larger storage limits.
 TABLE_MAX_ROWS = 100_000
 TABLE_MAX_COLUMNS = 256

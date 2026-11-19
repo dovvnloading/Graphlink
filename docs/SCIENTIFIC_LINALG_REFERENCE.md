@@ -1,6 +1,6 @@
 # Linear Algebra — Scientific Workbench reference
 
-**Plugin:** `science_linalg` · **Pack:** `linalg` · **Workbench version:** `1.1.0` · **Dependencies:** Python standard library only.
+**Plugin:** `science_linalg` · **Pack:** `linalg` · **Workbench version:** `1.2.0` · **Dependencies:** Python standard library only.
 
 Enable **Linear Algebra** as its own Scientific Workbench plugin in Settings → Plugins. Like the Numerical Methods (`science_numerics`) plugin, it uses `register_pack`, the generic workbench frontend, `graph.read` / `graph.mutate` grants, passive `workbench` node persistence, and the existing validated-input, provenance-hash, undo, and JSON export framework. The old `mathematics.linear_system` solve remains unchanged.
 

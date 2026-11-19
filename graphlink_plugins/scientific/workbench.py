@@ -21,7 +21,6 @@ from .data_table import (
     stage_from_saved, table_metadata_valid,
 )
 from .execution import ExecutionFailure, execute_in_process, execution_timeout
-from .reference_data import references_for_operation
 from .units import convert_decimal_measurement, parse_unit
 
 STATE_TYPES = (PersistedPluginState, PluginStateSnapshot, TableState)

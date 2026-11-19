@@ -1,6 +1,6 @@
 # Numerical Methods — Scientific Workbench reference
 
-The **Numerical Methods** pack (plugin ID: science_numerics) is a separate, explicitly granted Scientific Workbench plugin, like Fitting and Measurement Uncertainty. Enable it in Settings → Plugins and select it in Plugins → Scientific Workbench. Its manifest uses SDK API 1, generic frontend, passive workbench node persistence and graph.read / graph.mutate grants. The pack uses the existing scientific workbench receipt, undo and export framework (pack version 1.1.0). It adds **no external runtime dependencies**.
+The **Numerical Methods** pack (plugin ID: science_numerics) is a separate, explicitly granted Scientific Workbench plugin, like Fitting and Measurement Uncertainty. Enable it in Settings → Plugins and select it in Plugins → Scientific Workbench. Its manifest uses SDK API 1, generic frontend, passive workbench node persistence and graph.read / graph.mutate grants. The pack uses the existing scientific workbench receipt, undo and export framework (pack version 1.2.0). It adds **no external runtime dependencies**.
 
 ## Model input and security
 

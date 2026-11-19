@@ -135,7 +135,7 @@ def test_original_results_and_readable_receipts_are_unchanged():
                 result = convert(value, source, target)
                 assert result["values"] == {f"value ({target})": expected}
                 assert result["summary"] == f"Converted {dimension} from {source} to {target}."
-                assert result["provenance"]["packVersion"] == VERSION == "1.1.0"
+                assert result["provenance"]["packVersion"] == VERSION == "1.2.0"
     for source, target, value in [("K", "°C", 0), ("°C", "K", 25), ("°C", "°C", -273.15)]:
         original_offset = {"K": 0.0, "°C": 273.15}
         expected = value if source == target else float(
