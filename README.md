@@ -59,6 +59,8 @@ The composer shows the active route. Use its model picker to switch models on th
 
 ## Build your first graph
 
+![Panning the incident graph, searching for the database reply, jumping to it at full zoom, then choosing Branch from here and typing a follow-up question in the composer.](assets/gifs/canvas-navigation.gif)
+
 1. On an empty canvas choose **Write a message**. Ask *“Search got slower after a deploy. What should I check first?”* Your question and the reply appear as connected cards.
 2. Right-click the **reply’s header** and choose **Branch from Here**. Ask *“How would I test whether a database query regressed?”* Return to the **same original reply**, branch again, and ask *“How would I test the application layer?”* The two follow-ups now share an ancestor. Each can continue independently.
 3. Click the header of the first branch’s answer, then **Ctrl-click** the second (**Cmd-click** on macOS). Open the command palette with **Ctrl+K** or **Cmd+K**, choose **Synthesize Branches**, and send *“Give me one test that distinguishes these explanations.”* The resulting card records both source branches.
@@ -74,11 +76,15 @@ You can also use a chat message or another plain note as the source. To copy its
 
 Choose **Add a table** on an empty canvas or **Add Table** in the command palette. To use an existing CSV, open **Edit CSV**, choose **Import CSV file**, then **Save table**. The starter table records 2 hours for Design, 4 for Engineering, and another 3 for Design. Choose **Team** under **Group by** and **Hours** under **Sum column**. **Create chart** and **Create report** produce a bar chart and an editable Drafter document from the same grouped totals. Choose **Fit All** to see all three cards.
 
+![Adding the starter table, grouping Hours by Team, creating a bar chart and a report from it, then editing the first Design entry from 2 to 7 so both outputs show that their source changed.](assets/gifs/table-chart-report.gif)
+
 In **Edit table**, change the first Design entry from 2 to 7 and choose **Save table**. Each output marks its input as changed and keeps its previous result. Choose **Rerun from table** on the chart to update Design to 10 while the report still shows 5. Rerun the report when ready. **Compare versions** lets you inspect the previous result and restore it. On a current result, **Inspect source rows** shows the original data row numbers and cell values behind each group. For Design, rows 1 and 3 contribute 7 and 3. Saving and reopening the graph preserves these versions and their source connections. [View the chart and report after a table edit](assets/screenshots/table-workflow.png).
 
 ### Run connected outputs together
 
 To add a shared intermediate step, choose **Create grouped table** on the source, then create the chart and report from the grouped table. After editing the original table, open **Plugins → Graph Runner**, choose **Whole graph**, and select **Preview run**. The preview shows the order of the steps and which outputs need updating. The chart and report still show their old totals until you choose **Run graph**. If a report feeds a word-count note, the runner uses the updated report to calculate the count. Choose **Selected nodes** to limit the run to a branch and the inputs it needs.
+
+![Opening Graph Runner from Plugins, previewing the whole graph with the chart and report marked ready, running it, and the chart and report updating Design to 10.](assets/gifs/graph-runner.gif)
 
 Open Graph Runner again to inspect the saved result. If the app closed during execution, reopen the graph from the **Chat Library** and choose **Resume run**. Each completed step and its output were saved together. All transforms run locally. Existing chat replies can supply text to a workflow. [See the completed three-step run](assets/screenshots/graph-runner.png).
 
@@ -87,6 +93,8 @@ To run a local AI model explicitly, start **Ollama** and install a chat model. I
 ## Scientific Workbench
 
 Enable **Scientific Core** and a domain pack in **Settings → Plugins**. Open **Plugins → Scientific Workbench** to create a calculation node. For example, import a numeric CSV, branch a **Statistics** node from it, and select a measured column to compute its mean and sample standard deviation. Each result retains its inputs, method version, and source fingerprint and can be exported as JSON or CSV. [Pack specifications and worked example](docs/SCIENTIFIC_WORKBENCH.md).
+
+![Creating a Chemistry node from Plugins, choosing Convert transmission to absorbance, loading the example scan, running it, and turning the absorbance spectrum into a chart with Chart this.](assets/gifs/scientific-workbench.gif)
 
 ## API providers
 
@@ -139,5 +147,7 @@ Saved keys and GitHub tokens live in `~/.graphlink/session.dat`. Graphlink uses 
 The [desktop launcher](graphlink_desktop.py) starts FastAPI on loopback and opens the native webview. The Python backend owns the graph and persists edits. The React and TypeScript frontend renders the canvas and sends actions over a WebSocket. Shared types are generated from Python contracts. [Backend](backend) · [Frontend](web_ui/src/app) · [Wire contracts](contracts) · [Plugin examples](plugins).
 
 For automation, run `python -m backend.headless --port 8765` and connect the local MCP stdio adapter. Inspection is read-only by default. Canvas edits require explicit opt-in and a separate write token. The desktop and headless launchers share the same single-instance lock for each data directory. [Headless and MCP setup](docs/HEADLESS_MCP.md).
+
+The README screenshots and GIFs come from a seeded demo graph, so no model is needed. Run `npm --prefix web_ui run build`, then `npm --prefix web_ui run capture:screenshots` or `npm --prefix web_ui run capture:gifs`. The GIF capture needs ffmpeg 3.0 or newer.
 
 [Contributor setup and checks](CONTRIBUTING.md) · [Codebase map](GRAPHLINK_REPO_NAVIGATION.md) · [MIT license](LICENSE)
