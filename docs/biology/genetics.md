@@ -2,7 +2,7 @@
 
 **Pack:** `genetics` · **Plugin:** `science_genetics` · **Family:** Biology Workbench
 
-Enable **Genetics** in Settings → Plugins, then choose it in **Plugins → Biology Workbench**. This is a separate, grant-gated pack with six operations. It does not alter the historic `science_biology` operation IDs or saved receipts. All calculations use the Python standard library and produce Workbench summaries, values, labeled tables/plots and verified provenance.
+Enable **Genetics** in Settings → Plugins, then choose it in **Plugins → Biology Workbench**. This is a separate, grant-gated pack with eleven operations. It does not alter the historic `science_biology` operation IDs or saved receipts. All calculations use the Python standard library and produce Workbench summaries, values, labeled tables/plots and verified provenance.
 
 ## Operation inventory
 
@@ -14,6 +14,11 @@ Enable **Genetics** in Settings → Plugins, then choose it in **Plugins → Bio
 | `map_distances` | `recombinants`, `total_offspring` (two-locus counts) | Recombination fraction, Haldane/Kosambi distances (cM) |
 | `three_point_cross` | `progeny_counts` (eight complementary testcross gamete classes, fixed order below) | Gene order, parental/SCO/DCO classes, adjacent interval distances and interference |
 | `two_point_lod` | `recombinants`, `nonrecombinants` (informative meioses), `theta` (0–0.5) | Two-point LOD at θ, maximum LOD, θ MLE and LOD profile |
+| `f_statistics` | `genotype_counts` (two to 200 population rows, each [AA, AB, BB]) | Weighted observed/within/pooled heterozygosities, F_IS, F_ST, F_IT |
+| `linkage_disequilibrium` | `haplotype_counts` (four phased AB, Ab, aB, ab counts) | D, signed D′, r², marginal allele and haplotype frequencies |
+| `wright_fisher_drift_selection` | N (diploids), initial A copies, generations, viability fitnesses AA/AB/BB, random seed | One reproducible trajectory of selected parental frequencies and sampled A copies |
+| `heritability_variance` | Additive, dominance, epistatic, environmental variances and their common unit | Broad-sense H², narrow-sense h², supplied variance contributions |
+| `effective_population_size` | Breeding male/female counts and projection length | Sex-ratio N_e, ΔF and idealized heterozygosity retention by generation |
 
 Count and weight inputs are dimensionless, not percentages. Map distances are reported in **centimorgans** (cM), not physical base pairs. These operations assume fully classified, independent observations with no missing-data, penetrance, phase-uncertainty or population-relatedness model.
 
@@ -78,6 +83,39 @@ The maximum over **0≤θ≤0.5** occurs at `theta_hat = min(R/(R+NR), 0.5)`. Re
 
 Reference: [NIH linkage analysis course, LOD scores](https://www.genome.gov/sites/default/files/genome-old/pages/Research/IntramuralResearch/DIRCalendar/CurrentTopicsinGenomeAnalysis2005/CourseHandouts/CTGA2005Lec11.grey.pdf).
 
+
+## Population F-statistics
+
+The `f_statistics` operation takes **2–200 populations**, with a row of nonnegative integer genotype counts `[AA, AB, BB]` for each population, all at the **same biallelic diploid locus**. Every population must have at least one genotyped individual. It reports descriptive *heterozygosity-ratio* F-statistics, **not** the Weir–Cockerham finite-sample/bias-corrected θ estimator.
+
+Let population i contain Nᵢ diploids and A-allele frequency pᵢ=(2AAᵢ+ABᵢ)/(2Nᵢ). The observed heterozygosity is H_I=ΣABᵢ/ΣNᵢ; mean within-population Hardy–Weinberg heterozygosity is H_S=Σ[2Nᵢpᵢ(1−pᵢ)]/ΣNᵢ. Pooling copies gives p̄=Σ(2AAᵢ+ABᵢ)/(2ΣNᵢ), H_T=2p̄(1−p̄). The indices are **F_IS=(H_S−H_I)/H_S**, **F_ST=(H_T−H_S)/H_T**, and **F_IT=(H_T−H_I)/H_T**. Populations are weighted by counted *individuals*, not given equal weights regardless of size. If H_S=0, F_IS is explicitly undefined. If H_T=0, F_ST and F_IT are explicitly undefined; no fake zero is substituted.
+
+**Worked example:** genotype rows `[[10,0,0],[0,30,0]]` give H_I=0.75, H_S=0.375, H_T=0.46875, F_IS=−1, F_ST=0.2 and F_IT=−0.6. This identity also satisfies (1−F_IT)=(1−F_IS)(1−F_ST). Negative F_IS is a heterozygote excess; no causal interpretation or uncertainty interval is supplied. Reference: [Wright's F-statistics, population-genetics notes](https://cooplab.github.io/popgen-notes/).
+
+## Two-locus linkage disequilibrium
+
+Provide observed counts of **phased haplotypes**, in the strict order `[AB, Ab, aB, ab]`. They are chromosomes/gametic copies, **not unphased diploid genotypes**. From observed haplotype proportions derive p_A and p_B, and set D=p_AB−p_Ap_B. The **signed** standardized D′ uses D/D_max, where D_max is the appropriate positive or negative bound for the observed marginal frequencies. The squared correlation is **r²=D²/[p_A(1−p_A)p_B(1−p_B)]**. Both D′ and r² are undefined if either locus is monomorphic; D still evaluates to zero there.
+
+**Worked example:** `[40,10,10,40]` gives D=0.15, signed D′=0.6 and r²=0.36. Reversing coupling into `[10,40,40,10]` produces D=−0.15 and D′=−0.6, but still r²=0.36. The operation neither infers phase nor estimates uncertainty from population structure; disequilibrium is not itself proof of physical linkage. Reference: [One Hundred Years of Linkage Disequilibrium](https://academic.oup.com/genetics/article/209/3/629/5931007).
+
+## Wright–Fisher drift with viability selection
+
+The `wright_fisher_drift_selection` operation runs **one seeded trajectory** in a constant population of **1–5,000 diploids** for **1–400 discrete generations**. Initialize the count of A copies in 0…2N; supply strictly positive relative genotype viability weights w_AA, w_AB and w_BB (unitless), and a seed from 0 to 2³²−1. For parental frequency p, q=1−p, mean viability is w̄=p²w_AA+2pqw_AB+q²w_BB. Selection gives **p_sel=(p²w_AA+pqw_AB)/w̄**. Each subsequent generation draws the count of A copies from **Binomial(2N,p_sel)**, using a locally seeded pseudorandom generator. Returned rows contain generation number, selected frequency, new gene-copy count, and resulting frequency; the plot includes generation zero. Fixed/lost alleles are absorbing.
+
+**Numerical cross-check:** at p=0.5 and fitnesses (1.2,1.1,1), p_sel=(0.25×1.2+0.25×1.1)/(0.25×1.2+0.5×1.1+0.25×1)=0.575/1.1≈0.522727. A given seed reproduces the exact same trajectory; a single path is **not** an estimate of fixation probability or the expected trajectory. This simple model assumes random mating, independent diploid gene-copy sampling, constant N and no mutation, migration, overlapping generations or spatial structure. Reference: [Wright–Fisher model overview](https://pmc.ncbi.nlm.nih.gov/articles/PMC4269093/).
+
+## Broad- and narrow-sense heritability
+
+The `heritability_variance` operation takes **user-supplied** nonnegative additive (V_A), dominance (V_D), epistatic (V_I) and environmental (V_E) variance components, all in **one consistent squared-trait unit**. The positive phenotypic total is V_P=V_A+V_D+V_I+V_E. **Broad-sense H²=(V_A+V_D+V_I)/V_P** and **narrow-sense h²=V_A/V_P**. The operation does **not fit or estimate variance components from relatives, genotypes, twin correlations or phenotypes**; covariance, shared environment, G×E and measurement-error structure are excluded.
+
+**Worked example:** components (4,2,1,3) in cm² yield V_P=10 cm², H²=0.7 and h²=0.4. Zero total variance is rejected because neither ratio is defined. Heritability is population- and environment-dependent and does not measure the genetic determination of an individual's trait. Reference: [Stanford Encyclopedia of Philosophy, Heritability](https://plato.stanford.edu/archives/spr2021/entries/heredity/).
+
+## Effective population size from breeder sex ratio
+
+Given at least one breeding male (N_m) and one breeding female (N_f), `effective_population_size` computes the classic idealized **N_e=4N_mN_f/(N_m+N_f)** (diploid effective individuals). The one-generation expected inbreeding increment is ΔF=1/(2N_e). For **1–400 generations**, the operation reports the **relative heterozygosity retained H_t/H_0=(1−1/(2N_e))^t** and the corresponding projected inbreeding from F_0=0. Numerically stable logarithmic evaluation avoids losing very small rates.
+
+**Worked examples:** N_m=N_f=10 gives N_e=20; with N_m=1 and N_f=9, N_e=3.6 despite 10 total breeders. These are predictions for an ideal dioecious, random-mating, non-overlapping-generation system with constant sex ratio and equal reproductive success within sexes. They do not estimate N_e from allele-frequency change or linkage disequilibrium, nor correct for variance in family size or fluctuating census size. Reference: [Wang, Santiago and Caballero (2016), effective population size](https://www.nature.com/articles/hdy201643).
+
 ## Numerical limits and interpretation
 
-All class counts must be nonnegative integers and sums must stay in the exact-count range (≤2^53−1). The exact binomial and exact HWE size caps also bound runtime. Positive expected ratio weights must not underflow to zero when normalized. Mapping and three-point algorithms reject non-finite map distances; two-point LOD excludes infinite plot coordinates. No p-value from this pack establishes a causal variant, a medical genetic diagnosis or the validity of sampling/phase assumptions without independent evidence.
+All class counts must be nonnegative integers and sums must stay in the exact-count range (≤2^53−1). The exact binomial and exact HWE size caps also bound runtime. Positive expected ratio weights must not underflow to zero when normalized. Mapping and three-point algorithms reject non-finite map distances; two-point LOD excludes infinite plot coordinates. The new F, LD, variance and N_e outputs are descriptive or model-based rather than p-values; a single seeded simulation is not a population-level expectation. No p-value from this pack establishes a causal variant, a medical genetic diagnosis or the validity of sampling/phase assumptions without independent evidence.

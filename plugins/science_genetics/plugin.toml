@@ -1,7 +1,7 @@
 [plugin]
 id = "science_genetics"
 name = "Genetics"
-description = "Test Mendelian segregation and Hardy–Weinberg equilibrium; analyze linkage, genetic distances, three-point crosses and LOD scores."
+description = "Analyze Mendelian segregation, Hardy–Weinberg equilibrium, linkage, F-statistics, LD, drift, selection, heritability and effective size."
 version = "1.2.0"
 sdk_api_version = 1
 entry_point = "plugin:register"

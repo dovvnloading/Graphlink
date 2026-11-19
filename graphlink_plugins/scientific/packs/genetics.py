@@ -10,6 +10,8 @@ import math
 
 from graphlink_plugins.scientific.core import Citation, Field, Operation
 
+from .genetics_population import OPERATIONS as _POPULATION_OPERATIONS
+
 
 _MAX_COUNT = 2**53 - 1
 _MAX_EXACT_BINOMIAL = 10_000
@@ -365,7 +367,7 @@ def two_point_lod(data):
     }
 
 
-OPERATIONS = (
+OPERATIONS: tuple[Operation, ...] = (
     Operation(
         "segregation_chi_square", "Mendelian ratio χ² test",
         "Pearson goodness-of-fit for a fixed expected two-to-16-class segregation ratio.",
@@ -434,3 +436,7 @@ OPERATIONS = (
                             "https://www.genome.gov/sites/default/files/genome-old/pages/Research/IntramuralResearch/DIRCalendar/CurrentTopicsinGenomeAnalysis2005/CourseHandouts/CTGA2005Lec11.grey.pdf"),),
     ),
 )
+
+
+# Append to the catalog: preserve all six existing operation IDs and receipts.
+OPERATIONS += _POPULATION_OPERATIONS

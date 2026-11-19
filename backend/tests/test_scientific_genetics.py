@@ -46,6 +46,8 @@ def test_manifest_grant_discovery_docs_and_example_receipts():
     assert [operation.id for operation in operations("genetics")] == [
         "segregation_chi_square", "segregation_exact_binomial", "hardy_weinberg_exact",
         "map_distances", "three_point_cross", "two_point_lod",
+        "f_statistics", "linkage_disequilibrium", "wright_fisher_drift_selection",
+        "heritability_variance", "effective_population_size",
     ]
     document = (root / "docs/biology/genetics.md").read_text(encoding="utf-8")
     assert "science_genetics" in document
