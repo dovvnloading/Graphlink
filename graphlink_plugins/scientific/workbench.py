@@ -21,6 +21,7 @@ from .data_table import (
     stage_from_saved, table_metadata_valid, table_csv_chunk,
 )
 from .execution import ExecutionFailure, execute_in_process, execution_timeout
+from .methods import render_result_methods
 from .units import convert_decimal_measurement, parse_unit
 
 STATE_TYPES = (PersistedPluginState, PluginStateSnapshot, TableState)
@@ -573,6 +574,18 @@ def register_pack(host: HostContext, pack_id: str) -> None:
             return {"ok": False, "error": "Run a calculation before exporting its result."}
         return {"ok": True, "json": canonical_bytes(result).decode("ascii")}
 
+    def export_methods(document, ctx, request):
+        node, error = _current_state(document, request.node_id, kind, request.expected_run)
+        if error:
+            return error
+        try:
+            markdown = render_result_methods(
+                pack_id, node.state.data, node_id=node.id, title=node.title,
+            )
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "markdown": markdown}
+
     async def export_table_csv(document, ctx, request):
         node, error = _current_state(document, request.node_id, kind, request.expected_run)
         if error:
@@ -700,6 +713,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
     host.register_intent("run", run, args_schema=RunArgs, expose_to_builder=False)
     host.register_intent("cancel", cancel, args_schema=CancelArgs, expose_to_builder=False)
     host.register_intent("export_result", export_result, args_schema=ExportArgs, expose_to_builder=False)
+    host.register_intent("export_methods", export_methods, args_schema=ExportArgs, expose_to_builder=False)
     host.register_intent("export_table_csv", export_table_csv, args_schema=ExportTableCsvArgs, expose_to_builder=False)
     host.register_intent("import_table", import_table, args_schema=ImportTableArgs, expose_to_builder=False)
     host.register_intent("table_column", table_column, args_schema=TableColumnArgs, expose_to_builder=False)
