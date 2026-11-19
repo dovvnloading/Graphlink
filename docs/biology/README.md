@@ -5,6 +5,7 @@ Each biology pack has its own reference page and its own explicit Settings → P
 ## Pack references
 
 - [Biology and Ecology](biology.md) — community surveys, ecological modelling, growth and enzyme fits, genetics, survival and biodiversity (`science_biology`).
+- [Cell Culture](cell_culture.md) — hemocytometer counts and viability, viable-cell seeding, balanced serial dilutions, and centrifuge RCF/rpm (`science_cell_culture`).
 
 ## Add a biology pack using new files only
 
