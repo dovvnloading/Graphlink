@@ -41,6 +41,14 @@ Given known concentrations \(x_i\) and observed signals \(y_i\), the models mini
 
 For logistic curves, \(a\) is the low-concentration limiting signal, \(d\) is the high-concentration limiting signal, \(c>0\) is the concentration scale, \(b>0\) is the Hill slope, and \(g>0\) is the asymmetry (fixed at 1 for 4PL). Increasing and decreasing responses are supported via the ordering of the asymptotes. Logistic calibration spans at most 12 orders of magnitude. Calibration needs varying responses.
 
+**Important 5PL distinction:** the fitted scale parameter \(c\) is the half-response concentration *only if* \(g=1\). For the equation above, the concentration halfway between the fitted asymptotes is
+
+\[
+x_{1/2}=c\big(2^{1/g}-1\big)^{1/b}.
+\]
+
+The result now includes `half_response_concentration`, `half_response_concentration_unit`, and `half_response_status`. This descriptive half-asymptote concentration is explicitly marked as within or outside the sampled concentration range; an out-of-range value is **not** assay-validated. Unlike unknown-sample concentrations, this model-derived descriptor may be extrapolated and is never used for quantifying unknowns. See [independent correctness audit](SCIENTIFIC_CORRECTNESS_AUDIT_2026.md).
+
 **Inverse prediction:** Every observed standard and unknown signal is inverted over the **measured** concentration interval \([x_{\min},x_{\max}]\) using monotone bisection. Responses outside the fitted endpoint signals receive an **outside calibration** status, rather than extrapolated concentrations. The table includes nominal concentration, observed signal, fitted signal, back-calculated concentration and, when nominal concentration is positive, recovery \(100\hat{x}/x\).
 
 For each in-range unknown:
