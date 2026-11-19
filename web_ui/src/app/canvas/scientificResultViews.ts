@@ -60,11 +60,12 @@ export function isScienceResultView(v: unknown): v is ScienceResultView {
       if (i > 0 && (t < group.times[i - 1] || (i > 1 && t === group.times[i - 1]) ||
           p > group.survival[i - 1])) return false;
     }
-    if (group.censored !== undefined && (!Array.isArray(group.censored) ||
-        group.censored.length > group.times.length ||
-        group.censored.some((t: unknown, i: number) => !finite(t) ||
+    const censored = group.censored;
+    if (censored !== undefined && (!Array.isArray(censored) ||
+        censored.length > group.times.length ||
+        censored.some((t: unknown, i: number) => !finite(t) ||
           !(group.times as number[]).includes(t) ||
-          (i > 0 && t <= group.censored[i - 1])))) return false;
+          (i > 0 && t <= censored[i - 1])))) return false;
   }
   return true;
 }
