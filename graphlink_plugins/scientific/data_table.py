@@ -264,7 +264,7 @@ def stage_result_table(table: dict, *, pack: str, operation_id: str) -> dict:
     if not original_rows:
         raise ValueError("A generated typed table needs at least one row.")
     if len(set(headers)) != len(headers) or any(
-        not label.strip() or "\\r" in label or "\\n" in label for label in headers
+        not label.strip() or "\r" in label or "\n" in label for label in headers
     ):
         raise ValueError("Generated table headers must be distinct, nonempty names.")
     columns: list[dict] = []
@@ -470,7 +470,7 @@ def table_csv_chunk(meta: dict, offset: int = 0) -> dict:
                     suffix=".tmp", delete=False,
                 ) as handle:
                     temporary = Path(handle.name)
-                    writer = csv.writer(handle, lineterminator="\\r\\n")
+                    writer = csv.writer(handle, lineterminator="\r\n")
                     writer.writerow([col["label"] for col in meta["columns"]])
                     for row in table["rows"]:
                         writer.writerow([_csv_cell(value) for value in row])
@@ -504,7 +504,7 @@ def _csv_cell(value: object) -> str:
         return ""
     if isinstance(value, str):
         # Match the browser's CSV formula-injection defense.
-        return "'" + value if re.match(r"^(?:[\\t\\r\\n]|\\s*[=+@-])", value) else value
+        return "'" + value if re.match(r"^(?:[\t\r\n]|\s*[=+@-])", value) else value
     if value is True:
         return "true"
     if value is False:
