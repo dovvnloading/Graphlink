@@ -144,6 +144,10 @@ _CATEGORY_META = [
         "name": "Scientific Workbench",
         "description": "Interactive measurement, analysis and visualization with reproducible local results.",
     },
+    {
+        "name": "Biology Workbench",
+        "description": "Biological and ecological analysis with reproducible local results.",
+    },
 ]
 
 

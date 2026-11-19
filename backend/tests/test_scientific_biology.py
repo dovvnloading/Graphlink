@@ -1,7 +1,7 @@
 """Published numeric oracles, physical constraints and persisted Biology results.
 
 The reference readings and their stated precision are recorded in
-``docs/SCIENTIFIC_BIOLOGY_REFERENCE.md``. No scientific third-party runtime
+``docs/biology/biology.md``. No scientific third-party runtime
 package is needed by the workbench or this test module.
 """
 
