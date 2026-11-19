@@ -103,9 +103,11 @@ class _Newick:
             raise ValueError("Unterminated quoted Newick label.")
         start = self.pos
         while (self.pos < len(s) and not s[self.pos].isspace()
-               and s[self.pos] not in ",():;[]"):
+               and s[self.pos] not in ",():;[]'"):
             self.pos += 1
-        return s[start:self.pos] or None
+        token = s[start:self.pos]
+        # Per the Newick convention, unquoted underscores stand for spaces.
+        return token.replace("_", " ") if token else None
 
     def _length(self) -> float | None:
         self._skip()
@@ -121,6 +123,8 @@ class _Newick:
         if not _LENGTH_RE.fullmatch(token):
             raise ValueError("Newick branch lengths must be finite, nonnegative decimals.")
         value = float(token)
+        if value == 0.0 and any(ch in "123456789" for ch in re.split("[eE]", token, 1)[0]):
+            raise ValueError("Newick branch length underflows the supported numerical range.")
         if not math.isfinite(value) or value > _MAX_LENGTH:
             raise ValueError("Newick branch length exceeds the finite supported range.")
         return value
@@ -197,9 +201,16 @@ def _forest(text: str) -> list[_Node]:
 
 
 def _quote(label: str) -> str:
-    if re.fullmatch(r"[A-Za-z0-9_.-]+", label):
+    # A literal underscore must be quoted: unquoted underscores mean spaces.
+    if re.fullmatch(r"[A-Za-z0-9.-]+", label):
         return label
     return "'" + label.replace("'", "''") + "'"
+
+
+def _length_text(value: float) -> str:
+    # Shortest binary64-roundtripping decimal; .15g loses branch-length digits.
+    rendered = repr(value)
+    return rendered[:-2] if rendered.endswith(".0") else rendered
 
 
 def _newick(root: _Node) -> str:
@@ -207,7 +218,7 @@ def _newick(root: _Node) -> str:
         children = ("(" + ",".join(encode(c, False) for c in sorted(node.children, key=_taxa)) + ")"
                     if node.children else "")
         name = _quote(node.name) if node.name else ""
-        length = (":" + format(node.length, ".15g")
+        length = (":" + _length_text(node.length)
                   if not is_root and node.length is not None else "")
         return children + name + length
     return encode(root, True) + ";"
@@ -249,7 +260,7 @@ def _matrix(data: dict) -> tuple[list[str], dict[tuple[int, int], float]]:
             if i < j:
                 other = matrix[j][i]
                 if (type(other) not in (int, float) or not math.isfinite(other)
-                        or abs(value - other) > 1e-10 * max(1, value, abs(other))):
+                        or abs(value - other) > 1e-10 * max(value, abs(other))):
                     raise ValueError("Distance matrix must be symmetric.")
                 distances[names[i], names[j]] = (value + other) / 2
     sorted_names = sorted(names)
@@ -271,22 +282,38 @@ def _nonnegative(value: float, label: str) -> float:
     return max(0.0, value)
 
 
-def _distance_result(root: _Node, algorithm: str, clipped: int = 0) -> dict:
+def _distance_result(
+    root: _Node, algorithm: str, names: list[str],
+    observed: dict[tuple[int, int], float], clipped: int = 0,
+) -> dict:
     leaves = _leaves(root)
+    graph, labels = _graph(root)
+    tip_ids = {name: vertex for vertex, name in labels.items() if name is not None}
+    residuals = [
+        math.fsum(_require_length(weight) for _, _, weight in _path(
+            graph, tip_ids[names[i]], tip_ids[names[j]]
+        )) - distance
+        for (i, j), distance in observed.items()
+    ]
+    maximum_residual = max(abs(residual) for residual in residuals)
+    rms_residual = math.hypot(*residuals) / math.sqrt(len(residuals))
     return {
         "summary": (f"{algorithm}: inferred a tree with {len(leaves)} taxa. "
-                    + (f"Clipped {clipped} negative fitted limbs to zero; input distances may not be additive. "
-                       if clipped else "")
+                    + (f"Clipped {clipped} negative fitted limbs to zero. " if clipped else "")
+                    + f"Maximum absolute tip-distance residual: {maximum_residual:.6g} input units. "
                     + "Branch lengths use the input distance scale."),
         "values": {"newick": _newick(root), "taxa_count": len(leaves),
                    "total_branch_length": _total_length(root),
                    "negative_limbs_clipped": clipped,
+                   "maximum_absolute_distance_residual": maximum_residual,
+                   "root_mean_square_distance_residual": rms_residual,
                    "branch_length_unit": "input distance units"},
     }
 
 
 def upgma(data: dict) -> dict:
     names, d = _matrix(data)
+    observed = d.copy()
     active: dict[int, tuple[_Node, int, float, tuple[str, ...]]] = {
         i: (_Node(name), 1, 0.0, (name,)) for i, name in enumerate(names)
     }
@@ -307,11 +334,12 @@ def upgma(data: dict) -> dict:
         del active[i], active[j]
         active[next_id] = (node, na + nb, height, _taxa(node))
         next_id += 1
-    return _distance_result(next(iter(active.values()))[0], "UPGMA")
+    return _distance_result(next(iter(active.values()))[0], "UPGMA", names, observed)
 
 
 def neighbor_joining(data: dict) -> dict:
     names, d = _matrix(data)
+    observed = d.copy()
     active = {i: _Node(name) for i, name in enumerate(names)}
     next_id = len(active)
     clipped = 0
@@ -320,7 +348,7 @@ def neighbor_joining(data: dict) -> dict:
         nonlocal clipped
         if not math.isfinite(length) or abs(length) > 2 * _MAX_LENGTH:
             raise ValueError("Neighbor-joining limb exceeds the numerical range.")
-        if length < -1e-10:
+        if length < 0:
             clipped += 1
         node.length = max(0.0, length)
 
@@ -353,7 +381,7 @@ def neighbor_joining(data: dict) -> dict:
         limb(active[i], (d[_pair(i, j)] + d[_pair(i, k)] - d[_pair(j, k)]) / 2)
         limb(active[j], (d[_pair(i, j)] + d[_pair(j, k)] - d[_pair(i, k)]) / 2)
         limb(active[k], (d[_pair(i, k)] + d[_pair(j, k)] - d[_pair(i, j)]) / 2)
-    return _distance_result(_Node(children=list(active.values())), "Neighbor joining", clipped)
+    return _distance_result(_Node(children=list(active.values())), "Neighbor joining", names, observed, clipped)
 
 
 def _graph(root: _Node):
@@ -515,7 +543,7 @@ def _clades(root: _Node, rooted: bool) -> set[frozenset[str]]:
 
 
 def _split_name(clade: frozenset[str]) -> str:
-    return "{" + ", ".join(sorted(clade)) + "}"
+    return "{" + ", ".join(_quote(name) for name in sorted(clade)) + "}"
 
 
 def compare_trees(data: dict) -> dict:
