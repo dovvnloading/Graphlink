@@ -1,0 +1,19 @@
+[plugin]
+id = "science_epidemiology"
+name = "Epidemiology and Biostatistics"
+description = "Analyze cohort 2×2 effects, diagnostic accuracy, ROC/AUC, Poisson incidence rates and direct age standardization."
+version = "1.2.0"
+sdk_api_version = 1
+entry_point = "plugin:register"
+
+[scopes]
+grants = ["graph.read", "graph.mutate"]
+
+[frontend]
+view = "generic"
+
+[persistence]
+passive_node_kinds = ["workbench"]
+
+[scientific]
+family = "biology"
