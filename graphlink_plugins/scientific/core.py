@@ -48,6 +48,7 @@ _DYNAMIC = {
     "selected abundance unit": "abundance_unit",
     "selected rate unit": "rate_unit",
     "selected response unit": "response_unit",
+    "selected temperature unit": "temperature_unit",
     "see rate_constant_unit": "rate_constant_unit",
     "observation_unit": "observation_unit",
 }

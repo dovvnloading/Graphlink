@@ -14,6 +14,7 @@ import statistics
 from graphlink_plugins.scientific.core import Citation, Field, Operation
 from graphlink_plugins.scientific.packs.fitting import _d, _normal_solve, _original_nonlinear
 from graphlink_plugins.scientific.units import convert_decimal_measurement
+from graphlink_plugins.scientific.packs.enzyme_advanced import OPERATIONS as ADVANCED_OPERATIONS
 
 
 _MODELS = ("competitive", "uncompetitive", "noncompetitive", "mixed")
@@ -529,4 +530,4 @@ OPERATIONS = (
         citations=(Citation("Cheng and Prusoff (1973), Relationship between Ki and IC50",
                             "https://doi.org/10.1016/0006-2952(73)90196-2"),),
     ),
-)
+) + ADVANCED_OPERATIONS
