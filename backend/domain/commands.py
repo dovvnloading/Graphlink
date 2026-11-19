@@ -370,6 +370,7 @@ def _restore(live: dict, snapshot: dict) -> None:
 _COMMAND_LABELS = {
     "addNode": "Add Node",
     "addChatNode": "Add Chat Node",
+    "discussScientificResult": "Discuss Scientific Result",
     "addCodeNode": "Add Code Node",
     "addDocumentNode": "Add Document",
     "addThinkingNode": "Add Thinking Node",
