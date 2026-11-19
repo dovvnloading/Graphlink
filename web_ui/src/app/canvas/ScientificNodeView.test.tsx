@@ -309,6 +309,21 @@ describe("typed table import and numeric selections", () => {
       receiptHash: "c".repeat(64), parseOptions: { format: "tsv", missingValues: ["", "NA"] } },
   };
 
+  it("shows a recovery error rather than crashing on a damaged saved table preview", () => {
+    mount(JSON.stringify({ ...state, table: { ...meta, preview: [null] } }));
+    expect(screen.getByRole("alert")).toHaveTextContent("could not be loaded");
+  });
+
+  it("enforces the UTF-8 byte cap on pasted tables before sending an intent", async () => {
+    const { request } = mount(JSON.stringify({ ...state, limits: {
+      points: 1024, columns: 32, cells: 4096, text: 65536, tableSourceBytes: 5,
+    } }));
+    fireEvent.change(screen.getByLabelText("Pasted table text"), { target: { value: "x\n😀" } });
+    fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("exceeds the import size limit");
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("imports pasted TSV with explicit missing markers and type overrides", async () => {
     const { request } = mount();
     fireEvent.change(screen.getByLabelText("Table format"), { target: { value: "tsv" } });

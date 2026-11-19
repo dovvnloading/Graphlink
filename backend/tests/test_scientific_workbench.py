@@ -658,3 +658,134 @@ def test_typed_table_parser_limits_tsv_and_error_atomicity(session):
     })
     assert fail["ok"] is False
     assert envelope(document, source)["table"] == prior
+
+
+# Scientific integration audit: malformed saved state, byte/marker caps,
+# graph-runner compatibility and asynchronous selection fencing.
+
+
+def test_graph_runner_accepts_imported_table_node_state(session):
+    from backend.api.intents_graph_runner import _state_data
+
+    document, bus, _, _ = session
+    grant(bus, "core")
+    node_id = dispatch(bus, "executePlugin", "Scientific Core")
+    assert dispatch(bus, "invokePluginIntent", "science_core", "import_table", {
+        "node_id": node_id, "text": "Value\n1\n",
+    }) == {"ok": True}
+    data = _state_data(document.nodes[node_id])
+    assert data["table"]["rowCount"] == 1
+
+
+def test_linked_sources_reject_a_non_object_even_when_keys_match():
+    from typing import cast
+
+    from graphlink_plugins.scientific.workbench import _verify_sources
+
+    malformed = cast(dict[str, object], ["observations"])
+    with pytest.raises(ValueError, match="object keyed by input field"):
+        _verify_sources(None, None, {"observations": [1.0]}, malformed, None)
+
+
+def test_table_missing_markers_cannot_exceed_published_cap():
+    from graphlink_plugins.scientific.data_table import parse_table
+
+    with pytest.raises(ValueError, match="32"):
+        parse_table(b"Value\n1\n", missing=[f"marker_{i}" for i in range(32)])
+
+
+def test_oversized_pasted_source_is_rejected_before_encoding(monkeypatch):
+    from graphlink_plugins.scientific import data_table
+
+    class EncodingTrap(str):
+        def encode(self, encoding: str = "utf-8", errors: str = "strict") -> bytes:
+            raise AssertionError("oversized input was encoded before its size was checked")
+
+    monkeypatch.setattr(data_table, "TABLE_MAX_SOURCE_BYTES", 4)
+    with pytest.raises(ValueError, match="64 MiB"):
+        data_table.decode_input(text=EncodingTrap("12345"), encoded_file=None)
+
+
+def test_table_metadata_rejects_malformed_preview_and_columns():
+    from graphlink_plugins.scientific.data_table import parse_table, table_metadata_valid
+
+    table = parse_table(b"Value\n1\n")
+    assert table_metadata_valid(table)
+    assert not table_metadata_valid({**table, "preview": [None]})
+    assert not table_metadata_valid({**table, "previewColumns": 999})
+    assert not table_metadata_valid({
+        **table, "columns": [{**table["columns"][0], "name": None}],
+    })
+
+
+def test_table_column_returns_validation_error_for_corrupt_asset_rows():
+    from graphlink_plugins.scientific.core import canonical_bytes, fingerprint
+    from graphlink_plugins.scientific.data_table import (
+        _STAGING, numeric_column, parse_table, table_metadata_valid,
+    )
+
+    table = parse_table(b"Value\n1\n")
+    # A matching content hash is insufficient: the stored rows must obey the
+    # typed-table schema before the selector indexes them.
+    forged = canonical_bytes({
+        "version": 1, "columns": table["columns"], "rows": [{"0": 1}],
+    })
+    ref = _STAGING.put(forged)
+    receipt = {k: v for k, v in table["provenance"].items() if k != "receiptHash"}
+    receipt["tableHash"] = ref
+    receipt["receiptHash"] = fingerprint(receipt)
+    damaged = {**table, "asset_ref": ref, "provenance": receipt}
+    assert table_metadata_valid(damaged)
+    with pytest.raises(ValueError, match="damaged"):
+        numeric_column(damaged, 0)
+
+
+@pytest.mark.parametrize("change", ["disconnect", "delete_target", "revoke_source", "revoke_target"])
+def test_table_column_selection_rechecks_its_target_after_io(session, monkeypatch, change):
+    import threading
+
+    from graphlink_plugins.scientific import workbench
+
+    document, bus, _, _ = session
+    grant(bus, "core")
+    grant(bus, "statistics")
+    source = dispatch(bus, "executePlugin", "Scientific Core")
+    assert dispatch(bus, "invokePluginIntent", "science_core", "import_table", {
+        "node_id": source, "text": "Value\n1\n2\n",
+    }) == {"ok": True}
+    target = dispatch(bus, "executePlugin", "Statistics", source)
+    started, finish = threading.Event(), threading.Event()
+
+    def suspended_column(*_args: object) -> list[float]:
+        started.set()
+        assert finish.wait(timeout=10)
+        return [1.0, 2.0]
+
+    monkeypatch.setattr(workbench, "numeric_column", suspended_column)
+
+    async def scenario() -> None:
+        pending = asyncio.create_task(bus.dispatch_intent(
+            "app-plugins", "invokePluginIntent",
+            ["science_statistics", "table_column", {
+                "node_id": target, "source_node_id": source, "column": 0,
+            }],
+        ))
+        try:
+            assert await asyncio.to_thread(started.wait, 5)
+            if change == "disconnect":
+                document.remove_edges(list(document.edges))
+            elif change == "delete_target":
+                document.remove_nodes([target])
+            else:
+                pack = "science_core" if change == "revoke_source" else "science_statistics"
+                await bus.dispatch_intent("app-plugins", "setPluginGrant", [pack, False])
+        finally:
+            finish.set()
+        response = await pending
+        assert response["ok"] is False
+        if change.startswith("revoke"):
+            assert "disabled" in response["error"]
+        else:
+            assert response["conflict"] is True
+
+    asyncio.run(scenario())

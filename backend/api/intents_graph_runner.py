@@ -24,6 +24,7 @@ from backend.domain.model import SceneError, SceneNode
 from backend.domain.node_states import ModelState, PersistedPluginState, PluginStateSnapshot
 from backend.domain.nodes_content import _text_digest
 from backend.domain.table_workflows import table_output
+from graphlink_plugins.scientific.data_table import TableState
 from graphlink_plugins.scientific.graph_run_adapter import prepare as prepare_science
 from graphlink_plugins.scientific.workbench import _run_token
 from backend.events import IntentValidationError, SessionBus
@@ -104,7 +105,7 @@ def _plan(document: SceneDocument, node_ids: list[str]) -> tuple[str, list[dict[
 
 def _state_data(node: SceneNode) -> dict[str, Any]:
     """A scientific node's state payload; a node without state cannot run."""
-    if not isinstance(node.state, (PersistedPluginState, PluginStateSnapshot)):
+    if not isinstance(node.state, (PersistedPluginState, PluginStateSnapshot, TableState)):
         raise SceneError("The scientific node has no saved plugin state.")
     return node.state.data
 

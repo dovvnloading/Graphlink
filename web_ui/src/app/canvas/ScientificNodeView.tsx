@@ -231,6 +231,9 @@ function TableEditor({ state, nodeId, pluginId, store }: {
         args.filename = file.name;
         args.encoded_file = binaryBase64(new Uint8Array(await file.arrayBuffer()));
       } else {
+        // Pasted UTF-8 data has the same byte cap as a selected file.
+        if (text.length > fileLimit || new TextEncoder().encode(text).byteLength > fileLimit)
+          throw new Error("Pasted table data exceeds the import size limit.");
         args.text = text;
       }
       await tableIntent(store, pluginId, "import_table", args);
