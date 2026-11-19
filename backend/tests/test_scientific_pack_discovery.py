@@ -100,7 +100,7 @@ def test_biology_picker_description_covers_all_operation_families():
     import tomllib
 
     description = catalog.PACKS["biology"][1]
-    assert len(biology.OPERATIONS) == 11
+    assert len(biology.OPERATIONS) == 14
     assert all(word in description.lower() for word in (
         "community", "quadrat", "growth", "enzyme", "dose-response",
         "predator", "genetics", "survival",
