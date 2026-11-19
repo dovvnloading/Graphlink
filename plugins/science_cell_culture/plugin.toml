@@ -1,0 +1,19 @@
+[plugin]
+id = "science_cell_culture"
+name = "Cell Culture"
+description = "Calculate hemocytometer counts and viability, seeding and serial-dilution plans, and centrifuge RCF/rpm."
+version = "1.1.0"
+sdk_api_version = 1
+entry_point = "plugin:register"
+
+[scopes]
+grants = ["graph.read", "graph.mutate"]
+
+[frontend]
+view = "generic"
+
+[persistence]
+passive_node_kinds = ["workbench"]
+
+[scientific]
+family = "biology"
