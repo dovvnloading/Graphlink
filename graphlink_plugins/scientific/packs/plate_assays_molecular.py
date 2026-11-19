@@ -86,6 +86,8 @@ def qpcr_relative_expression(data: dict) -> dict:
     efficiencies = data["reference_efficiencies"]
     target_efficiency = data["target_efficiency"]
     count = len(sample_refs)
+    if count == 0:
+        raise ValueError("At least one reference gene is required for normalized qPCR expression.")
     if len(control_refs) != count or len(efficiencies) != count:
         raise ValueError("Each reference gene needs paired sample/calibrator Cts and one efficiency.")
     if any(not _qpcr_ct(ct) for ct in [sample, control, *sample_refs, *control_refs]):
