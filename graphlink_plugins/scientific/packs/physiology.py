@@ -51,7 +51,7 @@ def nernst_potential(data: dict) -> dict:
     z = data["valence"]
     if type(z) is not int or z == 0 or not -3 <= z <= 3:
         raise ValueError("Ionic valence must be a nonzero integer between -3 and 3.")
-    log_ratio = math.log(outside) - math.log(inside)
+    log_ratio = _log_positive_ratio(outside, inside)
     potential = _finite(1000 * R_GAS * temperature / (z * FARADAY) * log_ratio,
                         "Nernst potential")
     return {
