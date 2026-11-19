@@ -237,6 +237,24 @@ def test_choice_fields_and_operation_metadata_are_validated_at_the_python_bounda
     assert "methods" not in operations("core")[0].describe()
 
 
+def test_declared_headlines_name_a_displayable_value_of_the_operation_result():
+    """A workbench node leads with the declared headline, so it must be a scalar
+    in the operation's real output, not a typo that silently falls back."""
+    declared = 0
+    for pack in PACKS:
+        for op in operations(pack):
+            if not op.headline:
+                assert "headline" not in op.describe()
+                continue
+            declared += 1
+            assert op.describe()["headline"] == op.headline
+            value = run_operation(pack, op, op.example)["values"].get(op.headline)
+            assert isinstance(value, (int, float, str)) and not isinstance(value, bool), (pack, op.id, value)
+    assert declared >= 140
+    with pytest.raises(ValueError, match="headline"):
+        Operation("bad", "Bad", "", (), {}, lambda _: {}, headline=1)
+
+
 def test_damaged_receipt_is_visible_and_preserved(session):
     document, bus, _, _ = session
     grant(bus, "core")

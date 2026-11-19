@@ -397,6 +397,7 @@ OPERATIONS: tuple[Operation, ...] = (
         methods="Pearson χ² goodness-of-fit; df=k−1. Fixed a priori category ratios, no fitted parameters.",
         citations=(Citation("NIST chi-square goodness-of-fit test",
                             "https://www.itl.nist.gov/div898/handbook/eda/section3/eda35f.htm"),),
+        headline="p_value",
     ),
     Operation(
         "segregation_exact_binomial", "Exact two-class segregation test",
@@ -408,6 +409,7 @@ OPERATIONS: tuple[Operation, ...] = (
         methods="Conditional exact binomial; include all outcomes with probability ≤ observed probability.",
         citations=(Citation("NIST binomial distribution",
                             "https://www.itl.nist.gov/div898/handbook/eda/section3/eda366i.htm"),),
+        headline="two_sided_p_value",
     ),
     Operation(
         "hardy_weinberg_exact", "Hardy–Weinberg exact test",
@@ -420,6 +422,7 @@ OPERATIONS: tuple[Operation, ...] = (
         methods="Wigginton et al. (2005) exact recurrence, conditioned on allele copies and sample size.",
         citations=(Citation("Wigginton, Cutler & Abecasis (2005)",
                             "https://pmc.ncbi.nlm.nih.gov/articles/PMC1199378/"),),
+        headline="two_sided_p_value",
     ),
     Operation(
         "map_distances", "Haldane and Kosambi map distances",
@@ -453,6 +456,7 @@ OPERATIONS: tuple[Operation, ...] = (
         methods="Z(θ)=log10{θ^R(1−θ)^NR/0.5^(R+NR)}; maximum at min(R/N,0.5).",
         citations=(Citation("NIH linkage analysis course, LOD scores",
                             "https://www.genome.gov/sites/default/files/genome-old/pages/Research/IntramuralResearch/DIRCalendar/CurrentTopicsinGenomeAnalysis2005/CourseHandouts/CTGA2005Lec11.grey.pdf"),),
+        headline="maximum_lod",
     ),
 )
 

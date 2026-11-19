@@ -596,6 +596,7 @@ OPERATIONS: tuple[Operation, ...] = (
         ),
         {"shallow_depth_m": 100, "deep_depth_m": 900, "shallow_temperature_c": 14, "deep_temperature_c": 34},
         geothermal_gradient,
+        headline="gradient_c_per_km",
     ),
     Operation(
         "seismic_distance",
@@ -609,6 +610,7 @@ OPERATIONS: tuple[Operation, ...] = (
         ),
         {"s_minus_p_s": 10, "p_speed_km_s": 6, "s_speed_km_s": 3.5},
         seismic_distance,
+        headline="path_length_km",
     ),
     Operation(
         "geodesic_inverse", "WGS84 distance and bearings",
@@ -686,12 +688,14 @@ OPERATIONS: tuple[Operation, ...] = (
         "empirical energy estimate log10(E[J])=1.5Mw+4.8.",
         (Field("seismic_moment_nm", "Scalar seismic moment", "number", unit="N·m"),),
         {"seismic_moment_nm": 1e18}, moment_magnitude,
+        headline="moment_magnitude_mw",
     ),
     Operation(
         "seismic_moment", "Moment magnitude Mw to seismic moment",
         "Inverse Hanks–Kanamori conversion; estimated energy is not the exact measured radiated energy.",
         (Field("moment_magnitude_mw", "Moment magnitude Mw", "number", unit="Mw (1)"),),
         {"moment_magnitude_mw": 6}, seismic_moment,
+        headline="seismic_moment_nm",
     ),
     Operation(
         "gutenberg_richter", "Fit Gutenberg–Richter b-value",
@@ -704,6 +708,7 @@ OPERATIONS: tuple[Operation, ...] = (
         {"magnitudes_mw": [2.0, 2.1, 2.1, 2.2, 2.3, 2.4, 2.5, 2.7, 2.9, 3.0],
          "completeness_magnitude_mw": 2.0, "bin_width_mw": 0.1, "target_magnitude_mw": 3.0},
         gutenberg_richter,
+        headline="b_value_per_mw",
     ),
     Operation(
         "isa_atmosphere", "International Standard Atmosphere profile",
@@ -712,6 +717,7 @@ OPERATIONS: tuple[Operation, ...] = (
         (Field("geometric_altitude_m", "Geometric altitude above sea level", "number", unit="m"),),
         {"geometric_altitude_m": 11019.0678}, isa_atmosphere,
         reference_datasets=("earth.standard_atmosphere_1976",),
+        headline="pressure_pa",
     ),
     Operation(
         "solar_position", "Solar elevation and true-north azimuth",
@@ -722,6 +728,7 @@ OPERATIONS: tuple[Operation, ...] = (
          Field("longitude_deg", "Observer longitude", "number", unit="°E")),
         {"timestamp_iso8601": "2024-03-20T12:00:00Z", "latitude_deg": 0, "longitude_deg": 0},
         solar_position,
+        headline="elevation_deg",
     ),
 
 )

@@ -501,6 +501,7 @@ OPERATIONS = (
                             "https://pubmed.ncbi.nlm.nih.gov/13655060/"),
                    Citation("Robins, Breslow & Greenland (1986), Estimators of the Mantel–Haenszel variance",
                             "https://pubmed.ncbi.nlm.nih.gov/3741973/")),
+        headline="common_odds_ratio",
     ),
     Operation(
         "meta_analysis", "Inverse-variance meta-analysis and forest plot",
@@ -523,6 +524,7 @@ OPERATIONS = (
                             "https://pubmed.ncbi.nlm.nih.gov/3802833/"),
                    Citation("Higgins et al. (2003), Measuring inconsistency in meta-analyses",
                             "https://pubmed.ncbi.nlm.nih.gov/12958120/")),
+        headline="pooled_effect",
     ),
     Operation(
         "multi_group_kaplan_meier", "Multi-group Kaplan–Meier and log-rank test",
@@ -543,6 +545,7 @@ OPERATIONS = (
                             "https://doi.org/10.1080/01621459.1958.10501452"),
                    Citation("Mantel (1966), Evaluation of survival data and rank-order statistics",
                             "https://pubmed.ncbi.nlm.nih.gov/5910392/")),
+        headline="logrank_p_value",
     ),
     Operation(
         "cox_proportional_hazards", "Cox proportional hazards regression",
@@ -566,5 +569,6 @@ OPERATIONS = (
                             "https://doi.org/10.1111/j.2517-6161.1972.tb00899.x"),
                    Citation("Efron (1977), Efficiency of Cox likelihood with tied failures",
                             "https://doi.org/10.2307/2286217")),
+        headline="hazard_ratio_1",
     ),
 )

@@ -26,6 +26,10 @@
  * BROWSER. Playwright's bundled Chromium by default (`npx playwright install
  * chromium`). Set GRAPHLINK_CAPTURE_CHANNEL=msedge or chrome to drive an
  * installed browser instead; any Chromium build has the screencast API.
+ *
+ * SUBSET. Set GRAPHLINK_CAPTURE_ONLY to a comma-separated list of GIF names
+ * (canvas-navigation, table-chart-report, graph-runner, scientific-workbench,
+ * biology-workbench) to re-record only those.
  */
 
 import { spawn } from "node:child_process";
@@ -43,6 +47,8 @@ const VIEWPORT = { width: 1280, height: 800 };
 const GIF_FPS = 12;
 const FFMPEG = process.env.FFMPEG ?? "ffmpeg";
 const PYTHON = (process.env.GRAPHLINK_PYTHON ?? "python").split(" ").filter(Boolean);
+const ONLY = new Set((process.env.GRAPHLINK_CAPTURE_ONLY ?? "").split(",").map((name) => name.trim()).filter(Boolean));
+const wanted = (name) => ONLY.size === 0 || ONLY.has(name);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -227,8 +233,11 @@ async function newCanvas(page) {
   await page.locator('[data-overlay-trigger="library"]').click();
   const library = page.getByRole("dialog", { name: "Chat Library" });
   // New Chat confirms before discarding the unsaved canvas.
-  page.once("dialog", (dialog) => dialog.accept());
-  await library.getByRole("button", { name: "New Chat", exact: true }).click();
+  // On an already-empty canvas no confirm appears and this handler lingers
+  // to the next call, so tolerate a dialog that another handler accepted.
+  page.once("dialog", (dialog) => dialog.accept().catch(() => {}));
+  // The empty-library state repeats New Chat; either one starts a canvas.
+  await library.getByRole("button", { name: "New Chat", exact: true }).first().click();
   await library.waitFor({ state: "hidden" }).catch(() => page.keyboard.press("Escape"));
   await page.getByRole("button", { name: "Add a table" }).waitFor();
   await dismissToasts(page);
@@ -309,34 +318,94 @@ async function runnerFlow(page) {
   await fitAll(page, 1400);
 }
 
-/** A Chemistry node converts a transmission scan, then charts it. */
-async function scienceFlow(page) {
+/** Scroll a Workbench card's own body until `target` is fully inside it. */
+async function revealInCard(page, card, target) {
+  const body = card.locator(".science-body");
+  await glide(page, ...Object.values(await centreOf(body)));
+  for (let i = 0; i < 24; i++) {
+    const [area, box] = await Promise.all([body.boundingBox(), target.boundingBox()]);
+    if (box && box.y >= area.y + 4 && box.y + box.height <= area.y + area.height - 6) break;
+    await page.mouse.wheel(0, box && box.y < area.y ? -200 : 200);
+    await sleep(90);
+  }
+  await sleep(300);
+}
+
+/** Open a Workbench pack from the picker and pull its new card into view. */
+async function openWorkbench(page, category, pack) {
   await click(page, page.getByRole("button", { name: "Plugins", exact: true }), 500);
   const picker = page.locator(".plugin-picker-shell");
-  await click(page, picker.getByRole("button", { name: "Scientific Workbench" }), 700);
-  await click(page, picker.locator(".plugin-picker-row").filter({ hasText: "Chemistry" }), 1100);
-  const card = node(page, "Chemistry");
+  await click(page, picker.getByRole("button", { name: category }), 700);
+  await click(page, picker.locator(".plugin-picker-row").filter({ hasText: pack }), 1100);
+  const card = node(page, pack);
   // The card spawns with its corner at the viewport centre; pull it up into view.
   const b = await card.boundingBox();
   const grab = { x: b.x - 220, y: Math.min(b.y + 280, VIEWPORT.height - 120) };
   await pan(page, grab, { x: grab.x - (b.x - 360), y: grab.y - (b.y - 70) }, 1000);
-  await choose(page, card.getByLabel("Operation"), "transmission_spectrum", 700);
+  return card;
+}
+
+/** A Chemistry node converts a transmission scan, then charts it. */
+async function scienceFlow(page) {
+  const card = await openWorkbench(page, "Scientific Workbench", "Chemistry");
+  await choose(page, card.getByRole("combobox", { name: "Operation", exact: true }), "transmission_spectrum", 700);
   await click(page, card.getByRole("button", { name: "Load example" }), 600);
   await click(page, card.getByRole("button", { name: "Run calculation" }), 1300);
-  await card.getByRole("region", { name: "Latest result" }).waitFor();
-  // Scroll the card's own body until the result and its Chart this button show.
-  const body = card.locator(".science-body");
+  const latest = card.getByRole("region", { name: "Latest result" });
+  await latest.waitFor();
+  // Results are compact: the chart action sits under Actions & exports.
+  const actions = latest.getByText("Actions & exports", { exact: true });
+  await revealInCard(page, card, actions);
+  await click(page, actions, 700);
   const chart = card.getByRole("button", { name: "Chart this" });
-  await glide(page, ...Object.values(await centreOf(body)));
-  for (let i = 0; i < 16; i++) {
-    const [area, button] = await Promise.all([body.boundingBox(), chart.boundingBox()]);
-    if (button.y + button.height <= area.y + area.height - 6) break;
-    await page.mouse.wheel(0, 120);
-    await sleep(150);
-  }
-  await sleep(1400);
+  await revealInCard(page, card, chart);
   await click(page, chart, 1400);
   await fitAll(page, 1400);
+}
+
+/** A Plate Assays node fits an ELISA 4PL standard curve to labelled
+ * synthetic standards, reads two diluted samples, then discusses the
+ * verified result in chat (workflow 1 of docs/BIOLOGY_WORKBENCH.md). */
+async function biologyFlow(page) {
+  const card = await openWorkbench(page, "Biology Workbench", "Plate Assays");
+  await choose(page, card.getByRole("combobox", { name: "Operation", exact: true }), "standard_curve", 700);
+  await choose(page, card.getByRole("combobox", { name: "Calibration model", exact: true }), "4pl", 600);
+  const fields = [
+    [/^Known standard concentrations/, "[15.6, 31.25, 62.5, 125, 250, 500, 1000]"],
+    [/^Corresponding standard signals/, "[0.2449, 0.4566, 0.8186, 1.305, 1.7821, 2.1256, 2.3216]"],
+    [/^Unknown sample signals/, "[0.62, 1.48]"],
+    [/^Reciprocal sample dilution factors/, "[2, 2]"],
+  ];
+  for (const [name, value] of fields) {
+    const box = card.getByRole("textbox", { name });
+    await revealInCard(page, card, box);
+    await click(page, box, 150);
+    await box.fill(value);
+    await sleep(350);
+  }
+  for (const [name, value] of [["Concentration unit label", "pg/mL"], ["Signal unit label", "OD450"]]) {
+    const box = card.getByRole("textbox", { name, exact: true });
+    await revealInCard(page, card, box);
+    await type(page, box, value, 300);
+  }
+  const run = card.getByRole("button", { name: "Run calculation" });
+  await revealInCard(page, card, run);
+  await click(page, run, 1300);
+  const latest = card.getByRole("region", { name: "Latest result" });
+  await latest.waitFor();
+  const tables = latest.getByText(/^Tables · \d+ rows$/);
+  await revealInCard(page, card, tables);
+  await click(page, tables, 700);
+  const unknown = latest.getByRole("row").filter({ hasText: "Unknown" }).last();
+  await revealInCard(page, card, unknown);
+  await sleep(1200);
+  const actions = latest.getByText("Actions & exports", { exact: true });
+  await revealInCard(page, card, actions);
+  await click(page, actions, 700);
+  const discuss = card.getByRole("button", { name: "Discuss in chat" });
+  await revealInCard(page, card, discuss);
+  await click(page, discuss, 1200);
+  await fitAll(page, 1600);
 }
 
 // -- main -------------------------------------------------------------------
@@ -372,25 +441,37 @@ async function main() {
     } catch {
       // Never opened.
     }
-    await grantPacks(page, ["Scientific Core", "Chemistry"]);
+    await grantPacks(page, ["Scientific Core", "Chemistry", "Plate Assays"]);
 
-    // The seeded incident graph, fitted, is the first flow's opening frame.
-    await page.locator('[data-overlay-trigger="library"]').click();
-    const library = page.getByRole("dialog", { name: "Chat Library" });
-    await library.getByRole("button", { name: /^Open chat/ }).first().click();
-    await library.waitFor({ state: "hidden" });
-    await page.locator(".react-flow__node").first().waitFor();
-    await dismissToasts(page);
-    await page.getByRole("button", { name: "Fit All" }).click();
-    await sleep(1200);
-    await record(page, "canvas-navigation", () => canvasFlow(page));
+    if (wanted("canvas-navigation")) {
+      // The seeded incident graph, fitted, is the first flow's opening frame.
+      await page.locator('[data-overlay-trigger="library"]').click();
+      const library = page.getByRole("dialog", { name: "Chat Library" });
+      await library.getByRole("button", { name: /^Open chat/ }).first().click();
+      await library.waitFor({ state: "hidden" });
+      await page.locator(".react-flow__node").first().waitFor();
+      await dismissToasts(page);
+      await page.getByRole("button", { name: "Fit All" }).click();
+      await sleep(1200);
+      await record(page, "canvas-navigation", () => canvasFlow(page));
+    }
 
-    await newCanvas(page);
-    await record(page, "table-chart-report", () => tableFlow(page));
-    await record(page, "graph-runner", () => runnerFlow(page));
+    // Graph Runner replays the graph the table flow builds, so they go together.
+    if (wanted("table-chart-report") || wanted("graph-runner")) {
+      await newCanvas(page);
+      await record(page, "table-chart-report", () => tableFlow(page));
+      await record(page, "graph-runner", () => runnerFlow(page));
+    }
 
-    await newCanvas(page);
-    await record(page, "scientific-workbench", () => scienceFlow(page));
+    if (wanted("scientific-workbench")) {
+      await newCanvas(page);
+      await record(page, "scientific-workbench", () => scienceFlow(page));
+    }
+
+    if (wanted("biology-workbench")) {
+      await newCanvas(page);
+      await record(page, "biology-workbench", () => biologyFlow(page));
+    }
   } finally {
     if (browser) await browser.close();
     backend.kill();

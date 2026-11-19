@@ -493,6 +493,7 @@ OPERATIONS: tuple[Operation, ...] = (
          "ascending_node_deg": 80, "argument_periapsis_deg": 40, "mean_anomaly_epoch_deg": 5,
          "epoch_jd": 2451545.0, "target_jd": 2451555.0, "central_mass_solar": 1},
         _kepler_orbit,
+        headline="radius_au",
     ),
     Operation(
         "julian_sidereal_time",
@@ -523,6 +524,7 @@ OPERATIONS: tuple[Operation, ...] = (
          "observer_latitude_deg": 30, "observer_longitude_deg_east": 0},
         _coordinates,
         reference_datasets=_coordinate_reference_datasets,
+        headline="target_longitude_deg",
     ),
     Operation(
         "airmass_extinction",
@@ -547,6 +549,7 @@ OPERATIONS: tuple[Operation, ...] = (
         ),
         {"redshift": 1.0, "h0_km_s_mpc": 70, "omega_matter": 0.3},
         _cosmological_distances,
+        headline="luminosity_distance_mpc",
     ),
     Operation(
         "ab_flux_to_magnitude",

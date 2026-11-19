@@ -601,6 +601,7 @@ OPERATIONS = (
                 "extravascular: report only CL/F and Vz/F because F is not known. "
                 "Concentrations must be mass/volume, dose mass, time a time dimension.",
         citations=_NCA_CITES,
+        headline="auc_inf",
     ),
     Operation(
         "one_compartment_fit", "Fit one-compartment IV bolus PK",
@@ -611,6 +612,7 @@ OPERATIONS = (
                 "AUC=A/k, MRT=1/k. Local standard errors are Jacobian-linearized. "
                 "Use only single-dose, linear time-invariant IV bolus profiles.",
         citations=_COMP_CITES,
+        headline="clearance",
     ),
     Operation(
         "two_compartment_fit", "Fit two-compartment IV bolus PK",
@@ -622,6 +624,7 @@ OPERATIONS = (
                 "Vc=Dose/(A+B), Vss=CL*MRT, Vz=CL/beta, MRT=(A/alpha²+B/beta²)/AUC. "
                 "Local standard errors are Jacobian-linearized, and weak phase separation is flagged.",
         citations=_COMP_CITES,
+        headline="clearance",
     ),
 
     Operation(
@@ -642,6 +645,7 @@ OPERATIONS = (
                 "Assumes linear, time-invariant, first-order IV-bolus elimination.",
         citations=(Citation("McGraw Hill: multiple-dose pharmacokinetic models",
                             "https://accesspharmacy.mhmedical.com/content.aspx?bookid=2577&sectionid=234135883"),),
+        headline="steady_state_average",
     ),
     Operation(
         "human_equivalent_dose", "Scale animal dose to adult human by BSA",
@@ -659,6 +663,7 @@ OPERATIONS = (
                 "safety factor is considered.",
         citations=(Citation("FDA 2005 guidance: BSA scaling, Table 3",
                             "https://www.fda.gov/regulatory-information/search-fda-guidance-documents/estimating-maximum-safe-starting-dose-initial-clinical-trials-therapeutics-adult-healthy-volunteers"),),
+        headline="human_equivalent_dose",
     ),
     Operation(
         "drug_combination_analysis", "Bliss and Chou-Talalay drug combination analysis",
@@ -690,5 +695,6 @@ OPERATIONS = (
                             "https://pubmed.ncbi.nlm.nih.gov/16968952/"),
                    Citation("Review: drug combination reference models and Bliss independence",
                             "https://pmc.ncbi.nlm.nih.gov/articles/PMC9127325/")),
+        headline="combination_index",
     ),
 )

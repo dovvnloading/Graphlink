@@ -452,6 +452,7 @@ OPERATIONS = (
         ghk_potential,
         methods="GHK ln((PK Kout + PNa Naout + PCl Clin)/(PK Kin + PNa Nain + PCl Clout)).",
         citations=_CITES[1:3],
+        headline="membrane_potential_mv",
     ),
     Operation(
         "membrane_properties", "Passive membrane properties",
@@ -470,6 +471,7 @@ OPERATIONS = (
         membrane_properties,
         methods="C = cm A, R = rm/A, tau = RC, V(t) = Vrest + IR(1-exp(-t/tau)).",
         citations=_CITES[:1],
+        headline="time_constant_ms",
     ),
     Operation(
         "hodgkin_huxley", "Hodgkin–Huxley action potential",
@@ -488,6 +490,7 @@ OPERATIONS = (
         methods="Original HH alpha/beta gate rates, C=1 uF/cm2, gNa=120, gK=36, gL=0.3 mS/cm2; "
                 "ENa=50, EK=-77, EL=-54.387 mV; RK4 at 6.3 C.",
         citations=_CITES[:1],
+        headline="peak_voltage_mv",
     ),
     Operation(
         "spike_detection", "Threshold spike detection",
@@ -505,6 +508,7 @@ OPERATIONS = (
         methods="Linear threshold crossing interpolation; maximum sample before return below threshold; "
                 "onset-to-onset refractory exclusion.",
         citations=_CITES[:1],
+        headline="window_firing_rate_hz",
     ),
     Operation(
         "fick_diffusion", "Fick steady diffusion",

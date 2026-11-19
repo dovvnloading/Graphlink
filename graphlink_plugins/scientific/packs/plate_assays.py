@@ -309,6 +309,7 @@ OPERATIONS = (
         {"plate_format": "96", "wells_json": '{"A1":"blank","A2":"standard 1","B1":0,"B2":1.24}',
          "reading_label": "RFU or role"}, plate_layout,
         methods="Row-major 8×12 or 16×24 grids; addresses A1–H12 or A1–P24. Explicit null and omitted wells remain unmeasured.",
+        headline="recorded_wells",
     ),
     Operation(
         "standard_curve", "Standard curves and diluted unknowns",
@@ -332,6 +333,7 @@ OPERATIONS = (
                  "Original-sample concentration = inverse(signal) × reciprocal dilution."),
         citations=(Citation("Bio-Rad five-parameter logistic calibration",
                             "https://www.bio-rad.com/webroot/web/pdf/lsr/literature/10022815.pdf"),),
+        headline="r_squared",
     ),
     Operation(
         "assay_quality", "Assay quality: Z′, signal window and %CV",
@@ -348,6 +350,7 @@ OPERATIONS = (
                  "%CV=100×SD/|mean|. Undefined denominators are reported as text, not NaN."),
         citations=(Citation("NCBI Assay Validation: Z′ and signal window",
                             "https://www.ncbi.nlm.nih.gov/books/NBK83783/"),),
+        headline="z_prime_factor",
     ),
     Operation(
         "qpcr_standard_curve", "qPCR Ct standard curve and amplification efficiency",
@@ -407,6 +410,7 @@ OPERATIONS = (
                  "All-positive wells are saturated and cannot be finitely quantified."),
         citations=(Citation("Bio-Rad Droplet Digital PCR Applications Guide, p. 55",
                             "https://www.bio-rad.com/sites/default/files/webroot/web/pdf/lsr/literature/Bulletin_6407.pdf"),),
+        headline="copies_per_ul_original",
     ),
     Operation(
         "a260_quantification", "A260 nucleic-acid concentration and purity",
@@ -432,5 +436,6 @@ OPERATIONS = (
                  "Absorbances already normalized to 1 cm require path_length_cm=1."),
         citations=(Citation("Thermo Scientific NanoDrop Lite Plus User Guide",
                             "https://assets.thermofisher.com/TFS-Assets/MSD/Product-Guides/nanodrop-lite-plus-user-guide-en-s120.pdf"),),
+        headline="concentration_ng_per_ul_original",
     ),
 )

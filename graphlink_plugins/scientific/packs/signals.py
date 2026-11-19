@@ -614,6 +614,7 @@ OPERATIONS = (
         ),
         {"samples": [1, 0, -1, 0, 1, 0, -1, 0], "sample_rate_hz": 8},
         amplitude_spectrum,
+        headline="peak_bin_hz",
     ),
     Operation(
         "linear_resample",
@@ -643,6 +644,7 @@ OPERATIONS = (
         {"samples": [1, 0, -1, 0, 1, 0, -1, 0],
          "sample_times_s": [i / 8 for i in range(8)], "window": "hann"},
         windowed_fft_spectrum,
+        headline="peak_frequency_hz",
     ),
     Operation(
         "welch_psd",
@@ -659,6 +661,7 @@ OPERATIONS = (
         {"samples": [1, 0, -1, 0] * 4, "sample_times_s": [i / 8 for i in range(16)],
          "window": "hann", "segment_samples": 8, "overlap_samples": 4},
         welch_psd,
+        headline="peak_frequency_hz",
     ),
     Operation(
         "butterworth_filter",
@@ -711,5 +714,6 @@ OPERATIONS = (
          "sample_times_s": [i / 10 for i in range(9)],
          "minimum_height": 2, "minimum_prominence": 1, "minimum_spacing_samples": 2},
         detect_peaks,
+        headline="peaks_detected",
     ),
 )

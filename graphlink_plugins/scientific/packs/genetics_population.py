@@ -280,6 +280,7 @@ OPERATIONS = (
                  "Undefined zero-denominator indices stay labeled; not a bias-corrected θ estimator."),
         citations=(Citation("Wright's F-statistics: population and quantitative genetics notes",
                             "https://cooplab.github.io/popgen-notes/"),),
+        headline="f_st",
     ),
     Operation(
         "linkage_disequilibrium", "Two-locus linkage disequilibrium",
@@ -291,6 +292,7 @@ OPERATIONS = (
                  "standardized LD undefined if either locus is fixed."),
         citations=(Citation("One Hundred Years of Linkage Disequilibrium, Genetics 209 (2018)",
                             "https://academic.oup.com/genetics/article/209/3/629/5931007"),),
+        headline="r_squared",
     ),
     Operation(
         "wright_fisher_drift_selection", "Wright–Fisher drift and selection",
@@ -310,6 +312,7 @@ OPERATIONS = (
                  "One seeded path, no mutation, migration, or population-size changes."),
         citations=(Citation("Mathematical Wright–Fisher model (diploid gene-copy sampling)",
                             "https://pmc.ncbi.nlm.nih.gov/articles/PMC4269093/"),),
+        headline="final_a_frequency",
     ),
     Operation(
         "heritability_variance", "Broad- and narrow-sense heritability",
@@ -327,6 +330,7 @@ OPERATIONS = (
                  "assumes zero covariance and no genotype×environment component."),
         citations=(Citation("Stanford Encyclopedia of Philosophy: Heritability and variance components",
                             "https://plato.stanford.edu/archives/spr2021/entries/heredity/"),),
+        headline="narrow_sense_h2",
     ),
     Operation(
         "effective_population_size", "Effective population size from breeder sex ratio",
@@ -342,5 +346,6 @@ OPERATIONS = (
                  "overlap, selection and demographic fluctuations."),
         citations=(Citation("Wang, Santiago & Caballero (2016), Prediction and estimation of effective population size",
                             "https://www.nature.com/articles/hdy201643"),),
+        headline="effective_population_size",
     ),
 )

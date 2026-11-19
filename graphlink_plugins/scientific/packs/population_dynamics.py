@@ -332,6 +332,7 @@ OPERATIONS = (
             Citation("recapr: estimated Chapman variance and mark–recapture assumptions",
                      "https://search.r-project.org/CRAN/refmans/recapr/html/vChapman.html"),
         ),
+        headline="chapman_estimate",
     ),
     Operation(
         "cohort_life_table", "Closed-cohort life table and reproduction",
@@ -361,6 +362,7 @@ OPERATIONS = (
             Citation("Leslie (1945), On the use of matrices in certain population mathematics",
                      "https://doi.org/10.1093/biomet/33.3.183"),
         ),
+        headline="net_reproductive_rate",
     ),
     Operation(
         "matrix_population_projection", "Project structured populations (Leslie/Lefkovitch)",

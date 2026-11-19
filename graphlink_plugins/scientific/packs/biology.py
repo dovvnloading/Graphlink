@@ -646,6 +646,7 @@ OPERATIONS: tuple[Operation, ...] = (
                 "https://openstax.org/books/biology-2e/pages/45-1-population-demography",
             ),
         ),
+        headline="pooled_density_per_m2",
     ),
     Operation(
         "community_overlap",
@@ -743,6 +744,7 @@ OPERATIONS: tuple[Operation, ...] = (
                 "https://doi.org/10.1021/bi201284u",
             ),
         ),
+        headline="km",
     ),
     Operation(
         "dose_response_4pl_fit", "Fit dose–response (4PL)",
@@ -770,6 +772,7 @@ OPERATIONS: tuple[Operation, ...] = (
                 "https://doi.org/10.1002/pst.426",
             ),
         ),
+        headline="potency_concentration",
     ),
     Operation(
         "lotka_volterra", "Simulate Lotka–Volterra predator–prey",
@@ -803,6 +806,7 @@ OPERATIONS: tuple[Operation, ...] = (
                 "https://pmc.ncbi.nlm.nih.gov/articles/PMC4534218/",
             ),
         ),
+        headline="final_prey",
     ),
     Operation(
         "hardy_weinberg", "Hardy–Weinberg equilibrium and chi-square",
@@ -827,6 +831,7 @@ OPERATIONS: tuple[Operation, ...] = (
                 "https://doi.org/10.1080/14786440009463897",
             ),
         ),
+        headline="p_value",
     ),
     Operation(
         "kaplan_meier_logrank", "Kaplan–Meier and log-rank (two groups)",
@@ -857,6 +862,7 @@ OPERATIONS: tuple[Operation, ...] = (
                 "https://pubmed.ncbi.nlm.nih.gov/5910392/",
             ),
         ),
+        headline="logrank_p_value",
     ),
     Operation(
         "richness_rarefaction", "Species richness: Chao1 and rarefaction",

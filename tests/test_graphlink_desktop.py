@@ -197,6 +197,11 @@ def desktop_harness(tmp_path, monkeypatch):
     spa_index.parent.mkdir(parents=True)
     spa_index.write_text("<html></html>", encoding="utf-8")
     monkeypatch.setattr(graphlink_desktop, "REPO_ROOT", tmp_path)
+    # main() falls back to the packaged or checked-out SPA; point that at the
+    # temporary tree too, or a developer's own web_ui build masks a missing one.
+    from backend import packaging_resources
+
+    monkeypatch.setattr(packaging_resources, "resolve_spa_dir", lambda: spa_index.parent)
 
     monkeypatch.setattr(crash_recovery_module, "configure_logging", lambda *a, **k: None)
     monkeypatch.setattr(crash_recovery_module, "install_exception_handlers", lambda *a, **k: None)

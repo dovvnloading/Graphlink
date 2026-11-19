@@ -229,6 +229,7 @@ OPERATIONS: tuple[Operation, ...] = (
                 "partial gene panel); median_ratio: geometric mean per all-positive gene, "
                 "median of per-sample ratios, size factors centered to geometric mean 1. No length correction.",
         citations=(_CITES[0],),
+        headline="genes",
     ),
     Operation(
         id="differential_expression", title="Two-group differential expression (Welch / BH)",
@@ -260,6 +261,7 @@ OPERATIONS: tuple[Operation, ...] = (
                 "Effect is difference of mean log2 counts (B-A), not a count likelihood estimate. "
                 "CPM library totals are sums over the supplied gene rows only.",
         citations=_CITES,
+        headline="tested_genes",
     ),
 )
 
