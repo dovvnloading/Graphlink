@@ -1,0 +1,19 @@
+[plugin]
+id = "science_genetics"
+name = "Genetics"
+description = "Test Mendelian segregation and Hardy–Weinberg equilibrium; analyze linkage, genetic distances, three-point crosses and LOD scores."
+version = "1.2.0"
+sdk_api_version = 1
+entry_point = "plugin:register"
+
+[scopes]
+grants = ["graph.read", "graph.mutate"]
+
+[frontend]
+view = "generic"
+
+[persistence]
+passive_node_kinds = ["workbench"]
+
+[scientific]
+family = "biology"
