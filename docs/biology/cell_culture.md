@@ -120,7 +120,7 @@ The operation needs 6–120 observations at distinct times with a net increase a
 
 ### 8. Calculate a two-point doubling time
 
-For positive abundances N₁ and N₂ with N₂ > N₁, and positive elapsed time Δt, assume approximate exponential growth during the interval:
+For positive abundances N₁ and N₂ with N₂ > N₁, and positive elapsed time Δt, assume approximate exponential growth during the interval. For near-equal observed abundances the implementation evaluates \(\ln(1+(N_2-N_1)/N_1)\), avoiding a subtraction of large, nearly identical logarithms. This is a numerical precision improvement, not evidence that such small biological changes are experimentally resolvable:
 
 \[
 \mu=\frac{\ln N_2-\ln N_1}{\Delta t},

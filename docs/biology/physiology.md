@@ -23,7 +23,7 @@ No edits to the pinned pack catalog, picker or core result schema are needed.
 
 **Operation:** nernst_potential
 
-For valence z, absolute temperature T and positive concentrations in identical units:
+For valence z, absolute temperature T and positive concentrations in identical units (with near-equilibrium log ratios evaluated using `log1p` to preserve representable small differences):
 
 \[
 E_{\rm ion}=\frac{RT}{zF}\ln\frac{[{\rm ion}]_{\rm outside}}{[{\rm ion}]_{\rm inside}}.

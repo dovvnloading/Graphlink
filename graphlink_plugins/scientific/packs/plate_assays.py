@@ -119,7 +119,7 @@ def _logistic_fit(xs: list[float], ys: list[float], model: str) -> dict:
     g = estimates[4] if model == "5pl" else 1.0
     parameters = {"a": _checked(y_floor + y_span * a, "4PL/5PL asymptote"),
                   "d": _checked(y_floor + y_span * d, "4PL/5PL asymptote"),
-                  "c": _checked(x_scale * c, "4PL/5PL midpoint"),
+                  "c": _checked(x_scale * c, "4PL/5PL concentration scale"),
                   "b": _checked(b, "4PL/5PL slope"), "g": _checked(g, "5PL asymmetry")}
     if parameters["c"] <= 0 or parameters["b"] <= 0 or parameters["g"] <= 0:
         raise ValueError("The fitted 4PL/5PL parameters are not physically invertible.")
@@ -188,6 +188,30 @@ def standard_curve(data: dict) -> dict:
             raise ValueError("4PL/5PL needs enough distinct positive concentrations.")
         params = _logistic_fit(xs, ys, model)
     lo, hi = min(xs), max(xs)
+    half_metadata: dict[str, float | str] = {}
+    if model in ("4pl", "5pl"):
+        # For g != 1, the 5PL concentration scale c is NOT the concentration
+        # at half the fitted asymptotic response. Solve (1+(x/c)**b)**g=2.
+        log_half = (math.log(params["c"])
+                    + math.log(math.expm1(math.log(2) / params["g"])) / params["b"])
+        try:
+            half_response = math.exp(log_half)
+        except OverflowError:
+            half_response = math.inf
+        half_display: float | str = half_response
+        if not math.isfinite(half_response) or half_response <= 0:
+            half_display = "unavailable (outside numeric range)"
+            half_status = "not numerically representable"
+        else:
+            half_status = ("within measured concentration interval"
+                           if lo <= half_response <= hi else
+                           "outside measured concentration interval (extrapolated)")
+        half_metadata = {
+            "c_unit": unit,
+            "half_response_concentration": half_display,
+            "half_response_concentration_unit": unit,
+            "half_response_status": half_status,
+        }
     pred = [_evaluate(model, params, x) for x in xs]
     sse = _checked(math.fsum((observed - fitted) ** 2
                              for observed, fitted in zip(ys, pred)), "Residual sum of squares")
@@ -220,12 +244,14 @@ def standard_curve(data: dict) -> dict:
     return {
         "summary": (f"{model.upper()} standard curve fitted to {len(xs)} standards; "
                     f"{quantified} of {len(unknowns)} unknowns quantified within the calibration interval. "
-                    "Concentrations for unknowns include their reciprocal sample dilution factors."),
+                    "Concentrations for unknowns include their reciprocal sample dilution factors."
+                     + (" For 5PL, c is a scale; half-response is reported separately."
+                        if model == "5pl" else "")),
         "values": {
             "model": model, "standards": len(xs), "unknowns": len(unknowns),
             "unknowns_quantified": quantified, "calibration_min": lo, "calibration_max": hi,
             "concentration_unit": unit, "signal_unit": signal_unit,
-            "residual_sum_squares": sse, "r_squared": r_squared, **params,
+            "residual_sum_squares": sse, "r_squared": r_squared, **params, **half_metadata,
         },
         "table": {"columns": ["Type", "Index", f"Nominal ({unit})", f"Signal ({signal_unit})",
                               f"Fitted signal ({signal_unit})", f"Back-calculated ({unit})",

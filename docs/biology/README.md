@@ -2,6 +2,8 @@
 
 Each biology pack has its own reference page and its own explicit Settings → Plugins grant. Open **Plugins → Biology Workbench** in the picker after granting a pack; the existing **Biology and Ecology** pack retains its original plugin ID, operations, and saved-result compatibility.
 
+For scope, fixed issues and independent numerical regression oracles across enzyme kinetics, plate assays, cell culture, pharmacokinetics and physiology, see the [2026 scientific correctness audit](SCIENTIFIC_CORRECTNESS_AUDIT_2026.md). This is not an experimental validation certificate.
+
 ## Pack references
 
 - [Biology and Ecology](biology.md) — community surveys, Hill numbers, beta diversity, species accumulation, ecological modelling, growth and enzyme fits, genetics, survival, biodiversity, mark–recapture, cohort life tables and structured-population projection (`science_biology`).

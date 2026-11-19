@@ -105,6 +105,8 @@ f_{\mathrm{bound}}
 v([I]_T)=v_{\rm bottom}+(v_{\rm top}-v_{\rm bottom})(1-f_{\mathrm{bound}}).
 \]
 
+The quadratic discriminant is evaluated as \((1-x)^2+k(2(1+x)+k)\), where \(x=[I]_T/[E]_T\) and \(k=K_{i,app}/[E]_T\). This algebraically equivalent form avoids subtracting nearly equal squared terms when \(x\approx1\) and the inhibitor is very tight binding. The remaining free-enzyme fraction is also calculated from the stable positive root of \(f^2+(x-1+k)f-k=0\), rather than subtracting the bound fraction from 1; this retains tiny positive fractions at stoichiometric or excess inhibitor. Inferred constants still require a well-identified experimental dose series; numerical stability does not prove identifiability.
+
 The fit estimates `ki_app`, `top` and `bottom` from at least nine background-corrected, nonnegative activities at seven distinct inhibitor doses. The experimental series must include an inhibitor-free control and doses **at or above** the total active enzyme concentration. Reported Ki is *apparent* for that assay; competitive substrate effects and other mechanisms may require additional analysis before inferring an intrinsic Ki. Use enzyme **active-site molarity**, not nominal protein mass. This is a reversible equilibrium model, not a model for irreversible or time-dependent inactivation.
 
 ### Schild analysis

@@ -29,6 +29,20 @@ def _finite(value: float, label: str) -> float:
     return value
 
 
+def _log_positive_ratio(numerator: float, denominator: float) -> float:
+    """Log ratio of positive values without losing small ionic gradients."""
+    if numerator >= denominator:
+        difference = numerator - denominator
+        if difference <= denominator:
+            return math.log1p(difference / denominator)
+    else:
+        difference = denominator - numerator
+        if difference <= numerator:
+            return -math.log1p(difference / numerator)
+    # Logs separately avoid overflow/underflow of a very large/small quotient.
+    return math.log(numerator) - math.log(denominator)
+
+
 def nernst_potential(data: dict) -> dict:
     """Equilibrium potential E_inside - E_outside for one ionic species."""
     inside = _positive(data, "inside_mm")
@@ -37,7 +51,7 @@ def nernst_potential(data: dict) -> dict:
     z = data["valence"]
     if type(z) is not int or z == 0 or not -3 <= z <= 3:
         raise ValueError("Ionic valence must be a nonzero integer between -3 and 3.")
-    log_ratio = math.log(outside) - math.log(inside)
+    log_ratio = _log_positive_ratio(outside, inside)
     potential = _finite(1000 * R_GAS * temperature / (z * FARADAY) * log_ratio,
                         "Nernst potential")
     return {
@@ -81,7 +95,7 @@ def ghk_potential(data: dict) -> dict:
     denominator = _finite(math.fsum(denominator_terms), "GHK denominator")
     if numerator <= 0 or denominator <= 0:
         raise ValueError("GHK weighted intracellular and extracellular sums must both be positive.")
-    log_ratio = math.log(numerator) - math.log(denominator)
+    log_ratio = _log_positive_ratio(numerator, denominator)
     potential = _finite(1000 * R_GAS * temperature / FARADAY * log_ratio,
                         "GHK potential")
     return {

@@ -49,10 +49,17 @@ def _terminal(times, concentrations, count):
     peak_index = max(range(len(concentrations)), key=concentrations.__getitem__)
     if len(times) - count <= peak_index:
         raise ValueError("Terminal points must start after the observed peak concentration.")
-    x, y = times[-count:], concentrations[-count:]
+    # Center the time origin and the logarithms: subtracting two large log(C)
+    # values erases a shallow but resolvable terminal slope.
+    x = [t - times[-count] for t in times[-count:]]
+    y = concentrations[-count:]
     if any(v <= 0 for v in y):
         raise ValueError("Terminal concentrations must be strictly positive; exclude BLQ/zero tail points.")
-    logs = [math.log(v) for v in y]
+    reference = y[0]
+    reference_log = math.log(reference)
+    logs = [(math.log1p((v - reference) / reference)
+             if abs(v - reference) <= reference / 2 else math.log(v) - reference_log)
+            for v in y]
     mean_t, mean_log = statistics.mean(x), statistics.mean(logs)
     variance = math.fsum((t - mean_t) ** 2 for t in x)
     slope = math.fsum((t - mean_t) * (v - mean_log) for t, v in zip(x, logs)) / variance
@@ -68,7 +75,10 @@ def _interval_integrals(t0, t1, c0, c1):
     """Linear-up/log-down interval AUC and AUMC (including stable near-flat tail)."""
     dt = t1 - t0
     if c0 > 0 and c1 > 0 and c1 < c0:
-        q = math.log(c0) - math.log(c1)
+        # The quotient C0/C1 may overflow and the difference log(C0)-log(C1)
+        # may round to zero for almost-flat yet distinct positive samples.
+        q = (-math.log1p((c1 - c0) / c0) if c0 - c1 <= c0 / 2
+             else math.log(c0) - math.log(c1))
         area = c0 * dt * (-math.expm1(-q)) / q
         if q < 0.01:
             # Integral_0^1 u exp(-q*u) du, Taylor expanded near q=0.
