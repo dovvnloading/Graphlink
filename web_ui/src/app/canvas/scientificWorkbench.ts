@@ -1,6 +1,6 @@
-import { isScienceResultView, type ScienceResultView } from "./scientificResultViews";
+import { isScienceResultView, type ScienceResultView } from "./scientificViewTypes";
 
-export type { ScienceResultView } from "./scientificResultViews";
+export type { ScienceResultView } from "./scientificViewTypes";
 
 export interface ScienceField {
   key: string;
