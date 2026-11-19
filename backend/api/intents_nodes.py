@@ -179,7 +179,7 @@ def register_node_intents(
     async def discuss_scientific_result(source_node_id, expected_result_hash, expected_receipt_hash):
         """Start a chat from the authoritative, receipt-validated result, not browser JSON."""
         source = document.nodes.get(source_node_id)
-        if source is None or not re.fullmatch(r"science_[a-z0-9_]+\\.workbench", source.kind):
+        if source is None or not re.fullmatch(r"science_[a-z0-9_]+\.workbench", source.kind):
             raise SceneError("Select a Scientific Workbench result to discuss.")
         pack = source.kind.removeprefix("science_").removesuffix(".workbench")
         data = getattr(source.state, "data", None)
