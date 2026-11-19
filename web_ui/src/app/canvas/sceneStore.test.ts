@@ -901,6 +901,17 @@ describe("SceneStore", () => {
     ]);
   });
 
+  it("opens a scientific discussion using only the source and receipt identity", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.discussScientificResult("science-node", "hash-1", "receipt-1");
+    store.discussScientificResult("legacy-node", "legacy-hash");
+    expect(intents).toEqual([
+      { topic: "scene", intent: "discussScientificResult", args: ["science-node", "hash-1", "receipt-1"] },
+      { topic: "scene", intent: "discussScientificResult", args: ["legacy-node", "legacy-hash", "legacy-hash"] },
+    ]);
+  });
+
   it("collapseAllNodes sends the scene-topic collapseAllNodes intent with no args", () => {
     const { transport, intents } = makeFakeTransport();
     const store = new SceneStore(transport);
