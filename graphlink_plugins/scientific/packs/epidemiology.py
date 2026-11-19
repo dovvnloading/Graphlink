@@ -86,17 +86,27 @@ def two_by_two_measures(data):
     rd_lo = max(-1.0, rd - math.hypot(p_t - t_lo, c_hi - p_c))
     rd_hi = min(1.0, rd + math.hypot(t_hi - p_t, p_c - c_lo))
 
-    # When any cell is zero, Katz/Woolf log CIs are otherwise singular. State
-    # the global 0.5 correction explicitly, and apply it to point estimates too.
-    correction = 0.5 if 0 in (a, b, c, d) else 0.0
-    aa, bb, cc, dd = (value + correction for value in (a, b, c, d))
-    rr = (aa / (aa + bb)) / (cc / (cc + dd))
-    odds_ratio = (aa / bb) / (cc / dd)
-    rr_se = math.sqrt(1 / aa - 1 / (aa + bb) + 1 / cc - 1 / (cc + dd))
-    or_se = math.sqrt(1 / aa + 1 / bb + 1 / cc + 1 / dd)
-    log_rr, log_or = math.log(rr), math.log(odds_ratio)
-    rr_ci = (math.exp(log_rr - _Z95 * rr_se), math.exp(log_rr + _Z95 * rr_se))
-    or_ci = (math.exp(log_or - _Z95 * or_se), math.exp(log_or + _Z95 * or_se))
+    # Double-zero or double-all-event tables give no direction of relative
+    # effect. A fixed 0.5 correction would create a spurious RR/OR merely
+    # from unequal group sizes; retain estimable absolute-risk measures.
+    if (a == c == 0) or (b == d == 0):
+        reason = ("zero events in both groups" if a == c == 0
+                  else "all subjects had events in both groups")
+        rr = odds_ratio = f"undefined ({reason})"
+        rr_ci = or_ci = (rr, rr)
+        correction = 0.0
+    else:
+        # For single-zero-cell tables, show the all-cell 0.5 correction on
+        # both the effect estimate and its Katz/Woolf interval.
+        correction = 0.5 if 0 in (a, b, c, d) else 0.0
+        aa, bb, cc, dd = (value + correction for value in (a, b, c, d))
+        rr = (aa / (aa + bb)) / (cc / (cc + dd))
+        odds_ratio = (aa / bb) / (cc / dd)
+        rr_se = math.sqrt(1 / aa - 1 / (aa + bb) + 1 / cc - 1 / (cc + dd))
+        or_se = math.sqrt(1 / aa + 1 / bb + 1 / cc + 1 / dd)
+        log_rr, log_or = math.log(rr), math.log(odds_ratio)
+        rr_ci = (math.exp(log_rr - _Z95 * rr_se), math.exp(log_rr + _Z95 * rr_se))
+        or_ci = (math.exp(log_or - _Z95 * or_se), math.exp(log_or + _Z95 * or_se))
 
     reduction = -rd  # Control risk minus treatment risk.
     kind = "NNT" if reduction > 0 else "NNH" if reduction < 0 else "undefined"
@@ -108,11 +118,14 @@ def two_by_two_measures(data):
         n_lo, n_hi = 1 / -reduction_lo, 1 / -reduction_hi
     else:
         n_lo = n_hi = "unbounded (risk-difference CI includes zero)"
+    rr_text = rr if isinstance(rr, str) else f"{rr:.6g}"
+    or_text = odds_ratio if isinstance(odds_ratio, str) else f"{odds_ratio:.6g}"
     return {
         "summary": (f"Treated risk {p_t:.6g}; control risk {p_c:.6g}; "
-                    f"RR {rr:.6g}, OR {odds_ratio:.6g}, risk difference {rd:.6g}; "
+                    f"RR {rr_text}, OR {or_text}, risk difference {rd:.6g}; "
                     f"{kind} {needed if isinstance(needed, str) else f'{needed:.6g}'}. "
-                    "RR/OR use a 0.5 all-cell continuity correction when any cell is zero. "
+                    "RR/OR use a 0.5 all-cell correction for single-zero tables; "
+                    "both are undefined when both arms have no events or all events. "
                     "NNT/NNH is interpreted for a treatment comparison, not a causal claim."),
         "values": {
             "treated_risk": p_t, "control_risk": p_c,
@@ -407,15 +420,18 @@ OPERATIONS: tuple[Operation, ...] = (
         {"treated_events": 12, "treated_nonevents": 188,
          "control_events": 30, "control_nonevents": 170}, two_by_two_measures,
         methods=("For independent cohorts, risk = events/total and RD = treated risk − control risk. "
-                 "RR uses Katz and OR uses Woolf log-normal 95% intervals; any zero cell triggers "
-                 "a stated Haldane–Anscombe 0.5 correction to all cells for RR/OR only. "
+                 "RR uses Katz and OR uses Woolf log-normal 95% intervals; single-zero-cell "
+                 "tables use a stated Haldane–Anscombe 0.5 correction for RR/OR only. "
+                 "Both relative effects are undefined for double-zero or double-all-event tables. "
                  "RD uses Newcombe's unpooled Wilson-score interval. Absolute risk reduction is "
                  "−RD; its reciprocal is NNT (benefit) or NNH (harm). A confidence interval "
                  "crossing zero in RD gives an unbounded/disjoint reciprocal interval."),
         citations=(Citation("Newcombe (1998), Interval estimation for the difference between independent proportions",
                             "https://pubmed.ncbi.nlm.nih.gov/9595617/"),
                    Citation("Altman (1998), Confidence intervals for the number needed to treat",
-                            "https://www.bmj.com/content/317/7168/1309")),
+                            "https://www.bmj.com/content/317/7168/1309"),
+                   Citation("Cochrane Handbook, Choosing effect measures (double-zero studies)",
+                            "https://www.cochrane.org/authors/handbooks-and-manuals/handbook/current/chapter-06")),
     ),
     Operation(
         "diagnostic_test_accuracy", "Diagnostic test accuracy",
