@@ -328,7 +328,14 @@ const LARGEST_CHUNK_CEILING_BYTES = 443_000;
 // Frontend CI measured 1,626,520 total JS bytes across 78 chunks, 1,230
 // above the prior ceiling. Raise only by those measured 1,230 bytes;
 // leave the separate largest-chunk ceiling unchanged.
-const TOTAL_JS_CEILING_BYTES = 1_626_520;
+// Deliberate, measured amendment — 2026-11-18 (ADR-019 §4), PR #626.
+// Connected Scientific Workbench propagated uncertainty (± values, coverage,
+// budgets, and method selector) adds no dependency; GUM/MC math stays on the
+// backend and the scientific node view stays lazy. CI measured 1,631,746 total
+// JS bytes across 78 chunks, +5,226 over the old ceiling. After trimming
+// redundant frontend checks/lookups, cap the raise at that measured amount;
+// the separate largest-chunk ceiling remains unchanged.
+const TOTAL_JS_CEILING_BYTES = 1_631_746;
 
 // Below this much headroom, say so. Both prior amendments record the same
 // story: the ceiling was set with ~3-5% room, ordinary week-to-week growth
