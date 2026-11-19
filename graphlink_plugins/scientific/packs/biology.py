@@ -597,7 +597,7 @@ def richness_rarefaction(data):
 
 # The original Operation entries, ids, fields, examples and functions are
 # unchanged, preserving existing saved results and graph source bindings.
-OPERATIONS = (
+OPERATIONS: tuple[Operation, ...] = (
     Operation(
         "community_diversity",
         "Community diversity",
