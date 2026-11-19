@@ -169,7 +169,7 @@ def test_thermal_kelvin_and_explicit_celsius_unit_conversion():
 
 
 @pytest.mark.parametrize("op_name,changes,match", [
-    ("binding_isotherm_fit", {"ligand": [0] * 18}, "distinct"),
+    ("binding_isotherm_fit", {"ligand": [0] * 12}, "distinct"),
     ("binding_isotherm_fit", {"response": [1, 2, 3]}, "aligned"),
     ("binding_isotherm_fit", {"concentration_unit": "s"}, "molarity"),
     ("binding_isotherm_fit", {"model": "three_site"}, "must be one of"),
