@@ -41,7 +41,7 @@ test("imports measurements, analyzes a connected column, and reopens the reprodu
   await setGrants(page, ["Scientific Core", "Statistics"], true);
 
   const source = await launchPack(page, "Scientific Core");
-  await source.getByLabel("CSV measurements").fill("Station,Temperature (C)\n1,8\n2,10\n3,18");
+  await source.getByRole("textbox", { name: "CSV measurements", exact: true }).fill("Station,Temperature (C)\n1,8\n2,10\n3,18");
   await source.getByRole("button", { name: "Run calculation" }).click();
   await expect(source.getByRole("table", { name: "Result table" })).toHaveCount(0);
   await source.getByText(/Tables · 3 rows/).click();
@@ -86,15 +86,17 @@ test("imports measurements, analyzes a connected column, and reopens the reprodu
   await reopenSavedGraph(page);
   await expect(mean).toHaveText("12");
   await latest.getByText("Inputs and provenance", { exact: true }).click();
-  await expect(latest.locator("pre")).toContainText(result.provenance.resultHash);
-  await expect(latest.locator("pre")).toContainText(result.provenance.sources.observations.resultHash);
+  // "Units used" has its own <pre>; the receipt lives in the provenance one.
+  const provenance = latest.locator("details", { hasText: "Inputs and provenance" }).locator("pre");
+  await expect(provenance).toContainText(result.provenance.resultHash);
+  await expect(provenance).toContainText(result.provenance.sources.observations.resultHash);
 });
 
 test("reviews concurrent edits in two views and enforces grant changes on a connected source", async ({ page, context }) => {
   await gotoApp(page);
   await setGrants(page, ["Scientific Core", "Statistics"], true);
   const source = await launchPack(page, "Scientific Core");
-  await source.getByLabel("CSV measurements").fill("Reading\n1\n3");
+  await source.getByRole("textbox", { name: "CSV measurements", exact: true }).fill("Reading\n1\n3");
   await source.getByRole("button", { name: "Run calculation" }).click();
   await source.getByText(/Tables · 2 rows/).click();
   await expect(source.getByRole("table")).toBeVisible();
