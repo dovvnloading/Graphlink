@@ -115,6 +115,52 @@ export function formatScienceNumber(value: number): string {
   return String(Number(value.toPrecision(12)));
 }
 
+
+const SCIENCE_SUPERSCRIPT_DIGITS = "⁰¹²³⁴⁵⁶⁷⁸⁹";
+
+function scienceSuperscript(exponent: string): string {
+  return String(Number(exponent)).replace(/[-0-9]/g, (digit) =>
+    digit === "-" ? "⁻" : SCIENCE_SUPERSCRIPT_DIGITS[Number(digit)]);
+}
+
+/** Display-only summary cleanup: pack summaries often use Python's 6g "e"
+ * notation. Preserve the original text for saved receipts and JSON exports,
+ * and do not rewrite embedded identifiers or units. */
+export function formatScienceSummary(summary: string): string {
+  return summary.replace(/(^|[^\w.])([+-]?(?:\d+(?:\.\d*)?|\.\d+)[eE][+-]?\d+)(?![\w]|\.\d)/g,
+    (match, prefix: string, token: string) => {
+      const value = Number(token);
+      const [coefficient, power] = token.split(/[eE]/);
+      // Even outside JS's floating-point range, the displayed exponent must
+      // not silently become zero or infinity.
+      if (!Number.isFinite(value) || (value === 0 && Number(coefficient) !== 0))
+        return prefix + coefficient + " × 10" + scienceSuperscript(power);
+      const rounded = Number(formatScienceNumber(value));
+      const magnitude = Math.abs(value);
+      if (magnitude >= 1e12 || (magnitude > 0 && magnitude < 1e-6)) {
+        const [mantissa, exponent] = rounded.toExponential().split("e");
+        return prefix + mantissa + " × 10" + scienceSuperscript(exponent);
+      }
+      return prefix + (token.startsWith("+") ? "+" : "") +
+        rounded.toLocaleString("en-US", { maximumSignificantDigits: 12 });
+    });
+}
+
+/** Short plot captions, without collapsing distinct endpoints into one label.
+ * Geometry and per-point hover text continue to use the original coordinates. */
+export function formatScienceRange(low: number, high: number): string {
+  const label = (value: number, digits: number) =>
+    Number.isFinite(value) ? String(Number(value.toPrecision(digits))) : String(value);
+  let digits = 6;
+  let start = label(low, digits), end = label(high, digits);
+  while (start === end && low !== high && digits < 17) {
+    digits += 1;
+    start = label(low, digits);
+    end = label(high, digits);
+  }
+  return start + " to " + end;
+}
+
 /** Format values without discarding the standard uncertainty or its units. */
 export function formatMeasurement(measurement: ScientificMeasurement): string {
   const unit = measurement.unit ? " " + measurement.unit : "";
