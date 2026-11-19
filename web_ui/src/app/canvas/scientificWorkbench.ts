@@ -61,6 +61,7 @@ export interface ScientificImportedTable {
 }
 export interface ScientificTableSelection {
   nodeId: string; column: number; policy: "reject" | "drop"; start: number; end: number;
+  source?: "result";
 }
 export interface SciencePlot { x: number[]; y: number[]; xLabel: string; yLabel: string; title: string }
 
@@ -161,6 +162,8 @@ export interface ScienceResult {
   summary: string;
   values: Record<string, unknown>;
   table?: ScienceTable;
+  /** Complete generated rows live in an immutable asset, never in the scene wire. */
+  tableAsset?: ScientificImportedTable;
   plot?: SciencePlot;
   uncertainty?: ScientificUncertainty;
   provenance: Record<string, unknown> & { resultHash: string; receiptHash?: string; sources?: Sources };
@@ -311,9 +314,10 @@ function isResult(value: unknown): value is ScienceResult {
           return !isMeasurement(item) || !finite(outputValue) || item.value !== outputValue;
         })) return false;
   }
-  const { table, plot } = value;
+  const { table, tableAsset, plot } = value;
   if (table !== undefined && !(record(table) && strings(table.columns) && Array.isArray(table.rows)
       && table.rows.every((row) => Array.isArray(row) && row.length === (table.columns as string[]).length))) return false;
+  if (tableAsset !== undefined && (table !== undefined || !isImportedTable(tableAsset))) return false;
   return plot === undefined || (record(plot) && typeof plot.title === "string"
     && typeof plot.xLabel === "string" && typeof plot.yLabel === "string" && vector(plot.x) && vector(plot.y)
     && plot.x.length === plot.y.length);
@@ -559,35 +563,42 @@ export function sourceOptions(parents: ScienceParent[], maxPoints = V1_LIMITS.po
         if (matrix(rows)) add("Table rows", rows, ["table"]);
       }
     }
-    if (state.table) {
-      const table = state.table;
+    // Imported datasets retain independent receipts; generated table assets
+    // are tied to the complete producing result, not just a detached file.
+    for (const source of ["result", "import"] as const) {
+      const table = source === "result" ? result?.tableAsset : state.table;
+      if (!table) continue;
+      const generated = source === "result";
+      const resultHash = generated ? result!.provenance.resultHash : table.asset_ref;
+      const receiptHash = generated ? result!.provenance.receiptHash : table.provenance.receiptHash;
+      const wholeSelector = generated ? "result_table" : "typed_table";
+      const columnSelector = generated ? "result_table_column" : "table_column";
       options.push({
-        label: `${title} · Whole typed table (${table.rowCount} rows, ${table.columnCount} columns)`,
+        label: `${title} · ${generated ? "Result typed table" : "Whole typed table"} (${table.rowCount} rows, ${table.columnCount} columns)`,
         value: table,
         reference: {
           nodeId: parent.nodeId, ...(state.nodeKey && { sourceKey: state.nodeKey }),
-          resultHash: table.asset_ref, receiptHash: table.provenance.receiptHash,
-          selector: ["typed_table"],
+          resultHash, ...(receiptHash && { receiptHash }),
+          selector: [wholeSelector],
         },
       });
       table.columns.forEach((col, column) => {
         if (col.type !== "numeric") return;
-        // Existing calculation inputs still have their historical maximum.
-        // For larger datasets the dropdown explicitly chooses the first
-        // bounded row window instead of silently truncating the table.
+        // A column selector is explicitly bounded; whole tables are not.
         const start = 0, end = Math.min(table.rowCount, maxPoints);
         const modes: Array<"reject" | "drop"> = col.missingCount ? ["reject", "drop"] : ["reject"];
         modes.forEach((policy) => {
           const range = table.rowCount > end ? ` · first ${end} of ${table.rowCount} rows` : "";
           const missing = policy === "drop" ? " · Drop missing (explicit)" : col.missingCount ? " · Reject missing" : "";
           options.push({
-            label: `${title} · ${col.label} [typed table${range}${missing}]`,
+            label: `${title} · ${col.label} [${generated ? "result table" : "typed table"}${range}${missing}]`,
             value: undefined,
-            tableColumn: { nodeId: parent.nodeId, column, policy, start, end },
+            tableColumn: { nodeId: parent.nodeId, column, policy, start, end,
+              ...(generated && { source: "result" as const }) },
             reference: {
               nodeId: parent.nodeId, ...(state.nodeKey && { sourceKey: state.nodeKey }),
-              resultHash: table.asset_ref, receiptHash: table.provenance.receiptHash,
-              selector: ["table_column", column, policy, start, end],
+              resultHash, ...(receiptHash && { receiptHash }),
+              selector: [columnSelector, column, policy, start, end],
             },
           });
         });
