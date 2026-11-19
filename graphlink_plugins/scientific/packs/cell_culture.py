@@ -6,9 +6,11 @@ centrifuge safety, or organism-specific culture conditions. Standard library onl
 
 from __future__ import annotations
 
+import json
 import math
 
 from graphlink_plugins.scientific.core import Field, Operation
+from graphlink_plugins.scientific.result_views import check_result_views
 
 
 _MAX_EXACT_COUNT = 2**53 - 1
@@ -322,6 +324,48 @@ def plate_count_cfu(data: dict) -> dict:
             ],
             "rows": rows,
         },
+    }
+
+
+def microplate_map(data: dict) -> dict:
+    """Lay out sparse, user-labeled numeric or categorical microplate readings."""
+    def unique_object(pairs):
+        values = {}
+        for well, value in pairs:
+            if well in values:
+                raise ValueError(f"Well {well!r} appears more than once.")
+            values[well] = value
+        return values
+
+    try:
+        readings = json.loads(
+            data["wells_json"], object_pairs_hook=unique_object,
+            parse_constant=lambda value: (_ for _ in ()).throw(ValueError("Nonfinite well value.")),
+        )
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise ValueError("Wells must be a JSON object mapping well IDs to readings.") from exc
+    if not isinstance(readings, dict):
+        raise ValueError("Wells must be a JSON object mapping well IDs to readings.")
+    size = int(data["plate_format"])
+    wells = [{"well": well, "value": value} for well, value in readings.items()]
+    view = {
+        "type": "plate_map", "title": f"{size}-well microplate map",
+        "format": size, "unit": data["measurement_label"], "wells": wells,
+    }
+    check_result_views([view])
+    wells.sort(key=lambda entry: (entry["well"][0], int(entry["well"][1:])))
+    occupied = sum(entry["value"] is not None for entry in wells)
+    return {
+        "summary": f"{size}-well plate with {occupied} recorded readings and {size - occupied} empty wells.",
+        "values": {
+            "plate_format": str(size), "recorded_wells": occupied,
+            "empty_wells": size - occupied, "measurement_label": data["measurement_label"],
+        },
+        "table": {
+            "columns": ["Well", data["measurement_label"]],
+            "rows": [[entry["well"], entry["value"] if entry["value"] is not None else ""] for entry in wells],
+        },
+        "views": [view],
     }
 
 
@@ -684,6 +728,25 @@ OPERATIONS = (
         {"colony_counts": [45, 55], "reciprocal_dilutions": [1000, 1000],
          "plated_volume_ml": 0.1},
         plate_count_cfu,
+    ),
+    Operation(
+        "microplate_map", "96/384-well microplate map",
+        "Display measured or categorical readings in a labeled well grid. Empty wells remain distinct from zero.",
+        (
+            Field("plate_format", "Microplate format", "choice", unit="wells",
+                  choices=("96", "384")),
+            Field("wells_json", "Well readings (JSON object)", "text", unit="JSON",
+                  description='Use addresses such as A1 and H12 (96) or P24 (384), mapped to numbers, labels or null.'),
+            Field("measurement_label", "Reading label / unit", "text", unit="label"),
+        ),
+        {"plate_format": "96", "wells_json": '{"A1":"control","A2":0,"A3":0.42,"B3":1.25}',
+         "measurement_label": "Signal (RFU)"},
+        microplate_map,
+        methods=(
+            "This view preserves each supplied numeric or categorical reading without interpolation or "
+            "normalization. The 96-well grid has rows A–H and columns 1–12; the 384-well grid has "
+            "rows A–P and columns 1–24. Omitted wells and explicit nulls are unmeasured, not zero."
+        ),
     ),
     Operation(
         "most_probable_number", "Most probable number (MPN/mL)",

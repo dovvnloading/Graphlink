@@ -413,6 +413,9 @@ def check_artifact(data: dict) -> None:
     if "uncertainty" in data:
         from .propagation import check_uncertainty
         check_uncertainty(data["uncertainty"], data["values"])
+    if "views" in data:
+        from .result_views import check_result_views
+        check_result_views(data["views"])
     if "plot" in data:
         plot = data["plot"]
         if not isinstance(plot, dict) or not all(isinstance(plot.get(k), list) for k in ("x", "y")):
@@ -527,7 +530,7 @@ def readable_result(data: dict, pack: str) -> bool:
         if (not isinstance(sources, dict) or sources.keys() - result["inputs"].keys()
                 or not all(_source_valid(ref) for ref in sources.values())):
             return False
-        output = {k: result[k] for k in ("summary", "values", "table", "tableAsset", "plot", "uncertainty") if k in result}
+        output = {k: result[k] for k in ("summary", "values", "table", "tableAsset", "plot", "views", "uncertainty") if k in result}
         check_artifact(output)
         inputs_hash = fingerprint(result["inputs"])
         version = receipt["packVersion"]

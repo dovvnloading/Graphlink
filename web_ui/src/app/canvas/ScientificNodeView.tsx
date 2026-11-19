@@ -7,6 +7,7 @@ import type { SceneStore, ScienceEditorSession } from "./sceneStore";
 import { downloadBlob } from "./downloadTextFile";
 import { writeTableCsv } from "./tableCsv";
 import { createLinearScale } from "./charts/chartScales";
+import { ScientificResultViews } from "./ScientificResultViews";
 import {
   chartableScienceTypes, columnChoices, compatibleOptions, connectedInputText, draftInputs, FieldError, fieldText, formatMeasurement, formatScienceNumber, matchesSource, parseInputs, readScienceState, resultMeasurement, sourceOptions,
   type EditorDraft, type ScienceField, type ScienceLimits, type ScienceOperation, type ScienceParent, type SciencePlot, type ScienceResult,
@@ -109,7 +110,8 @@ function Results({ result, title, exportJson, exportCsv, onChart, onRefresh, cha
       {Object.entries(result.uncertainty.unsupportedOutputs ?? {}).map(([name, why]) =>
         <p role="note" key={name}>Uncertainty propagation unavailable for {name}: {why}</p>)}
     </details>}
-    {plot && <Plot plot={plot} />}
+    {result.views && <ScientificResultViews views={result.views} />}
+    {plot && !result.views?.some((view) => view.type === "survival_curve") && <Plot plot={plot} />}
     {table && <div className="science-table">
       <table aria-label="Result table"><thead><tr>{table.columns.map((col, i) => <th key={i} scope="col">{col}</th>)}</tr></thead>
         <tbody>{table.rows.slice(0, PREVIEW_ROWS).map((row, i) =>

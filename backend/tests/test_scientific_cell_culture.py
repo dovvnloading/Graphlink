@@ -28,7 +28,7 @@ def test_cell_culture_manifest_discovery_and_example_receipts():
     assert PACK_FAMILIES["cell_culture"] == "biology"
     assert [op.id for op in operations("cell_culture")] == [
         "cell_count_viability", "seeding_plan", "serial_dilution_plan", "centrifuge_rcf_rpm",
-        "plate_count_cfu", "most_probable_number", "growth_curve_parameters", "doubling_time",
+        "plate_count_cfu", "microplate_map", "most_probable_number", "growth_curve_parameters", "doubling_time",
     ]
 
     for operation in operations("cell_culture"):

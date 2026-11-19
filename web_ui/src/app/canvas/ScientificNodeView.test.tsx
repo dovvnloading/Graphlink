@@ -317,6 +317,45 @@ describe("scientific workbench card", () => {
     expect(screen.queryByText("Run calculation")).toBeNull();
     expect(readScienceState(JSON.stringify({ ...state, latest: { ...result, plot: { ...result.plot, y: [] } } }))).toBeNull();
   });
+
+  it("renders 96- and 384-well typed plate maps with accessible empty, zero and categorical wells", () => {
+    const plate = { type: "plate_map", title: "Plate readings", format: 96, unit: "RFU",
+      wells: [{ well: "A1", value: "control" }, { well: "A2", value: 0 }, { well: "H12", value: 12.4 }] };
+    const mounted = mount(JSON.stringify({ ...state, latest: { ...result, views: [plate] } }));
+    const map = screen.getByRole("table", { name: "96-well plate map" });
+    expect(within(map).getAllByRole("row")).toHaveLength(9);
+    expect(within(map).getByRole("cell", { name: "A1: control" })).toHaveTextContent("co");
+    expect(within(map).getByRole("cell", { name: "A2: 0 RFU" })).toHaveTextContent("●");
+    expect(within(map).getByRole("cell", { name: "A3: empty" })).toHaveTextContent("·");
+    expect(within(map).getByRole("cell", { name: "H12: 12.4 RFU" })).toBeInTheDocument();
+    expect(screen.getByText(/Numeric scale: 0 – 12.4 RFU/)).toBeVisible();
+
+    mounted.remount(JSON.stringify({ ...state, latest: { ...result, views: [
+      { ...plate, format: 384, wells: [{ well: "P24", value: 5 }] },
+    ] } }));
+    const large = screen.getByRole("table", { name: "384-well plate map" });
+    expect(within(large).getAllByRole("row")).toHaveLength(17);
+    expect(within(large).getByRole("cell", { name: "P24: 5 RFU" })).toBeInTheDocument();
+  });
+
+  it("renders all survival groups as step curves with censor ticks and a legend", () => {
+    const survival = { type: "survival_curve", title: "Kaplan–Meier by arm",
+      xLabel: "Follow-up (days)", groups: [
+        { label: "A", times: [0, 2, 4], survival: [1, .75, .5], censored: [4] },
+        { label: "B", times: [0, 1, 4], survival: [1, .9, .9], censored: [4] },
+        { label: "C", times: [0, 3], survival: [1, .8] },
+      ] };
+    mount(JSON.stringify({ ...state, latest: { ...result, views: [survival] } }));
+    const svg = screen.getByRole("img", { name: /Kaplan–Meier by arm: survival curves for A, B, C/ });
+    expect(svg.querySelectorAll("path")).toHaveLength(4); // Axes + one step path for each group.
+    expect([...svg.querySelectorAll("path")].slice(1).every((path) =>
+      /H.*V/.test(path.getAttribute("d") ?? ""))).toBe(true);
+    expect(svg.querySelectorAll("line[stroke-width='2']")).toHaveLength(2);
+    expect(screen.getByText("C · 0 censor times")).toBeVisible();
+    // The legacy single-series plot is retained for connections, not displayed twice.
+    expect(screen.queryByRole("img", { name: /Distance/ })).toBeNull();
+    expect(screen.getByRole("table", { name: "Result table" })).toBeInTheDocument();
+  });
 });
 
 

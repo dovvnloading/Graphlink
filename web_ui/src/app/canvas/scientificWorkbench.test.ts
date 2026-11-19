@@ -307,6 +307,38 @@ describe("saved Workbench wire safety", () => {
     expect(readScienceState(JSON.stringify(damaged))).toBeNull();
   });
 
+  it("accepts bounded typed views and rejects malformed wells and survival series on the wire", () => {
+    const plate = { type: "plate_map", title: "Assay", format: 384, unit: "RFU",
+      wells: [{ well: "P24", value: 0 }, { well: "A1", value: "control" }] };
+    const survival = { type: "survival_curve", title: "Survival", xLabel: "Days",
+      groups: [
+        { label: "A", times: [0, 0, 2], survival: [1, .8, .8], censored: [2] },
+        { label: "B", times: [0, 1], survival: [1, .5], censored: [] },
+        { label: "C", times: [0, 2], survival: [1, 1], censored: [2] },
+      ] };
+    const latest: ScienceResult = {
+      operationId: "convert_unit", inputs: {}, summary: "ok", values: {},
+      provenance: { resultHash: "digest" },
+    };
+    const read = (views: unknown) => readScienceState(JSON.stringify({
+      ...base, latest: { ...latest, views },
+    }));
+    expect(read([plate, survival])?.latest?.views).toHaveLength(2);
+    expect(read([{ ...plate, wells: [{ well: "P25", value: 2 }] }])).toBeNull();
+    expect(read([{ ...plate, wells: [{ well: "A1", value: 1 }, { well: "A1", value: 2 }] }])).toBeNull();
+    const overflowingWire = JSON.stringify({ ...base, latest: { ...latest,
+      views: [{ ...plate, wells: [{ well: "A1", value: 0 }] }],
+    } }).replace('"value":0', '"value":1e999');
+    expect(readScienceState(overflowingWire)).toBeNull();
+    expect(read([{ ...plate, wells: [{ well: "A1", value: true }] }])).toBeNull();
+    expect(read([{ ...survival, groups: [survival.groups[0]] }])).toBeNull();
+    expect(read([{ ...survival, groups: [{ ...survival.groups[0], survival: [1, 1.1, 1] }, ...survival.groups.slice(1)] }])).toBeNull();
+    expect(read([{ ...survival, groups: [{ ...survival.groups[0], censored: [5] }, ...survival.groups.slice(1)] }])).toBeNull();
+    expect(read([plate, plate, plate, plate, plate])).toBeNull();
+    expect(read([{ type: "custom_html", title: "Unsafe", html: "<svg onload=alert(1)>" }])).toBeNull();
+    expect(readScienceState(JSON.stringify({ ...base, latest }))?.latest?.views).toBeUndefined();
+  });
+
   it("rejects malformed uncertainty budget arrays and non-text diagnostics", () => {
     const measurement = { value: 4, standardUncertainty: 1, coverageFactor: 2, unit: "" };
     const result: ScienceResult = {
