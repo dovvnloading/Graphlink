@@ -176,11 +176,13 @@ def stress_strain_analysis(data):
     if limit <= strain[0] or limit >= strain[-1]:
         raise ValueError("Elastic fit limit must be inside the measured strain range.")
     elastic = [(e, s) for e, s in zip(strain, stress) if e <= limit]
-    if len(elastic) < 2:
-        raise ValueError("Elastic fit needs at least two samples up to the selected limit.")
+    if len(elastic) < 3:
+        raise ValueError("Elastic fit needs at least three samples up to the selected limit.")
     modulus, intercept, r2 = _linear_fit([v[0] for v in elastic], [v[1] for v in elastic])
     if modulus <= 0:
         raise ValueError("The fitted Young modulus must be positive.")
+    if r2 < 0.98:
+        raise ValueError("The selected elastic region is not sufficiently linear (R² < 0.98).")
     peak_index = stress.index(max(stress))
     # Require the 0.2%-offset intersection on the rising curve, rather than
     # misidentifying the descending post-necking portion as the yield point.
@@ -257,6 +259,8 @@ def _hardening_fit(plastic_strain, true_stress):
     n, log_k, r2 = _linear_fit([math.log(v) for v in plastic_strain], [math.log(s) for s in true_stress])
     if not 0 < n <= 1:
         raise ValueError("The log-log fit must give 0 < n ≤ 1 for strain-hardening behavior.")
+    if r2 < 0.90:
+        raise ValueError("The selected hardening region is not well described by a power law (R² < 0.90).")
     strength = math.exp(log_k)
     if not math.isfinite(strength) or strength <= 0:
         raise ValueError("Fitted strength coefficient is outside the numeric range.")
@@ -442,8 +446,12 @@ def paris_crack_growth(data):
     # Analytic integral of da/[C (Y Δσ sqrt(πa))^m]. Use expm1
     # to avoid cancellation when m is close to 2.
     p = 1 - m / 2
-    log_ratio = math.log(final / initial)
-    span = (math.log(final) - math.log(initial) if p == 0 else
+    # log(final / initial) loses precision for nearly identical cracks;
+    # log1p also avoids overflowing the ratio for widely separated sizes.
+    difference = final - initial
+    log_ratio = (math.log1p(difference / initial) if difference <= initial
+                 else math.log(final) - math.log(initial))
+    span = (log_ratio if p == 0 else
             initial ** p * math.expm1(p * log_ratio) / p)
     cycles = span / (c * (y * delta_stress * math.sqrt(math.pi)) ** m)
     if not math.isfinite(cycles) or cycles <= 0:
@@ -560,7 +568,9 @@ def hardness_e140(data):
     if source not in names or target not in names or source == target:
         raise ValueError("Select two distinct, tabulated hardness scales for the chosen table.")
     reading = data["hardness_reading"]
-    converted = _interpolate_hardness(source, target, rows, reading, names)
+    # E140 §7.3: do not report more significant digits than the integer
+    # values in these selected columns. Python's round uses ties-to-even.
+    converted = round(_interpolate_hardness(source, target, rows, reading, names))
     return {
         "summary": f"Approximate ASTM E140-12b {source} → {target} for homogeneous non-austenitic steel; "
                    "piecewise-linear interpolation, not an acceptance-test substitute.",

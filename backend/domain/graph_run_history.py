@@ -11,8 +11,8 @@ from backend.domain.graph_run_inspector import _identifier, _timestamp
 RUN_HISTORY_LIMIT = 12
 RUN_ID = re.compile(r"[a-zA-Z0-9_-]{8,100}")
 DIGEST = re.compile(r"[a-f0-9]{64}")
-_RUN_STATUSES = {"completed", "partial", "running", "interrupted", "reconciliation-required"}
-_STEP_STATUSES = {"pending", "current", "completed", "blocked", "failed", "running", "reconciliation-required"}
+_RUN_STATUSES = {"completed", "partial", "cancelled", "running", "interrupted", "reconciliation-required"}
+_STEP_STATUSES = {"pending", "current", "completed", "blocked", "failed", "cancelled", "running", "reconciliation-required"}
 
 
 def _restore_step(raw: Any, ids: dict[str, str]) -> dict[str, Any] | None:
@@ -21,7 +21,7 @@ def _restore_step(raw: Any, ids: dict[str, str]) -> dict[str, Any] | None:
     keys = ("nodeId", "sourceId", "operation", "kind", "status", "label", "detail", "inputHash", "configHash", "targetHash")
     if not all(isinstance(raw.get(key), str) for key in keys):
         return None
-    if raw["status"] not in _STEP_STATUSES or raw["kind"] not in {"note", "chart", "artifact", "table", "model", "tool"}:
+    if raw["status"] not in _STEP_STATUSES or raw["kind"] not in {"note", "chart", "artifact", "table", "model", "tool", "scientific"}:
         return None
     step = {key: raw[key] for key in keys}
     for key in ("inputHash", "configHash", "targetHash"):
@@ -47,9 +47,43 @@ def _restore_step(raw: Any, ids: dict[str, str]) -> dict[str, Any] | None:
             identifier = _identifier(raw.get(key))
             if identifier is not None:
                 step[key] = identifier
+    if step["kind"] == "scientific":
+        from graphlink_plugins.scientific.core import canonical_bytes, readable_result, MAX_RESULT_BYTES
+
+        raw_sources = raw.get("sourceIds")
+        if (not isinstance(raw_sources, list) or len(raw_sources) > 32
+                or any(not isinstance(source, str) or not source for source in raw_sources)
+                or len(set(raw_sources)) != len(raw_sources)):
+            return None
+        step["sourceIds"] = [ids.get(source, "") for source in raw_sources]
+        elapsed = raw.get("elapsedMs")
+        if type(elapsed) is int and 0 <= elapsed <= 86400000:
+            step["elapsedMs"] = elapsed
+        error_type = raw.get("errorType")
+        if error_type in {"timeout", "cancelled", "invalid_input", "worker_error", "validation", "conflict"}:
+            step["errorType"] = error_type
+        if "scientificResult" in raw:
+            result = raw["scientificResult"]
+            try:
+                pack = result["provenance"]["packId"]
+                if (not isinstance(pack, str) or result["operationId"] != step["operation"]
+                        or len(canonical_bytes(result)) > MAX_RESULT_BYTES
+                        or not readable_result({"version": 1, "latest": result}, pack)):
+                    return None
+            except (KeyError, TypeError, AttributeError, ValueError):
+                return None
+            step["scientificResult"] = result
+
     for key in ("nodeId", "sourceId"):
         # Never leave an unmapped saved id pointing at an unrelated new n0/n1.
         step[key] = ids.get(step[key], "")
+    if step["kind"] == "scientific" and raw["status"] == "running":
+        # Isolated pure calculations have no external side effects or replay
+        # ambiguity. An unfinished calculation is safe to attempt on resume;
+        # the runner rechecks all pins and a previously committed result.
+        step.update(status="pending", detail="Interrupted scientific calculation; recheck inputs on resume.")
+    if step["kind"] == "scientific" and any(not source for source in step["sourceIds"]):
+        step.update(status="blocked", detail="A saved scientific input no longer exists.")
     if "externalAttempt" in raw:
         attempt = restore_external_attempt(raw["externalAttempt"])
         if attempt is None:
@@ -71,7 +105,7 @@ def _restore_step(raw: Any, ids: dict[str, str]) -> dict[str, Any] | None:
     elif step["status"] in {"running", "reconciliation-required"}:
         # An in-flight remote step with no durable identity is unsafe to replay.
         step.update(status="reconciliation-required", detail="External request identity is missing; do not retry.")
-    if step["status"] == "pending" and not (step["sourceId"] and step["nodeId"]):
+    if step["status"] == "pending" and not (step["nodeId"] and (step["sourceId"] or step["kind"] == "scientific")):
         step.update(status="blocked", detail="The saved input or output no longer exists.")
     return step
 

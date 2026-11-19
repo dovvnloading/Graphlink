@@ -135,6 +135,13 @@ export interface ScienceResult {
   provenance: Record<string, unknown> & { resultHash: string; receiptHash?: string; sources?: Sources };
 }
 
+export interface ScienceRunnerConfiguration {
+  version: 1;
+  operationId: string;
+  inputs: Record<string, unknown>;
+  sources: Sources;
+}
+
 export interface ScienceState {
   scienceVersion: 1;
   packId: string;
@@ -144,6 +151,7 @@ export interface ScienceState {
   error?: string;
   operations: ScienceOperation[];
   latest: ScienceResult | null;
+  runner?: ScienceRunnerConfiguration | null;
   table?: ScientificImportedTable | null;
 }
 
@@ -260,6 +268,9 @@ export function readScienceState(raw: string): ScienceState | null {
         (value.limits === undefined || (record(value.limits) && Object.keys(V1_LIMITS).every((k) =>
           Number.isSafeInteger((value.limits as Record<string, unknown>)[k]) && Number((value.limits as Record<string, unknown>)[k]) > 0))) &&
         value.operations.every(isOperation) &&
+        (value.runner == null || (record(value.runner) && value.runner.version === 1 &&
+          typeof value.runner.operationId === "string" && record(value.runner.inputs) &&
+          record(value.runner.sources))) &&
         (value.table == null || isImportedTable(value.table)) &&
         (value.latest === null || isResult(value.latest))) return value as unknown as ScienceState;
   } catch { /* A missing plugin or unsupported saved version still leaves the card visible. */ }
@@ -276,7 +287,7 @@ export function fieldText(field: ScienceField, value: unknown): string {
   if (value === undefined) return "";
   if (field.kind === "text") return String(value);
   if (typeof value === "number") return editableNumber(value);
-  if (Array.isArray(value)) return "[" + value.map((part) => fieldText(field, part)).join(",") + "]";
+  if (Array.isArray(value)) return "[" + value.map((part) => typeof part === "string" ? JSON.stringify(part) : fieldText(field, part)).join(",") + "]";
   return JSON.stringify(value);
 }
 

@@ -44,6 +44,10 @@ percent** (0.002 is 0.2%). MPa × strain = MJ/m³; 1 MPa = 1 N/mm².
   plus tabular data and a plotted engineering curve.
 - **Method:** ordinary least squares of stress against strain **up to and
   including** the chosen elastic limit, with a freely fitted intercept. The
+  selected elastic region must contain at least **three** readings and
+  have an elastic-fit R² ≥ 0.98; otherwise a modulus/yield is not reported.
+  The threshold rejects fits without a credible linear region, while the
+  analyst still chooses which measurements are elastic. The
   offset yield is the **first** linearly interpolated intersection on the
   rising/pre-UTS branch with the line parallel to that fit displaced by
   Δε = 0.002. No yield result is fabricated when an intersection is absent.
@@ -83,8 +87,10 @@ percent** (0.002 is 0.2%). MPa × strain = MJ/m³; 1 MPa = 1 N/mm².
 - **Method:** respectively σ = K εₚⁿ and ε_total = σ/E + (σ/K)^(1/n),
   using an ordinary least-squares fit of `ln σ` against `ln εₚ` (where the
   Ramberg–Osgood εₚ is obtained by subtracting σ/E). Require at least three
-  points with **positive plastic strains and stresses**, and `0 < n ≤ 1`.
-  Select the post-yield uniform hardening region; include neither the yield
+  points with **positive plastic strains and stresses**, `0 < n ≤ 1`,
+  and a log-log fit R² ≥ 0.90. Strongly non-power-law data are rejected
+  instead of returning a misleading hardening coefficient; small
+  measurement scatter is permitted. Select the post-yield uniform hardening region; include neither the yield
   plateau nor necking. This is an **unweighted log-space fit** (errors are
   multiplicative in stress), not a nonlinear original-space least-squares
   fit and not the alternative α-parametrized Ramberg–Osgood equation.
@@ -156,8 +162,9 @@ percent** (0.002 is 0.2%). MPa × strain = MJ/m³; 1 MPa = 1 N/mm².
   `initial_delta_k_mpa_sqrt_m` / `final_delta_k_mpa_sqrt_m` (MPa√m),
   and `final_k_max_mpa_sqrt_m` (MPa√m).
 - **Method:** da/dN = C(ΔK)^m, ΔK = Y Δσ √(π a), with exact
-  analytical integration and a stable `expm1` form near m = 2 (logarithmic
-  antiderivative at m = 2). The requested final length cannot exceed
+  analytical integration and stable `log1p`/`expm1` evaluation for
+  nearly equal crack lengths and near m = 2 (logarithmic antiderivative
+  at m = 2). The requested final length cannot exceed
   K_max = K_IC when K_max = ΔK/(1−R). This **does not** check whether
   ΔK is above the Paris threshold, whether a closure/corrosion term is
   relevant, or whether the geometry factor changes with a. Fit C and m
@@ -210,7 +217,10 @@ percent** (0.002 is 0.2%). MPa × strain = MJ/m³; 1 MPa = 1 N/mm².
   `converted_hardness_<scale>` (each in the named HRC/HRB/HV/HBW/HBS
   scale; a hardness number is **not** a stress in MPa).
 - **Method:** piecewise-linear interpolation **only between tabulated
-  adjacent values**. Embedded values are from the earlier **ASTM
+  adjacent values**, with reported conversions rounded to the nearest
+  whole target-scale hardness number (ties to even), as the embedded
+  columns contain integers; original readings remain unchanged.
+  Embedded values are from the earlier **ASTM
   E140-12b(2019)e1**, Tables 1/2, cross-checked against a publicly posted
   reference chart. Table 1 covers **20–68 HRC** ↔ **238–940 HV**;
   Brinell HBW is available only for **20–59 HRC** (226–634 HBW).
@@ -263,7 +273,7 @@ illustrative; precision is not material property uncertainty.
 | Callister & Rethwisch, tensile chapter | Conventional 0.2% parallel elastic offset | Synthesized piecewise-linear curve: E = 200,000 MPa; offset yield = 457.89473684 MPa; elastic resilience = 0.4 MJ/m³ from integration |
 | Callister & Rethwisch, *Materials Science and Engineering: An Introduction*, Example 8.1 (glass flaw) | E = 69 GPa, surface energy = 0.3 J/m², σ = 40 MPa; maximum flaw `a` = **8.2 µm** | Convert surface energy to K_c = √(2Eγ) and invert K_c=σ√πa; compare to **8.2 µm to 2 significant digits** |
 | Callister & Rethwisch, *Materials Science and Engineering: An Introduction*, Fick II carburizing worked example | 950°C; D = **1.6×10⁻¹¹ m²/s**; C₀ = 0.25 wt%, C_s = 1.20 wt%; at x = 0.5 mm and t ≈ **25,400 s**, C ≈ **0.80 wt%** | Infer D₀ from specified Q and T to reproduce published D; compare computed C = 0.8002 wt% to **0.80 wt%** within example rounding |
-| ASTM E140-12b(2019)e1 Table 1, non-austenitic steel | **38 HRC ↔ 372 HV ↔ 353 HBW**; 30 HRC ↔ 302 HV; 68 HRC ↔ 940 HV | Exact table values; interpolated 38.5 HRC → 357.5 HBW; no HBW at 65 HRC |
+| ASTM E140-12b(2019)e1 Table 1, non-austenitic steel | **38 HRC ↔ 372 HV ↔ 353 HBW**; 30 HRC ↔ 302 HV; 68 HRC ↔ 940 HV | Exact table values; interpolated 38.5 HRC → 358 HBW after reporting-rounding; no HBW at 65 HRC |
 | ASTM E140-12b(2019)e1 Table 2, non-austenitic steel | **90 HRB ↔ 185 HV/HBS**; 100 HRB ↔ 240 HV/HBS | Exact values and inverse conversion; cross-table or out-of-range requests rejected |
 | Halpin–Tsai composite worked example | E_f = 230 GPa, E_m = 3.5 GPa, V_f = .6, ξ = 2 → **17.61 GPa** | 17.614 GPa (0.01 GPa tolerance); separately verify 139.4 GPa iso-strain and 8.55 GPa inverse rule (illustrative isotropic-fiber test) |
 | Dowling, stress-life / strain-life conventions | Basquin σa=σ′f(2N)^b; Coffin–Manson combined εa=(σ′f/E)(2N)^b+ε′f(2N)^c | Synthesize amplitudes at **100,000 cycles** and invert to 100,000 cycles; separately verify Goodman/Gerber/Soderberg factors |
