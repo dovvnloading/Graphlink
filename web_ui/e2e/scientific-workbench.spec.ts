@@ -43,6 +43,8 @@ test("imports measurements, analyzes a connected column, and reopens the reprodu
   const source = await launchPack(page, "Scientific Core");
   await source.getByLabel("CSV measurements").fill("Station,Temperature (C)\n1,8\n2,10\n3,18");
   await source.getByRole("button", { name: "Run calculation" }).click();
+  await expect(source.getByRole("table", { name: "Result table" })).toHaveCount(0);
+  await source.getByText(/Tables · 3 rows/).click();
   await expect(source.getByRole("table", { name: "Result table" }).getByRole("row")).toHaveCount(4);
   await source.locator(".node-heading-row").click();
   const statistics = await launchPack(page, "Statistics");
@@ -51,8 +53,11 @@ test("imports measurements, analyzes a connected column, and reopens the reprodu
   await expect(statistics.getByRole("textbox", { name: "Observations", exact: true })).toHaveValue("[8,10,18]");
   await statistics.getByRole("button", { name: "Run calculation" }).click();
   const latest = statistics.getByRole("region", { name: "Latest result" });
-  const mean = latest.locator("dl > div").filter({ has: page.getByText("mean", { exact: true }) }).locator("dd");
+  const mean = latest.locator(".science-result-highlight strong");
+  await expect(latest.locator(".science-result-highlight")).toContainText("mean");
   await expect(mean).toHaveText("12");
+  await expect(latest.locator("dl")).toHaveCount(0);
+  await latest.getByText("Actions & exports").click();
 
   const downloadStarted = page.waitForEvent("download");
   await latest.getByRole("button", { name: "Export JSON" }).click();
@@ -91,13 +96,14 @@ test("reviews concurrent edits in two views and enforces grant changes on a conn
   const source = await launchPack(page, "Scientific Core");
   await source.getByLabel("CSV measurements").fill("Reading\n1\n3");
   await source.getByRole("button", { name: "Run calculation" }).click();
+  await source.getByText(/Tables · 2 rows/).click();
   await expect(source.getByRole("table")).toBeVisible();
   await source.locator(".node-heading-row").click();
   const stats = await launchPack(page, "Statistics");
   await stats.getByRole("combobox", { name: "Import Observations from a connected result" })
     .selectOption({ label: "Scientific Core · Reading" });
   await stats.getByRole("button", { name: "Run calculation" }).click();
-  const mean = stats.locator("dl > div").filter({ has: page.getByText("mean", { exact: true }) }).locator("dd");
+  const mean = stats.locator(".science-result-highlight strong");
   await expect(mean).toHaveText("2");
 
   await setGrants(page, ["Scientific Core"], false);

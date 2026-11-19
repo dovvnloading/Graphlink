@@ -37,12 +37,32 @@
 .science-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .science-actions .science-run { font-weight: 600; }
 .science-body [role="alert"] { color: var(--gl-status-danger, currentColor); }
-.science-results { padding-top: 10px; border-top: 1px solid var(--gl-surface-border); }
-.science-results dl > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto); gap: 10px; }
+.science-results { padding-top: 9px; border-top: 1px solid var(--gl-surface-border); gap: 7px; }
+.science-result-head { display: grid; gap: 5px; min-width: 0; }
+.science-result-head h4 { font-size: .84em; font-weight: 600; color: var(--gl-surface-text-secondary); }
+.science-result-highlight {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 5px;
+}
+.science-result-highlight span { font-size: .85em; color: var(--gl-surface-text-secondary); overflow-wrap: anywhere; }
+.science-result-highlight strong { font-size: 1.16em; line-height: 1.2; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.science-result-summary { font-size: .91em; line-height: 1.4; overflow-wrap: anywhere; }
+.science-result-summary--clamped { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.science-result-sections { display: grid; gap: 1px; min-width: 0; }
+.science-result-disclosure { min-width: 0; padding: 4px 0; border-top: 1px solid var(--gl-surface-border); }
+.science-result-disclosure > summary { font-size: .9em; font-weight: 600; padding: 2px 0; color: var(--gl-surface-text-secondary); }
+.science-result-disclosure[open] > summary { margin-bottom: 7px; color: inherit; }
+.science-result-values { display: grid; gap: 5px; }
+.science-result-values > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto); gap: 10px; }
 .science-results dd, .science-table { font-variant-numeric: tabular-nums; }
 .science-results dd { text-align: end; }
 .science-results :is(dd, dt, pre, td, th) { overflow-wrap: anywhere; }
 .science-results pre { white-space: pre-wrap; font-size: .9em; }
+.science-result-table-content { display: grid; gap: 8px; min-width: 0; }
 .science-plot { display: grid; gap: 3px; }
 .science-plot svg { width: 100%; }
 .science-plot span { font-size: .9em; }
