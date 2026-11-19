@@ -98,6 +98,27 @@ def test_two_by_two_zero_cells_harm_and_unbounded_reciprocal_ci():
              control_events=1, control_nonevents=10)
 
 
+def test_two_by_two_double_zero_or_all_events_do_not_invent_relative_effect():
+    # The Cochrane Handbook identifies tables with no events (or all events)
+    # in both arms as uninformative for relative effects. With unequal arm
+    # sizes, a universal 0.5 correction falsely invents an apparent benefit.
+    for a, b, c, d in ((0, 200, 0, 20), (200, 0, 20, 0)):
+        result = _run("two_by_two_measures", treated_events=a, treated_nonevents=b,
+                      control_events=c, control_nonevents=d)
+        values = result["values"]
+        assert values["risk_difference"] == 0
+        assert values["absolute_risk_reduction"] == 0
+        assert values["number_needed_kind"] == "undefined"
+        assert values["continuity_correction_per_cell"] == 0
+        for key in ("risk_ratio", "odds_ratio",
+                    "risk_ratio_ci95_lower", "risk_ratio_ci95_upper",
+                    "odds_ratio_ci95_lower", "odds_ratio_ci95_upper"):
+            assert values[key].startswith("undefined")
+        assert "undefined" in result["summary"]
+        assert values["risk_difference_ci95_lower"] < 0 < values["risk_difference_ci95_upper"]
+
+
+
 def test_diagnostic_accuracy_wilson_intervals_likelihood_ratios_boundaries():
     v = _run("diagnostic_test_accuracy", true_positive=80, false_positive=10,
              false_negative=20, true_negative=90)["values"]
