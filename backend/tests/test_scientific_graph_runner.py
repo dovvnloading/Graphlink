@@ -17,6 +17,11 @@ from graphlink_plugins.scientific.core import calculate_result
 from graphlink_plugins.scientific.execution import ExecutionFailure
 from graphlink_settings_store import SettingsManager
 
+# These deadlines only bound a hang: a passing test continues as soon as the
+# event fires. 5 s was too tight for loaded Windows CI runners that now import
+# many more scientific packs before the runner reaches the controlled step.
+EVENT_DEADLINE_S = 30
+
 
 def open_session(path, settings):
     document = SceneDocument()
@@ -120,7 +125,7 @@ def test_ready_order_typed_fan_in_and_receipts_without_sleep(tmp_path, monkeypat
         task = asyncio.create_task(scene(
             "executeGraphRun", [], preview["previewToken"], "science-fanin", 2,
         ))
-        await asyncio.wait_for(both_entered.wait(), 5)
+        await asyncio.wait_for(both_entered.wait(), EVENT_DEADLINE_S)
         assert [row[1] for row in calls].count("linear_regression") == 0
         release.set()
         run = await task
@@ -205,7 +210,7 @@ def test_run_cancel_drains_science_and_prevents_resume(tmp_path, monkeypatch):
         monkeypatch.setattr(workbench, "execute_in_process", held)
         preview = await scene("previewGraphRun", [])
         execution = asyncio.create_task(scene("executeGraphRun", [], preview["previewToken"], "science-cancel"))
-        await asyncio.wait_for(started.wait(), 5)
+        await asyncio.wait_for(started.wait(), EVENT_DEADLINE_S)
         assert await scene("cancelGraphRun", "science-cancel") == {"ok": True}
         result = await execution
         assert drained.is_set()
@@ -504,7 +509,7 @@ def test_cancel_after_science_commit_retains_completed_receipt(tmp_path, monkeyp
         task = asyncio.create_task(scene(
             "executeGraphRun", [], preview["previewToken"], "science-cancel-after-commit",
         ))
-        await asyncio.wait_for(committed.wait(), 5)
+        await asyncio.wait_for(committed.wait(), EVENT_DEADLINE_S)
         assert document.nodes[target].state.data["latest"] is not None
         assert await scene("cancelGraphRun", "science-cancel-after-commit") == {"ok": True}
         run = await task
@@ -538,7 +543,7 @@ def test_midrun_scientific_edit_is_reported_as_conflict(tmp_path, monkeypatch):
         task = asyncio.create_task(scene(
             "executeGraphRun", [], preview["previewToken"], "science-midrun-conflict",
         ))
-        await asyncio.wait_for(started.wait(), 5)
+        await asyncio.wait_for(started.wait(), EVENT_DEADLINE_S)
         edited = document.nodes[target]
         previous_data = edited.state.data
         document.record_command(
@@ -577,7 +582,7 @@ def test_revoked_grant_during_graph_calculation_cannot_commit(tmp_path, monkeypa
         task = asyncio.create_task(scene(
             "executeGraphRun", [], preview["previewToken"], "science-grant-revoke",
         ))
-        await asyncio.wait_for(entered.wait(), 5)
+        await asyncio.wait_for(entered.wait(), EVENT_DEADLINE_S)
         settings.set_plugin_grant("science_core", False)
         release.set()
         run = await task
