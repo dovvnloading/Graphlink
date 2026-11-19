@@ -471,7 +471,7 @@ def table_csv_chunk(meta: dict, offset: int = 0) -> dict:
                 ) as handle:
                     temporary = Path(handle.name)
                     writer = csv.writer(handle, lineterminator="\r\n")
-                    writer.writerow([col["label"] for col in meta["columns"]])
+                    writer.writerow([_csv_cell(col["label"]) for col in meta["columns"]])
                     for row in table["rows"]:
                         writer.writerow([_csv_cell(value) for value in row])
                 if temporary is None:
