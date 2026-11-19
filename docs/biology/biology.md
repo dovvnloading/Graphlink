@@ -1,6 +1,6 @@
 # Scientific Workbench — Biology and Ecology reference
 
-The Biology pack retains the **three original operation IDs, fields, examples and exact outputs** (`community_diversity`, `quadrat_density`, `community_overlap`). Existing `science_biology.workbench` nodes, source bindings, saved receipts, and shared pack-version behavior have not changed. Eleven additional operations are appended (including mark–recapture, closed-cohort life tables and structured-population projections); none requires NumPy, SciPy, R, a web service, or any package beyond the Python standard library and Graphlink's existing scientific fitting core.
+The Biology pack retains the **three original operation IDs, fields, examples and exact outputs** (`community_diversity`, `quadrat_density`, `community_overlap`). Existing `science_biology.workbench` nodes, source bindings, saved receipts, and shared pack-version behavior have not changed. Fourteen additional operations are appended (including mark–recapture, closed-cohort life tables and structured-population projections); none requires NumPy, SciPy, R, a web service, or any package beyond the Python standard library and Graphlink's existing scientific fitting core.
 
 ## Operation methods, citations, and categorical inputs
 
@@ -35,6 +35,30 @@ All fitted models minimize **unweighted** residual sum of squares in **response 
 **Survival risk sets:** each individual contributes to risk at its observed time, whether event or right-censoring. At any joint event time, group-A's expected events are `d nA/n` and variance is `nA nB d(n−d)/(n²(n−1))` when `n>1`. The log-rank statistic is `(Σ(OA−EA))² / Σvariance`, with **df=1** and right-tail probability. The test is not the naive sum of `(O−E)²/E` contributions, which gives a different answer for censored samples. Medians are the first time KM survival reaches or falls below 0.5; otherwise *not reached*. Greenwood standard errors refer to the final reported KM survival probabilities; there is no stratification, competing-risk treatment, or proportional-hazards assumption built into the statistic.
 
 **Rarefaction numerical evaluation:** for each observed taxon of abundance `nᵢ` in a total `N`, `E[Sₘ] = Σ(1 − C(N−nᵢ,m)/C(N,m))`. Calculations use stable log products and `expm1`; for very long products with a small occupancy, a curvature-corrected midpoint log-product approximation avoids catastrophic cancellation in differences of large log-gamma values. Presence terms with absence probability below exp(−40) are rounded to 1. The returned table/plot samples at most 27 subsample sizes (always including `1`, the requested `m`, and `N`) and is an **expected-value** curve, not simulated or a confidence interval. These are binary64 calculations; for extreme surveys requiring more than binary64 precision, use arbitrary-precision analysis.
+
+## Community biodiversity additions: Hill, beta and accumulation
+
+The existing `science_biology` grant also provides three new operations. Every matrix is **rows = sites/sampling units, columns = taxa in the same order across rows**. Entries are nonnegative, whole-number abundances (individuals); zero means the taxon was not detected. Survey effort must be comparable when interpreting abundance differences. Totals must stay below 2⁵³ for exact count export; matrices have at most 32 taxa columns and 4,096 cells. These results supply summary values, a labeled table and a reusable numeric plot, with no optional scientific libraries.
+
+### Hill numbers (`hill_numbers`)
+
+Supply a taxon-abundance vector and a selected order `order_q` in **[0,10]**. For positive proportions `pᵢ=nᵢ/N`, the effective number of species is `^qD=(Σpᵢ^q)^(1/(1−q))` for q≠1, with the continuous Shannon limit `^1D=exp(−Σpᵢ ln pᵢ)`. The operation always reports `hill_q0` (observed richness), `hill_q1` (exponential Shannon), `hill_q2` (inverse Simpson concentration), and `hill_selected`, plus a profile over q. Zero-count taxa are excluded. These are **effective taxa**, not entropy in nats or Gini–Simpson diversity.
+
+For counts `[4,2,2,0]`, `^0D=3`, `^1D=2√2≈2.828427`, `^2D=8/3≈2.666667` and `^3D=√(32/5)≈2.529822`. Near q=1, numerical evaluation uses the Shannon limit/cumulant expansion to avoid loss of precision. These values describe the observed sample, without detection or bias correction. Reference: [Hill (1973), *Ecology* 54:427–432](https://doi.org/10.2307/1934352).
+
+### Beta diversity (`beta_diversity`)
+
+Supply **2–32 nonempty sites**, each with the same taxon columns. Let `Sᵢ` be site richness, `γ` pooled observed richness and `ᾱ=ΣSᵢ/K`. The result reports `whittaker_beta=γ/ᾱ` (an effective site-turnover factor) and `additive_beta=γ−ᾱ` (taxa). Each site pair also gets presence/absence **Jaccard** dissimilarity `1−shared/union`, **Sørensen** dissimilarity `1−2·shared/(Sₐ+Sᵦ)` and abundance **Bray–Curtis** dissimilarity `Σ|nₐᵢ−nᵦᵢ|/(Nₐ+Nᵦ)`. The table enumerates pairs (1-based indices), and the plot shows each pair's Bray–Curtis dissimilarity. Means across pairs are **unweighted**, while alpha is an arithmetic mean across sites. Neither coefficient accounts for unequal sampling effort or undetected species.
+
+For sites `[[3,1,0],[1,0,2]]`, `γ=3`, `ᾱ=2`, Whittaker beta `=1.5`, Jaccard dissimilarity `=2/3`, Sørensen `=1/2`, Bray–Curtis `=5/7`. Sites with no observed individuals are rejected because pairwise presence overlap is undefined for two empty sites. References: [Whittaker (1960)](https://doi.org/10.2307/1943563), [Bray & Curtis (1957)](https://doi.org/10.2307/1942268).
+
+### Sample-based species accumulation (`species_accumulation`)
+
+Supply **2–256 survey units** in the order they were sampled, with aligned taxa. Empty survey units are valid and still count as effort. The table includes the **observed input-order cumulative richness** after 1, 2, …, K surveys, and the **expected richness over uniformly chosen survey subsets**, independent of the provided order. If a taxon occurs in `fᵢ` of K surveys, its probability of being absent in m different sampled surveys is `C(K−fᵢ,m)/C(K,m)`. Therefore the plotted expectation is `E[Sₘ]=Σᵢ[1−C(K−fᵢ,m)/C(K,m)]`. A recurrence of the hypergeometric absence probability avoids enumerating permutations and is exact apart from floating-point rounding. At m=K both curves end at the observed pooled richness. This is **incidence/sample-based rarefaction**, not the `richness_rarefaction` operation's individual-based Hurlbert curve, extrapolation beyond K, or a confidence interval.
+
+For three surveys `[[2,0,0],[1,1,0],[0,0,1]]`, ordered cumulative richness is `[1,2,3]` taxa; the random-order expectation is `[4/3,7/3,3]` taxa. Reference: [Gotelli & Colwell (2001), *Ecology Letters* 4:379–391](https://doi.org/10.1046/j.1461-0248.2001.00230.x).
+
+Independent numerical, permutation-enumeration and invalid-input checks for all three additions live in `backend/tests/test_scientific_ecology_diversity.py`.
 
 ## Population dynamics additions
 

@@ -13,6 +13,7 @@ from collections import Counter
 
 from graphlink_plugins.scientific.core import Citation, Field, Operation
 from graphlink_plugins.scientific.packs.population_dynamics import OPERATIONS as _POPULATION_OPERATIONS
+from graphlink_plugins.scientific.packs.ecology_diversity import OPERATIONS as _ECOLOGY_DIVERSITY_OPERATIONS
 
 
 def _counts(values):
@@ -889,3 +890,4 @@ OPERATIONS: tuple[Operation, ...] = (
 
 # Extend without modifying the three original operation contracts or existing IDs.
 OPERATIONS += _POPULATION_OPERATIONS
+OPERATIONS += _ECOLOGY_DIVERSITY_OPERATIONS
