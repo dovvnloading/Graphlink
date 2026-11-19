@@ -95,7 +95,7 @@ def ghk_potential(data: dict) -> dict:
     denominator = _finite(math.fsum(denominator_terms), "GHK denominator")
     if numerator <= 0 or denominator <= 0:
         raise ValueError("GHK weighted intracellular and extracellular sums must both be positive.")
-    log_ratio = math.log(numerator) - math.log(denominator)
+    log_ratio = _log_positive_ratio(numerator, denominator)
     potential = _finite(1000 * R_GAS * temperature / FARADAY * log_ratio,
                         "GHK potential")
     return {
