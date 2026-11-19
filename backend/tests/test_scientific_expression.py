@@ -20,6 +20,8 @@ def test_manifest_auto_discovery_examples_and_receipts():
     assert PACK_FAMILIES["expression"] == "biology"
     assert {op.id for op in operations("expression")} == {
         "normalize_counts", "differential_expression",
+        "ma_values", "sample_correlation", "expression_pca",
+        "over_representation_enrichment",
     }
     for op in operations("expression"):
         assert op.methods and op.citations

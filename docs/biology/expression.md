@@ -6,14 +6,18 @@ Enable **Gene Expression** in Settings → Plugins (separate `graph.read` and `g
 
 ## Inputs and operations
 
-The input `counts` is a rectangular **genes × samples** JSON matrix of **raw** nonnegative integer counts (not pre-normalized measurements). `gene_ids` is a JSON string array with one distinct, nonblank ID per row (at most 80 characters each). Both operations accept up to **1,024 genes**, **32 samples** and **4,096 matrix cells** in the shared Workbench schema; integers must be exact, at most 2⁵³−1, and **every sample must have a nonzero library total**. No transcript-length adjustment is made. Counts should represent independent biological samples, not technical replicates treated as independent.
+The input `counts` is a rectangular **genes × samples** JSON matrix of **raw** nonnegative integer counts (not pre-normalized measurements). `gene_ids` is a JSON string array with one distinct, nonblank ID per row (at most 80 characters each). Count-matrix operations accept up to **1,024 genes**, **32 samples** and **4,096 matrix cells** in the shared Workbench schema; integers must be exact, at most 2⁵³−1, and **every sample must have a nonzero library total**. No transcript-length adjustment is made. Counts should represent independent biological samples, not technical replicates treated as independent.
 
 | Operation | Additional inputs | Result |
 | --- | --- | --- |
 | `normalize_counts` | `method`: `cpm` or `median_ratio` | Gene-by-sample normalized-count table; per-sample raw library totals and divisors; number of eligible reference genes |
 | `differential_expression` | `sample_groups`: JSON array of two labels in **sample column order** (≥2 replicates in **each** group); `method`; `pseudocount` (positive, ≤1e6); `min_total_count` (nonnegative integer); `fdr_cutoff` in (0,1); `log2_fc_cutoff` in [0,100] | Per-gene log2 means, B−A log2 fold change, Welch t/df/p, BH q and testing status; volcano scatter with significance thresholds |
+| `ma_values` | `sample_groups` (two groups, ≥2 samples each), `method`, `pseudocount` | Per-gene group mean normalized counts, MA abundance (A) and log2 ratio (M) |
+| `sample_correlation` | `sample_ids` JSON array in column order, `method`, `pseudocount` | Cluster-ordered Pearson correlation matrix; JSON linkage and leaf order in values |
+| `expression_pca` | `sample_ids`, `method`, `pseudocount` | PC1/PC2 scores by sample, variance and explained fractions |
+| `over_representation_enrichment` | `universe_gene_ids`, `selected_gene_ids`, `gene_sets` (JSON object of ID arrays), `fdr_cutoff` | Hypergeometric right-tail enrichment, BH FDR, overlaps and excluded out-of-universe sets |
 
-`sample_groups` can interleave group membership, e.g. `["control", "drug", "control", "drug"]`. The **first encountered label is group A** and the second group B, so a positive fold change means higher expression in B. The normalization operation does not require group labels. A differential-expression operation always starts from raw counts and performs its chosen normalization internally; do **not** pass the normalized-count output back as if it were raw counts.
+`sample_groups` can interleave group membership, e.g. `["control", "drug", "control", "drug"]`. The **first encountered label is group A** and the second group B, so a positive fold change means higher expression in B. Only MA values and differential expression require group labels; the normalization operation does not. A differential-expression operation always starts from raw counts and performs its chosen normalization internally; do **not** pass the normalized-count output back as if it were raw counts.
 
 ## Calculations
 
@@ -38,3 +42,33 @@ For count \(c_{ij}\), gene \(i\), sample \(j\), and sample total \(L_j=\sum_i c_
 - Anders S, Huber W (2010). [Differential expression analysis for sequence count data](https://doi.org/10.1186/gb-2010-11-10-r106). *Genome Biology* 11:R106. Median-ratio normalization; the present operation **does not implement DESeq testing**.
 - Benjamini Y, Hochberg Y (1995). [Controlling the false discovery rate](https://doi.org/10.1111/j.2517-6161.1995.tb02031.x). *J. Royal Statistical Society B* 57:289–300.
 - NIST/SEMATECH [e-Handbook: two-sample t tests](https://www.itl.nist.gov/div898/handbook/eda/section3/eda353.htm). Reference for Welch-type independent group inference.
+
+## MA values, sample QC and gene-set enrichment
+
+These four additional operations use the same consent-gated Workbench inputs and signed result receipts. **No normalization output is accepted as raw counts**: MA, correlation and PCA start with the original count matrix and normalize internally. The added count-matrix analyses require a positive pseudocount (at most 1,000,000 normalized counts). `sample_ids` is a JSON string array with exactly one distinct nonblank sample name (up to 80 characters) for every count-matrix column. An input with any empty library is rejected. The existing two operations and their result shapes have not changed.
+
+### MA values: `ma_values`
+
+For a gene, let `mean_A` and `mean_B` be the arithmetic means of its normalized counts in groups A and B. With pseudocount `p`, report `M=log2(mean_B+p)-log2(mean_A+p)` and `A=(log2(mean_B+p)+log2(mean_A+p))/2`, as well as both untransformed group means. A positive `M` indicates greater abundance in the **second encountered** group (B). This is a *descriptive* MA table, not a hypothesis test or a significance plot. The existing `differential_expression` operation calculates its Welch-test effect using **means of individual log2 counts**, not log2 of arithmetic group means, so the two fold-change values may differ.
+
+### Sample correlation and clustering: `sample_correlation`
+
+Each sample is a vector of `log2(normalized_count+p)` across genes; pairs are compared by **Pearson r**. Correlation requires at least two genes and nonconstant transformed expression in every sample. Average-linkage agglomerative clustering uses the distance **1−r**, with deterministic tie-breaking by sample index and cluster orientation; this is not Euclidean distance or complete linkage. The correlation table contains a `sample_id` column and columns named `correlation_to_<sample ID>`, all in clustered leaf order. The scalar `values` also contain JSON strings for `sample_ids_input_order`, `cluster_order` and `linkage`. Each linkage record is `[left_cluster_id, right_cluster_id, distance, merged_size]`; original sample IDs are indexes `0..n-1`, and merge `i` has ID `n+i`. Correlations are symmetric, the diagonal is 1 and perfect anticorrelation corresponds to distance 2. Results with 32 samples may use a verified table asset because the matrix has 33 columns including its row labels.
+
+### Expression PCA: `expression_pca`
+
+The **samples** are observations and the **genes** are features. Transform each count to `log2(normalized_count+p)` and center **each gene** across samples without variance scaling. Eigen-decompose the symmetric sample Gram covariance (the existing standard-library Jacobi solver) and report the first two sample scores with their component variances and fractions of total explained variance. Scores sum to zero per component; PC signs are oriented by the strongest sample score for reproducibility but their biological sign has no intrinsic meaning. If the data have only one nonzero component, PC2 scores and variance are zero. Constant normalized expression across samples is rejected; batch effects and population structure are not corrected.
+
+### Gene-set over-representation: `over_representation_enrichment`
+
+This operation does **not** infer a gene universe from a partial input list or contact a gene-annotation service. Supply all genes eligible for selection as `universe_gene_ids` (JSON array, at most 1,024 unique names), a nonempty subset as `selected_gene_ids` (at least one unselected gene must remain), and `gene_sets` as a JSON object, e.g. `{"cell_cycle":["A","B","D"],"stress":["C","E"]}`. At most **128 sets** and **8,192 gene memberships** are supported, subject to the common 65,536-character text limit. Repeated IDs within a set, invalid JSON, non-string IDs and selected genes outside the universe fail validation.
+
+For each gene set, intersect its members with the **explicit universe**, calculate `K` eligible members, `k` selected members, `N` total background genes and `n` selected genes. The right-tail hypergeometric probability is `Pr[X≥k] = Σ_(x=k..min(K,n)) C(K,x) C(N-K,n-x) / C(N,n)`; combinations are evaluated exactly with Python integers before conversion to a probability. The expected overlap is `nK/N`, and fold enrichment is `k/(nK/N)` when `K>0`. Benjamini–Hochberg correction is across **all sets with K>0**, including sets with zero overlap (p=1). A set without any in-universe genes has status `not_in_universe` and `not tested` p/q values and is excluded from the BH denominator. The result includes selected overlap IDs in input order. Enrichment tests association under fixed margins, not causation; background choice and dependency among gene sets matter.
+
+The catalog examples run all four operations without external data. Regression tests cover MA group direction, normalization-depth invariance, Pearson symmetry and first clustering merge, centered/orthogonal PCA scores, exact large/small hypergeometric tails, BH adjustments, invalid groups/sets and receipt readability.
+
+### Additional method references
+
+- Sokal RR, Michener CD (1958). *A statistical method for evaluating systematic relationships*. Average-linkage clustering.
+- Jolliffe IT, Cadima J (2016). [Principal component analysis: a review and recent developments](https://doi.org/10.1098/rsta.2015.0202).
+- Rivals I et al. (2007). [Enrichment or depletion of a GO category within a class of genes](https://doi.org/10.1093/bioinformatics/btl633). One-sided hypergeometric gene-set over-representation.
