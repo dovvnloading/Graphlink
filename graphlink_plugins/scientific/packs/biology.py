@@ -12,6 +12,7 @@ import math
 from collections import Counter
 
 from graphlink_plugins.scientific.core import Citation, Field, Operation
+from graphlink_plugins.scientific.packs.population_dynamics import OPERATIONS as _POPULATION_OPERATIONS
 
 
 def _counts(values):
@@ -596,7 +597,7 @@ def richness_rarefaction(data):
 
 # The original Operation entries, ids, fields, examples and functions are
 # unchanged, preserving existing saved results and graph source bindings.
-OPERATIONS = (
+OPERATIONS: tuple[Operation, ...] = (
     Operation(
         "community_diversity",
         "Community diversity",
@@ -885,3 +886,6 @@ OPERATIONS = (
         ),
     ),
 )
+
+# Extend without modifying the three original operation contracts or existing IDs.
+OPERATIONS += _POPULATION_OPERATIONS

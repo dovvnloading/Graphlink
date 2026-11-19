@@ -39,6 +39,7 @@ def test_manifest_examples_receipts_and_legacy_operations():
         "community_diversity", "quadrat_density", "community_overlap", "logistic_growth_fit",
         "gompertz_growth_fit", "michaelis_menten_fit", "dose_response_4pl_fit",
         "lotka_volterra", "hardy_weinberg", "kaplan_meier_logrank", "richness_rarefaction",
+        "mark_recapture", "cohort_life_table", "matrix_population_projection",
     ]
     for op in operations("biology"):
         assert all(f.unit for f in op.fields), (op.id, "unlabeled input")
@@ -68,7 +69,7 @@ def test_manifest_examples_receipts_and_legacy_operations():
 
 def test_biology_operation_metadata_and_categorical_potency_label():
     operation_ids = {op.id for op in operations("biology")}
-    assert len(operation_ids) == 11
+    assert len(operation_ids) == 14
     for op in operations("biology"):
         schema = op.describe()
         assert op.methods and schema["methods"] == op.methods
