@@ -80,6 +80,11 @@ def test_manifest_to_canvas_and_run_for_every_example(session):
         assert state["latest"] is None
         assert [o["id"] for o in state["operations"]] == [o.id for o in operations(pack)]
         for op in state["operations"]:
+            if any(field["kind"] == "table" for field in op["fields"]):
+                # Source-only operations have no standalone example to run:
+                # a valid table must be selected from a connected workbench.
+                assert run(bus, pack, node_id, op["id"], op["example"])["ok"] is False
+                continue
             assert run(bus, pack, node_id, op["id"], op["example"]) == {"ok": True}
             result = envelope(document, node_id)["latest"]
             assert result["operationId"] == op["id"] and result["provenance"]["packVersion"] == VERSION
@@ -860,3 +865,103 @@ def test_table_column_selection_rechecks_its_target_after_io(session, monkeypatc
             assert response["conflict"] is True
 
     asyncio.run(scenario())
+
+
+def test_whole_typed_table_operations_accept_text_categories_and_numeric_groups(session):
+    from graphlink_plugins.scientific.core import validated_inputs
+
+    document, bus, _, _ = session
+    grant(bus, "core")
+    grant(bus, "statistics")
+    source = dispatch(bus, "executePlugin", "Scientific Core")
+    source_text = (
+        "Station,Group,Score,Note\n"
+        "A,low,1,first\n"
+        "B,low,3,second\n"
+        "C,high,5,third\n"
+        "D,high,NA,fourth\n"
+        "E,high,7,fifth\n"
+    )
+    assert dispatch(bus, "invokePluginIntent", "science_core", "import_table", {
+        "node_id": source, "text": source_text, "column_types": {"Group": "categorical"},
+    }) == {"ok": True}
+    source_state = envelope(document, source)
+    table = source_state["table"]
+    assert [column["type"] for column in table["columns"]] == [
+        "text", "categorical", "numeric", "text",
+    ]
+    target = dispatch(bus, "executePlugin", "Statistics", source)
+    ref = {
+        "nodeId": source, "sourceKey": source_state["nodeKey"],
+        "resultHash": table["asset_ref"],
+        "receiptHash": table["provenance"]["receiptHash"],
+        "selector": ["typed_table"],
+    }
+    op = next(op for op in operations("statistics") if op.id == "grouped_table_summary")
+    inputs = {"table": table, "value_column": 2, "group_column": 1}
+    assert validated_inputs(op, inputs) == inputs
+    assert run(bus, "statistics", target, op.id, inputs)["ok"] is False  # connection citation required
+    assert run(bus, "statistics", target, op.id, inputs,
+               sources={"table": ref}) == {"ok": True}
+    result = envelope(document, target)["latest"]
+    assert result["inputs"]["table"] == table
+    assert result["values"] == {
+        "row_count": 5, "rows_used": 4, "rows_excluded": 1, "group_count": 2,
+    }
+    assert result["table"]["rows"] == [["high", 2, 6], ["low", 2, 2]]
+    assert result["provenance"]["sources"]["table"]["selector"] == ["typed_table"]
+    assert result["provenance"]["sources"]["table"]["receiptHash"] == ref["receiptHash"]
+
+    # The same picker can select a free-text, numeric or categorical group
+    # without turning the typed columns into truncated numeric vectors.
+    assert validated_inputs(op, {**inputs, "group_column": 0})["group_column"] == 0
+    assert validated_inputs(op, {**inputs, "group_column": 2})["group_column"] == 2
+    with pytest.raises(ValueError, match="numeric"):
+        validated_inputs(op, {**inputs, "value_column": 1})
+    with pytest.raises(ValueError, match="existing table column"):
+        validated_inputs(op, {**inputs, "group_column": 10})
+    damaged = {**table, "rowCount": 0}
+    with pytest.raises(ValueError, match="valid connected typed table"):
+        validated_inputs(op, {**inputs, "table": damaged})
+    assert dispatch(bus, "invokePluginIntent", "science_statistics", "configure_runner", {
+        "node_id": target, "operation_id": op.id, "inputs": inputs, "sources": {"table": ref},
+    }) == {"ok": True}
+    from graphlink_plugins.scientific.graph_run_adapter import prepare
+    _, replay, references, _, same = prepare(document, document.nodes[target], lambda _: True)
+    assert replay == inputs and references["table"]["receiptHash"] == ref["receiptHash"]
+    assert same
+
+    # A new import invalidates even a numerically identical saved binding.
+    assert dispatch(bus, "invokePluginIntent", "science_core", "import_table", {
+        "node_id": source, "text": source_text.replace("A,low,1", "A,low,2"),
+        "column_types": {"Group": "categorical"},
+    }) == {"ok": True}
+    stale = run(bus, "statistics", target, op.id, inputs, sources={"table": ref})
+    assert stale["ok"] is False and "changed" in stale["error"].lower()
+    assert envelope(document, target)["latest"] == result
+
+
+def test_whole_table_input_reads_beyond_legacy_numeric_vector_limit(session):
+    document, bus, _, _ = session
+    grant(bus, "core")
+    grant(bus, "statistics")
+    source = dispatch(bus, "executePlugin", "Scientific Core")
+    text = "Group,Reading\n" + "A,1\n" * 1025
+    assert dispatch(bus, "invokePluginIntent", "science_core", "import_table", {
+        "node_id": source, "text": text, "column_types": {"Group": "categorical"},
+    }) == {"ok": True}
+    data = envelope(document, source)
+    table = data["table"]
+    target = dispatch(bus, "executePlugin", "Statistics", source)
+    ref = {
+        "nodeId": source, "sourceKey": data["nodeKey"],
+        "resultHash": table["asset_ref"],
+        "receiptHash": table["provenance"]["receiptHash"],
+        "selector": ["typed_table"],
+    }
+    assert run(bus, "statistics", target, "grouped_table_summary", {
+        "table": table, "value_column": 1, "group_column": 0,
+    }, sources={"table": ref}) == {"ok": True}
+    result = envelope(document, target)["latest"]
+    assert result["values"]["rows_used"] == 1025
+    assert result["table"]["rows"] == [["A", 1025, 1]]

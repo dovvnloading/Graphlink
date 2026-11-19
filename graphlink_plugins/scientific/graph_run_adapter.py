@@ -184,7 +184,14 @@ def prepare(document: Any, node: Any, granted: Any) -> tuple[Any, dict, dict, st
         _verify_lineage(document, source, granted, set(), checked_sources)
         selector = saved["selector"]
         latest: dict[str, Any] | None = None
-        if len(selector) == 5 and selector[0] == "table_column":
+        if selector == ["typed_table"]:
+            table = source_data.get("table")
+            if not table_metadata_valid(table):
+                raise SceneError("The connected typed table is unavailable.")
+            value = table
+            result_hash = table["asset_ref"]
+            receipt_hash = table["provenance"]["receiptHash"]
+        elif len(selector) == 5 and selector[0] == "table_column":
             table = source_data.get("table")
             if not table_metadata_valid(table):
                 raise SceneError("The connected typed table is unavailable.")

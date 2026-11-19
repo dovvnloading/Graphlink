@@ -8,9 +8,9 @@ import { downloadBlob } from "./downloadTextFile";
 import { writeTableCsv } from "./tableCsv";
 import { createLinearScale } from "./charts/chartScales";
 import {
-  chartableScienceTypes, compatibleOptions, connectedInputText, draftInputs, FieldError, fieldText, formatMeasurement, formatScienceNumber, matchesSource, parseInputs, readScienceState, resultMeasurement, sourceOptions,
+  chartableScienceTypes, columnChoices, compatibleOptions, connectedInputText, draftInputs, FieldError, fieldText, formatMeasurement, formatScienceNumber, matchesSource, parseInputs, readScienceState, resultMeasurement, sourceOptions,
   type EditorDraft, type ScienceField, type ScienceLimits, type ScienceOperation, type ScienceParent, type SciencePlot, type ScienceResult,
-  type ScienceChartLink, type ScienceChartType, type ScienceState, type ScienceRunnerConfiguration, type Sources, type SourceOption, type SourceReference,
+  type ScienceChartLink, type ScienceChartType, type ScienceState, type ScienceRunnerConfiguration, type ScientificColumnType, type Sources, type SourceOption, type SourceReference,
 } from "./scientificWorkbench";
 import "./ScientificNodeView.css";
 
@@ -156,14 +156,15 @@ function Results({ result, title, exportJson, onChart, onRefresh, charts }: {
   </section>;
 }
 
-function FieldEditor({ field, value, onEdit, options, onImport, imported, errorId, stale, chosenUnit, unitSetter }: {
+function FieldEditor({ field, value, onEdit, options, onImport, imported, errorId, stale, chosenUnit, unitSetter, columnOptions }: {
   field: ScienceField; value: string; onEdit: (value: string) => void;
   options: SourceOption[]; onImport: (option: SourceOption) => void; imported?: string; errorId?: string; stale: boolean;
+  columnOptions: Array<{ index: number; label: string; type: ScientificColumnType }>;
   /** The unit typed into this field's unit-setting sibling (field.unit_field) and that sibling's label. */
   chosenUnit?: string; unitSetter?: string;
 }) {
   const unitOverridden = !!chosenUnit && chosenUnit !== field.default_unit;
-  const dimensioned = field.kind !== "text" && field.kind !== "choice";
+  const dimensioned = !["text", "choice", "table", "column"].includes(field.kind);
   const id = useId();
   const description = [field.description && id + "-hint", dimensioned && id + "-units",
     imported && id + "-source", errorId].filter(Boolean).join(" ");
@@ -175,6 +176,13 @@ function FieldEditor({ field, value, onEdit, options, onImport, imported, errorI
       ? <select {...common} onChange={(e) => onEdit(e.target.value)}>
         {field.choices?.map((choice) => <option key={choice} value={choice}>{choice}</option>)}
       </select>
+      : field.kind === "column"
+      ? <select {...common} onChange={(e) => onEdit(e.target.value)}>
+        <option value="">Select a column…</option>
+        {columnOptions.map((col) => <option key={col.index} value={col.index}>{col.label} · {col.type}</option>)}
+      </select>
+      : field.kind === "table"
+      ? <input {...common} type="text" value={value ? "Connected typed table selected" : "Select a connected typed table below"} readOnly />
       : field.kind === "number" || field.kind === "integer"
       ? <input {...common} type="text" inputMode="text"
         onChange={(e) => onEdit(e.target.value)} />
@@ -314,7 +322,7 @@ function TableEditor({ state, nodeId, pluginId, store }: {
             <td key={j}>{cell === null ? "—" : display(cell)}</td>)}</tr>)}</tbody>
         </table>
       </div>
-      <small>Preview: {table.preview.length} rows, {table.previewColumns} columns. Connect this workbench to another to select numeric columns.</small>
+      <small>Preview: {table.preview.length} rows, {table.previewColumns} columns. Connect this workbench to another to use the complete typed table with text, categorical and numeric column pickers, or select a bounded numeric vector.</small>
       <details><summary>Import receipt and parsing options</summary>
         <pre>{JSON.stringify(table.provenance, null, 2)}</pre>
       </details>
@@ -431,6 +439,7 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
         const chosenUnit = field.unit_field ? draft.values[field.unit_field]?.trim() : undefined;
         const unitSetter = op.fields.find((other) => other.key === field.unit_field)?.label;
         return <FieldEditor key={field.key} field={field} value={draft.values[field.key] ?? ""} options={available}
+          columnOptions={columnChoices(field, draft.values)}
           chosenUnit={chosenUnit || undefined} unitSetter={unitSetter} stale={!!source && !previous} errorId={error?.field === field.key ? errorId : undefined}
           imported={source && (previous?.label ?? "Result changed or disconnected. Select its current value or edit this input.")}
           onEdit={(value) => {
@@ -455,8 +464,16 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
               }).finally(() => { pending.current = false; setBusy(false); });
               return;
             }
-            setDraft((old) => ({ ...old, dirty: true, values: { ...old.values, [field.key]: connectedInputText(field, option) },
-              sources: { ...old.sources, [field.key]: option.reference } }));
+            setDraft((old) => {
+              const values = { ...old.values, [field.key]: connectedInputText(field, option) };
+              // The selected table determines the meaning of every dependent
+              // column index. Force explicit re-selection when it changes.
+              if (field.kind === "table") for (const dependent of op.fields) {
+                if (dependent.kind === "column" && dependent.table_field === field.key) values[dependent.key] = "";
+              }
+              return { ...old, dirty: true, values,
+                sources: { ...old.sources, [field.key]: option.reference } };
+            });
             setError(null);
           }} />;
       })}

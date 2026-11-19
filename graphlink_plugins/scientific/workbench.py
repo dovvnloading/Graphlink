@@ -155,6 +155,8 @@ def _verify_sources(document, node, inputs: dict, sources: dict, granted,
     fields = {field.key: field for field in operation.fields} if operation else {}
     if not isinstance(sources, dict):
         raise ValueError("Linked sources must be an object keyed by input field.")
+    if operation and any(field.kind == "table" and field.key not in sources for field in operation.fields):
+        raise ValueError("Connect a typed table to every table input before running.")
     if not sources:
         return {}
     if set(sources) - set(inputs):
@@ -189,6 +191,23 @@ def _verify_sources(document, node, inputs: dict, sources: dict, granted,
             raise ValueError("The source scientific result is unavailable or damaged.")
         # Imported tables have their own immutable, content-addressed receipt,
         # independent of the source node's last numerical calculation.
+        if selector == ["typed_table"]:
+            table = source.state.data.get("table")
+            if fields.get(key) is None or fields[key].kind != "table" or not table_metadata_valid(table):
+                raise ValueError("The connected source has no readable typed table input.")
+            receipt = table["provenance"]
+            if (citation.get("resultHash") != table["asset_ref"]
+                    or citation.get("receiptHash") != receipt["receiptHash"]):
+                raise ValueError("The connected table changed. Select its current table.")
+            if inputs[key] != table:
+                raise ValueError("The supplied table differs from the connected table.")
+            verified[key] = {
+                "nodeId": source_id, "sourceKey": source.state.data.get("nodeKey"),
+                "resultHash": table["asset_ref"], "receiptHash": receipt["receiptHash"],
+                "selector": selector, "packId": source.kind.removeprefix("science_").split(".")[0],
+                "operationId": "data_table",
+            }
+            continue
         if (len(selector) == 5 and selector[0] == "table_column"):
             _, column, policy, start, end = selector
             table = source.state.data.get("table")

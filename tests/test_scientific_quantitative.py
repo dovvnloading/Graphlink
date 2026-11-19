@@ -19,6 +19,10 @@ def calculate(operation_id, **changes):
 @pytest.mark.parametrize("operation_id", OPERATIONS)
 def test_example_repeats_without_mutating_input_and_stays_json_safe(operation_id):
     operation = OPERATIONS[operation_id]
+    if any(field.kind == "table" for field in operation.fields):
+        # These operations deliberately have no standalone sample: they
+        # require an imported table asset and a connected source receipt.
+        pytest.skip("Whole-table operations require a connected imported dataset.")
     before = json.dumps(operation.example)
     result = calculate(operation_id)
     assert result == calculate(operation_id)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+from contextlib import nullcontext
 import multiprocessing
 import os
 import pickle
@@ -55,7 +56,8 @@ def execution_timeout(operation: Operation) -> float:
 def _calculate_in_worker(sender: Connection, pack_id: str, operation_id: str, operation: Operation | None,
                          inputs: dict, sources: dict | None, input_units: dict | None,
                          uncertainty_inputs: dict | None = None,
-                         uncertainty_method: str = "auto") -> None:
+                         uncertainty_method: str = "auto",
+                         table_root: str | None = None) -> None:
     """Top-level spawn target: no closure or live graph objects cross processes."""
     try:
         try:
@@ -65,9 +67,11 @@ def _calculate_in_worker(sender: Connection, pack_id: str, operation_id: str, op
                 # inside the worker instead of changing their public pack API.
                 from .catalog import operations
                 operation = next(op for op in operations(pack_id) if op.id == operation_id)
-            answer: _WorkerReply = ("ok", calculate_result(
-                pack_id, operation, inputs, sources, input_units=input_units,
-                uncertainty_inputs=uncertainty_inputs, uncertainty_method=uncertainty_method))
+            from .data_table import use_table_store
+            with use_table_store(table_root) if table_root is not None else nullcontext():
+                answer: _WorkerReply = ("ok", calculate_result(
+                    pack_id, operation, inputs, sources, input_units=input_units,
+                    uncertainty_inputs=uncertainty_inputs, uncertainty_method=uncertainty_method))
         except ValueError as exc:
             answer = ("invalid_input", str(exc))
         except Exception:
@@ -166,11 +170,15 @@ async def execute_in_process(pack_id: str, operation: Operation, inputs: dict, s
         except (pickle.PickleError, AttributeError, TypeError):
             # Registered built-in lambdas are resolved by ID in the worker.
             transferable_operation = None
+        table_root = None
+        if any(field.kind == "table" for field in operation.fields):
+            from .data_table import table_store_root
+            table_root = table_store_root()
         try:
             worker = context.Process(
                 target=_calculate_in_worker,
                 args=(writer, pack_id, operation.id, transferable_operation, inputs, sources,
-                      input_units, uncertainty_inputs, uncertainty_method),
+                      input_units, uncertainty_inputs, uncertainty_method, table_root),
                 daemon=True, name=f"graphlink-science-{pack_id}-{operation.id}",
             )
             worker.start()

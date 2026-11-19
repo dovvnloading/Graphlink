@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chartableScienceTypes, compatibleOptions, draftInputs, fieldText, formatScienceNumber, matchesSource, parseInputs, readScienceState, sourceOptions, type ScienceField, type ScienceResult, type ScienceState } from "./scientificWorkbench";
+import { chartableScienceTypes, columnChoices, compatibleOptions, draftInputs, fieldText, formatScienceNumber, matchesSource, parseInputs, readScienceState, sourceOptions, type ScienceField, type ScienceResult, type ScienceState } from "./scientificWorkbench";
 
 const limits = { points: 3, columns: 2, cells: 4, text: 3 };
 function parse(kind: ScienceField["kind"], raw: string) {
@@ -127,7 +127,7 @@ describe("chartable scientific results", () => {
 });
 
 
-describe("typed table metadata and numeric column choices", () => {
+describe("typed table metadata and typed column choices", () => {
   const table = {
     version: 1 as const, asset_ref: "a".repeat(64), mime_type: "application/json",
     rowCount: 100000, columnCount: 2, previewColumns: 2, sourceName: "measurements.tsv",
@@ -156,23 +156,65 @@ describe("typed table metadata and numeric column choices", () => {
     expect(readScienceState(JSON.stringify({ ...state, table: { ...table, columns: [{ type: "nonsense" }] } }))).toBeNull();
   });
 
-  it("offers only numeric typed columns with explicit missing policies and a bounded row window", () => {
+  it("offers a whole-table binding alongside numeric vectors with bounded row windows", () => {
     const options = sourceOptions([{ nodeId: "parent", title: "Source", raw: JSON.stringify({
       scienceVersion: 1, packId: "core", nodeKey: "d".repeat(32), latest: null,
       operations: [{ id: "numeric_csv", title: "Import", description: "", fields: [], example: {} }], table,
     }) }], 1024);
-    expect(options).toHaveLength(2);
-    expect(options[0].label).toContain("first 1024 of 100000 rows");
-    expect(options[0].label).toContain("Reject missing");
-    expect(options[1].label).toContain("Drop missing (explicit)");
-    expect(options[0].tableColumn).toEqual({
+    expect(options).toHaveLength(3);
+    expect(options[0].label).toContain("Whole typed table (100000 rows, 2 columns)");
+    expect(options[0].reference).toMatchObject({
+      resultHash: table.asset_ref, receiptHash: table.provenance.receiptHash,
+      selector: ["typed_table"],
+    });
+    expect(options[0].value).toEqual(table);
+    expect(options[1].label).toContain("first 1024 of 100000 rows");
+    expect(options[1].label).toContain("Reject missing");
+    expect(options[2].label).toContain("Drop missing (explicit)");
+    expect(options[1].tableColumn).toEqual({
       nodeId: "parent", column: 0, policy: "reject", start: 0, end: 1024,
     });
-    expect(options[1].reference).toMatchObject({ resultHash: table.asset_ref, receiptHash: table.provenance.receiptHash,
+    expect(options[2].reference).toMatchObject({ resultHash: table.asset_ref, receiptHash: table.provenance.receiptHash,
       selector: ["table_column", 0, "drop", 0, 1024] });
     const field = (kind: ScienceField["kind"]): ScienceField => ({ key: "a", kind, label: "A", unit: "", description: "" });
     expect(compatibleOptions(field("vector"), options)).toHaveLength(2);
+    expect(compatibleOptions(field("table"), options)).toEqual([options[0]]);
     expect(compatibleOptions(field("number"), options)).toEqual([]);
+  });
+
+  it("selects numeric, text and categorical columns relative to the complete typed table", () => {
+    const mixed = { ...table, columnCount: 3, previewColumns: 3,
+      columns: [...table.columns, {
+        name: "Group", label: "Group", unit: "", type: "categorical" as const, missingCount: 0,
+      }],
+      preview: [[12.5, "A", "control"], [null, "B", "trial"]],
+    };
+    const op = {
+      id: "grouped_table_summary", title: "Grouped table", description: "",
+      fields: [
+        { key: "table", label: "Typed table", kind: "table" as const, unit: "", description: "" },
+        { key: "value_column", label: "Value", kind: "column" as const, table_field: "table",
+          column_types: ["numeric" as const], unit: "", description: "" },
+        { key: "group_column", label: "Group", kind: "column" as const, table_field: "table",
+          unit: "", description: "" },
+      ], example: { table: null, value_column: null, group_column: null },
+    };
+    const draft = { table: JSON.stringify(mixed), value_column: "0", group_column: "2" };
+    expect(columnChoices(op.fields[1], draft)).toEqual([
+      { index: 0, label: "Temperature (degC)", type: "numeric" },
+    ]);
+    expect(columnChoices(op.fields[2], draft)).toEqual([
+      { index: 0, label: "Temperature (degC)", type: "numeric" },
+      { index: 1, label: "Station", type: "text" },
+      { index: 2, label: "Group", type: "categorical" },
+    ]);
+    expect(parseInputs(op, draft)).toEqual({ table: mixed, value_column: 0, group_column: 2 });
+    expect(parseInputs(op, { ...draft, group_column: "1" }).group_column).toBe(1);
+    expect(parseInputs(op, { ...draft, group_column: "0" }).group_column).toBe(0);
+    expect(() => parseInputs(op, { ...draft, value_column: "2" })).toThrow(/numeric/);
+    expect(() => parseInputs(op, { ...draft, group_column: "4" })).toThrow(/column from the connected table/);
+    expect(() => parseInputs(op, { ...draft, table: "" })).toThrow(/Enter a value/);
+    expect(columnChoices(op.fields[2], { ...draft, table: "" })).toEqual([]);
   });
 });
 
