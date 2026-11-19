@@ -1,13 +1,13 @@
 // Only the desktop overflow action list is deferred. Inline toolbar
 // buttons stay immediately responsive and keep their full keyboard behavior.
 import { useState, useSyncExternalStore } from "react";
-import { downloadBlob } from "../canvas/downloadTextFile";
 import type { SceneStore } from "../canvas/sceneStore";
 import { Popover, useOverlays } from "../overlays/overlays";
 
-export function AppBarOverflowMenu({ store, exportPng }: {
+export function AppBarOverflowMenu({ store, exportPng, exportMethods }: {
   store: SceneStore;
   exportPng: () => Promise<void>;
+  exportMethods: () => Promise<void>;
 }) {
   const overlays = useOverlays();
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
@@ -109,9 +109,7 @@ export function AppBarOverflowMenu({ store, exportPng }: {
             setMethodsError("");
             setMethodsExporting(true);
             try {
-              const markdown = await store.exportWorkspaceMethods();
-              downloadBlob(new Blob([markdown], { type: "text/markdown;charset=utf-8" }),
-                "graphlink-workspace-methods.md");
+              await exportMethods();
               closeMenu();
             } catch (error) {
               setMethodsError(error instanceof Error ? error.message : "Methods export failed.");
