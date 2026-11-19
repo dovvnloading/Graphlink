@@ -62,6 +62,21 @@ def test_mantel_haenszel_sparse_correction_and_invalid_strata():
     assert result["values"]["corrected_strata"] == 1
     assert result["table"]["rows"][0][-1] == .5
     assert result["views"][0]["studies"][0]["lower"] > 0
+    # Independent statsmodels StratifiedTable(shift_zeros=False) oracle:
+    # zero-cell forest smoothing must not change pooled MH/RBG inference.
+    assert result["values"]["common_odds_ratio"] == pytest.approx(.3442622950819672)
+    assert result["values"]["common_odds_ratio_ci95_lower"] == pytest.approx(.09091856830597231)
+    assert result["values"]["common_odds_ratio_ci95_upper"] == pytest.approx(1.3035459095248232)
+    assert result["values"]["cmh_chi_square"] == pytest.approx(2.468337595907929)
+    # A stratum containing no cases in either arm contributes no MH evidence.
+    # Adding pseudo-events to it would instead distort the pooled OR.
+    no_cases = _run("mantel_haenszel", exposed_events=[0, 25],
+                    exposed_nonevents=[100, 75], unexposed_events=[0, 10],
+                    unexposed_nonevents=[100, 90])
+    assert no_cases["values"]["common_odds_ratio"] == pytest.approx(3.0)
+    assert no_cases["values"]["common_odds_ratio_ci95_lower"] == pytest.approx(1.3550150883841103)
+    assert no_cases["values"]["common_odds_ratio_ci95_upper"] == pytest.approx(6.641992459827683)
+    assert no_cases["values"]["corrected_strata"] == 1
     with pytest.raises(ValueError, match="2–64"):
         _run("mantel_haenszel", **{**raw, "exposed_events": [0]})
     with pytest.raises(ValueError, match="whole-number"):
@@ -98,6 +113,26 @@ def test_meta_analysis_random_dl_fixed_and_forest_plot_oracles():
     linear = _run("meta_analysis", **{**raw, "effect_measure": "mean_difference"})
     assert linear["views"][0]["scale"] == "linear"
     assert linear["values"]["pooled_effect"] == pytest.approx(values["pooled_analysis_scale_effect"])
+
+
+def test_meta_analysis_dl_denominator_is_stable_with_unequal_precisions():
+    # With two weights w1=1, w2=1e-48 after normalization, the subtractive
+    # form sum(w)-sum(w**2)/sum(w) rounds to zero. The pairwise equivalent
+    # remains 2e-48, so DL tau^2 = (Q-1) * 1e-24 / (2e-48) = 1.5e24.
+    raw = {"estimates": [0.0, 2e12], "standard_errors": [1e-12, 1e12],
+           "study_labels_json": '["Precise", "Imprecise"]',
+           "effect_measure": "mean_difference", "model": "random_dl"}
+    actual = _run("meta_analysis", **raw)["values"]
+    assert actual["cochran_q"] == pytest.approx(4.0)
+    assert actual["tau_squared"] == pytest.approx(1.5e24, rel=1e-12)
+    assert actual["pooled_analysis_scale_effect"] == pytest.approx(7.5e11, rel=1e-12)
+    reversed_raw = {**raw, "estimates": list(reversed(raw["estimates"])),
+                    "standard_errors": list(reversed(raw["standard_errors"])),
+                    "study_labels_json": '["Imprecise", "Precise"]'}
+    permuted = _run("meta_analysis", **reversed_raw)["values"]
+    assert permuted["tau_squared"] == pytest.approx(actual["tau_squared"])
+    assert permuted["pooled_analysis_scale_effect"] == pytest.approx(
+        actual["pooled_analysis_scale_effect"])
 
 
 def test_meta_analysis_rejects_invalid_scales_and_labels():
