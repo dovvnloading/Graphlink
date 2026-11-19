@@ -53,7 +53,7 @@ def test_manifest_grant_discovery_docs_and_example_receipts():
     for operation in operations("genetics"):
         assert operation.methods and operation.citations
         assert all(field.unit for field in operation.fields)
-        assert f"\`{operation.id}\`" in document
+        assert f"`{operation.id}`" in document
         result = run_operation("genetics", operation, operation.example)
         assert readable_result({"version": 1, "latest": result}, "genetics")
         assert result["provenance"]["packVersion"] == VERSION
