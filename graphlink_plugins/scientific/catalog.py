@@ -17,7 +17,7 @@ PACKS = {
     "astronomy": ("Astronomy", "Estimate stellar distances and blackbody peak wavelengths."),
     "engineering": ("Engineering", "Evaluate resistor networks, RC step response and thermal expansion."),
     "chemistry": ("Chemistry", "Analyze absorption measurements, transmission spectra and isotope abundances."),
-    "biology": ("Biology and Ecology", "Analyze Hill numbers, beta diversity, species accumulation and quadrat surveys; fit growth, enzyme and dose-response curves; model predator–prey ecology, genetics and survival."),
+    "biology": ("Biology and Ecology", "Analyze community diversity, Hill numbers, beta diversity, species accumulation and quadrat surveys; fit growth, enzyme and dose-response curves; model predator–prey ecology, genetics and survival."),
     "earth": ("Earth Science", "Analyze spherical distances, geothermal gradients and seismic arrival times."),
     "environment": ("Environmental Science", "Calculate flow-weighted concentrations, runoff and growing degree days."),
     "materials": ("Materials Science", "Analyze measured density, tensile response and apparent porosity."),
