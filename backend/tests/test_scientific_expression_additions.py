@@ -184,11 +184,11 @@ def test_pca_retains_resolvable_low_variance_second_component():
     oracle = math.fsum((x - mix*y)**2 for x, y in zip(weak, strong)) / 3
     values = result["values"]
     assert 1e-17 < oracle < 1e-15
-    assert values["pc2_variance"] == pytest.approx(oracle, rel=0.01)
+    assert values["pc2_variance"] == pytest.approx(oracle, rel=0.01, abs=0)
     assert values["pc2_explained_fraction"] > 1e-13
     scores = [row[2] for row in result["table"]["rows"]]
     assert math.fsum(score*score for score in scores) / 3 == pytest.approx(
-        values["pc2_variance"], rel=1e-9)
+        values["pc2_variance"], rel=1e-9, abs=0)
 
 
 def test_correlation_antipodal_profiles_cluster_at_distance_two():
