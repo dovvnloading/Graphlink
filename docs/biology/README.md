@@ -9,6 +9,7 @@ Each biology pack has its own reference page and its own explicit Settings → P
 - [Cell Culture](cell_culture.md) — hemocytometer viability, 96/384-well plate maps, CFU plate counts, MPN, growth-curve fits, doubling time, seeding, serial dilutions and centrifuge conversion (`science_cell_culture`).
 - [Enzyme Kinetics](enzyme_kinetics.md) — reversible inhibition, binding isotherms, Morrison tight-binding fits, Schild analysis, thermal-shift Tm, turnover and Hill saturation (`science_enzyme_kinetics`).
 - [Genetics](genetics.md) — Mendelian segregation, exact Hardy–Weinberg, map distances, testcrosses, LOD scores, F-statistics, linkage disequilibrium, Wright–Fisher drift/selection, heritability and effective population size (`science_genetics`).
+- [Gene Expression](expression.md) — CPM and median-ratio count normalization, two-group Welch differential expression, BH FDR and volcano scatter (`science_expression`).
 
 ## Add a biology pack using new files only
 

@@ -40,6 +40,30 @@ function mount(raw = JSON.stringify(state), parents = [parent], charts: ScienceC
 }
 
 describe("scientific workbench card", () => {
+  it("renders a volcano scatter with BH thresholds, categories and clipped zero q-values", () => {
+    const volcano = { type: "volcano_plot", title: "Volcano: drug vs control",
+      xLabel: "log2 fold change (drug / control)", fdrThreshold: 0.05, log2FoldChangeThreshold: 1,
+      points: [
+        { gene: "GeneUp", log2FoldChange: 2.5, qValue: 0.001 },
+        { gene: "GeneDown", log2FoldChange: -2.2, qValue: 0 },
+        { gene: "GeneOther", log2FoldChange: 0.5, qValue: 0.3 },
+      ] };
+    mount(JSON.stringify({ ...state, latest: { ...result, plot: undefined, views: [volcano] } }));
+    const svg = screen.getByRole("img", { name: /volcano scatter of 3 genes/ });
+    expect(svg.querySelectorAll(".science-volcano-point")).toHaveLength(3);
+    expect(svg.querySelector(".science-volcano-up title")?.textContent).toContain("GeneUp");
+    expect(svg.querySelector(".science-volcano-down title")?.textContent).toContain("GeneDown");
+    expect(svg.querySelectorAll(".science-volcano-fold-threshold")).toHaveLength(2);
+    expect(svg.querySelector(".science-volcano-fdr-threshold")).toHaveAttribute("stroke-dasharray", "4 4");
+    expect(svg.querySelector("polyline")).toBeNull();
+    const down = svg.querySelector(".science-volcano-down")!;
+    expect(Number.isFinite(Number(down.getAttribute("cy")))).toBe(true);
+    expect(screen.getByText(/Up in B: 1/)).toBeVisible();
+    expect(screen.getByText(/Down in B: 1/)).toBeVisible();
+    expect(screen.getByText(/Other tested: 1/)).toBeVisible();
+    expect(screen.getByText(/Underflowed q=0 plotted at/)).toBeVisible();
+  });
+
   it("discusses only a saved result and sends its receipt, not unverified browser data", () => {
     const mounted = mount();
     expect(screen.queryByRole("button", { name: "Discuss in chat" })).not.toBeInTheDocument();
