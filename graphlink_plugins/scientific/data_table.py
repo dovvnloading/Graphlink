@@ -474,6 +474,8 @@ def table_csv_chunk(meta: dict, offset: int = 0) -> dict:
                     writer.writerow([col["label"] for col in meta["columns"]])
                     for row in table["rows"]:
                         writer.writerow([_csv_cell(value) for value in row])
+                if temporary is None:
+                    raise OSError("Unable to stage the scientific CSV export.")
                 if temporary.stat().st_size > CSV_MAX_BYTES:
                     raise ValueError("The CSV export exceeds 256 MiB.")
                 os.replace(temporary, file)
