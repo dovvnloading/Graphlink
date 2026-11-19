@@ -55,6 +55,8 @@ Types inferred from nonmissing data are **numeric, text, categorical, datetime**
 
 To use the table in a numerical operation, connect the source node directly to another scientific node, select a **numeric** column for its vector field, and restrict the row window to at most **1,024** rows (the UI initially offers the first 1,024; the `table_column` intent can specify another bounded window). **Reject missing** is the default and fails if the selected window contains nulls; **Drop missing (explicit)** filters them and records the policy and row window in the source selector, without changing the table. Non-numeric columns are not selectable as numeric vectors.
 
+For operations declaring a `table` input, choose **Whole typed table** from the connected result instead. This binds the complete imported dataset (including its original numeric, text, categorical, datetime and boolean schema) without copying its rows into the canvas or result receipt. A `column` input then offers a picker over that table's columns, displaying their names and types. Operations can allow every kind or constrain the picker, e.g. to numeric measurements; the selection is a zero-based index in the verified table schema. **Statistics → Summarize a typed table by group** shows this workflow: choose a numeric measurement column and a group column of any type, including free text or categories. It uses the whole table, excludes rows with missing measurement/group values, supports up to 64 groups and reports the row counts. Table references require a directly connected and enabled source; changing or disconnecting the table invalidates the binding, including in Graph Runner.
+
 The canonical normalized table (all rows, types, units and nulls) is a SHA-256 **content-addressed AssetStore** JSON asset. Only its hash/ref, schema, counts, first-eight preview and an import receipt travel in graph/node state or the scene wire. The receipt includes the original file-bytes hash, CSV/TSV parsing choices, missing markers, type overrides, normalized table hash and its own checksum. Save/reopen and archive export/import preserve the verified asset. Missing/corrupted assets are reported rather than reconstructed from the preview. Implementation: [`data_table.py`](../graphlink_plugins/scientific/data_table.py).
 
 ## Complete operation catalog
@@ -81,7 +83,7 @@ Each row below is generated from the **actual** registered `Operation` declarati
 | `mathematics.trapezoid` — Integrate sampled data | `x` (vector; `—`); `y` (vector; `—`) | `integral`, `intervals`; `plot` |
 | `mathematics.linear_system` — Solve a linear system | `matrix` (matrix; `—`); `rhs` (vector; `—`) | `order`, `max_absolute_residual`; `table` |
 
-### Statistics (`statistics`) — 3 operations
+### Statistics (`statistics`) — 4 operations
 
 **Scientific assumptions and checks:** [Statistics reference](SCIENTIFIC_QUANTITATIVE_REFERENCE.md).
 
@@ -90,6 +92,7 @@ Each row below is generated from the **actual** registered `Operation` declarati
 | `statistics.describe` — Describe a sample | `observations` (vector; `—`) | `count`, `mean`, `median`, `sample_sd`, `minimum`, `maximum` |
 | `statistics.linear_regression` — Fit a regression line | `x` (vector; `—`); `y` (vector; `—`) | `count`, `slope`, `intercept`, `pearson_r`, `r_squared`; `plot` |
 | `statistics.weighted_summary` — Summarize weighted observations | `observations` (vector; `—`); `weights` (vector; `—`) | `positive_weights`, `weighted_mean`, `population_sd` |
+| `statistics.grouped_table_summary` — Summarize a typed table by group | `table` (table; `—`); `value_column` (column; `—`); `group_column` (column; `—`) | `row_count`, `rows_used`, `rows_excluded`, `group_count`; `table` |
 
 ### Physics (`physics`) — 13 operations
 

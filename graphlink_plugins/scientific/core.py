@@ -201,6 +201,10 @@ class Operation:
             described = asdict(item)
             if not item.choices:
                 described.pop("choices")
+            if not item.table_field:
+                described.pop("table_field")
+            if not item.column_types:
+                described.pop("column_types")
             if (unit_field := _unit_field(item, self.example)) is not None:
                 described["unit_field"] = unit_field
             fields.append(described)

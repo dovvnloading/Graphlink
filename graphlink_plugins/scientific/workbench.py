@@ -155,12 +155,12 @@ def _verify_sources(document, node, inputs: dict, sources: dict, granted,
     fields = {field.key: field for field in operation.fields} if operation else {}
     if not isinstance(sources, dict):
         raise ValueError("Linked sources must be an object keyed by input field.")
+    if operation and any(field.kind == "table" and field.key not in sources for field in operation.fields):
+        raise ValueError("Connect a typed table to every table input before running.")
     if not sources:
         return {}
     if set(sources) - set(inputs):
         raise ValueError("A linked field does not belong to this operation.")
-    if operation and any(field.kind == "table" and field.key not in sources for field in operation.fields):
-        raise ValueError("Connect a typed table to every table input before running.")
     incoming = {edge.source for edge in document.edges.values() if edge.target == node.id}
     verified = {}
     for key, citation in sources.items():
