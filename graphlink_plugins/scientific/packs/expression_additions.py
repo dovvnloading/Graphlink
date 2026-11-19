@@ -105,6 +105,7 @@ def sample_correlation(data: dict) -> dict:
                 candidate = (distance, min(la), min(lb), left, right)
                 if best is None or candidate < best:
                     best = candidate
+        assert best is not None  # At least two sample columns are required upstream.
         distance, _, _, left, right = best
         # Orient each pair by its earliest input leaf for stable dendrogram order.
         if min(clusters[left]) > min(clusters[right]):
