@@ -1,5 +1,7 @@
 # Biology Workbench
 
+For an overview, the conventions every pack follows and five end-to-end workflows, read the [Biology Workbench user guide](../BIOLOGY_WORKBENCH.md).
+
 Each biology pack has its own reference page and its own explicit Settings → Plugins grant. Open **Plugins → Biology Workbench** in the picker after granting a pack; the existing **Biology and Ecology** pack retains its original plugin ID, operations, and saved-result compatibility.
 
 For scope, fixed issues and independent numerical regression oracles across enzyme kinetics, plate assays, cell culture, pharmacokinetics and physiology, see the [2026 scientific correctness audit](SCIENTIFIC_CORRECTNESS_AUDIT_2026.md). This is not an experimental validation certificate.
@@ -11,7 +13,10 @@ For scope, fixed issues and independent numerical regression oracles across enzy
 - [Cell Culture](cell_culture.md) — hemocytometer viability, 96/384-well plate maps, CFU plate counts, MPN, growth-curve fits, doubling time, seeding, serial dilutions and centrifuge conversion (`science_cell_culture`).
 - [Enzyme Kinetics](enzyme_kinetics.md) — reversible inhibition, binding isotherms, Morrison tight-binding fits, Schild analysis, thermal-shift Tm, turnover and Hill saturation (`science_enzyme_kinetics`).
 - [Genetics](genetics.md) — Mendelian segregation, exact Hardy–Weinberg, map distances, testcrosses, LOD scores, F-statistics, linkage disequilibrium, Wright–Fisher drift/selection, heritability and effective population size (`science_genetics`).
-- [Gene Expression](expression.md) — CPM and median-ratio count normalization, two-group Welch differential expression, BH FDR and volcano scatter (`science_expression`).
+- [Gene Expression](expression.md) — CPM and median-ratio count normalization, two-group Welch differential expression, BH FDR and volcano scatter, MA values, sample correlation and clustering, expression PCA and gene-set over-representation against user-supplied sets (`science_expression`).
+- [Epidemiology and Biostatistics](epidemiology.md) — 2×2 effect measures, diagnostic accuracy, ROC/AUC, incidence rates with exact Poisson intervals, direct age standardization, Mantel–Haenszel, inverse-variance meta-analysis with forest plots, multi-group Kaplan–Meier with log-rank tests and Cox regression (`science_epidemiology`).
+- [Pharmacokinetics](pharmacokinetics.md) — noncompartmental analysis, one- and two-compartment fits, multiple-dose predictions, dose scaling and drug-combination analysis (`science_pharmacokinetics`).
+- [Physiology](physiology.md) — Nernst and Goldman–Hodgkin–Katz potentials, passive membrane properties, Hodgkin–Huxley simulation, spike detection and Fick diffusion (`science_physiology`).
 - [Phylogenetics](phylogenetics.md) — UPGMA and neighbor-joining inference, Newick parsing and rerooting, Robinson–Foulds comparisons, patristic distances and rooted consensus (`science_phylogenetics`); see the [scientific correctness audit](PHYLOGENETICS_SCIENTIFIC_AUDIT_2026.md).
 
 ## Add a biology pack using new files only
