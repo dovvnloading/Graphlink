@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chartableScienceTypes, columnChoices, compatibleOptions, draftInputs, fieldText, formatScienceNumber, matchesSource, parseInputs, readScienceState, sourceOptions, type ScienceField, type ScienceResult, type ScienceState } from "./scientificWorkbench";
+import { chartableScienceTypes, columnChoices, compatibleOptions, draftInputs, fieldText, formatScienceNumber, formatScienceRange, formatScienceSummary, matchesSource, parseInputs, readScienceState, sourceOptions, type ScienceField, type ScienceResult, type ScienceState } from "./scientificWorkbench";
 
 const limits = { points: 3, columns: 2, cells: 4, text: 3 };
 function parse(kind: ScienceField["kind"], raw: string) {
@@ -435,6 +435,32 @@ describe("formatScienceNumber", () => {
   });
 });
 
+
+
+describe("scientific result display formatting", () => {
+  it("makes exponent-based summary measurements readable without changing units or identifiers", () => {
+    expect(formatScienceSummary("2e+06 viable cells/mL after a 2-fold dilution."))
+      .toBe("2,000,000 viable cells/mL after a 2-fold dilution.");
+    expect(formatScienceSummary("catalytic efficiency kcat/Km=1e+06 M⁻¹ s⁻¹."))
+      .toBe("catalytic efficiency kcat/Km=1,000,000 M⁻¹ s⁻¹.");
+    expect(formatScienceSummary("A -1.25e-06 to 3.5e+21, 9.409e-11."))
+      .toBe("A -0.00000125 to 3.5 × 10²¹, 9.409 × 10⁻¹¹.");
+    expect(formatScienceSummary("Tiny 1e-400 and huge 1e+400"))
+      .toBe("Tiny 1 × 10⁻⁴⁰⁰ and huge 1 × 10⁴⁰⁰");
+    expect(formatScienceSummary("ID1e+06, 1e+06.2 and 2e+06mol"))
+      .toBe("ID1e+06, 1e+06.2 and 2e+06mol");
+  });
+
+  it("shortens plot bounds but keeps adjacent floating-point endpoints distinct", () => {
+    expect(formatScienceRange(5.895064056600376, 88.81371402318987))
+      .toBe("5.89506 to 88.8137");
+    expect(formatScienceRange(1, 1.0000000000000002))
+      .toBe("1 to 1.0000000000000002");
+    expect(formatScienceRange(-Number.MAX_VALUE, Number.MAX_VALUE))
+      .toBe("-1.79769e+308 to 1.79769e+308");
+    expect(formatScienceRange(0, 0)).toBe("0 to 0");
+  });
+});
 
 describe("generated typed-table result sources", () => {
   const asset = {

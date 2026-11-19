@@ -149,6 +149,22 @@ describe("scientific workbench card", () => {
     } finally { save.mockRestore(); }
   });
 
+  it("formats scientific summaries and plot captions without modifying stored values", () => {
+    const scientific = { ...result,
+      summary: "2e+06 viable cells/mL; kcat/Km=1e+06 M⁻¹ s⁻¹.",
+      plot: { ...result.plot!, x: [0, 88.81371402318987], y: [5.895064056600376, 88.81371402318987] },
+    };
+    mount(JSON.stringify({ ...state, latest: scientific }));
+    expect(screen.getByRole("status"))
+      .toHaveTextContent("2,000,000 viable cells/mL; kcat/Km=1,000,000 M⁻¹ s⁻¹.");
+    expect(screen.getByText("Length (m) · 5.89506 to 88.8137")).toBeVisible();
+    expect(screen.getByText("Time (s) · 0 to 88.8137")).toBeVisible();
+    expect(screen.getByRole("img").querySelector("circle title"))
+      .toHaveTextContent("0, 5.895064056600376");
+    expect(readScienceState(JSON.stringify({ ...state, latest: scientific }))?.latest?.summary)
+      .toBe(scientific.summary);
+  });
+
   it("retains the connected source label when a reopened parent has a new session id", () => {
     const reference = { nodeId: "prior-session-parent", sourceKey: "persistent-key", resultHash: "abc", selector: ["column", 1] };
     mount(JSON.stringify({ ...state, latest: { ...result, provenance: {
@@ -242,7 +258,7 @@ describe("scientific workbench card", () => {
     mount(JSON.stringify({ ...state, latest }));
     expect(screen.getByRole("img").querySelector("polyline")).toHaveAttribute("points", "10,98 160,8 310,98");
     expect(screen.getByText("Length (m) · 1 to 1.0000000000000002")).toBeVisible();
-    expect(screen.getByText(/Time \(s\) · -1.7976931348623157e\+308 to 1.7976931348623157e\+308/)).toBeVisible();
+    expect(screen.getByText("Time (s) · -1.79769e+308 to 1.79769e+308")).toBeVisible();
   });
 
   it("exports every result row, escapes CSV cells and retains small signed values beyond the preview", async () => {

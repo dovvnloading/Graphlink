@@ -9,7 +9,7 @@ import { writeTableCsv } from "./tableCsv";
 import { createLinearScale } from "./charts/chartScales";
 import { ScientificResultViews } from "./ScientificResultViews";
 import {
-  chartableScienceTypes, columnChoices, compatibleOptions, connectedInputText, draftInputs, FieldError, fieldText, formatMeasurement, formatScienceNumber, matchesSource, parseInputs, readScienceState, resultMeasurement, sourceOptions,
+  chartableScienceTypes, columnChoices, compatibleOptions, connectedInputText, draftInputs, FieldError, fieldText, formatMeasurement, formatScienceNumber, formatScienceRange, formatScienceSummary, matchesSource, parseInputs, readScienceState, resultMeasurement, sourceOptions,
   type EditorDraft, type ScienceField, type ScienceLimits, type ScienceOperation, type ScienceParent, type SciencePlot, type ScienceResult,
   type ScienceChartLink, type ScienceChartType, type ScienceState, type ScienceRunnerConfiguration, type ScientificColumnType, type Sources, type SourceOption, type SourceReference,
 } from "./scientificWorkbench";
@@ -47,14 +47,14 @@ function Plot({ plot }: { plot: SciencePlot }) {
 
   return <figure className="science-plot">
     <figcaption>{plot.title}</figcaption>
-    <span>{plot.yLabel} · {y.low} to {y.high}</span>
+    <span>{plot.yLabel} · {formatScienceRange(y.low, y.high)}</span>
     <svg viewBox="0 0 320 110" role="img" aria-label={`${plot.title}. ${plot.yLabel} versus ${plot.xLabel}, ${plot.x.length} points.`}>
       <path d="M10 8V98H310" fill="none" stroke="currentColor" opacity=".4" />
       <polyline points={points} fill="none" stroke="currentColor" strokeWidth="1.8" />
       {plot.x.length <= 48 && plot.x.map((v, i) =>
         <circle key={i} cx={x.at(v)} cy={y.at(plot.y[i])} r="2.4" fill="currentColor"><title>{v}, {plot.y[i]}</title></circle>)}
     </svg>
-    <span>{plot.xLabel} · {x.low} to {x.high}</span>
+    <span>{plot.xLabel} · {formatScienceRange(x.low, x.high)}</span>
   </figure>;
 }
 
@@ -85,7 +85,7 @@ function Results({ result, title, exportJson, exportCsv, onChart, onRefresh, cha
   const csv = table ?? (plot ? { columns: [plot.xLabel, plot.yLabel], rows: plot.x.map((v, i) => [v, plot.y[i]]) } : { columns: ["Metric", "Value"], rows: Object.entries(result.values) });
   return <section className="science-results" aria-label="Latest result">
     <h4>Last successful run · {title}</h4>
-    <p role="status">{result.summary}</p>
+    <p role="status">{formatScienceSummary(result.summary)}</p>
     <dl>{Object.entries(result.values).map(([label, value]) => {
       const measured = resultMeasurement(result, label);
       const unpropagatable = result.uncertainty?.unsupportedOutputs?.[label];
