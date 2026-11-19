@@ -224,7 +224,7 @@ def test_source_verification_rejects_zero_substituted_for_tiny_quantity() -> Non
     assert attached["length"]["sourceUnit"] == "mm"
     assert attached["length"]["unit"] == "m"
     assert attached["length"]["standardUncertainty"] == pytest.approx(1e-17)
-    assert attached["length"]["coverageFactor"] == _NORMAL_95
+    assert attached["length"]["coverageFactor"] == pytest.approx(_NORMAL_95, rel=1e-12)
 
 
 def test_huge_uncertainty_fails_explicitly_not_as_nan_or_infinity() -> None:
