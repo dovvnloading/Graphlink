@@ -511,51 +511,51 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
           <strong>Inputs</strong><small>{op.fields.length} {op.fields.length === 1 ? "field" : "fields"}</small>
         </div>
         <div className="science-input-grid">
-      {op.fields.map((field) => {
-        const available = compatibleOptions(field, options, limits);
-        const source = draft.sources[field.key];
-        const previous = source && available.find((option) => matchesSource(option, source));
-        const chosenUnit = field.unit_field ? draft.values[field.unit_field]?.trim() : undefined;
-        const unitSetter = op.fields.find((other) => other.key === field.unit_field)?.label;
-        return <FieldEditor key={field.key} field={field} value={draft.values[field.key] ?? ""} options={available}
-          columnOptions={columnChoices(field, draft.values)}
-          chosenUnit={chosenUnit || undefined} unitSetter={unitSetter} stale={!!source && !previous} errorId={error?.field === field.key ? errorId : undefined}
-          imported={source && (previous?.label ?? "Result changed or disconnected. Select its current value or edit this input.")}
-          onEdit={(value) => {
-            setDraft((old) => {
-              const sources = { ...old.sources };
-              delete sources[field.key];
-              return { ...old, values: { ...old.values, [field.key]: value }, sources, dirty: true };
-            });
-            setError(null);
-          }}
-          onImport={(option) => {
-            if (option.tableColumn) {
-              if (pending.current) return;
-              pending.current = true;
-              setBusy(true);
-              setError(null);
-              void fetchTableColumn(option).then(({ values, reference }) => {
-                setDraft((old) => ({ ...old, dirty: true, values: { ...old.values, [field.key]: fieldText(field, values) },
-                  sources: { ...old.sources, [field.key]: reference } }));
-              }).catch((e) => {
-                setError({ message: e instanceof Error ? e.message : "Could not read the table column.", field: field.key });
-              }).finally(() => { pending.current = false; setBusy(false); });
-              return;
-            }
-            setDraft((old) => {
-              const values = { ...old.values, [field.key]: connectedInputText(field, option) };
-              // The selected table determines the meaning of every dependent
-              // column index. Force explicit re-selection when it changes.
-              if (field.kind === "table") for (const dependent of op.fields) {
-                if (dependent.kind === "column" && dependent.table_field === field.key) values[dependent.key] = "";
-              }
-              return { ...old, dirty: true, values,
-                sources: { ...old.sources, [field.key]: option.reference } };
-            });
-            setError(null);
-          }} />;
-      })}
+          {op.fields.map((field) => {
+            const available = compatibleOptions(field, options, limits);
+            const source = draft.sources[field.key];
+            const previous = source && available.find((option) => matchesSource(option, source));
+            const chosenUnit = field.unit_field ? draft.values[field.unit_field]?.trim() : undefined;
+            const unitSetter = op.fields.find((other) => other.key === field.unit_field)?.label;
+            return <FieldEditor key={field.key} field={field} value={draft.values[field.key] ?? ""} options={available}
+              columnOptions={columnChoices(field, draft.values)}
+              chosenUnit={chosenUnit || undefined} unitSetter={unitSetter} stale={!!source && !previous} errorId={error?.field === field.key ? errorId : undefined}
+              imported={source && (previous?.label ?? "Result changed or disconnected. Select its current value or edit this input.")}
+              onEdit={(value) => {
+                setDraft((old) => {
+                  const sources = { ...old.sources };
+                  delete sources[field.key];
+                  return { ...old, values: { ...old.values, [field.key]: value }, sources, dirty: true };
+                });
+                setError(null);
+              }}
+              onImport={(option) => {
+                if (option.tableColumn) {
+                  if (pending.current) return;
+                  pending.current = true;
+                  setBusy(true);
+                  setError(null);
+                  void fetchTableColumn(option).then(({ values, reference }) => {
+                    setDraft((old) => ({ ...old, dirty: true, values: { ...old.values, [field.key]: fieldText(field, values) },
+                      sources: { ...old.sources, [field.key]: reference } }));
+                  }).catch((e) => {
+                    setError({ message: e instanceof Error ? e.message : "Could not read the table column.", field: field.key });
+                  }).finally(() => { pending.current = false; setBusy(false); });
+                  return;
+                }
+                setDraft((old) => {
+                  const values = { ...old.values, [field.key]: connectedInputText(field, option) };
+                  // The selected table determines the meaning of every dependent
+                  // column index. Force explicit re-selection when it changes.
+                  if (field.kind === "table") for (const dependent of op.fields) {
+                    if (dependent.kind === "column" && dependent.table_field === field.key) values[dependent.key] = "";
+                  }
+                  return { ...old, dirty: true, values,
+                    sources: { ...old.sources, [field.key]: option.reference } };
+                });
+                setError(null);
+              }} />;
+          })}
         </div>
       </div>
       {bound.some(([, ref]) => options.some((option) => matchesSource(option, ref) && option.uncertainty)) &&
