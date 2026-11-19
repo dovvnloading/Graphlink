@@ -71,7 +71,8 @@ describe("scientific workbench card", () => {
     expandResult("Plots & views");
     expect(within(latest).getByRole("img")).toBeVisible();
     expandResult("Units used");
-    expect(within(latest).getByText(/"mm"/)).toBeVisible();
+    const unitDetails = within(latest).getByText("Units used").closest("details")!;
+    expect(within(unitDetails).getByText(/"mm"/)).toBeVisible();
     expandResult("Inputs and provenance");
     expect(within(latest).getByText(/"resultHash": "abc"/)).toBeVisible();
     expandResult("Actions & exports");
