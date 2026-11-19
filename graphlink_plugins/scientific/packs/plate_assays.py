@@ -162,7 +162,7 @@ def standard_curve(data: dict) -> dict:
     unit = _label(data["concentration_unit"], "Concentration unit")
     signal_unit = _label(data["signal_unit"], "Signal unit")
     required = {"linear": 2, "quadratic": 3, "4pl": 6, "5pl": 7}[model]
-    if len(xs) != len(ys) or len(xs) < required or len(set(xs)) < (2 if model == "linear" else required - 1):
+    if len(xs) != len(ys) or len(xs) < required or len(set(xs)) < {"linear": 2, "quadratic": 3, "4pl": 5, "5pl": 6}[model]:
         raise ValueError(f"{model.upper()} requires at least {required} paired standards at distinct concentrations.")
     if len(unknowns) != len(dilutions):
         raise ValueError("Each unknown signal requires one matching dilution factor.")
