@@ -72,17 +72,22 @@ def mantel_haenszel(data):
         if n0 > 1:
             observed_minus_expected += aa0 - exposed * cases / n0
             variance += exposed * unexposed * cases * controls / (n0 * n0 * (n0 - 1))
-        correction = .5 if 0 in (aa0, bb0, cc0, dd0) else 0.0
-        correction_count += bool(correction)
-        aa, bb, cc, dd = (v + correction for v in (aa0, bb0, cc0, dd0))
-        n = aa + bb + cc + dd
-        ri, si = aa * dd / n, bb * cc / n
-        pi, qi = (aa + dd) / n, (bb + cc) / n
+        # Standard MH pooling and its RBG variance use the observed counts,
+        # including zero cells. A display correction must not alter the
+        # common-effect estimator or its inferential CI.
+        ri, si = aa0 * dd0 / n0, bb0 * cc0 / n0
+        pi, qi = (aa0 + dd0) / n0, (bb0 + cc0) / n0
         r += ri
         s += si
         pr += pi * ri
         ps_qr += pi * si + qi * ri
         qs += qi * si
+
+        # Only stratum-specific forest points use Haldane–Anscombe smoothing
+        # to permit finite log-OR estimates and intervals for sparse tables.
+        correction = .5 if 0 in (aa0, bb0, cc0, dd0) else 0.0
+        correction_count += bool(correction)
+        aa, bb, cc, dd = (v + correction for v in (aa0, bb0, cc0, dd0))
         log_or = math.log(aa) + math.log(dd) - math.log(bb) - math.log(cc)
         log_se = math.sqrt(1 / aa + 1 / bb + 1 / cc + 1 / dd)
         estimate = _ratio(log_or)
@@ -109,7 +114,8 @@ def mantel_haenszel(data):
                     f"(RBG 95% CI {lower:.6g}–{upper:.6g}) across {k} strata; "
                     f"CMH association test without continuity correction. "
                     f"A 0.5 all-cell correction was applied to {correction_count} sparse strata "
-                    "for odds-ratio estimation only; assumes a common stratum odds ratio."),
+                    "for individual forest estimates only, not MH pooling or CMH testing; "
+                    "assumes a common stratum odds ratio."),
         "values": {"strata": k, "common_odds_ratio": common_or,
                    "common_odds_ratio_ci95_lower": lower, "common_odds_ratio_ci95_upper": upper,
                    "log_common_odds_ratio_se": se, "cmh_chi_square": chi, "cmh_p_value": p,
@@ -145,10 +151,15 @@ def meta_analysis(data):
     fixed = math.fsum(w * x for w, x in zip(weights, effect)) / weight_total
     q = _number(math.fsum(((x - fixed) / se)**2 for x, se in zip(effect, errors)), "Cochran Q")
     df = k - 1
-    denominator = weight_total - math.fsum(w*w for w in weights) / weight_total
-    tau2 = max(0.0, (q - df) * base**2 / denominator) if denominator > 1e-14 else 0.0
-    if denominator <= 1e-14 and method == "random_dl":
-        raise ValueError("Random-effects heterogeneity is unidentifiable from these study precisions.")
+    # Σw − Σw²/Σw cancels to zero when one study dominates, even though the
+    # DL denominator is positive. The equivalent pairwise expression is
+    # nonnegative and stable for highly unequal (but finite) precisions.
+    denominator = 2 * math.fsum(
+        weights[i] * weights[j] for i in range(k) for j in range(i + 1, k)
+    ) / weight_total
+    if denominator <= 0:
+        raise ValueError("Between-study heterogeneity is unidentifiable from these study precisions.")
+    tau2 = _number(max(0.0, (q - df) * base**2 / denominator), "Between-study variance")
     total_errors = [math.hypot(se, math.sqrt(tau2)) if method == "random_dl" else se
                     for se in errors]
     minimum = min(total_errors)
@@ -483,8 +494,9 @@ OPERATIONS = (
         mantel_haenszel,
         methods=("Common OR=Σ(ad/n)/Σ(bc/n) across aligned 2×2 strata. Robins–Breslow–Greenland "
                  "log-OR variance gives normal 95% CI; CMH score χ² uses hypergeometric stratum "
-                 "variance, no continuity correction. Zero cells receive 0.5 in all four cells "
-                 "for OR and its forest CI, but not the CMH test. Common OR is assumed."),
+                 "variance, no continuity correction. MH pooling and its RBG CI use original "
+                 "stratum counts, including zeros. Only zero-cell stratum forest points "
+                 "and their CIs receive 0.5 in all four cells. Common OR is assumed."),
         citations=(Citation("Mantel & Haenszel (1959), Statistical aspects of analysis of retrospective studies",
                             "https://pubmed.ncbi.nlm.nih.gov/13655060/"),
                    Citation("Robins, Breslow & Greenland (1986), Estimators of the Mantel–Haenszel variance",

@@ -98,6 +98,27 @@ def test_two_by_two_zero_cells_harm_and_unbounded_reciprocal_ci():
              control_events=1, control_nonevents=10)
 
 
+def test_two_by_two_double_zero_or_all_events_do_not_invent_relative_effect():
+    # The Cochrane Handbook identifies tables with no events (or all events)
+    # in both arms as uninformative for relative effects. With unequal arm
+    # sizes, a universal 0.5 correction falsely invents an apparent benefit.
+    for a, b, c, d in ((0, 200, 0, 20), (200, 0, 20, 0)):
+        result = _run("two_by_two_measures", treated_events=a, treated_nonevents=b,
+                      control_events=c, control_nonevents=d)
+        values = result["values"]
+        assert values["risk_difference"] == 0
+        assert values["absolute_risk_reduction"] == 0
+        assert values["number_needed_kind"] == "undefined"
+        assert values["continuity_correction_per_cell"] == 0
+        for key in ("risk_ratio", "odds_ratio",
+                    "risk_ratio_ci95_lower", "risk_ratio_ci95_upper",
+                    "odds_ratio_ci95_lower", "odds_ratio_ci95_upper"):
+            assert values[key].startswith("undefined")
+        assert "undefined" in result["summary"]
+        assert values["risk_difference_ci95_lower"] < 0 < values["risk_difference_ci95_upper"]
+
+
+
 def test_diagnostic_accuracy_wilson_intervals_likelihood_ratios_boundaries():
     v = _run("diagnostic_test_accuracy", true_positive=80, false_positive=10,
              false_negative=20, true_negative=90)["values"]
@@ -140,7 +161,7 @@ def test_empirical_roc_auc_independent_pairwise_oracle_ties_direction_and_thresh
     assert oracle == pytest.approx(5 / 6)
     assert v["values"]["auc"] == pytest.approx(oracle)
     rows = v["table"]["rows"]
-    assert rows[0][3:5] == [0, 0]
+    assert rows[0][3:6] == [0, 0, 0]
     assert rows[-1][3:5] == [1, 1]
     assert len(rows) == len(set(scores)) + 1
     assert v["values"]["best_youden_threshold"] == .55
@@ -154,6 +175,16 @@ def test_empirical_roc_auc_independent_pairwise_oracle_ties_direction_and_thresh
                     positive_direction="higher")
     assert all_ties["values"]["auc"] == .5
     assert len(all_ties["table"]["rows"]) == 2
+    # A non-discriminating ROC has no positive J; the (0,0) origin is the
+    # first/most stringent maximizer, not an arbitrary observed-score cutoff.
+    assert all_ties["table"]["rows"][0][-1] == 0
+    assert all_ties["values"]["best_youden_j"] == 0
+    assert all_ties["values"]["best_youden_threshold"] == "No predicted positives"
+    inverted = _run("roc_curve_auc", scores=[4, 3, 2, 1],
+                    disease_status=[0, 0, 1, 1], positive_direction="higher")
+    assert inverted["values"]["auc"] == 0
+    assert inverted["values"]["best_youden_j"] == 0
+    assert inverted["values"]["best_youden_threshold"] == "No predicted positives"
     perfect = _run("roc_curve_auc", scores=[9, 8, 2, 1], disease_status=[1, 1, 0, 0],
                    positive_direction="higher")
     assert perfect["values"]["auc"] == 1
