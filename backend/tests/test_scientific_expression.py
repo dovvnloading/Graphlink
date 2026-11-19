@@ -26,7 +26,7 @@ def test_manifest_auto_discovery_examples_and_receipts():
         result = run_operation("expression", op, op.example)
         assert readable_result({"version": 1, "latest": result}, "expression")
         assert result["operationId"] == op.id
-    docs = (Path(__file__).resolve().parents[2] / "docs/biology/expression.md").read_text()
+    docs = (Path(__file__).resolve().parents[2] / "docs/biology/expression.md").read_text(encoding="utf-8")
     assert "normalize_counts" in docs and "differential_expression" in docs
     assert "negative-binomial" in docs
 
@@ -108,10 +108,21 @@ def test_default_de_independent_p_values_bh_order_and_volcano():
 
 def test_de_group_assignment_permutations_and_zero_variance_are_explicit():
     forward = _run("differential_expression")
-    flipped = _run("differential_expression", sample_groups=json.dumps(
+    # Simply renaming both groups does not change the first-seen A/B ordering.
+    renamed = _run("differential_expression", sample_groups=json.dumps(
         ["treated", "treated", "treated", "control", "control", "control"]))
-    assert flipped["table"]["rows"][0][3] == pytest.approx(-forward["table"]["rows"][0][3])
-    assert flipped["table"]["rows"][0][7] == pytest.approx(forward["table"]["rows"][0][7])
+    assert renamed["table"]["rows"][0][3] == pytest.approx(forward["table"]["rows"][0][3])
+
+    # Reorder columns so the treated samples appear first: group A/B really
+    # reverse, and the B-vs-A effect changes sign without changing the p-value.
+    op = next(item for item in operations("expression") if item.id == "differential_expression")
+    reordered_counts = [row[3:] + row[:3] for row in op.example["counts"]]
+    reversed_groups = _run("differential_expression", counts=reordered_counts,
+                           sample_groups=json.dumps(["treated"] * 3 + ["control"] * 3))
+    assert reversed_groups["table"]["rows"][0][3] == pytest.approx(
+        -forward["table"]["rows"][0][3])
+    assert reversed_groups["table"]["rows"][0][7] == pytest.approx(
+        forward["table"]["rows"][0][7])
     zero = _run("differential_expression", gene_ids='["A", "B"]',
                 counts=[[10, 10, 10, 20, 20, 20], [20, 20, 20, 10, 10, 10]],
                 method="median_ratio", min_total_count=0)
