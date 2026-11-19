@@ -71,10 +71,10 @@ function csvCell(value: unknown): string {
 
 const PREVIEW_ROWS = 30;
 
-function Results({ result, title, exportJson, exportCsv, onChart, onRefresh, charts }: {
+function Results({ result, title, exportJson, exportCsv, onChart, onRefresh, onDiscuss, charts }: {
   result: ScienceResult; title: string; exportJson: () => Promise<string>; exportCsv: () => Promise<Blob>;
   onChart: (type: ScienceChartType) => void; onRefresh: (chart: ScienceChartLink) => void;
-  charts: ScienceChartLink[];
+  onDiscuss: (result: ScienceResult) => void; charts: ScienceChartLink[];
 }) {
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
@@ -136,6 +136,7 @@ function Results({ result, title, exportJson, exportCsv, onChart, onRefresh, cha
       <pre>{JSON.stringify({ inputs: result.inputs, provenance }, null, 2)}</pre>
     </details>
     <div className="science-actions">
+      <button type="button" onClick={() => onDiscuss(result)}>Discuss in chat</button>
       <button type="button" disabled={exporting} onClick={async () => {
         setError("");
         setExporting(true);
@@ -553,10 +554,11 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
   </form>;
 }
 
-function Workbench({ session, state, options, run, configure, cancel, fetchTableColumn, exportJson, exportCsv, charts, onChart, onRefresh, tableEditor }: {
+function Workbench({ session, state, options, run, configure, cancel, fetchTableColumn, exportJson, exportCsv, charts, onChart, onRefresh, onDiscuss, tableEditor }: {
   session: ScienceEditorSession; state: ScienceState; options: SourceOption[]; run: Run; configure: Run; cancel: Cancel; fetchTableColumn: FetchTableColumn;
   exportJson: () => Promise<string>; exportCsv: () => Promise<Blob>; tableEditor: ReactNode;
   charts: ScienceChartLink[]; onChart: (type: ScienceChartType) => void; onRefresh: (chart: ScienceChartLink) => void;
+  onDiscuss: (result: ScienceResult) => void;
 }) {
   const [selected, setSelected] = useState(session.selected ?? state.runner?.operationId ?? state.latest?.operationId ?? state.operations[0].id);
   const [busy, setBusy] = useState(false);
@@ -573,7 +575,7 @@ function Workbench({ session, state, options, run, configure, cancel, fetchTable
       busy={busy} setBusy={setBusy} />
     {tableEditor}
     {state.latest && <Results key={revision} result={state.latest} exportJson={exportJson} exportCsv={exportCsv}
-      charts={charts} onChart={onChart} onRefresh={onRefresh} title={
+      charts={charts} onChart={onChart} onRefresh={onRefresh} onDiscuss={onDiscuss} title={
       state.operations.find((candidate) => candidate.id === state.latest?.operationId)?.title ?? state.latest.operationId
     } />}
   </>;
@@ -607,6 +609,9 @@ export const ScientificNodeView = memo(function ScientificNodeView({ data, id, s
         charts={data.charts ?? []}
         onChart={(chartType) => data.store.generateChart(id, chartType)}
         onRefresh={(chart) => data.store.generateChart(chart.id, chart.chartType)}
+        onDiscuss={(result) => data.store.discussScientificResult(
+          id, result.provenance.resultHash, result.provenance.receiptHash ?? result.provenance.resultHash,
+        )}
         run={(operationId, inputs, sources, token, method) => data.store.runScientificOperation(data.pluginId, id, operationId, inputs, sources, token, method)}
         configure={(operationId, inputs, sources, token) => data.store.configureScientificRunner(data.pluginId, id, operationId, inputs, sources, token)}
         cancel={(operationId) => data.store.cancelScientificOperation(data.pluginId, id, operationId)} />
