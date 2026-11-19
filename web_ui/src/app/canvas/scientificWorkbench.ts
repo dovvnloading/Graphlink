@@ -107,15 +107,9 @@ export function connectedInputText(field: ScienceField, option: SourceOption): s
   return field.kind === "number" && option.unit ? `${raw} ${option.unit}` : raw;
 }
 
-/** Display only: round to 12 significant digits so binary floating-point
- * noise (50.000837999999995, 9.409000000000001e-11) reads as the value it is.
- * Exports, receipts and linked inputs keep the exact number. */
-export function formatScienceNumber(value: number): string {
-  if (!Number.isFinite(value) || Number.isInteger(value)) return String(value);
-  return String(Number(value.toPrecision(12)));
-}
-
-
+/** Human-facing formatting only. Never round the actual result, linked inputs,
+ * plot coordinates, provenance receipts or CSV/JSON exports. */
+const SCIENCE_DIGITS = 6;
 const SCIENCE_SUPERSCRIPT_DIGITS = "⁰¹²³⁴⁵⁶⁷⁸⁹";
 
 function scienceSuperscript(exponent: string): string {
@@ -123,54 +117,75 @@ function scienceSuperscript(exponent: string): string {
     digit === "-" ? "⁻" : SCIENCE_SUPERSCRIPT_DIGITS[Number(digit)]);
 }
 
-/** Display-only summary cleanup: pack summaries often use Python's 6g "e"
- * notation. Preserve the original text for saved receipts and JSON exports,
- * and do not rewrite embedded identifiers or units. */
-export function formatScienceSummary(summary: string): string {
-  return summary.replace(/(^|[^\w.])([+-]?(?:\d+(?:\.\d*)?|\.\d+)[eE][+-]?\d+)(?![\w]|\.\d)/g,
-    (match, prefix: string, token: string) => {
-      const value = Number(token);
-      const [coefficient, power] = token.split(/[eE]/);
-      // Even outside JS's floating-point range, the displayed exponent must
-      // not silently become zero or infinity.
-      if (!Number.isFinite(value) || (value === 0 && Number(coefficient) !== 0))
-        return prefix + coefficient + " × 10" + scienceSuperscript(power);
-      const rounded = Number(formatScienceNumber(value));
-      const magnitude = Math.abs(value);
-      if (magnitude >= 1e12 || (magnitude > 0 && magnitude < 1e-6)) {
-        const [mantissa, exponent] = rounded.toExponential().split("e");
-        return prefix + mantissa + " × 10" + scienceSuperscript(exponent);
-      }
-      return prefix + (token.startsWith("+") ? "+" : "") +
-        rounded.toLocaleString("en-US", { maximumSignificantDigits: 12 });
-    });
+/** Six significant digits, grouped thousands, and matching power-of-ten
+ * notation at either extreme of a scientific result. */
+export function formatScienceNumber(value: number, digits = SCIENCE_DIGITS): string {
+  if (!Number.isFinite(value)) return String(value);
+  if (value === 0) return Object.is(value, -0) ? "-0" : "0";
+  let precision = digits;
+  let rounded = Number(value.toPrecision(precision));
+  // Rounding Number.MAX_VALUE to just one significant digit can overflow.
+  while (!Number.isFinite(rounded) && precision < 17)
+    rounded = Number(value.toPrecision(++precision));
+  const magnitude = Math.abs(value);
+  if (magnitude < 1e-4 || magnitude >= 1e12) {
+    const [mantissa, exponent] = rounded.toExponential().split("e");
+    return mantissa + " × 10" + scienceSuperscript(exponent);
+  }
+  return rounded.toLocaleString("en-US", { maximumSignificantDigits: precision, useGrouping: true });
 }
 
-/** Short plot captions, without collapsing distinct endpoints into one label.
- * Geometry and per-point hover text continue to use the original coordinates. */
+// Standalone numeric tokens, including already-grouped values. Do not rewrite
+// measurement units, identifiers, version strings or partial exponent tokens.
+const SUMMARY_NUMBER = /(^|[^\p{L}\p{N}_.+-])([+-]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)(?![\p{L}\p{N}_]|\.\d)/gu;
+
+/** Present both 1e+06 and 500000 consistently without changing receipts. */
+export function formatScienceSummary(summary: string): string {
+  return summary.replace(SUMMARY_NUMBER, (_match, prefix: string, token: string) => {
+    const value = Number(token.replaceAll(",", ""));
+    const [coefficient, exponent] = token.split(/[eE]/);
+    // Never present overflowed or underflowed scientific tokens as Infinity/0.
+    if (!Number.isFinite(value) || (value === 0 && exponent && Number(coefficient) !== 0)) {
+      return prefix + (exponent === undefined
+        ? token : coefficient + " × 10" + scienceSuperscript(exponent));
+    }
+    return prefix + formatScienceNumber(value);
+  });
+}
+
+/** Short captions; increase precision where adjacent endpoints would collapse. */
 export function formatScienceRange(low: number, high: number): string {
-  const label = (value: number, digits: number) =>
-    Number.isFinite(value) ? String(Number(value.toPrecision(digits))) : String(value);
-  let digits = 6;
-  let start = label(low, digits), end = label(high, digits);
+  let digits = SCIENCE_DIGITS;
+  let start = formatScienceNumber(low, digits), end = formatScienceNumber(high, digits);
   while (start === end && low !== high && digits < 17) {
-    digits += 1;
-    start = label(low, digits);
-    end = label(high, digits);
+    digits++;
+    start = formatScienceNumber(low, digits);
+    end = formatScienceNumber(high, digits);
   }
   return start + " to " + end;
 }
 
-/** Format values without discarding the standard uncertainty or its units. */
+/** Round uncertainty to two significant figures, limiting nominal precision
+ * to a compatible place rather than showing binary64 calculation noise. */
 export function formatMeasurement(measurement: ScientificMeasurement): string {
   const unit = measurement.unit ? " " + measurement.unit : "";
-  const n = formatScienceNumber;
+  const sigma = measurement.standardUncertainty;
+  const roundedSigma = Number.isFinite(sigma) && sigma > 0 ? Number(sigma.toPrecision(2)) : sigma;
+  const nominal = (value: number): string => {
+    if (!(Number.isFinite(roundedSigma) && roundedSigma > 0) || !Number.isFinite(value) || value === 0)
+      return formatScienceNumber(value);
+    const lastPlace = Math.floor(Math.log10(roundedSigma)) - 1;
+    const digits = Math.min(SCIENCE_DIGITS,
+      Math.max(1, Math.floor(Math.log10(Math.abs(value))) - lastPlace + 1));
+    return formatScienceNumber(value, digits);
+  };
+  const deviation = formatScienceNumber(roundedSigma);
   // A nonlinear Monte Carlo PDF is not centered at the nominal f(E[X]).
-  // Never present its sampled standard deviation as an error bar about f(E[X]).
   if (measurement.method === "monte_carlo" && finite(measurement.monteCarloMean)) {
-    return `nominal ${n(measurement.value)}; Monte Carlo mean ${n(measurement.monteCarloMean)} ± ${n(measurement.standardUncertainty)}${unit}`;
+    return "nominal " + nominal(measurement.value) + "; Monte Carlo mean " +
+      nominal(measurement.monteCarloMean) + " ± " + deviation + unit;
   }
-  return `${n(measurement.value)} ± ${n(measurement.standardUncertainty)}${unit}`;
+  return nominal(measurement.value) + " ± " + deviation + unit;
 }
 
 /** Also understand pre-existing pack outputs without changing their receipts. */
