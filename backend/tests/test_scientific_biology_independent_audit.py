@@ -21,14 +21,14 @@ def run(pack, operation_id, **updates):
     return run_operation(pack, operation, {**operation.example, **updates})["values"]
 
 
-def test_enzyme_morrison_ultratight_equimolar_quadratic():
-    # E=I=1, Ki=1e-16. The naive discriminant (2+Ki)^2-4
-    # rounds to zero, falsely making the log-Ki Jacobian singular.
-    ki = 1e-16
+@pytest.mark.parametrize("ki", [1e-16, 1e-32])
+def test_enzyme_morrison_ultratight_equimolar_quadratic(ki):
+    # E=I=1. The naive discriminant (2+Ki)^2-4 rounds to zero;
+    # subtracting bound enzyme from one also loses the small free fraction.
     response, derivatives = _morrison_prediction(1.0, (0.0, 0.0, math.log(ki)))
     # At E=I=1, free enzyme is (sqrt(Ki^2+4Ki)-Ki)/2.
     expected = (math.sqrt(ki * (ki + 4)) - ki) / 2
-    assert response == pytest.approx(expected, rel=2e-7)
+    assert response == pytest.approx(expected, rel=2e-7, abs=0)
     assert all(math.isfinite(value) for value in derivatives)
     assert derivatives[2] > 0
 
@@ -76,7 +76,7 @@ def test_cell_culture_doubling_time_preserves_small_positive_log_growth():
                  final_abundance=after, elapsed_time=1, time_unit="h",
                  abundance_unit="cells/mL")
     expected = math.log1p(relative_increment)
-    assert result["specific_growth_rate"] == pytest.approx(expected, rel=1e-12)
+    assert result["specific_growth_rate"] == pytest.approx(expected, rel=1e-12, abs=0)
     assert result["doubling_time"] == pytest.approx(math.log(2) / expected, rel=1e-12)
 
 
@@ -111,7 +111,7 @@ def test_physiology_nernst_preserves_adjacent_concentrations():
     expected = (1000 * 8.31446261815324 * 310.15 / 96485.33212
                 * math.log1p((outside - inside) / inside))
     assert result["equilibrium_potential_mv"] > 0
-    assert result["equilibrium_potential_mv"] == pytest.approx(expected, rel=1e-12)
+    assert result["equilibrium_potential_mv"] == pytest.approx(expected, rel=1e-12, abs=0)
 
 
 def test_physiology_ghk_single_cation_equals_nernst_at_small_gradient():
@@ -123,7 +123,7 @@ def test_physiology_ghk_single_cation_equals_nernst_at_small_gradient():
                  outside_mm=outside, valence=1, temperature_k=310.15)
     assert actual["membrane_potential_mv"] > 0
     assert actual["membrane_potential_mv"] == pytest.approx(
-        nernst["equilibrium_potential_mv"], rel=1e-12)
+        nernst["equilibrium_potential_mv"], rel=1e-12, abs=0)
 
 
 def test_five_pack_independent_ordinary_formula_cross_checks():
