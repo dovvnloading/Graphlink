@@ -367,7 +367,7 @@ def two_point_lod(data):
     }
 
 
-OPERATIONS = (
+OPERATIONS: tuple[Operation, ...] = (
     Operation(
         "segregation_chi_square", "Mendelian ratio χ² test",
         "Pearson goodness-of-fit for a fixed expected two-to-16-class segregation ratio.",
