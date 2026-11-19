@@ -394,7 +394,7 @@ def direct_age_standardization(data):
     }
 
 
-OPERATIONS = (
+OPERATIONS: tuple[Operation, ...] = (
     Operation(
         "two_by_two_measures", "Two-by-two treatment/exposure effects",
         "Compute RR, OR, risk difference, absolute risk reduction, and NNT/NNH with 95% CIs.",
