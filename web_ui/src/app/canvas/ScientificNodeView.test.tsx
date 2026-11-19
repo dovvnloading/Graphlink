@@ -415,6 +415,44 @@ describe("typed table import and numeric selections", () => {
       inputs: { samples: [10, 20] }, sources: { samples: reference },
     });
   });
+
+  it("binds a complete typed table and selects text and numeric group fields in the form", async () => {
+    const tableOp = {
+      id: "grouped_table_summary", title: "Summarize a typed table by group", description: "",
+      fields: [
+        { key: "table", label: "Typed table", kind: "table" as const, unit: "", description: "" },
+        { key: "value_column", label: "Measurement", kind: "column" as const, table_field: "table",
+          column_types: ["numeric" as const], unit: "", description: "" },
+        { key: "group_column", label: "Group", kind: "column" as const, table_field: "table",
+          unit: "", description: "" },
+      ], example: { table: null, value_column: null, group_column: null },
+    };
+    const parentTable = { nodeId: "parent", title: "Samples", raw: JSON.stringify({
+      ...state, nodeKey: "d".repeat(32), latest: null, table: meta,
+    }) };
+    const { request } = mount(JSON.stringify({ ...state, operations: [tableOp] }), [parentTable]);
+    const input = screen.getByRole("combobox", { name: "Import Typed table from a connected result" });
+    const complete = Array.from((input as HTMLSelectElement).options).find((option) =>
+      option.text.includes("Whole typed table"))!;
+    expect(complete).toBeDefined();
+    fireEvent.change(input, { target: { value: complete.value } });
+    expect(screen.getByRole("textbox", { name: "Typed table" }))
+      .toHaveValue("Connected typed table selected");
+    const measurement = screen.getByRole("combobox", { name: "Measurement" });
+    expect(within(measurement).getByRole("option", { name: "Temperature (degC) · numeric" })).toBeVisible();
+    expect(within(measurement).queryByRole("option", { name: /Station/ })).toBeNull();
+    const group = screen.getByRole("combobox", { name: "Group" });
+    expect(within(group).getByRole("option", { name: "Station · text" })).toBeVisible();
+    fireEvent.change(measurement, { target: { value: "0" } });
+    fireEvent.change(group, { target: { value: "1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
+    await waitFor(() => expect(request.mock.lastCall?.[2]?.[1]).toBe("run"));
+    expect(request.mock.lastCall?.[2]?.[2]).toMatchObject({
+      inputs: { table: meta, value_column: 0, group_column: 1 },
+      sources: { table: { selector: ["typed_table"], resultHash: meta.asset_ref,
+        receiptHash: meta.provenance.receiptHash } },
+    });
+  });
 });
 
 describe("unit-aware scientific node inputs and receipts", () => {

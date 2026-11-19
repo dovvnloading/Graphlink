@@ -875,12 +875,12 @@ def test_whole_typed_table_operations_accept_text_categories_and_numeric_groups(
     grant(bus, "statistics")
     source = dispatch(bus, "executePlugin", "Scientific Core")
     source_text = (
-        "Station,Group,Score,Note\\n"
-        "A,low,1,first\\n"
-        "B,low,3,second\\n"
-        "C,high,5,third\\n"
-        "D,high,NA,fourth\\n"
-        "E,high,7,fifth\\n"
+        "Station,Group,Score,Note\n"
+        "A,low,1,first\n"
+        "B,low,3,second\n"
+        "C,high,5,third\n"
+        "D,high,NA,fourth\n"
+        "E,high,7,fifth\n"
     )
     assert dispatch(bus, "invokePluginIntent", "science_core", "import_table", {
         "node_id": source, "text": source_text, "column_types": {"Group": "categorical"},
@@ -946,7 +946,7 @@ def test_whole_table_input_reads_beyond_legacy_numeric_vector_limit(session):
     grant(bus, "core")
     grant(bus, "statistics")
     source = dispatch(bus, "executePlugin", "Scientific Core")
-    text = "Group,Reading\\n" + "A,1\\n" * 1025
+    text = "Group,Reading\n" + "A,1\n" * 1025
     assert dispatch(bus, "invokePluginIntent", "science_core", "import_table", {
         "node_id": source, "text": text, "column_types": {"Group": "categorical"},
     }) == {"ok": True}
