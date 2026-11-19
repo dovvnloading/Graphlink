@@ -169,6 +169,8 @@ jobs:
           npm ci
           npm run check:paths
           npm run build
+          # Keep the checkout unbuilt for desktop tests that exercise missing SPA assets.
+          Remove-Item -Recurse -Force dist
 
       - name: Run pytest (with coverage floor - see pyproject.toml's own [tool.coverage])
         run: python -m pytest -q --cov --cov-report=term-missing --ignore=backend/tests/perf
