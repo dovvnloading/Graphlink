@@ -29,6 +29,20 @@ def _finite(value: float, label: str) -> float:
     return value
 
 
+def _log_positive_ratio(numerator: float, denominator: float) -> float:
+    """Log ratio of positive values without losing small ionic gradients."""
+    if numerator >= denominator:
+        difference = numerator - denominator
+        if difference <= denominator:
+            return math.log1p(difference / denominator)
+    else:
+        difference = denominator - numerator
+        if difference <= numerator:
+            return -math.log1p(difference / numerator)
+    # Logs separately avoid overflow/underflow of a very large/small quotient.
+    return math.log(numerator) - math.log(denominator)
+
+
 def nernst_potential(data: dict) -> dict:
     """Equilibrium potential E_inside - E_outside for one ionic species."""
     inside = _positive(data, "inside_mm")
