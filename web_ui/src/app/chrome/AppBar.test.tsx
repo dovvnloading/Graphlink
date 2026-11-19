@@ -87,6 +87,26 @@ describe("AppBar", () => {
     expect(spy).toHaveBeenCalledOnce();
   });
 
+  it("exports verified workspace methods from the visible desktop toolbar", async () => {
+    const user = userEvent.setup();
+    const store = makeStore();
+    const verified = "# Graphlink workspace — scientific methods\n\n## Saved result\n";
+    const request = vi.spyOn(store, "exportWorkspaceMethods").mockResolvedValue(verified);
+    const downloadSpy = vi.spyOn(download, "downloadBlob").mockImplementation(() => {});
+    try {
+      renderAppBar(store);
+      const action = screen.getByRole("button", { name: "Export methods" });
+      expect(action.closest(".appbar-tier")).toBeInTheDocument();
+      await user.click(action);
+      await waitFor(() => expect(downloadSpy).toHaveBeenCalledOnce());
+      expect(request).toHaveBeenCalledOnce();
+      expect(downloadSpy.mock.calls[0][1]).toBe("graphlink-workspace-methods.md");
+      expect(await downloadSpy.mock.calls[0][0].text()).toBe(verified);
+    } finally {
+      downloadSpy.mockRestore();
+    }
+  });
+
   it("downloads the server-verified workspace methods Markdown from the overflow menu", async () => {
     const user = userEvent.setup();
     const store = makeStore();
@@ -181,6 +201,7 @@ describe("AppBar", () => {
 
       for (const label of [
         "Export PNG",
+        "Export methods",
         "Pins",
         "Organize",
         "View",
@@ -271,6 +292,7 @@ describe("AppBar", () => {
         "Organize",
         "Pins",
         "Export PNG",
+        "Export methods",
         "View",
         "Plugins",
         "Global Search",
