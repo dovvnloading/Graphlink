@@ -28,7 +28,8 @@ def test_pack_discovery_grants_documentation_and_reproducible_example_receipts()
     assert PACKS["epidemiology"][0] == "Epidemiology and Biostatistics"
     assert PACK_FAMILIES["epidemiology"] == "biology"
     expected_ids = ["two_by_two_measures", "diagnostic_test_accuracy", "roc_curve_auc",
-                    "incidence_rate", "direct_age_standardization"]
+                    "incidence_rate", "direct_age_standardization", "mantel_haenszel",
+                    "meta_analysis", "multi_group_kaplan_meier", "cox_proportional_hazards"]
     assert [op.id for op in operations("epidemiology")] == expected_ids
     documentation = (root / "docs/biology/epidemiology.md").read_text(encoding="utf-8")
     assert "science_epidemiology" in documentation
