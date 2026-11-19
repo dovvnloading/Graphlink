@@ -200,7 +200,9 @@ def roc_curve_auc(data):
     tp = fp = 0
     prior_fpr = prior_tpr = area = 0.0
     rows = [["No predicted positives", 0, 0, 0.0, 0.0, 1.0]]
-    best_j, best_threshold = -1.0, "No predicted positives"
+    # The (0, 0) ROC origin has J = 0 and is an eligible threshold. Without
+    # it, a non-discriminating test can return a misleading numeric cutoff.
+    best_j, best_threshold = 0.0, "No predicted positives"
     index = 0
     while index < len(observations):
         threshold = observations[index][0]
@@ -442,6 +444,7 @@ OPERATIONS: tuple[Operation, ...] = (
          "positive_direction": "higher"}, roc_curve_auc,
         methods=("Sort scores from highest predicted risk to lowest, updating tied observations "
                  "together at each inclusive threshold, with (0,0) and (1,1) endpoints. "
+                 "Include the no-predicted-positive (0,0) point when maximizing Youden J. "
                  "AUC uses trapezoidal integration, equivalent to P(score_case > score_control) "
                  "+ 0.5 P(tie). Output the maximizing Youden J threshold as descriptive only; "
                  "no train/test separation or bootstrap CI is inferred."),
