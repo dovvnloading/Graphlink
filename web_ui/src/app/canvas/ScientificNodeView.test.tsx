@@ -87,7 +87,8 @@ describe("scientific workbench card", () => {
     expect(latest.querySelector(".science-result-highlight")).toHaveTextContent("3 rows");
     expect(latest.querySelector(".science-result-summary")).toHaveClass("science-result-summary--clamped");
     expandResult("Read full summary");
-    expect(within(latest).getByText(long)).toBeVisible();
+    const fullSummary = within(latest).getByText("Read full summary").closest("details");
+    expect(fullSummary?.querySelector("p")?.textContent).toBe(long);
     expect(within(latest).queryByRole("table")).not.toBeInTheDocument();
   });
 
@@ -333,7 +334,7 @@ describe("scientific workbench card", () => {
     mount(JSON.stringify({ ...state, latest: { ...result,
       table: { columns, rows: [columns.map((_name, i) => i + .123456789)] },
     } }));
-    expandResult("Tables · 1 rows");
+    expandResult("Tables · 1 row");
     const table = screen.getByRole("table", { name: "Result table" });
     expect(within(table).getAllByRole("columnheader")).toHaveLength(8);
     expect(table.closest(".science-table")).toBeInTheDocument();
