@@ -96,7 +96,7 @@ def two_by_two_measures(data):
         rr_ci = or_ci = (rr, rr)
         correction = 0.0
     else:
-        # For single-zero-cell tables, show the all-cell 0.5 correction on
+        # For other zero-cell tables, show the all-cell 0.5 correction on
         # both the effect estimate and its Katz/Woolf interval.
         correction = 0.5 if 0 in (a, b, c, d) else 0.0
         aa, bb, cc, dd = (value + correction for value in (a, b, c, d))
@@ -124,7 +124,7 @@ def two_by_two_measures(data):
         "summary": (f"Treated risk {p_t:.6g}; control risk {p_c:.6g}; "
                     f"RR {rr_text}, OR {or_text}, risk difference {rd:.6g}; "
                     f"{kind} {needed if isinstance(needed, str) else f'{needed:.6g}'}. "
-                    "RR/OR use a 0.5 all-cell correction for single-zero tables; "
+                    "RR/OR use a 0.5 all-cell correction for other zero-cell tables; "
                     "both are undefined when both arms have no events or all events. "
                     "NNT/NNH is interpreted for a treatment comparison, not a causal claim."),
         "values": {
@@ -420,7 +420,7 @@ OPERATIONS: tuple[Operation, ...] = (
         {"treated_events": 12, "treated_nonevents": 188,
          "control_events": 30, "control_nonevents": 170}, two_by_two_measures,
         methods=("For independent cohorts, risk = events/total and RD = treated risk − control risk. "
-                 "RR uses Katz and OR uses Woolf log-normal 95% intervals; single-zero-cell "
+                 "RR uses Katz and OR uses Woolf log-normal 95% intervals; other zero-cell "
                  "tables use a stated Haldane–Anscombe 0.5 correction for RR/OR only. "
                  "Both relative effects are undefined for double-zero or double-all-event tables. "
                  "RD uses Newcombe's unpooled Wilson-score interval. Absolute risk reduction is "
