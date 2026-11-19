@@ -146,7 +146,12 @@ def segregation_exact_binomial(data):
     if n > _MAX_EXACT_BINOMIAL:
         raise ValueError("Exact segregation binomial tests support at most 10,000 offspring.")
     p = proportions[0]
-    log_p, log_q = math.log(p), math.log1p(-p)
+    # A strictly positive minor-class probability can survive normalization while
+    # the major-class probability rounds to 1. Use the small complement directly
+    # to avoid log1p(-1) and preserve the exact rare-outcome tail in log space.
+    q = proportions[1]
+    log_p, log_q = ((math.log1p(-q), math.log(q)) if p >= 0.5
+                    else (math.log(p), math.log1p(-p)))
     # Evaluate in log-space so rare, strongly imbalanced results do not overflow.
     log_weights = {
         k: (math.lgamma(n + 1) - math.lgamma(k + 1) - math.lgamma(n - k + 1)
@@ -159,7 +164,8 @@ def segregation_exact_binomial(data):
         "summary": f"Exact two-sided binomial segregation test: {observed[0]}/{n} in class 1 "
                    f"(expected {p:.6g}); p={exact:.6g} (probability-ordered tail).",
         "values": {"offspring": n, "class_1_observed": observed[0],
-                   "class_1_expected_probability": p, "two_sided_p_value": exact,
+                   "class_1_expected_probability": p,
+                   "class_2_expected_probability": q, "two_sided_p_value": exact,
                    "log10_two_sided_p_value": log10_exact,
                    "observed_outcome_probability": observed_probability,
                    "method": "two-sided probability-ordered exact binomial"},
@@ -299,7 +305,7 @@ def three_point_cross(data):
     order_label = "-".join(labels[pos] for pos in order)
     return {
         "summary": f"Three-point testcross order {order_label}; intervals "
-                   f"{100 * r_left:.6g} and {100 * r_right:.6g} recombination cM "
+                   f"{100 * r_left:.6g} and {100 * r_right:.6g} uncorrected cM (100×r) "
                    f"(DCO={groups['double']}, expected {expected_dco:.6g}). "
                    "Double crossovers are counted in both intervals.",
         "values": {"gene_order": order_label, "middle_gene": labels[middle],
@@ -329,8 +335,21 @@ def _lod(recombinant, total, theta):
         return -math.inf if recombinant else total * math.log10(2)
     if theta == 0.5:
         return 0.0
-    return (recombinant * math.log10(2 * theta)
-            + (total - recombinant) * math.log10(2 * (1 - theta)))
+    nonrecombinant = total - recombinant
+    if theta < 0.25:
+        # This form also works for positive theta arbitrarily close to zero.
+        return (recombinant * math.log(2 * theta)
+                + nonrecombinant * (math.log(2) + math.log1p(-theta))) / math.log(10)
+    # Near independence the positive and negative LOD contributions cancel.
+    # Pair their logarithms *before* multiplying by potentially huge counts:
+    # log(1-u) + log(1+u) = log(1-u²), with u = 1-2θ.
+    u = 1 - 2 * theta
+    paired = min(recombinant, nonrecombinant) * math.log1p(-u * u)
+    if recombinant >= nonrecombinant:
+        unmatched = (recombinant - nonrecombinant) * math.log1p(-u)
+    else:
+        unmatched = (nonrecombinant - recombinant) * math.log1p(u)
+    return (paired + unmatched) / math.log(10)
 
 
 def two_point_lod(data):
