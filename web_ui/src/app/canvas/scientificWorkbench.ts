@@ -221,7 +221,7 @@ function isResult(value: unknown): value is ScienceResult {
     const data = value.uncertainty;
     if (!record(data) || !["gum", "monte_carlo"].includes(String(data.method))
         || !record(data.inputs) || !record(data.outputs)
-        || !Object.values(data.inputs).every(isMeasurement) || !Object.values(data.outputs).every(isMeasurement)
+        || !Object.values(data.inputs).every(isMeasurement)
         || Object.entries(data.outputs).some(([key, item]) => {
           const outputValue = resultValues[key];
           return !isMeasurement(item) || !finite(outputValue) || item.value !== outputValue;
@@ -399,10 +399,10 @@ export function sourceOptions(parents: ScienceParent[], maxPoints = V1_LIMITS.po
         const interval = selector[0] === "values" ? intervalOnly(result, name) : undefined;
         const detail = uncertainty ? " · " + formatMeasurement(uncertainty) :
           interval ? ` · interval [${interval[0]}, ${interval[1]}] · cannot propagate without a standard uncertainty` : "";
+        const unit = selector[0] === "values" ? uncertainty?.unit || resultUnit(name) : "";
         options.push({ label: `${title} · ${name}${detail}`, value,
           ...(uncertainty && { uncertainty }),
-          ...(selector[0] === "values" && resultUnit(name) && { unit: uncertainty?.unit || resultUnit(name) }),
-          ...(uncertainty?.unit && { unit: uncertainty.unit }),
+          ...(unit && { unit }),
           reference: { nodeId: parent.nodeId, ...(state.nodeKey && { sourceKey: state.nodeKey }), resultHash: result.provenance.resultHash,
             ...(result.provenance.receiptHash && { receiptHash: result.provenance.receiptHash }), selector } });
       };
