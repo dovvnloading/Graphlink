@@ -1,7 +1,7 @@
 [plugin]
 id = "science_epidemiology"
 name = "Epidemiology and Biostatistics"
-description = "Analyze cohort 2×2 effects, diagnostic accuracy, ROC/AUC, Poisson incidence rates and direct age standardization."
+description = "Analyze epidemiologic risks, stratified Mantel-Haenszel effects, meta-analysis, survival and Cox regression, diagnostics and incidence rates."
 version = "1.2.0"
 sdk_api_version = 1
 entry_point = "plugin:register"
