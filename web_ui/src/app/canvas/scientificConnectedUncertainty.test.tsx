@@ -150,4 +150,59 @@ describe("uncertainty-aware Scientific Workbench connections", () => {
       fields: [field], example: { distance: 1 } }, { distance: text })).toEqual({ distance: "25 mm" });
   });
 
+  it("labels nonlinear Monte Carlo moments and intervals without misleading coverage factors or connections", () => {
+    const output = {
+      ...linkedResult.uncertainty!.outputs["value (m)"],
+      value: 0, standardUncertainty: 1.43, interval: [0, 5] as [number, number],
+      method: "monte_carlo" as const, monteCarloMean: 1, monteCarloTrials: 200_000,
+    };
+    const mc: ScienceResult = {
+      ...linkedResult, values: { "value (m)": 0 },
+      uncertainty: { ...linkedResult.uncertainty!, method: "monte_carlo",
+        outputs: { "value (m)": output } },
+    };
+    // A nonlinear PDF is centered on its sampled mean, not the nominal f(E[X]).
+    expect(formatMeasurement(output)).toBe("nominal 0; Monte Carlo mean 1 ± 1.43 m");
+    const parentState = JSON.parse(parent.raw) as Record<string, unknown>;
+    const options = sourceOptions([{ ...parent, raw: JSON.stringify({ ...parentState, latest: mc }) }]);
+    const linked = options.find((option) => option.reference.selector.join("/") === "values/value (m)");
+    expect(linked).toBeDefined();
+    expect(linked!.label).toContain("joint PDF");
+    expect(compatibleOptions(convert.fields[0], options)).not.toContain(linked);
+
+    mount(JSON.stringify({ ...core, latest: mc }));
+    expect(screen.getAllByText(/Monte Carlo mean 1 ± 1.43 m/).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByText(/Propagated uncertainty budget · Monte Carlo/));
+    expect(screen.getByText(/95% Monte Carlo quantile coverage interval/)).toBeVisible();
+    expect(screen.getByText(/Gaussian input model/)).toBeVisible();
+    expect(screen.queryByText(/coverage factor k =/)).not.toBeInTheDocument();
+  });
+
+  it("never presents an intrinsic standard error as complete propagated uncertainty", () => {
+    const intrinsic: ScienceResult = {
+      ...linkedResult,
+      values: { ...linkedResult.values, "value (m)_standard_uncertainty": .3, other_m: 1 },
+      uncertainty: {
+        ...linkedResult.uncertainty!,
+        outputs: { other_m: {
+          ...linkedResult.uncertainty!.outputs["value (m)"], value: 1,
+          interval: [.5, 1.5],
+        } },
+        unsupportedOutputs: { "value (m)": "intrinsic covariance is unknown" },
+      },
+    };
+    expect(resultMeasurement({ ...intrinsic, uncertainty: undefined }, "value (m)")?.standardUncertainty).toBe(.3);
+    expect(resultMeasurement(intrinsic, "value (m)")).toBeUndefined();
+    const sourceState = JSON.parse(parent.raw) as Record<string, unknown>;
+    const options = sourceOptions([{ ...parent, raw: JSON.stringify({ ...sourceState, latest: intrinsic }) }]);
+    const unsupported = options.find((option) => option.reference.selector.join("/") === "values/value (m)");
+    expect(unsupported?.label).toContain("intrinsic covariance is unknown");
+    expect(compatibleOptions(convert.fields[0], options)).not.toContain(unsupported);
+
+    mount(JSON.stringify({ ...core, latest: intrinsic }));
+    expect(screen.getByText("0.005 · uncertainty unavailable")).toBeVisible();
+    fireEvent.click(screen.getByText(/Propagated uncertainty budget/));
+    expect(screen.getByText(/Uncertainty propagation unavailable for value \(m\)/)).toBeVisible();
+  });
+
 });

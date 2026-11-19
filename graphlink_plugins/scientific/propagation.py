@@ -13,6 +13,7 @@ import math
 import random
 import re
 import statistics
+from array import array
 from statistics import NormalDist
 
 from .core import Operation, _effective_unit, finite, fingerprint
@@ -20,7 +21,8 @@ from .units import parse_unit
 
 _NORMAL_95 = NormalDist().inv_cdf(0.975)
 _MAX_ROOTS = 64
-_MC_TRIALS = 16384
+_MC_TRIALS = 200_000  # JCGM 101:2008 7.2.2, illustrative minimum at p = 0.95.
+_MC_MAX_TRIALS = 1_000_000  # Bound worker memory/time at higher coverage levels.
 _UNIT_SUFFIX = re.compile(r"\(([^()]{1,64})\)\s*$")
 _UNIT_NAMES = {
     "ma": "Ma", "m": "m", "mm": "mm", "cm": "cm", "km": "km",
@@ -128,6 +130,14 @@ def connected_measurement(result: dict, selector: list, source_identity: str) ->
         if item is not None:
             if item["value"] != result["values"][key]:
                 raise ValueError("The connected measurement metadata disagrees with the result.")
+            if item.get("method") == "monte_carlo":
+                # A marginal mean, standard deviation and interval are not the
+                # output PDF (nor its joint PDF with sibling outputs). Sampling
+                # a new Gaussian here would lose skew and shared correlations.
+                raise ValueError(
+                    "The connected Monte Carlo output has no saved joint output "
+                    "distribution; downstream uncertainty propagation is unsupported."
+                )
             return item
     measurement = _native_uncertainty(result, key)
     if measurement is None:
@@ -215,12 +225,11 @@ def _derivatives(operation: Operation, inputs: dict, base: dict[str, float],
         if not _numeric(value):
             raise ValueError(f"Connected input '{field}' is not a scalar measurement.")
         u = measurement["standardUncertainty"]
-        if u == 0:
-            for key in base:
-                derivatives[key][field] = 0.0
-            continue
-        # Keep h representable even for huge nominal values or tiny u.
-        h = max(abs(value) * 1e-5, abs(u) * 1e-3, math.ulp(float(value)) * 16)
+        # A zero input uncertainty makes its contribution zero, but does not
+        # make its sensitivity coefficient zero (JCGM 100, Eq. 10).
+        # Use an absolute scale at the origin, where the ULP is subnormal.
+        h = max(abs(value) * 1e-5, abs(u) * 1e-3,
+                1e-8 if value == 0 else 0.0, math.ulp(float(value)) * 16)
         if not math.isfinite(h):
             raise ValueError("A sensitivity perturbation exceeds the numerical range.")
         try:
@@ -257,7 +266,7 @@ def _derivatives(operation: Operation, inputs: dict, base: dict[str, float],
 
 def _budget(derivatives: dict[str, float], attached: dict) -> tuple[list[dict[str, str | float]], dict[str, float]]:
     rows: list[dict[str, str | float]] = []
-    vectors: dict[str, float] = {}
+    components_by_root: dict[str, list[float]] = {}
     signed_by_field: dict[str, dict[str, float]] = {}
     for field, slope in derivatives.items():
         item = attached[field]
@@ -270,7 +279,7 @@ def _budget(derivatives: dict[str, float], attached: dict) -> tuple[list[dict[st
                      "standardUncertainty": item["standardUncertainty"], "sensitivity": slope,
                      "signedContribution": signed, "variance": signed * signed})
         for origin, value in vector.items():
-            vectors[origin] = finite(vectors.get(origin, 0.0) + value, "Correlated contribution")
+            components_by_root.setdefault(origin, []).append(value)
     keys = list(derivatives)
     for i, first in enumerate(keys):
         for second in keys[i + 1:]:
@@ -281,8 +290,12 @@ def _budget(derivatives: dict[str, float], attached: dict) -> tuple[list[dict[st
             covariance = 2 * math.fsum(a[root] * b[root] for root in common)
             rows.append({"input": f"{first} × {second}", "kind": "covariance",
                          "variance": finite(covariance, "Shared-source covariance")})
-    if len(vectors) > _MAX_ROOTS:
+    if len(components_by_root) > _MAX_ROOTS:
         raise ValueError("The calculation exceeds the 64-source uncertainty lineage limit.")
+    # fsum once per root: incremental addition loses the small middle term in
+    # large + small - large even when the combined uncertainty is resolvable.
+    vectors = {root: finite(math.fsum(parts), "Correlated contribution")
+               for root, parts in components_by_root.items()}
     return rows, vectors
 
 
@@ -293,7 +306,23 @@ def _quantile(values: list[float], fraction: float) -> float:
     return values[lower] * (1 - blend) + values[min(lower + 1, len(values) - 1)] * blend
 
 
-def _monte_carlo(operation: Operation, inputs: dict, attached: dict, keys: set[str]) -> dict:
+def _mc_trial_count(probability: float) -> int:
+    """JCGM 101:2008 7.2.2: enough draws to resolve coverage tails.
+
+    The example recommendation is M >= 10^4/(1-p); a bounded worker cannot
+    support arbitrary p, so reject unsupported tail probabilities explicitly.
+    """
+    recommended = 10_000 / (1 - probability)
+    if recommended > _MC_MAX_TRIALS:
+        raise ValueError(
+            "Monte Carlo coverage probability requires more than 1,000,000 "
+            "trials to resolve the tails; use first-order GUM or lower coverage."
+        )
+    return max(_MC_TRIALS, math.ceil(recommended))
+
+
+def _monte_carlo(operation: Operation, inputs: dict, attached: dict,
+                 keys: set[str], trials: int) -> dict:
     """Seeded Gaussian input PDFs, sampled jointly by *root*, per JCGM 101.
 
     Reject nonphysical domain draws, rather than silently discarding them
@@ -303,8 +332,9 @@ def _monte_carlo(operation: Operation, inputs: dict, attached: dict, keys: set[s
     seed = int(fingerprint(["mc", operation.id, inputs, attached])[:16], 16)
     rng = random.Random(seed)
     roots = sorted({root for item in attached.values() for root in item["components"]})
-    samples: dict[str, list[float]] = {name: [] for name in keys}
-    for _ in range(_MC_TRIALS):
+    # Compact numeric arrays keep a million draws bounded for typical models.
+    samples = {name: array("d") for name in keys}
+    for _ in range(trials):
         z = {root: rng.gauss(0.0, 1.0) for root in roots}
         trial = dict(inputs)
         for name, item in attached.items():
@@ -370,7 +400,8 @@ def propagate(operation: Operation, inputs: dict, result: dict,
     probability = next(iter(probabilities))
     derivatives, curved = _derivatives(operation, inputs, numbers, attached)
     use_mc = method == "monte_carlo" or (method == "auto" and bool(curved))
-    trials = _monte_carlo(operation, inputs, attached, set(numbers)) if use_mc else {}
+    trial_count = _mc_trial_count(probability) if use_mc else 0
+    trials = _monte_carlo(operation, inputs, attached, set(numbers), trial_count) if use_mc else {}
     # A conservative factor for mixed effective degrees of freedom; never
     # silently downgrade a finite-DoF upstream factor to the normal limit.
     factor = max(NormalDist().inv_cdf((1 + probability) / 2),
@@ -422,7 +453,7 @@ def propagate(operation: Operation, inputs: dict, result: dict,
                 "method": "monte_carlo" if use_mc else "gum",
                 "components": vector,
                 "budget": rows,
-                **({"monteCarloMean": estimate, "monteCarloTrials": _MC_TRIALS,
+                **({"monteCarloMean": estimate, "monteCarloTrials": trial_count,
                     "budgetNote": "First-order input attribution; Monte Carlo uncertainty and interval."} if use_mc else {}),
             }
         except ValueError as exc:
