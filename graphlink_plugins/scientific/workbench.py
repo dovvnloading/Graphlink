@@ -206,7 +206,7 @@ def _verify_sources(document, node, inputs: dict, sources: dict, granted,
                 len(selector) == 5 and selector[0] == "result_table_column"):
             latest = source.state.data.get("latest")
             table = latest.get("tableAsset") if isinstance(latest, dict) else None
-            if not table_metadata_valid(table):
+            if not isinstance(table, dict) or not table_metadata_valid(table):
                 raise ValueError("The connected source has no readable result table.")
             receipt = latest["provenance"]
             if (citation.get("resultHash") != receipt["resultHash"]
