@@ -1,6 +1,7 @@
 import { useReactFlow, useStoreApi } from "@xyflow/react";
 import { lazy, Suspense, useEffect, useState, useSyncExternalStore } from "react";
 import type { GraphModelBinding, GraphRun, GraphRunPreview, GraphRunStep, LatestGraphRun, SceneStore } from "../canvas/sceneStore";
+import { formatScienceSummary } from "../canvas/scientificWorkbench";
 import { Dialog } from "../overlays/overlays";
 import { getRunTrace } from "./graphRunTrace";
 import { Disclosure } from "./RunnerDisclosure";
@@ -37,7 +38,7 @@ function RunSteps({ steps, names }: { steps: GraphRunStep[]; names: Map<string, 
       {step.kind === "scientific" && <div>
         {step.elapsedMs !== undefined && <>Elapsed: {step.elapsedMs.toLocaleString()} ms. </>}
         {step.errorType && <>Error type: <strong>{step.errorType}</strong></>}
-        {step.scientificResult && <p>Result: {step.scientificResult.summary}</p>}
+        {step.scientificResult && <p>Result: {formatScienceSummary(step.scientificResult.summary)}</p>}
       </div>}
       {step.detail && <p>{step.detail}</p>}
       {step.externalAttempt && <Disclosure label="External request" className="runner-fingerprints">

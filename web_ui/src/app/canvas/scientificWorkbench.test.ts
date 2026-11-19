@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chartableScienceTypes, columnChoices, compatibleOptions, draftInputs, fieldText, formatScienceNumber, formatScienceRange, formatScienceSummary, matchesSource, parseInputs, readScienceState, sourceOptions, type ScienceField, type ScienceResult, type ScienceState } from "./scientificWorkbench";
+import { chartableScienceTypes, columnChoices, compatibleOptions, draftInputs, fieldText, formatMeasurement, formatScienceNumber, formatScienceRange, formatScienceSummary, matchesSource, parseInputs, readScienceState, sourceOptions, type ScienceField, type ScienceResult, type ScienceState } from "./scientificWorkbench";
 
 const limits = { points: 3, columns: 2, cells: 4, text: 3 };
 function parse(kind: ScienceField["kind"], raw: string) {
@@ -421,16 +421,16 @@ describe("saved Workbench wire safety", () => {
 
 describe("formatScienceNumber", () => {
   it("drops binary floating-point noise but keeps real precision", () => {
-    expect(formatScienceNumber(50.000837999999995)).toBe("50.000838");
-    expect(formatScienceNumber(0.05000083799999999)).toBe("0.050000838");
-    expect(formatScienceNumber(9.409000000000001e-11)).toBe("9.409e-11");
-    expect(formatScienceNumber(0.6989700043360187)).toBe("0.698970004336");
-    expect(formatScienceNumber(2.681585351992652e-8)).toBe("2.68158535199e-8");
+    expect(formatScienceNumber(50.000837999999995)).toBe("50.0008");
+    expect(formatScienceNumber(0.05000083799999999)).toBe("0.0500008");
+    expect(formatScienceNumber(9.409000000000001e-11)).toBe("9.409 × 10⁻¹¹");
+    expect(formatScienceNumber(0.6989700043360187)).toBe("0.69897");
+    expect(formatScienceNumber(2.681585351992652e-8)).toBe("2.68159 × 10⁻⁸");
   });
 
   it("leaves integers and non-finite values exactly as they are", () => {
-    expect(formatScienceNumber(5400)).toBe("5400");
-    expect(formatScienceNumber(1e21)).toBe("1e+21");
+    expect(formatScienceNumber(5400)).toBe("5,400");
+    expect(formatScienceNumber(1e21)).toBe("1 × 10²¹");
     expect(formatScienceNumber(Number.NaN)).toBe("NaN");
   });
 });
@@ -444,11 +444,29 @@ describe("scientific result display formatting", () => {
     expect(formatScienceSummary("catalytic efficiency kcat/Km=1e+06 M⁻¹ s⁻¹."))
       .toBe("catalytic efficiency kcat/Km=1,000,000 M⁻¹ s⁻¹.");
     expect(formatScienceSummary("A -1.25e-06 to 3.5e+21, 9.409e-11."))
-      .toBe("A -0.00000125 to 3.5 × 10²¹, 9.409 × 10⁻¹¹.");
+      .toBe("A -1.25 × 10⁻⁶ to 3.5 × 10²¹, 9.409 × 10⁻¹¹.");
     expect(formatScienceSummary("Tiny 1e-400 and huge 1e+400"))
       .toBe("Tiny 1 × 10⁻⁴⁰⁰ and huge 1 × 10⁴⁰⁰");
     expect(formatScienceSummary("ID1e+06, 1e+06.2 and 2e+06mol"))
       .toBe("ID1e+06, 1e+06.2 and 2e+06mol");
+  });
+
+  it("groups ordinary counts and uses matching scientific notation in Fick units", () => {
+    expect(formatScienceSummary("500000 CFU/mL from 100000 person-years."))
+      .toBe("500,000 CFU/mL from 100,000 person-years.");
+    expect(formatScienceSummary("Fick flux = 0.000002 mol/(m²·s); transfer = 4e-08 mol."))
+      .toBe("Fick flux = 2 × 10⁻⁶ mol/(m²·s); transfer = 4 × 10⁻⁸ mol.");
+    expect(formatScienceSummary("1,000,000 CFU/mL, M⁻¹ s⁻¹, ID1e+06"))
+      .toBe("1,000,000 CFU/mL, M⁻¹ s⁻¹, ID1e+06");
+    expect(formatScienceNumber(58.3279090977)).toBe("58.3279");
+    expect(formatScienceNumber(500000)).toBe("500,000");
+    expect(formatScienceNumber(2e-6)).toBe("2 × 10⁻⁶");
+  });
+
+  it("rounds nominal values and uncertainties to compatible precision", () => {
+    expect(formatMeasurement({ value: 58.3279090977,
+      standardUncertainty: 0.0281384359596, coverageFactor: 2, unit: "mV" }))
+      .toBe("58.328 ± 0.028 mV");
   });
 
   it("shortens plot bounds but keeps adjacent floating-point endpoints distinct", () => {
@@ -457,7 +475,7 @@ describe("scientific result display formatting", () => {
     expect(formatScienceRange(1, 1.0000000000000002))
       .toBe("1 to 1.0000000000000002");
     expect(formatScienceRange(-Number.MAX_VALUE, Number.MAX_VALUE))
-      .toBe("-1.79769e+308 to 1.79769e+308");
+      .toBe("-1.79769 × 10³⁰⁸ to 1.79769 × 10³⁰⁸");
     expect(formatScienceRange(0, 0)).toBe("0 to 0");
   });
 });

@@ -182,6 +182,38 @@ describe("scientific workbench card", () => {
       .toBe(scientific.summary);
   });
 
+  it("groups plain counts and displays Fick-scale values consistently without touching results", () => {
+    const scientific = { ...result,
+      summary: "500000 CFU/mL; 100000 person-years; Fick flux 0.000002 mol/(m²·s); net 4e-08 mol.",
+      values: { voltage: 58.3279090977, population: 500000, samples: [500000, 4e-8] },
+      table: { columns: ["Time (ms)", "Membrane potential (mV)"],
+        rows: [[0, 58.3279090977], [1, 500000]] },
+    };
+    mount(JSON.stringify({ ...state, latest: scientific }));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "500,000 CFU/mL; 100,000 person-years; Fick flux 2 × 10⁻⁶ mol/(m²·s); net 4 × 10⁻⁸ mol.");
+    expect(screen.getByText("[500,000, 4 × 10⁻⁸]")).toBeVisible();
+    const table = screen.getByRole("table", { name: "Result table" });
+    expect(within(table).getByText("58.3279")).toBeVisible();
+    expect(within(table).getByRole("columnheader", { name: "Time (ms)" })).toBeVisible();
+    expect(table.closest(".science-table")).toBeInTheDocument();
+    expect(readScienceState(JSON.stringify({ ...state, latest: scientific }))?.latest?.summary)
+      .toBe(scientific.summary);
+  });
+
+  it("keeps a wide Hodgkin–Huxley table inside the scrollable preview", () => {
+    const columns = ["Time (ms)", "Membrane potential (mV)", "Sodium activation (m)",
+      "Sodium inactivation (h)", "Potassium activation (n)", "Sodium current (µA/cm²)",
+      "Potassium current (µA/cm²)", "Leak current (µA/cm²)"];
+    mount(JSON.stringify({ ...state, latest: { ...result,
+      table: { columns, rows: [columns.map((_name, i) => i + .123456789)] },
+    } }));
+    const table = screen.getByRole("table", { name: "Result table" });
+    expect(within(table).getAllByRole("columnheader")).toHaveLength(8);
+    expect(table.closest(".science-table")).toBeInTheDocument();
+    expect(within(table).getByRole("columnheader", { name: "Time (ms)" })).toBeVisible();
+  });
+
   it("retains the connected source label when a reopened parent has a new session id", () => {
     const reference = { nodeId: "prior-session-parent", sourceKey: "persistent-key", resultHash: "abc", selector: ["column", 1] };
     mount(JSON.stringify({ ...state, latest: { ...result, provenance: {
@@ -275,7 +307,7 @@ describe("scientific workbench card", () => {
     mount(JSON.stringify({ ...state, latest }));
     expect(screen.getByRole("img").querySelector("polyline")).toHaveAttribute("points", "10,98 160,8 310,98");
     expect(screen.getByText("Length (m) · 1 to 1.0000000000000002")).toBeVisible();
-    expect(screen.getByText("Time (s) · -1.79769e+308 to 1.79769e+308")).toBeVisible();
+    expect(screen.getByText("Time (s) · -1.79769 × 10³⁰⁸ to 1.79769 × 10³⁰⁸")).toBeVisible();
   });
 
   it("exports every result row, escapes CSV cells and retains small signed values beyond the preview", async () => {

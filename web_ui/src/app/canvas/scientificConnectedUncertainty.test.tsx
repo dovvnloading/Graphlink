@@ -162,7 +162,7 @@ describe("uncertainty-aware Scientific Workbench connections", () => {
         outputs: { "value (m)": output } },
     };
     // A nonlinear PDF is centered on its sampled mean, not the nominal f(E[X]).
-    expect(formatMeasurement(output)).toBe("nominal 0; Monte Carlo mean 1 ± 1.43 m");
+    expect(formatMeasurement(output)).toBe("nominal 0; Monte Carlo mean 1 ± 1.4 m");
     const parentState = JSON.parse(parent.raw) as Record<string, unknown>;
     const options = sourceOptions([{ ...parent, raw: JSON.stringify({ ...parentState, latest: mc }) }]);
     const linked = options.find((option) => option.reference.selector.join("/") === "values/value (m)");
@@ -171,7 +171,7 @@ describe("uncertainty-aware Scientific Workbench connections", () => {
     expect(compatibleOptions(convert.fields[0], options)).not.toContain(linked);
 
     mount(JSON.stringify({ ...core, latest: mc }));
-    expect(screen.getAllByText(/Monte Carlo mean 1 ± 1.43 m/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Monte Carlo mean 1 ± 1.4 m/).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByText(/Propagated uncertainty budget · Monte Carlo/));
     expect(screen.getByText(/95% Monte Carlo quantile coverage interval/)).toBeVisible();
     expect(screen.getByText(/Gaussian input model/)).toBeVisible();
@@ -226,7 +226,7 @@ describe("uncertainty-aware Scientific Workbench connections", () => {
     const noisy: ScienceResult = { ...linkedResult, uncertainty: undefined,
       values: { "value (m)": 0.05000083799999999 } };
     mount(JSON.stringify({ ...core, latest: noisy }));
-    expect(screen.getByText("0.050000838")).toBeVisible();
+    expect(screen.getByText("0.0500008")).toBeVisible();
     expect(screen.queryByText("0.05000083799999999")).toBeNull();
   });
 
