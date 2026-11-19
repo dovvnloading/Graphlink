@@ -21,10 +21,17 @@ export type ScientificFlowNode = Node<{
 
 function display(value: unknown): string {
   if (typeof value === "string") return value;
-  if (typeof value === "number") return formatScienceNumber(value);
-  // Arrays and records render their numbers the same rounded way.
-  return JSON.stringify(value, (_key, item: unknown) =>
-    typeof item === "number" && Number.isFinite(item) ? Number(formatScienceNumber(item)) : item) ?? "";
+  // Never parse formatted "1,000" or "2 × 10⁻⁶" back into a Number:
+  // that would turn nested scientific values into null in JSON previews.
+  const nested = (item: unknown): string => {
+    if (typeof item === "number") return formatScienceNumber(item);
+    if (Array.isArray(item)) return "[" + item.map(nested).join(", ") + "]";
+    if (item !== null && typeof item === "object")
+      return "{" + Object.entries(item).map(([key, entry]) =>
+        JSON.stringify(key) + ": " + nested(entry)).join(", ") + "}";
+    return JSON.stringify(item) ?? "";
+  };
+  return nested(value);
 }
 
 /** Budget and interval cells: a rounded number, or a dash when absent. */
