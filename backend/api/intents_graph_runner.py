@@ -20,8 +20,8 @@ from backend.domain.graph_runner import (
     _inspect, _matching_node, _output_digest, execute_graph_step, plan_graph_run, schedule_graph_steps,
     step_sources, validate_graph_run_ancestors,
 )
-from backend.domain.model import SceneError
-from backend.domain.node_states import ModelState
+from backend.domain.model import SceneError, SceneNode
+from backend.domain.node_states import ModelState, PersistedPluginState, PluginStateSnapshot
 from backend.domain.nodes_content import _text_digest
 from backend.domain.table_workflows import table_output
 from graphlink_plugins.scientific.graph_run_adapter import prepare as prepare_science
@@ -101,8 +101,15 @@ def _plan(document: SceneDocument, node_ids: list[str]) -> tuple[str, list[dict[
     return token, steps
 
 
+
+def _state_data(node: SceneNode) -> dict[str, Any]:
+    """A scientific node's state payload; a node without state cannot run."""
+    if not isinstance(node.state, (PersistedPluginState, PluginStateSnapshot)):
+        raise SceneError("The scientific node has no saved plugin state.")
+    return node.state.data
+
 async def _run_model_step(
-    document: SceneDocument, confirmed_checkpoint: Callable[[], Awaitable[None]],
+    document: SceneDocument, confirmed_checkpoint: Callable[[], Awaitable[bool]],
     run: dict[str, Any], step: dict[str, Any], by_node_id: dict[str, Any],
 ) -> None:
     """One reviewed local Model step with a durable fence, never auto-retried."""
@@ -200,7 +207,7 @@ async def _run_scientific_step(
     # A successful calculation may have committed just before an
     # interrupted receipt checkpoint. Do not repeat it on resume.
     if live["status"] == "current":
-        latest = node.state.data.get("latest")
+        latest = _state_data(node).get("latest")
         if not isinstance(latest, dict):
             raise SceneError("The scientific result receipt is missing.")
         step.update(
@@ -223,7 +230,7 @@ async def _run_scientific_step(
         pack, "run", {
             "node_id": node.id, "operation_id": operation.id,
             "inputs": inputs, "sources": sources,
-            "expected_run": _run_token(node.state.data),
+            "expected_run": _run_token(_state_data(node)),
             "graph_run_id": run["runId"],
         },
     ])
@@ -247,7 +254,7 @@ async def _run_scientific_step(
         updated[key] != step[key] for key in ("inputHash", "configHash")
     ):
         raise SceneError("The scientific result or its input changed during execution.")
-    latest = node.state.data.get("latest")
+    latest = _state_data(node).get("latest")
     if not isinstance(latest, dict):
         raise SceneError("The scientific worker returned no committed result.")
     step.update(
