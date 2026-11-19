@@ -208,7 +208,6 @@ def standard_curve(data: dict) -> dict:
                      factor, corrected if corrected is not None else "", "",
                      "within range" if back is not None else "outside calibration"])
         quantified += back is not None
-    samples = sorted(xs)
     if model in ("4pl", "5pl"):
         points = [math.exp(math.log(lo) + i * (math.log(hi) - math.log(lo)) / 95)
                   for i in range(96)]
