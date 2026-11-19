@@ -965,3 +965,123 @@ def test_whole_table_input_reads_beyond_legacy_numeric_vector_limit(session):
     result = envelope(document, target)["latest"]
     assert result["values"]["rows_used"] == 1025
     assert result["table"]["rows"] == [["A", 1025, 1]]
+
+def test_discuss_scientific_result_opens_undoable_chat_with_verified_snapshot(session):
+    from backend.api.intents_nodes import register_node_intents
+
+    document, bus, _, _ = session
+    register_node_intents(bus, document, None)
+    grant(bus, "core")
+    source_id = dispatch(bus, "executePlugin", "Scientific Core")
+    example = operations("core")[1].example
+    assert run(bus, "core", source_id, "convert_unit", example)["ok"]
+    saved_result = envelope(document, source_id)["latest"]
+    receipt = saved_result["provenance"]
+    previous_tip = document.last_chat_node_id
+
+    chat_id = asyncio.run(bus.dispatch_intent(
+        "scene", "discussScientificResult",
+        [source_id, receipt["resultHash"], receipt.get("receiptHash", receipt["resultHash"])],
+    ))
+    chat = document.nodes[chat_id]
+    assert chat.kind == "chat" and chat.state.is_user
+    assert document.last_chat_node_id == chat_id
+    assert "Scientific Workbench result" in chat.content
+    assert receipt["resultHash"] in chat.content
+    assert '"inputs"' in chat.content and '"values"' in chat.content
+    assert saved_result["summary"] in chat.content
+    assert len(document.nodes) == 2
+    assert [(edge.source, edge.target, edge.role) for edge in document.edges.values()] == [
+        (source_id, chat_id, "reference"),
+    ]
+    assert document.chat_branch_history(chat_id) == [{"role": "user", "content": chat.content}]
+
+    # It is a snapshot, not a live link: future Workbench runs cannot rewrite
+    # the text already in this chat's conversational context.
+    assert run(bus, "core", source_id, "convert_unit", {**example, "value": 77})["ok"]
+    assert document.nodes[chat_id].content == chat.content
+    follow_up = document.send_message("Explain the units used.")
+    assert document._branch_parent_edge(follow_up.id).source == chat_id
+    assert document.chat_branch_history(follow_up.id) == [
+        {"role": "user", "content": chat.content},
+        {"role": "user", "content": "Explain the units used."},
+    ]
+
+    # Remove the follow-up separately; the discussion's own creation and
+    # provenance edge must undo/redo together with its chat pointer.
+    document.remove_nodes([follow_up.id])
+    document.last_chat_node_id = chat_id
+    # A new run also made a command. Undo it first, then the discussion.
+    document.undo()
+    command = document.undo()
+    assert command.command_type == "discussScientificResult"
+    assert chat_id not in document.nodes and not document.edges
+    assert document.last_chat_node_id == previous_tip
+    document.redo()
+    assert chat_id in document.nodes
+    assert document.last_chat_node_id == chat_id
+    assert next(iter(document.edges.values())).role == "reference"
+
+
+def test_discuss_scientific_result_rejects_stale_or_damaged_receipts_without_mutating(session):
+    from backend.api.intents_nodes import register_node_intents
+    from backend.domain.model import SceneError
+    from backend.domain.node_states import PluginStateSnapshot
+
+    document, bus, _, _ = session
+    register_node_intents(bus, document, None)
+    grant(bus, "core")
+    source_id = dispatch(bus, "executePlugin", "Scientific Core")
+    example = operations("core")[1].example
+    old = envelope(document, source_id)
+    with pytest.raises(SceneError, match="Run a calculation"):
+        asyncio.run(bus.dispatch_intent(
+            "scene", "discussScientificResult", [source_id, "not-run", "not-run"],
+        ))
+
+    assert run(bus, "core", source_id, "convert_unit", example)["ok"]
+    previous = envelope(document, source_id)["latest"]["provenance"]
+    assert run(bus, "core", source_id, "convert_unit", {**example, "value": 77})["ok"]
+    node_ids, command_count = set(document.nodes), len(document.command_log)
+    with pytest.raises(SceneError, match="changed"):
+        asyncio.run(bus.dispatch_intent(
+            "scene", "discussScientificResult",
+            [source_id, previous["resultHash"], previous.get("receiptHash", previous["resultHash"])],
+        ))
+    with pytest.raises(SceneError, match="Select a Scientific"):
+        asyncio.run(bus.dispatch_intent(
+            "scene", "discussScientificResult", ["unknown", "hash", "hash"],
+        ))
+    assert set(document.nodes) == node_ids and len(document.command_log) == command_count
+
+    # A browser cannot supply a counterfeit result: the backend validates
+    # the saved receipt before building any chat message or graph edge.
+    current = envelope(document, source_id)
+    damaged = document.nodes[source_id].state.data
+    damaged["latest"]["values"]["value (K)"] = 9999
+    document.nodes[source_id].state = PluginStateSnapshot.from_data(damaged)
+    with pytest.raises(SceneError, match="damaged"):
+        asyncio.run(bus.dispatch_intent(
+            "scene", "discussScientificResult",
+            [source_id, current["latest"]["provenance"]["resultHash"],
+             current["latest"]["provenance"]["receiptHash"]],
+        ))
+    assert set(document.nodes) == node_ids and len(document.command_log) == command_count
+
+
+def test_scientific_discussion_context_excerpts_oversized_results():
+    from backend.api.intents_nodes import _science_discussion_context
+
+    result = {
+        "operationId": "integral", "summary": "Measured the curve.",
+        "values": {"integral": 5.5}, "inputs": {"samples": [1, 2, 3]},
+        "table": {"columns": ["x", "y"], "rows": [[1, "data" * 900] for _ in range(40)]},
+        "provenance": {"packId": "mathematics", "resultHash": "a" * 64,
+                       "receiptHash": "b" * 64},
+    }
+    text = _science_discussion_context("science-node", result)
+    assert "Measured the curve." in text and "integral" in text
+    assert "a" * 64 in text and "b" * 64 in text
+    assert "truncated" in text and "inspect the source Workbench" in text
+    assert len(text) < 16_000
+
