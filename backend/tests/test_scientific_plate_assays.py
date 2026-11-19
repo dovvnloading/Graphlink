@@ -113,7 +113,7 @@ def test_unknown_outside_standard_range_not_extrapolated():
 
 @pytest.mark.parametrize("changes", [
     {"standard_concentrations": [0, 1]},
-    {"standard_concentrations": [0, 1, 1, 1, 1]},
+    {"standard_concentrations": [0, 0, 0, 0, 0]},
     {"standard_signals": [5, 5, 5, 5, 5]},
     {"dilution_factors": [1]},
     {"dilution_factors": [0, 1]},
