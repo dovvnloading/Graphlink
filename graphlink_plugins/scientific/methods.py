@@ -46,14 +46,14 @@ def render_result_methods(pack: str, data: dict, *, node_id: str, title: str) ->
         f"**Source node:** {_single_line(node_id)}",
         f"**Pack:** {pack} (version {version})",
         f"**Operation:** {result['operationId']}" +
-        (f" — {operation.title}" if catalog_matches else ""),
+        (f" — {operation.title}" if catalog_matches and operation is not None else ""),
         f"**Recorded:** {receipt['createdAt']}",
         f"**Input SHA-256:** {receipt['inputHash']}",
         f"**Result SHA-256:** {receipt['resultHash']}",
         f"**Receipt SHA-256:** {receipt.get('receiptHash', 'legacy 1.0.0 receipt; result hash only')}",
         "", "### Method", "",
     ]
-    if catalog_matches:
+    if catalog_matches and operation is not None:
         lines.append(operation.methods or operation.description or "No catalog method description was provided.")
     else:
         lines.append(
@@ -63,7 +63,7 @@ def render_result_methods(pack: str, data: dict, *, node_id: str, title: str) ->
         )
 
     lines.extend(["", "### Recorded inputs (normalized)", ""])
-    labels = {field.key: field.label for field in operation.fields} if catalog_matches else {}
+    labels = {field.key: field.label for field in operation.fields} if catalog_matches and operation is not None else {}
     for name, value in result["inputs"].items():
         label = name + (f" ({labels[name]})" if name in labels else "")
         lines.extend(_value_lines(label, value))
@@ -109,7 +109,7 @@ def render_result_methods(pack: str, data: dict, *, node_id: str, title: str) ->
     if "views" in result:
         lines.append(f"Typed result views: {len(result['views'])}.")
 
-    if catalog_matches and operation.citations:
+    if catalog_matches and operation is not None and operation.citations:
         lines.extend(["", "### Method references", ""])
         lines.extend(f"- {citation.label}: {citation.url}" for citation in operation.citations)
     lines.extend([
