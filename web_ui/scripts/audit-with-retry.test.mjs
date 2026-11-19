@@ -1,6 +1,5 @@
 // Guard the guard: audit-with-retry.mjs decides whether a merge is blocked,
-// so the decision itself gets tested rather than trusted. Same posture as
-// check-bundle-size.mjs's "guards the guard" empty-assets branch, and the
+// so the decision itself gets tested rather than trusted. Same posture as the
 // backend's own AST-scan gates.
 //
 // The process/retry shell around classifyAuditRun is deliberately NOT tested
