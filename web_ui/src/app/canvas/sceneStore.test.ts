@@ -912,6 +912,32 @@ describe("SceneStore", () => {
     ]);
   });
 
+  it("makes the new scientific chat the next composer target on success, but not on failure", () => {
+    const { transport, fireIntentSettlers } = makeFakeTransport({ autoSettleFireIntent: false });
+    const store = new SceneStore(transport);
+    store.setReplyTargetNodeId("earlier-branch");
+    store.discussScientificResult("science", "hash", "receipt");
+    expect(store.getReplyTargetNodeId()).toBe("earlier-branch");
+    fireIntentSettlers[0](false);
+    expect(store.getReplyTargetNodeId()).toBe("earlier-branch");
+
+    store.discussScientificResult("science", "hash", "receipt");
+    fireIntentSettlers[1](true);
+    expect(store.getReplyTargetNodeId()).toBeNull();
+
+    store.setSynthesizeTargetNodeIds(["branch-1", "branch-2"]);
+    store.discussScientificResult("science", "hash", "receipt");
+    fireIntentSettlers[2](true);
+    expect(store.getSynthesizeTargetNodeIds()).toBeNull();
+
+    // An unrelated pick made while the create was pending takes precedence.
+    store.setReplyTargetNodeId("old");
+    store.discussScientificResult("science", "hash", "receipt");
+    store.setReplyTargetNodeId("new");
+    fireIntentSettlers[3](true);
+    expect(store.getReplyTargetNodeId()).toBe("new");
+  });
+
   it("collapseAllNodes sends the scene-topic collapseAllNodes intent with no args", () => {
     const { transport, intents } = makeFakeTransport();
     const store = new SceneStore(transport);
