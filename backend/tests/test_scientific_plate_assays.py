@@ -2,14 +2,12 @@
 
 import copy
 import json
-import math
 import statistics
 
 import pytest
 
 from graphlink_plugins.scientific.catalog import PACK_FAMILIES, operations
 from graphlink_plugins.scientific.core import readable_result, run_operation
-from graphlink_plugins.scientific.packs import plate_assays
 
 
 def _run(operation_id, **inputs):
