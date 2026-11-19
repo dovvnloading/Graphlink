@@ -92,8 +92,8 @@ def ghk_potential(data: dict) -> dict:
         ),
         "values": {
             "membrane_potential_mv": potential,
-            "weighted_outside_sum_mm": numerator,
-            "weighted_inside_sum_mm": denominator,
+            "ghk_numerator_mm": numerator,
+            "ghk_denominator_mm": denominator,
             "log_ghk_ratio": log_ratio,
         },
         "table": {
@@ -189,13 +189,25 @@ def _hh_derivative(state: tuple[float, float, float, float], current: float
             an * (1 - n) - bn * n)
 
 
+def _hh_shift(state: tuple[float, float, float, float],
+              slope: tuple[float, float, float, float],
+              scale: float) -> tuple[float, float, float, float]:
+    """Preserve the fixed four-variable state shape for the RK4 stages."""
+    return (
+        state[0] + scale * slope[0],
+        state[1] + scale * slope[1],
+        state[2] + scale * slope[2],
+        state[3] + scale * slope[3],
+    )
+
+
 def _hh_step(state: tuple[float, float, float, float], current: float,
              dt: float) -> tuple[float, float, float, float]:
     """Classical fourth-order Runge--Kutta with piecewise-constant step current."""
     k1 = _hh_derivative(state, current)
-    k2 = _hh_derivative(tuple(x + dt * k / 2 for x, k in zip(state, k1)), current)
-    k3 = _hh_derivative(tuple(x + dt * k / 2 for x, k in zip(state, k2)), current)
-    k4 = _hh_derivative(tuple(x + dt * k for x, k in zip(state, k3)), current)
+    k2 = _hh_derivative(_hh_shift(state, k1, dt / 2), current)
+    k3 = _hh_derivative(_hh_shift(state, k2, dt / 2), current)
+    k4 = _hh_derivative(_hh_shift(state, k3, dt), current)
     next_state = [
         x + dt * (a + 2 * b + 2 * c + d) / 6
         for x, a, b, c, d in zip(state, k1, k2, k3, k4)
@@ -290,7 +302,8 @@ def spike_detection(data: dict) -> dict:
     if refractory < 0:
         raise ValueError("Refractory period must be nonnegative.")
     threshold = data["threshold_mv"]
-    rows, last_onset = [], -math.inf
+    rows: list[list[float]] = []
+    last_onset = -math.inf
     for i in range(1, len(times)):
         if not (voltages[i - 1] < threshold <= voltages[i]):
             continue
