@@ -258,3 +258,8 @@ OPERATIONS: tuple[Operation, ...] = (
         citations=_CITES,
     ),
 )
+
+# Keep the original operation IDs and receipt shapes unchanged.
+from graphlink_plugins.scientific.packs.expression_additions import EXTRA_OPERATIONS
+
+OPERATIONS += EXTRA_OPERATIONS
