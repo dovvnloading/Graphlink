@@ -2,7 +2,7 @@
 
 **Pack:** `cell_culture` · **Plugin:** `science_cell_culture` · **Family:** Biology Workbench
 
-Enable **Cell Culture** in Settings → Plugins and select **Plugins → Biology Workbench**. This is an independent, grant-gated pack: it does not change any existing `science_biology` operation, result, or saved receipt. All eight calculations use the Python standard library, and every result uses the Workbench's verified summary, scalar values, and optional table contract.
+Enable **Cell Culture** in Settings → Plugins and select **Plugins → Biology Workbench**. This is an independent, grant-gated pack: it does not change any existing `science_biology` operation, result, or saved receipt. All nine operations use the Python standard library, and results use the Workbench's verified summary, scalar values, optional tables, and typed result views.
 
 ## Operations at a glance
 
@@ -14,6 +14,7 @@ Enable **Cell Culture** in Settings → Plugins and select **Plugins → Biology
 | `centrifuge_rcf_rpm` | `input_kind` (`rpm` or `rcf`); `input_value` (rpm or multiple of gravity ×g); `rotor_radius_cm` (cm from rotation axis to the sample position) | Both rpm and RCF (×g), with radius and units |
 
 | `plate_count_cfu` | `colony_counts` (CFU/plate); `reciprocal_dilutions` (factor/plate); `plated_volume_ml` (mL/plate) | Exposure-weighted pooled CFU/mL; per-plate table and countability flags |
+| `microplate_map` | `plate_format` choice (`96` or `384`); `wells_json` (JSON well-ID → number/text/null); `measurement_label` (text) | Scrollable 96/384-well grid and sparse data table for export; empty wells are not zero |
 | `most_probable_number` | `positive_tubes`, `total_tubes` (tubes/level); `reciprocal_dilutions` (factor/level); `inoculum_volume_ml` (mL/tube) | Poisson-likelihood MPN/mL; observed/fitted positive tubes by level |
 | `growth_curve_parameters` | `time`, `abundance` (numeric vectors with selected `time_unit`, `abundance_unit` labels) | Modified Gompertz lag, maximum specific growth rate, asymptote, fastest instantaneous doubling time, diagnostics, table/plot |
 | `doubling_time` | `initial_abundance`, `final_abundance`, `elapsed_time` (numeric; selected abundance/time units) | Two-point exponential growth rate, doubling time and observed doublings |
@@ -129,6 +130,12 @@ For positive abundances N₁ and N₂ with N₂ > N₁, and positive elapsed tim
 **Worked example:** 100,000 to 800,000 CFU/mL over 6 hours is three doublings, a specific growth rate ln(2)/2 h⁻¹ and **2 h doubling time**. Both abundance inputs must use the same units or proportional measurement, and the time field accepts compatible time measurements (for example 360 min with a chosen time unit of h). No increase or zero/negative values are rejected.
 
 Unlike the growth fit's minimum instantaneous doubling time, the two-point result is an **average exponential-phase estimate over the observed interval**. Lag phases and plateaus invalidate its constant-rate assumption.
+
+### 9. Display measurements on a 96/384-well plate
+
+Select **96** or **384** in the microplate-map operation, then supply a JSON object whose keys are well addresses and whose values are finite numbers, short labels, or `null`. For example: `{"A1":"control","A2":0,"B3":0.65,"H12":null}`. Well IDs are uppercase and range from **A1–H12** (96-well) or **A1–P24** (384-well); every address must be unique and inside the selected format. The reading label supplies a display unit (for example, `Signal (RFU)`).
+
+The resulting typed plate map presents all wells in row/column order, with numeric intensity shading, a tooltip for each measurement, and horizontal scrolling for 384-well plates. The accompanying sparse table and exported JSON retain input readings exactly; unspecified and explicit `null` wells remain unmeasured, distinct from an observed zero. This is a layout of observations, **not** a spatial interpolation or normalization, and no plate-position corrections are inferred.
 
 ## Method references and limitations
 
