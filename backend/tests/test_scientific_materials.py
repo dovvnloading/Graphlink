@@ -344,7 +344,7 @@ def test_astm_e140_table_1_reference_steel_values_to_tabulated_digits():
     assert values("hardness_e140", from_scale="HRC", to_scale="HV", hardness_reading=68)[
         "converted_hardness_hv"] == 940
     interpolated = values("hardness_e140", from_scale="HRC", to_scale="HBW", hardness_reading=38.5)
-    assert interpolated["converted_hardness_hbw"] == pytest.approx(357.5)
+    assert interpolated["converted_hardness_hbw"] == 358  # E140 reporting precision
 
 
 def test_astm_e140_table_2_rockwell_b_uses_hbs_not_hbw():
@@ -418,3 +418,72 @@ def test_shared_validation_rejects_nan_and_infinity():
             calculate("thermal_expansion_stress", young_modulus_mpa=value)
         with pytest.raises(ValueError):
             calculate("arrhenius_diffusion_profile", depth_mm=[0, value])
+
+
+# Independent audit regressions: previously accepted invalid fits or lost
+# numerical/reporting precision at domain edges.
+
+
+def test_elastic_fit_requires_three_points_to_establish_linearity():
+    # Two points always produce R²=1, even if no elastic *region* exists.
+    with pytest.raises(ValueError, match="at least three"):
+        calculate("stress_strain_analysis", elastic_limit_strain_mm_mm=0.0005)
+
+
+def test_elastic_fit_rejects_noisy_non_linear_selection_but_tolerates_small_scatter():
+    rows = [list(row) for row in OPS["stress_strain_analysis"].example["engineering_curve"]]
+    rows[2][1] = 20  # Huge stress reversal; an arbitrary positive OLS slope is not Young's modulus.
+    with pytest.raises(ValueError, match="sufficiently linear"):
+        calculate("stress_strain_analysis", engineering_curve=rows)
+
+    close = [list(row) for row in OPS["stress_strain_analysis"].example["engineering_curve"]]
+    for i, shift in ((1, 2), (2, -2), (3, 3), (4, 2)):
+        close[i][1] += shift
+    assert values("stress_strain_analysis", engineering_curve=close)["elastic_fit_r_squared_dimensionless"] > .98
+
+
+def test_hollomon_rejects_data_without_a_power_law_trend():
+    # Positive log-log slope is not sufficient: this scatter gave R²≈0.42.
+    rows = [[p, s] for p, s in zip(
+        (.01, .02, .04, .08, .16), (200, 240, 210, 290, 245),
+    )]
+    with pytest.raises(ValueError, match="power law"):
+        calculate("hollomon_fit", true_plastic_curve=rows)
+
+
+def test_paris_m2_integral_retains_precision_for_adjacent_crack_lengths():
+    initial = .007
+    final = math.nextafter(initial, math.inf)
+    expected_log_span = math.log1p((final - initial) / initial)
+    expected_cycles = expected_log_span / (1e-12 * (100 * math.sqrt(math.pi)) ** 2)
+    actual = values("paris_crack_growth", initial_crack_a_m=initial,
+                    final_crack_a_m=final, paris_exponent_m=2)["paris_growth_cycles"]
+    assert actual == pytest.approx(expected_cycles, rel=1e-12)
+
+
+def test_astm_e140_interpolated_results_do_not_claim_extra_precision():
+    # The chosen E140 columns are integral; input readings remain unrounded.
+    v = values("hardness_e140", from_scale="HRC", to_scale="HBW", hardness_reading=38.5)
+    assert v["original_hardness_hrc"] == 38.5
+    assert v["converted_hardness_hbw"] == 358
+    inverse = values("hardness_e140", from_scale="HV", to_scale="HRC", hardness_reading=377)
+    assert inverse["converted_hardness_hrc"] == 38  # 38.5 rounds to even.
+
+
+def test_materials_thermal_composite_and_fracture_boundary_values():
+    # Cooling reverses restrained-stress sign, while free restraint implies σ=0.
+    assert values("thermal_expansion_stress", temperature_change_k=-50)[
+        "restrained_axial_stress_mpa"] == pytest.approx(120)
+    assert values("thermal_expansion_stress", axial_restraint_fraction=0)[
+        "restrained_axial_stress_mpa"] == 0
+    for vf, expected in ((0, 3.5), (1, 15)):
+        result = values("composite_moduli", fiber_volume_fraction=vf)
+        assert result["transverse_inverse_rule_modulus_gpa"] == pytest.approx(expected)
+        assert result["halpin_tsai_modulus_gpa"] == pytest.approx(expected)
+    for name, changed in (
+        ("fracture_stress_intensity", {"applied_tensile_stress_mpa": 0}),
+        ("fracture_critical_length", {"applied_tensile_stress_mpa": -2}),
+        ("paris_crack_growth", {"stress_range_mpa": 0}),
+    ):
+        with pytest.raises(ValueError):
+            calculate(name, **changed)
