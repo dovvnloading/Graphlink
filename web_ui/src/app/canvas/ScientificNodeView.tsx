@@ -94,6 +94,13 @@ function headlineScienceValue(result: ScienceResult): [string, unknown] | undefi
     !best || rank(entry[0]) < rank(best[0]) ? entry : best, undefined);
 }
 
+/** Result keys are snake_case identifiers; the headline shows them as words
+ * and keeps the exact key as a tooltip. */
+function readableKey(key: string): string {
+  const words = key.replace(/_+/g, " ").trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : key;
+}
+
 /** Closed disclosures do not mount wide plots, tables or thousands of cells. */
 function ResultDisclosure({ label, children, className = "" }: {
   label: string; children: ReactNode; className?: string;
@@ -131,7 +138,7 @@ function Results({ result, title, exportJson, exportCsv, exportMethods, onChart,
     <div className="science-result-head">
       <h4>Last successful run · {title}</h4>
       {headline ? <div className="science-result-highlight">
-        <span>{headline[0]}</span>
+        <span title={headline[0]}>{readableKey(headline[0])}</span>
         <strong>{uncertaintyUnavailable ? `${display(headline[1])} · uncertainty unavailable`
           : measurement ? formatMeasurement(measurement) : display(headline[1])}</strong>
       </div> : (table || tableAsset) && <div className="science-result-highlight">
@@ -395,8 +402,11 @@ function TableEditor({ state, nodeId, pluginId, store }: {
     }
   }
 
+  // The importer is rarely needed and tall, so it stays collapsed like the
+  // result sections; an imported table shows one status line by default.
   return <section className="science-data-table" aria-label="Typed data table">
-    <h4>Typed data table</h4>
+    {table && <p role="status">{table.sourceName} · {table.rowCount.toLocaleString()} rows · {table.columnCount} columns</p>}
+    <ResultDisclosure label={table ? "Replace data table" : "Import a data table"}>
     <p>Import mixed data and missing values. Tables support {rowsLimit.toLocaleString()} rows and {cellsLimit.toLocaleString()} cells, stored outside the graph.</p>
     <form onSubmit={submit}>
       <fieldset disabled={busy}>
@@ -431,10 +441,10 @@ function TableEditor({ state, nodeId, pluginId, store }: {
         </label>
         <button type="submit" className="science-run">{busy ? "Importing…" : "Import typed table"}</button>
       </fieldset>
-      {error && <p role="alert">{error}</p>}
     </form>
-    {table && <div className="science-imported">
-      <p role="status">{table.sourceName} · {table.rowCount.toLocaleString()} rows · {table.columnCount} columns</p>
+    </ResultDisclosure>
+    {error && <p role="alert">{error}</p>}
+    {table && <ResultDisclosure label="Table preview and export"><div className="science-imported">
       <div className="science-table">
         <table aria-label="Imported typed table preview">
           <thead><tr>{table.columns.slice(0, table.previewColumns).map((col, i) =>
@@ -456,7 +466,7 @@ function TableEditor({ state, nodeId, pluginId, store }: {
       <details><summary>Import receipt and parsing options</summary>
         <pre>{JSON.stringify(table.provenance, null, 2)}</pre>
       </details>
-    </div>}
+    </div></ResultDisclosure>}
   </section>;
 }
 
