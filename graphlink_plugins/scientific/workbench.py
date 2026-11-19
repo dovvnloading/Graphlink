@@ -14,7 +14,7 @@ from weakref import WeakKeyDictionary
 from backend.domain.node_states import ChartState, PersistedPluginState, PluginStateSnapshot
 from backend.plugin_sdk import HostContext, PluginNodeSeed, PluginSceneUpdate
 
-from .catalog import PACKS, operations
+from .catalog import PACKS, PACK_FAMILIES, operations
 from .core import INPUT_LIMITS, _effective_unit, canonical_bytes, fingerprint, finite, readable_result, validated_inputs_with_units
 from .data_table import (
     TableState, decode_input, numeric_column, parse_table, persist_table,
@@ -598,7 +598,10 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         "workbench", seed, requires_parent=False, serialize=serialize,
         serialize_saved=serialize_saved, deserialize=deserialize, externalize_state=True,
     )
-    host.register_picker_entry(node_kind="workbench", name=title, description=description, category="Scientific Workbench")
+    host.register_picker_entry(
+        node_kind="workbench", name=title, description=description,
+        category="Biology Workbench" if PACK_FAMILIES.get(pack_id) == "biology" else "Scientific Workbench",
+    )
     host.register_intent("configure_runner", configure_runner, args_schema=ConfigureRunnerArgs, expose_to_builder=False)
     host.register_intent("run", run, args_schema=RunArgs, expose_to_builder=False)
     host.register_intent("cancel", cancel, args_schema=CancelArgs, expose_to_builder=False)

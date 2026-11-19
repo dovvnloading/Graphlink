@@ -16,7 +16,7 @@ from backend.plugins import plugins_payload, register_plugin_tools, register_plu
 from backend.session_load import restore_chat_into_document
 from backend.session_save import build_chat_data
 from backend.tools import ToolRegistry
-from graphlink_plugins.scientific.catalog import PACKS, operations
+from graphlink_plugins.scientific.catalog import PACKS, PACK_FAMILIES, operations
 from graphlink_plugins.scientific.core import Citation, Field, MAX_POINTS, Operation, VERSION, run_operation
 from graphlink_settings_store import SettingsManager
 
@@ -92,8 +92,19 @@ def test_manifest_to_canvas_and_run_for_every_example(session):
     assert plan_graph_run(document, list(document.nodes)) == []
     assert register_plugin_tools(ToolRegistry(), registry, settings, document) == ()
     categories = plugins_payload(registry, settings)["categories"]
-    assert len(categories) == 1 and categories[0]["name"] == "Scientific Workbench"
-    assert len(categories[0]["plugins"]) == len(PACKS)
+    assert [category["name"] for category in categories] == [
+        "Scientific Workbench", "Biology Workbench",
+    ]
+    by_category = {
+        category["name"]: {plugin["name"] for plugin in category["plugins"]}
+        for category in categories
+    }
+    assert by_category["Biology Workbench"] == {
+        title for pack, (title, _) in PACKS.items() if PACK_FAMILIES.get(pack) == "biology"
+    }
+    assert by_category["Scientific Workbench"] == {
+        title for pack, (title, _) in PACKS.items() if PACK_FAMILIES.get(pack) != "biology"
+    }
 
 
 def test_csv_to_statistics_provenance_undo_grant_and_reopen(session):
