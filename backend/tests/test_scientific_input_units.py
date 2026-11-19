@@ -18,7 +18,8 @@ def test_every_numeric_field_publishes_a_unit_and_dimension(pack):
         schema = operation.describe()
         assert len(schema["fields"]) == len(operation.fields)
         for field in operation.fields:
-            if field.kind == "text":
+            if field.kind in ("text", "choice"):
+                # Categorical selectors are not physical measurements.
                 continue
             assert field.default_unit, (pack, operation.id, field.key)
             if field.column_units:
