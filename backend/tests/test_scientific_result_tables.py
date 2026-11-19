@@ -13,7 +13,11 @@ import pytest
 from backend.asset_store import AssetStore
 from backend.session_load import restore_chat_into_document
 from backend.session_save import build_chat_data
-from backend.tests.test_scientific_workbench import dispatch, envelope, grant, run, session
+from backend.tests.test_scientific_workbench import (
+    dispatch, envelope, grant, run, session as _shared_session,
+)
+# Re-export the imported fixture for pytest without an unused import.
+session = _shared_session
 from graphlink_plugins.scientific import workbench
 from graphlink_plugins.scientific.core import (
     Operation, calculate_result, readable_result, run_operation,
