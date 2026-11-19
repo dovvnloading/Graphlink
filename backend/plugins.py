@@ -444,7 +444,12 @@ async def _execute_discovered_plugin(
         if effective_parent is not None:
             x, y = canvas_document.place_child(effective_parent, kind_spec.kind)
         else:
-            x, y = float(spawn_x or 0.0), float(spawn_y or 0.0)
+            # Start at the viewport centre the picker reported, then step
+            # clear of existing nodes like every other spawn path does.
+            width, height = canvas_document.kind_fallback_footprint(kind_spec.kind)
+            x, y = canvas_document.find_free_position(
+                float(spawn_x or 0.0), float(spawn_y or 0.0), width, height,
+            )
         return canvas_document.add_plugin_node(
             kind_spec.kind, x, y, effective_parent,
             title=seed.title, content=seed.content, state=seed.state,

@@ -8,7 +8,7 @@ import { downloadBlob } from "./downloadTextFile";
 import { writeTableCsv } from "./tableCsv";
 import { createLinearScale } from "./charts/chartScales";
 import {
-  chartableScienceTypes, compatibleOptions, connectedInputText, draftInputs, FieldError, fieldText, formatMeasurement, matchesSource, parseInputs, readScienceState, resultMeasurement, sourceOptions,
+  chartableScienceTypes, compatibleOptions, connectedInputText, draftInputs, FieldError, fieldText, formatMeasurement, formatScienceNumber, matchesSource, parseInputs, readScienceState, resultMeasurement, sourceOptions,
   type EditorDraft, type ScienceField, type ScienceLimits, type ScienceOperation, type ScienceParent, type SciencePlot, type ScienceResult,
   type ScienceChartLink, type ScienceChartType, type ScienceState, type ScienceRunnerConfiguration, type Sources, type SourceOption, type SourceReference,
 } from "./scientificWorkbench";
@@ -19,7 +19,16 @@ export type ScientificFlowNode = Node<{
 }, "scientific">;
 
 function display(value: unknown): string {
-  return typeof value === "string" ? value : JSON.stringify(value) ?? "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return formatScienceNumber(value);
+  // Arrays and records render their numbers the same rounded way.
+  return JSON.stringify(value, (_key, item: unknown) =>
+    typeof item === "number" && Number.isFinite(item) ? Number(formatScienceNumber(item)) : item) ?? "";
+}
+
+/** Budget and interval cells: a rounded number, or a dash when absent. */
+function numberCell(value: number | undefined): string {
+  return value === undefined ? "—" : formatScienceNumber(value);
 }
 
 function scienceScale(values: number[], from: number, to: number) {
@@ -55,7 +64,8 @@ function saveText(data: string, name: string, mime: string) {
 // Spreadsheet applications may interpret leading formula characters inside quoted CSV strings.
 function csvCell(value: unknown): string {
   if (typeof value === "string" && /^(?:[\t\r\n]|\s*[=+@-])/.test(value)) return "'" + value;
-  return display(value);
+  // Exports keep the exact value; only on-screen text is rounded.
+  return typeof value === "string" ? value : JSON.stringify(value) ?? "";
 }
 
 const PREVIEW_ROWS = 30;
@@ -85,14 +95,14 @@ function Results({ result, title, exportJson, onChart, onRefresh, charts }: {
       {Object.entries(result.uncertainty.outputs).map(([name, measured]) =>
         <section key={name}>
           <h5>{name} · {formatMeasurement(measured)}</h5>
-          {measured.interval && <small>{Math.round((measured.coverageProbability ?? 0.95) * 100)}% {measured.method === "monte_carlo" ? "Monte Carlo quantile coverage interval" : "coverage interval"} [{measured.interval[0]}, {measured.interval[1]}]{measured.method === "monte_carlo" ? " · Gaussian input model" : ` · coverage factor k = ${measured.coverageFactor}`}</small>}
+          {measured.interval && <small>{Math.round((measured.coverageProbability ?? 0.95) * 100)}% {measured.method === "monte_carlo" ? "Monte Carlo quantile coverage interval" : "coverage interval"} [{numberCell(measured.interval[0])}, {numberCell(measured.interval[1])}]{measured.method === "monte_carlo" ? " · Gaussian input model" : ` · coverage factor k = ${numberCell(measured.coverageFactor)}`}</small>}
           {measured.budgetNote && <small>{measured.budgetNote}</small>}
           {measured.budget && <table aria-label={`Uncertainty budget for ${name}`}>
             <thead><tr><th>Contributing input</th><th>Standard uncertainty</th><th>Sensitivity</th><th>Signed contribution</th><th>Variance / covariance</th></tr></thead>
             <tbody>{measured.budget.map((entry, index) => <tr key={index}>
               <td>{entry.input}{entry.kind === "covariance" ? " (shared source)" : entry.unit ? ` (${entry.unit})` : ""}</td>
-              <td>{entry.standardUncertainty ?? "—"}</td><td>{entry.sensitivity ?? "—"}</td>
-              <td>{entry.signedContribution ?? "—"}</td><td>{entry.variance}</td>
+              <td>{numberCell(entry.standardUncertainty)}</td><td>{numberCell(entry.sensitivity)}</td>
+              <td>{numberCell(entry.signedContribution)}</td><td>{numberCell(entry.variance)}</td>
             </tr>)}</tbody>
           </table>}
         </section>)}
@@ -146,24 +156,30 @@ function Results({ result, title, exportJson, onChart, onRefresh, charts }: {
   </section>;
 }
 
-function FieldEditor({ field, value, onEdit, options, onImport, imported, errorId, stale }: {
+function FieldEditor({ field, value, onEdit, options, onImport, imported, errorId, stale, chosenUnit, unitSetter }: {
   field: ScienceField; value: string; onEdit: (value: string) => void;
   options: SourceOption[]; onImport: (option: SourceOption) => void; imported?: string; errorId?: string; stale: boolean;
+  /** The unit typed into this field's unit-setting sibling (field.unit_field) and that sibling's label. */
+  chosenUnit?: string; unitSetter?: string;
 }) {
+  const unitOverridden = !!chosenUnit && chosenUnit !== field.default_unit;
   const id = useId();
   const description = [field.description && id + "-hint", field.kind !== "text" && id + "-units",
     imported && id + "-source", errorId].filter(Boolean).join(" ");
   const common = { id, name: field.key, value, "aria-invalid": errorId || stale ? true as const : undefined,
     "aria-describedby": description || undefined };
   return <div className="science-field">
-    <label htmlFor={id}>{field.kind !== "text" ? `${field.label} (${field.column_units?.length ? field.unit : field.default_unit || field.unit || "1"})` : field.label}</label>
+    <label htmlFor={id}>{field.kind !== "text" ? `${field.label} (${field.column_units?.length ? field.unit : chosenUnit || field.default_unit || field.unit || "1"})` : field.label}</label>
     {field.kind === "number" || field.kind === "integer"
       ? <input {...common} type="text" inputMode="text"
         onChange={(e) => onEdit(e.target.value)} />
       : <textarea {...common} rows={field.kind === "matrix" || field.kind === "text" ? 3 : 2}
         onChange={(e) => onEdit(e.target.value)} spellCheck={field.kind === "text"} />}
     {field.description && <small id={id + "-hint"}>{field.description}</small>}
-    {field.kind !== "text" && <small id={id + "-units"}>
+    {field.kind !== "text" && unitOverridden && <small id={id + "-units"}>
+      Unit: {chosenUnit}, set by {unitSetter ?? field.unit_field}.
+    </small>}
+    {field.kind !== "text" && !unitOverridden && <small id={id + "-units"}>
       Default unit: {field.column_units?.length
         ? field.column_units.map((unit, i) => `column ${i + 1}: ${unit}`).join("; ")
         : field.default_unit || field.unit || "1"} · {field.dimension || "dimensionless"}.
@@ -398,8 +414,10 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
         const available = compatibleOptions(field, options, limits);
         const source = draft.sources[field.key];
         const previous = source && available.find((option) => matchesSource(option, source));
+        const chosenUnit = field.unit_field ? draft.values[field.unit_field]?.trim() : undefined;
+        const unitSetter = op.fields.find((other) => other.key === field.unit_field)?.label;
         return <FieldEditor key={field.key} field={field} value={draft.values[field.key] ?? ""} options={available}
-          stale={!!source && !previous} errorId={error?.field === field.key ? errorId : undefined}
+          chosenUnit={chosenUnit || undefined} unitSetter={unitSetter} stale={!!source && !previous} errorId={error?.field === field.key ? errorId : undefined}
           imported={source && (previous?.label ?? "Result changed or disconnected. Select its current value or edit this input.")}
           onEdit={(value) => {
             setDraft((old) => {

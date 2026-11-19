@@ -8,6 +8,8 @@ export interface ScienceField {
   dimension?: string;
   column_units?: string[];
   column_dimensions?: string[];
+  /** Sibling input whose text sets this field's unit (e.g. value <- from_unit). */
+  unit_field?: string;
 }
 
 export interface ScienceOperation {
@@ -89,15 +91,24 @@ export function connectedInputText(field: ScienceField, option: SourceOption): s
   return field.kind === "number" && option.unit ? `${raw} ${option.unit}` : raw;
 }
 
+/** Display only: round to 12 significant digits so binary floating-point
+ * noise (50.000837999999995, 9.409000000000001e-11) reads as the value it is.
+ * Exports, receipts and linked inputs keep the exact number. */
+export function formatScienceNumber(value: number): string {
+  if (!Number.isFinite(value) || Number.isInteger(value)) return String(value);
+  return String(Number(value.toPrecision(12)));
+}
+
 /** Format values without discarding the standard uncertainty or its units. */
 export function formatMeasurement(measurement: ScientificMeasurement): string {
   const unit = measurement.unit ? " " + measurement.unit : "";
+  const n = formatScienceNumber;
   // A nonlinear Monte Carlo PDF is not centered at the nominal f(E[X]).
   // Never present its sampled standard deviation as an error bar about f(E[X]).
   if (measurement.method === "monte_carlo" && finite(measurement.monteCarloMean)) {
-    return `nominal ${measurement.value}; Monte Carlo mean ${measurement.monteCarloMean} ± ${measurement.standardUncertainty}${unit}`;
+    return `nominal ${n(measurement.value)}; Monte Carlo mean ${n(measurement.monteCarloMean)} ± ${n(measurement.standardUncertainty)}${unit}`;
   }
-  return `${measurement.value} ± ${measurement.standardUncertainty}${unit}`;
+  return `${n(measurement.value)} ± ${n(measurement.standardUncertainty)}${unit}`;
 }
 
 /** Also understand pre-existing pack outputs without changing their receipts. */
@@ -205,7 +216,8 @@ function isField(value: unknown): value is ScienceField {
     && (value.default_unit === undefined || typeof value.default_unit === "string")
     && (value.dimension === undefined || typeof value.dimension === "string")
     && (value.column_units === undefined || strings(value.column_units))
-    && (value.column_dimensions === undefined || strings(value.column_dimensions));
+    && (value.column_dimensions === undefined || strings(value.column_dimensions))
+    && (value.unit_field === undefined || typeof value.unit_field === "string");
 }
 
 function isOperation(value: unknown): value is ScienceOperation {
@@ -521,6 +533,9 @@ export function sourceOptions(parents: ScienceParent[], maxPoints = V1_LIMITS.po
 }
 
 export function compatibleOptions(field: ScienceField, options: SourceOption[], limits = V1_LIMITS): SourceOption[] {
+  // A unit selector (from_unit, time_unit, ...) is the analyst's declaration,
+  // not measured data: no upstream text output is a meaningful unit for it.
+  if (field.kind === "text" && /(?:^|_)unit$/.test(field.key)) return [];
   return options.filter(({ value, tableColumn, uncertainty, unpropagatable }) => {
     // Neither an explicitly unpropagatable result nor MC marginal moments
     // can be used as a new Gaussian measurement. The server rejects both.

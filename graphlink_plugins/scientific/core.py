@@ -123,6 +123,20 @@ def _effective_unit(field: Field, raw: dict) -> str:
     return unit.strip()
 
 
+def _unit_field(field: Field, raw: dict) -> str | None:
+    """The sibling input whose text sets this field's unit, mirroring
+    _effective_unit, so the editor can label the field with the unit the
+    user actually chose. Derived units ("1 / selected time unit") stay on
+    their declared default label."""
+    if field.unit == _HARDNESS_UNIT:
+        return "from_scale"
+    if field.unit == "selected concentration unit":
+        return "substrate_unit" if field.key == "substrate" else "concentration_unit"
+    if field.key == "value" and "from_unit" in raw:
+        return "from_unit"
+    return _DYNAMIC.get(field.unit)
+
+
 @dataclass(frozen=True)
 class Operation:
     id: str
@@ -142,9 +156,15 @@ class Operation:
         ))
 
     def describe(self) -> dict:
+        fields = []
+        for item in self.fields:
+            described = asdict(item)
+            if (unit_field := _unit_field(item, self.example)) is not None:
+                described["unit_field"] = unit_field
+            fields.append(described)
         return {
             "id": self.id, "title": self.title, "description": self.description,
-            "fields": [asdict(item) for item in self.fields], "example": self.example,
+            "fields": fields, "example": self.example,
         }
 
 

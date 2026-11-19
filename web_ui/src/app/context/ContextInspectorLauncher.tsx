@@ -63,7 +63,7 @@ export function ContextInspectorLauncher({
     <div className="context-inspector-launcher">
       <button
         type="button"
-        className="context-inspector-toggle"
+        className="composer-control context-inspector-toggle"
         disabled={!nodeId}
         aria-expanded={isOpen}
         aria-controls="context-inspector-panel"

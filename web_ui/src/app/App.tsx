@@ -410,13 +410,15 @@ function App() {
                     </div>
                   </div>
                   <footer className="app-composer-layer" aria-label="Message composer">
-                    <Suspense fallback={null}>
-                      <ContextInspectorLauncher sceneStore={sceneStore} composerStore={composerStore} transport={transport} />
-                    </Suspense>
                     <Composer
                       store={composerStore}
                       sceneStore={sceneStore}
                       showTokenCounter={settingsVisibility.showTokenCounter !== false}
+                      contextInspector={
+                        <Suspense fallback={null}>
+                          <ContextInspectorLauncher sceneStore={sceneStore} composerStore={composerStore} transport={transport} />
+                        </Suspense>
+                      }
                     />
                   </footer>
                   <LazySurface overlayName="palette">

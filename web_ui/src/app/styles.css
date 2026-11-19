@@ -45,6 +45,13 @@ body,
   margin: 0;
 }
 
+/* Anchored popovers (Plugins, View, Pins) and node menus are portaled to
+   <body>, outside .app-shell - without this they fell back to the browser's
+   serif default instead of the app font. */
+body {
+  font-family: var(--gl-font-family);
+}
+
 .app-shell {
   display: flex;
   flex-direction: column;

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { Composer } from "./Composer";
 import { TokenCounter } from "./TokenCounter";
-import { NotificationBanner } from "./NotificationBanner";
+import { NotificationBanner, TRANSIENT_NOTIFICATION_MS } from "./NotificationBanner";
 import { initialComposerState, initialNotificationState, initialTokenCounterState } from "./composerStore";
 import { initialSceneState } from "../canvas/sceneStore";
 import { OverlayProvider } from "../overlays/overlays";
@@ -787,5 +787,33 @@ describe("NotificationBanner", () => {
     expect(screen.getByText("Saved.")).toBeInTheDocument();
     await user.click(screen.getByLabelText("Dismiss notification"));
     expect(dismissNotification).toHaveBeenCalled();
+  });
+
+  it("clears a success confirmation by itself, through the dismiss intent", () => {
+    vi.useFakeTimers();
+    try {
+      const { store, dismissNotification } = makeStore({
+        notification: { visible: true, message: "Saved.", msgType: "success" },
+      });
+      // @ts-expect-error - test double
+      render(<NotificationBanner store={store} />);
+      vi.advanceTimersByTime(TRANSIENT_NOTIFICATION_MS - 1);
+      expect(dismissNotification).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(dismissNotification).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("keeps a warning until the user dismisses it", () => {
+    vi.useFakeTimers();
+    try {
+      const { store, dismissNotification } = makeStore({
+        notification: { visible: true, message: "No AI provider is configured yet.", msgType: "warning" },
+      });
+      // @ts-expect-error - test double
+      render(<NotificationBanner store={store} />);
+      vi.advanceTimersByTime(TRANSIENT_NOTIFICATION_MS * 4);
+      expect(dismissNotification).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
   });
 });

@@ -66,6 +66,12 @@ def test_footprint_falls_back_per_kind_then_to_the_generic_default():
     assert doc.node_footprint(node) == DEFAULT_FALLBACK_FOOTPRINT
 
 
+def test_plugin_kinds_fall_back_to_their_local_kind_name():
+    doc = SceneDocument()
+    assert doc.kind_fallback_footprint("science_core.workbench") == KIND_FALLBACK_FOOTPRINTS["workbench"]
+    assert doc.kind_fallback_footprint("some_plugin.unknown") == DEFAULT_FALLBACK_FOOTPRINT
+
+
 # -- place_child ------------------------------------------------------------
 
 def test_place_child_lands_below_the_parents_real_measured_bottom_edge():

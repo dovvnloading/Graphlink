@@ -205,4 +205,29 @@ describe("uncertainty-aware Scientific Workbench connections", () => {
     expect(screen.getByText(/Uncertainty propagation unavailable for value \(m\)/)).toBeVisible();
   });
 
+  it("labels a value with the unit its Source unit sibling sets, not the example's", () => {
+    const labelled = { ...convert, fields: [
+      { ...convert.fields[0], default_unit: "mm", unit_field: "from_unit" }, ...convert.fields.slice(1),
+    ] };
+    mount(JSON.stringify({ ...core, operations: [labelled] }));
+    expect(screen.getByLabelText("Measured value (mm)")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Source unit"), { target: { value: "km" } });
+    expect(screen.getByLabelText("Measured value (km)")).toBeInTheDocument();
+    expect(screen.getByText("Unit: km, set by Source unit.")).toBeVisible();
+  });
+
+  it("offers no connected results to unit selectors", () => {
+    const text = sourceOptions([parent]).map((option) => ({ ...option, value: "infinite" }));
+    expect(text.length).toBeGreaterThan(0);
+    expect(compatibleOptions(convert.fields[1], text)).toEqual([]);
+  });
+
+  it("rounds binary noise in displayed result values", () => {
+    const noisy: ScienceResult = { ...linkedResult, uncertainty: undefined,
+      values: { "value (m)": 0.05000083799999999 } };
+    mount(JSON.stringify({ ...core, latest: noisy }));
+    expect(screen.getByText("0.050000838")).toBeVisible();
+    expect(screen.queryByText("0.05000083799999999")).toBeNull();
+  });
+
 });
