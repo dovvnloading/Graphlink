@@ -920,7 +920,7 @@ def test_whole_typed_table_operations_accept_text_categories_and_numeric_groups(
         validated_inputs(op, {**inputs, "value_column": 1})
     with pytest.raises(ValueError, match="existing table column"):
         validated_inputs(op, {**inputs, "group_column": 10})
-    damaged = {**table, "rowCount": 99}
+    damaged = {**table, "rowCount": 0}
     with pytest.raises(ValueError, match="valid connected typed table"):
         validated_inputs(op, {**inputs, "table": damaged})
     assert dispatch(bus, "invokePluginIntent", "science_statistics", "configure_runner", {
