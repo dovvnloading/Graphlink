@@ -356,6 +356,71 @@ describe("scientific workbench card", () => {
     expect(screen.queryByRole("img", { name: /Distance/ })).toBeNull();
     expect(screen.getByRole("table", { name: "Result table" })).toBeInTheDocument();
   });
+
+  it("renders forest estimates and whiskers, a pooled diamond and linear or log reference axes", () => {
+    const forest = { type: "forest_plot", title: "Treatment effects", xLabel: "Mean difference",
+      scale: "linear", reference: 0, studies: [
+        { label: "Study Alpha", estimate: -.2, lower: -.5, upper: .1, weight: 4 },
+        { label: "Study Beta", estimate: .4, lower: .2, upper: .8, weight: 1 },
+      ],
+      pooled: { label: "Pooled effect", estimate: .1, lower: -.1, upper: .3 },
+    };
+    const mounted = mount(JSON.stringify({ ...state, latest: { ...result, views: [forest] } }));
+    const svg = screen.getByRole("img", { name: /Treatment effects: forest plot with 2 studies.*linear/ });
+    expect(svg.querySelectorAll(".science-forest-study")).toHaveLength(2);
+    expect(svg.querySelectorAll(".science-forest-study rect")).toHaveLength(2);
+    expect(svg.querySelector(".science-forest-diamond")).toHaveAttribute("points", expect.stringContaining(","));
+    expect(svg.querySelector(".science-forest-reference")).toHaveAttribute("stroke-dasharray", "4 4");
+    expect(within(svg).getByText("Pooled effect")).toBeVisible();
+    fireEvent.click(screen.getByText("Exact estimates and confidence intervals"));
+    const data = screen.getByRole("table", { name: "Treatment effects estimate data" });
+    expect(within(data).getByRole("row", { name: /Study Alpha/ })).toHaveTextContent("-0.5");
+    expect(within(data).getByRole("row", { name: /Pooled effect/ })).toHaveTextContent("0.3");
+
+    mounted.remount(JSON.stringify({ ...state, latest: { ...result, views: [{
+      ...forest, scale: "log", reference: 1, xLabel: "Risk ratio",
+      studies: [
+        { label: "Study Alpha", estimate: .8, lower: .6, upper: 1.1 },
+        { label: "Study Beta", estimate: 1.4, lower: 1.1, upper: 1.8 },
+      ],
+      pooled: { estimate: 1.05, lower: .9, upper: 1.2 },
+    }] } }));
+    const logPlot = screen.getByRole("img", { name: /forest plot with 2 studies.*log axis/ });
+    const squares = [...logPlot.querySelectorAll(".science-forest-study rect")];
+    expect(squares[0].getAttribute("x")).not.toBe(squares[1].getAttribute("x"));
+    expect(screen.getByText(/Risk ratio \(log\)/)).toBeVisible();
+  });
+
+  it("renders rectangular phylograms and circular cladograms with branch lengths and support", () => {
+    const phylogeny = { type: "phylogenetic_tree", title: "Three-taxon tree",
+      layout: "rectangular", mode: "phylogram",
+      tree: { children: [
+        { length: .3, support: 95, children: [
+          { name: "Species A", length: .2 }, { name: "Species B", length: .1 },
+        ] },
+        { name: "Species C", length: .8, support: 85 },
+      ] },
+    };
+    const mounted = mount(JSON.stringify({ ...state, latest: { ...result, views: [phylogeny] } }));
+    const rectangular = screen.getByRole("img", { name: /Three-taxon tree: rectangular phylogram of 3 taxa/ });
+    expect(rectangular.querySelectorAll("line.science-tree-branch")).toHaveLength(6);
+    expect(rectangular.textContent).toContain("Species A");
+    expect(rectangular.textContent).toContain("S 95");
+    fireEvent.click(screen.getByText(/Branch lengths and support labels/));
+    const table = screen.getByRole("table", { name: "Three-taxon tree branch data" });
+    expect(within(table).getByRole("row", { name: /Species C/ })).toHaveTextContent("0.8");
+    expect(within(table).getByRole("row", { name: /Species C/ })).toHaveTextContent("85");
+
+    mounted.remount(JSON.stringify({ ...state, latest: { ...result, views: [{
+      ...phylogeny, layout: "circular", mode: "cladogram",
+    }] } }));
+    const circular = screen.getByRole("img", { name: /Three-taxon tree: circular cladogram of 3 taxa/ });
+    expect(circular.querySelectorAll("path.science-tree-branch").length).toBeGreaterThan(0);
+    expect(circular.querySelectorAll("line.science-tree-branch")).toHaveLength(4);
+    expect(circular.textContent).toContain("Species B");
+    expect(screen.getByText(/lengths do not determine geometry/)).toBeVisible();
+  });
+
 });
 
 

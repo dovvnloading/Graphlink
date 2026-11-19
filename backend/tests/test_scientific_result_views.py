@@ -168,3 +168,138 @@ def test_zero_time_events_and_tied_censoring_remain_step_curve_valid():
     assert view["groups"][0]["survival"] == pytest.approx([1, 2/3, 2/3])
     assert view["groups"][0]["censored"] == [0, 1]
     assert readable_result({"version": 1, "latest": result}, "biology")
+
+
+def _forest(scale="linear"):
+    return {
+        "type": "forest_plot", "title": "Treatment effects", "xLabel": "Mean difference",
+        "scale": scale, "reference": 0 if scale == "linear" else 1,
+        "studies": [
+            {"label": "Study A", "estimate": -.2 if scale == "linear" else .8,
+             "lower": -.6 if scale == "linear" else .6,
+             "upper": .3 if scale == "linear" else 1.2, "weight": 2.5},
+            {"label": "Study B", "estimate": .4 if scale == "linear" else 1.3,
+             "lower": .2 if scale == "linear" else 1.1,
+             "upper": .7 if scale == "linear" else 1.6, "weight": 1},
+        ],
+        "pooled": {"label": "Overall", "estimate": .2 if scale == "linear" else 1.04,
+                   "lower": 0 if scale == "linear" else .91,
+                   "upper": .5 if scale == "linear" else 1.22},
+    }
+
+
+def _tree(layout="rectangular", mode="phylogram"):
+    return {
+        "type": "phylogenetic_tree", "title": "Rooted clades",
+        "layout": layout, "mode": mode,
+        "tree": {"name": "Root", "children": [
+            {"name": "Clade A", "length": .4, "support": 98, "children": [
+                {"name": "Taxon A", "length": .2},
+                {"name": "Taxon B", "length": .1},
+            ]},
+            {"name": "Taxon C", "length": 1.2, "support": 85},
+        ]},
+    }
+
+
+@pytest.mark.parametrize("scale", ["linear", "log"])
+def test_forest_views_validate_studies_pooled_confidence_intervals_and_scale(scale):
+    view = _forest(scale)
+    check_result_views([view])
+    check_artifact({"summary": "ok", "values": {"n": 2}, "views": [view]})
+    assert check_result_views([_plate(), view, _survival(), _tree()]) is None
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda v: v.update(scale="symlog"),
+    lambda v: v.update(reference=float("inf")),
+    lambda v: v.update(studies=[]),
+    lambda v: v.update(studies=v["studies"] * 33),
+    lambda v: v["studies"][1].update(label="Study A"),
+    lambda v: v["studies"][0].update(lower=.95),
+    lambda v: v["studies"][0].update(upper=-.3),
+    lambda v: v["studies"][0].update(estimate=float("nan")),
+    lambda v: v["studies"][0].update(weight=-1),
+    lambda v: v["studies"][0].update(weight=True),
+    lambda v: v["studies"][0].update(href="javascript:alert(1)"),
+    lambda v: v.update(pooled={"estimate": 1, "lower": 1}),
+    lambda v: v.update(pooled={"estimate": .3, "lower": .4, "upper": .5}),
+    lambda v: v.update(studies=[{"label": "A", "estimate": 1, "lower": 0, "upper": 2}]),
+    lambda v: v.update(reference=0),
+])
+def test_log_forest_views_fail_closed_for_invalid_intervals_and_data(mutate):
+    view = _forest("log")
+    mutate(view)
+    with pytest.raises(ValueError):
+        check_result_views([view])
+
+
+@pytest.mark.parametrize("layout", ["rectangular", "circular"])
+@pytest.mark.parametrize("mode", ["phylogram", "cladogram"])
+def test_phylogenetic_views_validate_layouts_and_branch_annotations(layout, mode):
+    view = _tree(layout, mode)
+    check_result_views([view])
+    check_artifact({"summary": "ok", "values": {}, "views": [view]})
+    if mode == "cladogram":
+        view["tree"]["children"][0].pop("length")
+        check_result_views([view])
+        view["tree"]["children"][0]["length"] = None
+        with pytest.raises(ValueError):
+            check_result_views([view])
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda v: v.update(layout="radial"),
+    lambda v: v.update(mode="chronogram"),
+    lambda v: v["tree"].update(length=2),
+    lambda v: v["tree"].update(support=95),
+    lambda v: v["tree"].update(children=[]),
+    lambda v: v["tree"]["children"][0].update(length=-.1),
+    lambda v: v["tree"]["children"][0].update(length=float("nan")),
+    lambda v: v["tree"]["children"][0].update(length=None),
+    lambda v: v["tree"]["children"][0].update(support=101),
+    lambda v: v["tree"]["children"][0].update(support=True),
+    lambda v: v["tree"]["children"][0].update(children=[{"name": "A", "length": 1}]),
+    lambda v: v["tree"]["children"][1].update(name="Taxon A"),
+    lambda v: v["tree"]["children"][1].pop("length"),
+    lambda v: v["tree"]["children"][0].update(children=[
+        {"length": 1}, {"name": "A", "length": 2}]),
+    lambda v: v["tree"]["children"][0].update(onload="unsafe"),
+    lambda v: v["tree"]["children"][0].update(children=[]),
+])
+def test_phylograms_fail_closed_for_invalid_topology_lengths_and_support(mutate):
+    view = _tree()
+    mutate(view)
+    with pytest.raises(ValueError):
+        check_result_views([view])
+
+
+def test_phylogenetic_view_rejects_cycles_and_oversized_or_depth_bomb_trees():
+    root = {"children": [{"name": "A", "length": 1}]}
+    root["children"].append(root)
+    with pytest.raises(ValueError):
+        check_result_views([{**_tree(), "tree": root}])
+
+    def balanced(names):
+        if len(names) == 1:
+            return {"name": names[0], "length": 1}
+        middle = len(names) // 2
+        return {"length": 1, "children": [balanced(names[:middle]), balanced(names[middle:])]}
+
+    permitted = _tree()
+    permitted["tree"] = {"children": [balanced([f"Taxon {i}" for i in range(32)]),
+                                    balanced([f"Taxon {i}" for i in range(32, 64)])]}
+    check_result_views([permitted])
+    prohibited = copy.deepcopy(permitted)
+    prohibited["tree"] = {"children": [balanced([f"Taxon {i}" for i in range(33)]),
+                                     balanced([f"Taxon {i}" for i in range(33, 65)])]}
+    with pytest.raises(ValueError):
+        check_result_views([prohibited])
+
+    long_branch = {"name": "Bottom"}
+    for depth in range(34):
+        long_branch = {"children": [
+            {"name": f"Side {depth}"}, long_branch,
+        ]}
+    with pytest.raises(ValueError):
+        check_result_views([{**_tree(mode="cladogram"), "tree": long_branch}])

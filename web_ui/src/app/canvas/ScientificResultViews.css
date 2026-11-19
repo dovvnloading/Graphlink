@@ -18,3 +18,21 @@
 .science-survival-legend { display: flex; flex-wrap: wrap; gap: 5px 13px; padding: 0; margin: 0; list-style: none; font-size: .83em; }
 .science-survival-legend li { display: inline-flex; align-items: center; gap: 5px; }
 .science-survival-line { display: inline-block; width: 20px; border-top-width: 3px; }
+
+/* Bounded specialist views preserve readable labels in the narrow science card. */
+.science-forest-scroll, .science-phylogeny-scroll, .science-view-data-scroll {
+  max-width: 100%; overflow: auto;
+}
+.science-forest-scroll, .science-phylogeny-scroll { max-height: 540px; }
+.science-forest svg, .science-phylogeny svg {
+  width: 100%; min-width: 540px; height: auto; display: block; overflow: visible;
+}
+.science-forest-label, .science-tree-tip { font: 12px sans-serif; fill: currentColor; }
+.science-forest-pooled { font-weight: 700; }
+.science-forest-axis, .science-tree-annotation { font: 10px sans-serif; fill: currentColor; }
+.science-tree-annotation { opacity: .85; }
+.science-tree-branch { stroke: var(--gl-status-info, currentColor); stroke-width: 1.6; fill: none; }
+.science-view-data summary { font-size: .83em; cursor: pointer; }
+.science-view-data table { width: 100%; border-collapse: collapse; font-size: .81em; font-variant-numeric: tabular-nums; }
+.science-view-data th, .science-view-data td { border-bottom: 1px solid var(--gl-surface-border); padding: 3px 6px; text-align: left; }
+.science-view-data th { font-weight: 600; }

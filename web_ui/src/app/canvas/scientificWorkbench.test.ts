@@ -339,6 +339,64 @@ describe("saved Workbench wire safety", () => {
     expect(readScienceState(JSON.stringify({ ...base, latest }))?.latest?.views).toBeUndefined();
   });
 
+
+  it("accepts forest plots and rooted phylogenies, rejecting tampered geometry and labels", () => {
+    const forest = {
+      type: "forest_plot", title: "Effect", xLabel: "Risk ratio", scale: "log", reference: 1,
+      studies: [
+        { label: "A", estimate: .8, lower: .6, upper: 1.1, weight: 3 },
+        { label: "B", estimate: 1.2, lower: 1.05, upper: 1.4 },
+      ],
+      pooled: { label: "Combined", estimate: .94, lower: .8, upper: 1.1 },
+    };
+    const tree = {
+      type: "phylogenetic_tree", title: "Relatedness", layout: "circular", mode: "phylogram",
+      tree: { children: [
+        { length: 1, support: 99, children: [
+          { name: "A", length: .2 }, { name: "B", length: 0 },
+        ] },
+        { name: "C", length: .7, support: 80 },
+      ] },
+    };
+    const latest: ScienceResult = {
+      operationId: "convert_unit", inputs: {}, summary: "ok", values: {},
+      provenance: { resultHash: "digest" },
+    };
+    const read = (views: unknown) => readScienceState(JSON.stringify({
+      ...base, latest: { ...latest, views },
+    }));
+    expect(read([forest, tree])?.latest?.views).toHaveLength(2);
+    expect(read([{ ...forest, studies: [{ ...forest.studies[0], upper: .3 }] }])).toBeNull();
+    expect(read([{ ...forest, studies: [{ ...forest.studies[0], lower: 0 }] }])).toBeNull();
+    expect(read([{ ...forest, reference: 0 }])).toBeNull();
+    expect(read([{ ...forest, scale: "linear", reference: 0 }])?.latest?.views).toHaveLength(1);
+    expect(read([{ ...forest, pooled: { ...forest.pooled, upper: .5 } }])).toBeNull();
+    expect(read([{ ...forest, studies: [...forest.studies, forest.studies[0]] }])).toBeNull();
+    expect(read([{ ...forest, studies: [{ ...forest.studies[0], weight: -1 }] }])).toBeNull();
+    expect(read([{ ...forest, html: "<script>" }])).toBeNull();
+    expect(read([{ ...tree, tree: { ...tree.tree, length: 1 } }])).toBeNull();
+    expect(read([{ ...tree, tree: { children: [
+      { name: "A", length: 1 }, { name: "A", length: 2 },
+    ] } }])).toBeNull();
+    expect(read([{ ...tree, tree: { children: [
+      { name: "A", length: -1 }, { name: "B", length: 2 },
+    ] } }])).toBeNull();
+    expect(read([{ ...tree, tree: { children: [
+      { name: "A", length: null }, { name: "B", length: 2 },
+    ] } }])).toBeNull();
+    expect(read([{ ...tree, tree: { children: [
+      { name: "A" }, { name: "B", length: 2 },
+    ] } }])).toBeNull();
+    expect(read([{ ...tree, tree: { children: [
+      { name: "A", length: 1, support: 101 }, { name: "B", length: 2 },
+    ] } }])).toBeNull();
+    expect(read([{ ...tree, mode: "cladogram", tree: { children: [
+      { name: "A" }, { name: "B" },
+    ] } }])?.latest?.views).toHaveLength(1);
+    expect(read([{ ...tree, layout: "radial" }])).toBeNull();
+    expect(read([{ ...tree, tree: { children: [] } }])).toBeNull();
+  });
+
   it("rejects malformed uncertainty budget arrays and non-text diagnostics", () => {
     const measurement = { value: 4, standardUncertainty: 1, coverageFactor: 2, unit: "" };
     const result: ScienceResult = {

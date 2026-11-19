@@ -9,7 +9,23 @@ export interface ScienceSurvivalGroup {
 export interface ScienceSurvivalCurveView {
   type: "survival_curve"; title: string; xLabel: string; groups: ScienceSurvivalGroup[];
 }
-export type ScienceResultView = SciencePlateMapView | ScienceSurvivalCurveView;
+export interface ScienceForestEstimate {
+  label: string; estimate: number; lower: number; upper: number; weight?: number;
+}
+export interface ScienceForestPlotView {
+  type: "forest_plot"; title: string; xLabel: string; scale: "linear" | "log";
+  reference?: number; studies: ScienceForestEstimate[];
+  pooled: { label?: string; estimate: number; lower: number; upper: number };
+}
+export interface SciencePhylogeneticNode {
+  name?: string; length?: number; support?: number; children?: SciencePhylogeneticNode[];
+}
+export interface SciencePhylogeneticTreeView {
+  type: "phylogenetic_tree"; title: string; layout: "rectangular" | "circular";
+  mode: "phylogram" | "cladogram"; tree: SciencePhylogeneticNode;
+}
+export type ScienceResultView =
+  SciencePlateMapView | ScienceSurvivalCurveView | ScienceForestPlotView | SciencePhylogeneticTreeView;
 
 const record = (v: unknown): v is Record<string, unknown> =>
   v !== null && typeof v === "object" && !Array.isArray(v);
@@ -18,6 +34,68 @@ const label = (v: unknown, max = 160): v is string =>
   typeof v === "string" && !!v.trim() && v.length <= max;
 const keys = (v: Record<string, unknown>, allowed: string[]): boolean =>
   Object.keys(v).every((key) => allowed.includes(key));
+
+
+function forestInterval(v: unknown, logScale: boolean, pooled: boolean): boolean {
+  if (!record(v) || !keys(v, pooled
+    ? ["label", "estimate", "lower", "upper"]
+    : ["label", "estimate", "lower", "upper", "weight"])) return false;
+  if ((!pooled || v.label !== undefined) && !label(v.label, 80)) return false;
+  if (!finite(v.lower) || !finite(v.estimate) || !finite(v.upper) ||
+      v.lower > v.estimate || v.estimate > v.upper || (logScale && v.lower <= 0)) return false;
+  if (!pooled && v.weight !== undefined && (!finite(v.weight) || v.weight < 0)) return false;
+  return true;
+}
+
+function forestView(v: Record<string, unknown>): boolean {
+  if (!keys(v, ["type", "title", "xLabel", "scale", "reference", "studies", "pooled"]) ||
+      !label(v.xLabel) || (v.scale !== "linear" && v.scale !== "log") ||
+      !Array.isArray(v.studies) || v.studies.length < 1 || v.studies.length > 64) return false;
+  const logScale = v.scale === "log";
+  const reference = v.reference === undefined ? (logScale ? 1 : 0) : v.reference;
+  if (!finite(reference) || (logScale && reference <= 0)) return false;
+  const names = new Set<string>();
+  for (const study of v.studies) {
+    if (!forestInterval(study, logScale, false)) return false;
+    const name = (study as ScienceForestEstimate).label;
+    if (names.has(name)) return false;
+    names.add(name);
+  }
+  return forestInterval(v.pooled, logScale, true);
+}
+
+function phylogeneticView(v: Record<string, unknown>): boolean {
+  if (!keys(v, ["type", "title", "layout", "mode", "tree"]) ||
+      (v.layout !== "rectangular" && v.layout !== "circular") ||
+      (v.mode !== "phylogram" && v.mode !== "cladogram")) return false;
+  const seen = new Set<object>(), taxa = new Set<string>();
+  let count = 0, positiveLength = false;
+  const visit = (node: unknown, depth: number): boolean => {
+    if (!record(node) || !keys(node, ["name", "length", "support", "children"]) ||
+        seen.has(node) || ++count > 127 || depth > 32) return false;
+    seen.add(node);
+    if (node.name !== undefined && !label(node.name, 80)) return false;
+    if (depth === 0) {
+      if (node.length !== undefined || node.support !== undefined ||
+          Object.hasOwn(node, "length") || Object.hasOwn(node, "support")) return false;
+    } else {
+      if (v.mode === "phylogram" && !Object.hasOwn(node, "length")) return false;
+      if (Object.hasOwn(node, "length") && (!finite(node.length) || node.length < 0)) return false;
+      if (typeof node.length === "number" && node.length > 0) positiveLength = true;
+      if (Object.hasOwn(node, "support") &&
+          (!finite(node.support) || node.support < 0 || node.support > 100)) return false;
+    }
+    if (!Object.hasOwn(node, "children")) {
+      if (!label(node.name, 80) || taxa.has(node.name) || taxa.size >= 64) return false;
+      taxa.add(node.name);
+      return true;
+    }
+    return Array.isArray(node.children) && node.children.length >= 2 &&
+      node.children.length <= 16 && node.children.every((child: unknown) => visit(child, depth + 1));
+  };
+  return visit(v.tree, 0) && record(v.tree) && Array.isArray(v.tree.children) &&
+    taxa.size >= 2 && (v.mode !== "phylogram" || positiveLength);
+}
 
 export function isScienceResultView(v: unknown): v is ScienceResultView {
   if (!record(v) || !label(v.title)) return false;
@@ -41,6 +119,8 @@ export function isScienceResultView(v: unknown): v is ScienceResultView {
     }
     return true;
   }
+  if (v.type === "forest_plot") return forestView(v);
+  if (v.type === "phylogenetic_tree") return phylogeneticView(v);
   if (v.type !== "survival_curve" ||
       !keys(v, ["type", "title", "xLabel", "groups"]) || !label(v.xLabel) ||
       !Array.isArray(v.groups) || v.groups.length < 2 || v.groups.length > 12) return false;
