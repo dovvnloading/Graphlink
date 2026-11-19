@@ -158,6 +158,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("scene", "addNode", "A", "content: create"),
     Classified("scene", "addChatNode", "A", "content: create"),
     Classified("scene", "discussScientificResult", "A", "content: create a chat linked to a verified scientific result"),
+    Classified("scene", "exportScientificWorkspaceMethods", "B", "read-only: formats already-saved verified scientific receipts as Markdown; no graph mutation"),
     Classified("scene", "addCodeNode", "A", "content: create"),
     Classified("scene", "addDocumentNode", "A", "content: create"),
     Classified("scene", "addThinkingNode", "A", "content: create"),
