@@ -394,7 +394,7 @@ def direct_age_standardization(data):
     }
 
 
-OPERATIONS = (
+OPERATIONS: tuple[Operation, ...] = (
     Operation(
         "two_by_two_measures", "Two-by-two treatment/exposure effects",
         "Compute RR, OR, risk difference, absolute risk reduction, and NNT/NNH with 95% CIs.",
@@ -487,3 +487,9 @@ OPERATIONS = (
                             "https://support.sas.com/documentation/cdl/en/statug/67523/HTML/default/statug_stdrate_details14.htm")),
     ),
 )
+
+
+# Advanced epidemiology extends (rather than renumbers) existing operations.
+from graphlink_plugins.scientific.packs.epidemiology_advanced import OPERATIONS as _ADVANCED_OPERATIONS
+
+OPERATIONS += _ADVANCED_OPERATIONS
