@@ -382,3 +382,177 @@ def _cox_statistics(beta, ordered, x, times, events, ties):
     return _number(log_likelihood, "Cox log likelihood"), score, info
 
 
+def cox_proportional_hazards(data):
+    """Multivariable Cox PH, Efron or Breslow ties, Newton + step halving."""
+    times, events, predictors = data["follow_up_time"], data["event_observed"], data["covariates"]
+    n = len(times)
+    if len(events) != n or len(predictors) != n or n < 4:
+        raise ValueError("Cox regression needs matching follow-up, event and covariate rows (n >= 4).")
+    p = len(predictors[0])
+    if not 1 <= p <= 5 or any(len(row) != p for row in predictors) or n < p+2:
+        raise ValueError("Cox regression supports 1–5 covariate columns and at least p+2 subjects.")
+    if any(t < 0 for t in times) or any(e not in (0, 1) for e in events):
+        raise ValueError("Follow-up must be nonnegative; event indicators must be 0/1.")
+    failures = int(sum(events))
+    if failures <= p:
+        raise ValueError("Cox regression needs more events than fitted covariates.")
+    labels = _labels(data["covariate_labels_json"], p)
+    unit = data["time_unit"].strip()
+    if not 1 <= len(unit) <= 40 or any(ord(ch) < 32 for ch in unit):
+        raise ValueError("Time unit must have 1–40 printable characters.")
+    columns = list(zip(*predictors))
+    center = [math.fsum(col)/n for col in columns]
+    scales = [math.sqrt(math.fsum(((v-m)/1)**2 for v in col)/n)
+              for col, m in zip(columns, center)]
+    if any(not math.isfinite(scale) or scale <= 1e-12 for scale in scales):
+        raise ValueError("Cox covariates must vary and have nonzero variance.")
+    x = [[(v-center[j])/scales[j] for j, v in enumerate(row)] for row in predictors]
+    if any(not math.isfinite(v) for row in x for v in row):
+        raise ValueError("Cox covariate scaling exceeds the numeric range.")
+    order = sorted(range(n), key=lambda i: times[i], reverse=True)
+    beta = [0.0]*p
+    ties = data["ties"]
+    likelihood, score, info = _cox_statistics(beta, order, x, times, events, ties)
+    iterations = 0
+    converged = False
+    for iteration in range(1, 61):
+        delta, _ = _positive_solve(info, score)
+        step = 1.0
+        for _ in range(30):
+            proposal = [b + step*d for b, d in zip(beta, delta)]
+            if max(map(abs, proposal)) < 25:
+                trial, trial_score, trial_info = _cox_statistics(
+                    proposal, order, x, times, events, ties)
+                if trial >= likelihood - 1e-9:
+                    break
+            step *= .5
+        else:
+            raise ValueError("Cox Newton iteration failed to find an improving step (possible separation).")
+        gain = trial - likelihood
+        beta, likelihood, score, info = proposal, trial, trial_score, trial_info
+        iterations = iteration
+        if max(abs(step*d) for d in delta) <= 1e-8 and max(map(abs, score)) <= 1e-6:
+            converged = True
+            break
+        if gain < 1e-12 and max(map(abs, score)) < 1e-7:
+            converged = True
+            break
+    if not converged:
+        raise ValueError("Cox regression did not converge (possibly complete separation).")
+    _, inverse = _positive_solve(info, [0.0]*p)
+    values = {"subjects": n, "events": failures, "covariates": p, "iterations": iterations,
+              "ties": ties, "log_partial_likelihood": likelihood,
+              "coefficient_unit": "log-hazard per covariate unit", "hazard_ratio_unit": "1 (dimensionless)",
+              "standard_error_unit": "log-hazard per covariate unit", "time_unit": unit}
+    rows = []
+    for j, name in enumerate(labels):
+        coefficient = _number(beta[j]/scales[j], "Cox coefficient")
+        se = _number(math.sqrt(inverse[j][j])/scales[j], "Cox standard error")
+        hr, low, high = (_ratio(coefficient), _ratio(coefficient - _Z*se),
+                         _ratio(coefficient + _Z*se))
+        z = coefficient / se
+        pv = math.erfc(abs(z)/math.sqrt(2))
+        rows.append([name, coefficient, se, hr, low, high, z, pv])
+        for suffix, value in (("coefficient", coefficient), ("standard_error", se),
+                              ("hazard_ratio", hr), ("hazard_ratio_ci95_lower", low),
+                              ("hazard_ratio_ci95_upper", high), ("p_value", pv)):
+            values[f"{suffix}_{j+1}"] = value
+    return {
+        "summary": (f"Cox proportional hazards regression on {n} subjects and {failures} events "
+                    f"({p} covariates); {ties} treatment of tied failures, Newton partial "
+                    "likelihood maximization, observed-information Wald 95% intervals. "
+                    "Hazard ratios are conditional associations per one input covariate unit; "
+                    "proportional hazards is an assumption, not tested here."),
+        "values": values,
+        "table": {"columns": ["Covariate", "Log hazard coefficient", "SE", "Hazard ratio",
+                              "95% lower", "95% upper", "Wald z", "Two-sided p"],
+                  "rows": rows},
+    }
+
+
+OPERATIONS = (
+    Operation(
+        "mantel_haenszel", "Mantel–Haenszel stratified odds ratio",
+        "Combine 2–64 aligned 2×2 strata; common odds ratio, 95% CI and CMH test with forest plot.",
+        (Field("exposed_events", "Exposed cases by stratum", "vector", unit="people"),
+         Field("exposed_nonevents", "Exposed noncases by stratum", "vector", unit="people"),
+         Field("unexposed_events", "Unexposed cases by stratum", "vector", unit="people"),
+         Field("unexposed_nonevents", "Unexposed noncases by stratum", "vector", unit="people")),
+        {"exposed_events": [12, 8, 15], "exposed_nonevents": [88, 72, 85],
+         "unexposed_events": [20, 16, 24], "unexposed_nonevents": [80, 64, 76]},
+        mantel_haenszel,
+        methods=("Common OR=Σ(ad/n)/Σ(bc/n) across aligned 2×2 strata. Robins–Breslow–Greenland "
+                 "log-OR variance gives normal 95% CI; CMH score χ² uses hypergeometric stratum "
+                 "variance, no continuity correction. Zero cells receive 0.5 in all four cells "
+                 "for OR and its forest CI, but not the CMH test. Common OR is assumed."),
+        citations=(Citation("Mantel & Haenszel (1959), Statistical aspects of analysis of retrospective studies",
+                            "https://pubmed.ncbi.nlm.nih.gov/13655060/"),
+                   Citation("Robins, Breslow & Greenland (1986), Estimators of the Mantel–Haenszel variance",
+                            "https://pubmed.ncbi.nlm.nih.gov/3741973/")),
+    ),
+    Operation(
+        "meta_analysis", "Inverse-variance meta-analysis and forest plot",
+        "Fixed/common effect or DerSimonian–Laird random effects, heterogeneity and forest plot.",
+        (Field("estimates", "Study effects (log-ratio for ratio measures)", "vector", unit="1"),
+         Field("standard_errors", "Study standard errors (same input scale)", "vector", unit="1"),
+         Field("study_labels_json", "Study labels (JSON array)", "text", unit="labels"),
+         Field("effect_measure", "Effect measure", "choice", unit="category",
+               choices=("mean_difference", "log_odds_ratio", "log_risk_ratio", "log_hazard_ratio")),
+         Field("model", "Pooling model", "choice", unit="category", choices=("fixed", "random_dl"))),
+        {"estimates": [-.22, .10, -.11], "standard_errors": [.12, .15, .10],
+         "study_labels_json": '["Trial A", "Trial B", "Trial C"]',
+         "effect_measure": "log_odds_ratio", "model": "random_dl"},
+        meta_analysis,
+        methods=("Inverse-variance pooled log ratio/difference with normal 95% CI; for random effects "
+                 "τ²=max(0,(Q−(k−1))/[Σw−Σw²/Σw]) (DerSimonian–Laird). "
+                 "Q, I² and selected-model study weights are reported. Ratios exponentiate "
+                 "only for display; heterogeneity remains on the analysis scale."),
+        citations=(Citation("DerSimonian & Laird (1986), Meta-analysis in clinical trials",
+                            "https://pubmed.ncbi.nlm.nih.gov/3802833/"),
+                   Citation("Higgins et al. (2003), Measuring inconsistency in meta-analyses",
+                            "https://pubmed.ncbi.nlm.nih.gov/12958120/")),
+    ),
+    Operation(
+        "multi_group_kaplan_meier", "Multi-group Kaplan–Meier and log-rank test",
+        "Product-limit survival curves with censor marks and multigroup log-rank comparison.",
+        (Field("follow_up_time", "Observed follow-up time", "vector", unit="selected time unit"),
+         Field("event_observed", "Event (1) or censored (0)", "vector", unit="1"),
+         Field("group", "Group code (integer 1–12)", "vector", unit="1"),
+         Field("time_unit", "Time label", "text", unit="unit label")),
+        {"follow_up_time": [1, 2, 4, 6, 1, 3, 5, 7, 2, 3, 6, 8],
+         "event_observed": [1, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0],
+         "group": [1]*4 + [2]*4 + [3]*4, "time_unit": "days"},
+        multi_group_kaplan_meier,
+        methods=("Per group KM S(t)=Π(1−d/n) at observed events, events before censoring "
+                 "at equal times, Greenwood final SE and median time. Multigroup Mantel–Cox "
+                 "log-rank uses hypergeometric event-count covariance and χ² with k−1 df "
+                 "when the contrast covariance is full rank; otherwise p is undefined."),
+        citations=(Citation("Kaplan & Meier (1958), Nonparametric estimation from incomplete observations",
+                            "https://doi.org/10.1080/01621459.1958.10501452"),
+                   Citation("Mantel (1966), Evaluation of survival data and rank-order statistics",
+                            "https://pubmed.ncbi.nlm.nih.gov/5910392/")),
+    ),
+    Operation(
+        "cox_proportional_hazards", "Cox proportional hazards regression",
+        "Fit adjusted hazard ratios and Wald confidence intervals from censored time-to-event data.",
+        (Field("follow_up_time", "Observed follow-up time", "vector", unit="selected time unit"),
+         Field("event_observed", "Event (1) or censored (0)", "vector", unit="1"),
+         Field("covariates", "Covariate matrix, rows matching follow-up", "matrix", unit="1"),
+         Field("covariate_labels_json", "Covariate labels (JSON array)", "text", unit="labels"),
+         Field("ties", "Tied event method", "choice", unit="category", choices=("efron", "breslow")),
+         Field("time_unit", "Time label", "text", unit="unit label")),
+        {"follow_up_time": [2, 3, 4, 5, 6, 7, 8, 10],
+         "event_observed": [1, 1, 1, 0, 1, 1, 0, 1],
+         "covariates": [[0], [1], [0], [1], [1], [0], [0], [1]],
+         "covariate_labels_json": '["Treatment"]', "ties": "efron", "time_unit": "months"},
+        cox_proportional_hazards,
+        methods=("Cox partial likelihood with right censoring, Efron or Breslow tied failures, "
+                 "Newton–Raphson and backtracking, centered/scaled covariates for stability. "
+                 "Inverse observed information yields Wald 95% intervals; fails closed for "
+                 "singular or separated fits. Does not test proportional hazards."),
+        citations=(Citation("Cox (1972), Regression models and life-tables",
+                            "https://doi.org/10.1111/j.2517-6161.1972.tb00899.x"),
+                   Citation("Efron (1977), Efficiency of Cox likelihood with tied failures",
+                            "https://doi.org/10.2307/2286217")),
+    ),
+)
