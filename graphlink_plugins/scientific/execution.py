@@ -170,10 +170,10 @@ async def execute_in_process(pack_id: str, operation: Operation, inputs: dict, s
         except (pickle.PickleError, AttributeError, TypeError):
             # Registered built-in lambdas are resolved by ID in the worker.
             transferable_operation = None
-        table_root = None
-        if any(field.kind == "table" for field in operation.fields):
-            from .data_table import table_store_root
-            table_root = table_store_root()
+        # The worker may *produce* a typed-table asset even without a table
+        # input. Both reads and writes must use the parent's staging root.
+        from .data_table import table_store_root
+        table_root = table_store_root()
         try:
             worker = context.Process(
                 target=_calculate_in_worker,
@@ -224,6 +224,15 @@ async def execute_in_process(pack_id: str, operation: Operation, inputs: dict, s
                     or (input_units is not None and payload["provenance"].get("inputUnits") != input_units)):
                 raise ExecutionFailure("worker_error", "The scientific worker returned an incomplete or invalid result.",
                                        elapsed_ms())
+            if "tableAsset" in payload:
+                from .data_table import read_table
+                try:
+                    read_table(payload["tableAsset"])
+                except ValueError:
+                    raise ExecutionFailure(
+                        "worker_error", "The scientific worker's table asset is missing or damaged.",
+                        elapsed_ms(),
+                    ) from None
             return payload
         if status in ("invalid_input", "worker_error") and isinstance(payload, str):
             raise ExecutionFailure(status, payload, elapsed_ms())
