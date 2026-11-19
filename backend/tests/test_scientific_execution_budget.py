@@ -32,7 +32,12 @@ def _quick(data):
 
 
 def _held(data):
-    Path(data["marker"]).write_text(str(os.getpid()), encoding="ascii")
+    # Write then rename so the marker never exists without its PID: a reader
+    # polling for existence under parallel load could otherwise see "".
+    marker = Path(data["marker"])
+    partial = marker.with_name(marker.name + ".partial")
+    partial.write_text(str(os.getpid()), encoding="ascii")
+    os.replace(partial, marker)
     # This never returns: only process termination can stop the worker.
     threading.Event().wait()
     return {"summary": "Never committed", "values": {"quantity (m)": -999}}
