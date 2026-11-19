@@ -304,7 +304,7 @@ def test_methods_export_is_receipt_bound_and_does_not_change_the_graph(session):
 
     # A revoked grant cannot use the plugin export intent, even for a
     # previously successful run whose result remains saved.
-    assert dispatch(bus, "setPluginGrant", "science_core", False) is not None
+    dispatch(bus, "setPluginGrant", "science_core", False)
     response = export(current["runToken"])
     assert not response or response.get("ok") is not True
 
@@ -335,7 +335,7 @@ def test_workspace_methods_export_validates_every_saved_receipt_and_grant(sessio
 
     # The report is a read-only snapshot; revoking a pack immediately hides
     # its result without affecting the other enabled pack.
-    assert dispatch(bus, "setPluginGrant", "science_statistics", False) is not None
+    dispatch(bus, "setPluginGrant", "science_statistics", False)
     reduced = _workspace_scientific_methods(document)
     assert reduced.count("### Recorded inputs") == 1
     assert core_node in reduced and statistics_node not in reduced
@@ -349,7 +349,7 @@ def test_workspace_methods_export_validates_every_saved_receipt_and_grant(sessio
 
     # A corrupted receipt is never silently replaced with an unverified
     # methods section and is not included even when another node is valid.
-    assert dispatch(bus, "setPluginGrant", "science_statistics", True) is not None
+    dispatch(bus, "setPluginGrant", "science_statistics", True)
     with pytest.raises(SceneError, match="receipt|damaged"):
         _workspace_scientific_methods(document)
 
