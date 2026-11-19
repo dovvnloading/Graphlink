@@ -93,7 +93,10 @@ describe("scientific workbench card", () => {
     const metric = screen.getByRole("combobox", { name: "Potency metric" });
     expect(metric).toHaveValue("EC50");
     expect(within(metric).getAllByRole("option")).toHaveLength(2);
-    fireEvent.click(screen.getByText("Methods and citations"));
+    const methods = screen.getByText("About & methods").closest("details");
+    expect(methods).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByText("About & methods"));
+    expect(methods).toHaveAttribute("open");
     expect(screen.getByText(/Four-parameter logistic fit/)).toBeVisible();
     expect(screen.getByRole("link", { name: "Sebaugh (2011)" }))
       .toHaveAttribute("href", "https://doi.org/10.1002/pst.426");
@@ -295,6 +298,8 @@ describe("scientific workbench card", () => {
     fireEvent.click(screen.getByText("Run calculation"));
     expect(field).toHaveFocus();
     expect(field).toHaveAttribute("aria-invalid", "true");
+    expect(field).not.toHaveAccessibleDescription(/Ordered observations.*array of numbers/);
+    fireEvent.click(screen.getByRole("button", { name: "Input and unit help for Samples" }));
     expect(field).toHaveAccessibleDescription(/Ordered observations.*array of numbers/);
     expect(request).not.toHaveBeenCalled();
   });
@@ -692,6 +697,8 @@ describe("unit-aware scientific node inputs and receipts", () => {
     }], example: { temperature_change_k: 50 } };
     mount(JSON.stringify({ ...state, operations: [temperature] }), []);
     expect(screen.getByRole("textbox", { name: "Temperature change (delta_K)" })).toHaveValue("50");
+    expect(screen.queryByText(/Default unit: delta_K/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Input and unit help for Temperature change" }));
     expect(screen.getByText(/Default unit: delta_K/)).toBeVisible();
   });
 
@@ -701,6 +708,8 @@ describe("unit-aware scientific node inputs and receipts", () => {
     }] };
     const { request } = mount(JSON.stringify({ ...state, operations: [typed] }), []);
     const input = screen.getByRole("textbox", { name: "Length (m)" });
+    expect(input).not.toHaveAccessibleDescription(/Default unit: m.*length \(m\)/);
+    fireEvent.click(screen.getByRole("button", { name: "Input and unit help for Length" }));
     expect(input).toHaveAccessibleDescription(/Default unit: m.*length \(m\)/);
     fireEvent.change(input, { target: { value: "25 mm" } });
     fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));

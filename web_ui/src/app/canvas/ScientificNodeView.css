@@ -69,3 +69,89 @@
 .science-uncertainty-budget small { display: block; }
 .science-uncertainty-budget table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: .85em; font-variant-numeric: tabular-nums; }
 .science-uncertainty-budget :is(th, td) { text-align: start; padding: 4px 7px; border-bottom: 1px solid var(--gl-surface-border); white-space: nowrap; }
+
+/* A workbench node is a 390px canvas surface, not a full-page settings form. */
+.science-operation-picker {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.science-operation-picker label { font-size: .9em; font-weight: 600; }
+.science-operation-picker select { width: 100%; }
+
+.science-operation-editor { gap: 8px; }
+.science-operation-context { display: grid; gap: 4px; min-width: 0; }
+.science-operation-preview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--gl-surface-text-secondary);
+  font-size: .88em;
+}
+.science-methods { min-width: 0; font-size: .9em; }
+.science-methods > summary { width: fit-content; color: var(--gl-surface-text-secondary); }
+.science-methods-content {
+  display: grid;
+  gap: 6px;
+  max-height: 180px;
+  overflow: auto;
+  margin-top: 5px;
+  padding: 7px 9px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
+.science-methods-content ul { margin: 0; padding-left: 18px; }
+
+.science-operation-editor fieldset { gap: 8px; }
+.science-inputs { display: grid; min-width: 0; gap: 7px; }
+.science-inputs-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--gl-surface-border);
+  font-size: .9em;
+}
+.science-inputs-heading small { font-weight: normal; }
+.science-input-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 10px;
+  min-width: 0;
+}
+.science-input-grid > .science-field { grid-column: 1 / -1; gap: 4px; }
+.science-input-grid > .science-field--compact { grid-column: span 1; }
+.science-field-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 5px;
+  min-width: 0;
+}
+.science-field-heading > label { display: inline; min-width: 0; font-size: .92em; font-weight: 600; overflow-wrap: anywhere; }
+.science-field-unit { font-size: .85em; font-weight: normal; color: var(--gl-surface-text-secondary); white-space: nowrap; }
+.science-body .science-help-toggle {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: .8em;
+  line-height: 1;
+  font-weight: 600;
+}
+.science-help-toggle:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.science-field-help {
+  display: grid;
+  gap: 4px;
+  padding: 5px 8px;
+  border-left: 2px solid var(--gl-surface-border);
+  color: var(--gl-surface-text-secondary);
+  font-size: .85em;
+  overflow-wrap: anywhere;
+}

@@ -212,15 +212,22 @@ function FieldEditor({ field, value, onEdit, options, onImport, imported, errorI
   /** The unit typed into this field's unit-setting sibling (field.unit_field) and that sibling's label. */
   chosenUnit?: string; unitSetter?: string;
 }) {
-  const unitOverridden = !!chosenUnit && chosenUnit !== field.default_unit;
+  const [helpOpen, setHelpOpen] = useState(false);
+  const unitOverridden = !!chosenUnit && chosenUnit !== (field.default_unit || field.unit || "1");
   const dimensioned = !["text", "choice", "table", "column"].includes(field.kind);
+  const unit = field.column_units?.length ? field.unit || "mixed" : chosenUnit || field.default_unit || field.unit || "1";
+  const compact = (field.kind === "number" || field.kind === "integer") && !options.length && !imported;
   const id = useId();
-  const description = [field.description && id + "-hint", dimensioned && id + "-units",
-    imported && id + "-source", errorId].filter(Boolean).join(" ");
+  const description = [helpOpen && id + "-help", imported && id + "-source", errorId].filter(Boolean).join(" ");
   const common = { id, name: field.key, value, "aria-invalid": errorId || stale ? true as const : undefined,
     "aria-describedby": description || undefined };
-  return <div className="science-field">
-    <label htmlFor={id}>{dimensioned ? `${field.label} (${field.column_units?.length ? field.unit : chosenUnit || field.default_unit || field.unit || "1"})` : field.label}</label>
+  return <div className={"science-field" + (compact ? " science-field--compact" : "")}>
+    <div className="science-field-heading">
+      <label htmlFor={id}>{field.label}{dimensioned && <> <span className="science-field-unit">({unit})</span></>}</label>
+      {(field.description || dimensioned) && <button type="button" className="science-help-toggle"
+        aria-label={"Input and unit help for " + field.label} aria-expanded={helpOpen}
+        aria-controls={helpOpen ? id + "-help" : undefined} onClick={() => setHelpOpen(!helpOpen)}>?</button>}
+    </div>
     {field.kind === "choice"
       ? <select {...common} onChange={(e) => onEdit(e.target.value)}>
         {field.choices?.map((choice) => <option key={choice} value={choice}>{choice}</option>)}
@@ -237,18 +244,21 @@ function FieldEditor({ field, value, onEdit, options, onImport, imported, errorI
         onChange={(e) => onEdit(e.target.value)} />
       : <textarea {...common} rows={field.kind === "matrix" || field.kind === "text" ? 3 : 2}
         onChange={(e) => onEdit(e.target.value)} spellCheck={field.kind === "text"} />}
-    {field.description && <small id={id + "-hint"}>{field.description}</small>}
-    {dimensioned && unitOverridden && <small id={id + "-units"}>
-      Unit: {chosenUnit}, set by {unitSetter ?? field.unit_field}.
-    </small>}
-    {dimensioned && !unitOverridden && <small id={id + "-units"}>
-      Default unit: {field.column_units?.length
-        ? field.column_units.map((unit, i) => `column ${i + 1}: ${unit}`).join("; ")
-        : field.default_unit || field.unit || "1"} · {field.dimension || "dimensionless"}.
-      {field.kind === "vector" || field.kind === "matrix"
-        ? ' Use JSON arrays; quote values with unit suffixes, e.g. ["25 mm", "2 cm"].'
-        : " You may append a compatible unit, e.g. 25 mm."}
-    </small>}
+    {helpOpen && <div id={id + "-help"} className="science-field-help">
+      {field.description && <p>{field.description}</p>}
+      {dimensioned && unitOverridden && <p>Unit: {chosenUnit}, set by {unitSetter ?? field.unit_field}.
+        {field.kind === "vector" || field.kind === "matrix"
+          ? ' Use JSON arrays; quote values with unit suffixes, e.g. ["25 mm", "2 cm"].'
+          : " You may append a compatible unit, e.g. 25 mm."}</p>}
+      {dimensioned && !unitOverridden && <p>
+        Default unit: {field.column_units?.length
+          ? field.column_units.map((columnUnit, i) => `column ${i + 1}: ${columnUnit}`).join("; ")
+          : field.default_unit || field.unit || "1"} · {field.dimension || "dimensionless"}.
+        {field.kind === "vector" || field.kind === "matrix"
+          ? ' Use JSON arrays; quote values with unit suffixes, e.g. ["25 mm", "2 cm"].'
+          : " You may append a compatible unit, e.g. 25 mm."}
+      </p>}
+    </div>}
     {options.length > 0 && <select aria-label={`Import ${field.label} from a connected result`} value=""
       onChange={(e) => { if (e.target.value) onImport(options[Number(e.target.value)]); }}>
       <option value="">Use connected result…</option>
@@ -479,63 +489,75 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
     finally { pending.current = false; setConfiguring(false); setBusy(false); }
   }
 
-  return <form onSubmit={submit}>
-    <p>{op.description}</p>
-    {(op.methods || op.citations?.length) && <details className="science-methods">
-      <summary>Methods and citations</summary>
-      {op.methods && <p>{op.methods}</p>}
-      {!!op.citations?.length && <ul>
-        {op.citations.map((citation) => <li key={citation.url + citation.label}>
-          <a href={citation.url} target="_blank" rel="noopener noreferrer">{citation.label}</a>
-        </li>)}
-      </ul>}
-    </details>}
+  return <form className="science-operation-editor" onSubmit={submit}>
+    <div className="science-operation-context">
+      {op.description && <p className="science-operation-preview" title={op.description}>{op.description}</p>}
+      {(op.description || op.methods || op.citations?.length) && <details className="science-methods">
+        <summary>About &amp; methods</summary>
+        <div className="science-methods-content">
+          {op.description && <p>{op.description}</p>}
+          {op.methods && <p>{op.methods}</p>}
+          {!!op.citations?.length && <ul>
+            {op.citations.map((citation) => <li key={citation.url + citation.label}>
+              <a href={citation.url} target="_blank" rel="noopener noreferrer">{citation.label}</a>
+            </li>)}
+          </ul>}
+        </div>
+      </details>}
+    </div>
     <fieldset disabled={busy}>
-      {op.fields.map((field) => {
-        const available = compatibleOptions(field, options, limits);
-        const source = draft.sources[field.key];
-        const previous = source && available.find((option) => matchesSource(option, source));
-        const chosenUnit = field.unit_field ? draft.values[field.unit_field]?.trim() : undefined;
-        const unitSetter = op.fields.find((other) => other.key === field.unit_field)?.label;
-        return <FieldEditor key={field.key} field={field} value={draft.values[field.key] ?? ""} options={available}
-          columnOptions={columnChoices(field, draft.values)}
-          chosenUnit={chosenUnit || undefined} unitSetter={unitSetter} stale={!!source && !previous} errorId={error?.field === field.key ? errorId : undefined}
-          imported={source && (previous?.label ?? "Result changed or disconnected. Select its current value or edit this input.")}
-          onEdit={(value) => {
-            setDraft((old) => {
-              const sources = { ...old.sources };
-              delete sources[field.key];
-              return { ...old, values: { ...old.values, [field.key]: value }, sources, dirty: true };
-            });
-            setError(null);
-          }}
-          onImport={(option) => {
-            if (option.tableColumn) {
-              if (pending.current) return;
-              pending.current = true;
-              setBusy(true);
-              setError(null);
-              void fetchTableColumn(option).then(({ values, reference }) => {
-                setDraft((old) => ({ ...old, dirty: true, values: { ...old.values, [field.key]: fieldText(field, values) },
-                  sources: { ...old.sources, [field.key]: reference } }));
-              }).catch((e) => {
-                setError({ message: e instanceof Error ? e.message : "Could not read the table column.", field: field.key });
-              }).finally(() => { pending.current = false; setBusy(false); });
-              return;
-            }
-            setDraft((old) => {
-              const values = { ...old.values, [field.key]: connectedInputText(field, option) };
-              // The selected table determines the meaning of every dependent
-              // column index. Force explicit re-selection when it changes.
-              if (field.kind === "table") for (const dependent of op.fields) {
-                if (dependent.kind === "column" && dependent.table_field === field.key) values[dependent.key] = "";
-              }
-              return { ...old, dirty: true, values,
-                sources: { ...old.sources, [field.key]: option.reference } };
-            });
-            setError(null);
-          }} />;
-      })}
+      <div className="science-inputs" role="group" aria-label="Inputs">
+        <div className="science-inputs-heading">
+          <strong>Inputs</strong><small>{op.fields.length} {op.fields.length === 1 ? "field" : "fields"}</small>
+        </div>
+        <div className="science-input-grid">
+          {op.fields.map((field) => {
+            const available = compatibleOptions(field, options, limits);
+            const source = draft.sources[field.key];
+            const previous = source && available.find((option) => matchesSource(option, source));
+            const chosenUnit = field.unit_field ? draft.values[field.unit_field]?.trim() : undefined;
+            const unitSetter = op.fields.find((other) => other.key === field.unit_field)?.label;
+            return <FieldEditor key={field.key} field={field} value={draft.values[field.key] ?? ""} options={available}
+              columnOptions={columnChoices(field, draft.values)}
+              chosenUnit={chosenUnit || undefined} unitSetter={unitSetter} stale={!!source && !previous} errorId={error?.field === field.key ? errorId : undefined}
+              imported={source && (previous?.label ?? "Result changed or disconnected. Select its current value or edit this input.")}
+              onEdit={(value) => {
+                setDraft((old) => {
+                  const sources = { ...old.sources };
+                  delete sources[field.key];
+                  return { ...old, values: { ...old.values, [field.key]: value }, sources, dirty: true };
+                });
+                setError(null);
+              }}
+              onImport={(option) => {
+                if (option.tableColumn) {
+                  if (pending.current) return;
+                  pending.current = true;
+                  setBusy(true);
+                  setError(null);
+                  void fetchTableColumn(option).then(({ values, reference }) => {
+                    setDraft((old) => ({ ...old, dirty: true, values: { ...old.values, [field.key]: fieldText(field, values) },
+                      sources: { ...old.sources, [field.key]: reference } }));
+                  }).catch((e) => {
+                    setError({ message: e instanceof Error ? e.message : "Could not read the table column.", field: field.key });
+                  }).finally(() => { pending.current = false; setBusy(false); });
+                  return;
+                }
+                setDraft((old) => {
+                  const values = { ...old.values, [field.key]: connectedInputText(field, option) };
+                  // The selected table determines the meaning of every dependent
+                  // column index. Force explicit re-selection when it changes.
+                  if (field.kind === "table") for (const dependent of op.fields) {
+                    if (dependent.kind === "column" && dependent.table_field === field.key) values[dependent.key] = "";
+                  }
+                  return { ...old, dirty: true, values,
+                    sources: { ...old.sources, [field.key]: option.reference } };
+                });
+                setError(null);
+              }} />;
+          })}
+        </div>
+      </div>
       {bound.some(([, ref]) => options.some((option) => matchesSource(option, ref) && option.uncertainty)) &&
         <label>Uncertainty propagation method
           <select aria-label="Uncertainty propagation method" value={uncertaintyMethod}
@@ -587,13 +609,17 @@ function Workbench({ session, state, options, run, configure, cancel, fetchTable
 }) {
   const [selected, setSelected] = useState(session.selected ?? state.runner?.operationId ?? state.latest?.operationId ?? state.operations[0].id);
   const [busy, setBusy] = useState(false);
+  const operationId = useId();
   const op = state.operations.find((candidate) => candidate.id === selected) ?? state.operations[0];
   const result = state.latest?.operationId === op.id ? state.latest : null;
   const revision = (state.runToken ?? JSON.stringify(state.latest?.provenance ?? null)) + "|" + JSON.stringify(state.runner ?? null);
   return <>
-    <label>Operation<select value={op.id} disabled={busy} onChange={(e) => { session.selectOperation(e.target.value); setSelected(e.target.value); }}>
-      {state.operations.map((operation) => <option key={operation.id} value={operation.id}>{operation.title}</option>)}
-    </select></label>
+    <div className="science-operation-picker">
+      <label htmlFor={operationId}>Operation</label>
+      <select id={operationId} value={op.id} disabled={busy} onChange={(e) => { session.selectOperation(e.target.value); setSelected(e.target.value); }}>
+        {state.operations.map((operation) => <option key={operation.id} value={operation.id}>{operation.title}</option>)}
+      </select>
+    </div>
     <OperationEditor key={op.id} session={session} op={op} result={result} configured={state.runner}
       revision={revision} runToken={state.runToken} limits={state.limits}
       options={options} run={run} configure={configure} cancel={cancel} fetchTableColumn={fetchTableColumn}
