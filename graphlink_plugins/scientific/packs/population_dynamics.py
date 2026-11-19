@@ -170,33 +170,59 @@ def _matrix_vector(matrix, population):
     return [math.fsum(a * n for a, n in zip(row, population)) for row in matrix]
 
 
-def _asymptotic_multiplier(matrix):
-    """Power iteration only reports a stable distribution when it converges.
-
-    Periodic and some reducible matrices have no convergent stage fractions
-    under this iteration; reporting a spurious Perron estimate would mislead.
-    """
+def _power_iterate(matrix, iterations=4000):
+    """Normalized power iteration; returns the converged fractions or None."""
     size = len(matrix)
     stage_fractions = [1.0 / size] * size
-    for _ in range(4000):
+    for _ in range(iterations):
         projected = _matrix_vector(matrix, stage_fractions)
-        multiplier = math.fsum(projected)
-        if multiplier == 0:
-            return 0.0, ()
-        if not math.isfinite(multiplier):
+        total = math.fsum(projected)
+        if total == 0:
+            return None
+        if not math.isfinite(total):
             raise ValueError("Matrix coefficients exceed the numeric range.")
-        updated = [n / multiplier for n in projected]
+        updated = [n / total for n in projected]
         if max(abs(a - b) for a, b in zip(updated, stage_fractions)) < 1e-12:
-            # Check Av = lambda v instead of interpreting a small iteration
-            # difference alone as a meaningful dominant eigenpair.
-            check = _matrix_vector(matrix, updated)
-            eigenvalue = math.fsum(check)
-            if (math.isfinite(eigenvalue) and max(
-                    abs(a - eigenvalue * b) for a, b in zip(check, updated)
-            ) <= 1e-9 * eigenvalue):
-                return eigenvalue, updated
+            return updated
         stage_fractions = updated
-    return "undefined (periodic or slowly converging matrix)", ()
+    return None
+
+
+def _asymptotic_multiplier(matrix):
+    """Return (dominant multiplier, stable stage fractions, oscillates).
+
+    Every nonnegative matrix has a real dominant (Perron) eigenvalue, but
+    plain power iteration does not converge for periodic (imprimitive)
+    matrices such as semelparous Leslie matrices. Iterating A + I instead
+    shares A's Perron eigenvector and converges for those matrices too.
+    The result is reported only when A v = lambda v is verified, and the
+    oscillates flag records that the plain projection cycles instead of
+    approaching the stable structure.
+    """
+    size = len(matrix)
+    # A nonnegative matrix is nilpotent (dominant multiplier 0) exactly when
+    # A^n applied to a positive vector vanishes.
+    probe = [1.0] * size
+    for _ in range(size):
+        probe = _matrix_vector(matrix, probe)
+    if not any(probe):
+        return 0.0, (), False
+    shifted = [[a + (1.0 if i == j else 0.0) for j, a in enumerate(row)]
+               for i, row in enumerate(matrix)]
+    stable = _power_iterate(shifted)
+    if stable is None:
+        return "undefined (dominant multiplier did not converge)", (), False
+    check = _matrix_vector(matrix, stable)
+    eigenvalue = math.fsum(check)
+    if not math.isfinite(eigenvalue):
+        raise ValueError("Matrix coefficients exceed the numeric range.")
+    scale = max(eigenvalue, max(stable))
+    if max(abs(a - eigenvalue * b) for a, b in zip(check, stable)) > 1e-9 * scale:
+        return "undefined (dominant multiplier did not converge)", (), False
+    if eigenvalue <= 0:
+        return 0.0, (), False
+    oscillates = _power_iterate(matrix) is None
+    return eigenvalue, stable, oscillates
 
 
 def matrix_population_projection(data):
@@ -229,7 +255,7 @@ def matrix_population_projection(data):
             if any(not math.isfinite(n) or n < 0 for n in current):
                 raise ValueError("Projection overflows; reduce the number of steps or matrix coefficients.")
     final_total = rows[-1][-1]
-    multiplier, stable = _asymptotic_multiplier(matrix)
+    multiplier, stable, oscillates = _asymptotic_multiplier(matrix)
     finite_horizon = (final_total / first_total)**(1 / steps)
     values = {
         "stages": size, "stages_unit": "stages",
@@ -249,9 +275,17 @@ def matrix_population_projection(data):
         values["stable_stage_fraction_unit"] = "1 (dimensionless)"
         values.update({f"stable_stage_{i + 1}_fraction": portion
                        for i, portion in enumerate(stable)})
-    asymptotic_note = (f"Converged asymptotic multiplier: {multiplier:.6g} per step."
-                       if isinstance(multiplier, float)
-                       else "No stable stage proportions / dominant multiplier from power iteration.")
+        values["stage_structure_behaviour"] = (
+            "periodic: stage proportions cycle" if oscillates
+            else "converges to the stable stage structure")
+    if isinstance(multiplier, float) and oscillates:
+        asymptotic_note = (f"Dominant (Perron) multiplier: {multiplier:.6g} per step. The matrix "
+                           "is periodic, so stage proportions cycle instead of settling "
+                           "into the stable structure.")
+    elif isinstance(multiplier, float):
+        asymptotic_note = f"Dominant (Perron) multiplier: {multiplier:.6g} per step."
+    else:
+        asymptotic_note = "No verified dominant multiplier or stable stage proportions."
     return {
         "summary": f"Projected {size} stages through {steps} {unit} steps: "
                    f"{first_total:.6g} to {final_total:.6g} individuals; "
@@ -346,10 +380,12 @@ OPERATIONS = (
             "For a nonnegative square Leslie age-class or Lefkovitch stage-class "
             "projection matrix A, iterate nₜ₊₁=A nₜ exactly for each requested "
             "step. Report total and stage abundance, and the finite-horizon geometric "
-            "factor (N_end/N_initial)^(1/steps). A normalized power iteration "
-            "reports the Perron multiplier and stable stage fractions only when "
-            "a verified eigenpair converges; periodic/slow cases are explicitly "
-            "unresolved, though their finite projections are still available. "
+            "factor (N_end/N_initial)^(1/steps). The dominant (Perron) multiplier "
+            "and stable stage fractions come from normalized power iteration on "
+            "A + I, which shares A's Perron eigenvector and also converges for "
+            "periodic (imprimitive) matrices such as semelparous Leslie matrices; "
+            "they are reported only after A v = λ v is verified, and periodic "
+            "matrices are flagged because their stage proportions cycle. "
             "Time invariant, no density dependence, environmental variability or "
             "integer rounding of expected counts."
         ),
