@@ -163,23 +163,28 @@ function FieldEditor({ field, value, onEdit, options, onImport, imported, errorI
   chosenUnit?: string; unitSetter?: string;
 }) {
   const unitOverridden = !!chosenUnit && chosenUnit !== field.default_unit;
+  const dimensioned = field.kind !== "text" && field.kind !== "choice";
   const id = useId();
-  const description = [field.description && id + "-hint", field.kind !== "text" && id + "-units",
+  const description = [field.description && id + "-hint", dimensioned && id + "-units",
     imported && id + "-source", errorId].filter(Boolean).join(" ");
   const common = { id, name: field.key, value, "aria-invalid": errorId || stale ? true as const : undefined,
     "aria-describedby": description || undefined };
   return <div className="science-field">
-    <label htmlFor={id}>{field.kind !== "text" ? `${field.label} (${field.column_units?.length ? field.unit : chosenUnit || field.default_unit || field.unit || "1"})` : field.label}</label>
-    {field.kind === "number" || field.kind === "integer"
+    <label htmlFor={id}>{dimensioned ? `${field.label} (${field.column_units?.length ? field.unit : chosenUnit || field.default_unit || field.unit || "1"})` : field.label}</label>
+    {field.kind === "choice"
+      ? <select {...common} onChange={(e) => onEdit(e.target.value)}>
+        {field.choices?.map((choice) => <option key={choice} value={choice}>{choice}</option>)}
+      </select>
+      : field.kind === "number" || field.kind === "integer"
       ? <input {...common} type="text" inputMode="text"
         onChange={(e) => onEdit(e.target.value)} />
       : <textarea {...common} rows={field.kind === "matrix" || field.kind === "text" ? 3 : 2}
         onChange={(e) => onEdit(e.target.value)} spellCheck={field.kind === "text"} />}
     {field.description && <small id={id + "-hint"}>{field.description}</small>}
-    {field.kind !== "text" && unitOverridden && <small id={id + "-units"}>
+    {dimensioned && unitOverridden && <small id={id + "-units"}>
       Unit: {chosenUnit}, set by {unitSetter ?? field.unit_field}.
     </small>}
-    {field.kind !== "text" && !unitOverridden && <small id={id + "-units"}>
+    {dimensioned && !unitOverridden && <small id={id + "-units"}>
       Default unit: {field.column_units?.length
         ? field.column_units.map((unit, i) => `column ${i + 1}: ${unit}`).join("; ")
         : field.default_unit || field.unit || "1"} · {field.dimension || "dimensionless"}.
@@ -409,6 +414,15 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
 
   return <form onSubmit={submit}>
     <p>{op.description}</p>
+    {(op.methods || op.citations?.length) && <details className="science-methods">
+      <summary>Methods and citations</summary>
+      {op.methods && <p>{op.methods}</p>}
+      {!!op.citations?.length && <ul>
+        {op.citations.map((citation) => <li key={citation.url + citation.label}>
+          <a href={citation.url} target="_blank" rel="noopener noreferrer">{citation.label}</a>
+        </li>)}
+      </ul>}
+    </details>}
     <fieldset disabled={busy}>
       {op.fields.map((field) => {
         const available = compatibleOptions(field, options, limits);

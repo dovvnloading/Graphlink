@@ -1,16 +1,20 @@
 export interface ScienceField {
   key: string;
   label: string;
-  kind: "number" | "integer" | "vector" | "matrix" | "text";
+  kind: "number" | "integer" | "vector" | "matrix" | "text" | "choice";
   unit: string;
   description: string;
   default_unit?: string;
   dimension?: string;
   column_units?: string[];
   column_dimensions?: string[];
+  /** Allowed literal values for a categorical dropdown (kind: choice). */
+  choices?: string[];
   /** Sibling input whose text sets this field's unit (e.g. value <- from_unit). */
   unit_field?: string;
 }
+
+export interface ScienceCitation { label: string; url: string }
 
 export interface ScienceOperation {
   id: string;
@@ -18,6 +22,9 @@ export interface ScienceOperation {
   description: string;
   fields: ScienceField[];
   example: Record<string, unknown>;
+  /** Human-readable description of the implemented numerical procedure and limitations. */
+  methods?: string;
+  citations?: ScienceCitation[];
 }
 
 export interface SourceReference {
@@ -212,7 +219,13 @@ const matrix = (value: unknown): value is number[][] => Array.isArray(value) && 
 
 function isField(value: unknown): value is ScienceField {
   return record(value) && ["key", "label", "unit", "description"].every((key) => typeof value[key] === "string")
-    && ["number", "integer", "vector", "matrix", "text"].includes(String(value.kind))
+    && ["number", "integer", "vector", "matrix", "text", "choice"].includes(String(value.kind))
+    && (value.kind === "choice"
+      ? Array.isArray(value.choices) && value.choices.length > 0
+        && value.choices.every((choice: unknown) => typeof choice === "string" && !!choice
+          && choice.trim() === choice)
+        && new Set(value.choices).size === value.choices.length
+      : value.choices === undefined || Array.isArray(value.choices) && value.choices.length === 0)
     && (value.default_unit === undefined || typeof value.default_unit === "string")
     && (value.dimension === undefined || typeof value.dimension === "string")
     && (value.column_units === undefined || strings(value.column_units))
@@ -223,7 +236,12 @@ function isField(value: unknown): value is ScienceField {
 function isOperation(value: unknown): value is ScienceOperation {
   return record(value) && typeof value.id === "string" && typeof value.title === "string"
     && typeof value.description === "string" && record(value.example) && Array.isArray(value.fields)
-    && value.fields.every(isField);
+    && value.fields.every(isField)
+    && (value.methods === undefined || typeof value.methods === "string")
+    && (value.citations === undefined || Array.isArray(value.citations)
+      && value.citations.every((citation: unknown) => record(citation)
+        && typeof citation.label === "string" && citation.label.trim().length > 0
+        && typeof citation.url === "string" && /^https:\/\/[^/\s]+(?:\/[^\s]*)?$/.test(citation.url)));
 }
 
 function isSourceReference(value: unknown): value is SourceReference {
@@ -339,7 +357,7 @@ function editableNumber(value: number): string {
 
 export function fieldText(field: ScienceField, value: unknown): string {
   if (value === undefined) return "";
-  if (field.kind === "text") return String(value);
+  if (field.kind === "text" || field.kind === "choice") return String(value);
   if (typeof value === "number") return editableNumber(value);
   if (Array.isArray(value)) return "[" + value.map((part) => typeof part === "string" ? JSON.stringify(part) : fieldText(field, part)).join(",") + "]";
   return JSON.stringify(value);
@@ -356,11 +374,12 @@ function accepts(kind: ScienceField["kind"], value: unknown): boolean {
     case "vector": return vector(value);
     case "matrix": return matrix(value);
     case "text": return typeof value === "string";
+    case "choice": return typeof value === "string";
   }
 }
 
 const expected = { number: "a finite number", integer: "a whole number", vector: "an array of numbers, such as [1,2,3]",
-  matrix: "a rectangular numeric array, such as [[1,2],[3,4]]", text: "text" };
+  matrix: "a rectangular numeric array, such as [[1,2],[3,4]]", text: "text", choice: "an allowed choice" };
 
 export class FieldError extends Error {
   constructor(readonly key: string, message: string) { super(message); }
@@ -422,6 +441,9 @@ export function parseInputs(op: ScienceOperation, draft: Record<string, string>,
     if (field.kind === "text") {
       if (raw.length > limits.text && Array.from(raw).length > limits.text)
         invalid(`${field.label} exceeds ${limits.text} characters.`);
+      value = raw;
+    } else if (field.kind === "choice") {
+      if (!field.choices?.includes(raw)) invalid(`${field.label} must be one of: ${(field.choices ?? []).join(", ")}.`);
       value = raw;
     } else if (field.kind === "integer") {
       // Decimal/exponent conversion through Number first silently rounds e.g. 9007199254740990.5.
@@ -542,6 +564,7 @@ export function compatibleOptions(field: ScienceField, options: SourceOption[], 
     if (field.kind === "number" && (unpropagatable || uncertainty?.method === "monte_carlo")) return false;
     if (tableColumn) return field.kind === "vector" && tableColumn.end - tableColumn.start <= limits.points;
     if (!accepts(field.kind, value)) return false;
+    if (field.kind === "choice" && !field.choices?.includes(value as string)) return false;
     if (typeof value === "string") return value.length > 0 && (value.length <= limits.text || Array.from(value).length <= limits.text);
     if (!Array.isArray(value)) return true;
     return value.length <= limits.points && (field.kind !== "matrix" ||

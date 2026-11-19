@@ -17,7 +17,7 @@ from backend.session_load import restore_chat_into_document
 from backend.session_save import build_chat_data
 from backend.tools import ToolRegistry
 from graphlink_plugins.scientific.catalog import PACKS, operations
-from graphlink_plugins.scientific.core import MAX_POINTS, VERSION, run_operation
+from graphlink_plugins.scientific.core import Citation, Field, MAX_POINTS, Operation, VERSION, run_operation
 from graphlink_settings_store import SettingsManager
 
 
@@ -185,6 +185,40 @@ def test_described_fields_name_the_sibling_that_sets_their_unit():
                 if "unit_field" in field:
                     assert keys[field["unit_field"]].kind == "text"
                     assert isinstance(op.example.get(field["unit_field"]), str)
+
+
+def test_choice_fields_and_operation_metadata_are_validated_at_the_python_boundary():
+    field = Field("mode", "Assay mode", "choice", choices=("EC50", "IC50"))
+    citation = Citation("Method paper", "https://doi.org/10.1002/pst.426")
+    operation = Operation(
+        "assay_mode", "Assay mode", "Test allowed categorical inputs", (field,),
+        {"mode": "EC50"},
+        lambda data: {"summary": data["mode"], "values": {"selected": data["mode"]}},
+        methods="Categorical mode selects the interpretation, not the computation.",
+        citations=(citation,),
+    )
+    described = operation.describe()
+    assert described["fields"][0]["choices"] == ("EC50", "IC50")
+    assert described["methods"] == operation.methods
+    assert described["citations"] == [{"label": citation.label, "url": citation.url}]
+    assert run_operation("biology", operation, {"mode": "IC50"})["values"]["selected"] == "IC50"
+    for invalid in ("ec50", "Other", "", 1, None):
+        with pytest.raises(ValueError, match="must be one of"):
+            run_operation("biology", operation, {"mode": invalid})
+    with pytest.raises(ValueError, match="exactly the inputs"):
+        run_operation("biology", operation, {"mode": "EC50", "extra": "no"})
+    for options in ((), ("EC50", "EC50"), (" EC50", "IC50"), (1, "IC50")):
+        with pytest.raises(ValueError, match="Choice fields require"):
+            Field("mode", "Assay mode", "choice", choices=options)
+    with pytest.raises(ValueError, match="Only choice fields"):
+        Field("mode", "Assay mode", "text", choices=("EC50",))
+    with pytest.raises(ValueError, match="Example for mode"):
+        Operation("broken", "Broken", "", (field,), {"mode": "invalid"}, lambda _: {})
+    with pytest.raises(ValueError, match="HTTPS URL"):
+        Citation("Unsafe", "javascript:alert(1)")
+    # Non-choice catalog entries still use the original wire shape.
+    assert "choices" not in operations("biology")[0].describe()["fields"][0]
+    assert "methods" not in operations("core")[0].describe()
 
 
 def test_damaged_receipt_is_visible_and_preserved(session):

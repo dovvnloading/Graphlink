@@ -39,6 +39,30 @@ function mount(raw = JSON.stringify(state), parents = [parent], charts: ScienceC
 }
 
 describe("scientific workbench card", () => {
+  it("renders categorical choices as a dropdown with linked methods and citations", async () => {
+    const choiceOp = {
+      id: "potency", title: "Potency fit", description: "Fit a response curve.",
+      fields: [{ key: "metric", label: "Potency metric", kind: "choice" as const,
+        unit: "category", description: "", choices: ["EC50", "IC50"] }],
+      example: { metric: "EC50" },
+      methods: "Four-parameter logistic fit, with relative potency at the response midpoint.",
+      citations: [{ label: "Sebaugh (2011)", url: "https://doi.org/10.1002/pst.426" }],
+    };
+    const { request } = mount(JSON.stringify({ ...state, packId: "biology", operations: [choiceOp] }));
+    const metric = screen.getByRole("combobox", { name: "Potency metric" });
+    expect(metric).toHaveValue("EC50");
+    expect(within(metric).getAllByRole("option")).toHaveLength(2);
+    fireEvent.click(screen.getByText("Methods and citations"));
+    expect(screen.getByText(/Four-parameter logistic fit/)).toBeVisible();
+    expect(screen.getByRole("link", { name: "Sebaugh (2011)" }))
+      .toHaveAttribute("href", "https://doi.org/10.1002/pst.426");
+    fireEvent.change(metric, { target: { value: "IC50" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
+    expect(request.mock.lastCall?.[2]?.[2]).toMatchObject({
+      operation_id: "potency", inputs: { metric: "IC50" },
+    });
+  });
+
   it("charts a saved XY trace and exposes receipt-aware refresh for its linked chart", () => {
     const charts: ScienceChartLink[] = [{
       id: "child-chart", title: "Distance chart", chartType: "scatter",

@@ -11,7 +11,7 @@ import json
 import math
 from collections import Counter
 
-from graphlink_plugins.scientific.core import Field, Operation
+from graphlink_plugins.scientific.core import Citation, Field, Operation
 
 
 def _counts(values):
@@ -588,6 +588,21 @@ OPERATIONS = (
         (Field("counts", "Individuals observed per taxon", "vector", unit="individuals"),),
         {"counts": [12, 6, 2, 0]},
         community_diversity,
+        methods=(
+            "Count observed taxa with nᵢ > 0. From pᵢ = nᵢ/N for nonzero taxa, calculate Shannon "
+            "H = −Σpᵢ ln(pᵢ) (nats) and the Gini–Simpson index 1−Σpᵢ². This uses empirical "
+            "population proportions, without a finite-sample correction."
+        ),
+        citations=(
+            Citation(
+                "Shannon (1948), A Mathematical Theory of Communication, Bell System Technical Journal 27:379–423",
+                "https://doi.org/10.1002/j.1538-7305.1948.tb01338.x",
+            ),
+            Citation(
+                "Simpson (1949), Measurement of Diversity, Nature 163:688",
+                "https://doi.org/10.1038/163688a0",
+            ),
+        ),
     ),
     Operation(
         "quadrat_density",
@@ -600,6 +615,18 @@ OPERATIONS = (
         ),
         {"counts": [4, 9, 5], "area_m2": [1, 2, 1]},
         quadrat_density,
+        methods=(
+            "For nonoverlapping quadrats with matched counts nᵢ and positive areas Aᵢ, compute "
+            "individual densities nᵢ/Aᵢ and pooled density Σnᵢ/ΣAᵢ (individuals/m²). Unequal-area "
+            "quadrats are weighted by sampled area, not averaged equally; habitat-wide "
+            "extrapolation needs representative sampling."
+        ),
+        citations=(
+            Citation(
+                "OpenStax Biology 2e, 45.1 Population Demography — population density and quadrat sampling",
+                "https://openstax.org/books/biology-2e/pages/45-1-population-demography",
+            ),
+        ),
     ),
     Operation(
         "community_overlap",
@@ -612,6 +639,22 @@ OPERATIONS = (
         ),
         {"site_a_counts": [3, 2, 0, 0], "site_b_counts": [1, 0, 4, 0]},
         community_overlap,
+        methods=(
+            "Turn positive counts into species presence at each site, using the same taxon "
+            "ordering. Let a be taxa shared and u be taxa present at either site; Jaccard = a/u "
+            "and Sørensen = 2a/(u+a). Joint absences do not contribute; two empty sites yield "
+            "undefined similarity."
+        ),
+        citations=(
+            Citation(
+                "An improved asymptotic test for the Jaccard similarity index for binary data (2022) — set-overlap definition",
+                "https://www.sciencedirect.com/science/article/pii/S0167715222000074",
+            ),
+            Citation(
+                "Sørensen (1948), A method of establishing groups of equal amplitude in plant sociology, Biologiske Skrifter 5:1–34",
+                "https://refs.drheap.org/sorensen1948method/",
+            ),
+        ),
     ),
     Operation(
         "logistic_growth_fit", "Fit logistic population growth",
@@ -623,6 +666,18 @@ OPERATIONS = (
         {"time": [0, 1, 2, 3, 4, 5, 6, 7, 8],
          "abundance": [10.1, 15.9, 25.0, 37.7, 53.4, 67.7, 79.3, 87.6, 92.8],
          "time_unit": "days", "abundance_unit": "cells/mL"}, logistic_growth_fit,
+        methods=(
+            "Fit N(t) = K/[1+exp(−r(t−t_mid))] with unweighted multi-start Levenberg–Marquardt "
+            "nonlinear least squares (K,r > 0). Report fitted residuals, inflection time and "
+            "local linearized standard errors. Doubling time starts at fitted abundance at the "
+            "first sample and is defined only when twice that abundance is below K."
+        ),
+        citations=(
+            Citation(
+                "GraphPad Prism Curve Fitting Guide, Logistic growth — model and parameter interpretation",
+                "https://www.graphpad.com/guides/prism/latest/curve-fitting/reg_logistic-growth.htm",
+            ),
+        ),
     ),
     Operation(
         "gompertz_growth_fit", "Fit Gompertz population growth",
@@ -634,6 +689,18 @@ OPERATIONS = (
         {"time": [0, 1, 2, 3, 4, 5, 6, 7, 8],
          "abundance": [2.4, 8.2, 18.3, 33.1, 50.1, 65.7, 77.5, 86.1, 91.5],
          "time_unit": "days", "abundance_unit": "cells/mL"}, gompertz_growth_fit,
+        methods=(
+            "Fit N(t) = K exp[−exp(−r(t−t_mid))] by unweighted multi-start Levenberg–Marquardt "
+            "nonlinear least squares (K,r > 0). Here r controls the exponential decline of "
+            "specific growth rate, not a constant per-capita rate. Return local linearized "
+            "standard errors and first-sample doubling time only when 2N₀ < K."
+        ),
+        citations=(
+            Citation(
+                "GraphPad Prism Curve Fitting Guide, Gompertz growth — model and parameter interpretation",
+                "https://www.graphpad.com/guides/prism/latest/curve-fitting/reg_gompertz-growth.htm",
+            ),
+        ),
     ),
     Operation(
         "michaelis_menten_fit", "Fit Michaelis–Menten enzyme kinetics",
@@ -645,6 +712,18 @@ OPERATIONS = (
         {"substrate": [0, 1, 2, 5, 8, 12, 30, 50],
          "initial_rate": [0, 11.1, 25.4, 44.8, 54.5, 58.2, 72, 60.1],
          "substrate_unit": "mM", "rate_unit": "mM/s"}, michaelis_menten_fit,
+        methods=(
+            "Fit v = Vmax[S]/(Km+[S]) for Vmax,Km > 0 by unweighted, multi-start nonlinear least "
+            "squares. Parameter standard errors use local SSE/(n−2) × (JᵀJ)⁻¹ covariance. A "
+            "separate Lineweaver–Burk reciprocal regression is provided for comparison only; it "
+            "does not determine Vmax, Km or their uncertainties."
+        ),
+        citations=(
+            Citation(
+                "Michaelis & Menten (1913), translated and annotated by Johnson & Goody (2011), Biochemistry 50:8264–8269",
+                "https://doi.org/10.1021/bi201284u",
+            ),
+        ),
     ),
     Operation(
         "dose_response_4pl_fit", "Fit dose–response (4PL)",
@@ -653,11 +732,25 @@ OPERATIONS = (
          Field("response", "Measured responses", "vector", unit="selected response unit"),
          Field("concentration_unit", "Dose unit (e.g. nM)", "text", unit="unit label"),
          Field("response_unit", "Response unit (e.g. % activity)", "text", unit="unit label"),
-         Field("potency_metric", "Potency label: EC50 or IC50", "text", unit="category (dimensionless)")),
+         Field("potency_metric", "Potency label: EC50 or IC50", "choice",
+               unit="category (dimensionless)", choices=("EC50", "IC50"))),
         {"concentration": [0, 0.1, 0.3, 1, 3, 10, 30, 100, 300],
          "response": [1, 2, 5, 18, 42, 75, 92, 97, 99],
          "concentration_unit": "nM", "response_unit": "% activity", "potency_metric": "EC50"},
         dose_response_4pl_fit,
+        methods=(
+            "Use unweighted multi-start nonlinear least squares for y = "
+            "low+(high−low)/[1+exp(−h(ln(c)−ln(c50)))]. The positive Hill slope h is bounded "
+            "0.1–20; plateau ordering permits both ascending and descending responses. Zero-dose "
+            "controls approach the low-dose limit. Report relative EC50/IC50; its 95% interval is "
+            "a transformed Student-t interval on ln(c50) and its SE uses the delta method."
+        ),
+        citations=(
+            Citation(
+                "Sebaugh (2011), Guidelines for accurate EC50/IC50 estimation, Pharmaceutical Statistics 10:128–134",
+                "https://doi.org/10.1002/pst.426",
+            ),
+        ),
     ),
     Operation(
         "lotka_volterra", "Simulate Lotka–Volterra predator–prey",
@@ -674,6 +767,23 @@ OPERATIONS = (
         {"initial_prey": 40, "initial_predators": 9, "prey_growth_rate": .5,
          "predation_rate": .025, "conversion_rate": .01, "predator_death_rate": .4,
          "step_size": .1, "steps": 100, "time_unit": "days"}, lotka_volterra,
+        methods=(
+            "Integrate dX/dt = αX−βXY and dY/dt = δXY−γY from positive initial populations and "
+            "rates using classical fourth-order Runge–Kutta with eight internal substeps per "
+            "reported time interval. This deterministic predator–prey model omits carrying "
+            "capacity and demographic/environmental stochasticity; negative or nonfinite "
+            "trajectories are rejected."
+        ),
+        citations=(
+            Citation(
+                "Wolfram MathWorld, Lotka–Volterra Equations — model and equilibria",
+                "https://mathworld.wolfram.com/Lotka-VolterraEquations.html",
+            ),
+            Citation(
+                "Kingsland (2015), Alfred J. Lotka and the origins of theoretical population ecology, PNAS",
+                "https://pmc.ncbi.nlm.nih.gov/articles/PMC4534218/",
+            ),
+        ),
     ),
     Operation(
         "hardy_weinberg", "Hardy–Weinberg equilibrium and chi-square",
@@ -682,6 +792,22 @@ OPERATIONS = (
          Field("heterozygote_ab", "AB heterozygotes", "integer", unit="individuals"),
          Field("homozygote_bb", "BB homozygotes", "integer", unit="individuals")),
         {"homozygote_aa": 30, "heterozygote_ab": 60, "homozygote_bb": 10}, hardy_weinberg,
+        methods=(
+            "Estimate allele frequency p = (2AA+AB)/(2N), q = 1−p; the Hardy–Weinberg expected "
+            "genotype counts are Np², 2Npq and Nq². Compute Pearson χ² with one degree of freedom "
+            "after fitting p, and its asymptotic upper-tail p-value. Warn on expected genotype "
+            "counts below five and avoid χ² inference at a monomorphic locus."
+        ),
+        citations=(
+            Citation(
+                "Hardy (1908), Mendelian Proportions in a Mixed Population, Science 28:49–50",
+                "https://doi.org/10.1126/science.28.706.49",
+            ),
+            Citation(
+                "Pearson (1900), On the criterion that a given system of deviations..., Philosophical Magazine 50:157–175",
+                "https://doi.org/10.1080/14786440009463897",
+            ),
+        ),
     ),
     Operation(
         "kaplan_meier_logrank", "Kaplan–Meier and log-rank (two groups)",
@@ -694,6 +820,23 @@ OPERATIONS = (
         {"time_a": [2, 4, 5, 7, 9], "event_a": [1, 1, 0, 1, 1],
          "time_b": [6, 8, 11, 13, 15], "event_b": [1, 0, 1, 1, 0], "time_unit": "days"},
         kaplan_meier_logrank,
+        methods=(
+            "Calculate two right-censored Kaplan–Meier product-limit step curves, processing "
+            "events before censoring at tied times; Greenwood's variance gives final survival SEs "
+            "and medians are first crossings of 0.5. Use observed-minus-expected events with "
+            "hypergeometric tie variance for a Mantel–Cox log-rank χ² (one degree of freedom when "
+            "variance > 0). Both curves appear in the table; the plot displays group A."
+        ),
+        citations=(
+            Citation(
+                "Kaplan & Meier (1958), Nonparametric Estimation from Incomplete Observations, JASA 53:457–481",
+                "https://doi.org/10.1080/01621459.1958.10501452",
+            ),
+            Citation(
+                "Mantel (1966), Evaluation of Survival Data and Two New Rank Order Statistics, Cancer Chemotherapy Reports 50:163–170",
+                "https://pubmed.ncbi.nlm.nih.gov/5910392/",
+            ),
+        ),
     ),
     Operation(
         "richness_rarefaction", "Species richness: Chao1 and rarefaction",
@@ -701,5 +844,26 @@ OPERATIONS = (
         (Field("counts", "Abundances in taxon order", "vector", unit="individuals per taxon"),
          Field("subsample_individuals", "Rarefaction subsample size", "integer", unit="individuals")),
         {"counts": [5, 3, 2], "subsample_individuals": 5}, richness_rarefaction,
+        methods=(
+            "Calculate Chao1 = Sobs+f₁²/(2f₂), using the bias-corrected Sobs+f₁(f₁−1)/2 when f₂ = "
+            "0. Expected richness at sample size m ≤ N is the individual-based "
+            "without-replacement Hurlbert sum Σᵢ[1−C(N−nᵢ,m)/C(N,m)]. Use stable log-absence "
+            "probabilities (and a long-product approximation); rarefaction is an expectation, not "
+            "extrapolation or a confidence interval."
+        ),
+        citations=(
+            Citation(
+                "Chao (1984), Nonparametric Estimation of the Number of Classes in a Population, Scandinavian Journal of Statistics 11:265–270",
+                "https://www.jstor.org/stable/4615964",
+            ),
+            Citation(
+                "Hurlbert (1971), The Nonconcept of Species Diversity, Ecology 52:577–586",
+                "https://doi.org/10.2307/1934145",
+            ),
+            Citation(
+                "spacc (CRAN), Richness Estimation and Completeness — Chao1 conventions",
+                "https://cran.rstudio.org/web/packages/spacc/vignettes/richness-estimation.html",
+            ),
+        ),
     ),
 )

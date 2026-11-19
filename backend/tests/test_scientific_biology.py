@@ -66,6 +66,33 @@ def test_manifest_examples_receipts_and_legacy_operations():
     }
 
 
+def test_biology_operation_metadata_and_categorical_potency_label():
+    operation_ids = {op.id for op in operations("biology")}
+    assert len(operation_ids) == 11
+    for op in operations("biology"):
+        schema = op.describe()
+        assert op.methods and schema["methods"] == op.methods
+        assert len(op.citations) >= 1
+        assert len(schema["citations"]) == len(op.citations)
+        for citation in schema["citations"]:
+            assert citation["label"] and citation["url"].startswith("https://")
+        assert [field["key"] for field in schema["fields"]] == [field.key for field in op.fields]
+
+    fourpl = next(op for op in operations("biology") if op.id == "dose_response_4pl_fit")
+    metric = next(field for field in fourpl.describe()["fields"] if field["key"] == "potency_metric")
+    assert metric["kind"] == "choice"
+    assert metric["choices"] == ("EC50", "IC50")
+    assert fourpl.example["potency_metric"] == "EC50"
+    with pytest.raises(ValueError, match="must be one of"):
+        _run("dose_response_4pl_fit", **{**fourpl.example, "potency_metric": "arbitrary"})
+
+    # The first three operations keep the old field and result contracts.
+    for op in operations("biology")[:3]:
+        assert all(field.kind != "choice" for field in op.fields)
+        assert "choices" not in op.describe()["fields"][0]
+        assert _run(op.id, **op.example)["operationId"] == op.id
+
+
 def test_published_michaelis_menten_nls_not_reciprocal_regression():
     # Freddie Buck, UW Madison Biochemistry (2017), base R nls():
     # Vmax 73.261, Km 3.437 and SSE 156.4 (precision printed by author).
