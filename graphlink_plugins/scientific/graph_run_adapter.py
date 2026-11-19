@@ -205,7 +205,7 @@ def prepare(document: Any, node: Any, granted: Any) -> tuple[Any, dict, dict, st
                 len(selector) == 5 and selector[0] == "result_table_column"):
             latest = source_data.get("latest")
             table = latest.get("tableAsset") if isinstance(latest, dict) else None
-            if not table_metadata_valid(table):
+            if not isinstance(table, dict) or not table_metadata_valid(table):
                 raise SceneError("The connected result table is unavailable.")
             if selector == ["result_table"]:
                 value = table
