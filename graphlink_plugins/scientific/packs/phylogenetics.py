@@ -31,6 +31,8 @@ class _Node:
 
 def _taxa(node: _Node) -> tuple[str, ...]:
     if not node.children:
+        if node.name is None:
+            raise ValueError("A tree leaf must have a taxon label.")
         return (node.name,)
     return tuple(sorted(name for child in node.children for name in _taxa(child)))
 
@@ -178,7 +180,7 @@ def _parse(text: str) -> _Node:
 
 def _forest(text: str) -> list[_Node]:
     parser = _Newick(text)
-    trees = []
+    trees: list[_Node] = []
     while True:
         parser._skip()
         if parser.pos == len(text):
@@ -235,7 +237,7 @@ def _matrix(data: dict) -> tuple[list[str], dict[tuple[int, int], float]]:
     if not isinstance(matrix, list) or len(matrix) != n or any(
             not isinstance(row, list) or len(row) != n for row in matrix):
         raise ValueError("The distance matrix must be square and match the taxa list.")
-    distances = {}
+    distances: dict[tuple[str, str], float] = {}
     for i in range(n):
         for j in range(n):
             value = matrix[i][j]
@@ -251,11 +253,12 @@ def _matrix(data: dict) -> tuple[list[str], dict[tuple[int, int], float]]:
                     raise ValueError("Distance matrix must be symmetric.")
                 distances[names[i], names[j]] = (value + other) / 2
     sorted_names = sorted(names)
-    return sorted_names, {
-        (i, j): distances.get((sorted_names[i], sorted_names[j]),
-                               distances.get((sorted_names[j], sorted_names[i])))
-        for i in range(n) for j in range(i + 1, n)
-    }
+    ordered: dict[tuple[int, int], float] = {}
+    for i in range(n):
+        for j in range(i + 1, n):
+            a, b = sorted_names[i], sorted_names[j]
+            ordered[i, j] = distances[a, b] if (a, b) in distances else distances[b, a]
+    return sorted_names, ordered
 
 
 def _pair(i: int, j: int) -> tuple[int, int]:
@@ -284,7 +287,9 @@ def _distance_result(root: _Node, algorithm: str, clipped: int = 0) -> dict:
 
 def upgma(data: dict) -> dict:
     names, d = _matrix(data)
-    active = {i: (_Node(name), 1, 0.0, (name,)) for i, name in enumerate(names)}
+    active: dict[int, tuple[_Node, int, float, tuple[str, ...]]] = {
+        i: (_Node(name), 1, 0.0, (name,)) for i, name in enumerate(names)
+    }
     next_id = len(active)
     while len(active) > 1:
         ids = sorted(active)
@@ -402,8 +407,8 @@ def _on_edge(graph, labels, a: int, b: int, from_a: float | None) -> _Node:
 
 
 def _path(graph, start: int, end: int) -> list[tuple[int, int, float | None]]:
-    parents = {start: None}
-    edges = {}
+    parents: dict[int, int | None] = {start: None}
+    edges: dict[int, float | None] = {}
     pending = [start]
     while pending and end not in parents:
         here = pending.pop()
@@ -412,14 +417,22 @@ def _path(graph, start: int, end: int) -> list[tuple[int, int, float | None]]:
                 parents[other] = here
                 edges[other] = weight
                 pending.append(other)
-    result = []
+    result: list[tuple[int, int, float | None]] = []
     here = end
-    while parents[here] is not None:
+    while True:
         previous = parents[here]
+        if previous is None:
+            break
         result.append((previous, here, edges[here]))
         here = previous
     result.reverse()
     return result
+
+
+def _require_length(weight: float | None) -> float:
+    if weight is None:
+        raise ValueError("A weighted tree requires every branch length.")
+    return weight
 
 
 def _midpoint(graph, labels) -> _Node:
@@ -431,7 +444,7 @@ def _midpoint(graph, labels) -> _Node:
     for i, (_, a) in enumerate(tips):
         for _, b in tips[i + 1:]:
             path = _path(graph, a, b)
-            distance = math.fsum(weight for _, _, weight in path)
+            distance = math.fsum(_require_length(weight) for _, _, weight in path)
             if distance > max_distance:
                 max_distance, diameter_path = distance, path
     if max_distance == 0:
@@ -439,6 +452,7 @@ def _midpoint(graph, labels) -> _Node:
         return _on_edge(graph, labels, a, b, 0.0)
     remaining = max_distance / 2
     for a, b, length in diameter_path:
+        length = _require_length(length)
         if remaining == 0:
             return _collapse(_orient(graph, labels, a, None))
         if remaining < length:
@@ -482,6 +496,8 @@ def _clades(root: _Node, rooted: bool) -> set[frozenset[str]]:
 
     def visit(node: _Node, at_root: bool) -> frozenset[str]:
         if not node.children:
+            if node.name is None:
+                raise ValueError("A tree leaf must have a taxon label.")
             return frozenset((node.name,))
         members = frozenset().union(*(visit(child, False) for child in node.children))
         size = len(members)
@@ -538,7 +554,7 @@ def patristic_distances(data: dict) -> dict:
     distances = []
     for i, (name, a) in enumerate(tips):
         for other_name, b in tips[i + 1:]:
-            distance = math.fsum(weight for _, _, weight in _path(graph, a, b))
+            distance = math.fsum(_require_length(weight) for _, _, weight in _path(graph, a, b))
             rows.append([name, other_name, distance])
             distances.append(distance)
     return {
