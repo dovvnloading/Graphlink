@@ -8,7 +8,7 @@ import { downloadBlob } from "./downloadTextFile";
 import { writeTableCsv } from "./tableCsv";
 import { createLinearScale } from "./charts/chartScales";
 import {
-  chartableScienceTypes, compatibleOptions, draftInputs, FieldError, fieldText, matchesSource, parseInputs, readScienceState, sourceOptions,
+  chartableScienceTypes, compatibleOptions, connectedInputText, draftInputs, FieldError, fieldText, formatMeasurement, matchesSource, parseInputs, readScienceState, resultMeasurement, sourceOptions,
   type EditorDraft, type ScienceField, type ScienceLimits, type ScienceOperation, type ScienceParent, type SciencePlot, type ScienceResult,
   type ScienceChartLink, type ScienceChartType, type ScienceState, type Sources, type SourceOption, type SourceReference,
 } from "./scientificWorkbench";
@@ -75,7 +75,29 @@ function Results({ result, title, exportJson, onChart, onRefresh, charts }: {
   return <section className="science-results" aria-label="Latest result">
     <h4>Last successful run · {title}</h4>
     <p role="status">{result.summary}</p>
-    <dl>{Object.entries(result.values).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{display(value)}</dd></div>)}</dl>
+    <dl>{Object.entries(result.values).map(([label, value]) => {
+      const measured = resultMeasurement(result, label);
+      return <div key={label}><dt>{label}</dt><dd>{measured ? formatMeasurement(measured) : display(value)}</dd></div>;
+    })}</dl>
+    {result.uncertainty && <details className="science-uncertainty-budget">
+      <summary>Propagated uncertainty budget · {result.uncertainty.method === "gum" ? "first-order GUM" : "Monte Carlo"}</summary>
+      {Object.entries(result.uncertainty.outputs).map(([name, measured]) =>
+        <section key={name}>
+          <h5>{name} · {formatMeasurement(measured)}</h5>
+          {measured.interval && <small>{Math.round((measured.coverageProbability ?? 0.95) * 100)}% coverage interval [{measured.interval[0]}, {measured.interval[1]}] · coverage factor k = {measured.coverageFactor}</small>}
+          {measured.budgetNote && <small>{measured.budgetNote}</small>}
+          {measured.budget && <table aria-label={`Uncertainty budget for ${name}`}>
+            <thead><tr><th>Contributing input</th><th>Standard uncertainty</th><th>Sensitivity</th><th>Signed contribution</th><th>Variance / covariance</th></tr></thead>
+            <tbody>{measured.budget.map((entry, index) => <tr key={index}>
+              <td>{entry.input}{entry.kind === "covariance" ? " (shared source)" : entry.unit ? ` (${entry.unit})` : ""}</td>
+              <td>{entry.standardUncertainty ?? "—"}</td><td>{entry.sensitivity ?? "—"}</td>
+              <td>{entry.signedContribution ?? "—"}</td><td>{entry.variance}</td>
+            </tr>)}</tbody>
+          </table>}
+        </section>)}
+      {Object.entries(result.uncertainty.unsupportedOutputs ?? {}).map(([name, why]) =>
+        <p role="note" key={name}>Uncertainty propagation unavailable for {name}: {why}</p>)}
+    </details>}
     {plot && <Plot plot={plot} />}
     {table && <div className="science-table">
       <table aria-label="Result table"><thead><tr>{table.columns.map((col, i) => <th key={i} scope="col">{col}</th>)}</tr></thead>
@@ -275,17 +297,30 @@ function TableEditor({ state, nodeId, pluginId, store }: {
   </section>;
 }
 
-type Run = (operationId: string, inputs: Record<string, unknown>, sources: Sources, expectedRun?: string) => Promise<void>;
+type Run = (operationId: string, inputs: Record<string, unknown>, sources: Sources, expectedRun?: string,
+  method?: "auto" | "gum" | "monte_carlo") => Promise<void>;
 type Cancel = (operationId: string) => Promise<void>;
-function restoreDraft(op: ScienceOperation, result: ScienceResult | null, revision: string): EditorDraft {
-  return { values: draftInputs(op, result?.inputs ?? op.example), sources: result?.provenance.sources ?? {}, revision, dirty: false };
+function restoreDraft(op: ScienceOperation, result: ScienceResult | null, revision: string,
+  options: SourceOption[] = []): EditorDraft {
+  const sources = result?.provenance.sources ?? {};
+  const values = draftInputs(op, result?.inputs ?? op.example);
+  // Restore the linked scalar in its source units instead of reusing the
+  // normalized solver value and losing the original input-unit provenance.
+  for (const field of op.fields) {
+    const source = sources[field.key];
+    const option = source && options.find((candidate) => matchesSource(candidate, source));
+    if (option && field.kind === "number" && option.unit) {
+      values[field.key] = connectedInputText(field, option);
+    }
+  }
+  return { values, sources, revision, dirty: false };
 }
 
 function OperationEditor({ session, op, result, revision, runToken, limits, options, run, cancel, fetchTableColumn, busy, setBusy }: {
   session: ScienceEditorSession; op: ScienceOperation; result: ScienceResult | null; revision: string; runToken?: string; limits?: ScienceLimits;
   options: SourceOption[]; run: Run; cancel: Cancel; fetchTableColumn: FetchTableColumn; busy: boolean; setBusy: (busy: boolean) => void;
 }) {
-  const [draft, setDraft] = useState(() => session.drafts.get(op.id) ?? restoreDraft(op, result, revision));
+  const [draft, setDraft] = useState(() => session.drafts.get(op.id) ?? restoreDraft(op, result, revision, options));
   useLayoutEffect(() => {
     if (draft.dirty) session.drafts.set(op.id, draft);
     else session.drafts.delete(op.id);
@@ -293,10 +328,11 @@ function OperationEditor({ session, op, result, revision, runToken, limits, opti
   const [error, setError] = useState<{ message: string; field?: string } | null>(null);
   const [running, setRunning] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [uncertaintyMethod, setUncertaintyMethod] = useState<"auto" | "gum" | "monte_carlo">("auto");
   const errorId = useId();
   const changed = draft.revision !== revision;
   if (changed && !draft.dirty) {
-    setDraft(restoreDraft(op, result, revision));
+    setDraft(restoreDraft(op, result, revision, options));
     setError(null);
   }
   const conflict = changed && draft.dirty;
@@ -321,7 +357,7 @@ function OperationEditor({ session, op, result, revision, runToken, limits, opti
     setRunning(true);
     setBusy(true);
     try {
-      await run(op.id, inputs, draft.sources, runToken);
+      await run(op.id, inputs, draft.sources, runToken, uncertaintyMethod);
       setDraft((old) => ({ ...old, dirty: false }));
     } catch (e) { setError({ message: e instanceof Error ? e.message : "The calculation failed." }); }
     finally { pending.current = false; setRunning(false); setBusy(false); }
@@ -359,16 +395,25 @@ function OperationEditor({ session, op, result, revision, runToken, limits, opti
               }).finally(() => { pending.current = false; setBusy(false); });
               return;
             }
-            setDraft((old) => ({ ...old, dirty: true, values: { ...old.values, [field.key]: fieldText(field, option.value) },
+            setDraft((old) => ({ ...old, dirty: true, values: { ...old.values, [field.key]: connectedInputText(field, option) },
               sources: { ...old.sources, [field.key]: option.reference } }));
             setError(null);
           }} />;
       })}
+      {bound.some(([, ref]) => options.some((option) => matchesSource(option, ref) && option.uncertainty)) &&
+        <label>Uncertainty propagation method
+          <select aria-label="Uncertainty propagation method" value={uncertaintyMethod}
+            onChange={(event) => setUncertaintyMethod(event.target.value as "auto" | "gum" | "monte_carlo")}>
+            <option value="auto">Automatic · first-order GUM or Monte Carlo for strong nonlinearity</option>
+            <option value="gum">First-order GUM</option>
+            <option value="monte_carlo">Monte Carlo · JCGM 101 (Gaussian input model)</option>
+          </select>
+        </label>}
       {conflict && <div className="science-conflict">
         <p role="alert">The saved run changed while you were editing. Your inputs are still here.</p>
         <div className="science-actions">
           <button type="button" onClick={() => { setDraft({ ...draft, revision }); setError(null); }}>Keep my inputs</button>
-          <button type="button" onClick={() => { setDraft(restoreDraft(op, result, revision)); setError(null); }}>
+          <button type="button" onClick={() => { setDraft(restoreDraft(op, result, revision, options)); setError(null); }}>
             {result ? "Load saved inputs" : "Reset to example"}
           </button>
         </div>
@@ -444,7 +489,7 @@ export const ScientificNodeView = memo(function ScientificNodeView({ data, id, s
         charts={data.charts ?? []}
         onChart={(chartType) => data.store.generateChart(id, chartType)}
         onRefresh={(chart) => data.store.generateChart(chart.id, chart.chartType)}
-        run={(operationId, inputs, sources, token) => data.store.runScientificOperation(data.pluginId, id, operationId, inputs, sources, token)}
+        run={(operationId, inputs, sources, token, method) => data.store.runScientificOperation(data.pluginId, id, operationId, inputs, sources, token, method)}
         cancel={(operationId) => data.store.cancelScientificOperation(data.pluginId, id, operationId)} />
       : <p role="alert">This workbench version could not be loaded. Check the plugin in Settings.</p>}
   </NodeShell>;

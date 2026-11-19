@@ -53,7 +53,9 @@ def execution_timeout(operation: Operation) -> float:
 
 
 def _calculate_in_worker(sender: Connection, pack_id: str, operation_id: str, operation: Operation | None,
-                         inputs: dict, sources: dict | None, input_units: dict | None) -> None:
+                         inputs: dict, sources: dict | None, input_units: dict | None,
+                         uncertainty_inputs: dict | None = None,
+                         uncertainty_method: str = "auto") -> None:
     """Top-level spawn target: no closure or live graph objects cross processes."""
     try:
         try:
@@ -63,7 +65,9 @@ def _calculate_in_worker(sender: Connection, pack_id: str, operation_id: str, op
                 # inside the worker instead of changing their public pack API.
                 from .catalog import operations
                 operation = next(op for op in operations(pack_id) if op.id == operation_id)
-            answer: _WorkerReply = ("ok", calculate_result(pack_id, operation, inputs, sources, input_units=input_units))
+            answer: _WorkerReply = ("ok", calculate_result(
+                pack_id, operation, inputs, sources, input_units=input_units,
+                uncertainty_inputs=uncertainty_inputs, uncertainty_method=uncertainty_method))
         except ValueError as exc:
             answer = ("invalid_input", str(exc))
         except Exception:
@@ -96,7 +100,9 @@ def _stop_worker(process: BaseProcess) -> None:
 
 async def execute_in_process(pack_id: str, operation: Operation, inputs: dict, sources: dict | None,
                              *, timeout_s: float, cancel_event: asyncio.Event,
-                             input_units: dict | None = None) -> dict:
+                             input_units: dict | None = None,
+                             uncertainty_inputs: dict | None = None,
+                             uncertainty_method: str = "auto") -> dict:
     """Run without executor threads; terminate/reap the child on every exit.
 
     Spawn works on Windows (forking the multithreaded server would be unsafe).
@@ -118,7 +124,8 @@ async def execute_in_process(pack_id: str, operation: Operation, inputs: dict, s
         transferable_operation = None  # Resolve built-in operation by ID in child.
     worker = context.Process(
         target=_calculate_in_worker,
-        args=(writer, pack_id, operation.id, transferable_operation, inputs, sources, input_units),
+        args=(writer, pack_id, operation.id, transferable_operation, inputs, sources,
+              input_units, uncertainty_inputs, uncertainty_method),
         daemon=True, name=f"graphlink-science-{pack_id}-{operation.id}",
     )
     try:

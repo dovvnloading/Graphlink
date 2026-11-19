@@ -258,6 +258,9 @@ def check_artifact(data: dict) -> None:
             for cell in row:
                 if not isinstance(cell, str):
                     finite(cell, "Table cell")
+    if "uncertainty" in data:
+        from .propagation import check_uncertainty
+        check_uncertainty(data["uncertainty"], data["values"])
     if "plot" in data:
         plot = data["plot"]
         if not isinstance(plot, dict) or not all(isinstance(plot.get(k), list) for k in ("x", "y")):
@@ -271,17 +274,27 @@ def check_artifact(data: dict) -> None:
                 finite(point, "Plot coordinate")
 
 
-def run_operation(pack: str, operation: Operation, raw: dict, sources: dict | None = None) -> dict:
+def run_operation(pack: str, operation: Operation, raw: dict, sources: dict | None = None,
+                  *, uncertainty_inputs: dict | None = None, uncertainty_method: str = "auto") -> dict:
     values, units = validated_inputs_with_units(operation, raw)
-    return calculate_result(pack, operation, values, sources, input_units=units)
+    return calculate_result(pack, operation, values, sources, input_units=units,
+                            uncertainty_inputs=uncertainty_inputs, uncertainty_method=uncertainty_method)
 
 
 def calculate_result(pack: str, operation: Operation, inputs: dict, sources: dict | None,
-                     *, input_units: dict | None = None) -> dict:
+                     *, input_units: dict | None = None, uncertainty_inputs: dict | None = None,
+                     uncertainty_method: str = "auto") -> dict:
     """Calculate with normalized inputs after any requested source bindings are verified."""
     try:
         output = operation.calculate(inputs)
         check_artifact(output)
+        if uncertainty_inputs:
+            # Keep the numerical output and historic hash format for exact-input runs.
+            # Uncertain connected runs attach a receipt-protected GUM/MC sidecar.
+            from .propagation import propagate
+            output = {**output, "uncertainty": propagate(
+                operation, inputs, output, uncertainty_inputs, uncertainty_method)}
+            check_artifact(output)
         input_hash = fingerprint(inputs)
         result_hash = fingerprint([pack, VERSION, operation.id, input_hash, output])
     except ArithmeticError:
@@ -346,7 +359,7 @@ def readable_result(data: dict, pack: str) -> bool:
         if (not isinstance(sources, dict) or sources.keys() - result["inputs"].keys()
                 or not all(_source_valid(ref) for ref in sources.values())):
             return False
-        output = {k: result[k] for k in ("summary", "values", "table", "plot") if k in result}
+        output = {k: result[k] for k in ("summary", "values", "table", "plot", "uncertainty") if k in result}
         check_artifact(output)
         inputs_hash = fingerprint(result["inputs"])
         version = receipt["packVersion"]
