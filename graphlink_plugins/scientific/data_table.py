@@ -16,6 +16,8 @@ import json
 import math
 import re
 import tempfile
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -36,6 +38,22 @@ KINDS = frozenset(("numeric", "text", "categorical", "datetime", "boolean"))
 _REF = re.compile(r"[0-9a-f]{64}")
 _STAGING_DIR = tempfile.TemporaryDirectory(prefix="graphlink-scientific-")
 _STAGING = AssetStore(Path(_STAGING_DIR.name))
+_WORKER_STORE: ContextVar[AssetStore | None] = ContextVar("scientific_table_worker_store", default=None)
+
+
+def table_store_root() -> str:
+    """The parent-owned staging directory, passed only to a trusted worker."""
+    return str(_STAGING.root)
+
+
+@contextmanager
+def use_table_store(root: str):
+    """A spawned process has its own staging cache; read the parent's verified assets."""
+    token = _WORKER_STORE.set(AssetStore(Path(root)))
+    try:
+        yield
+    finally:
+        _WORKER_STORE.reset(token)
 
 
 @dataclass(frozen=True)
@@ -302,7 +320,7 @@ def persist_table(data: dict) -> dict:
 def read_table(meta: dict) -> dict:
     if not table_metadata_valid(meta):
         raise ValueError("The scientific table's import receipt is damaged.")
-    raw = _STAGING.get(meta["asset_ref"], max_bytes=TABLE_MAX_ASSET_BYTES)
+    raw = (_WORKER_STORE.get() or _STAGING).get(meta["asset_ref"], max_bytes=TABLE_MAX_ASSET_BYTES)
     if raw is None:
         raise ValueError("The scientific table asset is missing. Restore the workspace asset and reopen.")
     try:

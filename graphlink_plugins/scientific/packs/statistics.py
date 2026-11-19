@@ -87,6 +87,38 @@ def _weighted(data):
     }
 
 
+
+def _grouped_table(data):
+    from graphlink_plugins.scientific.data_table import read_table
+
+    table = read_table(data["table"])
+    value_column = data["value_column"]
+    group_column = data["group_column"]
+    groups: dict[str, list[float]] = {}
+    excluded = 0
+    for row in table["rows"]:
+        value, group = row[value_column], row[group_column]
+        if value is None or group is None:
+            excluded += 1
+            continue
+        label = ("true" if group else "false") if type(group) is bool else str(group)
+        groups.setdefault(label, []).append(value)
+        if len(groups) > 64:
+            raise ValueError("Group summaries support at most 64 distinct groups.")
+    if not groups:
+        raise ValueError("No complete group/measurement rows remain.")
+    rows = [[label, len(values), statistics.mean(values)]
+            for label, values in sorted(groups.items())]
+    used = sum(row[1] for row in rows)
+    unit = table["columns"][value_column]["unit"]
+    return {
+        "summary": f"Grouped {used} complete rows into {len(groups)} groups; excluded {excluded} rows with missing data.",
+        "values": {"row_count": len(table["rows"]), "rows_used": used,
+                   "rows_excluded": excluded, "group_count": len(groups)},
+        "table": {"columns": [table["columns"][group_column]["label"], "Count",
+                              f"Mean ({unit})" if unit else "Mean"], "rows": rows},
+    }
+
 OPERATIONS = (
     Operation(
         "describe",
@@ -111,5 +143,16 @@ OPERATIONS = (
         (Field("observations", "Observations", "vector"), Field("weights", "Relative weights", "vector")),
         {"observations": [2, 4, 10], "weights": [1, 2, 1]},
         _weighted,
+    ),
+    Operation(
+        "grouped_table_summary",
+        "Summarize a typed table by group",
+        "Use every row of a connected typed table to calculate group means. Missing group/value pairs are excluded; at most 64 groups.",
+        (Field("table", "Typed table", "table", description="Choose a connected imported table; its complete asset stays outside the graph."),
+         Field("value_column", "Numeric measurement column", "column", table_field="table",
+               column_types=("numeric",)),
+         Field("group_column", "Group column", "column", table_field="table")),
+        {"table": None, "value_column": None, "group_column": None},
+        _grouped_table,
     ),
 )

@@ -65,8 +65,18 @@ class Field:
     column_units: tuple[str, ...] = ()
     column_dimensions: tuple[str, ...] = ()
     choices: tuple[str, ...] = ()
+    # A column field selects a zero-based column in a sibling typed-table input.
+    table_field: str = ""
+    column_types: tuple[str, ...] = ()
 
     def __post_init__(self):
+        if self.kind == "column":
+            if not self.table_field or any(kind not in
+                    ("numeric", "text", "categorical", "datetime", "boolean")
+                    for kind in self.column_types) or len(set(self.column_types)) != len(self.column_types):
+                raise ValueError("A column picker needs a table field and valid distinct column types.")
+        elif self.table_field or self.column_types:
+            raise ValueError("Only column pickers can declare a table field or column types.")
         if self.kind == "choice":
             if (not self.choices or any(
                 not isinstance(value, str) or not value or value.strip() != value
@@ -175,6 +185,10 @@ class Operation:
         for field in self.fields:
             if field.kind == "choice" and self.example.get(field.key) not in field.choices:
                 raise ValueError(f"Example for {field.key} must be an allowed choice.")
+            if field.kind == "column" and not any(
+                other.key == field.table_field and other.kind == "table" for other in self.fields
+            ):
+                raise ValueError(f"Column picker {field.key} must name a table input in this operation.")
         # Expose a declared default unit and dimension for every numeric field.
         object.__setattr__(self, "fields", tuple(
             replace(f, default_unit=u) if (u := _effective_unit(f, self.example)) != f.default_unit else f
@@ -282,6 +296,15 @@ def _field_with_units(field: Field, value, unit: str):
             if exact.denominator == 1 and abs(exact.numerator) <= 2**53 - 1 and number == exact.numerator:
                 return int(exact.numerator), used
         raise ValueError(f"{field.label} requires an exact integer in the supported range; expected {field.dimension}.")
+    if field.kind == "table":
+        from .data_table import table_metadata_valid
+        if not table_metadata_valid(value):
+            raise ValueError(f"{field.label} must be a valid connected typed table.")
+        return value, None
+    if field.kind == "column":
+        if type(value) is not int:
+            raise ValueError(f"{field.label} must select an existing table column.")
+        return value, None
     if field.kind == "choice":
         if not isinstance(value, str) or value not in field.choices:
             raise ValueError(f"{field.label} must be one of: {', '.join(field.choices)}.")
@@ -325,6 +348,16 @@ def validated_inputs_with_units(operation: Operation, raw: dict) -> tuple[dict, 
         normalized[field.key], symbols = _field_with_units(field, raw[field.key], unit)
         if field.kind in _NUMERIC:
             used[field.key] = symbols
+    for field in operation.fields:
+        if field.kind != "column":
+            continue
+        columns = normalized[field.table_field]["columns"]
+        index = normalized[field.key]
+        if not 0 <= index < len(columns):
+            raise ValueError(f"{field.label} must select an existing table column.")
+        column_type = columns[index]["type"]
+        if field.column_types and column_type not in field.column_types:
+            raise ValueError(f"{field.label} requires a {', '.join(field.column_types)} column, not {column_type}.")
     return normalized, used
 
 
@@ -423,7 +456,7 @@ def _source_valid(ref: dict) -> bool:
     if ref.get("sourceKey") is not None and not _NODE_KEY.fullmatch(ref["sourceKey"]):
         return False
     match ref.get("selector"):
-        case ["plot", "x" | "y"] | ["table"] | ["values", str()]:
+        case ["plot", "x" | "y"] | ["table"] | ["typed_table"] | ["values", str()]:
             return True
         case ["column", int(index)]:
             return type(index) is int and 0 <= index < MAX_COLUMNS
