@@ -1,7 +1,7 @@
 [plugin]
 id = "science_expression"
 name = "Gene Expression"
-description = "Normalize RNA-seq count matrices and explore two-group differential expression with BH FDR volcano plots."
+description = "Normalize expression counts, test differential expression, compute MA values, sample correlations/clustering, PCA, and user gene-set enrichment."
 version = "1.2.0"
 sdk_api_version = 1
 entry_point = "plugin:register"
