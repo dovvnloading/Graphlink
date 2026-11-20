@@ -48,7 +48,7 @@ def _try_lock(fd: int) -> None:
     else:
         import fcntl
 
-        # Windows-targeted mypy stubs omit these POSIX-only APIs; this
+        # Windows-targeted type stubs omit these POSIX-only APIs; this
         # branch is unreachable on Windows at runtime.
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # type: ignore[attr-defined]
 

@@ -78,7 +78,7 @@ security boundary; validate on Windows/macOS/Linux independently.
 - direct execution of a saved script still requires per-run human approval
 - source-build opt-in, dependency validation, process-group/Job Object
   handling, cancellation and all existing tests remain intact
-- Windows Python lint/mypy/pytest/coverage/perf/pip-audit and frontend
+- Windows Python lint/pytest/coverage/perf/pip-audit and frontend
   lint/typecheck/vitest/build, Playwright, packaging and POSIX checks green
 
 ## Further high-impact phases (not included here)

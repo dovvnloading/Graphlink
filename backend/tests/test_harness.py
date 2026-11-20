@@ -1345,6 +1345,24 @@ class TestPersistence:
         del payload["shell"]
         assert _restore_harness_payload(payload).state.harness_shell == "auto"
 
+    def test_shell_allow_rules_round_trip_and_invalid_data_fails_closed(self):
+        node = SceneDocument().add_harness_node(0, 0, "goal")
+        node.state.harness_shell_allow_rules[:] = ["bash\tgit status", "powershell\tGet-ChildItem"]
+        payload = _serialize_harness_node(node)
+        assert payload["shell_allow_rules"] == ["bash\tgit status", "powershell\tGet-ChildItem"]
+        restored = _restore_harness_payload(payload)
+        assert restored.state.harness_shell_allow_rules == payload["shell_allow_rules"]
+        assert restored.state.harness_shell_allow_rules is not node.state.harness_shell_allow_rules
+
+        payload["shell_allow_rules"] = [
+            "bash\tgit status", "bash\tgit status", "", "bad-shell\tgit status",
+            "bash\t", "bash\techo hello\nrm -rf out", 42,
+        ]
+        assert _restore_harness_payload(payload).state.harness_shell_allow_rules == ["bash\tgit status"]
+
+        payload["shell_allow_rules"] = {"bad": "shape"}
+        assert _restore_harness_payload(payload).state.harness_shell_allow_rules == []
+
     def test_execution_profile_roundtrips_and_invalid_values_default_to_host(self):
         node = SceneDocument().add_harness_node(0, 0, "goal")
         assert node.state.harness_execution_profile == "host"

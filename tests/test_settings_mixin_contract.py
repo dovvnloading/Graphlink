@@ -10,9 +10,8 @@ defining its own - a fallback nobody asked for, in the one class written to
 have no behaviour at all.
 
 Same posture as tests/test_domain_purity.py and test_node_state_migration.py:
-the property is cheap to assert and expensive to notice by eye. This is also
-the reason [tool.mypy].files can include settings_store at all, so it is
-worth keeping honest.
+the property is cheap to assert and expensive to notice by eye. Keeping the
+type-only declaration aligned with the runtime class is worth enforcing.
 """
 
 from __future__ import annotations
@@ -47,7 +46,7 @@ def test_it_defines_no_initializer():
 
 def test_every_declared_name_is_really_provided_by_the_composed_class():
     """The declaration has to describe reality, or it is just a way to make
-    mypy agree with a lie. A name dropped from SettingsManager (or renamed)
+    a type checker agree with a lie. A name dropped from SettingsManager (or renamed)
     must fail here rather than keep type-checking against nothing."""
     manager = SettingsManager.__new__(SettingsManager)  # no __init__: class surface only
     for name in _DECLARED_CLASS_CONSTANTS:

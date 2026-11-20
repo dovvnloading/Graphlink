@@ -100,5 +100,5 @@ transcript export parity and model-pinned branch context. Include offline
 record/replay scenarios before adding external provider tests.
 
 Each future phase must ship in a separate reviewed PR with full Windows
-pytest/Ruff/mypy/coverage/performance/pip-audit, frontend checks, Playwright,
+pytest/Ruff/coverage/performance/pip-audit, frontend checks, Playwright,
 packaging and POSIX checks. Never merge a red or stale CI run.

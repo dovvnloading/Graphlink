@@ -99,7 +99,7 @@ def _ensure_private_scratch_root(root: Path) -> None:
     crashing outright - real POSIX systems always have it."""
     root.mkdir(parents=True, exist_ok=True)
     try:
-        # mypy resolves `os` against the win32 stubs when it runs on Windows,
+        # Static checkers may resolve `os` against win32 stubs on Windows,
         # where getuid genuinely does not exist - which is the case the
         # except below is written for, not an error to fix.
         this_uid = os.getuid()  # type: ignore[attr-defined]

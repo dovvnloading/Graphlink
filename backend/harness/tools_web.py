@@ -30,7 +30,9 @@ from graphlink_plugins.web_research.providers import (
     source_id_for_url,
 )
 
-# The search adapter is DuckDuckGoSearchProvider, not a new network client.
+# DuckDuckGoSearchProvider pins ddgs to its DuckDuckGo backend. Consent
+# covers that service family/subdomains, not a socket-level hostname
+# allowlist enforced inside the third-party search library.
 _SEARCH_DOMAIN = "duckduckgo.com"
 _MAX_SEARCH_RESULTS = 8
 _MAX_URL_CHARS = 2048

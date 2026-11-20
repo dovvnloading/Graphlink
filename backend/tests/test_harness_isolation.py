@@ -1,17 +1,22 @@
 """Isolated shell profile: no host fallback, restricted CLI, session binding."""
 from __future__ import annotations
 
+import asyncio
 import io
 import os
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
 
+from backend.harness.loop import HarnessRunContext, _offered_harness_specs, _retire_host_repl_for_isolated
 from backend.harness.shell_isolation import (
     CONTAINER_IMAGE, IsolationUnavailableError, available_engine,
     container_invocation, normalize_execution_profile,
 )
 from backend.harness.shell_sessions import ShellSessionRegistry
+from backend.providers.base import ToolCall, ToolSpec
+from backend.tools import CODE_EXECUTE, GRAPH_READ, NET_FETCH, ToolRegistry, ToolResult
 
 
 def test_profile_validation_defaults_old_or_tampered_graphs_to_host():
@@ -144,3 +149,66 @@ def test_rebinding_same_directory_to_isolated_retires_host_sessions(tmp_path):
     assert session.stopped
     assert registry.names("ws") == []
     assert registry._profiles["ws"] == "isolated"
+
+
+def test_ambiguous_mount_path_fails_closed_before_container_launch(tmp_path):
+    # Docker/Podman --mount parses commas inside a single argv element.
+    for folder in ("workspace,with-comma", "workspace,source=/other"):
+        with patch("backend.harness.shell_isolation.shutil.which", return_value="/usr/bin/docker"):
+            with pytest.raises(IsolationUnavailableError, match="commas or newlines"):
+                container_invocation("echo safe", tmp_path / folder, env={"PATH": "/usr/bin"})
+
+
+def test_extra_container_mounts_reject_commas_and_newlines(tmp_path):
+    # App-owned mounts must not bypass the workspace's --mount validation.
+    with patch("backend.harness.shell_isolation.shutil.which",
+               return_value="/usr/bin/docker"):
+        for folder in ("managed,venv", "managed\nvenv"):
+            with pytest.raises(IsolationUnavailableError, match="commas or newlines"):
+                container_invocation(
+                    "echo safe", tmp_path, env={"PATH": "/usr/bin"},
+                    extra_mounts=((tmp_path / folder, "/graphlink-python-env/test"),),
+                )
+
+
+def test_isolated_tool_catalog_includes_container_python_and_scoped_web():
+    registry = ToolRegistry()
+
+    async def harmless(_call, _ctx):
+        return ToolResult(content="ok")
+
+    for name, scope in (
+        ("shell.exec", CODE_EXECUTE),
+        ("shell.session", CODE_EXECUTE),
+        ("python.exec", CODE_EXECUTE),
+        ("python.install", CODE_EXECUTE),
+        ("web.search", NET_FETCH),
+        ("web.fetch", NET_FETCH),
+        ("other.network", NET_FETCH),
+        ("run_node", GRAPH_READ),
+        ("builder.complete_step", GRAPH_READ),
+    ):
+        registry.register(
+            ToolSpec(name=name, description=name, input_schema={"type": "object"}),
+            harmless, scopes={scope}, approval="auto",
+        )
+
+    host = {spec.name for spec in _offered_harness_specs(registry, "host")}
+    isolated = {spec.name for spec in _offered_harness_specs(registry, "isolated")}
+    assert host == {
+        "shell.exec", "shell.session", "python.exec", "python.install",
+        "web.search", "web.fetch", "run_node",
+    }
+    assert isolated == host  # Both Python tools execute in the container.
+
+
+# Container Python no-host-fallback and approval coverage is in
+# test_harness_python_isolation.py.
+
+
+def test_isolated_transition_retires_existing_host_repl():
+    repl = Mock()
+    _retire_host_repl_for_isolated(SimpleNamespace(_harness_python_repls=repl), "workspace-1")
+    repl.stop_workspace.assert_called_once_with("workspace-1")
+    _retire_host_repl_for_isolated(SimpleNamespace(), "workspace-2")
+

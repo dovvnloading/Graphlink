@@ -404,7 +404,7 @@ def _read_pdf(path: Path) -> str:
         try:
             # The two packages are the same library either side of its
             # rename, and this code only touches the PdfReader/extract_text
-            # surface they share - but mypy has no way to express "either of
+            # surface they share - but a static checker cannot express "either of
             # these modules, whichever imported" and reads the fallback as a
             # redefinition of the name the first import already bound.
             import PyPDF2 as pdf_reader_lib  # type: ignore[no-redef]  # noqa: N813

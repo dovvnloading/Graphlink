@@ -59,6 +59,14 @@ function renderAppBar(store = makeStore()) {
   return { store };
 }
 
+// The lazy overflow menu replaces its loading dialog when the chunk resolves.
+// Re-query the dialog on each retry instead of searching the detached fallback.
+async function findOverflowButton(name: string) {
+  return waitFor(() =>
+    within(screen.getByRole("dialog", { name: "More toolbar actions" })).getByRole("button", { name }),
+  );
+}
+
 describe("AppBar", () => {
   it("no longer renders the provider-mode select (finding #8) - Settings is the only provider surface", () => {
     renderAppBar();
@@ -118,8 +126,7 @@ describe("AppBar", () => {
     try {
       renderAppBar(store);
       await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
-      const action = await within(screen.getByRole("dialog")).findByRole("button",
-        { name: "Export methods" }, { timeout: 5_000 });
+      const action = await findOverflowButton("Export methods");
       await user.click(action);
       await waitFor(() => expect(saved).toHaveBeenCalledOnce());
       expect(request).toHaveBeenCalledOnce();
@@ -139,7 +146,7 @@ describe("AppBar", () => {
     try {
       renderAppBar(store);
       await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
-      await user.click(await within(screen.getByRole("dialog")).findByRole("button", { name: "Export methods" }));
+      await user.click(await findOverflowButton("Export methods"));
       expect(await within(screen.getByRole("dialog")).findByRole("alert")).toHaveTextContent("A receipt is damaged.");
       expect(saved).not.toHaveBeenCalled();
     } finally {
@@ -187,7 +194,7 @@ describe("AppBar", () => {
       const user = userEvent.setup();
       renderAppBar();
       await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
-      await within(screen.getByRole("dialog", { name: "More toolbar actions" })).findByRole("button", { name: "Pins" });
+      await findOverflowButton("Pins");
       expect(screen.getByRole("dialog")).toBeInTheDocument();
       await user.keyboard("{Escape}");
       expect(screen.queryByRole("dialog")).toBeNull();
@@ -198,7 +205,7 @@ describe("AppBar", () => {
       renderAppBar();
 
       await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
-      await within(screen.getByRole("dialog", { name: "More toolbar actions" })).findByRole("button", { name: "Pins" });
+      await findOverflowButton("Pins");
       const menuItems = within(screen.getByRole("dialog"));
 
       for (const label of [
@@ -229,7 +236,7 @@ describe("AppBar", () => {
         const user = userEvent.setup();
         renderAppBar();
         await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
-      await within(screen.getByRole("dialog", { name: "More toolbar actions" })).findByRole("button", { name: "Pins" });
+      await findOverflowButton("Pins");
         await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: label }));
         expect(screen.queryByRole("dialog")).toBeNull();
       },
@@ -240,7 +247,7 @@ describe("AppBar", () => {
       const { store } = renderAppBar();
       const organizeSpy = vi.spyOn(store, "organizeNodes");
       await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
-      await within(screen.getByRole("dialog", { name: "More toolbar actions" })).findByRole("button", { name: "Pins" });
+      await findOverflowButton("Pins");
       await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Organize" }));
       expect(organizeSpy).not.toHaveBeenCalled();
       expect(screen.getByTestId("active-overlay")).toHaveTextContent("organize");
@@ -250,7 +257,7 @@ describe("AppBar", () => {
       const user = userEvent.setup();
       renderAppBar();
       await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
-      await within(screen.getByRole("dialog", { name: "More toolbar actions" })).findByRole("button", { name: "Pins" });
+      await findOverflowButton("Pins");
       await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Pins" }));
 
       expect(screen.queryByRole("dialog")).toBeNull();
@@ -271,7 +278,7 @@ describe("AppBar", () => {
       const user = userEvent.setup();
       renderAppBar();
       await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
-      await within(screen.getByRole("dialog", { name: "More toolbar actions" })).findByRole("button", { name: "Pins" });
+      await findOverflowButton("Pins");
       const menu = within(screen.getByRole("dialog"));
       for (const label of ["Pins", "View", "Plugins", "About", "Help", "Diagnostics"]) {
         expect(menu.getByRole("button", { name: label })).toHaveAttribute("aria-pressed", "false");
@@ -282,7 +289,7 @@ describe("AppBar", () => {
       const user = userEvent.setup();
       renderAppBar();
       await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
-      await within(screen.getByRole("dialog", { name: "More toolbar actions" })).findByRole("button", { name: "Pins" });
+      await findOverflowButton("Pins");
       const menu = screen.getByRole("dialog", { name: "More toolbar actions" });
 
       // Groups collapse whole and all at once, so an inline action and its

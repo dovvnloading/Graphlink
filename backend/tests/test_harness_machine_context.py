@@ -50,6 +50,9 @@ def test_isolated_machine_tier_describes_container_not_host_shell(tmp_path, monk
     assert "Container network: disabled" in snapshot
     assert "512 MiB RAM" in snapshot
     assert "Host executables are NOT automatically available" in snapshot
+    assert "python.exec: persistent container REPL" in snapshot
+    assert "python.install: container binary wheels" in snapshot
+    assert "web.search / web.fetch: backend-host HTTPS" in snapshot
 
 
 def test_command_shell_is_the_execution_shell_not_the_login_shell(monkeypatch):
