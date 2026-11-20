@@ -40,10 +40,14 @@ def register_workspace_tools(registry: ToolRegistry, dispatcher, document) -> No
         if workspace is None:
             return ToolResult(content="No harness workspace is bound to this run.", is_error=True)
         try:
+            source = call.arguments.get("source")
+            name = call.arguments.get("name")
+            if not isinstance(source, str) or not isinstance(name, str):
+                raise SkillError("skills.load requires string source and name arguments.")
             full_text = await asyncio.to_thread(
                 load_skill, workspace,
-                source=call.arguments.get("source"),
-                name=call.arguments.get("name"),
+                source=source,
+                name=name,
             )
         except SkillError as exc:
             return ToolResult(content=str(exc), is_error=True)
