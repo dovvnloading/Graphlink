@@ -245,7 +245,7 @@ function AgentSettingsPopover({
       ) : engine === null ? (
         <p role="status">No container engine found. Install Docker Desktop (Windows/macOS), Docker Engine (Linux), or Podman to use Isolated execution. Isolated commands never fall back to Host.</p>
       ) : (
-        <p role="status">{engine === "docker" ? "Docker" : "Podman"} detected. Isolated uses a network-disabled container with 1 CPU, 512 MiB RAM and your workspace mounted at /workspace. Pull python:3.12-slim with {engine} before your first run.</p>
+        <p role="status">{engine === "docker" ? "Docker" : "Podman"} detected. Isolated runs shell and Python in a container with 1 CPU, 512 MiB RAM and your workspace mounted at /workspace. Commands have no network access except approved python.install PyPI downloads. Pull python:3.12-slim with {engine} before your first run.</p>
       )}
       <p>Saved with this graph. Changes apply from the next task.</p>
     </div>,
