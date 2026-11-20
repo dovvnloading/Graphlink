@@ -372,7 +372,9 @@ class ToolRegistry:
                     if network_once is not None:
                         network_once.discard(call.id)
                     if decision == "network-task":
-                        ctx.harness_network_task_approved = False
+                        # Only HarnessRunContext owns this grant; the registry
+                        # accepts the shared RunContext type.
+                        setattr(ctx, "harness_network_task_approved", False)
                     return ToolResult(
                         content="Shell request changed while approval was pending; submit it for fresh approval.",
                         is_error=True,

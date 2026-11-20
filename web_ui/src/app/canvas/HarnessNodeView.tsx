@@ -267,7 +267,7 @@ function AgentSettingsPopover({
       ) : (
         <p role="status">{engine === "docker" ? "Docker" : "Podman"} detected. Isolated uses a container with 1 CPU, 512 MiB RAM and your workspace mounted at /workspace. Network is {allowNetwork ? "enabled by this node setting" : "off by default; the agent can request it for a command"}. Pull python:3.12-slim with {engine} before your first run.</p>
       )}
-      <p>Network access only applies to Isolated shell.exec commands. Each command still needs approval. Settings are saved with this graph; changes apply from the next task.</p>
+      <p>Network access only applies to Isolated shell.exec commands. Each command still needs approval. Settings are saved with this graph. Changes apply from the next task.</p>
     </div>,
     document.body,
   );

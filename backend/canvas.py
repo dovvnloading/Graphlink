@@ -384,7 +384,7 @@ def register_canvas(
     register_code_review_intents(bus, document, notifications, agent_dispatcher)
     register_code_sandbox_intents(bus, document, notifications, agent_dispatcher)
     register_builder_intents(bus, document, notifications, agent_dispatcher)
-    register_harness_intents(bus, document, notifications, agent_dispatcher)
+    register_harness_intents(bus, document, notifications, agent_dispatcher, composer_document)
 
     register_groups_intents(bus, document)
     register_table_intents(bus, document)

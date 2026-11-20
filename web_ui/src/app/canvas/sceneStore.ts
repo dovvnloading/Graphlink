@@ -1118,6 +1118,20 @@ export class SceneStore {
     this.transport.fireIntent("harness", "send", [nodeId, text]);
   }
 
+  /** One-shot composer dispatch: reuse the selected harness node, otherwise
+   * let the backend create a fresh scratch agent. This is not queueable or
+   * replayable: callers clear the composer draft only on a real node-id reply.
+   * The backend resolves the live composer model itself at dispatch time. */
+  async sendComposerAgentMessage(text: string): Promise<boolean> {
+    const selected = this.scene.nodes.find((node) =>
+      node.id === this.selectedNodeId && node.kind === "harness",
+    );
+    const nodeId = await this.transport.request(
+      "harness", "composerSend", [text, selected?.id ?? null],
+    );
+    return typeof nodeId === "string" && nodeId.length > 0;
+  }
+
   cancelHarnessRun(requestId: string): void {
     this.transport.fireIntent("harness", "cancel", [requestId]);
   }
