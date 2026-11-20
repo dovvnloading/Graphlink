@@ -22,7 +22,6 @@ MAX_QUERY_TERMS = 16
 MAX_MATCHES = 10
 MAX_EXCERPT_CHARS = 500
 _MAX_INDEX_LINE_BYTES = 1024 * 1024
-_MAX_INDEX_TEXT_CHARS = 80_000
 
 
 def index_path(transcript: Path) -> Path:
@@ -59,7 +58,7 @@ def _searchable_text(item: object) -> tuple[str, str] | None:
     if kind == "compact":
         content = item.get("content")
         if isinstance(content, str) and content:
-            return "summary", content[:_MAX_INDEX_TEXT_CHARS]
+            return "summary", content
         return None
     if kind != "msg":
         return None
@@ -72,11 +71,17 @@ def _searchable_text(item: object) -> tuple[str, str] | None:
     parts = [content] if isinstance(content, str) and content else []
     calls = item.get("tool_calls")
     if isinstance(calls, list) and calls:
-        parts.append(json.dumps(calls, ensure_ascii=False))
+        # Searching must not manufacture future matches from its own query
+        # arguments, just as its tool result must not be re-indexed.
+        other_calls = [call for call in calls if not (
+            isinstance(call, dict) and call.get("name") == "session.search"
+        )]
+        if other_calls:
+            parts.append(json.dumps(other_calls, ensure_ascii=False))
     text = "\n".join(parts)
     if not text:
         return None
-    return str(item.get("role") or "unknown"), text[:_MAX_INDEX_TEXT_CHARS]
+    return str(item.get("role") or "unknown"), text
 
 
 def sync_index(transcript: Path) -> None:
