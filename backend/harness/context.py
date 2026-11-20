@@ -209,13 +209,14 @@ def describe_machine(workspace: Path, *, shell: str = "auto", profile: str = "ho
 
 def build_system_prompt(workspace: Path, *, machine_context: str | None = None) -> str:
     """The tiered prompt: pinned core + tool guide + session machine facts,
-    then the workspace's own instructions, all in the cacheable system
+    then skill metadata and the workspace's own instructions, all in the cacheable system
     message. The run loop supplies a dispatcher-cached machine_context;
     standalone callers collect it on demand."""
 
     from graphlink_prompts import resolve_prompt_text
 
     from backend.harness.tool_catalog import tool_guide
+    from backend.harness.skills import skills_prompt
 
     # File-discovered hints are a separate, deterministic prompt tier.
     # Keep the registered core hash stable when another tools_*.py lands.
@@ -223,6 +224,9 @@ def build_system_prompt(workspace: Path, *, machine_context: str | None = None) 
         resolve_prompt_text("harness-core"), tool_guide(),
         machine_context if machine_context is not None else describe_machine(workspace),
     ]
+    catalog = skills_prompt(workspace)
+    if catalog:
+        tiers.append(catalog)
     instructions = read_instructions(workspace)
     if instructions:
         tiers.append(

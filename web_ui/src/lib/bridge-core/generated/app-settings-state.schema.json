@@ -173,6 +173,12 @@
     "githubTokenConfigured": {
       "type": "boolean"
     },
+    "harnessTrustedDirs": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "hasCompletedOnboarding": {
       "type": "boolean"
     },
@@ -392,6 +398,7 @@
     "llamaCppScanSummary",
     "llamaCppScanStatus",
     "llamaCppNotice",
+    "harnessTrustedDirs",
     "mcpServers"
   ],
   "title": "AppSettingsState",

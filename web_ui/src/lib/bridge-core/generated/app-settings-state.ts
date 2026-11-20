@@ -95,6 +95,7 @@ export interface AppSettingsState {
   llamaCppScanSummary: string;
   llamaCppScanStatus: string;
   llamaCppNotice: string;
+  harnessTrustedDirs: string[];
   mcpServers: McpServerConfig[];
   minCompatibleSchemaVersion?: number | null;
 }
@@ -188,6 +189,7 @@ const APP_SETTINGS_STATE_FIELDS: WireFields = [
   ["llamaCppScanSummary", "s", 0],
   ["llamaCppScanStatus", "s", 0],
   ["llamaCppNotice", "s", 0],
+  ["harnessTrustedDirs", { a: "s" }, 0],
   ["mcpServers", { a: { o: MCP_SERVER_CONFIG_FIELDS } }, 0],
   ["minCompatibleSchemaVersion", "n", 1],
 ];

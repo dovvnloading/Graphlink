@@ -25,6 +25,7 @@ const SECTIONS = [
   "Fal.ai",
   "Integrations",
   "MCP Servers",
+  "Workspace Agent",
   "Plugins",
   "Resource Limits",
 ] as const;
@@ -158,6 +159,7 @@ const initialState: AppSettingsState = {
   llamaCppScanStatus: "idle",
   llamaCppNotice: "",
   // ADR-012 stage 12.6: mirrors SettingsManager.get_mcp_servers()'s own default.
+  harnessTrustedDirs: [],
   mcpServers: [],
 };
 
@@ -1184,6 +1186,37 @@ const MCP_APPROVAL_LABELS: Record<string, string> = {
   always: "Always confirm",
 };
 
+function WorkspaceAgentPage({ state, transport }: { state: AppSettingsState; transport: WsTransport }) {
+  return (
+    <div className="settings-general-page">
+      <p className="settings-integrations-intro">
+        These folders were granted to the Workspace Agent when you selected them through the folder picker.
+        Revoking a folder prevents new runs from using it. An agent already running there retains its workspace
+        until that run ends.
+      </p>
+      <fieldset className="settings-fieldset">
+        <legend>Trusted Folders</legend>
+        {state.harnessTrustedDirs.length === 0 && (
+          <p className="settings-update-status">No trusted folders yet. Choose a workspace folder on an agent to grant access.</p>
+        )}
+        {state.harnessTrustedDirs.map((path) => (
+          <div className="settings-mcp-server-row" key={path}>
+            <span className="settings-trusted-folder-path" title={path}>{path}</span>
+            <button
+              type="button"
+              className="settings-button settings-mcp-server-remove"
+              aria-label={`Revoke access to ${path}`}
+              onClick={() => transport.fireIntent("app-settings", "revokeHarnessTrustedDir", [path], undefined, true)}
+            >
+              Revoke
+            </button>
+          </div>
+        ))}
+      </fieldset>
+    </div>
+  );
+}
+
 function McpServersPage({ state, transport }: { state: AppSettingsState; transport: WsTransport }) {
   const [draftName, setDraftName] = useState("");
   const [draftCommand, setDraftCommand] = useState("");
@@ -1589,6 +1622,8 @@ export function SettingsDialog({ transport }: { transport: WsTransport }) {
             <LlamaCppPage state={state} transport={transport} />
           ) : activeSection === "MCP Servers" ? (
             <McpServersPage state={state} transport={transport} />
+          ) : activeSection === "Workspace Agent" ? (
+            <WorkspaceAgentPage state={state} transport={transport} />
           ) : activeSection === "Plugins" ? (
             <PluginsPage grants={pluginsState.grants} transport={transport} />
           ) : activeSection === "Resource Limits" ? (

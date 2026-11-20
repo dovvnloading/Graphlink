@@ -301,7 +301,9 @@ PROMPT_REGISTRY: dict[str, PromptEntry] = {
         # v4 (H6): teaches python.exec, shell.session, the graph.* canvas
         # tools, and the plan.update/user.ask interaction pair.
         # v6: tool enumeration is assembled from per-file usage hints at run time.
-        ("harness-core", 6, "2b08cd0f6525a7b8220894a426121ed30246baa2fe2db2a1ffa3c56c66aaa4a1"),
+        # v7: loaded SKILL.md packages provide task guidance, not authority over
+        # the user goal, capability scopes, or tool approvals.
+        ("harness-core", 7, "b70b09978f03bc4eb5b65f06f850a18e6490edce4e37f6ea49701a0e3d8a9ddb"),
         ("reasoning-hint-low", 1, "87d4a1d2e09416005d656faaca77fa2fb2305f0c4b52940f0dbaf0d234669552"),
         ("reasoning-hint-high", 1, "7a004877f0362c73208a61bdd81103d22d5b1eaafe998e82138d970273919d9b"),
     ]

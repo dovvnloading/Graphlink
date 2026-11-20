@@ -5482,6 +5482,14 @@ mark.document-view-search-match-current {
   flex-shrink: 0;
 }
 
+/* Show each granted path in full, including long/nested paths, rather
+   than clipping off the part a user may need to distinguish before revoke. */
+.settings-trusted-folder-path {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 /* SECURITY-FIX (mcp-approval-auto-invisible-in-settings-ui): the one
    approval policy that skips confirmation entirely (backend/tools.py's
    ApprovalPolicy "auto") reads as visually distinct from "once"/"always",
@@ -9520,6 +9528,78 @@ mark.document-view-search-match-current {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* The agent's on-demand, read-only workspace browser. It sits below the
+   folder binding and scrolls internally instead of expanding the canvas card. */
+.harness-workspace-files-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.harness-files-browser {
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+  background: var(--gl-surface-inset, var(--gl-surface-window));
+}
+.harness-files-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.harness-files-current,
+.harness-files-root,
+.harness-files-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.harness-files-current {
+  flex: 1;
+  font-size: 11px;
+  color: var(--gl-surface-text-primary);
+}
+.harness-files-root,
+.harness-files-note {
+  margin: 5px 0;
+  font-size: 11px;
+  color: var(--gl-surface-text-muted);
+}
+.harness-files-list {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0 0;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.harness-files-entry-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--gl-surface-text-primary);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.harness-files-entry-button:hover,
+.harness-files-entry-button:focus-visible {
+  background: var(--gl-surface-window);
+}
+.harness-files-entry-button:disabled { cursor: progress; }
+.harness-files-error {
+  margin: 6px 0;
+  font-size: 11px;
+  color: var(--gl-semantic-status-error);
+  overflow-wrap: anywhere;
 }
 /* PLAN-2026-08-24 §2.3's plan.update checklist. Reuses the surrounding
    node's own type/color tokens rather than introducing any of its own -
