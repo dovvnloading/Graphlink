@@ -112,16 +112,25 @@ def text_tool_history(messages: list[dict], tools: tuple[ToolSpec, ...]) -> list
             })
             continue
         flush_results()
-        if role == "assistant" and message.get("tool_calls"):
-            calls = [
-                {"name": call["name"], "arguments_json": json.dumps(call["arguments"], ensure_ascii=False)}
-                for call in message["tool_calls"]
-            ]
+        if role == "assistant":
+            content = _text_content(message)
+            if message.get("tool_calls"):
+                calls = [
+                    {"name": call["name"], "arguments_json": json.dumps(call["arguments"], ensure_ascii=False)}
+                    for call in message["tool_calls"]
+                ]
+                # Native assistant commentary can accompany tool calls, but
+                # the JSON protocol forbids calls together with a final answer.
+                envelope = {"tool_calls": calls, "final_answer": ""}
+            elif content.strip():
+                envelope = {"tool_calls": [], "final_answer": content}
+            else:
+                # Contentless native assistant turns cannot be valid JSON
+                # final answers and offer no useful protocol example.
+                continue
             converted.append({
                 "role": "assistant",
-                "content": json.dumps({
-                    "tool_calls": calls, "final_answer": _text_content(message),
-                }, ensure_ascii=False),
+                "content": json.dumps(envelope, ensure_ascii=False),
             })
         elif role == "system":
             content = _text_content(message)
@@ -147,8 +156,8 @@ def text_tool_history(messages: list[dict], tools: tuple[ToolSpec, ...]) -> list
                 )
             else:
                 converted.append({"role": "user", "content": parts})
-        elif role in ("user", "assistant"):
-            converted.append({"role": role, "content": _text_content(message)})
+        elif role == "user":
+            converted.append({"role": "user", "content": _text_content(message)})
         else:
             raise JSONToolProtocolError(f"Unsupported message role in JSON tool history: {role!r}")
     flush_results()

@@ -143,9 +143,9 @@ async def _approve_domain(ctx: RunContext, call: ToolCall, domain: str, *, url: 
 
 
 def _harness_only(ctx: RunContext) -> ToolResult | None:
-    # The workspace catalog adds registrations to the shared Builder registry.
-    # Never permit a Builder run to invoke these harness-only handlers even
-    # if it bypasses the Builder's offered-tool filter.
+    # The workspace catalog is registered on a fork, not on Builder's
+    # registry. Keep a context check as defense in depth against a handler
+    # invoked by an unrelated run.
     if not hasattr(ctx, "harness_workspace_id"):
         return ToolResult("Web tools are available only to workspace agent tasks.", is_error=True)
     return None

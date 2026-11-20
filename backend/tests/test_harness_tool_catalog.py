@@ -12,10 +12,10 @@ from backend.harness import tool_catalog
 from backend.harness.context import build_system_prompt
 from backend.harness.shell_sessions import ShellSessionRegistry
 from backend.harness.tools_python import PythonReplRegistry
-from backend.providers.base import ToolCall
+from backend.providers.base import ToolCall, ToolSpec
 from backend.tools import (
     CODE_EXECUTE, FS_READ, FS_WRITE, GRAPH_MUTATE, GRAPH_READ,
-    KNOWLEDGE_READ, NET_FETCH, PROVIDER_CALL, ToolRegistry,
+    KNOWLEDGE_READ, NET_FETCH, PROVIDER_CALL, RunContext, ToolRegistry, ToolResult,
 )
 
 
@@ -113,6 +113,52 @@ def test_builtin_modules_keep_their_scopes_approvals_and_hints(tmp_path):
         dispatcher.python.stop_all()
 
 
+def test_workspace_only_registrations_do_not_leak_to_builder_after_agent_setup():
+    from backend.builder import BUILDER_GRANTED_SCOPES
+
+    dispatcher, document = _Dispatcher(), SceneDocument()
+    async def ping(call, ctx):
+        return ToolResult("builder handler")
+
+    async def allow(call):
+        return True
+
+    try:
+        builder = dispatcher.builder_tool_registry(document)
+        builder.register(
+            ToolSpec("builder.ping", "Builder handler", {"type": "object"}),
+            ping, scopes={GRAPH_READ}, approval="auto",
+        )
+        harness = HarnessDispatchOps.harness_tool_registry(dispatcher, document)
+        assert harness is not builder
+        assert harness.scopes_for("builder.ping") == frozenset({GRAPH_READ})
+        assert harness.approval_for("builder.ping") == "auto"
+        # This is the Builder's actual offer predicate; CODE_EXECUTE,
+        # GRAPH_READ and PROVIDER_CALL overlap Agent-only tool scopes.
+        offered = {
+            spec.name for spec in builder.specs()
+            if (builder.scopes_for(spec.name) or frozenset()) <= BUILDER_GRANTED_SCOPES
+            and spec.name not in ("web.search", "web.fetch")
+        }
+        assert offered == {"builder.ping"}
+        assert {"shell.exec", "python.exec", "plan.update", "user.ask"}.isdisjoint(offered)
+        reply = asyncio.run(harness.invoke(
+            ToolCall("ping_1", "builder.ping", {}),
+            RunContext(granted_scopes=frozenset({GRAPH_READ}), request_approval=allow),
+        ))
+        assert reply.content == "builder handler" and not reply.is_error
+        assert HarnessDispatchOps.harness_tool_registry(dispatcher, document) is harness
+        dispatcher.registry = ToolRegistry()  # Builder cache invalidation.
+        rebuilt = HarnessDispatchOps.harness_tool_registry(dispatcher, document)
+        assert rebuilt is not harness
+        assert rebuilt.scopes_for("builder.ping") is None
+        assert rebuilt.scopes_for("shell.exec") == frozenset({CODE_EXECUTE})
+        assert not tuple(dispatcher.registry.specs())
+    finally:
+        dispatcher.shell.stop_all()
+        dispatcher.python.stop_all()
+
+
 def test_new_file_alone_adds_a_tool_and_its_prompt_hint(tmp_path, monkeypatch):
     import backend.harness as package
 
@@ -142,6 +188,7 @@ def register_workspace_tools(registry, dispatcher, document):
         registry = HarnessDispatchOps.harness_tool_registry(dispatcher, document)
         assert registry.scopes_for("example.ping") == frozenset({FS_READ})
         assert registry.approval_for("example.ping") == "auto"
+        assert dispatcher.registry.scopes_for("example.ping") is None
         assert "example.ping responds" in build_system_prompt(tmp_path)
         from backend.tools import RunContext
 

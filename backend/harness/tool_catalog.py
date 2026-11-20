@@ -7,9 +7,9 @@ To add a workspace-agent tool, add one backend/harness/tools_*.py module:
     approval policy. Use dispatcher for session-lived resources if needed.
 
 Modules are loaded in filename order, so both registration and the system
-prompt's tool guide are stable between turns. The Builder's shared registry
-still owns its existing graph, knowledge and Fal tools; the shared adapter
-reuses those registrations without duplicating them.
+prompt's tool guide are stable between turns. The Agent's fork of the Builder
+registry reuses the existing graph, knowledge and Fal tool registrations
+without rebuilding their handlers or exposing workspace-only tools to Builder.
 """
 
 from __future__ import annotations

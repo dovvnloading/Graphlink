@@ -28,7 +28,11 @@ def test_machine_snapshot_describes_execution_environment_without_running_comman
 
     assert f"OS: {context_module.platform.platform()}" in snapshot
     assert context_module.platform.machine() in snapshot
-    assert f"Python (python.exec): {context_module.platform.python_version()}" in snapshot
+    assert f"Backend Python (Graphlink process): {context_module.platform.python_version()}" in snapshot
+    assert f"({context_module.sys.executable})" in snapshot
+    assert "python.exec: selects a usable workspace .venv or venv" in snapshot
+    assert "Its interpreter/version may differ from backend Python." in snapshot
+    assert "Python (python.exec):" not in snapshot
     assert str(tmp_path.resolve()) in snapshot
     assert "Command shell (shell.exec / shell.session):" in snapshot
     assert "- git: /toolchain/bin/git" in snapshot
@@ -42,17 +46,44 @@ def test_machine_snapshot_describes_execution_environment_without_running_comman
     ]
 
 
+def test_existing_workspace_venv_is_not_misidentified_as_backend_python(tmp_path):
+    from backend.harness.python_env import ensure_python_environment, venv_python
+
+    venv = tmp_path / ".venv"
+    venv.mkdir()
+    (venv / "pyvenv.cfg").write_text("version = 3.11\n", encoding="utf-8")
+    selected = venv_python(venv)
+    selected.parent.mkdir(parents=True)
+    selected.write_text("fake project interpreter", encoding="utf-8")
+    selected.chmod(0o755)
+    assert ensure_python_environment("workspace", tmp_path, is_scratch=False) == selected
+
+    snapshot = context_module.describe_machine(tmp_path)
+    assert "Backend Python (Graphlink process):" in snapshot
+    assert "python.exec: selects a usable workspace .venv or venv" in snapshot
+    assert "Python (python.exec):" not in snapshot
+
+
 def test_isolated_machine_tier_describes_container_not_host_shell(tmp_path, monkeypatch):
     monkeypatch.setattr("backend.harness.shell_isolation.available_engine", lambda: "podman")
     snapshot = context_module.describe_machine(tmp_path, profile="isolated")
     assert "podman" in snapshot
     assert "/bin/sh -c in isolated" in snapshot
-    assert "Container network: disabled" in snapshot
+    assert "Container network: disabled by default" in snapshot
+    assert "shell.exec can request per-command or per-task user approval" in snapshot
     assert "512 MiB RAM" in snapshot
     assert "Host executables are NOT automatically available" in snapshot
     assert "python.exec: persistent container REPL" in snapshot
     assert "python.install: container binary wheels" in snapshot
     assert "web.search / web.fetch: backend-host HTTPS" in snapshot
+
+
+def test_isolated_engine_cli_absence_is_reported_as_a_path_problem(tmp_path, monkeypatch):
+    monkeypatch.setattr("backend.harness.shell_isolation.available_engine", lambda: None)
+    snapshot = context_module.describe_machine(tmp_path, profile="isolated")
+    assert "Container engine: Docker/Podman CLI not on execution PATH" in snapshot
+    assert "isolation unavailable until configured" in snapshot
+    assert "none installed" not in snapshot
 
 
 def test_command_shell_is_the_execution_shell_not_the_login_shell(monkeypatch):

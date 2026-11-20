@@ -277,28 +277,28 @@ class HarnessDispatchOps(DispatcherParts):
         await asyncio.to_thread(retire)
 
     def harness_tool_registry(self, document) -> "ToolRegistry":
-        """The harness rides the SAME per-session registry the Builder
-        built (tools.py: one registry per session, RunContext is what's
-        per-run) - fs tools are simply registered into it on first harness
-        use. Cross-visibility is governed by scope filtering, not by
-        separate registries: the Builder's spec filter excludes fs.read
-        (outside BUILDER_GRANTED_SCOPES) and the harness's excludes
-        everything outside HARNESS_GRANTED_SCOPES, so each loop offers its
-        model only what its own grant set could pass at invoke()."""
-        registry = self.builder_tool_registry(document)
-        # The builder registry can be invalidated (e.g. after an MCP
-        # configuration change). Register once per registry INSTANCE, not
-        # once per dispatcher, so a rebuilt registry never loses harness tools.
-        # A weak reference avoids retaining a stale Builder registry (and
-        # its tool handlers) after settings invalidate the shared cache.
+        """Fork the Builder catalog, then register workspace-only tools.
+
+        Builder handlers (graph, knowledge, MCP, plugins) are reused, not
+        rebuilt, but the Agent's own registrations live in a distinct
+        ToolRegistry. Scope overlap can therefore never offer shell,
+        Python, planning or interaction tools to a later Builder turn.
+        Rebuild this fork when Builder invalidates its underlying catalog.
+        """
         from weakref import ref
 
-        registered_ref = getattr(self, "_harness_tools_registry_ref", None)
-        if registered_ref is None or registered_ref() is not registry:
+        builder_registry = self.builder_tool_registry(document)
+        source_ref = getattr(self, "_harness_builder_registry_ref", None)
+        registry = getattr(self, "_harness_registry", None)
+        if registry is None or source_ref is None or source_ref() is not builder_registry:
             from backend.harness.tool_catalog import register_tool_modules
 
+            registry = builder_registry.fork()
             register_tool_modules(registry, self, document)
-            self._harness_tools_registry_ref = ref(registry)
+            self._harness_registry = registry
+            # Do not pin a discarded Builder registry after Settings
+            # invalidation; the Agent fork is replaced on the next use.
+            self._harness_builder_registry_ref = ref(builder_registry)
         return registry
 
     async def start_harness_run(
