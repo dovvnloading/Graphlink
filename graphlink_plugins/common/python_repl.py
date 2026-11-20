@@ -18,6 +18,7 @@ changed, only their home and (for the analysis agent) their name.
 """
 
 import base64
+import codecs
 import os
 import subprocess
 import sys
@@ -38,13 +39,42 @@ from graphlink_scratch_dirs import (
 )
 
 
-# stdout is controlled by code running in the child process. The child has
-# resource limits, but a parent-side unbounded readline()/output accumulator
-# would still allocate in the Graphlink host (before the Harness's 20k-char
-# display cap). Leave room under that cap for an explicit truncation marker.
+# Child stdout is untrusted: bound each OS read as well as the result capture.
+# Read the pipe itself instead of readline(), which hides flushed fragments
+# until a newline or EOF. Leave room for the model's truncation marker.
 _REPL_READ_CHARS = 4_096
 _REPL_CAPTURE_CHARS = 19_000
 _REPL_TRUNCATION_NOTICE = "\n...[output truncated at 19,000 characters]"
+
+
+def _stdout_fragments(stream):
+    """Yield decoded, flushed pipe bytes without waiting for a full line.
+
+    os.read() returns the bytes currently available from a pipe. Decode
+    incrementally so UTF-8 characters split across reads are not corrupted.
+    A bounded readline fallback supports streams supplied by test doubles.
+    """
+    try:
+        fd = stream.fileno()
+    except (AttributeError, OSError, ValueError):
+        fd = None
+    if fd is None:
+        while True:
+            piece = stream.readline(_REPL_READ_CHARS)
+            if not piece:
+                return
+            yield piece
+    else:
+        decoder = codecs.getincrementaldecoder(
+            getattr(stream, "encoding", None) or "utf-8"
+        )(errors="replace")
+        while True:
+            raw = os.read(fd, _REPL_READ_CHARS)
+            piece = decoder.decode(raw, final=not raw)
+            if piece:
+                yield piece
+            if not raw:
+                return
 
 
 class PythonREPL:
@@ -295,42 +325,68 @@ while True:
         captured: list[str] = []
         captured_chars = 0
         truncated = False
-        while True:
-            # readline(size) bounds allocation BEFORE a child can emit one
-            # giant newline-free line. Keep reading after the capture cap:
-            # stopping at the cap would fill the child's stdout pipe and
-            # deadlock the REPL before its nonce-delimited boundary arrives.
-            try:
-                line = process.stdout.readline(_REPL_READ_CHARS)
-            except (ValueError, OSError):
-                # Stop can close stdout from another thread, waking a read
-                # with ValueError rather than EOF. It is still a dead REPL.
-                line = ""
-            if not line:
-                # EOF without a boundary: the interpreter exited mid-run.
-                # Reap it so the next call gets a fresh, synchronized REPL.
-                self.last_run_failed = True
-                self.stop()
-                break
-            stripped = line.strip()
-            if stripped == self._boundary_prefix + "OK---":
-                self.last_run_failed = False
-                break
-            if stripped == self._boundary_prefix + "ERROR---":
-                self.last_run_failed = True
-                break
+        pending = ""
+        at_line_start = True
+        status = None
+        markers = {
+            self._boundary_prefix + "OK---": "OK",
+            self._boundary_prefix + "ERROR---": "ERROR",
+        }
+
+        def emit(fragment: str) -> None:
+            nonlocal captured_chars, truncated
             if captured_chars < _REPL_CAPTURE_CHARS:
-                kept = line[:_REPL_CAPTURE_CHARS - captured_chars]
+                kept = fragment[:_REPL_CAPTURE_CHARS - captured_chars]
                 captured.append(kept)
                 captured_chars += len(kept)
-                if len(kept) != len(line):
+                if len(kept) != len(fragment):
                     truncated = True
             else:
                 truncated = True
-            # Capture is first-N for the model, but activity shows the
-            # latest bounded tail, including lines after that limit.
+            # Send the live fragment even after the model's first-N cap.
             if on_output is not None:
-                on_output(line)
+                on_output(fragment)
+
+        try:
+            for fragment in _stdout_fragments(process.stdout):
+                pending += fragment
+                while pending:
+                    newline = pending.find("\n")
+                    if newline >= 0:
+                        line, pending = pending[:newline + 1], pending[newline + 1:]
+                        # The wrapper emits a nonce-delimited, exact full
+                        # line, never a partial marker. Do not leak the
+                        # framing marker into the model or activity stream.
+                        if at_line_start and line.strip() in markers:
+                            status = markers[line.strip()]
+                            break
+                        emit(line)
+                        at_line_start = True
+                        continue
+                    # A read may end in the middle of the nonce marker.
+                    # Hold only that short candidate, not an arbitrary
+                    # newline-free user write (which must stream now).
+                    if at_line_start and any(
+                        marker.startswith(pending) for marker in markers
+                    ):
+                        break
+                    emit(pending)
+                    pending = ""
+                    at_line_start = False
+                if status is not None:
+                    break
+        except (ValueError, OSError):
+            # Stop may close stdout while this worker is reading it.
+            pass
+        if status is None:
+            if pending:
+                emit(pending)
+            # EOF without a boundary: the interpreter exited mid-run.
+            # Reap it so the next call gets a fresh synchronized REPL.
+            self.last_run_failed = True
+            self.stop()
+        else:
+            self.last_run_failed = status == "ERROR"
 
         result = "".join(captured).strip()
         return result + _REPL_TRUNCATION_NOTICE if truncated else result
