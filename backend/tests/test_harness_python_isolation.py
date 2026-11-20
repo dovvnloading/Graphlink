@@ -513,8 +513,19 @@ def test_isolated_managed_env_refreshes_bucket_used_by_startup_sweep(tmp_path, m
     monkeypatch.setattr(python_env, "HARNESS_PYTHON_ENV_ROOT", root)
     plan = planned_isolated_python_environment("active-agent", project, is_scratch=False)
 
+    # Also enforce the root-before-leaf preparation ordering on Windows,
+    # where the separate POSIX ownership-rejection test is skipped.
+    prepared = []
+    real_prepare = python_isolation.prepare_scratch_dir
+
+    def record_prepare(path):
+        prepared.append(path)
+        real_prepare(path)
+
+    monkeypatch.setattr(python_isolation, "prepare_scratch_dir", record_prepare)
     python_isolation.prepare_isolated_python_environment(plan)
     bucket = plan.host_venv.parent.parent
+    assert prepared[:2] == [bucket, plan.host_venv.parent]
     marker = plan.host_venv.parent / "installed-dependency.txt"
     marker.write_text("keep me", encoding="utf-8")
     old = time.time() - 8 * 24 * 60 * 60
