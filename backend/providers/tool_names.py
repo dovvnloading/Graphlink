@@ -53,8 +53,40 @@ def cloud_tool_names(
         if message.get("role") == "tool" and message.get("name") in aliases:
             message = {**message, "name": aliases[message["name"]]}
         elif message.get("role") == "assistant" and message.get("tool_calls"):
+            calls = message["tool_calls"]
             message = {**message, "tool_calls": [
-                {**call, "name": aliases[call["name"]]} for call in message["tool_calls"]
+                {**call, "name": aliases[call["name"]]} for call in calls
             ]}
+            # Claude's signed thinking and adjacent native tool_use blocks
+            # are recorded in the ORIGINAL request's wire aliases. Those
+            # aliases can be reassigned when tools change (fs.write versus
+            # a newly offered fs_write). Reconcile by the canonical call ID,
+            # not by the old alias, preserving all opaque thinking/signatures
+            # and the original block order. Never mutate persisted history.
+            blocks = message.get("_anthropic_content_blocks")
+            if isinstance(blocks, list):
+                uses = [block for block in blocks if isinstance(block, dict)
+                        and block.get("type") == "tool_use"]
+                valid = (
+                    len(uses) == len(calls)
+                    and all(
+                        block.get("id") == call.get("id")
+                        and isinstance(block.get("name"), str) and bool(block["name"])
+                        and block.get("input") == call.get("arguments")
+                        for block, call in zip(uses, calls)
+                    )
+                )
+                if valid:
+                    names_by_id = {call["id"]: aliases[call["name"]] for call in calls}
+                    message["_anthropic_content_blocks"] = [
+                        {**block, "name": names_by_id[block["id"]]}
+                        if block.get("type") == "tool_use" else block
+                        for block in blocks
+                    ]
+                else:
+                    # Inconsistent replay metadata must fall back to the
+                    # canonical ordinary tool_calls, never transmit a
+                    # block that could claim the wrong historical action.
+                    message.pop("_anthropic_content_blocks", None)
         wire_messages.append(message)
     return wire_tools, wire_messages, {aliases[tool.name]: tool.name for tool in tools}
