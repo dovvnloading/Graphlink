@@ -134,7 +134,7 @@ def test_ollama_request_asks_the_daemon_to_serve_the_budgeted_window(monkeypatch
         captured.update(kwargs)
         if stream:
             return iter([{"message": {"content": "ok"}, "done": True}])
-        return {"message": {"content": "ok"}}
+        return {"message": {"content": "ok"}, "done": True}
 
     import backend.providers.ollama_provider as op_module
     monkeypatch.setattr(op_module, "ollama", types.SimpleNamespace(chat=fake_chat))
