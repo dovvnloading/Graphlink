@@ -4,6 +4,9 @@ import type { WsTransport } from "../../lib/ws/transport";
 import type { SceneStore } from "../canvas/sceneStore";
 import { motionDuration } from "../reducedMotion";
 import { Dialog, useOverlays } from "../overlays/overlays";
+import {
+  HarnessExecutionProfileSelect, MAX_HARNESS_TASK_LENGTH, type HarnessExecutionProfile,
+} from "./HarnessLaunchOptions";
 
 /**
  * PLAN-2026-08-24 H1: the workspace agent's launcher - a task and a turn
@@ -43,6 +46,7 @@ export function HarnessLaunchDialog({ transport, store }: { transport: WsTranspo
   const [task, setTask] = useState("");
   const [maxTurns, setMaxTurns] = useState<number>(DEFAULT_MAX_TURNS);
   const [workspace, setWorkspace] = useState("");
+  const [executionProfile, setExecutionProfile] = useState<HarnessExecutionProfile>("host");
   const [picking, setPicking] = useState(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,16 +67,21 @@ export function HarnessLaunchDialog({ transport, store }: { transport: WsTranspo
   function startAgent() {
     const trimmed = task.trim();
     if (!trimmed || starting) return;
+    if (trimmed.length > MAX_HARNESS_TASK_LENGTH) {
+      setError(`Agent tasks cannot exceed ${MAX_HARNESS_TASK_LENGTH.toLocaleString()} characters. Shorten the task; your draft is preserved.`);
+      return;
+    }
     const requestId = ++latestRequestId.current;
     setStarting(true);
     setError(null);
     transport
-      .request("harness", "start", [trimmed, maxTurns, workspace])
+      .request("harness", "start", [trimmed, maxTurns, workspace, executionProfile])
       .then((nodeId) => {
         if (requestId !== latestRequestId.current) return;
         if (nodeId != null) {
           setTask("");
           setWorkspace("");
+          setExecutionProfile("host");
           overlays.close();
           const node = store.getScene().nodes.find((n) => n.id === nodeId);
           if (node) {
@@ -150,6 +159,16 @@ export function HarnessLaunchDialog({ transport, store }: { transport: WsTranspo
             </button>
           )}
         </div>
+      </fieldset>
+
+      <fieldset className="builder-launch-fieldset">
+        <legend>First task execution</legend>
+        <HarnessExecutionProfileSelect
+          store={store}
+          value={executionProfile}
+          onChange={setExecutionProfile}
+          disabled={starting}
+        />
       </fieldset>
 
       <fieldset className="builder-launch-fieldset">

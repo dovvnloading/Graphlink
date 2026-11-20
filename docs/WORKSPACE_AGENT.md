@@ -176,9 +176,9 @@ graph wiring. For connected pipelines use the Workbench UI and Graph Runner.
 
 ## Isolated execution profile
 
-**Host** is the default. To move shell and Python execution into containers, select **Agent settings → Execution profile → Isolated (Docker / Podman)**.
+**Host** is the default. For the **very first task**, select **Execution profile → Isolated (Docker / Podman)** in the Agent launch dialog or in the main composer after choosing **Agent → New agent**. The chosen profile is bound before that task starts. When sending to an existing selected Agent from the composer, the Agent's saved profile remains in effect. To change the profile for later tasks, use **Agent settings → Execution profile** on its card.
 
-**First-task caveat:** The Agent launcher starts the first task immediately under Host; it has no profile selector. If you need Isolated, start with a harmless read-only setup task, deny Host shell/Python requests, and select Isolated before the next task.
+The launch-time Isolated option requires a detected Docker or Podman CLI on the backend. If neither is available, the choice is disabled and an Isolated launch request is rejected without creating an Agent. A detected CLI alone does not prove the daemon or image is ready; isolated tools still fail closed without Host fallback.
 
 1. Install/start **Docker** or **Podman** on the backend machine and pre-pull the fixed image:
 
@@ -188,7 +188,7 @@ graph wiring. For connected pipelines use the Workbench UI and Graph Runner.
    podman pull python:3.12-slim
    ```
 
-2. Select **Isolated** in Agent settings. A detected CLI enables the choice, but does not prove its daemon/image is ready. The saved profile applies from the next task.
+2. Select **Isolated** before launching the first task, or in Agent settings for subsequent tasks. A detected CLI enables the choice, but does not prove its daemon/image is ready.
 3. Continue the task with the usual approvals. If the engine, daemon or image is unavailable, shell and Python tools **fail closed**, without falling back to Host.
 
 The container mounts the selected project/scratch workspace at `/workspace` and has a read-only image filesystem, 64 MiB temporary filesystem, 1 CPU, 512 MiB RAM/swap, 128-process limit, dropped capabilities and no-new-privileges. Shell and Python are offline by default. Container-native virtualenvs and the wheel cache are mounted only where needed. Host executables and backend secrets are not passed into the container.

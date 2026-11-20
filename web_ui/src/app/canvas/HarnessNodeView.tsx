@@ -9,6 +9,7 @@ import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 import { HarnessWorkspaceFiles } from "./AgentWorkspaceBrowser";
 import type { HarnessWorkspaceListing } from "./harnessWorkspaceFiles";
+import { MAX_HARNESS_TASK_LENGTH } from "../../lib/harnessTaskLimit";
 
 /**
  * PLAN-2026-08-24 H1: the workspace agent node. Everything rendered here
@@ -418,6 +419,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   const collapsed = useLodVisibility() || data.isCollapsed;
   const running = data.harnessStatus === "running";
   const [draft, setDraft] = useState("");
+  const [draftError, setDraftError] = useState("");
   const [answerDraft, setAnswerDraft] = useState("");
   const [submittedApprovalId, setSubmittedApprovalId] = useState("");
   const submittedApprovalRef = useRef("");
@@ -429,25 +431,23 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   const [settingsPosition, setSettingsPosition] = useState<MenuPosition | null>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
   const shellApproval = data.harnessApprovalToolName === "shell.exec";
-  const boundApproval = shellApproval || data.harnessApprovalNetworkOffered ||
-    ["python.exec", "python.install", "web.fetch", "web.search"].includes(data.harnessApprovalToolName) ||
-    data.harnessApprovalToolName.startsWith("fal.");
+  // Every human consent prompt carries a unique ID, not just Python, Web
+  // and shell.exec. The UI must never submit an unbound approval for files
+  // or interactive shell commands.
+  const sessionGrantTool = ![
+    "shell.exec", "shell.session", "python.exec", "python.install",
+    "web.fetch", "web.search",
+  ].includes(data.harnessApprovalToolName) && !data.harnessApprovalToolName.startsWith("fal.");
   const fileApproval = data.harnessApprovalToolName === "fs.write" || data.harnessApprovalToolName === "fs.edit";
   // Never ask someone to approve an unseen mutation. The backend explains
   // when it cannot safely read the existing file to build the preview.
   const previewUnavailable = fileApproval &&
     data.harnessApprovalSummary.slice(data.harnessApprovalSummary.indexOf("\n") + 1)
       .startsWith("Preview unavailable:");
-  const decisionPending = boundApproval && (
-    !data.harnessApprovalId || submittedApprovalId === data.harnessApprovalId
-  );
+  const decisionPending = !data.harnessApprovalId || submittedApprovalId === data.harnessApprovalId;
 
   function decideTool(approved: boolean, alwaysAllow = false): void {
     const decide = alwaysAllow ? data.onApproveToolForSession : approved ? data.onApproveTool : data.onDenyTool;
-    if (!boundApproval) {
-      decide();
-      return;
-    }
     const approvalId = data.harnessApprovalId;
     if (!approvalId || submittedApprovalRef.current === approvalId) return;
     submittedApprovalRef.current = approvalId;
@@ -498,6 +498,11 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   function sendDraft(): void {
     const text = draft.trim();
     if (!text || !acceptsInput(data.harnessStatus)) return;
+    if (text.length > MAX_HARNESS_TASK_LENGTH) {
+      setDraftError(`Agent tasks cannot exceed ${MAX_HARNESS_TASK_LENGTH.toLocaleString()} characters. Shorten the task; your draft is preserved.`);
+      return;
+    }
+    setDraftError("");
     data.onSend(text);
     setDraft("");
   }
@@ -767,7 +772,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
                 Approve once
               </button>
             )}
-            {data.harnessApprovalSessionOffered && (!boundApproval || shellApproval) && !previewUnavailable && (
+            {data.harnessApprovalSessionOffered && (sessionGrantTool || shellApproval) && !previewUnavailable && (
               <button
                 type="button"
                 className="plan-node-button nodrag"
@@ -847,7 +852,10 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
             value={draft}
             rows={2}
             aria-label="Follow-up message"
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              setDraftError("");
+            }}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
@@ -863,6 +871,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
           >
             Send
           </button>
+          {draftError && <p className="composer-agent-error" role="alert">{draftError}</p>}
         </div>
       )}
 

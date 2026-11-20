@@ -53,14 +53,22 @@ def _request(*, tools=()):
 
 
 def _openai_chunk(delta=None, finish_reason=None):
-    return ChatCompletionChunk.model_validate({
+    # SDK models enforce standard stop reasons; OpenAI-compatible servers
+    # can return vendor-specific reasons that the provider must still reject.
+    sdk_reason = None if finish_reason == "unknown_stop" else finish_reason
+    chunk = ChatCompletionChunk.model_validate({
         "id": "chatcmpl-1",
         "object": "chat.completion.chunk",
         "created": 0,
         "model": "gpt-4o",
-        "choices": [{"index": 0, "delta": delta if delta is not None else {}, "finish_reason": finish_reason}],
+        "choices": [{"index": 0, "delta": delta if delta is not None else {}, "finish_reason": sdk_reason}],
         "usage": None,
     })
+    if finish_reason == "unknown_stop":
+        # Simulate a permissive compatible transport without making a
+        # nonstandard value fail SDK validation before stream() receives it.
+        object.__setattr__(chunk.choices[0], "finish_reason", finish_reason)
+    return chunk
 
 
 def _openai_usage_chunk(prompt_tokens=12, completion_tokens=5):

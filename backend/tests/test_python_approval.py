@@ -278,7 +278,16 @@ def test_python_approval_intents_bind_each_disclosure_and_reject_other_resolvers
         await bus.dispatch_intent("harness", "approveTool", [handle.request_id, "second-disclosure"])
         assert not other_tool.done(), "a Python confirmation cannot authorize a later unrelated tool"
         await bus.dispatch_intent("harness", "approveTool", [handle.request_id])
-        assert other_tool.result() is True, "existing unrelated-tool approval remains compatible"
+        assert not other_tool.done(), "a harness prompt without a disclosure ID must not be approved"
+        # Every harness approval, including a non-Python tool, now has its
+        # own identity. Missing or replayed IDs must fail for that tool too.
+        handle.approval_token = "other-tool-disclosure"
+        await bus.dispatch_intent("harness", "approveTool", [handle.request_id])
+        assert not other_tool.done(), "a missing ID cannot authorize another tool"
+        await bus.dispatch_intent("harness", "approveTool", [handle.request_id, "second-disclosure"])
+        assert not other_tool.done(), "a stale ID cannot authorize another tool"
+        await bus.dispatch_intent("harness", "approveTool", [handle.request_id, "other-tool-disclosure"])
+        assert other_tool.result() is True, "only the matching disclosure approves the tool"
         dispatcher._runs.release(handle.request_id)
 
     asyncio.run(run())

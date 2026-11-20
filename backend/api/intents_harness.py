@@ -57,7 +57,7 @@ def register_harness_composer_intent(
     validation, agent creation, and dispatch for all harness callers.
     """
 
-    async def composer_send(text, selected_node_id=None):
+    async def composer_send(text, selected_node_id=None, execution_profile="host"):
         """Route the composer to the selected agent, or create one if none is selected.
 
         The model is resolved from THIS session's live composer route rather
@@ -65,9 +65,13 @@ def register_harness_composer_intent(
         exact model shown in the composer at dispatch time; the regular
         launcher and per-card follow-up retain their existing defaults.
         """
-        message = str(text or "").strip()[:_MESSAGE_CAP]
+        message = str(text or "").strip()
         if not message:
             notifications.show("Type a message for the agent first.", "info")
+            await bus.publish("notification")
+            return None
+        if len(message) > _MESSAGE_CAP:
+            notifications.show("Agent tasks cannot exceed 20,000 characters. Shorten the draft and retry.", "warning")
             await bus.publish("notification")
             return None
 
@@ -94,7 +98,7 @@ def register_harness_composer_intent(
         if selected is not None and isinstance(selected.state, HarnessState):
             request_id = await send(selected.id, message, model_ref=model_ref)
             return selected.id if request_id is not None else None
-        return await start(message, model_ref=model_ref)
+        return await start(message, execution_profile=execution_profile, model_ref=model_ref)
 
     bus.register_intent("harness", "composerSend", composer_send)
 
@@ -108,10 +112,22 @@ def register_harness_intents(
 ) -> None:
     publish_scene = make_publish_scene(bus)
 
-    async def start(goal, max_turns=None, workspace_path=None, *, model_ref=None):
-        goal_text = str(goal or "").strip()[:_MESSAGE_CAP]
+    async def start(goal, max_turns=None, workspace_path=None, execution_profile="host", *, model_ref=None):
+        goal_text = str(goal or "").strip()
         if not goal_text:
             notifications.show("Give the agent a task first.", "info")
+            await bus.publish("notification")
+            return None
+        if len(goal_text) > _MESSAGE_CAP:
+            notifications.show("Agent tasks cannot exceed 20,000 characters. Shorten the draft and retry.", "warning")
+            await bus.publish("notification")
+            return None
+        if not isinstance(execution_profile, str) or execution_profile not in VALID_EXECUTION_PROFILES:
+            notifications.show("Unsupported agent execution profile.", "warning")
+            await bus.publish("notification")
+            return None
+        if execution_profile == "isolated" and available_engine() is None:
+            notifications.show("Isolated requires Docker or Podman on the backend. Agent not started.", "warning")
             await bus.publish("notification")
             return None
         # Avoid creating a stranded agent node when a task is already running.
@@ -142,6 +158,8 @@ def register_harness_intents(
         requested_workspace = str(workspace_path or "").strip()[:_PATH_CAP]
         if requested_workspace:
             node.state.harness_workspace_path = requested_workspace
+        # The dispatcher snapshots the profile as it claims the first task.
+        node.state.harness_execution_profile = execution_profile
 
         # The busy guard above and the dispatcher's synchronous run claim
         # must not yield to a second start. Publishing here previously let
@@ -159,7 +177,7 @@ def register_harness_intents(
         return node.id if request_id is not None else None
 
     async def send(node_id, text, allow_session_grants=True, *, model_ref=None):
-        message = str(text or "").strip()[:_MESSAGE_CAP]
+        message = str(text or "").strip()
         node = document.nodes.get(node_id)
         if node is None or not isinstance(node.state, HarnessState):
             notifications.show("This agent node no longer exists.", "warning")
@@ -167,6 +185,10 @@ def register_harness_intents(
             return None
         if not message:
             notifications.show("Type a message for the agent first.", "info")
+            await bus.publish("notification")
+            return None
+        if len(message) > _MESSAGE_CAP:
+            notifications.show("Agent tasks cannot exceed 20,000 characters. Shorten the draft and retry.", "warning")
             await bus.publish("notification")
             return None
         if node.pending_request_id:

@@ -995,6 +995,27 @@ class TestShellTool:
         assert "yyy" in result.content
         assert elapsed < 30, "a drained pipe finishes at the command's own speed"
 
+    def test_invalid_utf8_does_not_stall_shell_exec_or_lose_live_output(
+        self, workspace_root, monkeypatch,
+    ):
+        from backend.harness import tools_shell
+
+        # More than an OS pipe buffer of undecodable bytes: strict decoding
+        # kills the reader, blocks the producer and falsely reports timeout.
+        monkeypatch.setattr(tools_shell, "SHELL_EXEC_TIMEOUT_SECONDS", 3)
+        pieces = []
+        output, code, ended = tools_shell._run_command(
+            'python -c "import os; os.write(1, bytes([255]) * 200000); '
+            'os.write(1, bytes([70, 73, 78, 73, 83, 72, 69, 68]))"',
+            ensure_workspace("ws1"), threading.Event(), on_output=pieces.append,
+        )
+        assert ended == "ok"
+        assert code == 0
+        assert len(output) == tools_shell._OUTPUT_CAP_CHARS + 1
+        assert "".join(pieces).endswith("FINISHED"), (
+            "live streaming must keep draining after the result cap"
+        )
+
     def test_newline_free_stdout_is_bounded_during_actual_read(self):
         import io
         from backend.harness.tools_shell import _drain_bounded_output, _OUTPUT_CAP_CHARS

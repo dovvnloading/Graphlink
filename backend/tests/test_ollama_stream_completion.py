@@ -77,6 +77,6 @@ def test_tool_call_only_stream_passes(monkeypatch):
     assert [e.type for e in events] == ["tool_call", "done"]
 
 
-def test_length_finish_passes(monkeypatch):
-    events, _ = _events(monkeypatch, [_part("A long answer"), _part(" that", done=True, done_reason="length")])
-    assert events[-1].text == "A long answer that"
+def test_length_finish_is_not_a_success(monkeypatch):
+    with pytest.raises(RuntimeError, match=r"Ollama generation incomplete \(stop reason: length\)"):
+        _events(monkeypatch, [_part("A long answer"), _part(" that", done=True, done_reason="length")])

@@ -108,6 +108,30 @@ def test_powershell_destructive_commands_and_aliases_are_dangerous(command):
 @pytest.mark.parametrize(
     "command",
     [
+        "Add-Content notes.txt updated",
+        "ac notes.txt updated",
+        "Rename-Item before.txt after.txt",
+        "rni before.txt after.txt",
+    ],
+)
+def test_powershell_missing_mutators_warn_and_cannot_be_saved(command, tmp_path, monkeypatch):
+    from backend.harness import shell_selection
+    from backend.harness.shell_policy import shell_allow_rule_candidates
+
+    # A PowerShell rule must be vetted with PowerShell grammar on any test OS.
+    monkeypatch.setattr(shell_selection, "effective_shell", lambda _shell: "powershell")
+    plan = analyze(command, shell="powershell")
+    assert plan.dangerous == [command]
+    assert f"! {command}" in plan.disclosure()
+    assert "! flagged commands are not undoable" in plan.disclosure()
+    assert shell_allow_rule_candidates(
+        command, shell="powershell", workspace_root=tmp_path,
+    ) == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
         "Get-ChildItem -Recurse .",
         "Get-Process | Where-Object Name -Like 'python*'",
         "Write-Output 'Remove-Item -Recurse x'",
