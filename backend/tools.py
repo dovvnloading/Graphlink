@@ -308,7 +308,11 @@ class ToolRegistry:
                 return ToolResult(content=error, is_error=True)
             call = ToolCall(id=call.id, name=call.name, arguments=deepcopy(call.arguments))
 
-        if registration.approval != "auto":
+        # Only selected workspace operations may bypass an ordinary approval.
+        # The scope gate and all handler-level confinement stay in force.
+        from backend.harness.permission_modes import may_skip_workspace_approval
+
+        if registration.approval != "auto" and not may_skip_workspace_approval(call, ctx):
             fingerprint = _tool_call_fingerprint(call) if registration.approval == "always" else None
             # §2.4's dangerous-command rule: a predicate that says "always
             # ask" wins over the memo AND declines to write a new memo entry
