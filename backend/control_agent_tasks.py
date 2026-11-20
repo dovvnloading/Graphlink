@@ -152,10 +152,10 @@ def register_control_agent_task_api(app: FastAPI, bus: EventBus) -> None:
             run_id = await session.dispatch_intent("harness", "send", [node.id, body.text.strip(), False])
             if not isinstance(run_id, str) or not run_id:
                 raise HTTPException(status_code=409, detail="the agent task could not start")
-            # start_harness_run claims a RunHandle synchronously but schedules
-            # run_harness on the next event-loop turn. Expose that claim now
-            # so an immediate MCP status/cancel cannot see the PREVIOUS
-            # task's ID or state before the worker has started.
+            # The real dispatcher now records the run synchronously, before
+            # the worker is scheduled. Retain this defensive fallback for
+            # alternate dispatch implementations that only claim a handle:
+            # immediate MCP polls must still see the new task, not the old.
             handle = dispatcher._runs.get(run_id)
             if (handle is not None and handle.kind == "harness"
                     and handle.node_id == node.id and node.state.harness_run_id != run_id):
@@ -166,6 +166,15 @@ def register_control_agent_task_api(app: FastAPI, bus: EventBus) -> None:
                 # expose the previous task's answer or checklist.
                 node.state.harness_reply = ""
                 node.state.harness_plan = []
+                # A cancelled predecessor's question/approval is not B's.
+                node.state.harness_awaiting_question = False
+                node.state.harness_question = ""
+                node.state.harness_awaiting_approval = False
+                node.state.harness_approval_id = ""
+                node.state.harness_approval_tool_name = ""
+                node.state.harness_approval_summary = ""
+                node.state.harness_approval_session_offered = False
+                node.state.harness_approval_network_offered = False
                 node.state.harness_goal = body.text.strip()
                 node.pending_request_id = run_id
             receipts[body.operation_id] = (

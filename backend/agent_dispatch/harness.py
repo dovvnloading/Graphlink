@@ -342,7 +342,11 @@ class HarnessDispatchOps(DispatcherParts):
         cancel_event = threading.Event()
 
         async def _finalize() -> None:
-            if node.state.harness_status == "running" and node.state.harness_run_id == request_id:
+            # Stop releases the registry slot immediately. A newer task can
+            # already own this node when the old finalizer is scheduled.
+            if node.state.harness_run_id != request_id:
+                return
+            if node.state.harness_status == "running":
                 node.state.harness_status = "stopped"
                 node.state.harness_status_detail = "Stopped by user."
                 # A tool may still be unwinding in its worker thread.
@@ -358,7 +362,9 @@ class HarnessDispatchOps(DispatcherParts):
             node.state.harness_approval_id = ""
             node.state.harness_approval_session_offered = False
             node.state.harness_approval_network_offered = False
-            if node.pending_request_id == handle.request_id:
+            node.state.harness_awaiting_question = False
+            node.state.harness_question = ""
+            if node.pending_request_id == request_id:
                 node.pending_request_id = None
             await bus.publish("scene")
 
@@ -366,6 +372,24 @@ class HarnessDispatchOps(DispatcherParts):
             "harness", node_id=harness_node_id, cancel_event=cancel_event, finalize=_finalize,
         )
         request_id = handle.request_id
+        # Publish run ownership synchronously, before the worker's first
+        # await. This also makes pre-worker failures and immediate MCP polls
+        # refer to the claimed task rather than the previous run.
+        node.state.harness_run_id = request_id
+        node.state.harness_status = "running"
+        node.state.harness_status_detail = ""
+        node.state.harness_reply = ""
+        node.state.harness_plan = []
+        node.state.harness_goal = user_text
+        node.state.harness_awaiting_question = False
+        node.state.harness_question = ""
+        node.state.harness_awaiting_approval = False
+        node.state.harness_approval_id = ""
+        node.state.harness_approval_tool_name = ""
+        node.state.harness_approval_summary = ""
+        node.state.harness_approval_session_offered = False
+        node.state.harness_approval_network_offered = False
+        node.pending_request_id = request_id
         active = getattr(self, "_harness_active_workspaces", None)
         if active is None:
             active = {}
@@ -387,6 +411,29 @@ class HarnessDispatchOps(DispatcherParts):
                     permission_mode=task_mode, execution_profile=task_profile,
                     **self._runtime_kwargs(),
                 )
+            except Exception as exc:
+                # Registry/runtime-argument setup runs before run_harness
+                # enters its own try/_land path. A claimed task still needs
+                # a terminal state and a released pending ID in that case.
+                # Do not overwrite a stopped task or a newer run's fields.
+                if (node.state.harness_run_id == request_id
+                        and node.state.harness_status == "running"
+                        and not cancel_event.is_set()):
+                    node.state.harness_status = "failed"
+                    node.state.harness_status_detail = (
+                        f"Run failed: {exc} — send a follow-up to retry."
+                    )
+                    node.state.harness_awaiting_question = False
+                    node.state.harness_question = ""
+                    node.state.harness_awaiting_approval = False
+                    node.state.harness_approval_id = ""
+                    node.state.harness_approval_tool_name = ""
+                    node.state.harness_approval_summary = ""
+                    node.state.harness_approval_session_offered = False
+                    node.state.harness_approval_network_offered = False
+                    if node.pending_request_id == request_id:
+                        node.pending_request_id = None
+                    await bus.publish("scene")
             finally:
                 self._harness_active_workspaces.pop(request_id, None)
                 try:

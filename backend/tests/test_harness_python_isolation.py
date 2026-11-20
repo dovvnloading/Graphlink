@@ -11,7 +11,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 from unittest.mock import Mock
 
-from backend.harness import python_env, python_install, python_isolation, tools_python
+from backend.harness import python_env, python_install, python_isolation, tool_catalog, tools_python
 from backend.harness.loop import HarnessRunContext
 from backend.harness.python_isolation import (
     CONTAINER_PYTHON, isolated_repl_command, planned_isolated_python_environment,
@@ -462,3 +462,27 @@ def test_project_venv_bootstrap_probes_real_interpreter_and_rejects_broken_one(t
     assert failed.returncode != 0
     assert "cannot run inside the container" in failed.stderr
     assert (broken / "bin/python").read_text() == "not executable Python"
+
+
+def test_isolated_python_guidance_matches_selected_project_and_fallback_envs(tmp_path, monkeypatch):
+    project = tmp_path / "trusted-project"
+    project.mkdir()
+    _container_native_stub(project / ".venv")
+    monkeypatch.setattr(python_env, "HARNESS_PYTHON_ENV_ROOT", tmp_path / "managed")
+
+    selected = planned_isolated_python_environment("ws", project, is_scratch=False)
+    assert not selected.managed
+    assert selected.interpreter == PurePosixPath("/workspace/.venv/bin/python")
+    assert python_install.planned_install_interpreter(
+        "ws", project, is_scratch=False, profile="isolated",
+    ) == selected.interpreter
+    fallback = planned_isolated_python_environment("ws", project, is_scratch=True)
+    assert fallback.managed
+    assert fallback.interpreter != selected.interpreter
+
+    # Both the tool schema and tool_guide reach the model's live prompts.
+    for guidance in (tools_python.PYTHON_EXEC_SPEC.description,
+                     tools_python.USAGE_HINT, tool_catalog.tool_guide()):
+        assert "compatible project .venv/venv" in guidance
+        assert "managed" in guidance and "fallback" in guidance
+        assert "always uses a separate managed" not in guidance

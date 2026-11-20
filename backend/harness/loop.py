@@ -561,6 +561,8 @@ async def run_harness(
     # awaiting fields for the panel, and clears them in a finally so no
     # exit path leaves a phantom prompt on the canvas.
     async def request_approval(call: ToolCall) -> "bool | str":
+        if cancel_event.is_set() or not _alive() or node.state.harness_run_id != request_id:
+            return False
         # Prepare the file preview before exposing any approval future. The
         # diff computation yields to a worker thread: a Stop during that
         # window must not publish a stale prompt or grant permission.
@@ -741,6 +743,8 @@ async def run_harness(
         finally - so cancel-means-resolve and the disconnect auto-resolve
         both already cover it. A False/None resolution (Stop, disconnect,
         or a dismissed prompt) reads as 'declined to answer'."""
+        if cancel_event.is_set() or not _alive() or node.state.harness_run_id != request_id:
+            return None
         future: asyncio.Future = loop_handle.create_future()
         handle.approval_future = future
         node.state.harness_awaiting_question = True
@@ -749,8 +753,13 @@ async def run_harness(
         try:
             answer = await future
         finally:
-            node.state.harness_awaiting_question = False
-            node.state.harness_question = ""
+            # A cancelled run can unwind after another MCP task asks its own
+            # question. The future distinguishes successive prompts in one
+            # run; the run ID prevents the old run clearing the new one's.
+            if (node.state.harness_run_id == request_id
+                    and handle.approval_future is future):
+                node.state.harness_awaiting_question = False
+                node.state.harness_question = ""
         await bus.publish("scene")
         return answer if isinstance(answer, str) and answer.strip() else None
 
@@ -802,6 +811,16 @@ async def run_harness(
     node.state.harness_plan = []
     node.state.harness_run_id = request_id
     node.state.harness_goal = user_text
+    # Clear prompt surfaces on run entry too (direct/in-app harness starts
+    # do not necessarily pass through the MCP claim path).
+    node.state.harness_awaiting_question = False
+    node.state.harness_question = ""
+    node.state.harness_awaiting_approval = False
+    node.state.harness_approval_id = ""
+    node.state.harness_approval_tool_name = ""
+    node.state.harness_approval_summary = ""
+    node.state.harness_approval_session_offered = False
+    node.state.harness_approval_network_offered = False
     node.pending_request_id = request_id
     await bus.publish("scene")
 

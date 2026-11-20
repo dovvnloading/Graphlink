@@ -60,8 +60,9 @@ PYTHON_EXEC_SPEC = ToolSpec(
     description=(
         "Run Python in a persistent interpreter whose working directory is "
         "the workspace. Host uses a project .venv/venv or managed environment; "
-        "Isolated always uses a separate managed container-native virtualenv "
-        "inside a network-disabled container. "
+        "In Isolated mode, a compatible project .venv/venv in a trusted "
+        "workspace is preferred (verified in the network-disabled container); "
+        "a separate managed container-native virtualenv is the fallback. "
         "Variables, imports, and loaded data survive between calls. "
         "Returns stdout/stderr plus whether the code raised. Use print() - "
         "expression values are not echoed. Every call needs the user's "
@@ -347,7 +348,9 @@ def register_harness_python_tool(
 USAGE_HINT = (
     "python.exec runs in the workspace's .venv/venv when available, or a persistent "
     "managed virtual environment created on first use in Host mode. In Isolated "
-    "mode it always uses a network-disabled container with a separate managed environment. "
+    "mode, a compatible project .venv/venv in a trusted workspace is preferred "
+    "(verified in the network-disabled container); a separate managed environment "
+    "is the fallback. python.install targets the selected environment. "
     "State survives between calls; every execution requires fresh approval."
 )
 

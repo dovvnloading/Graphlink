@@ -335,8 +335,8 @@ class OllamaProvider:
 
             response = ollama.chat(model=self.model_id, messages=messages, **kwargs)
             _raise_if_cancelled(cancel.event)
-            if response.get("done") is False:
-                raise RuntimeError("Ollama generation incomplete (done: false). Please try again.")
+            if response.get("done") is not True:
+                raise RuntimeError("Ollama generation incomplete (expected done: true). Please try again.")
             require_successful_stop("Ollama", response.get("done_reason"), {"stop"})
             # ADR-006 stage 6.8: complete() returns a bare str by protocol, so
             # the usage from the raw response rides a side attribute the

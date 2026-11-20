@@ -257,13 +257,19 @@ class ProviderEvent:
     replay: dict | None = None
 
 
-def require_successful_stop(provider: str, reason: object, allowed: set[str]) -> None:
+def require_successful_stop(
+    provider: str, reason: object, allowed: set[str], *, required: bool = False,
+) -> None:
     """Reject output-limit, filtered or unknown terminal reasons before done.
 
     Older Ollama/Anthropic transports may omit an optional reason even
-    when they deliver their required terminal event. Never mistake an
-    explicitly reported non-success reason for a completed agent turn.
+    when they deliver their required terminal event. For transports with
+    mandatory finish reasons, require the marker as well as a successful value.
     """
+    if reason is None and required:
+        raise RuntimeError(
+            f"{provider} generation incomplete (missing stop reason). Please try again."
+        )
     if reason is not None and str(reason).strip().lower() not in allowed:
         raise RuntimeError(
             f"{provider} generation incomplete (stop reason: {reason}). Please try again."
