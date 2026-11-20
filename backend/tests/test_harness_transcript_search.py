@@ -38,6 +38,10 @@ def test_writer_indexes_messages_calls_and_compaction_without_rewriting_history(
 
     transcript = transcript_path(tmp_path)
     assert index_path(transcript).is_file()  # indexed on write, not just on search
+    # The indexer never passes the scratch pathname to SQLite, so no WAL,
+    # shared-memory or rollback-journal companion is created there.
+    for suffix in ("-wal", "-shm", "-journal"):
+        assert not Path(str(index_path(transcript)) + suffix).exists()
     assert {hit["role"] for hit in search_index(transcript, "chrysanthemum")} == {
         "user", "summary",
     }
