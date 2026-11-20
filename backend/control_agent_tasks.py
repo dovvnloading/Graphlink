@@ -63,6 +63,7 @@ def _task_snapshot(node) -> dict[str, Any]:
         "source": "live",
         "node_id": node.id,
         "run_id": state.harness_run_id,
+        "permission_mode": state.harness_task_permission_mode,
         "status": state.harness_status,
         "status_detail": str(state.harness_status_detail or "")[:_MAX_DETAIL],
         "checklist": steps,
