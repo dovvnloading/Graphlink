@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { Composer } from "./Composer";
@@ -101,6 +101,10 @@ describe("Composer", () => {
       selectedNodeId: "agent-1",
       scene: { nodes: [{ id: "agent-1", kind: "harness", title: "Code agent" }] },
     });
+    let finishSend: (started: boolean) => void = () => {};
+    sendComposerAgentMessage.mockReturnValue(new Promise<boolean>((resolve) => {
+      finishSend = resolve;
+    }));
     render(
       <OverlayProvider>
         {/* @ts-expect-error - minimal test store */}
@@ -117,8 +121,8 @@ describe("Composer", () => {
     expect(sendComposerAgentMessage).toHaveBeenCalledWith("Review these changes");
     expect(sendMessage).not.toHaveBeenCalled();
     expect(updateDraft).not.toHaveBeenCalledWith("");
-    await screen.findByRole("button", { name: "Send message" });
-    await vi.waitFor(() => expect(updateDraft).toHaveBeenCalledWith(""));
+    finishSend(true);
+    await waitFor(() => expect(updateDraft).toHaveBeenCalledWith(""));
   });
 
   it("agent mode creates a new agent when the selected node is not an agent", async () => {
