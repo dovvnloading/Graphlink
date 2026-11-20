@@ -36,7 +36,8 @@ def test_windows_prefers_powershell_7_then_windows_powershell():
     assert args[-1] == "Write-Output 'hi'"
     assert "-NoProfile" in args
 
-    with patch("backend.harness.shell_selection.shutil.which", side_effect=[None, None, r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"]):
+    with patch("backend.harness.shell_selection.Path.is_file", return_value=False), \
+         patch("backend.harness.shell_selection.shutil.which", side_effect=[None, None, r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"]):
         args, use_shell = shell_invocation("Get-Location", "powershell", env={"PATH": "tools"}, os_name="nt")
     assert args[0].endswith("powershell.exe")
     assert not use_shell

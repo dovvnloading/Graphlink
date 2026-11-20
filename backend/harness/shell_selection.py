@@ -100,7 +100,6 @@ def shell_invocation(
     """
     environment = safe_subprocess_env() if env is None else env
     selected = effective_shell(shell, os_name=os_name)
-    path = _env_value(environment, "PATH") or os.defpath
     if selected == "cmd":
         return command, True
     if selected == "powershell":

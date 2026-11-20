@@ -49,9 +49,9 @@ def test_command_shell_is_the_execution_shell_not_the_login_shell(monkeypatch):
     assert context_module._command_shell(
         {"ComSpec": r"C:\Windows\cmd.exe"}, os_name="nt", shell="cmd",
     ) == r"C:\Windows\cmd.exe /c"
-    assert context_module._command_shell({}, os_name="nt").startswith(
-        "powershell.exe -NoLogo -NoProfile -NonInteractive -Command"
-    )
+    powershell_command = context_module._command_shell({}, os_name="nt")
+    assert "pwsh.exe" in powershell_command.lower() or "powershell.exe" in powershell_command.lower()
+    assert "-NoLogo -NoProfile -NonInteractive -Command" in powershell_command
 
 
 def test_machine_tier_is_cacheable_and_precedes_untrusted_workspace_instructions(tmp_path):
