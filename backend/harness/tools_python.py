@@ -147,6 +147,21 @@ class PythonReplRegistry:
             stale[0].stop()
         return repl
 
+    def bind_root(self, workspace_id: str, cwd: Path, profile: str) -> None:
+        """Retire live interpreters on workspace rebind or profile change.
+
+        This runs at task start, even if the next task does not call Python:
+        an old Host interpreter must not linger after Isolated is selected.
+        """
+        with self._lock:
+            stale = self._repls.get(workspace_id)
+            retire = stale is not None and (
+                stale[1] != cwd
+                or self._profiles.get(workspace_id, "host") != profile
+            )
+        if retire:
+            self.stop_workspace(workspace_id, expected_repl=stale[0])
+
     def stop_workspace(
         self, workspace_id: str, *, expected_repl: PythonREPL | None = None,
     ) -> None:
