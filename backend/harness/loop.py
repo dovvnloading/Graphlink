@@ -54,7 +54,7 @@ from backend.harness.transcript import (
     flush as flush_transcript,
     load_messages,
 )
-from backend.harness.workspace import bound_root, ensure_workspace
+from backend.harness.workspace import WorkspaceError, bound_root, ensure_workspace
 from backend.providers.base import CancelToken, ToolCall
 from backend.tools import (
     CODE_EXECUTE,
@@ -163,6 +163,8 @@ class HarnessRunContext(RunContext):
     # they need). set_plan(steps) -> None; ask_user(question) -> str | None.
     set_plan: object = None
     ask_user: object = None
+    # The interpreter disclosed for a fresh python.install authorization.
+    python_install_approved_interpreter: object = None
 
 
 def _truncate(text: str, cap: int) -> str:
@@ -209,7 +211,7 @@ def _is_dangerous_call(call: ToolCall) -> bool:
     A dangerous-name blacklist is insufficient for arbitrary shell code:
     interpreters and wrappers can execute anything after a benign command.
     """
-    return call.name == "python.exec" or shell_policy.requires_fresh_shell_approval(call.name, call.arguments)
+    return call.name in ("python.exec", "python.install") or shell_policy.requires_fresh_shell_approval(call.name, call.arguments)
 
 
 def _approval_summary(call: ToolCall, *, workspace_root: Path | None = None) -> str:
@@ -220,6 +222,10 @@ def _approval_summary(call: ToolCall, *, workspace_root: Path | None = None) -> 
     capped sorted-JSON arguments, the builder's own default shape."""
     if call.name == "python.exec":
         return f"python.exec\n--- source\n{call.arguments['code']}"
+    if call.name == "python.install":
+        from backend.harness.python_install import install_approval_summary
+
+        return install_approval_summary(call.arguments.get("packages", []), None)
     if call.name == "shell.exec":
         # §2.4: disclose one line per thing that will actually run, so a
         # dangerous tail cannot hide behind a benign head in a chain.
@@ -335,21 +341,44 @@ async def run_harness(
             preview = await asyncio.to_thread(preview_harness_file_change, call, root)
             if cancel_event.is_set() or not _alive():
                 return False
+        # Show the environment selected by python.exec, without creating a
+        # virtualenv before consent. Pin the choice against a late rebind.
+        install_target = None
+        ctx.python_install_approved_interpreter = None
+        if call.name == "python.install":
+            from backend.harness.python_install import (
+                planned_install_interpreter, workspace_install_binding,
+            )
+
+            try:
+                workspace_id, root, is_scratch = workspace_install_binding(ctx)
+                install_target = planned_install_interpreter(
+                    workspace_id, root, is_scratch=is_scratch,
+                )
+            except (WorkspaceError, OSError):
+                return False
         future: asyncio.Future = loop_handle.create_future()
         handle.approval_future = future
         # A run can pause many times. Its request_id alone is not consent
         # for the next Python call: a delayed/replayed click must still name
         # the exact disclosure that was on screen when the user decided.
-        bind_approval = call.name == "python.exec" or call.name.startswith("fal.")
+        bind_approval = call.name in ("python.exec", "python.install") or call.name.startswith("fal.")
         approval_token = uuid.uuid4().hex if bind_approval else ""
         handle.approval_token = approval_token
         node.state.harness_approval_id = handle.approval_token
         node.state.harness_awaiting_approval = True
         node.state.harness_approval_tool_name = call.name
         preview_available = preview.available if preview is not None else True
-        node.state.harness_approval_summary = (
-            preview.summary if preview is not None else _approval_summary(call)
-        )
+        if call.name == "python.install":
+            from backend.harness.python_install import install_approval_summary
+
+            node.state.harness_approval_summary = install_approval_summary(
+                call.arguments["packages"], install_target,
+            )
+        else:
+            node.state.harness_approval_summary = (
+                preview.summary if preview is not None else _approval_summary(call)
+            )
         # Executable commands and interactive stdin always ask fresh, even
         # when a previous call was approved for the session. The panel must
         # not suggest session consent that the registry will reject.
@@ -370,6 +399,8 @@ async def run_harness(
         await bus.publish("scene")
         # UI controls are not an authorization boundary. A forged or stale
         # client approval cannot permit a write whose preview was unavailable.
+        if call.name == "python.install" and approved and preview_available:
+            ctx.python_install_approved_interpreter = install_target
         return approved if preview_available else False
 
     async def set_plan(steps: list) -> None:
