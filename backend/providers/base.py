@@ -251,6 +251,19 @@ class ProviderEvent:
     tool_call: ToolCall | None = None
 
 
+def require_successful_stop(provider: str, reason: object, allowed: set[str]) -> None:
+    """Reject output-limit, filtered or unknown terminal reasons before done.
+
+    Older Ollama/Anthropic transports may omit an optional reason even
+    when they deliver their required terminal event. Never mistake an
+    explicitly reported non-success reason for a completed agent turn.
+    """
+    if reason is not None and str(reason).strip().lower() not in allowed:
+        raise RuntimeError(
+            f"{provider} generation incomplete (stop reason: {reason}). Please try again."
+        )
+
+
 def normalize_usage(prompt_tokens, completion_tokens) -> dict | None:
     """ADR-006 stage 6.8: the ONE normalized usage shape every provider
     attaches to its done event - {"prompt_tokens": int | None,
