@@ -407,6 +407,34 @@ describe("conversationHistoryToDocumentMarkdown (R8a Open Document View transcri
 });
 
 describe("toFlowNodes (R8a Open Document View wiring)", () => {
+  it("routes agent workspace files to Document View and reveals the bound folder", async () => {
+    const scene = baseScene({ nodes: [baseNode({ id: "agent-1", kind: "harness" })], edges: [] });
+    const store = makeStore();
+    const list = vi.spyOn(store, "listHarnessWorkspaceFiles").mockResolvedValue({
+      root: "/project", path: "", isScratch: false, truncated: false, entries: [],
+    });
+    const read = vi.spyOn(store, "readHarnessWorkspaceFile").mockResolvedValue({
+      path: "docs/readme.md", content: "# Hello", truncated: false,
+    });
+    const reveal = vi.spyOn(store, "revealHarnessWorkspace").mockImplementation(() => {});
+    const onOpenDocumentView = vi.fn();
+    const node = toFlowNodes(scene, store, onOpenDocumentView).find((entry) => entry.id === "agent-1");
+    expect(node).toBeDefined();
+    const actions = node!.data as {
+      onListWorkspaceFiles: (path: string) => Promise<unknown>;
+      onOpenWorkspaceFile: (path: string) => Promise<void>;
+      onRevealWorkspace: () => void;
+    };
+    await actions.onListWorkspaceFiles("docs");
+    await actions.onOpenWorkspaceFile("docs/readme.md");
+    actions.onRevealWorkspace();
+    expect(list).toHaveBeenCalledWith("agent-1", "docs");
+    expect(read).toHaveBeenCalledWith("agent-1", "docs/readme.md");
+    expect(onOpenDocumentView).toHaveBeenCalledWith("# Hello", "Workspace: docs/readme.md");
+    expect(reveal).toHaveBeenCalledWith("agent-1");
+  });
+
+
   it("a chat node's onOpenDocumentView invokes the third-argument callback with its own content", () => {
     const scene = baseScene({
       nodes: [baseNode({ id: "chat-1", kind: "chat", content: "Hello world" })],
