@@ -313,8 +313,9 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # 252 -> 254: harness/setExecutionProfile stores a task profile and
     # harness/getIsolationEngine probes engine availability.
     # 254 -> 255: harness/removeShellAllowRule revokes saved execution consent.
-    assert len(real) == 255, (
-        f"expected exactly 255 real registered intents, found {len(real)} - "
+    # 255 -> 256: harness/composerSend adds a new-or-selected agent dispatch.
+    assert len(real) == 256, (
+        f"expected exactly 256 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"

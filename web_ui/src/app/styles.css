@@ -2916,6 +2916,58 @@ body {
   stroke-linejoin: round;
 }
 
+/* One compact, explicit mode switch. Active reads as a selected route, not
+   as another primary send button. */
+.composer-agent-toggle {
+  width: auto;
+  padding: 0 8px;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.composer-agent-toggle.active {
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.composer-agent-target {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 5px 10px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 8px;
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  font-size: 11px;
+}
+
+.composer-agent-target-label {
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  color: var(--gl-surface-text-muted);
+}
+
+.composer-agent-target-preview {
+  color: var(--gl-surface-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-agent-target-note {
+  color: var(--gl-surface-text-muted);
+  font-style: italic;
+}
+
+.composer-agent-error {
+  margin: 4px 0;
+  color: var(--gl-surface-text-primary);
+  font-size: 11px;
+}
+
 /* The rail's quiet chips (Reasoning, Model, Tokens): ONE line of type per
    chip - a muted label, then the value. The old anatomy stacked a 9px
    all-caps kicker over the value inside every chip, which put six lines of
