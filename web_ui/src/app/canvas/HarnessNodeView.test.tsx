@@ -27,6 +27,8 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     harnessShell: "auto",
     harnessShellAllowRules: [],
     harnessExecutionProfile: "host",
+    harnessPermissionMode: "ask",
+    harnessTaskPermissionMode: "ask"
     harnessNetworkAlways: false,
     harnessAwaitingApproval: false,
     harnessApprovalToolName: "",
@@ -57,6 +59,7 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     onSetShell: vi.fn(),
     onRemoveShellAllowRule: vi.fn(),
     onSetExecutionProfile: vi.fn(),
+    onSetPermissionMode: vi.fn(),
     onSetNetworkAlways: vi.fn(),
     onGetIsolationEngine: vi.fn(async () => "docker"),
     ...overrides,
