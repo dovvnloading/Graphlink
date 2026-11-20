@@ -74,6 +74,33 @@ def test_legacy_backfill_and_crash_gap_sync_are_idempotent(tmp_path):
     assert len(search_index(transcript, "marigold")) == 1
 
 
+
+def test_replacing_transcript_without_shrinking_invalidates_old_fts_rows(tmp_path):
+    transcript = transcript_path(tmp_path)
+    old = b'{"t":"msg","role":"user","content":"alpha"}\n'
+    replacement = b'{"t":"msg","role":"user","content":"bravo"}\n'
+    assert len(old) == len(replacement)
+
+    transcript.write_bytes(old)
+    assert len(search_index(transcript, "alpha")) == 1
+    transcript.write_bytes(replacement)  # Same inode/size on many filesystems.
+    assert search_index(transcript, "alpha") == []
+    assert len(search_index(transcript, "bravo")) == 1
+
+    # An in-place rewrite to a larger file must also invalidate prior rows,
+    # rather than seek directly to the old byte offset.
+    transcript.write_bytes(b'{"t":"msg","role":"user","content":"chrysanthemum"}\n')
+    assert search_index(transcript, "bravo") == []
+    assert len(search_index(transcript, "chrysanthemum")) == 1
+
+    # A normal append after a reset still indexes once without duplication.
+    with transcript.open("ab") as stream:
+        stream.write(b'{"t":"msg","role":"assistant","content":"marigold"}\n')
+    assert len(search_index(transcript, "chrysanthemum")) == 1
+    assert len(search_index(transcript, "marigold")) == 1
+
+
+
 def test_incomplete_and_oversized_lines_do_not_poison_index(tmp_path):
     transcript = transcript_path(tmp_path)
     transcript.write_bytes(

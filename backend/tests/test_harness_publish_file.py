@@ -133,7 +133,7 @@ def _xlsx(path, *, chartsheet_first=False, sparse_first_row=False):
         z.writestr("xl/workbook.xml", (
             f'<workbook xmlns="{main}" xmlns:r="{office}"><sheets>'
             + ('<sheet name="Charts" sheetId="3" r:id="r3"/>' if chartsheet_first else '')
-            '<sheet name="Overview" sheetId="1" r:id="r1"/>'
+            + '<sheet name="Overview" sheetId="1" r:id="r1"/>'
             '<sheet name="Details" sheetId="2" r:id="r2"/>'
             '</sheets></workbook>'
         ))
