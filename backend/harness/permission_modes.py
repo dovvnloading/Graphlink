@@ -56,14 +56,14 @@ def effective_permission_mode(mode: object, profile: object) -> str:
     return chosen
 
 
-def _within(root: Path, raw: str) -> bool:
+def _within(root: Path, raw: str, *, container_path: bool = False) -> bool:
     if not raw or "\x00" in raw or raw.startswith("~") or "$" in raw or "%" in raw:
         return False
     # Shell commands run *inside* the container, where the one project mount
     # appears at /workspace rather than the host's trusted directory.
-    if raw == "/workspace":
+    if container_path and raw == "/workspace":
         raw = "."
-    elif raw.startswith("/workspace/"):
+    elif container_path and raw.startswith("/workspace/"):
         raw = raw[len("/workspace/"):]
     try:
         path = resolve_under_root(root, raw)
@@ -72,7 +72,7 @@ def _within(root: Path, raw: str) -> bool:
     return not any(part.casefold() in _METADATA_DIRS for part in path.parts)
 
 
-def _safe_shell(command: object, root: Path, shell: str) -> bool:
+def _safe_shell(command: object, root: Path, shell: str, *, isolated: bool = False) -> bool:
     if not isinstance(command, str) or not command.strip() or len(command) > 4000:
         return False
     if _NETWORK_WORDS.search(command):
@@ -121,9 +121,9 @@ def _safe_shell(command: object, root: Path, shell: str) -> bool:
             if candidate.startswith(("/", "./", "../", "~", "\\")) or (
                 "/" in candidate and "://" not in candidate
             ):
-                if index == 0 and candidate.startswith("/") and not _within(root, candidate):
+                if index == 0 and candidate.startswith("/") and not _within(root, candidate, container_path=isolated):
                     return False
-                if not _within(root, candidate):
+                if not _within(root, candidate, container_path=isolated):
                     return False
             if candidate.startswith("-") and ".." in candidate:
                 return False
@@ -157,7 +157,7 @@ def _safe_python(source: object, root: Path) -> bool:
             if value == ".." or value.startswith(("/", "../", "./", "~", "\\")) or (
                 "/" in value and not value.startswith(("http:", "https:"))
             ):
-                if not _within(root, value):
+                if not _within(root, value, container_path=True):
                     return False
         # Path arithmetic / interpolated paths are not statically bound.
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div) and (
@@ -180,7 +180,7 @@ def _safe_python(source: object, root: Path) -> bool:
                 if not node.args or not isinstance(node.args[0], ast.Constant):
                     return False
                 first = node.args[0].value
-                if not isinstance(first, str) or not _within(root, first):
+                if not isinstance(first, str) or not _within(root, first, container_path=True):
                     return False
             if target in {"write_text", "write_bytes", "read_text", "read_bytes", "mkdir"}:
                 # A Path acquired in a previous REPL turn might point outside
@@ -195,7 +195,7 @@ def _safe_python(source: object, root: Path) -> bool:
                 if not node.args or not isinstance(node.args[0], ast.Constant):
                     return False
                 path = node.args[0].value
-                if not isinstance(path, str) or not _within(root, path):
+                if not isinstance(path, str) or not _within(root, path, container_path=True):
                     return False
         # Dynamic code generation can hide side effects from this screening.
         if isinstance(node, (ast.Lambda, ast.Yield, ast.YieldFrom, ast.Await)):
@@ -219,6 +219,7 @@ def requires_explicit_workspace_approval(call, ctx) -> bool:
     if call.name == "shell.exec":
         return call.arguments.get("network") is True or not _safe_shell(
             call.arguments.get("command"), root, getattr(ctx, "harness_shell", "auto"),
+            isolated=getattr(ctx, "harness_execution_profile", "host") == "isolated",
         )
     if call.name == "shell.session":
         action = call.arguments.get("action")
@@ -227,6 +228,7 @@ def requires_explicit_workspace_approval(call, ctx) -> bool:
         if action == "start":
             return not _safe_shell(
                 call.arguments.get("command"), root, getattr(ctx, "harness_shell", "auto"),
+                isolated=getattr(ctx, "harness_execution_profile", "host") == "isolated",
             )
     return False
 
@@ -258,13 +260,19 @@ def may_skip_workspace_approval(call, ctx) -> bool:
     if call.name == "shell.exec":
         if call.arguments.get("network") is not None and call.arguments.get("network") is not False:
             return False
-        return _safe_shell(call.arguments.get("command"), root, getattr(ctx, "harness_shell", "auto"))
+        return _safe_shell(
+            call.arguments.get("command"), root, getattr(ctx, "harness_shell", "auto"),
+            isolated=True,
+        )
     if call.name == "shell.session":
         action = call.arguments.get("action")
         if action in ("read", "list", "stop"):
             return True
         if action == "start":
-            return _safe_shell(call.arguments.get("command"), root, getattr(ctx, "harness_shell", "auto"))
+            return _safe_shell(
+            call.arguments.get("command"), root, getattr(ctx, "harness_shell", "auto"),
+            isolated=True,
+        )
         # A session's stdin may target a Python/Node/shell REPL; its language
         # cannot be inferred from the input alone. Ask for every write.
     return False
