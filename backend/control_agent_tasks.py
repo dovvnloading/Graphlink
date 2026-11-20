@@ -113,7 +113,7 @@ def register_control_agent_task_api(app: FastAPI, bus: EventBus) -> None:
             node = _get_agent_node(document, body.node_id)
             # Also initializes the revision epoch for this SceneDocument.
             current_revision = scene_revision(document)
-            epoch = document._mcp_revision_epoch
+            epoch = getattr(document, "_mcp_revision_epoch")
             previous = receipts.get(body.operation_id)
             if previous is not None:
                 old_fingerprint, old_epoch, old_workspace, old_run = previous
