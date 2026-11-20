@@ -478,10 +478,13 @@ class TestLoop:
         output.append("")
         output.append("x" * 500_000)
         preview = output.snapshot()
-        assert preview is not None and "truncated at 2000" in preview
-        assert preview.startswith("x" * 2_000)
+        assert preview is not None and "showing last 2000" in preview
+        assert preview.endswith("x" * 2_000)
         output.append("y" * 500_000)
-        assert output.snapshot() == preview, "later output must not grow the activity payload"
+        latest = output.snapshot()
+        assert latest is not None and latest.endswith("y" * 2_000)
+        assert len(latest) < 2_100, "later output must replace, not grow, the preview"
+        assert latest != preview, "chatty commands must continue to update activity"
 
     def test_follow_up_reloads_history_from_the_transcript(self, workspace_root, monkeypatch):
         document, dispatcher, registry, bus, node = self._make(workspace_root)
@@ -924,11 +927,15 @@ class TestShellTool:
                 self.reads += 1
                 return super().readline(size)
 
-        stream = CappedReader("x" * 300_000)
+        stream = CappedReader("x" * 300_000 + "new tail")
         chunks = []
-        _drain_bounded_output(stream, chunks)
+        live = _BoundedToolOutput()
+        _drain_bounded_output(stream, chunks, live.append)
         assert "".join(chunks) == "x" * (_OUTPUT_CAP_CHARS + 1)
         assert stream.reads > 1, "reader must drain the entire pipe"
+        assert live.snapshot().endswith("new tail"), (
+            "live output must continue after the model's result cap"
+        )
 
     def test_output_streams_while_running_and_stop_kills_the_command(self, workspace_root):
         ws = ensure_workspace("ws1")
