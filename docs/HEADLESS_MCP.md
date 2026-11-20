@@ -143,7 +143,9 @@ python -m backend.headless --port 8765 --allow-mcp-writes --open-ui
 ```
 
 **`--open-ui` is the supported live-Agent / human-consent path.** It requires
-`--allow-mcp-writes` and opens the normal Graphlink SPA in the local default
+`--allow-mcp-writes` and a built app SPA (for source checkouts, run
+`cd web_ui && npm run build` first; missing builds fail startup rather than
+opening a broken operator UI). It opens the normal Graphlink SPA in the local default
 browser with the same `/#token=...` capability fragment as the desktop
 window. In that browser, create an Agent using the Agent composer or open a
 saved graph with an Agent; let any initial Agent run finish or stop it.
