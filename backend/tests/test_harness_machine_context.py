@@ -15,7 +15,7 @@ def test_machine_snapshot_describes_execution_environment_without_running_comman
     # PATH must match the allowlisted environment passed to shell subprocesses,
     # not a hard-coded set of commands or a guessed PATH.
     monkeypatch.setattr(
-        context_module, "safe_subprocess_env", lambda: {"PATH": "/toolchain/bin"},
+        context_module, "safe_subprocess_env", lambda: {"Path": "/toolchain/bin"},
     )
     checks = []
 
@@ -45,6 +45,9 @@ def test_command_shell_is_the_execution_shell_not_the_login_shell():
     assert context_module._command_shell(
         {"COMSPEC": r"C:\Windows\System32\cmd.exe"}, os_name="nt",
     ) == r"C:\Windows\System32\cmd.exe /c"
+    assert context_module._command_shell(
+        {"ComSpec": r"C:\Windows\cmd.exe"}, os_name="nt",
+    ) == r"C:\Windows\cmd.exe /c"
     assert context_module._command_shell({}, os_name="nt") == "cmd.exe /c"
 
 
