@@ -3,6 +3,9 @@ import type { SceneStore } from "../canvas/sceneStore";
 import { Popover, useOverlays } from "../overlays/overlays";
 import type { ComparisonModel, ComposerStore } from "./composerStore";
 import { TokenCounter } from "./TokenCounter";
+import {
+  HarnessExecutionProfileSelect, MAX_HARNESS_TASK_LENGTH, type HarnessExecutionProfile,
+} from "./HarnessLaunchOptions";
 
 /**
  * The composer dock (Qt-removal plan R2.3/R3.3/R4.3) - ComposerApp's SPA
@@ -107,6 +110,7 @@ export function Composer({
   const [agentMode, setAgentMode] = useState(false);
   const [agentSending, setAgentSending] = useState(false);
   const [agentError, setAgentError] = useState("");
+  const [newAgentProfile, setNewAgentProfile] = useState<HarnessExecutionProfile>("host");
   const [comparisonMode, setComparisonMode] = useState(false);
   const [comparisonOptions, setComparisonOptions] = useState<ComparisonModel[]>([]);
   const [selectedComparisonKeys, setSelectedComparisonKeys] = useState<string[]>([]);
@@ -144,10 +148,14 @@ export function Composer({
     const text = composer.draft.text.trim();
     if (!text || !composer.request.canSend) return;
     if (agentMode) {
+      if (text.length > MAX_HARNESS_TASK_LENGTH) {
+        setAgentError(`Agent tasks cannot exceed ${MAX_HARNESS_TASK_LENGTH.toLocaleString()} characters. Shorten the task; your draft is preserved.`);
+        return;
+      }
       if (agentSending || !composer.route.available || !composer.route.modelId) return;
       setAgentSending(true);
       setAgentError("");
-      void sceneStore.sendComposerAgentMessage(text)
+      void sceneStore.sendComposerAgentMessage(text, newAgentProfile)
         .then((started) => {
           if (!started) {
             setAgentError("The workspace agent could not start. See the notification for details.");
@@ -188,6 +196,14 @@ export function Composer({
           <span className="composer-agent-target-preview">
             {selectedAgent ? `Selected: ${selectedAgent.title || "Agent"}` : "New agent · scratch workspace"}
           </span>
+          {!selectedAgent && (
+            <HarnessExecutionProfileSelect
+              store={sceneStore}
+              value={newAgentProfile}
+              onChange={setNewAgentProfile}
+              disabled={agentSending}
+            />
+          )}
           {composer.context.items.length > 0 && (
             <span className="composer-agent-target-note">Attachments are not sent to agents</span>
           )}
