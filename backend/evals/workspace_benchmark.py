@@ -208,6 +208,7 @@ def _runtime(provider: str, model: str, base_url: str | None, api_key: str = "")
 async def _drive(case: Case, runtime, model_ref, timeout: float, max_turns: int) -> Result:
     import api_provider
     from backend.domain.graph import SceneDocument
+    from backend.domain.node_states import HarnessState
     from backend.harness.loop import run_harness
     from backend.harness.tools_fs import register_harness_fs_tools
     from backend.harness.workspace import ensure_workspace
@@ -216,8 +217,11 @@ async def _drive(case: Case, runtime, model_ref, timeout: float, max_turns: int)
 
     document = SceneDocument()
     node = document.add_harness_node(0, 0, case.prompt)
-    node.state.harness_max_turns = max_turns
-    workspace = ensure_workspace(node.state.harness_workspace_id)
+    state = node.state
+    # The newly created harness node always owns this concrete state type.
+    assert isinstance(state, HarnessState)
+    state.harness_max_turns = max_turns
+    workspace = ensure_workspace(state.harness_workspace_id)
     for relpath, content in case.inputs.items():
         path = workspace / relpath
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -266,11 +270,11 @@ async def _drive(case: Case, runtime, model_ref, timeout: float, max_turns: int)
                         break
                     future = handle.approval_future
                     if future is not None and not future.done():
-                        if node.state.harness_awaiting_approval:
+                        if state.harness_awaiting_approval:
                             # --run explicitly approves only fs.write/fs.edit
                             # in this newly created temporary workspace.
-                            future.set_result(node.state.harness_approval_tool_name in {"fs.write", "fs.edit"})
-                        elif node.state.harness_awaiting_question:
+                            future.set_result(state.harness_approval_tool_name in {"fs.write", "fs.edit"})
+                        elif state.harness_awaiting_question:
                             future.set_result(None)
                     await asyncio.sleep(0.02)
                 outcomes = await asyncio.gather(pending, return_exceptions=True)
@@ -284,17 +288,17 @@ async def _drive(case: Case, runtime, model_ref, timeout: float, max_turns: int)
     finally:
         dispatcher._runs.release(handle.request_id)
     elapsed = time.monotonic() - started
-    status = "timeout" if timeout_hit else node.state.harness_status
-    passed, detail = grade(case, workspace, status, node.state.harness_activity)
-    if not passed and node.state.harness_status_detail:
-        detail += f" ({node.state.harness_status_detail})"
+    status = "timeout" if timeout_hit else state.harness_status
+    passed, detail = grade(case, workspace, status, state.harness_activity)
+    if not passed and state.harness_status_detail:
+        detail += f" ({state.harness_status_detail})"
     return Result(
         name=case.name, passed=passed, status=status, detail=detail,
-        seconds=round(elapsed, 3), turns=node.state.harness_spent_turns,
+        seconds=round(elapsed, 3), turns=state.harness_spent_turns,
         prompt_tokens=meter.prompt_tokens, completion_tokens=meter.completion_tokens,
         provider_reported_turns=meter.provider_reported_turns,
         metered_turns=meter.metered_turns, cost_usd=None,
-        tools=tuple(row.get("tool", "") for row in node.state.harness_activity),
+        tools=tuple(row.get("tool", "") for row in state.harness_activity),
     )
 
 

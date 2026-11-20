@@ -24,6 +24,7 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     harnessWorkspacePath: "",
     harnessWorkspaceActive: "",
     harnessShell: "auto",
+    harnessExecutionProfile: "host",
     harnessAwaitingApproval: false,
     harnessApprovalToolName: "",
     harnessApprovalSummary: "",
@@ -50,6 +51,8 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     onOpenWorkspaceFile: vi.fn().mockResolvedValue(undefined),
     onRevealWorkspace: vi.fn(),
     onSetShell: vi.fn(),
+    onSetExecutionProfile: vi.fn(),
+    onGetIsolationEngine: vi.fn(async () => "docker"),
     ...overrides,
   };
 }
@@ -127,7 +130,7 @@ describe("HarnessNodeView", () => {
       await user.click(screen.getByRole("button", { name: "Agent settings" }));
       const select = screen.getByRole("combobox", { name: "Shell" });
       expect(select).toHaveValue("powershell");
-      expect(screen.getAllByRole("option").map((option) => (option as HTMLOptionElement).value))
+      expect(Array.from((select as HTMLSelectElement).options).map((option) => option.value))
         .toEqual(["powershell", "cmd", "git-bash"]);
       await user.selectOptions(select, "cmd");
       expect(agent.onSetShell).toHaveBeenCalledWith("cmd");
@@ -138,6 +141,35 @@ describe("HarnessNodeView", () => {
     } finally {
       platform.mockRestore();
     }
+  });
+
+  it("offers Isolated when Podman is installed and saves the profile for the next task", async () => {
+    const user = userEvent.setup();
+    const data = makeData({ onGetIsolationEngine: vi.fn(async () => "podman") });
+    renderHarness(data);
+    await user.click(screen.getByRole("button", { name: "Agent settings" }));
+    expect(await screen.findByText(/Podman detected/)).toBeInTheDocument();
+    const select = screen.getByRole("combobox", { name: "Execution profile" });
+    expect(select).toHaveValue("host");
+    await user.selectOptions(select, "isolated");
+    expect(data.onSetExecutionProfile).toHaveBeenCalledWith("isolated");
+  });
+
+  it("explains what to install without an engine and never suggests host fallback", async () => {
+    const user = userEvent.setup();
+    const data = makeData({
+      harnessExecutionProfile: "isolated",
+      onGetIsolationEngine: vi.fn(async () => null),
+    });
+    renderHarness(data);
+    await user.click(screen.getByRole("button", { name: "Agent settings" }));
+    expect(await screen.findByText(/No container engine found/)).toHaveTextContent("Docker");
+    expect(screen.getByText(/No container engine found/)).toHaveTextContent("Podman");
+    expect(screen.getByText(/No container engine found/)).toHaveTextContent("never fall back to Host");
+    expect(screen.getByRole("combobox", { name: "Execution profile" })).toHaveValue("isolated");
+    expect(screen.getByRole("option", { name: /Isolated/ })).toBeDisabled();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Execution profile" }), "host");
+    expect(data.onSetExecutionProfile).toHaveBeenCalledWith("host");
   });
 
   // -- collapse/delete wiring (previously declared on HarnessNodeData with

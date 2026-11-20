@@ -640,3 +640,74 @@ class TestCancellationPropagationAcrossFetcherBoundary:
 
         assert robots.closed
         assert [url for url, _ in session.get_calls] == ["https://example.com/robots.txt"]
+
+
+def test_domain_consent_hook_runs_before_each_redirect_hop(limits, token):
+    """Cross-origin Location must never bypass the harness domain gate."""
+    original = "https://first.example/start"
+    redirected = "https://second.example/landing"
+    session = _FakeSession([
+        _FakeResponse(status_code=404, body=b""),  # first host robots.txt
+        _FakeResponse(status_code=302, location=redirected),
+        _FakeResponse(status_code=404, body=b""),  # second host robots.txt
+        _FakeResponse(status_code=200, content_type="text/plain", body=b"reference"),
+    ])
+    fetcher = RequestsDocumentFetcher(
+        policy=_real_policy_with_fake_resolver("93.184.216.34"),
+        etiquette=CrawlEtiquette(default_crawl_delay_seconds=0),
+    )
+    prompted = []
+
+    def approve(url):
+        # The redirect's first request must not yet have reached the socket.
+        if url == redirected:
+            assert all("second.example" not in called for called, _ in session.get_calls)
+        prompted.append(url)
+
+    with patch.object(providers_module, "requests") as fake_requests:
+        fake_requests.Session.return_value = session
+        fake_requests.RequestException = Exception
+        payload = fetcher.fetch(
+            _search_result(original), limits=limits, token=token, on_request=approve,
+        )
+
+    assert prompted == [original, redirected]
+    assert payload.final_url == redirected
+    assert [called for called, _ in session.get_calls] == [
+        "https://first.example/robots.txt", original,
+        "https://second.example/robots.txt", redirected,
+    ]
+
+
+def test_denied_redirect_domain_does_not_contact_redirect_target(limits, token):
+    original = "https://first.example/start"
+    redirected = "https://second.example/landing"
+    session = _FakeSession([
+        _FakeResponse(status_code=404, body=b""),
+        _FakeResponse(status_code=302, location=redirected),
+    ])
+    fetcher = RequestsDocumentFetcher(
+        policy=_real_policy_with_fake_resolver("93.184.216.34"),
+        etiquette=CrawlEtiquette(default_crawl_delay_seconds=0),
+    )
+    prompted = []
+
+    def approve(url):
+        prompted.append(url)
+        if url == redirected:
+            raise ResearchFailure("Not approved", code="domain_approval_denied")
+
+    with patch.object(providers_module, "requests") as fake_requests:
+        fake_requests.Session.return_value = session
+        fake_requests.RequestException = Exception
+        with pytest.raises(ResearchFailure, match="Not approved") as failure:
+            fetcher.fetch(
+                _search_result(original), limits=limits, token=token,
+                on_request=approve,
+            )
+
+    assert failure.value.code == "domain_approval_denied"
+    assert prompted == [original, redirected]
+    assert [called for called, _ in session.get_calls] == [
+        "https://first.example/robots.txt", original,
+    ]
