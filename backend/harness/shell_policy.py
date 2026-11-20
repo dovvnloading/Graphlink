@@ -45,7 +45,9 @@ from dataclasses import dataclass, field
 # module does not know about is a segment whose contents are never
 # disclosed and never dangerous-checked, which is exactly the "dangerous
 # tail hiding behind a benign head" this module exists to prevent.
+# This regex remains the legacy cmd/POSIX behavior; PowerShell is opt-in.
 _SEPARATOR_RE = re.compile(r"(\|\||&&|;|\||&|\n)")
+_POWERSHELL_NAMES = frozenset({"powershell", "powershell.exe", "pwsh", "pwsh.exe"})
 
 # Constructs whose contents we decline to parse - see the module docstring.
 _UNSPLITTABLE_MARKERS = ("$(", "`", "<(", ">(")
@@ -79,6 +81,26 @@ _DANGEROUS_PHRASES = (
 )
 
 
+
+# PowerShell cmdlets and aliases with irreversible side effects. The shared
+# list above still applies (including git push, rm, kill, etc.). Do not rely
+# on a -Recurse or -Force flag: Remove-Item without those flags can delete a
+# file too, and aliases such as ri/rm/del have the same effect.
+_POWERSHELL_DANGEROUS_PROGRAMS = frozenset({
+    "remove-item", "ri", "remove-itemproperty", "clear-item",
+    "clear-itemproperty", "clear-content", "clear-recyclebin",
+    "set-content", "out-file", "set-item", "set-itemproperty",
+    "copy-item", "move-item", "rename-item", "mi", "si", "sp",
+    "stop-process", "spps", "stop-service", "spsv", "restart-service",
+    "stop-computer", "restart-computer", "stop-job", "remove-job",
+    "remove-service", "remove-psdrive",
+    "clear-disk", "format-volume", "initialize-disk",
+    "remove-partition", "set-acl", "set-executionpolicy",
+    "invoke-expression", "iex", "invoke-command", "icm",
+    "start-process", "saps", "start-job",
+    "powershell", "pwsh", "cmd",
+})
+
 @dataclass
 class ShellPlan:
     """The analysis of one `shell.exec` command string."""
@@ -86,6 +108,7 @@ class ShellPlan:
     command: str
     segments: list[str] = field(default_factory=list)
     unsplittable: bool = False
+    unsplittable_note: str | None = None
     # Segments that tripped the dangerous list, in order, deduplicated.
     dangerous: list[str] = field(default_factory=list)
 
@@ -101,10 +124,10 @@ class ShellPlan:
         prompt reappeared is visible in the prompt itself."""
         lines: list[str] = []
         if self.unsplittable:
-            lines.append(
+            lines.append(self.unsplittable_note or (
                 "! contains command substitution or a subshell - "
                 "reviewed as one unit, contents not parsed"
-            )
+            ))
         for segment in self.segments:
             marker = "!" if segment in self.dangerous else " "
             lines.append(f"{marker} {segment}")
@@ -155,39 +178,184 @@ def _is_dangerous(segment: str) -> bool:
     return False
 
 
-def analyze(command: str) -> ShellPlan:
+
+def _split_powershell(text: str) -> list[str] | None:
+    """Split PowerShell top-level statements/pipelines for approval.
+
+    PowerShell's backtick escapes separators; its & is both a call operator
+    and (after a pipeline) a background-job operator. Quoted arguments are
+    opaque to segmentation. We deliberately do NOT parse nested executable
+    constructs (scriptblocks, expressions, expandable-string subexpressions,
+    here-strings, block comments, or stop-parsing): fail closed instead of
+    incorrectly claiming their inner commands were separately checked.
+    """
+    segments: list[str] = []
+    start = 0
+    quote: str | None = None
+    i = 0
+    while i < len(text):
+        char = text[i]
+        following = text[i + 1] if i + 1 < len(text) else ""
+
+        if quote == "'":
+            if char == "'":
+                if following == "'":  # PowerShell single-quote escaping
+                    i += 2
+                    continue
+                quote = None
+            i += 1
+            continue
+
+        if char == "\x60":  # escapes quotes, pipes, semicolons, newlines
+            if not following:
+                return None
+            i += 3 if following == "\r" and text[i + 2:i + 3] == "\n" else 2
+            continue
+
+        if quote == '"':
+            # Double-quoted strings are expandable: "$( ... )" executes code.
+            if text.startswith("$(", i):
+                return None
+            if char == '"':
+                if following == '"':  # doubled quotes inside a string
+                    i += 2
+                    continue
+                quote = None
+            i += 1
+            continue
+
+        if char in ("'", '"'):
+            quote = char
+            i += 1
+            continue
+
+        if char in "(){}" or text.startswith(("<#", "@'", '@"', "??"), i):
+            return None
+        if text.startswith("--%", i) and (i == 0 or text[i - 1].isspace()):
+            return None
+
+        # A line comment terminates the current command, but any separators
+        # in the comment body must not invent more commands for approval.
+        if char == "#" and (i == 0 or text[i - 1].isspace() or text[i - 1] in ";|&"):
+            before_comment = text[start:i].strip()
+            if before_comment:
+                segments.append(before_comment)
+            newline = text.find("\n", i)
+            if newline < 0:
+                start = len(text)
+                break
+            i = newline + 1
+            start = i
+            continue
+
+        separator_length = 0
+        if char in ";\r\n|":
+            separator_length = 2 if (
+                (char == "|" and following == "|") or
+                (char == "\r" and following == "\n")
+            ) else 1
+        elif char == "&":
+            if following == "&":  # PowerShell 7 pipeline-chain operator
+                separator_length = 2
+            elif text[start:i].strip():
+                # A leading "& command" invokes a command, not a separator.
+                # A trailing "&" backgrounds an already-started pipeline.
+                separator_length = 1
+
+        if separator_length:
+            segment = text[start:i].strip()
+            if segment:
+                segments.append(segment)
+            i += separator_length
+            start = i
+            continue
+        i += 1
+
+    if quote is not None:
+        return None
+    tail = text[start:].strip()
+    if tail:
+        segments.append(tail)
+    return segments
+
+
+def _is_dangerous_powershell(segment: str) -> bool:
+    # "& <script>" and ". <script>" can invoke arbitrary script content or
+    # variable-held commands. Neither is a harmless standalone separator.
+    if segment.lstrip().startswith("&") or re.match(r"^\s*\.\s+", segment):
+        return True
+
+    # Backticks can hide letters in cmdlet names: Rem-ove-Item can be
+    # written with an escape in the middle. Unescape before matching names.
+    unescaped = re.sub(r"\x60\r?\n", "", segment)
+    unescaped = re.sub(r"\x60(.)", r"\1", unescaped)
+    tokens = _tokens(unescaped)
+    return (
+        _is_dangerous(unescaped)
+        or bool(tokens and tokens[0] in _POWERSHELL_DANGEROUS_PROGRAMS)
+    )
+
+
+def analyze(command: str, *, shell: str | None = None) -> ShellPlan:
     """Segment `command` and flag its dangerous parts. Never raises: a
     string this cannot make sense of comes back as one unsplittable
-    segment, which the caller treats as dangerous."""
+    segment, which the caller treats as dangerous.
+
+    Request PowerShell grammar with `shell="powershell"` or `shell="pwsh"`.
+    Omitted shell and explicit cmd/POSIX shells preserve the old policy.
+    """
     text = (command or "").strip()
     plan = ShellPlan(command=text)
     if not text:
         return plan
 
-    if any(marker in text for marker in _UNSPLITTABLE_MARKERS):
+    # The default is deliberately unchanged: shell.exec still uses cmd.exe
+    # on Windows and /bin/sh on POSIX. PowerShell analysis is explicitly
+    # requested by callers that actually execute PowerShell.
+    shell_name = (shell or "").strip().lower()
+    dangerous_check = _is_dangerous
+    if shell_name in _POWERSHELL_NAMES:
+        segments = _split_powershell(text)
+        dangerous_check = _is_dangerous_powershell
+        if segments is None:
+            plan.unsplittable = True
+            plan.unsplittable_note = (
+                "! contains nested or ambiguous PowerShell syntax - "
+                "reviewed as one unit, contents not parsed"
+            )
+        else:
+            plan.segments = segments
+    elif shell_name in {"", "cmd", "cmd.exe", "posix", "sh", "bash", "zsh"}:
+        if any(marker in text for marker in _UNSPLITTABLE_MARKERS):
+            plan.unsplittable = True
+        else:
+            segments = [part.strip() for part in _SEPARATOR_RE.split(text)]
+            # The capturing group retains separators; drop them here.
+            plan.segments = [
+                seg for seg in segments
+                if seg and not _SEPARATOR_RE.fullmatch(seg)
+            ]
+        dangerous_check = _is_dangerous
+    else:
+        # Do not silently apply the wrong grammar to a new shell.
         plan.unsplittable = True
+
+    if plan.unsplittable:
         plan.segments = [text]
         plan.dangerous = [text]
         return plan
 
-    segments = [part.strip() for part in _SEPARATOR_RE.split(text)]
-    # The split keeps the separators themselves (a capturing group) so they
-    # can be dropped here in one pass rather than with a second regex.
-    plan.segments = [
-        seg for seg in segments
-        if seg and not _SEPARATOR_RE.fullmatch(seg)
-    ]
     seen: set[str] = set()
     for segment in plan.segments:
-        if _is_dangerous(segment) and segment not in seen:
+        if dangerous_check(segment) and segment not in seen:
             seen.add(segment)
             plan.dangerous.append(segment)
     return plan
 
 
-def is_dangerous_command(command: str) -> bool:
+def is_dangerous_command(command: str, *, shell: str | None = None) -> bool:
     """The `always_reprompt` predicate ToolRegistry calls per invocation."""
-    return analyze(command).is_dangerous
+    return analyze(command, shell=shell).is_dangerous
 
 
 def requires_fresh_shell_approval(tool_name: str, arguments: dict) -> bool:
