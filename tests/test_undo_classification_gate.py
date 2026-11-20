@@ -309,7 +309,7 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # 246 -> 247: scene/exportScientificWorkspaceMethods reads verified receipts without mutating the graph.
     # 247 -> 250: harness workspace listing, preview and native reveal do not mutate the canvas document.
     assert len(real) == 250, (
-        f"expected exactly 250 real registered intents, found {len(real)} - 
+        f"expected exactly 250 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"
