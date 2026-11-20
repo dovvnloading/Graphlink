@@ -10,6 +10,7 @@ from contextlib import closing
 import pytest
 
 from backend.harness import transcript as transcript_module
+from backend.harness import transcript_index as index_module
 from backend.harness import workspace as workspace_module
 from backend.harness.tools_transcript import register_workspace_tools
 from backend.harness.transcript import (
@@ -122,7 +123,7 @@ def test_incomplete_and_oversized_lines_do_not_poison_index(tmp_path):
 def test_index_failure_cannot_lose_the_source_transcript(tmp_path, monkeypatch):
     real_sync = transcript_module.sync_index
 
-    def broken_index(path):
+    def broken_index(path, **kwargs):
         raise sqlite3.OperationalError("simulated FTS write failure")
 
     monkeypatch.setattr(transcript_module, "sync_index", broken_index)
@@ -206,9 +207,9 @@ def test_writer_batches_search_indexing_until_flush(tmp_path, monkeypatch):
     indexed = []
     original_sync = transcript_module.sync_index
 
-    def count_sync(path):
+    def count_sync(path, **kwargs):
         indexed.append(path)
-        original_sync(path)
+        original_sync(path, **kwargs)
 
     monkeypatch.setattr(transcript_module, "sync_index", count_sync)
     append_message(tmp_path, {"role": "user", "content": "first observation"})
@@ -216,6 +217,61 @@ def test_writer_batches_search_indexing_until_flush(tmp_path, monkeypatch):
     assert flush(tmp_path)
     assert indexed.count(transcript_path(tmp_path)) == 1
     assert len(search_index(transcript_path(tmp_path), "observation")) == 2
+
+
+def test_writer_appends_reuse_hash_checkpoint_instead_of_rereading_prefix(tmp_path, monkeypatch):
+    append_message(tmp_path, {"role": "user", "content": "archive " * 60000})
+    assert flush(tmp_path)
+    transcript = transcript_path(tmp_path)
+
+    # Windows can expose different ctime values via path.stat and fstat for
+    # the same file. Reproduce that disagreement on all platforms.
+    original_stat = type(transcript).stat
+
+    class DifferentPathCtime:
+        def __init__(self, stats):
+            self.stats = stats
+
+        def __getattr__(self, name):
+            if name == "st_ctime_ns":
+                return self.stats.st_ctime_ns + 1_000_000
+            return getattr(self.stats, name)
+
+    def different_path_stat(path, *args, **kwargs):
+        stats = original_stat(path, *args, **kwargs)
+        return DifferentPathCtime(stats) if path == transcript else stats
+
+    monkeypatch.setattr(type(transcript), "stat", different_path_stat)
+
+    rescans = []
+    original = index_module._prefix_hasher
+
+    def counted(source, length):
+        rescans.append(length)
+        return original(source, length)
+
+    monkeypatch.setattr(index_module, "_prefix_hasher", counted)
+    for i in range(4):
+        append_message(tmp_path, {"role": "user", "content": f"incremental marigold {i}"})
+        assert flush(tmp_path)
+    assert rescans == []
+    assert len(search_index(transcript, "marigold")) == 4
+    assert rescans == []  # Search with an unchanged source is also cheap.
+
+
+def test_external_rewrite_before_writer_append_invalidates_cached_index(tmp_path):
+    append_message(tmp_path, {"role": "user", "content": "alpha"})
+    assert flush(tmp_path)
+    transcript = transcript_path(tmp_path)
+    # Same-size rewrite on the same inode, then an ordinary writer append.
+    original = transcript.read_bytes()
+    assert b"alpha" in original
+    transcript.write_bytes(original.replace(b"alpha", b"bravo"))
+    append_message(tmp_path, {"role": "assistant", "content": "charlie"})
+    assert flush(tmp_path)
+    assert search_index(transcript, "alpha") == []
+    assert len(search_index(transcript, "bravo")) == 1
+    assert len(search_index(transcript, "charlie")) == 1
 
 
 def test_loader_refuses_to_invent_interrupted_results_when_writer_is_behind(tmp_path, monkeypatch):

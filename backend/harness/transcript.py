@@ -49,6 +49,7 @@ old synchronous behavior rather than to silent loss.
 from __future__ import annotations
 
 import json
+import os
 import queue
 import sqlite3
 import subprocess
@@ -97,6 +98,7 @@ class _Writer:
 
     def _run(self) -> None:
         needs_index = False
+        append_origin = None
         while True:
             item = self._queue.get()
             try:
@@ -106,6 +108,14 @@ class _Writer:
                 if line:
                     try:
                         with self.path.open("a", encoding="utf-8") as fh:
+                            if not needs_index:
+                                # Capture the pre-append state using fstat, as
+                                # sync_index does. On Windows, path.stat and
+                                # fstat may disagree on st_ctime_ns.
+                                try:
+                                    append_origin = os.fstat(fh.fileno())
+                                except OSError:
+                                    append_origin = None
                             fh.write(line)
                             fh.flush()
                         needs_index = True
@@ -123,10 +133,11 @@ class _Writer:
                         # instead of opening and syncing FTS for every line.
                         # Flush indexes all preceding writes before releasing
                         # its barrier; search can also backfill after a crash.
-                        sync_index(self.path)
+                        sync_index(self.path, append_origin=append_origin)
                     except (OSError, sqlite3.Error):
                         pass  # search backfills from JSONL on next read
                     needs_index = False
+                    append_origin = None
                 if done is not None:
                     done.set()
             finally:

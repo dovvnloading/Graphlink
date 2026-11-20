@@ -16,6 +16,11 @@ describe("workspace file response validation", () => {
       .toThrow("Invalid workspace file entry");
     expect(() => parseHarnessWorkspaceListing(null)).toThrow("Invalid workspace folder response");
     expect(parseHarnessWorkspaceListing({ ...value, nextCursor: "page-two" }).nextCursor).toBe("page-two");
+    // A valid 255-codepoint Unicode filename can yield a >1,024-char cursor.
+    const longCursor = "A".repeat(1372);
+    expect(parseHarnessWorkspaceListing({ ...value, nextCursor: longCursor }).nextCursor).toBe(longCursor);
+    expect(() => parseHarnessWorkspaceListing({ ...value, nextCursor: "A".repeat(2049) }))
+      .toThrow("Invalid workspace folder response");
     expect(() => parseHarnessWorkspaceListing({ ...value, nextCursor: 7 }))
       .toThrow("Invalid workspace folder response");
   });

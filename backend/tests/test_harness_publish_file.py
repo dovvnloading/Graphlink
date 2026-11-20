@@ -122,7 +122,7 @@ def test_valid_image_is_served_from_assets_and_undone_with_run(publisher):
     assert document.get_image_asset(asset_id) == (picture.getvalue(), "image/png")
 
 
-def _xlsx(path, *, chartsheet_first=False, sparse_first_row=False):
+def _xlsx(path, *, chartsheet_first=False, sparse_first_row=False, whitespace_header=False):
     """A two-sheet OOXML workbook with shared strings and sparse second sheet."""
     main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
     office = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -151,7 +151,10 @@ def _xlsx(path, *, chartsheet_first=False, sparse_first_row=False):
         if sparse_first_row:
             overview = (
                 f'<worksheet xmlns="{main}"><sheetData>'
-                '<row r="1"><c r="A1" t="inlineStr"><is><t>Name</t></is></c></row>'
+                '<row r="1"><c r="A1" t="inlineStr"><is><t>Name</t></is></c>'
+                + ('<c r="B1" t="inlineStr"><is><t xml:space="preserve"> </t></is></c>'
+                   if whitespace_header else '')
+                + '</row>'
                 '<row r="2"><c r="A2" t="inlineStr"><is><t>Alice</t></is></c>'
                 '<c r="B2" t="inlineStr"><is><t>Sales</t></is></c></row>'
                 '</sheetData></worksheet>'
@@ -205,6 +208,14 @@ def test_excel_sparse_header_expands_to_all_occupied_columns(publisher):
     assert node.state.is_table_source
     # The missing B1 header must not hide the populated B2 cell; canvas
     # requires a name for every CSV column, so one is generated for B.
+    assert node.content.replace("\r\n", "\n") == "Name,Column 2\nAlice,Sales"
+
+
+def test_excel_whitespace_only_header_is_repaired_and_publishable(publisher):
+    root, *_ = publisher
+    _xlsx(root / "whitespace.xlsx", sparse_first_row=True, whitespace_header=True)
+    node = _created(publisher, "whitespace.xlsx")
+    assert node.state.is_table_source
     assert node.content.replace("\r\n", "\n") == "Name,Column 2\nAlice,Sales"
 
 

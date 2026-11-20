@@ -8,6 +8,7 @@ import pytest
 from backend.api import intents_harness, intents_harness_workspace
 from backend.domain.graph import SceneDocument
 from backend.harness import workspace as workspace_module
+from backend.harness import workspace_files as files_module
 from backend.harness.workspace import WorkspaceError, workspace_dir
 from backend.harness.workspace_files import list_workspace_files, read_workspace_file
 from backend.notifications import NotificationState
@@ -127,6 +128,68 @@ def test_many_files_have_deterministic_pages_without_hiding_flat_directory_entri
     assert second["nextCursor"] is None
     with pytest.raises(WorkspaceError, match="page cursor"):
         list_workspace_files(root, cursor="not a valid cursor")
+
+
+def test_long_unicode_filename_cursor_is_accepted_and_still_bounded():
+    # Linux limits filename *bytes*, so exercise the cross-platform cursor
+    # codec directly rather than trying to create a 765-byte filename here.
+    name = "中" * 255
+    cursor = files_module._next_cursor({"isDir": False, "name": name})
+    assert 1024 < len(cursor) <= files_module._MAX_CURSOR_CHARS
+    assert files_module._page_key(cursor) == (True, name.casefold(), name)
+    with pytest.raises(WorkspaceError, match="page cursor"):
+        files_module._page_key("x" * (files_module._MAX_CURSOR_CHARS + 1))
+
+
+def test_pagination_reuses_snapshot_and_only_resolves_page_candidates(tmp_path, monkeypatch):
+    root = tmp_path / "many"
+    root.mkdir()
+    for i in reversed(range(905)):
+        (root / f"{i:05}.txt").touch()
+
+    original_scan = files_module.os.scandir
+    original_inside = files_module._inside
+    counts = {"scan": 0, "resolve": 0}
+
+    def count_scan(path):
+        if path == root.resolve():
+            counts["scan"] += 1
+        return original_scan(path)
+
+    def count_inside(*args):
+        counts["resolve"] += 1
+        return original_inside(*args)
+
+    monkeypatch.setattr(files_module.os, "scandir", count_scan)
+    monkeypatch.setattr(files_module, "_inside", count_inside)
+    first = files_module.list_workspace_files(root)
+    second = files_module.list_workspace_files(root, cursor=first["nextCursor"])
+    third = files_module.list_workspace_files(root, cursor=second["nextCursor"])
+
+    assert [page["entries"][0]["name"] for page in (first, second, third)] == [
+        "00000.txt", "00300.txt", "00600.txt",
+    ]
+    assert counts["scan"] == 1  # No full directory traversal per page.
+    assert counts["resolve"] < 920  # Not 905 path resolves * three pages.
+
+
+def test_directory_snapshot_is_invalidated_by_content_changes(tmp_path, monkeypatch):
+    root = tmp_path / "project"
+    root.mkdir()
+    # Simulate Windows returning unchanged directory metadata after a create.
+    original_stat = type(root).stat
+    frozen_stat = root.stat()
+
+    def stale_directory_stat(path, *args, **kwargs):
+        return frozen_stat if path == root else original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(root), "stat", stale_directory_stat)
+    (root / "b.txt").touch()
+    assert [e["name"] for e in list_workspace_files(root)["entries"]] == ["b.txt"]
+    (root / "a.txt").touch()
+    assert [e["name"] for e in list_workspace_files(root)["entries"]] == [
+        "a.txt", "b.txt",
+    ]
 
 
 def test_folder_listing_intent_accepts_next_page_cursor(tmp_path):
