@@ -39,6 +39,8 @@ guard.close() on either - so Stop lands mid-command, not after it.
 from __future__ import annotations
 
 import asyncio
+import codecs
+import os
 import subprocess
 import sys
 import threading
@@ -72,26 +74,46 @@ _OUTPUT_READ_CHUNK_CHARS = 4096
 
 
 def _drain_bounded_output(stream, chunks: list[str], on_output=None) -> None:
-    """Drain all stdout without ever storing a whole unbounded line.
+    """Drain flushed bytes promptly, including output without a newline.
 
-    The extra character lets the caller distinguish a truly 20K output
-    from a truncated one, preserving its existing truncation notice.
+    TextIOWrapper.readline() is line-buffered even when the child flushes;
+    read the underlying pipe in bounded byte chunks instead. Incremental
+    decoding preserves multibyte characters across OS reads. StringIO-like
+    test doubles without a file descriptor retain a bounded line fallback.
     """
+    try:
+        fd = stream.fileno()
+    except (AttributeError, OSError, ValueError):
+        fd = None
+
+    def fragments():
+        if fd is None:
+            while True:
+                piece = stream.readline(_OUTPUT_READ_CHUNK_CHARS)
+                if not piece:
+                    return
+                yield piece
+        else:
+            decoder = codecs.getincrementaldecoder(
+                getattr(stream, "encoding", None) or "utf-8"
+            )(errors="replace")
+            while True:
+                raw = os.read(fd, _OUTPUT_READ_CHUNK_CHARS)
+                piece = decoder.decode(raw, final=not raw)
+                if piece:
+                    yield piece
+                if not raw:
+                    return
+
     buffered = 0
     budget = _OUTPUT_CAP_CHARS + 1
-    while True:
-        # readline(size) returns promptly at a newline while still bounding
-        # a newline-free producer to fixed-size chunks.
-        fragment = stream.readline(_OUTPUT_READ_CHUNK_CHARS)
-        if not fragment:
-            return
+    for fragment in fragments():
         if buffered < budget:
             retained = fragment[:budget - buffered]
             chunks.append(retained)
             buffered += len(retained)
-        # The tool result keeps its first 20K characters, but the activity
-        # preview is a separate bounded rolling tail. Keep forwarding even
-        # after capture fills so long-running commands continue to update.
+        # The model keeps the first 20K; the live activity keeps its own
+        # rolling tail, so keep forwarding after the model's cap is full.
         if on_output is not None:
             on_output(fragment)
 
