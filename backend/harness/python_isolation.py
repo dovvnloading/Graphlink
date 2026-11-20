@@ -15,7 +15,7 @@ from typing import Callable
 from backend.harness import python_env
 from backend.harness.shell_isolation import cleanup_container, container_invocation
 from graphlink_process_env import safe_subprocess_env
-from graphlink_scratch_dirs import prepare_scratch_dir, safe_scratch_id
+from graphlink_scratch_dirs import prepare_scratch_dir, safe_scratch_id, touch_scratch_dir_usage
 
 CONTAINER_PYTHON = "/usr/local/bin/python"
 CONTAINER_WHEEL_CACHE = "/graphlink-wheel-cache"
@@ -156,7 +156,18 @@ def prepare_isolated_python_environment(plan: IsolatedPythonPlan) -> None:
             raise python_env.PythonEnvironmentError(
                 f"managed Python environment directory is a symlink: {host_dir}"
             )
+        # The agent bucket is a child of the predictable shared temp root.
+        # Preparing it first validates ownership of that root before any
+        # mountable children are created (as the Host profile already does).
+        bucket = host_dir.parent
+        if bucket.is_symlink():
+            raise python_env.PythonEnvironmentError(
+                f"managed Python environment bucket is a symlink: {bucket}"
+            )
+        prepare_scratch_dir(bucket)
         prepare_scratch_dir(host_dir)
+        # Startup GC sweeps agent buckets by mtime, not project-key leaves.
+        touch_scratch_dir_usage(bucket)
 
 
 def isolated_python_container_env(plan: IsolatedPythonPlan) -> dict[str, str]:

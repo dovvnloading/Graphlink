@@ -266,16 +266,22 @@ def _checked_isolated_command(
     cancellation or timeout kills their local Docker/Podman CLI.
     """
     env = safe_subprocess_env()
+    # The bridge-networked pip must not see the untrusted project, including
+    # its writable venv or any workspace-controlled import hooks. It only
+    # needs the app-owned wheel cache; offline steps still mount the project.
+    container_workspace = cache_root if network else cwd
+    mounts = ((cache_root, CONTAINER_WHEEL_CACHE),) if network else (
+        *plan.mounts, (cache_root, CONTAINER_WHEEL_CACHE),
+    )
+    container_env = {"PIP_CONFIG_FILE": "/dev/null"}
+    if not network:
+        container_env.update(isolated_python_container_env(plan))
     argv, engine, name = container_invocation(
-        command, cwd, env=env, network=network,
-        extra_mounts=(*plan.mounts, (cache_root, CONTAINER_WHEEL_CACHE)),
-        container_env={
-            **isolated_python_container_env(plan),
-            "PIP_CONFIG_FILE": "/dev/null",
-        },
+        command, container_workspace, env=env, network=network,
+        extra_mounts=mounts, container_env=container_env,
     )
     try:
-        return _checked_pip(argv, cwd, cancel_event)
+        return _checked_pip(argv, container_workspace, cancel_event)
     finally:
         cleanup_container(engine, name, env=env)
 
@@ -335,10 +341,14 @@ def _install_in_worker(
             venv_python(approved_identity[0][0])
             if approved_identity is not None else interpreter
         )
-        common = [
-            str(executable), "-m", "pip", "--no-input",
+        # -I isolates pip from workspace-controlled modules. The networked
+        # download must use the image Python, not a mutable project venv.
+        # Keep the approved, pinned executable for host-profile installs.
+        pip_args = [
+            "-I", "-m", "pip", "--no-input",
             "--disable-pip-version-check", f"--cache-dir={pip_http}",
         ]
+        common = [str(executable), *pip_args]
         offline = [
             *common, "install", "--only-binary=:all:", "--no-index",
             f"--find-links={pip_wheels}", *packages,
@@ -349,7 +359,7 @@ def _install_in_worker(
             # Some externally created project virtualenvs omit pip. This
             # bootstraps only bundled ensurepip wheels, after authorization.
             setup_code, setup_output = run_pip(
-                [str(executable), "-m", "ensurepip", "--default-pip"],
+                [str(executable), "-I", "-m", "ensurepip", "--default-pip"],
             )
             if setup_code:
                 return ToolResult(
@@ -370,7 +380,8 @@ def _install_in_worker(
             # that same wheelhouse. A failed download leaves prior wheels
             # reusable in a future offline call.
             download = [
-                *common, "download", "--only-binary=:all:",
+                CONTAINER_PYTHON if isolated_plan is not None else str(executable),
+                *pip_args, "download", "--only-binary=:all:",
                 f"--index-url={DEFAULT_PYPI_INDEX}",
                 f"--dest={pip_wheels}", "--retries=0", "--timeout=8",
                 *packages,
