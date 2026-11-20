@@ -53,7 +53,7 @@ def _open_index(path: Path) -> sqlite3.Connection:
         db.execute(
             "CREATE TABLE IF NOT EXISTS transcript_index_source ("
             "id INTEGER PRIMARY KEY CHECK (id = 1), "
-            "device INTEGER NOT NULL, inode INTEGER NOT NULL, "
+            "device TEXT NOT NULL, inode TEXT NOT NULL, "
             "prefix_sha256 TEXT NOT NULL)"
         )
     except Exception:
@@ -138,7 +138,7 @@ def sync_index(transcript: Path) -> None:
             if (offset > size or (
                 offset > 0 and (
                     identity is None or
-                    (identity[0], identity[1]) != (stats.st_dev, stats.st_ino) or
+                    (identity[0], identity[1]) != (str(stats.st_dev), str(stats.st_ino)) or
                     identity[2] != _prefix_digest(source, offset)
                 )
             )):
@@ -189,7 +189,7 @@ def sync_index(transcript: Path) -> None:
                 "VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
                 "device=excluded.device, inode=excluded.inode, "
                 "prefix_sha256=excluded.prefix_sha256",
-                (stats.st_dev, stats.st_ino, _prefix_digest(source, offset)),
+                (str(stats.st_dev), str(stats.st_ino), _prefix_digest(source, offset)),
             )
 
 
