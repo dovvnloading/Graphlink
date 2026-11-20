@@ -33,7 +33,7 @@ The packs analyse numbers you supply. They do not fetch data from biological dat
 - **Units.** Every numeric input declares a default unit. You can type a compatible unit after a value (for example `25 mm`); the receipt records the unit you used.
 - **Receipts.** Each result stores hashes of its inputs and outputs, and the version and checksum of any bundled reference data it used. Saved results are re-verified when they are loaded, connected or exported.
 - **Typed views.** Some results include a view built for the data: a plate map, Kaplan–Meier survival curves, a forest plot, a phylogenetic tree or a volcano plot.
-- **Discuss in chat.** **Actions & exports → Discuss in chat** opens a chat node linked to the result. The node shows a compact card: the pack and operation, the headline value, the summary and the receipt. The complete verified result, which is what the model reads, is under **Data sent to the model**.
+- **Discuss in chat.** **Actions & exports → Discuss in chat** opens a chat node linked to the verified result. Its compact card shows the pack, operation, headline value, summary and receipt. For smaller runs, **Data sent to the model** shows the complete result JSON. If serialized result JSON exceeds **12,000 characters**, the chat sends bounded excerpts instead; the card flags this, and the disclosure shows the exact text sent, including explicit truncation markers. The receipt still identifies the verified source result, but the model has **not** received every row, value or plot. Inspect or export the original Workbench result when you need complete data.
 - **Copy methods.** **Actions & exports → Copy methods** copies a methods paragraph built from the result's receipt; **Export methods** in the toolbar collects the methods for every verified result in the workspace.
 - **Assumptions are stated, not hidden.** Summaries and methods say what each calculation assumes (for example, that 2^-ΔΔCt assumes 100% efficiency for every assay).
 
@@ -49,7 +49,7 @@ Data: a clearly labelled **synthetic** sandwich-ELISA run. Seven standards from 
    - Standard signals: `0.2449, 0.4566, 0.8186, 1.305, 1.7821, 2.1256, 2.3216` (OD450)
    - Unknown signals: `0.62, 1.48`; dilution factors: `2, 2`
 4. Run it. The fit recovers bottom 0.050, top 2.500, inflection 120.0 pg/mL and slope 1.200 (R² > 0.9999). Both unknowns fall inside the calibration interval: 44.4 and 159.0 pg/mL in the well, so **88.8 and 318.0 pg/mL** in the original samples. The lowest standard is flagged as outside the back-calculation range rather than silently extrapolated.
-5. Open **Actions & exports → Discuss in chat** to ask questions about the result. The chat starts from the verified result, so the model sees the same numbers, units and receipt you do.
+5. Open **Actions & exports → Discuss in chat** to ask questions about the result. The chat includes the verified receipt and a snapshot of this small run. For larger runs, the model receives excerpts rather than every row; review **Data sent to the model** and inspect or export the source Workbench when a question needs complete data.
 
 For plate quality, **Assay quality: Z′, signal window and %CV** takes positive and negative control wells and reports the Z′-factor without imposing a pass/fail threshold.
 

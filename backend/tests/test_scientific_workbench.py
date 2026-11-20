@@ -1171,6 +1171,92 @@ def test_discussion_card_reference_is_verified_on_the_wire_and_survives_save_loa
         assert science_reference_or_none(damaged) is None
 
 
+def test_editing_discussion_message_invalidates_verified_card_through_tool_and_reopen(session):
+    from backend.api.intents_nodes import register_node_intents
+    from backend.providers.base import ToolCall
+    from backend.tools import GRAPH_MUTATE, GRAPH_READ, RunContext, ToolRegistry
+    from backend.tools_graph import register_graph_tools
+    from backend.tests.conftest import client_row
+
+    document, bus, plugin_registry, settings = session
+    register_node_intents(bus, document, None)
+    grant(bus, "core")
+    source_id = dispatch(bus, "executePlugin", "Scientific Core")
+    assert run(bus, "core", source_id, "convert_unit", operations("core")[1].example)["ok"]
+    receipt = envelope(document, source_id)["latest"]["provenance"]
+    chat_id = asyncio.run(bus.dispatch_intent(
+        "scene", "discussScientificResult",
+        [source_id, receipt["resultHash"], receipt["receiptHash"]],
+    ))
+    original = document.nodes[chat_id].content
+    reference = document.nodes[chat_id].state.science_reference.copy()
+
+    tools = ToolRegistry()
+    register_graph_tools(tools, document)
+
+    async def approve(_call):
+        return True
+
+    ctx = RunContext(granted_scopes=frozenset({GRAPH_READ, GRAPH_MUTATE}), request_approval=approve)
+
+    def write(content):
+        call = ToolCall(id="edit-discussion", name="graph.set_node_content",
+                        arguments={"node_id": chat_id, "content": content})
+        return asyncio.run(tools.invoke(call, ctx))
+
+    # Writing identical bytes does not invalidate the original receipt.
+    assert not write(original).is_error
+    assert document.nodes[chat_id].state.science_reference == reference
+
+    replacement = "This message is NOT the saved assay snapshot"
+    assert not write(replacement).is_error
+    edited = document.nodes[chat_id]
+    assert edited.content == replacement and edited.state.science_reference is None
+    row = next(node for node in document.scene_payload()["nodes"] if node["id"] == chat_id)
+    # Default-valued fields are omitted from the sparse wire, then hydrated by the client.
+    assert "scienceReference" not in row
+    assert client_row(row)["scienceReference"] is None
+
+    document.undo()
+    restored = document.nodes[chat_id]
+    assert restored.content == original and restored.state.science_reference == reference
+    document.redo()
+    assert document.nodes[chat_id].content == replacement
+    assert document.nodes[chat_id].state.science_reference is None
+
+    saved = build_chat_data(document, plugin_registry=plugin_registry, settings_manager=settings)
+    restore_chat_into_document(document, {"data": saved}, [], [],
+                               plugin_registry=plugin_registry, settings_manager=settings)
+    loaded = next(node for node in document.nodes.values() if node.kind == "chat")
+    assert loaded.content == replacement and loaded.state.science_reference is None
+
+
+def test_large_biology_discussion_keeps_receipt_but_sends_truncated_excerpts(session):
+    from backend.api.intents_nodes import register_node_intents
+
+    document, bus, _, _ = session
+    register_node_intents(bus, document, None)
+    grant(bus, "biology")
+    source_id = dispatch(bus, "executePlugin", "Biology and Ecology")
+    projection = next(op for op in operations("biology") if op.id == "matrix_population_projection")
+    assert run(bus, "biology", source_id, projection.id, {**projection.example, "steps": 400})["ok"]
+    latest = envelope(document, source_id)["latest"]
+    assert len(json.dumps(latest, sort_keys=True, ensure_ascii=False, indent=2)) > 12_000
+    assert len(latest["table"]["rows"]) == 401
+
+    receipt = latest["provenance"]
+    chat_id = asyncio.run(bus.dispatch_intent(
+        "scene", "discussScientificResult",
+        [source_id, receipt["resultHash"], receipt["receiptHash"]],
+    ))
+    chat = document.nodes[chat_id]
+    assert chat.state.science_reference["receiptHash"] == receipt["receiptHash"]
+    assert "Result excerpts (inspect the source Workbench for complete data):" in chat.content
+    assert "table (excerpt)" in chat.content and "[truncated from" in chat.content
+    assert len(chat.content) < 16_000
+    assert "Result JSON:" not in chat.content
+
+
 def test_discuss_scientific_result_rejects_stale_or_damaged_receipts_without_mutating(session):
     from backend.api.intents_nodes import register_node_intents
     from backend.domain.model import SceneError

@@ -85,10 +85,10 @@ class ConversationalOps(SceneDocumentParts):
         file (move_node/set_chat_collapsed/set_node_docked all mutate a
         position/flag, never displayed text). Scope confirmed against legacy's
         ChatNode.update_content (graphlink_nodes/graphlink_node_chat.py:677-686):
-        sets content ONLY. Does not touch title (legacy's update_content never
-        recomputes any title-like state either, and every other in-place mutator
-        here already leaves title untouched post-creation - consistent, not a
-        new carve-out). Does not touch is_user/is_collapsed/kind.
+        sets content without changing the title (legacy's update_content never
+        recomputed title-like state). If the text actually changes, any saved
+        science_reference is cleared: its verification receipt only covered the
+        original Discuss-in-chat message. Other chat flags remain untouched.
 
         ADR-006 stage 6.4: `incomplete` marks a PARTIAL reply committed after
         its stream died (see ChatState.response_incomplete). A normal full
@@ -97,9 +97,15 @@ class ConversationalOps(SceneDocumentParts):
         node = self.nodes.get(node_id)
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
-        node.content = str(content)
+        new_content = str(content)
         if isinstance(node.state, ChatState):
+            # The card/receipt summarizes the original Discuss-in-chat message.
+            # Once its model context changes, displaying that card would make
+            # the new text look like the old, verified scientific snapshot.
+            if new_content != node.content:
+                node.state.science_reference = None
             node.state.response_incomplete = bool(incomplete)
+        node.content = new_content
         return node
 
     def set_chat_collapsed(self, node_id: str, collapsed: bool) -> None:

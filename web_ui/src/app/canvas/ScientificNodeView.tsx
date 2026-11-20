@@ -83,12 +83,12 @@ function headlineScienceValue(result: ScienceResult, declared?: string): [string
 }
 
 /** Closed disclosures do not mount wide plots, tables or thousands of cells. */
-function ResultDisclosure({ label, children, className = "" }: {
-  label: string; children: ReactNode; className?: string;
+function ResultDisclosure({ label, children, className = "", onClose }: {
+  label: string; children: ReactNode; className?: string; onClose?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   return <details className={`science-result-disclosure ${className}`.trim()} open={open}>
-    <summary onClick={(event) => { event.preventDefault(); setOpen((previous) => !previous); }}>{label}</summary>
+    <summary onClick={(event) => { event.preventDefault(); if (open) onClose?.(); setOpen((previous) => !previous); }}>{label}</summary>
     {open && children}
   </details>;
 }
@@ -388,12 +388,12 @@ function TableEditor({ state, nodeId, pluginId, store }: {
   // result sections; an imported table shows one status line by default.
   return <section className="science-data-table" aria-label="Typed data table">
     {table && <p role="status">{table.sourceName} · {table.rowCount.toLocaleString()} rows · {table.columnCount} columns</p>}
-    <ResultDisclosure label={table ? "Replace data table" : "Import a data table"}>
+    <ResultDisclosure label={table ? "Replace data table" : "Import a data table"} onClose={() => setFile(null)}>
     <p>Import mixed data and missing values. Tables support {rowsLimit.toLocaleString()} rows and {cellsLimit.toLocaleString()} cells, stored outside the graph.</p>
     <form onSubmit={submit}>
       <fieldset disabled={busy}>
         <label>Data source
-          <select aria-label="Table data source" value={source} onChange={(e) => setSource(e.target.value as "paste" | "file")}>
+          <select aria-label="Table data source" value={source} onChange={(e) => { setSource(e.target.value as "paste" | "file"); setFile(null); }}>
             <option value="paste">Paste CSV / TSV</option><option value="file">Choose a file</option>
           </select>
         </label>

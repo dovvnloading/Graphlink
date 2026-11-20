@@ -666,6 +666,15 @@ body {
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 }
 
+.chat-science-card-excerpt {
+  margin: 0;
+  padding: 6px 8px;
+  border-left: 3px solid var(--gl-surface-border);
+  color: var(--gl-surface-text-secondary);
+  font-size: 0.87em;
+  line-height: 1.4;
+}
+
 .chat-science-card-sent {
   padding-top: 6px;
   border-top: 1px solid var(--gl-surface-border);

@@ -526,6 +526,7 @@ describe("ChatNodeView Discuss in chat result card", () => {
     expect(card).toHaveTextContent("0.999984");
     expect(card).toHaveTextContent("2 of 2 unknowns quantified");
     expect(screen.getByText(/Verified snapshot/)).toHaveTextContent("Verified snapshot · receipt 2bc26741");
+    expect(screen.queryByRole("note")).toBeNull();
     // The raw snapshot is not the visible message body.
     expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
     const sent = screen.getByText("Data sent to the model");
@@ -533,6 +534,25 @@ describe("ChatNodeView Discuss in chat result card", () => {
     await user.click(sent);
     expect(sent.closest("details")).toHaveAttribute("open");
     expect(card.querySelector("pre")).toHaveTextContent("Result JSON:");
+  });
+
+  it("warns visibly when a large result sent only excerpts to the model", async () => {
+    const user = userEvent.setup();
+    const excerpt = [
+      "Scientific Workbench result — verified saved snapshot",
+      "Result excerpts (inspect the source Workbench for complete data):",
+      "summary: Verified analysis",
+      "table (excerpt): [1,2,3]… [truncated from 45000 characters]",
+    ].join("\n");
+    renderChatNode({ isUser: true, content: excerpt, scienceReference: reference });
+    const warning = screen.getByRole("note");
+    expect(warning).toBeVisible();
+    expect(warning).toHaveTextContent("Only excerpts were sent to the model.");
+    expect(warning).toHaveTextContent("source Workbench");
+    const disclosure = screen.getByText("Data sent to the model");
+    await user.click(disclosure);
+    expect(disclosure.closest("details")?.querySelector("pre")).toHaveTextContent("table (excerpt)");
+    expect(disclosure.closest("details")?.querySelector("pre")).toHaveTextContent("truncated from 45000");
   });
 
   it("omits the headline when the operation declares none and keeps ordinary messages unchanged", () => {

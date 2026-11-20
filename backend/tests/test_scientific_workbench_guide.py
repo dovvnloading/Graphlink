@@ -52,6 +52,16 @@ def test_scientific_workbench_guide_covers_every_operation_and_field():
             )
 
 
+def test_biology_guide_discloses_bounded_discussion_context():
+    guide = (GUIDE.parent / "BIOLOGY_WORKBENCH.md").read_text(encoding="utf-8")
+    discussion = guide.split("- **Discuss in chat.**", 1)[1].split("\n- **Copy methods.**", 1)[0]
+    assert "12,000 characters" in discussion
+    assert "bounded excerpts" in discussion and "truncation markers" in discussion
+    assert "model has **not** received every row" in discussion
+    assert "complete verified result, which is what the model reads" not in guide
+    assert "model sees the same numbers, units and receipt" not in guide
+
+
 def test_scientific_workbench_guide_links_audit_and_pack_references():
     guide = GUIDE.read_text(encoding="utf-8")
     assert "(SCIENTIFIC_CORRECTNESS_AUDIT.md)" in guide

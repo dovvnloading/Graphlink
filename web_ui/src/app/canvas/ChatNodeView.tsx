@@ -174,7 +174,7 @@ export interface ChatNodeData extends Record<string, unknown> {
   estimatedCostUsd: number | null;
   // The verified Scientific Workbench result a "Discuss in chat" message was
   // started from - rendered as a compact card (ChatScienceCard) instead of
-  // the raw snapshot text in `content`, which the model still reads in full.
+  // the model context in `content`, which may contain bounded excerpts.
   scienceReference?: ScienceReferenceData | null;
 }
 
