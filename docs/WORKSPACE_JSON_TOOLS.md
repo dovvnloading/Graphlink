@@ -32,9 +32,13 @@ a time). Their results appear in the transcript, activity log and next model
 turn **in the order requested**, regardless of completion order. Every other
 call is a barrier: all previous reads finish before it starts, it runs alone
 under its existing approval policy, and later reads wait until it finishes.
-Auto approval alone does not imply concurrency (e.g. `plan.update` and
-`user.ask` remain serial). This preserves individual approvals for file,
-graph, shell and Python mutations.
+Auto-approval alone does not imply concurrency (e.g. `plan.update` and
+`user.ask` remain serial). The same scope gate, task-snapshotted
+permission mode and tool-specific approval rules apply: Auto-edit
+exempts confined file writes/edits, and Isolated Autonomous adds
+narrow offline-shell, cached-install and session-management exemptions.
+Every `python.exec` call still requires fresh approval. JSON transport itself grants
+no extra permissions. See [permission modes](WORKSPACE_PERMISSION_MODES.md).
 
 ## Protocol and safety
 
