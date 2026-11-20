@@ -135,12 +135,12 @@ describe("Agent-card follow-up admission", () => {
     // The simulated run has already finished; a retry must NOT claim run-2.
     await expect(store.sendHarnessMessage("agent-a", "write one file")).resolves.toBe(true);
     expect(executed).toEqual(["agent-a:write one file"]);
-    expect(requestImpl.mock.calls[0][2][3]).toBe(requestImpl.mock.calls[1][2][3]);
+    expect(requestImpl.mock.calls[0][2]![3]).toBe(requestImpl.mock.calls[1][2]![3]);
 
     // After the acknowledged run, an intentional new follow-up has a new key.
     await expect(store.sendHarnessMessage("agent-a", "write one file")).resolves.toBe(true);
     expect(executed).toHaveLength(2);
-    expect(requestImpl.mock.calls[2][2][3]).not.toBe(requestImpl.mock.calls[1][2][3]);
+    expect(requestImpl.mock.calls[2][2]![3]).not.toBe(requestImpl.mock.calls[1][2]![3]);
   });
 
   it("propagates transport failure so the Agent card can preserve the draft", async () => {
