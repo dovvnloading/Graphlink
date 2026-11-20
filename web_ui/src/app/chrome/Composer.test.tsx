@@ -182,7 +182,9 @@ describe("Composer", () => {
 
   it("disables new-agent isolation when no container engine is detected", async () => {
     const user = userEvent.setup();
-    const { store } = makeStore();
+    const { store } = makeStore({
+      composer: { request: { ...initialComposerState.request, canSend: true } },
+    });
     const { sceneStore } = makeSceneStore({ isolationEngine: null });
     render(
       <OverlayProvider>
