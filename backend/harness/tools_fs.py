@@ -374,7 +374,9 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
                     **{name: call.arguments.get(name) for name in selectors},
                 )
             else:
-                text = _read_bounded_text(target, errors="replace")
+                # Text reads can be large; do not block other read tasks
+                # on the event loop while this one performs disk I/O.
+                text = await asyncio.to_thread(_read_bounded_text, target, errors="replace")
         except (OSError, WorkspaceError, ValueError) as exc:
             return ToolResult(content=f"Could not read file: {exc}", is_error=True)
         except Exception as exc:
@@ -397,7 +399,7 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
         header = f"{len(lines)} line(s) total; showing from line {offset + 1}.\n"
         return ToolResult(content=header + body)
 
-    async def fs_list(call: ToolCall, ctx: RunContext) -> ToolResult:
+    def _fs_list_sync(call: ToolCall, ctx: RunContext) -> ToolResult:
         root = _bound_root(ctx)
         if root is None:
             return ToolResult(content="No harness workspace is bound to this run.", is_error=True)
@@ -416,6 +418,11 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
             return ToolResult(content="The workspace has no files matching that pattern.")
         suffix = f"\n…[capped at {_LIST_CAP_ENTRIES} entries]" if truncated else ""
         return ToolResult(content="\n".join(entries) + suffix)
+
+    async def fs_list(call: ToolCall, ctx: RunContext) -> ToolResult:
+        # Directory traversal and glob expansion also need a worker thread
+        # for concurrent reads to make progress.
+        return await asyncio.to_thread(_fs_list_sync, call, ctx)
 
     def _fs_grep_sync(call: ToolCall, ctx: RunContext) -> ToolResult:
         root = _bound_root(ctx)

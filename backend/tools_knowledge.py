@@ -27,6 +27,8 @@ an error, since plenty of real setups are lexical-only by design."""
 
 from __future__ import annotations
 
+import asyncio
+
 import json
 from pathlib import Path
 
@@ -132,8 +134,10 @@ def make_knowledge_search_handler(
             _resolve_workspace_collection_id(document, resolved_db_path) if document is not None else None
         )
 
-        results = hybrid_search(
-            resolved_db_path, query,
+        # Hybrid search can do disk I/O and embedding work; keep the event
+        # loop free so independent workspace reads can actually overlap.
+        results = await asyncio.to_thread(
+            hybrid_search, resolved_db_path, query,
             embedding_provider=embedding_provider, embedding_model_id=embedding_model_id,
             collection_id=collection_id, k=k,
         )
