@@ -23,12 +23,18 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from backend.agent_dispatch._composed import DispatcherParts
 
 if TYPE_CHECKING:
     from backend.tools import ToolRegistry
+
+
+# Serializes first-use snapshots across concurrent harness tasks. The
+# contents remain per-dispatcher (one app session), never process-global.
+_MACHINE_SNAPSHOT_LOCK = threading.Lock()
 
 
 class HarnessDispatchOps(DispatcherParts):
@@ -80,6 +86,29 @@ class HarnessDispatchOps(DispatcherParts):
             self._harness_session_grants = store
         return store.setdefault(workspace_id, set())
 
+    def harness_machine_snapshot(self, workspace_id: str, root: Path) -> str:
+        """Probe once per session/workspace binding, reuse on follow-ups.
+
+        The workspace can be rebound from scratch to a trusted folder:
+        replacing its cached entry when the resolved root changes avoids
+        telling the agent it is working in the old directory. Node deletion
+        and session eviction drop the cache alongside other live resources.
+        """
+        from backend.harness.context import describe_machine
+
+        root_key = str(root.resolve())
+        with _MACHINE_SNAPSHOT_LOCK:
+            snapshots = getattr(self, "_harness_machine_snapshots", None)
+            if snapshots is None:
+                snapshots = {}
+                self._harness_machine_snapshots = snapshots
+            previous = snapshots.get(workspace_id)
+            if previous is not None and previous[0] == root_key:
+                return previous[1]
+            description = describe_machine(root)
+            snapshots[workspace_id] = (root_key, description)
+            return description
+
     def harness_shell_sessions(self):
         """The session's long-running shell processes (PLAN §2.3). Held
         HERE, not per-run, because a dev server started in one task must
@@ -110,6 +139,10 @@ class HarnessDispatchOps(DispatcherParts):
         grants = getattr(self, "_harness_session_grants", None)
         if grants is not None:
             grants.pop(workspace_id, None)
+        with _MACHINE_SNAPSHOT_LOCK:
+            snapshots = getattr(self, "_harness_machine_snapshots", None)
+            if snapshots is not None:
+                snapshots.pop(workspace_id, None)
         sessions = getattr(self, "_harness_shell_sessions", None)
         if sessions is not None:
             sessions.stop_workspace(workspace_id)
@@ -118,9 +151,12 @@ class HarnessDispatchOps(DispatcherParts):
             repls.stop_workspace(workspace_id)
 
     def dispose_all_harness_processes(self) -> None:
-        """Session-evict/shutdown teardown: every live harness process this
-        dispatcher owns. Mirrors cancel_all's own "walk everything" posture
-        - an evicted session must not leave a dev server running forever."""
+        """Session-evict/shutdown teardown: all harness session resources,
+        including the machine snapshot and live processes."""
+        with _MACHINE_SNAPSHOT_LOCK:
+            snapshots = getattr(self, "_harness_machine_snapshots", None)
+            if snapshots is not None:
+                snapshots.clear()
         sessions = getattr(self, "_harness_shell_sessions", None)
         if sessions is not None:
             sessions.stop_all()
