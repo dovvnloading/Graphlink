@@ -493,7 +493,10 @@ def _safe_saved_segment(segment: str, root: Path) -> bool:
         return False
     words = segment.split(" ")
     tokens = _tokens(segment)
-    if not tokens or tokens[0] in _NON_PERSISTABLE_PROGRAMS:
+    # _tokens strips env/assignment wrappers to find the executable, but
+    # those raw leading forms must never qualify for remembered approval.
+    if (not tokens or words[0].lower() in _NON_PERSISTABLE_PROGRAMS
+            or tokens[0] in _NON_PERSISTABLE_PROGRAMS):
         return False
     # A program specified by a path or a leading assignment is mutable
     # outside the shell lookup and not suitable for a durable approval.
@@ -559,6 +562,10 @@ def shell_allow_rule_candidates(
     root, digest = bound
     text = command.strip()
     if not text or len(text) > _MAX_SAVED_COMMAND_CHARS or "\n" in text or "\r" in text:
+        return []
+    # PowerShell discards comments when splitting commands, so checking only
+    # the parsed segments can miss text that was present in the original.
+    if "#" in text:
         return []
     selected = effective_shell_for_rules(shell, profile=profile)
     plan = analyze(text, shell="bash" if selected == "git-bash" else selected)
