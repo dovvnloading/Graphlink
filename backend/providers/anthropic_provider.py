@@ -262,6 +262,10 @@ class AnthropicProvider:
 
         answer_parts: list[str] = []
         thinking_parts: list[str] = []
+        # Keep the original ordering of text, thinking, redacted thinking and
+        # tool_use blocks. Signed thinking must be echoed verbatim on the
+        # next tool turn; transient "reasoning" events alone cannot replay it.
+        replay_blocks: dict[int, dict] = {}
         # ADR-007 stage 7.1: Anthropic streams a tool call as
         # content_block_start (type "tool_use", carrying id/name) followed
         # by zero or more content_block_delta "input_json_delta" events
@@ -302,29 +306,68 @@ class AnthropicProvider:
                 if event_type == "content_block_delta":
                     delta = _extract_response_field(event, "delta", {})
                     delta_type = str(_extract_response_field(delta, "type", "")).strip().lower()
+                    index = _extract_response_field(event, "index", None)
                     if delta_type == "text_delta":
                         text = str(_extract_response_field(delta, "text", "") or "")
                         if text:
                             answer_parts.append(text)
                             yield ProviderEvent("text", text)
+                            if index is not None:
+                                block = replay_blocks.setdefault(index, {"type": "text", "text": ""})
+                                if block["type"] == "text":
+                                    block["text"] += text
                     elif delta_type == "thinking_delta":
                         thinking = str(_extract_response_field(delta, "thinking", "") or "")
                         if thinking:
                             thinking_parts.append(thinking)
                             yield ProviderEvent("reasoning", thinking)
+                            if index is not None:
+                                block = replay_blocks.setdefault(
+                                    index, {"type": "thinking", "thinking": "", "signature": ""}
+                                )
+                                if block["type"] == "thinking":
+                                    block["thinking"] += thinking
+                    elif delta_type == "signature_delta":
+                        # Anthropic's signature is opaque: never normalize,
+                        # trim or mix it into the visible reasoning channel.
+                        block = replay_blocks.get(index)
+                        if block is not None and block["type"] == "thinking":
+                            block["signature"] += str(_extract_response_field(delta, "signature", "") or "")
                     elif delta_type == "input_json_delta":
-                        index = _extract_response_field(event, "index", None)
                         buf = tool_call_buffers.get(index)
                         if buf is not None:
                             buf["json"] += str(_extract_response_field(delta, "partial_json", "") or "")
                 elif event_type == "content_block_start":
+                    index = _extract_response_field(event, "index", None)
                     content_block = _extract_response_field(event, "content_block", None)
                     block_type = str(_extract_response_field(content_block, "type", "") or "").strip().lower()
                     if block_type == "tool_use":
-                        tool_call_buffers[_extract_response_field(event, "index", None)] = {
+                        buf = {
                             "id": str(_extract_response_field(content_block, "id", "") or ""),
                             "name": str(_extract_response_field(content_block, "name", "") or ""),
                             "json": "",
+                        }
+                        tool_call_buffers[index] = buf
+                        if index is not None:
+                            replay_blocks[index] = {
+                                "type": "tool_use", "id": buf["id"], "name": buf["name"],
+                                "input": _extract_response_field(content_block, "input", {}) or {},
+                            }
+                    elif block_type == "text" and index is not None:
+                        replay_blocks[index] = {
+                            "type": "text",
+                            "text": str(_extract_response_field(content_block, "text", "") or ""),
+                        }
+                    elif block_type == "thinking" and index is not None:
+                        replay_blocks[index] = {
+                            "type": "thinking",
+                            "thinking": str(_extract_response_field(content_block, "thinking", "") or ""),
+                            "signature": str(_extract_response_field(content_block, "signature", "") or ""),
+                        }
+                    elif block_type == "redacted_thinking" and index is not None:
+                        replay_blocks[index] = {
+                            "type": "redacted_thinking",
+                            "data": str(_extract_response_field(content_block, "data", "") or ""),
                         }
                 elif event_type == "message_start":
                     message = _extract_response_field(event, "message", {})
@@ -366,15 +409,14 @@ class AnthropicProvider:
             # short-circuit ahead of its equivalent _compose() call.
             for index in sorted(tool_call_buffers, key=str):
                 buf = tool_call_buffers[index]
+                arguments = tool_arguments(
+                    json.loads(buf["json"]) if buf["json"] else {}, "Anthropic"
+                )
+                if index in replay_blocks and replay_blocks[index]["type"] == "tool_use":
+                    replay_blocks[index]["input"] = arguments
                 yield ProviderEvent(
                     "tool_call",
-                    tool_call=ToolCall(
-                        id=buf["id"],
-                        name=buf["name"],
-                        arguments=tool_arguments(
-                            json.loads(buf["json"]) if buf["json"] else {}, "Anthropic"
-                        ),
-                    ),
+                    tool_call=ToolCall(id=buf["id"], name=buf["name"], arguments=arguments),
                 )
             # review-fix: prompt_tokens/completion_tokens were already
             # collected above (message_start/message_delta fire regardless
@@ -382,9 +424,32 @@ class AnthropicProvider:
             # short-circuit dropped them - every builder tool-call turn
             # silently reported usage=None and the token budget went
             # unenforced on real spend.
+            # Replay only a complete signed thinking turn. Plain tool turns
+            # retain the existing normalized history path, and an unsigned
+            # or incomplete thinking block must never be sent as signed data.
+            thinking_blocks = [
+                block for block in replay_blocks.values()
+                if block["type"] in ("thinking", "redacted_thinking")
+            ]
+            has_complete_replay = (
+                bool(thinking_blocks)
+                and all(
+                    block["type"] != "thinking" or bool(block["signature"])
+                    for block in thinking_blocks
+                )
+                and all(
+                    replay_blocks.get(index, {}).get("type") == "tool_use"
+                    for index in tool_call_buffers
+                )
+            )
+            replay = (
+                {"content_blocks": [replay_blocks[index] for index in sorted(replay_blocks)]}
+                if has_complete_replay else None
+            )
             yield ProviderEvent(
                 "done", "".join(answer_parts).strip(),
                 usage=normalize_usage(prompt_tokens, completion_tokens),
+                replay=replay,
             )
             return
 

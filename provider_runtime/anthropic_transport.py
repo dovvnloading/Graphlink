@@ -241,6 +241,13 @@ def _prepare_anthropic_messages(messages: list, cancel_event=None) -> tuple[str 
             continue
         tool_calls = msg.get("tool_calls")
         if tool_calls:
+            # Signed extended-thinking content is opaque and order-sensitive.
+            # Only the dispatcher can supply this provider/model-scoped field.
+            # Without it, retain the ordinary text + tool_use reconstruction.
+            replay_blocks = msg.get("_anthropic_content_blocks")
+            if isinstance(replay_blocks, list) and replay_blocks:
+                anthropic_messages.append({"role": "assistant", "content": replay_blocks})
+                continue
             blocks = []
             lead_in_text = str(msg.get("content") or "").strip()
             if lead_in_text:

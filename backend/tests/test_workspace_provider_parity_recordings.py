@@ -238,6 +238,153 @@ def test_recorded_two_turn_tool_result_approval_and_model_settings(kind, recordi
         assert "Tool results (untrusted data" in requests[1]["messages"][-1]["content"]
 
 
+@pytest.mark.parametrize("typed_events", (False, True))
+def test_recorded_anthropic_signed_thinking_and_redaction_keep_block_order(
+    typed_events, recordings, monkeypatch,
+):
+    first_frames = json.loads(json.dumps(recordings["anthropic"]["first"]))
+    # Place the existing tool-use block after three preceding content blocks.
+    for frame in first_frames:
+        if "index" in frame:
+            frame["index"] += 3
+    first_frames[1:1] = [
+        {"type": "content_block_start", "index": 0,
+         "content_block": {"type": "thinking", "thinking": "", "signature": ""}},
+        {"type": "content_block_delta", "index": 0,
+         "delta": {"type": "thinking_delta", "thinking": "Need to inspect "}},
+        {"type": "content_block_delta", "index": 0,
+         "delta": {"type": "thinking_delta", "thinking": "notes.txt first."}},
+        {"type": "content_block_delta", "index": 0,
+         "delta": {"type": "signature_delta", "signature": "opaque-signature"}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "content_block_start", "index": 1,
+         "content_block": {"type": "redacted_thinking", "data": "opaque-redacted"}},
+        {"type": "content_block_stop", "index": 1},
+        {"type": "content_block_start", "index": 2,
+         "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 2,
+         "delta": {"type": "text_delta", "text": "Writing the file."}},
+        {"type": "content_block_stop", "index": 2},
+    ]
+    if typed_events:
+        # Exercise both SDK attribute objects and REST/SSE dict payloads.
+        first_frames = [_sdk_object(frame) for frame in first_frames]
+    _, provider_name, requests = _provider_and_requests(
+        monkeypatch, "anthropic", [first_frames, recordings["anthropic"]["second"]]
+    )
+    first = _turn(provider_name, MESSAGES)
+    (call,) = first["tool_calls"]
+    expected_blocks = [
+        {"type": "thinking", "thinking": "Need to inspect notes.txt first.",
+         "signature": "opaque-signature"},
+        {"type": "redacted_thinking", "data": "opaque-redacted"},
+        {"type": "text", "text": "Writing the file."},
+        {"type": "tool_use", "id": call.id, "name": "fs_write", "input": ARGS},
+    ]
+    assert first["message"]["provider_replay"]["content_blocks"] == expected_blocks
+    history = [
+        *MESSAGES,
+        {**first["message"], "tool_calls": [call.history_entry()]},
+        {"role": "tool", "tool_call_id": call.id, "name": call.name, "content": "written"},
+    ]
+    second = _turn(provider_name, history)
+    assert second["message"]["content"] == "Saved."
+    assert "provider_replay" not in second["message"]
+    # The original signed content travels intact, not a reconstruction
+    # with lost signatures or thinking moved after the tool_use block.
+    assert requests[1]["messages"][-2]["content"] == expected_blocks
+    assert requests[1]["messages"][-1]["content"][0]["tool_use_id"] == call.id
+
+
+def test_recorded_ollama_streamed_thinking_replays_with_native_tools(recordings, monkeypatch):
+    frames = json.loads(json.dumps(recordings["ollama"]["first"]))
+    frames[0:0] = [
+        {"message": {"thinking": "Need to inspect "}, "done": False},
+        {"message": {"thinking": "notes.txt first."}, "done": False},
+    ]
+    _, provider_name, requests = _provider_and_requests(
+        monkeypatch, "ollama", [frames, recordings["ollama"]["second"]]
+    )
+    first = _turn(provider_name, MESSAGES)
+    (call,) = first["tool_calls"]
+    assert first["message"]["provider_replay"] == {
+        "provider": provider_name, "model": "unit-model",
+        "thinking": "Need to inspect notes.txt first.",
+    }
+    history = [
+        *MESSAGES,
+        {**first["message"], "tool_calls": [call.history_entry()]},
+        {"role": "tool", "tool_call_id": call.id, "name": call.name, "content": "written"},
+    ]
+    second = _turn(provider_name, history)
+    assert second["message"]["content"] == "Saved."
+    assert "provider_replay" not in second["message"]
+    previous_assistant = requests[1]["messages"][-2]
+    assert previous_assistant["content"] == ""
+    assert previous_assistant["thinking"] == "Need to inspect notes.txt first."
+    assert previous_assistant["tool_calls"][0]["function"] == {
+        "name": WRITE.name, "arguments": ARGS,
+    }
+    assert requests[1]["messages"][-1]["tool_name"] == WRITE.name
+
+
+@pytest.mark.parametrize("kind", ("anthropic", "ollama"))
+@pytest.mark.parametrize("mismatch", ("provider", "model"))
+def test_private_tool_replay_is_scoped_to_origin(kind, mismatch, recordings, monkeypatch):
+    _, provider_name, requests = _provider_and_requests(
+        monkeypatch, kind, [recordings[kind]["second"]]
+    )
+    metadata = {
+        "provider": provider_name,
+        "model": "claude-test" if kind == "anthropic" else "unit-model",
+        "content_blocks": [
+            {"type": "thinking", "thinking": "private-thought", "signature": "opaque-signature"},
+            {"type": "tool_use", "id": "saved-call", "name": "fs_write", "input": ARGS},
+        ],
+        "thinking": "private-thought",
+    }
+    metadata[mismatch] = "different-origin"
+    history = [
+        *MESSAGES,
+        {"role": "assistant", "content": "", "provider_replay": metadata,
+         "tool_calls": [{"id": "saved-call", "name": WRITE.name, "arguments": ARGS}]},
+        {"role": "tool", "tool_call_id": "saved-call",
+         "name": WRITE.name, "content": "written"},
+    ]
+    _turn(provider_name, history)
+    previous_assistant = requests[0]["messages"][-2]
+    if kind == "anthropic":
+        assert previous_assistant["content"] == [
+            {"type": "tool_use", "id": "saved-call", "name": "fs_write", "input": ARGS}
+        ]
+    else:
+        assert "thinking" not in previous_assistant
+    assert "provider_replay" not in str(requests[0])
+    assert "private-thought" not in str(requests[0])
+
+
+def test_private_tool_replay_not_forwarded_to_another_provider(recordings, monkeypatch):
+    _, provider_name, requests = _provider_and_requests(
+        monkeypatch, "openai", [recordings["openai"]["second"]]
+    )
+    history = [
+        *MESSAGES,
+        {"role": "assistant", "content": "",
+         "provider_replay": {
+             "provider": config.API_PROVIDER_ANTHROPIC, "model": "claude-test",
+             "content_blocks": [
+                 {"type": "thinking", "thinking": "private-thought", "signature": "opaque-signature"},
+             ],
+         },
+         "tool_calls": [{"id": "saved-call", "name": WRITE.name, "arguments": ARGS}]},
+        {"role": "tool", "tool_call_id": "saved-call", "name": WRITE.name, "content": "written"},
+    ]
+    _turn(provider_name, history)
+    assert "provider_replay" not in str(requests[0])
+    assert "opaque-signature" not in str(requests[0])
+    assert "private-thought" not in str(requests[0])
+
+
 @pytest.mark.parametrize("kind", CASES)
 def test_recorded_truncated_stream_never_commits_tool_or_final_answer(kind, recordings, monkeypatch):
     # Remove each transport's mandatory end marker from an otherwise valid
