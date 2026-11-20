@@ -245,7 +245,28 @@ def register_settings_general_intents(
         # intent is exposed: a malformed argument must never clear the list.
         if not isinstance(path, str) or not path.strip():
             return
-        await asyncio.to_thread(run_locked, manager.revoke_harness_trusted_dir, path)
+        def revoke_grant() -> bool:
+            # Check and mutate under the same SettingsManager lock. An
+            # unlisted path must not trigger teardown of another binding.
+            if path not in manager.get_harness_trusted_dirs():
+                return False
+            manager.revoke_harness_trusted_dir(path)
+            return path not in manager.get_harness_trusted_dirs()
+
+        revoked = await asyncio.to_thread(run_locked, revoke_grant)
+        if revoked and agent_dispatcher is not None:
+            try:
+                # Persist the revocation FIRST, so any newly claimed task
+                # fails the trust gate. Retire idle sessions/REPLs now and
+                # defer those belonging to an in-progress task until it ends.
+                await agent_dispatcher.retire_revoked_harness_root(path)
+            except Exception as exc:  # noqa: BLE001 - persist/republish even when teardown fails
+                if notifications is not None:
+                    notifications.show(
+                        f"Folder revoked, but a workspace process could not be stopped: {exc}",
+                        "warning",
+                    )
+                    await bus.publish("notification")
         await bus.publish("app-settings")
 
     bus.register_intent("app-settings", "setActiveSection", set_active_section)
