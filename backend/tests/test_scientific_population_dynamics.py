@@ -269,6 +269,23 @@ def test_tiny_positive_triangular_root_and_genuinely_nilpotent_matrix():
     assert "stable_stage_1_fraction" not in nilpotent["values"]
 
 
+def test_reducible_projection_uses_dominant_block_and_keeps_float_receipt():
+    identity = run("matrix_population_projection",
+                   projection_matrix=[[1, 0], [0, 1]],
+                   initial_population=[3, 7], steps=2, time_step_unit="years")
+    assert identity["values"]["asymptotic_growth_factor_per_step"] == 1.0
+    assert identity["values"]["asymptotic_log_growth_rate"] == 0.0
+    assert "Dominant (Perron) multiplier: 1" in identity["summary"]
+
+    # The other isolated stage is subdominant; the cycling SCC determines
+    # both the spectral radius and period of the projected population.
+    cycling = run("matrix_population_projection",
+                  projection_matrix=[[0, 2, 0], [1, 0, 0], [0, 0, .5]],
+                  initial_population=[1, 1, 1], steps=1, time_step_unit="years")
+    assert cycling["values"]["asymptotic_growth_factor_per_step"] == pytest.approx(math.sqrt(2))
+    assert cycling["values"]["stage_structure_behaviour"].startswith("periodic")
+
+
 @pytest.mark.parametrize("override", [
     {"projection_matrix": [[1, 2, 3], [4, 5, 6]]},
     {"projection_matrix": [[1, 1], [-1, 0]]},
