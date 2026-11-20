@@ -39,7 +39,7 @@ const LazyModelComparisonPicker = lazy(() =>
   import("./ModelComparisonPicker").then((m) => ({ default: m.ModelComparisonPicker })),
 );
 
-function Icon({ name }: { name: "attach" | "send" | "chevron" | "stop" | "compare" | "reasoning" }) {
+function Icon({ name }: { name: "attach" | "send" | "chevron" | "stop" | "compare" | "reasoning" | "agent" }) {
   const paths: Record<string, string> = {
     attach:
       "M12 5.5 6.4 11.1a3.6 3.6 0 0 0 5.1 5.1l6-6a2.5 2.5 0 0 0-3.5-3.5l-6.1 6.1a1.35 1.35 0 0 0 1.9 1.9l5.5-5.5",
@@ -48,6 +48,7 @@ function Icon({ name }: { name: "attach" | "send" | "chevron" | "stop" | "compar
     stop: "M7 7h10v10H7z",
     compare: "M9 8V5.5A1.5 1.5 0 0 1 10.5 4h8A1.5 1.5 0 0 1 20 5.5v8a1.5 1.5 0 0 1-1.5 1.5H16M5.5 9h8A1.5 1.5 0 0 1 15 10.5v8a1.5 1.5 0 0 1-1.5 1.5h-8A1.5 1.5 0 0 1 4 18.5v-8A1.5 1.5 0 0 1 5.5 9Z",
     reasoning: "M12 3.5v2m0 13v2M3.5 12h2m13 0h2M6 6l1.4 1.4m9.2 9.2L18 18M6 18l1.4-1.4m9.2-9.2L18 6M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z",
+    agent: "M8 4h8m-4 0v3m-7 6V9a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v4m-14 0v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4M9 12h.01M15 12h.01M9 16h6",
   };
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
@@ -85,6 +86,8 @@ export function Composer({
   const scene = useSyncExternalStore(sceneStore.subscribe, sceneStore.getScene);
   const replyTargetNodeId = useSyncExternalStore(sceneStore.subscribe, sceneStore.getReplyTargetNodeId);
   const replyTargetNode = replyTargetNodeId ? scene.nodes.find((n) => n.id === replyTargetNodeId) : undefined;
+  const selectedNodeId = useSyncExternalStore(sceneStore.subscribe, sceneStore.getSelectedNodeId);
+  const selectedAgent = scene.nodes.find((n) => n.id === selectedNodeId && n.kind === "harness");
 
   // ADR-002 Workstream 1 ("Synthesize Branches"): the list-valued sibling of
   // replyTargetNodeId above - same subscription reasoning (re-renders if a
@@ -101,6 +104,9 @@ export function Composer({
 
   // Comparison is opt-in; the ordinary single-model Send never changes its
   // intent or model picker. Selection is an exact provider/model pair.
+  const [agentMode, setAgentMode] = useState(false);
+  const [agentSending, setAgentSending] = useState(false);
+  const [agentError, setAgentError] = useState("");
   const [comparisonMode, setComparisonMode] = useState(false);
   const [comparisonOptions, setComparisonOptions] = useState<ComparisonModel[]>([]);
   const [selectedComparisonKeys, setSelectedComparisonKeys] = useState<string[]>([]);
@@ -137,6 +143,24 @@ export function Composer({
   function send() {
     const text = composer.draft.text.trim();
     if (!text || !composer.request.canSend) return;
+    if (agentMode) {
+      if (agentSending || !composer.route.available || !composer.route.modelId) return;
+      setAgentSending(true);
+      setAgentError("");
+      void sceneStore.sendComposerAgentMessage(text)
+        .then((started) => {
+          if (!started) {
+            setAgentError("The workspace agent could not start. See the notification for details.");
+          } else if (store.getComposer().draft.text.trim() === text) {
+            // A rejected/failed dispatch or a draft edited while waiting must
+            // never be lost. Unlike chat sends, this has an explicit reply.
+            store.updateDraft("");
+          }
+        })
+        .catch(() => setAgentError("Could not send to the workspace agent. Try again."))
+        .finally(() => setAgentSending(false));
+      return;
+    }
     if (comparisonMode && !isSynthesizing) {
       if (!comparisonReady) return;
       store.sendModelComparison(
@@ -158,7 +182,18 @@ export function Composer({
 
   return (
     <div className="composer-dock">
-      {replyTargetNode && (
+      {agentMode && (
+        <div className="composer-agent-target" aria-label="Agent destination">
+          <span className="composer-agent-target-label">Workspace agent</span>
+          <span className="composer-agent-target-preview">
+            {selectedAgent ? `Selected: ${selectedAgent.title || "Agent"}` : "New agent · scratch workspace"}
+          </span>
+          {composer.context.items.length > 0 && (
+            <span className="composer-agent-target-note">Attachments are not sent to agents</span>
+          )}
+        </div>
+      )}
+      {!agentMode && replyTargetNode && (
         // ADR-002 Workstream 1: the "Branch from here" pick, staged via a
         // chat node's own context menu (ChatNodeView.tsx) and cleared
         // either by this button or automatically once consumed by the next
@@ -178,7 +213,7 @@ export function Composer({
           </button>
         </div>
       )}
-      {isSynthesizing && (
+      {!agentMode && isSynthesizing && (
         // ADR-002 Workstream 1 ("Synthesize Branches"): the selection staged
         // via App.tsx's Synthesize Branches shortcut, cleared either by this
         // button or automatically once consumed by the next Send
@@ -223,6 +258,7 @@ export function Composer({
           ))}
         </div>
       )}
+      {agentError && <p className="composer-agent-error" role="alert">{agentError}</p>}
       <div className="composer-input-wrap">
         <textarea
           // ADR-012 stage 12.3: the skip-link's own jump target - see
@@ -244,9 +280,11 @@ export function Composer({
             }
           }}
           placeholder={
-            isSynthesizing
-              ? "Describe how to combine these branches…"
-              : "Ask about this graph…"
+            agentMode
+              ? "Give the workspace agent a task…"
+              : isSynthesizing
+                ? "Describe how to combine these branches…"
+                : "Ask about this graph…"
           }
           aria-label="Message composer"
           rows={1}
@@ -283,12 +321,30 @@ export function Composer({
 
           <button
             type="button"
+            className={`composer-icon-button composer-agent-toggle${agentMode ? " active" : ""}`}
+            aria-label="Send to workspace agent"
+            aria-pressed={agentMode}
+            disabled={!composer.request.canSend || agentSending}
+            title={selectedAgent ? "Send a task to the selected agent" : "Start a new workspace agent from this message"}
+            onClick={() => {
+              setAgentMode((enabled) => !enabled);
+              setComparisonMode(false);
+              setAgentError("");
+              overlays.close();
+            }}
+          >
+            <Icon name="agent" />
+            <span>Agent</span>
+          </button>
+
+          <button
+            type="button"
             className="composer-icon-button composer-compare-button"
             data-overlay-trigger="model-comparison"
             aria-haspopup="dialog"
             aria-pressed={comparisonMode}
             aria-label={comparisonMode ? `Compare models: ${selectedComparisonModels.length} selected` : "Compare models"}
-            disabled={!composer.request.canSend || isSynthesizing}
+            disabled={!composer.request.canSend || isSynthesizing || agentMode}
             title="Send one message to two to four models in parallel"
             onClick={() => { void openComparisonPicker(); }}
           >
@@ -369,8 +425,10 @@ export function Composer({
             <button
               type="button"
               className="composer-send-button"
-              disabled={!composer.draft.text.trim() || !composer.request.canSend || (comparisonMode && !isSynthesizing && !comparisonReady)}
-              title={comparisonMode && !comparisonReady && !isSynthesizing ? "Choose at least two comparison models" : "Send message"}
+              disabled={!composer.draft.text.trim() || !composer.request.canSend || agentSending || (agentMode && (!composer.route.available || !composer.route.modelId)) || (comparisonMode && !agentMode && !isSynthesizing && !comparisonReady)}
+              title={agentMode
+                ? (agentSending ? "Starting agent…" : !composer.route.modelId || !composer.route.available ? "Choose an available model first" : "Send task to workspace agent")
+                : comparisonMode && !comparisonReady && !isSynthesizing ? "Choose at least two comparison models" : "Send message"}
               aria-label="Send message"
               onClick={send}
             >
