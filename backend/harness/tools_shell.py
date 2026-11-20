@@ -10,10 +10,11 @@ PythonREPL takes - and stdout/stderr are merged, bounded, and fed back as
 the tool result.
 
 Registered approval="always" under code.execute. A command normally asks
-for human consent, including an identical repeat. "Always allow" on a safe
-shell.exec approval persists a shell-specific command-prefix rule on that
-agent node. A future command can skip the prompt only when EVERY segment
-matches an existing rule and no segment is dangerous or ambiguous.
+for human consent, including an identical repeat. "Always allow" on a limited
+set of plainly read-only commands creates an exact in-memory grant scoped
+to the current workspace, shell and execution profile. Grants are discarded
+on reload; they cannot be carried into another workspace via a graph file.
+Every segment must match an existing grant, with no additional arguments.
 Interactive shell.session start/write and interpreter code still ask fresh.
 
 §2.4's two additional permission mechanics ride on top of that baseline

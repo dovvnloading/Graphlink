@@ -340,16 +340,18 @@ class ToolRegistry:
                 fingerprint is not None and fingerprint in ctx._approved_fingerprints
             )
             if call.name == "shell.exec" and ctx.shell_allow_rules is not None:
-                # The real harness never accepts a whole-tool grant or a
-                # fingerprint for shell commands. Only explicit prefixes for
-                # *every* segment, with no dangerous or ambiguous segment,
-                # can bypass this command's fresh consent requirement.
+                # Neither a tool-wide grant nor a fingerprint authorizes shell
+                # execution. Every segment needs its exact live-context rule,
+                # with no ambiguous syntax or unreviewed argument suffix.
                 from backend.harness.shell_policy import shell_command_allowed
 
                 try:
                     already_approved = not reprompt_failed and shell_command_allowed(
                         str(call.arguments.get("command") or ""),
-                        ctx.shell_allow_rules, shell=getattr(ctx, "harness_shell", "auto"),
+                        ctx.shell_allow_rules,
+                        shell=getattr(ctx, "harness_shell", "auto"),
+                        profile=getattr(ctx, "harness_execution_profile", "host"),
+                        workspace_root=getattr(ctx, "harness_workspace_dir", None),
                     )
                 except Exception:
                     already_approved = False

@@ -1018,21 +1018,13 @@ _HARNESS_TERMINAL_STATUSES = ("done", "failed", "stopped", "interrupted")
 
 
 def _restore_harness_shell_allow_rules(raw: object) -> list[str]:
-    """Bound malformed/legacy saved lists before putting them on a node."""
-    if not isinstance(raw, list):
-        return []
-    result: list[str] = []
-    for item in raw:
-        if not isinstance(item, str) or len(item) > 272:
-            continue
-        shell, separator, prefix = item.partition("\t")
-        if (separator and shell in {"bash", "git-bash", "cmd", "powershell"}
-                and prefix and not any(c in prefix for c in "\r\n\t")
-                and item not in result):
-            result.append(item)
-        if len(result) >= 100:
-            break
-    return result
+    """Never treat graph/session-file strings as proof of operator approval.
+
+    Graphs may be imported or hand-edited. A forged rule would let model
+    shell calls skip the approval gate on this installation. Rules are
+    intentionally kept only in the live node until the app/session reloads.
+    """
+    return []
 
 
 def _restore_harness_payload(payload: dict[str, Any]) -> SceneNode:

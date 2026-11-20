@@ -324,7 +324,9 @@ def _approval_summary(
     if call.name == "shell.exec":
         # §2.4: disclose one line per thing that will actually run, so a
         # dangerous tail cannot hide behind a benign head in a chain.
-        selected = shell_policy.effective_shell_for_rules(shell)
+        selected = shell_policy.effective_shell_for_rules(
+            shell, profile="isolated" if network_status.startswith("isolated:") else "host",
+        )
         plan = shell_policy.analyze(
             str(call.arguments.get("command") or ""),
             shell="bash" if selected == "git-bash" else selected,
@@ -602,7 +604,9 @@ async def run_harness(
         approval_token = uuid.uuid4().hex if bind_approval else ""
         shell_rules = (
             shell_policy.shell_allow_rule_candidates(
-                str(call.arguments.get("command") or ""), shell=ctx.harness_shell,
+                str(call.arguments.get("command") or ""),
+                shell=ctx.harness_shell, profile=ctx.harness_execution_profile,
+                workspace_root=ctx.harness_workspace_dir,
             ) if call.name == "shell.exec" else []
         )
         can_save_shell_rules = not network_offered and bool(shell_rules) and len(set(

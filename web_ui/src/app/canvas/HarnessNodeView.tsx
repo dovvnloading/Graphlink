@@ -273,15 +273,19 @@ function AgentSettingsPopover({
       )}
       <p>Network access only applies to Isolated shell.exec commands. Each command still needs approval. Settings are saved with this graph. Changes apply from the next task.</p>
       <div className="harness-node-allow-rules">
-        <strong>Allowed command prefixes</strong>
+        <strong>Allowed exact commands (this session)</strong>
         {rules.length === 0 ? (
-          <p>No saved rules for this agent.</p>
+          <p>No active command grants for this agent.</p>
         ) : (
-          <ul aria-label="Allowed command prefixes">
+          <ul aria-label="Allowed exact commands">
             {rules.map((rule) => {
               const boundary = rule.indexOf("\t");
-              const ruleShell = boundary >= 0 ? rule.slice(0, boundary) : "";
+              const ruleScope = boundary >= 0 ? rule.slice(0, boundary) : "";
               const prefix = boundary >= 0 ? rule.slice(boundary + 1) : rule;
+              const fields = ruleScope.split(":");
+              const ruleShell = fields[0] === "v2" && fields.length === 4
+                ? `${fields[2]} · ${fields[1]} · workspace-bound`
+                : ruleScope;
               return (
                 <li key={rule}>
                   <span className="harness-node-allow-rule-text">
@@ -706,7 +710,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
           )}
           {shellApproval && data.harnessApprovalSessionOffered && (
             <p className="harness-approval-allow-explanation">
-              Always allow saves each displayed safe command as a prefix on this agent, for the selected shell.
+              Always allow remembers only eligible exact commands for this workspace, shell, and execution profile until this session ends. New arguments require approval.
             </p>
           )}
           <div className="plan-node-approval-actions">
@@ -746,7 +750,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
                 disabled={decisionPending}
                 onClick={() => decideTool(true, true)}
                 title={shellApproval
-                  ? "Save a shell-scoped prefix for each safe command segment on this agent"
+                  ? "Remember eligible exact commands for this workspace and execution profile until reload"
                   : "Stop asking for this tool for the rest of this agent's session"}
               >
                 {shellApproval ? "Always allow" : "Always allow this tool"}

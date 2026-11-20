@@ -573,7 +573,9 @@ def _serialize_harness_node(raw_node: SceneNode) -> dict[str, Any]:
         # must never imply trust on a machine that does not.
         "workspace_path": node.state.harness_workspace_path,
         "shell": node.state.harness_shell,
-        "shell_allow_rules": list(node.state.harness_shell_allow_rules),
+        # Runtime grants are not portable consent. Imported/edited graphs
+        # must never carry shell auto-approval across a reload.
+        "shell_allow_rules": [],
         "execution_profile": node.state.harness_execution_profile,
         "network_always": node.state.harness_network_always is True,
         "activity": [dict(a) for a in node.state.harness_activity],

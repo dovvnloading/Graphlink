@@ -34,8 +34,11 @@ this design avoids.
 
 from __future__ import annotations
 
+import hashlib
+import os
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 # Top-level separators, longest-first so `&&` is never read as two `&`
 # and `||` is never read as two `|`. The bare `&` is in the list because
@@ -64,6 +67,11 @@ _DANGEROUS_PROGRAMS = frozenset({
     "chown", "chmod", "icacls", "takeown", "attrib",
     "mv", "move", "ren", "rename",
     "curl", "wget", "iwr", "invoke-webrequest",
+    # Shell builtins, dispatchers and wrappers can execute a second command
+    # that a first-word-only classifier would never see.
+    "eval", "exec", "source", "command", "builtin", "call", "start",
+    "cd", "chdir", "pushd", "popd", "env", "xargs", "find", "busybox",
+    "parallel", "nohup", "setsid", "nice",
 })
 
 # Multi-word forms where the FIRST word alone is harmless. Matched against
@@ -339,8 +347,19 @@ def analyze(command: str, *, shell: str | None = None) -> ShellPlan:
         else:
             plan.segments = segments
     elif shell_name in {"", "cmd", "cmd.exe", "posix", "sh", "bash", "zsh"}:
-        if any(marker in text for marker in _UNSPLITTABLE_MARKERS):
+        # We split only an unquoted, expansion-free subset. Regex splitting
+        # inside quotes, escaped metacharacters or shell comments fabricates
+        # commands that do not execute and can miss the real dangerous tail.
+        # A full shell grammar is out of scope: display the entire original
+        # text and require fresh consent instead of claiming parsed safety.
+        if any(marker in text for marker in _UNSPLITTABLE_MARKERS) or any(
+            char in text for char in "\\'\\"\\\\$%^!(){}<>#\\r\\t*?[]~"
+        ):
             plan.unsplittable = True
+            plan.unsplittable_note = (
+                "! contains quoting, expansion or ambiguous shell syntax - "
+                "reviewed as one unit, contents not parsed"
+            )
         else:
             segments = [part.strip() for part in _SEPARATOR_RE.split(text)]
             # The capturing group retains separators; drop them here.
@@ -371,86 +390,122 @@ def is_dangerous_command(command: str, *, shell: str | None = None) -> bool:
     return analyze(command, shell=shell).is_dangerous
 
 
-# Rules are deliberately exact shell+text prefixes, not regexes or tool-name
-# grants. A rule only covers a segment that equals its prefix or has an argument
-# boundary immediately after it; "git status" must not match "git statuses".
-# Store the effective shell because the syntax/meaning of a command can change
-# when the node switches between PowerShell, cmd and Bash.
+# A remembered approval is narrower than a normal, once-only shell prompt:
+# it covers one EXACT, conservatively classified command segment, never a
+# prefix whose unreviewed suffix could change flags, paths or interpreters.
+# Only the backend may create in-memory rules. Graph/session files cannot
+# attest to an operator's approval and MUST NOT restore these grants.
 MAX_SHELL_ALLOW_RULES = 100
 _SHELL_RULE_SEPARATOR = "\t"
+# These forms have no caller-selected file operands, redirects, shell scripts,
+# working-directory changes or interpreter flags. Shell commands outside this
+# small set can still run after fresh approval; they just cannot be remembered.
+_REMEMBERABLE_COMMANDS = frozenset({
+    "pwd", "ls", "ls .", "ls -l", "ls -a", "ls -la", "ls -al",
+    "dir", "dir .",
+    "git status", "git status --short", "git status -s",
+    "git status --porcelain", "git status --porcelain=v1",
+    "git diff", "git log", "git show",
+    "git branch --show-current", "git rev-parse --show-toplevel",
+    "get-location", "get-childitem", "get-childitem .",
+    "get-item .", "get-process",
+})
+_PLAIN_SEGMENT_RE = re.compile(r"[A-Za-z0-9_./:@=+,-]+(?: [A-Za-z0-9_./:@=+,-]+)*")
+_PLAIN_CHAIN_RE = re.compile(r"[A-Za-z0-9_./:@=+,\-;|& \n]+")
 
 
-def effective_shell_for_rules(shell: str) -> str:
+def effective_shell_for_rules(shell: str, *, profile: str = "host") -> str:
+    # Isolated execution is ALWAYS /bin/sh -c inside a Linux container, even
+    # if a Windows node is configured to use PowerShell or cmd on Host.
+    if profile == "isolated":
+        return "sh"
     from backend.harness.shell_selection import effective_shell
 
     return effective_shell(shell)
 
 
-def shell_allow_rule_candidates(command: str, *, shell: str = "auto") -> list[str]:
-    """Return safe, shell-scoped prefixes for an explicitly approved command.
+def _rule_scope(shell: str, profile: str, workspace_root: Path | None) -> str | None:
+    """Bind consent to the real cwd, execution profile and interpreter.
 
-    A chained command produces one prefix per segment. Unknown syntax,
-    dangerous commands, redirects, and inline interpreter programs cannot
-    create persistent bypasses. This is intentionally narrower than what a
-    human may approve *once*.
+    Missing/invalid roots fail closed; a workspace rebind or Host/Isolated
+    switch never inherits a prior permission. The hash is an identifier, NOT
+    an authentication tag; serialized rules are discarded on load.
     """
-    selected = effective_shell_for_rules(shell)
+    if profile not in {"host", "isolated"} or workspace_root is None:
+        return None
+    try:
+        root = Path(workspace_root).resolve(strict=True)
+        if not root.is_dir():
+            return None
+    except (OSError, ValueError, TypeError, RuntimeError):
+        return None
+    selected = effective_shell_for_rules(shell, profile=profile)
+    digest = hashlib.sha256(os.fsencode(os.path.normcase(str(root)))).hexdigest()[:32]
+    return f"v2:{profile}:{selected}:{digest}"
+
+
+def _rememberable(segment: str) -> bool:
+    if len(segment) > 256 or not _PLAIN_SEGMENT_RE.fullmatch(segment):
+        return False
+    normalized = segment.lower()
+    # echo/Write-Output print only literal, expansion-free operands under
+    # the plain-token grammar. Do not authorize arbitrary external commands
+    # (including test scripts, environment wrappers, interpreters or cd).
+    return (
+        normalized in _REMEMBERABLE_COMMANDS
+        or normalized == "echo"
+        or normalized.startswith("echo ")
+        or normalized == "write-output"
+        or normalized.startswith("write-output ")
+    )
+
+
+def shell_allow_rule_candidates(
+    command: str, *, shell: str = "auto", profile: str = "host",
+    workspace_root: Path | None = None,
+) -> list[str]:
+    """Produce exact, workspace/profile/shell-bound in-memory grants.
+
+    The splitter is only a *disclosure* aid, not a security-grade shell
+    parser. For persisted consent, reject unfamiliar syntax and commands
+    with arbitrary path operands or execution side effects. No root means
+    no grant: caller must supply the run's already-bound workspace.
+    """
+    scope = _rule_scope(shell, profile, workspace_root)
+    if (scope is None or not isinstance(command, str) or len(command) > 4000
+            or not _PLAIN_CHAIN_RE.fullmatch(command)):
+        return []
+    selected = effective_shell_for_rules(shell, profile=profile)
     plan = analyze(command, shell="bash" if selected == "git-bash" else selected)
     if plan.is_dangerous or not plan.segments:
         return []
-    rules = []
-    for segment in plan.segments:
-        # analyze() is a disclosure-oriented splitter, not a complete shell
-        # grammar. Its permissive quote/escape handling is NOT sufficient to
-        # authorize persistence: quoted executables, variables, grouping,
-        # redirections and encoded escapes can conceal a dangerous command.
-        # For remembered rules accept only the unambiguous plain-token subset.
-        if len(segment) > 256 or not re.fullmatch(r"[a-zA-Z0-9_./:@=+,-]+(?: [a-zA-Z0-9_./:@=+,-]+)*", segment):
-            return []
-        tokens = _tokens(segment)
-        # An inline program (possibly constructing a different shell command)
-        # is not a safe prefix to grant for future use.
-        if tokens and tokens[0] in {"sh", "bash", "zsh", "python", "python3",
-                                    "node", "ruby", "perl", "php", "cmd",
-                                    "powershell", "pwsh"} and any(
-            flag in tokens[1:] for flag in {"-c", "-command", "-encodedcommand",
-                                            "/c", "-e", "-r"}
-        ):
-            return []
-        rules.append(f"{selected}{_SHELL_RULE_SEPARATOR}{segment}")
-    return list(dict.fromkeys(rules))
+    if not all(_rememberable(segment) for segment in plan.segments):
+        return []
+    return list(dict.fromkeys(
+        f"{scope}{_SHELL_RULE_SEPARATOR}{segment}" for segment in plan.segments
+    ))
 
 
-def shell_command_allowed(command: str, rules: list[str], *, shell: str = "auto") -> bool:
-    """Only bypass a prompt if *every* safe segment matches a stored prefix."""
-    candidates = shell_allow_rule_candidates(command, shell=shell)
-    if not candidates or not isinstance(rules, list):
-        return False
-    for candidate in candidates:
-        shell_name, _, segment = candidate.partition(_SHELL_RULE_SEPARATOR)
-
-        def matches(rule: str) -> bool:
-            if not isinstance(rule, str):
-                return False
-            recorded_shell, sep, prefix = rule.partition(_SHELL_RULE_SEPARATOR)
-            return bool(
-                sep and recorded_shell == shell_name and prefix
-                and (segment == prefix or (
-                    segment.startswith(prefix)
-                    and segment[len(prefix):len(prefix) + 1].isspace()
-                ))
-            )
-        if not any(matches(rule) for rule in rules):
-            return False
-    return True
+def shell_command_allowed(
+    command: str, rules: list[str], *, shell: str = "auto",
+    profile: str = "host", workspace_root: Path | None = None,
+) -> bool:
+    """Only bypass when EVERY independently safe segment is an exact grant."""
+    candidates = shell_allow_rule_candidates(
+        command, shell=shell, profile=profile, workspace_root=workspace_root,
+    )
+    return bool(candidates and isinstance(rules, list) and all(
+        candidate in rules for candidate in candidates
+    ))
 
 
 def requires_fresh_shell_approval(tool_name: str, arguments: dict) -> bool:
     """Fail closed for commands with effects a shell classifier cannot prove.
 
     A tool-name session grant alone never bypasses execution approval.
-    shell.exec may instead use an explicit node-scoped, shell-specific prefix
-    rule, after validating every segment with shell_command_allowed().
+    shell.exec may instead use an exact in-memory command grant bound to
+    the workspace root, execution profile and interpreter, after validating
+    every segment with shell_command_allowed().
     shell.session start/write always require fresh approval.
     Read/list/stop retain the less intrusive existing grant behavior.
     """
