@@ -177,6 +177,7 @@ export interface SceneNodeRow {
   harnessQuestion: string;
   harnessWorkspacePath: string;
   harnessWorkspaceActive: string;
+  harnessShell: string;
   harnessMaxTurns: number;
   harnessSpentTurns: number;
   harnessSpentTokens: number;
@@ -799,6 +800,7 @@ const SCENE_NODE_ROW_FIELDS: WireFields = [
   ["harnessQuestion", "s", 0, ""],
   ["harnessWorkspacePath", "s", 0, ""],
   ["harnessWorkspaceActive", "s", 0, ""],
+  ["harnessShell", "s", 0, "auto"],
   ["harnessMaxTurns", "n", 0, 0],
   ["harnessSpentTurns", "n", 0, 0],
   ["harnessSpentTokens", "n", 0, 0],
