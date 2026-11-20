@@ -236,8 +236,9 @@ def _approval_summary(call: ToolCall, *, workspace_root: Path | None = None) -> 
     if call.name in ("fs.write", "fs.edit"):
         return preview_harness_file_change(call, workspace_root).summary
     args = json.dumps(call.arguments, sort_keys=True, ensure_ascii=False)
-    if call.name.startswith("fal."):
-        # Show every field sent to Fal, including billing options and result bindings.
+    if call.name.startswith("fal.") or call.name == "science.run":
+        # Disclose every Fal billing/binding field and every Scientific Workbench
+        # input. Long numeric arrays must not be silently cut off in approval.
         return f"{call.name} {args}"
     return f"{call.name} {_truncate(args, _APPROVAL_SUMMARY_CAP)}"
 
