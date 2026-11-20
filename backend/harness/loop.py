@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -112,6 +113,11 @@ _APPROVAL_SUMMARY_CAP = 400
 _ACTIVITY_CAP = 100
 _ACTIVITY_SUMMARY_CAP = 200
 _ACTIVITY_TOOL_NAME_CAP = 80
+# One bounded preview per running shell/Python call. The tool-result buffers
+# have their own larger caps; a canvas snapshot must not carry that much text
+# for each of the 100 activity rows. Polling also caps WS update frequency.
+_LIVE_OUTPUT_CAP_CHARS = 2_000
+_LIVE_PUBLISH_INTERVAL = 0.15
 
 _LAND_NOTIFICATION_KINDS = {"done": "success", "failed": "error"}
 
@@ -170,6 +176,10 @@ class HarnessRunContext(RunContext):
     ask_user: object = None
     # The interpreter disclosed for a fresh python.install authorization.
     python_install_approved_interpreter: object = None
+    # Attached only while a shell.exec/python.exec handler is running. The
+    # callback may be invoked by a worker thread, so it must not touch the
+    # scene or event bus itself.
+    on_tool_output: Callable[[str], None] | None = None
 
 
 def _truncate(text: str, cap: int) -> str:
@@ -185,16 +195,53 @@ def _activity_summary(call: ToolCall, result: ToolResult) -> str:
     return _truncate(text, _ACTIVITY_SUMMARY_CAP)
 
 
-def _log_activity(node, *, tool: str, summary: str, outcome: str, elapsed_ms: int) -> None:
+def _log_activity(node, *, tool: str, summary: str, outcome: str, elapsed_ms: int) -> dict:
     activity = node.state.harness_activity
-    activity.append({
+    row = {
         "tool": _truncate(tool, _ACTIVITY_TOOL_NAME_CAP),
         "summary": summary,
         "outcome": outcome,
         "elapsedMs": elapsed_ms,
-    })
+    }
+    activity.append(row)
     if len(activity) > _ACTIVITY_CAP:
         del activity[: len(activity) - _ACTIVITY_CAP]
+    return row
+
+
+class _BoundedToolOutput:
+    """Thread-safe rolling output tail (no per-chunk task queue).
+
+    The worker continues draining after the tool-result capture cap; the
+    canvas sees the latest output in bounded memory. The asyncio pump only
+    snapshots at a fixed cadence, independent of producer speed.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._text = ""
+        self._started = False
+        self._truncated = False
+
+    def append(self, fragment: str) -> None:
+        with self._lock:
+            self._started = True  # an empty fragment means execution started
+            combined = self._text + fragment
+            if len(combined) > _LIVE_OUTPUT_CAP_CHARS:
+                self._truncated = True
+                self._text = combined[-_LIVE_OUTPUT_CAP_CHARS:]
+            else:
+                self._text = combined
+
+    def snapshot(self) -> str | None:
+        with self._lock:
+            if not self._started:
+                return None
+            prefix = (
+                f"…[showing last {_LIVE_OUTPUT_CAP_CHARS} characters]\n"
+                if self._truncated else ""
+            )
+            return prefix + self._text
 
 
 def _session_grants_of(dispatcher, workspace_id: str) -> "set | None":
@@ -272,6 +319,7 @@ async def _execute_tool_calls(
     registry: ToolRegistry,
     ctx: RunContext,
     record_result: Callable[[ToolCall, ToolResult, int], Awaitable[None]],
+    record_progress: Callable[[ToolCall, str, int], Awaitable[None]] | None = None,
 ) -> None:
     """Run consecutive parallel-safe reads together, preserving model order.
 
@@ -282,7 +330,44 @@ async def _execute_tool_calls(
     """
     async def invoke_timed(call: ToolCall) -> tuple[ToolResult, int]:
         started = time.monotonic()
-        result = await registry.invoke(call, ctx)
+        # Both streaming tools are non-parallel execution barriers. Set a
+        # per-call sink only for them; parallel-safe reads continue to share
+        # ctx without racing an output callback.
+        if (
+            record_progress is None or call.name not in ("shell.exec", "python.exec")
+            or not isinstance(ctx, HarnessRunContext)
+        ):
+            result = await registry.invoke(call, ctx)
+        else:
+            sink = _BoundedToolOutput()
+            ctx.on_tool_output = sink.append
+            finished = False
+
+            async def publish_live() -> None:
+                previous = None
+                while not finished:
+                    await asyncio.sleep(_LIVE_PUBLISH_INTERVAL)
+                    current = sink.snapshot()
+                    if current is not None and current != previous:
+                        await record_progress(
+                            call, current, max(0, round((time.monotonic() - started) * 1000)),
+                        )
+                        previous = current
+                # Drain the final fragment before recording the terminal
+                # result. No worker thread ever mutates node state.
+                current = sink.snapshot()
+                if current is not None and current != previous:
+                    await record_progress(
+                        call, current, max(0, round((time.monotonic() - started) * 1000)),
+                    )
+
+            pump = asyncio.create_task(publish_live())
+            try:
+                result = await registry.invoke(call, ctx)
+            finally:
+                ctx.on_tool_output = None
+                finished = True
+                await pump
         return result, max(0, round((time.monotonic() - started) * 1000))
 
     semaphore = asyncio.Semaphore(_MAX_CONCURRENT_READS)
@@ -373,6 +458,10 @@ async def run_harness(
             await asyncio.to_thread(flush_transcript, workspace_for_flush)
         if not _alive():
             return
+        if node.state.harness_activity and node.state.harness_activity[-1]["outcome"] == "running":
+            node.state.harness_activity[-1]["outcome"] = (
+                "stopped" if status == "stopped" else "ok" if status == "done" else "error"
+            )
         node.state.harness_status = status
         node.state.harness_status_detail = detail
         if reply is not None:
@@ -705,12 +794,41 @@ async def run_harness(
                 await _land("done", "Task complete.", reply=assistant_text)
                 return
 
+            live_rows: dict[str, dict] = {}
+            live_text: dict[str, str] = {}
+
+            async def record_progress(call: ToolCall, output: str, elapsed_ms: int) -> None:
+                # Stop frees the slot immediately; a late worker/pump must
+                # never mutate the next run's activity or resurrect a row.
+                if cancel_event.is_set() or not _alive() or node.state.harness_run_id != request_id:
+                    return
+                row = live_rows.get(call.id)
+                if row is None:
+                    row = _log_activity(
+                        node, tool=call.name, summary="Waiting for output…",
+                        outcome="running", elapsed_ms=elapsed_ms,
+                    )
+                    live_rows[call.id] = row
+                row["summary"] = f"Output:\n{output}" if output else "Waiting for output…"
+                row["elapsedMs"] = elapsed_ms
+                live_text[call.id] = output
+                await bus.publish("scene")
+
             async def record_result(call: ToolCall, result: ToolResult, elapsed_ms: int) -> None:
-                _log_activity(
-                    node, tool=call.name, summary=_activity_summary(call, result),
-                    outcome="error" if result.is_error else "ok",
-                    elapsed_ms=elapsed_ms,
-                )
+                if cancel_event.is_set() or not _alive() or node.state.harness_run_id != request_id:
+                    return
+                outcome = "error" if result.is_error else "ok"
+                row = live_rows.pop(call.id, None)
+                if row is not None:
+                    output = live_text.pop(call.id, "")
+                    row["summary"] = f"Output:\n{output}" if output else _activity_summary(call, result)
+                    row["outcome"] = outcome
+                    row["elapsedMs"] = elapsed_ms
+                else:
+                    _log_activity(
+                        node, tool=call.name, summary=_activity_summary(call, result),
+                        outcome=outcome, elapsed_ms=elapsed_ms,
+                    )
                 tool_message = {
                     "role": "tool", "tool_call_id": call.id,
                     "name": call.name, "content": result.content,
@@ -719,7 +837,9 @@ async def run_harness(
                 append_message(transcript_dir, tool_message)
                 await bus.publish("scene")
 
-            await _execute_tool_calls(tool_calls, registry, ctx, record_result)
+            await _execute_tool_calls(
+                tool_calls, registry, ctx, record_result, record_progress=record_progress,
+            )
     except api_provider.RequestCancelledError:
         await _land("stopped", "Stopped by user.")
     except asyncio.TimeoutError:

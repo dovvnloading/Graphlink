@@ -205,7 +205,7 @@ while True:
 
             try:
                 self.process = spawn_guarded_subprocess(self.guard,
-                    [str(self.python_executable), '-c', script],
+                    [str(self.python_executable), '-u', '-c', script],
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
@@ -242,9 +242,17 @@ while True:
                     guard.close()
                 raise
 
-    def execute(self, code):
+    def execute(self, code, on_output=None, cancel_event=None):
+        # An already-cancelled worker must never spawn a process AFTER the
+        # cancellation path has retired its interpreter. Check on both
+        # sides of start(), which may take the process lock while Stop runs.
+        if cancel_event is not None and cancel_event.is_set():
+            return ""
         if not self.process or self.process.poll() is not None:
             self.start()
+        if cancel_event is not None and cancel_event.is_set():
+            self.stop()
+            return ""
 
         # ADR-005 stage 5.3 (review-fix): mark this cwd as actively used -
         # see touch_scratch_dir_usage's own docstring for why the age
@@ -253,10 +261,13 @@ while True:
         if self._manage_cwd:
             touch_scratch_dir_usage(self.cwd)
 
+        # Use a stable process reference: Stop may close and clear
+        # self.process concurrently while a blocked stdout read unwinds.
+        process = self.process
         encoded_code = base64.b64encode(code.encode('utf-8')).decode('utf-8')
         try:
-            self.process.stdin.write(encoded_code + "\n")
-            self.process.stdin.flush()
+            process.stdin.write(encoded_code + "\n")
+            process.stdin.flush()
         except Exception as e:
             self.last_run_failed = True
             return f"Failed to send code to REPL: {e}"
@@ -269,7 +280,12 @@ while True:
             # giant newline-free line. Keep reading after the capture cap:
             # stopping at the cap would fill the child's stdout pipe and
             # deadlock the REPL before its nonce-delimited boundary arrives.
-            line = self.process.stdout.readline(_REPL_READ_CHARS)
+            try:
+                line = process.stdout.readline(_REPL_READ_CHARS)
+            except (ValueError, OSError):
+                # Stop can close stdout from another thread, waking a read
+                # with ValueError rather than EOF. It is still a dead REPL.
+                line = ""
             if not line:
                 # EOF without a boundary: the interpreter exited mid-run.
                 # Reap it so the next call gets a fresh, synchronized REPL.
@@ -291,6 +307,10 @@ while True:
                     truncated = True
             else:
                 truncated = True
+            # Capture is first-N for the model, but activity shows the
+            # latest bounded tail, including lines after that limit.
+            if on_output is not None:
+                on_output(line)
 
         result = "".join(captured).strip()
         return result + _REPL_TRUNCATION_NOTICE if truncated else result
