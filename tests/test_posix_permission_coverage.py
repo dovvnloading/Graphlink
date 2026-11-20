@@ -1,13 +1,13 @@
 """The posix-permissions CI job has to actually cover the marked tests.
 
 That job (.github/workflows/ci.yml) runs `-m posix_permissions` against an
-EXPLICIT list of four files rather than all of backend/tests, because pytest
+EXPLICIT list of six files rather than all of backend/tests, because pytest
 imports every module it collects and roughly 18 tests elsewhere in that
 directory genuinely assume Windows. Narrowing collection is what keeps the
 job about file permissions instead of about porting the suite to Linux.
 
 The cost of narrowing is drift: a tenth `@pytest.mark.posix_permissions`
-test landing in a fifth file would be selected by nobody and run nowhere,
+test landing in a new file would be selected by nobody and run nowhere,
 which is the exact condition this job was added to end - and it would look
 green. So the two are tied together here.
 
@@ -48,10 +48,12 @@ def _files_with_marked_tests() -> set[str]:
 
 
 def _files_the_job_runs() -> set[str]:
-    """The backend/tests paths named in the posix-permissions job's own step."""
+    """Only paths in the marked-permissions step, not the separate Bash step."""
     text = WORKFLOW.read_text(encoding="utf-8")
-    start = text.index("  posix-permissions:")
-    return set(re.findall(r"(backend/tests/test_[a-z0-9_]+\.py)", text[start:]))
+    job = text.split("\n  posix-permissions:\n", 1)[1]
+    step = job.split("\n      - name: Run the POSIX permission assertions\n", 1)[1]
+    step = re.split(r"\n      - (?:name:|uses:)", step, maxsplit=1)[0]
+    return set(re.findall(r"(backend/tests/test_[a-z0-9_]+\.py)", step))
 
 
 def test_the_job_runs_every_file_that_has_a_marked_test():
@@ -81,3 +83,8 @@ def test_the_marker_is_actually_in_use():
     above would pass vacuously on two empty sets."""
     assert len(_files_with_marked_tests()) >= 4
     assert len(_files_the_job_runs()) >= 4
+
+
+def test_the_separate_bash_e2e_step_does_not_expand_the_permission_inventory():
+    """A separate Ubuntu test selection must not look like a marked test."""
+    assert "backend/tests/test_harness_e2e_scenarios.py" not in _files_the_job_runs()
