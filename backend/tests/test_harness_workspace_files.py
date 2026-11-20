@@ -97,7 +97,7 @@ def test_previews_reject_binary_and_oversized_files_and_truncate_text(tmp_path):
     assert result["truncated"] is True
     assert len(result["content"]) == 40_000
 
-    (root / "photo.png").write_bytes(b"\\x89PNG\\x00image")
+    (root / "photo.png").write_bytes(b"\x89PNG\x00image")
     with pytest.raises(WorkspaceError, match="Binary"):
         read_workspace_file(root, "photo.png")
 
@@ -132,7 +132,6 @@ def test_intents_only_expose_currently_trusted_workspace(tmp_path, monkeypatch):
     # A session can claim this was the last run root; that is NOT permission.
     node.state.harness_workspace_active = str(project)
     # Revoking trust switches all three UI actions to the agent's scratch dir.
-    dispatcher_settings = None
     # The returned bus handler closes over the dispatcher; use a new one
     # with the same node binding and no grant for the attempted read/reveal.
     bus2, node2 = harness_with_folder(project, trusted=[])
