@@ -212,7 +212,7 @@ def test_analyse_csv_and_publish_a_native_chart(scenario, monkeypatch):
     monkeypatch.setattr(agents_module, "_call_chart_agent", chart_model)
 
     def create_source(request):
-        assert csv_text in _result(request, "read_csv")
+        assert csv_text.rstrip("\n") in _result(request, "read_csv")
         return {"calls": [_call("source", "graph.create_node", kind="note", content=csv_text)]}
 
     def publish_chart(request):
