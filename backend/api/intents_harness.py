@@ -18,6 +18,7 @@ from backend.api._shared import make_publish_scene
 from backend.domain.graph import SceneDocument
 from backend.domain.node_states import HarnessState
 from backend.harness.shell_selection import VALID_SHELLS
+from backend.harness.shell_isolation import VALID_EXECUTION_PROFILES, available_engine
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 
@@ -193,6 +194,22 @@ def register_harness_intents(
         node.state.harness_shell = shell
         await publish_scene()
 
+    async def set_execution_profile(node_id, profile):
+        """Save for future tasks. The shell tools enforce it at launch time."""
+        node = document.nodes.get(node_id)
+        if node is None or not isinstance(node.state, HarnessState):
+            return
+        if not isinstance(profile, str) or profile not in VALID_EXECUTION_PROFILES:
+            notifications.show("Unsupported agent execution profile.", "warning")
+            await bus.publish("notification")
+            return
+        node.state.harness_execution_profile = profile
+        await publish_scene()
+
+    async def get_isolation_engine():
+        """Probe the BACKEND host, not the browser or a saved graph."""
+        return available_engine()
+
     async def approve_tool(request_id, approval_id=""):
         if approval_id:
             agent_dispatcher.approve_code_execution(request_id, approval_id)
@@ -232,3 +249,5 @@ def register_harness_intents(
     bus.register_intent("harness", "pickWorkspace", pick_workspace)
     bus.register_intent("harness", "useScratch", use_scratch)
     bus.register_intent("harness", "setShell", set_shell)
+    bus.register_intent("harness", "setExecutionProfile", set_execution_profile)
+    bus.register_intent("harness", "getIsolationEngine", get_isolation_engine)
