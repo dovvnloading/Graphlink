@@ -48,10 +48,13 @@ from __future__ import annotations
 
 import json
 import queue
+import sqlite3
 import subprocess
 import threading
 import time
 from pathlib import Path
+
+from backend.harness.transcript_index import sync_index
 
 TRANSCRIPT_FILENAME = "transcript.jsonl"
 
@@ -101,6 +104,13 @@ class _Writer:
                     with self.path.open("a", encoding="utf-8") as fh:
                         fh.write(line)
                         fh.flush()
+                    if line:
+                        try:
+                            # Index in the same single-writer order as the
+                            # JSONL; a failed sidecar never blocks history.
+                            sync_index(self.path)
+                        except (OSError, sqlite3.Error):
+                            pass  # search backfills from JSONL on next read
                 except OSError:
                     # Swallowed deliberately: a transcript we cannot write is
                     # bad, but killing a live agent run over it is worse, and
@@ -155,6 +165,10 @@ def _emit(path: Path, payload: dict) -> None:
     if writer is None:
         with path.open("a", encoding="utf-8") as fh:
             fh.write(line)
+        try:
+            sync_index(path)
+        except (OSError, sqlite3.Error):
+            pass
         return
     writer.write(line)
 
