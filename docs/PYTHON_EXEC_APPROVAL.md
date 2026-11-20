@@ -1,6 +1,6 @@
 # Fresh approval for persistent Python execution
 
-**Current-mode qualification:** This records the earlier Ask-mode approval hardening. Since #721, Ask and Auto-edit still prompt for every `python.exec` call, but Isolated Autonomous can skip the prompt for conservatively screened Python source. Unscreened code still asks; Host remains unsandboxed. See [permission modes](WORKSPACE_PERMISSION_MODES.md).
+**Current-mode qualification:** This records the earlier approval-hardening tests. PR #721 temporarily allowed screened `python.exec` source to skip prompts in Isolated Autonomous, but #725 removed that exemption after finding that persistent interpreter state can defeat source-only screening. **Every `python.exec` now requires a fresh approval in Ask, Auto-edit and Autonomous.** Host remains unsandboxed. See [permission modes](WORKSPACE_PERMISSION_MODES.md) and [audit](WORKSPACE_PERMISSION_MODES_AUDIT.md).
 
 `python.exec` executes approved code with the local process's privileges in Host mode, or inside the restricted, network-disabled container in Isolated mode. This
 change hardens the approval path; the Host profile is not a sandbox and
@@ -33,7 +33,7 @@ the first writes `1`, denial leaves `1`, and fresh approval then writes `2`.
 
 ## Enforced behavior
 
-When a call reaches the approval gate, the production Python registration forces a fresh prompt, ignoring per-run fingerprints and session grants. Ask/Auto-edit always take that route; Isolated Autonomous may bypass it for safely screened source only. The registry copies arguments before disclosure, gives the approval callback a separate copy, and refuses a changed pending request before starting the interpreter.
+When a call reaches the approval gate, the production Python registration forces a fresh prompt, ignoring per-run fingerprints and session grants. All three permission modes now take that route; the former Isolated Autonomous screened-source exception was removed in #725. The registry copies arguments before disclosure, gives the approval callback a separate copy, and refuses a changed pending request before starting the interpreter.
 Accepted source is never stripped, coerced, or truncated. Requests above
 20,000 characters, non-string/blank code, and invisible controls that cannot
 be presented faithfully are refused explicitly. Tab, CR and LF remain

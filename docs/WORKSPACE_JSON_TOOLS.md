@@ -36,7 +36,8 @@ Auto-approval alone does not imply concurrency (e.g. `plan.update` and
 `user.ask` remain serial). The same scope gate, task-snapshotted
 permission mode and tool-specific approval rules apply: Auto-edit
 exempts confined file writes/edits, and Isolated Autonomous adds
-narrow Python/install/session exemptions. JSON transport itself grants
+narrow offline-shell, cached-install and session-management exemptions.
+Every `python.exec` call still requires fresh approval. JSON transport itself grants
 no extra permissions. See [permission modes](WORKSPACE_PERMISSION_MODES.md).
 
 ## Protocol and safety

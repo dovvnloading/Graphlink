@@ -1,6 +1,6 @@
 # Safety case: Python approval and reviewed local-file changes
 
-> **Historical Ask-mode approval evidence.** The Python fresh-prompt claims below describe the original approval-hardening path. Since #721, Isolated Autonomous can bypass a per-call prompt for conservatively screened `python.exec` source; Ask/Auto-edit and unscreened Autonomous calls still require fresh consent. See [permission modes](WORKSPACE_PERMISSION_MODES.md).
+> **Historical approval evidence.** The tests and cases below document the original Python and file-review hardening. PR #721 briefly introduced screened Python auto-approval under Isolated Autonomous, but the later independent audit (#725) removed it because a persistent REPL cannot be made safe by source inspection alone. **Every `python.exec` call now requires fresh approval in every permission mode.** See [permission modes](WORKSPACE_PERMISSION_MODES.md) and [the follow-up audit](WORKSPACE_PERMISSION_MODES_AUDIT.md).
 
 This work strengthens two application paths: authorization of each
 `python.exec` request and review of local Gitlink file changes. The starting
@@ -27,7 +27,7 @@ trusted backend process are outside these boundaries.
 | Before the change | Fix and observable positive control |
 | --- | --- |
 | Python's generic approval summary stopped after 400 characters. | The complete source is rendered as inert text. Source over 20,000 characters, non-string/blank input, and unsupported invisible controls are explicitly refused. No executable source is silently truncated or stripped. |
-| An identical Python call could reuse its fingerprint grant; a session grant could cover different later source. | In the Ask-mode route tested here, each call requires a fresh prompt regardless of either cache. Separately approved identical calls advance a persistent counter from 1 to 2; denial leaves it unchanged. Isolated Autonomous now has a narrow screened-source exception. |
+| An identical Python call could reuse its fingerprint grant; a session grant could cover different later source. | In the Ask-mode route tested here, each call requires a fresh prompt regardless of either cache. Separately approved identical calls advance a persistent counter from 1 to 2; denial leaves it unchanged. The later #725 audit extends this fresh-approval requirement to all modes. |
 | Mutable pending arguments could differ from what was disclosed. | Separate execution and disclosure snapshots are compared with the original request before execution. Changed arguments are refused and need a new request/approval. |
 | A run request ID was reused across prompts. | Each Python prompt has a new approval identity. Replayed identities and generic/session/question-answer approval routes cannot settle a different Python prompt. |
 | CRLF/LF conversions, final-newline changes, and mixed-ending reordering could say “No textual diff available” despite different byte hashes. | Review uses the exact bytes captured for the baseline. Sizes, hashes, line-ending counts, final-newline state, BOM state, and reversible escaped line content visibly identify the change. An approved CRLF-to-LF action writes exactly the disclosed LF bytes. |

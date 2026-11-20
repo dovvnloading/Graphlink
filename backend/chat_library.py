@@ -2747,6 +2747,24 @@ def _safe_export_filename(name: str) -> str:
     return safe or "workspace"
 
 
+def _disarm_imported_harness_permissions(data: dict[str, Any]) -> dict[str, Any]:
+    """Imported Agent configuration is not a transferable approval grant.
+
+    Sanitize the stored graph as defense in depth; the regular graph loader
+    independently resets those fields before they can authorize tool calls.
+    """
+    if not isinstance(data, dict):
+        return data
+    nodes = data.get("nodes")
+    if isinstance(nodes, list):
+        for node in nodes:
+            if isinstance(node, dict) and node.get("node_type") == "harness":
+                node["permission_mode"] = "ask"
+                node["shell_allow_rules"] = []
+                node["network_always"] = False
+    return data
+
+
 def import_workspace_rows_atomically(
     db_path: Path, archive_path: Path, workspace_id: int,
 ) -> list[int]:
@@ -2789,7 +2807,7 @@ def import_workspace_rows_atomically(
         with conn:
             for chat in chats:
                 title = chat["title"]
-                data = chat["data"]
+                data = _disarm_imported_harness_permissions(chat["data"])
                 preview, message_count = _extract_preview_and_message_count(data)
                 now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
                 cursor = conn.execute(

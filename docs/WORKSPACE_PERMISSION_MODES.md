@@ -1,32 +1,90 @@
 # Workspace agent permission modes
 
-Open **Agent settings → Permission mode** on the workspace Agent card. The preference is for the *next* task, not the running task: the backend snapshots the effective mode and execution profile when claiming a task. The card shows the latest task's mode, and the append-only workspace `transcript.jsonl` records a `task` audit row with run ID, mode and profile before that task's user message.
+The workspace Agent card offers **Ask**, **Auto-edit** and **Autonomous** in
+Agent settings. The backend snapshots the effective mode and execution
+profile at task claim, so changing a preference mid-task never loosens that
+task. The card shows the previous task's mode; an append-only
+`transcript.jsonl` task row records each run's mode and profile.
 
-| Mode | Where available | Current behavior |
+| Mode | Profile | Operations that can skip approval |
 | --- | --- | --- |
-| **Ask** (default) | Host and Isolated | Ordinary per-tool prompts and eligible remembered grants. Workspace writes and Python execution prompt. |
-| **Auto-edit** | Host and Isolated | Confined `fs.write` / `fs.edit` skip approval; other tools retain Ask behavior. |
-| **Autonomous** | **Isolated only** | Includes Auto-edit, screened `python.exec`, offline cached-wheel `python.install`, and `shell.session` read/list/stop. On current `main`, shell commands and session starts still prompt despite the intended screened exemption (below). |
+| **Ask** (default) | Host or Isolated | Ordinary tool policies and grants explicitly made during the current session |
+| **Auto-edit** | Host or Isolated | Workspace-confined `fs.write` and `fs.edit` |
+| **Autonomous** | **Isolated only** | Auto-edit plus a narrow list of offline shell commands, harmless shell-session management and offline cached-wheel Python installs |
 
-Autonomous is rejected under Host, even if the UI is bypassed. Unknown or invalid saved values fall back to Ask; switching Isolated to Host resets an Autonomous preference to Ask. A running task never acquires a looser setting selected during that task.
+Autonomous cannot be selected for Host. If a container engine is missing,
+execution fails closed rather than falling back to the host. A new selection
+applies only to a subsequent task, never to an already-running task.
 
-## Approvals and boundaries that remain
+## What always asks
 
-A mode never changes the granted workspace or tool scopes. ToolRegistry checks scopes before exemptions, while handlers retain path confinement, execution guards and cancellation.
+Automatic shell commands in Autonomous are limited to literal `echo`,
+`pwd`, `ls`, `cat`, `head`, `tail`, `wc`, `touch`, and `mkdir`
+forms, with constrained flags and any file arguments resolved within the
+bound workspace. Scripts, build tools, Git commands, interpreter invocations,
+shell wrappers, ambiguous grammar and symlink escapes do **not** qualify.
+A remembered shell approval cannot defeat these protections. Even when a
+v2 exact command rule has been stored, scripts, Git, interpreters and other
+commands outside the safe-shell grammar still require a fresh prompt.
 
-- File writes/edits with outside-root paths (including symlink escapes) cannot skip approval and may be blocked by the file handler even after a prompt.
-- Dangerous or ambiguous shell commands—e.g. `rm -rf`, `git push`, redirections, shell substitutions and unreviewable wrappers—require a fresh decision. Commands that may access the network or paths outside the workspace also prompt. Shell-session stdin **always** needs fresh approval.
-- Isolated Autonomous `python.exec` skips a prompt only if its source passes conservative AST, path, network and subprocess screening. Code involving uncertain operations, network, dynamic execution or outside paths prompts. Ask/Auto-edit ask for every execution.
-- In Isolated Autonomous, `shell.exec` network consent is **per command only**: the panel offers **Allow network once**, not a task-wide choice. Enabling Autonomous clears the broad per-node network grant. Isolated Ask/Auto-edit also support one-command or task-wide consent and a separate **Allow network for every task** opt-in. `shell.session` and `python.exec` remain offline in all Isolated modes.
-- Autonomous `python.install` first attempts a network-disabled install from already cached, compatible binary wheels without prompting. If the cache is insufficient, it stops before PyPI and asks for fresh interpreter- and package-bound approval for the binary-wheel download. Ask/Auto-edit require approval even for cached installs.
-- Graph mutations, scientific runs and Web Research keep their ordinary approvals, including per-service/per-hostname Web Research task consent and redirect checks.
+**Every `python.exec` invocation asks for approval.** Python runs in a
+persistent REPL; source scanning cannot prove a prior alias, imported
+callable or dynamically generated pathname is safe, even when the visible
+source looks harmless. Re-enabling automatic Python would require
+enforceable runtime constraints rather than just an AST allowlist.
 
-## Remembered exact shell commands: current-main caveat
+Network requests from Isolated Autonomous shell calls require approval for
+the **specific command**, not a task-wide or saved grant. Web Research
+keeps its per-domain approvals and redirect consent. For `python.install`,
+a cached-wheel install can happen entirely offline without prompting.
+If the cache is insufficient, it stops before a PyPI connection and
+requests fresh approval for the exact packages and interpreter.
 
-For eligible `shell.exec` prompts, **Always allow** saves a versioned **v2 exact whole-command** rule—not a command prefix—bound to the effective shell, execution profile and a hash of the resolved workspace root. In Isolated the effective shell is `/bin/sh` even on Windows. Changing arguments, composing separately approved commands into a chain, switching workspace/profile or retargeting symlinks cannot reuse a rule. Unsafe syntax, absolute/parent paths, ambiguous options, inline interpreters, environment wrappers and PowerShell comments are ineligible. Legacy prefix records are inactive.
+Auto-edit and Autonomous file operations still pass scoped argument snapshots
+to their handlers. File tools independently confine paths and reject VCS metadata.
+For approval-pending `fs.write` and `fs.edit`, the request shown to the
+user must be the request executed; mutated arguments cause denial.
 
-**Post-#723 integration limitation on `main` (`c2551273`):** `backend/harness/permission_modes.py::_safe_shell()` calls `shell_allow_rule_candidates()` without the required `workspace_root`. It consequently receives no candidates. Its sensitive-call check makes **all** workspace `shell.exec` and `shell.session` starts request fresh approval, even if the exact matcher would otherwise accept a saved rule. The intended Autonomous safe-shell/session-start exemptions do not currently apply. A rule can be saved, but **does not currently suppress prompts**. This is fail-closed extra prompting, not a wider grant. See [shell audit](WORKSPACE_SHELL_APPROVAL_AUDIT_2026-11-20.md).
+## Exact shell-command rules and sessions
 
-## Migration and compatibility
+For an eligible `shell.exec` prompt, **Always allow** saves a v2 **exact
+whole-command** rule, not a prefix. It binds the effective shell, execution
+profile and hash of the resolved workspace root. In Isolated, the effective
+shell is `/bin/sh`. Changed arguments, recomposed chains, workspace/profile
+changes, symlink escapes and legacy prefix records cannot reuse approval.
 
-Existing nodes without mode fields default to Ask. `harness_permission_mode` stores the durable preference; `harness_task_permission_mode` records the effective mode of the most recent task. Transcript `task` records are audit-only and do not enter model history. Old transcripts still load. Only valid v2 shell rules are active storage entries, and they can be revoked under **Agent settings → Allowed exact commands** (subject to the integration caveat above). Other eligible per-tool consent remains gated by sensitive-call checks.
+The live sensitive-call gate is independent of the exact-rule matcher: a
+saved rule can skip an approval only for a command that also passes today's
+narrow safe-shell policy. Other commands can still prompt even if a rule
+was saved earlier. Isolated Autonomous can skip safe `shell.session` starts
+and read/list/stop operations, but **every stdin write** asks again.
+Allowed exact commands can be removed in Agent settings. All grants are
+cleared when a saved or imported graph is opened, including valid v2 rules.
+
+## Isolated network and package installation
+
+Isolated `shell.exec` is offline by default. Ask/Auto-edit support a
+one-command network approval, a task-wide approval, or an explicit
+**Allow network for every task** setting for the live graph. Autonomous
+clears broad network consent and asks **once per network command**; neither
+`shell.session` nor `python.exec` gets container networking. Web Research
+uses separate task-scoped per-service and per-hostname approvals.
+
+Autonomous may install compatible cached wheels with `python.install`
+offline without prompting. If a wheel is missing, it asks for fresh consent
+bound to the exact packages and interpreter **before** contacting PyPI.
+Ask/Auto-edit prompt for every install, including cached installs.
+
+## Saved graphs and archives
+
+**A saved or imported graph is data, not an authorization token.** The
+Agent's live permission preference resets to **Ask** when a graph opens;
+serialized shell rules and broad network preferences are cleared. Users
+must select a new mode or approve new grants during that open session.
+The serialized previous task mode survives solely for the display and
+audit record. Workspace archive import also scrubs these grant-bearing
+fields from stored graph rows before they are opened. Older transcripts
+remain readable and task-audit rows do not become model conversation turns.
+
+See [the independent PR 721 audit](WORKSPACE_PERMISSION_MODES_AUDIT.md)
+for findings, tests and remaining limitations.

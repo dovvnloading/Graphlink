@@ -1042,7 +1042,7 @@ def _restore_harness_payload(payload: dict[str, Any]) -> SceneNode:
     scratch GC refuses to delete through."""
     x, y = _position(payload)
     goal = str(payload.get("goal", ""))
-    from backend.harness.permission_modes import effective_permission_mode, normalize_permission_mode
+    from backend.harness.permission_modes import ASK, normalize_permission_mode
 
     raw_status = str(payload.get("harness_status", "idle") or "idle")
     status = raw_status if raw_status in _HARNESS_TERMINAL_STATUSES + ("idle",) else "interrupted"
@@ -1078,14 +1078,13 @@ def _restore_harness_payload(payload: dict[str, Any]) -> SceneNode:
             harness_workspace_id=str(payload.get("workspace_id") or uuid.uuid4().hex[:12]),
             harness_workspace_path=str(payload.get("workspace_path", "")),
             harness_shell=normalize_shell(payload.get("shell", "auto")),
-            harness_shell_allow_rules=_restore_harness_shell_allow_rules(payload.get("shell_allow_rules")),
+            # Saved and imported session JSON is untrusted data, not
+            # authorization. A reopened Agent starts with no active grants.
+            harness_shell_allow_rules=[],
             harness_execution_profile=normalize_execution_profile(payload.get("execution_profile", "host")),
-            harness_permission_mode=effective_permission_mode(
-                payload.get("permission_mode", "ask"),
-                normalize_execution_profile(payload.get("execution_profile", "host")),
-            ),
+            harness_permission_mode=ASK,
             harness_task_permission_mode=normalize_permission_mode(payload.get("task_permission_mode", "ask")),
-            harness_network_always=payload.get("network_always") is True,
+            harness_network_always=False,
             harness_activity=activity,
             harness_max_turns=_positive_int(payload.get("max_turns"), 16),
             harness_spent_turns=_non_negative_int(payload.get("spent_turns")),
