@@ -64,7 +64,7 @@ name: CI
 # project's pinned Python 3.12 - regenerating it from a different interpreter
 # risks a lock that resolves differently than what 3.12 actually needs.
 
-# ADR-015 stage 15.6: e2e-playwright is a fourth, independent job. Every
+# ADR-015 stage 15.6: e2e-playwright is a separate, nightly/manual job. Every
 # job above exercises the backend or the frontend in isolation (unit/
 # integration tests, a mock DOM for React, a wheel import) - none of them
 # ever boots the real backend/app.py factory under uvicorn AND drives the
@@ -89,10 +89,13 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  schedule:
+    # Every night at 07:00 UTC; the regular PR jobs do not run on this trigger.
+    - cron: "0 7 * * *"
   workflow_dispatch:
     inputs:
       run_browser_tests:
-        description: 'Run optional Chromium browser tests'
+        description: 'Run Chromium browser tests on this manual dispatch'
         type: boolean
         default: false
 
@@ -109,7 +112,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Only browser E2E runs on the nightly schedule; regular checks stay PR/manual.
   python-tests:
+    if: github.event_name != 'schedule'
     # ADR-015 stage 15.3: was "Python tests (offscreen)" - a Qt-removal-era
     # name for a job that no longer runs anything Qt-related (the offscreen
     # QT_QPA_PLATFORM setting it referred to is gone, see pyproject.toml's
@@ -190,6 +195,7 @@ jobs:
         run: pip install --quiet pip-audit==2.10.1 && python -m pip_audit -r requirements.txt
 
   build-check:
+    if: github.event_name != 'schedule'
     name: Build check (wheel builds, installs, and imports cleanly)
     # ubuntu, not windows (2026-08-07 minutes economy): Windows runners bill
     # at 2x. Nothing here is Windows-bound - the wheel is pure-Python and
@@ -271,6 +277,7 @@ jobs:
           PY
 
   frontend-checks:
+    if: github.event_name != 'schedule'
     name: Frontend checks (npm run check)
     # ubuntu, not windows - same 2x-billing economy note as build-check.
     runs-on: ubuntu-latest
@@ -317,8 +324,8 @@ jobs:
 
   e2e-playwright:
     name: E2E (Playwright boot-smoke)
-    # Opt-in: skip on every PR; run only when manually dispatched with input=true.
-    if: github.event_name == 'workflow_dispatch' && inputs.run_browser_tests
+    # Scheduled nightly on main, or opt-in on manual dispatch; never on PRs.
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_browser_tests)
     # ubuntu, not windows - see this file's own module comment above for
     # why this suite specifically doesn't need a Windows runner.
     runs-on: ubuntu-latest
@@ -382,25 +389,23 @@ jobs:
           path: web_ui/test-results/
           retention-days: 14
 
-  # A fifth job, and the smallest. python-tests is the only job that runs
-  # pytest and it is pinned to windows-latest for DPAPI, so the 9 tests that
-  # assert POSIX file mode bits - on chats.db, the knowledge store, DB
-  # backups, and session.dat, the secrets-at-rest file - skipped in CI and
-  # ran nowhere else. Nine assertions about the permissions of a file holding
-  # API keys, executing on no machine anyone checked.
+  # This Ubuntu pytest job covers POSIX mode-bit assertions that cannot run
+  # meaningfully in the Windows-only python-tests job. A separate focused
+  # pytest step below also runs the real Bash workspace-agent E2E scenario
+  # on PRs, which the Windows suite collects but skips.
   #
-  # Scoped to the four files that contain them, NOT all of backend/tests:
+  # The permissions run is scoped to the six marked files, NOT all of backend/tests:
   # pytest imports every module it collects, and this file's own comment
   # above records that ~18 tests elsewhere genuinely assume Windows.
   # Narrowing collection is what keeps this job about permissions rather
   # than about porting the suite to Linux. tests/test_posix_permission_
-  # coverage.py ties the file list below to the marked tests, so a tenth
-  # marked test landing in a fifth file fails the build instead of silently
-  # not running here.
+  # coverage.py ties the permissions step's file list to the marked tests;
+  # the independent Bash step is intentionally outside that marker inventory.
   #
   # ubuntu-latest, and deliberately cheap: no coverage, no xdist workers
-  # (-n0 for 9 tests), no dev tooling beyond pytest itself.
+  # (-n0), no dev tooling beyond pytest itself.
   posix-permissions:
+    if: github.event_name != 'schedule'
     name: POSIX file permissions (ubuntu)
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -433,3 +438,8 @@ jobs:
           backend/tests/test_backend_secrets_at_rest.py
           backend/tests/test_mcp_server.py
           backend/tests/test_instance_lock.py
+
+      # The broad Windows run skips this POSIX-only test; exercise real Bash,
+      # approvals, subprocess output, activity and the transcript on each PR.
+      - name: Run Bash workspace-agent E2E scenario
+        run: python -m pytest -q -n0 backend/tests/test_harness_e2e_scenarios.py::test_bash_shell_exec_from_scripted_agent
