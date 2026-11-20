@@ -6,6 +6,7 @@ import io
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -22,6 +23,7 @@ from backend.harness.tools_python_install import register_harness_python_install
 from backend.providers.base import ToolCall
 from backend.tools import CODE_EXECUTE, ToolRegistry, ToolResult
 from graphlink_plugins.common import python_repl
+from graphlink_scratch_dirs import gc_stale_by_age
 
 
 def _isolated_context(project: Path, approve, workspace_id="isolated-test"):
@@ -240,13 +242,28 @@ def test_isolated_install_only_download_has_network_and_all_steps_use_container(
         assert argv[:2] == ["/usr/bin/docker", "run"]
         assert CONTAINER_IMAGE in argv
         assert "--mount" in argv
-        if "download" in argv:
+        command = argv[argv.index(CONTAINER_IMAGE) + 1:]
+        if "download" in command:
             assert "--network=bridge" in argv
+            assert command[:4] == [CONTAINER_PYTHON, "-I", "-m", "pip"]
             assert f"--index-url={python_install.DEFAULT_PYPI_INDEX}" in argv
+            assert "--only-binary=:all:" in argv
+            # Bridge networking must never expose workspace-controlled pip,
+            # its site-packages, or other project files to this process.
+            cache_mount = f"type=bind,source={(tmp_path / 'cache').resolve()},target=/workspace"
+            project_mount = f"type=bind,source={project.resolve()},target=/workspace"
+            managed_mount = (
+                f"type=bind,source={plan.host_venv.parent.resolve()},target={plan.mounts[0][1]}"
+            )
+            assert cache_mount in argv
+            assert project_mount not in argv
+            assert managed_mount not in argv
+            assert not any(arg.startswith("VIRTUAL_ENV=") for arg in argv)
             return 0, "downloaded"
         assert "--network=none" in argv
-        if "install" in argv:
+        if "install" in command:
             installs += 1
+            assert command[:4] == [str(plan.interpreter), "-I", "-m", "pip"]
             assert "--no-index" in argv
             return (1, "cache miss") if installs == 1 else (0, "installed")
         return 0, "created venv"
@@ -486,3 +503,42 @@ def test_isolated_python_guidance_matches_selected_project_and_fallback_envs(tmp
         assert "compatible project .venv/venv" in guidance
         assert "managed" in guidance and "fallback" in guidance
         assert "always uses a separate managed" not in guidance
+
+
+def test_isolated_managed_env_refreshes_bucket_used_by_startup_sweep(tmp_path, monkeypatch):
+    """Daily use of a nested project venv must keep its agent bucket alive."""
+    project = tmp_path / "project"
+    project.mkdir()
+    root = tmp_path / "managed-envs"
+    monkeypatch.setattr(python_env, "HARNESS_PYTHON_ENV_ROOT", root)
+    plan = planned_isolated_python_environment("active-agent", project, is_scratch=False)
+
+    python_isolation.prepare_isolated_python_environment(plan)
+    bucket = plan.host_venv.parent.parent
+    marker = plan.host_venv.parent / "installed-dependency.txt"
+    marker.write_text("keep me", encoding="utf-8")
+    old = time.time() - 8 * 24 * 60 * 60
+    os.utime(bucket, (old, old))
+
+    python_isolation.prepare_isolated_python_environment(plan)
+    assert bucket.stat().st_mtime > time.time() - 60
+    assert gc_stale_by_age(root) == []
+    assert marker.read_text(encoding="utf-8") == "keep me"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ownership of the shared temp root")
+def test_isolated_managed_env_rejects_foreign_owned_shared_root(tmp_path, monkeypatch):
+    """A 0700 agent bucket cannot be safe under an attacker-owned parent."""
+    project = tmp_path / "project"
+    project.mkdir()
+    root = tmp_path / "managed-envs"
+    root.mkdir()
+    monkeypatch.setattr(python_env, "HARNESS_PYTHON_ENV_ROOT", root)
+    plan = planned_isolated_python_environment("agent", project, is_scratch=False)
+
+    # Simulate a root precreated by another UID without needing privileges.
+    our_uid = os.getuid()
+    monkeypatch.setattr("graphlink_scratch_dirs.os.getuid", lambda: our_uid + 1)
+    with pytest.raises(OSError, match="owned by uid"):
+        python_isolation.prepare_isolated_python_environment(plan)
+    assert not plan.host_venv.parent.exists()
