@@ -34,6 +34,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Awaitable, Callable
 
 import graphlink_task_config as config
 from backend.domain.node_states import HarnessState
@@ -113,6 +114,10 @@ _ACTIVITY_SUMMARY_CAP = 200
 _ACTIVITY_TOOL_NAME_CAP = 80
 
 _LAND_NOTIFICATION_KINDS = {"done": "success", "failed": "error"}
+
+# Cap independent read-only tool calls per model turn. Mutation, interaction,
+# and unknown calls are barriers and always execute serially.
+_MAX_CONCURRENT_READS = 4
 
 # Registered in graphlink_prompts' pinned inventory as "harness-core".
 # Terse by design: in a multi-turn loop every system-prompt token recurs
@@ -253,6 +258,62 @@ def _spend_from_turn(turn: dict, messages_added: str) -> int:
     from graphlink_token_estimator import TokenEstimator
 
     return TokenEstimator().count_tokens(messages_added or "")
+
+
+async def _execute_tool_calls(
+    calls: list[ToolCall],
+    registry: ToolRegistry,
+    ctx: RunContext,
+    record_result: Callable[[ToolCall, ToolResult, int], Awaitable[None]],
+) -> None:
+    """Run consecutive parallel-safe reads together, preserving model order.
+
+    A non-read call is a barrier: earlier reads finish before it starts and
+    later reads cannot start until it completes (including its own approval).
+    Tool results, activity and transcript writes are recorded *serially* in
+    requested order, even when concurrent reads finish out of order.
+    """
+    async def invoke_timed(call: ToolCall) -> tuple[ToolResult, int]:
+        started = time.monotonic()
+        result = await registry.invoke(call, ctx)
+        return result, max(0, round((time.monotonic() - started) * 1000))
+
+    semaphore = asyncio.Semaphore(_MAX_CONCURRENT_READS)
+
+    async def invoke_read(call: ToolCall) -> tuple[ToolResult, int]:
+        async with semaphore:
+            return await invoke_timed(call)
+
+    index = 0
+    while index < len(calls):
+        if not registry.parallel_safe_for(calls[index].name):
+            call = calls[index]
+            result, elapsed_ms = await invoke_timed(call)
+            await record_result(call, result, elapsed_ms)
+            index += 1
+            continue
+
+        end = index + 1
+        while end < len(calls) and registry.parallel_safe_for(calls[end].name):
+            end += 1
+
+        batch = calls[index:end]
+        pending = [asyncio.create_task(invoke_read(call)) for call in batch]
+        try:
+            # gather preserves input order, not completion order.
+            outcomes = await asyncio.gather(*pending)
+        except BaseException:
+            # gather does not cancel siblings on an ordinary exception.
+            # Drain them before unwinding so a cancelled run cannot leave
+            # reads executing alongside a later mutation or a new run.
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            raise
+
+        for call, (result, elapsed_ms) in zip(batch, outcomes):
+            await record_result(call, result, elapsed_ms)
+        index = end
 
 
 async def run_harness(
@@ -612,13 +673,11 @@ async def run_harness(
                 await _land("done", "Task complete.", reply=assistant_text)
                 return
 
-            for call in tool_calls:
-                call_started = time.monotonic()
-                result = await registry.invoke(call, ctx)
+            async def record_result(call: ToolCall, result: ToolResult, elapsed_ms: int) -> None:
                 _log_activity(
                     node, tool=call.name, summary=_activity_summary(call, result),
                     outcome="error" if result.is_error else "ok",
-                    elapsed_ms=max(0, round((time.monotonic() - call_started) * 1000)),
+                    elapsed_ms=elapsed_ms,
                 )
                 tool_message = {
                     "role": "tool", "tool_call_id": call.id,
@@ -627,6 +686,8 @@ async def run_harness(
                 history.append(tool_message)
                 append_message(transcript_dir, tool_message)
                 await bus.publish("scene")
+
+            await _execute_tool_calls(tool_calls, registry, ctx, record_result)
     except api_provider.RequestCancelledError:
         await _land("stopped", "Stopped by user.")
     except asyncio.TimeoutError:
