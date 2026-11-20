@@ -159,7 +159,7 @@ def register_harness_intents(
             command.run_id = request_id
         return node.id if request_id is not None else None
 
-    async def send(node_id, text, *, model_ref=None):
+    async def send(node_id, text, allow_session_grants=True, *, model_ref=None):
         message = str(text or "").strip()[:_MESSAGE_CAP]
         node = document.nodes.get(node_id)
         if node is None or not isinstance(node.state, HarnessState):
@@ -177,6 +177,8 @@ def register_harness_intents(
         return await agent_dispatcher.start_harness_run(
             bus=bus, notifications_state=notifications, document=document,
             harness_node_id=node_id, user_text=message, model_ref=model_ref,
+            # MCP task starts opt out; UI/composer sends retain normal grants.
+            allow_session_grants=allow_session_grants is True,
         )
 
     async def cancel(request_id):

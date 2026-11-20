@@ -46,6 +46,10 @@ from backend.tools import (
 )
 
 
+# Deadlock watchdog only: the subprocess gate, not elapsed time, proves overlap.
+_PYTHON_STREAM_WATCHDOG_S = 120
+
+
 class TestFaultClassification:
     @pytest.mark.parametrize(
         "message, expected",
@@ -539,28 +543,46 @@ class TestPythonExec:
         cancel = threading.Event()
         ctx = _tool_ctx(workspace, cancel=CancelToken(cancel))
         chunks: list[str] = []
-        ctx.on_tool_output = chunks.append
+        release = workspace / "release_python.txt"
+        # A parent-controlled gate keeps the call in flight even if Windows
+        # takes a long time to start the interpreter or deliver stdout.
         code = (
-            "marker = 42; import time; print('started'); "
-            "time.sleep(30); open('too_late.txt', 'w').write('bad')"
+            "marker = 42; import pathlib, time; print('started', flush=True)\n"
+            "while not pathlib.Path('release_python.txt').exists():\n"
+            "    time.sleep(0.02)\n"
+            "open('too_late.txt', 'w').write('bad')"
         )
 
         async def go():
+            loop = asyncio.get_running_loop()
+            streamed = asyncio.Event()
+
+            def on_output(chunk: str) -> None:
+                chunks.append(chunk)
+                if "started" in chunk:
+                    loop.call_soon_threadsafe(streamed.set)
+
+            ctx.on_tool_output = on_output
             task = asyncio.create_task(registry.invoke(
                 ToolCall(id="stream", name="python.exec", arguments={"code": code}), ctx,
             ))
-            for _ in range(1500):
-                if "started" in "".join(chunks):
-                    break
-                await asyncio.sleep(0.02)
-            assert "started" in "".join(chunks), "Python stdout must arrive before return"
-            assert not task.done()
-            cancel.set()
-            with pytest.raises(RequestCancelledError):
-                await asyncio.wait_for(task, timeout=7)
+            try:
+                await asyncio.wait_for(streamed.wait(), timeout=_PYTHON_STREAM_WATCHDOG_S)
+                assert "started" in "".join(chunks), "Python stdout must arrive before return"
+                assert not task.done()
+                # Check the actual child, not only removal of the registry entry.
+                old_process = repls._repls["ws-h6"][0].process
+                assert old_process is not None and old_process.poll() is None
+                cancel.set()
+                with pytest.raises(RequestCancelledError):
+                    await asyncio.wait_for(task, timeout=_PYTHON_STREAM_WATCHDOG_S)
+                assert old_process.poll() is not None
+            finally:
+                cancel.set()
 
         try:
             asyncio.run(go())
+            release.touch()
             assert not (workspace / "too_late.txt").exists()
             # Stop kills the persistent interpreter: a later call must use a
             # fresh one, rather than the half-executed old process.
