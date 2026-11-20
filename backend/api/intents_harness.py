@@ -20,6 +20,9 @@ from backend.domain.node_states import HarnessState
 from backend.harness.shell_selection import VALID_SHELLS
 from backend.events import SessionBus
 from backend.notifications import NotificationState
+from graphlink_cloud_providers import CLOUD_PROVIDERS
+from graphlink_model_catalog import ModelRef
+import graphlink_task_config as config
 
 _MIN_TURNS = 1
 _MAX_TURNS = 64
@@ -45,13 +48,20 @@ def register_harness_intents(
     document: SceneDocument,
     notifications: NotificationState,
     agent_dispatcher,
+    composer_document=None,
 ) -> None:
     publish_scene = make_publish_scene(bus)
 
-    async def start(goal, max_turns=None, workspace_path=None):
+    async def start(goal, max_turns=None, workspace_path=None, *, model_ref=None):
         goal_text = str(goal or "").strip()[:_MESSAGE_CAP]
         if not goal_text:
             notifications.show("Give the agent a task first.", "info")
+            await bus.publish("notification")
+            return None
+        # Avoid creating a stranded agent node when a task is already running.
+        runs = getattr(agent_dispatcher, "_runs", None)
+        if runs is not None and runs.is_busy("harness"):
+            notifications.show("An agent run is already in progress.", "info")
             await bus.publish("notification")
             return None
         x, y = _place_harness_node(document)
@@ -80,16 +90,16 @@ def register_harness_intents(
 
         request_id = await agent_dispatcher.start_harness_run(
             bus=bus, notifications_state=notifications, document=document,
-            harness_node_id=node.id, user_text=goal_text,
+            harness_node_id=node.id, user_text=goal_text, model_ref=model_ref,
         )
         if request_id is not None:
             # Stamp the creation command with the run that now owns it -
             # the builder-plan precedent: the run id cannot exist before
             # the node does (the claim needs a node_id).
             command.run_id = request_id
-        return node.id
+        return node.id if request_id is not None else None
 
-    async def send(node_id, text):
+    async def send(node_id, text, *, model_ref=None):
         message = str(text or "").strip()[:_MESSAGE_CAP]
         node = document.nodes.get(node_id)
         if node is None or not isinstance(node.state, HarnessState):
@@ -106,8 +116,47 @@ def register_harness_intents(
             return None
         return await agent_dispatcher.start_harness_run(
             bus=bus, notifications_state=notifications, document=document,
-            harness_node_id=node_id, user_text=message,
+            harness_node_id=node_id, user_text=message, model_ref=model_ref,
         )
+
+    async def composer_send(text, selected_node_id=None):
+        """Route the composer to the selected agent, or create one if none is selected.
+
+        The model is resolved from THIS session's live composer route rather
+        than trusting a client-supplied model identifier. Every task uses the
+        exact model shown in the composer at dispatch time; the regular
+        launcher and per-card follow-up retain their existing defaults.
+        """
+        message = str(text or "").strip()[:_MESSAGE_CAP]
+        if not message:
+            notifications.show("Type a message for the agent first.", "info")
+            await bus.publish("notification")
+            return None
+
+        route = composer_document.route() if composer_document is not None else {}
+        model_id = str(route.get("modelId") or "").strip()
+        mode = route.get("mode")
+        if mode == "ollama":
+            provider = config.LOCAL_PROVIDER_OLLAMA
+        elif mode == "llama_cpp":
+            provider = config.LOCAL_PROVIDER_LLAMACPP
+        elif mode == "api" and route.get("provider") in CLOUD_PROVIDERS:
+            provider = route["provider"]
+        else:
+            provider = ""
+        if not provider or not model_id or not route.get("available", False):
+            notifications.show("Choose an available composer model before starting an agent.", "warning")
+            await bus.publish("notification")
+            return None
+        model_ref = ModelRef(provider=provider, model_id=model_id)
+
+        # Selection is advisory: an absent, deleted, or non-agent node means
+        # "new agent", never an attempt to send to the wrong kind of node.
+        selected = document.nodes.get(selected_node_id) if isinstance(selected_node_id, str) else None
+        if selected is not None and isinstance(selected.state, HarnessState):
+            request_id = await send(selected.id, message, model_ref=model_ref)
+            return selected.id if request_id is not None else None
+        return await start(message, model_ref=model_ref)
 
     async def cancel(request_id):
         agent_dispatcher.cancel_harness(request_id)
@@ -228,6 +277,7 @@ def register_harness_intents(
 
     bus.register_intent("harness", "start", start)
     bus.register_intent("harness", "send", send)
+    bus.register_intent("harness", "composerSend", composer_send)
     bus.register_intent("harness", "cancel", cancel)
     bus.register_intent("harness", "approveTool", approve_tool)
     bus.register_intent("harness", "denyTool", deny_tool)
