@@ -33,11 +33,13 @@ import json
 import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 
 import graphlink_task_config as config
 from backend.domain.node_states import HarnessState
 from backend.harness import context as context_module
 from backend.harness import shell_policy
+from backend.harness.tools_fs import preview_harness_file_change
 from backend.harness.retry import (
     ACTION_COMPACT_AND_RETRY,
     ACTION_FAIL,
@@ -209,7 +211,7 @@ def _is_dangerous_call(call: ToolCall) -> bool:
     return call.name == "python.exec" or shell_policy.requires_fresh_shell_approval(call.name, call.arguments)
 
 
-def _approval_summary(call: ToolCall) -> str:
+def _approval_summary(call: ToolCall, *, workspace_root: Path | None = None) -> str:
     """What the approval panel shows for one parked call. The mutating
     tools disclose their EFFECT verbatim (the command that will run, the
     content that will land on disk) rather than a JSON blob - and
@@ -230,16 +232,8 @@ def _approval_summary(call: ToolCall) -> str:
         if action == "write":
             return f"shell.session write {name}\n--- stdin\n{call.arguments.get('input') or ''}"
         return f"shell.session {action} {name}".rstrip()
-    if call.name == "fs.write":
-        path = call.arguments.get("path") or ""
-        content = call.arguments.get("content")
-        body = content if isinstance(content, str) else ""
-        return f"fs.write {path}\n---\n{body}"
-    if call.name == "fs.edit":
-        path = call.arguments.get("path") or ""
-        old = call.arguments.get("old_string") or ""
-        new = call.arguments.get("new_string") or ""
-        return f"fs.edit {path}\n--- remove\n{old}\n--- insert\n{new}"
+    if call.name in ("fs.write", "fs.edit"):
+        return preview_harness_file_change(call, workspace_root)
     args = json.dumps(call.arguments, sort_keys=True, ensure_ascii=False)
     if call.name.startswith("fal."):
         # Show every field sent to Fal, including billing options and result bindings.
@@ -342,7 +336,8 @@ async def run_harness(
         node.state.harness_approval_id = handle.approval_token
         node.state.harness_awaiting_approval = True
         node.state.harness_approval_tool_name = call.name
-        node.state.harness_approval_summary = _approval_summary(call)
+        root = ctx.harness_workspace_dir if isinstance(ctx.harness_workspace_dir, Path) else None
+        node.state.harness_approval_summary = _approval_summary(call, workspace_root=root)
         # Executable commands and interactive stdin always ask fresh, even
         # when a previous call was approved for the session. The panel must
         # not suggest session consent that the registry will reject.
