@@ -68,12 +68,26 @@ class ScriptedProvider:
         yield ProviderEvent("done", response, usage={"prompt_tokens": 15, "completion_tokens": 10})
 
 
-def _turn(monkeypatch, provider, provider_name, history=MESSAGES):
+def _turn(monkeypatch, provider, provider_name, history=MESSAGES, *, runtime=None):
     monkeypatch.setattr(api_provider, "_provider_for_model_ref", lambda ref, state: provider)
     return api_provider.chat_turn_with_tools(
         config.TASK_CHAT, history, TOOLS,
         model_ref=ModelRef(provider_name, "test-model"), json_tool_fallback=True,
+        runtime=runtime,
     )
+
+
+class _TestApiClient:
+    pass
+
+
+def _custom_runtime():
+    runtime = api_provider.ProviderRuntime()
+    runtime._write(
+        use_api_mode=True, api_provider_type=config.API_PROVIDER_OPENAI,
+        api_client=_TestApiClient(), api_base_url="https://custom.example/v1",
+    )
+    return runtime
 
 
 def test_schema_is_strict_and_names_are_constrained():
@@ -201,7 +215,8 @@ def test_custom_endpoint_recovers_native_tools_after_both_json_modes_are_rejecte
             yield ProviderEvent("done", "")
 
     provider = NativeAfterJsonProvider([], native_tools=True, structured_output=False)
-    result = _turn(monkeypatch, provider, config.API_PROVIDER_OPENAI)
+    runtime = _custom_runtime()
+    result = _turn(monkeypatch, provider, config.API_PROVIDER_OPENAI, runtime=runtime)
     assert [(call.name, call.arguments) for call in result["tool_calls"]] == [
         ("fs.read", {"path": "notes.txt"}),
     ]
@@ -211,6 +226,69 @@ def test_custom_endpoint_recovers_native_tools_after_both_json_modes_are_rejecte
             for request in provider.requests] == ["json_schema", "json_object", None]
     assert provider.requests[0].tools == provider.requests[1].tools == ()
     assert provider.requests[2].tools[0].name == "fs_read"
+
+    # A normal second agent turn includes the native tool result in history.
+    history = [
+        *MESSAGES,
+        {**result["message"], "tool_calls": [
+            call.history_entry() for call in result["tool_calls"]
+        ]},
+        {"role": "tool", "tool_call_id": result["tool_calls"][0].id,
+         "name": "fs.read", "content": "hello"},
+    ]
+    second = _turn(monkeypatch, provider, config.API_PROVIDER_OPENAI, history, runtime=runtime)
+    assert second["tool_calls"][0].name == "fs.read"
+    assert [request.extra_kwargs.get("response_format", {}).get("type")
+            for request in provider.requests] == ["json_schema", "json_object", None, None]
+    assert provider.requests[3].tools[0].name == "fs_read"
+
+    # The same client must probe independently for other endpoints and models.
+    runtime._write(api_base_url="https://other.example/v1")
+    _turn(monkeypatch, provider, config.API_PROVIDER_OPENAI, runtime=runtime)
+    provider.model_id = "another-model"
+    _turn(monkeypatch, provider, config.API_PROVIDER_OPENAI, runtime=runtime)
+    runtime._write(api_client=_TestApiClient())
+    _turn(monkeypatch, provider, config.API_PROVIDER_OPENAI, runtime=runtime)
+    modes = [request.extra_kwargs.get("response_format", {}).get("type")
+             for request in provider.requests]
+    assert modes == [
+        "json_schema", "json_object", None, None,
+        "json_schema", "json_object", None,
+        "json_schema", "json_object", None,
+        "json_schema", "json_object", None,
+    ]
+
+
+def test_cached_native_recovery_reprobes_json_if_native_tools_are_later_rejected(monkeypatch):
+    class ChangingEndpoint(ScriptedProvider):
+        def __init__(self):
+            super().__init__([], native_tools=True, structured_output=False)
+            self.json_supported = False
+
+        def stream(self, request, cancel):
+            self.requests.append(request)
+            if "response_format" in request.extra_kwargs:
+                if not self.json_supported:
+                    raise RuntimeError("400: response_format unsupported")
+                yield ProviderEvent("done", _json_reply(answer="JSON works"))
+                return
+            assert request.tools
+            if self.json_supported:
+                raise RuntimeError("400: model does not support tools")
+            yield ProviderEvent("done", "native works")
+
+    provider = ChangingEndpoint()
+    runtime = _custom_runtime()
+    assert _turn(monkeypatch, provider, config.API_PROVIDER_OPENAI, runtime=runtime)["message"]["content"] == "native works"
+    _turn(monkeypatch, provider, config.API_PROVIDER_OPENAI, runtime=runtime)
+    provider.json_supported = True
+    assert _turn(monkeypatch, provider, config.API_PROVIDER_OPENAI, runtime=runtime)["message"]["content"] == "JSON works"
+    _turn(monkeypatch, provider, config.API_PROVIDER_OPENAI, runtime=runtime)
+    assert [request.extra_kwargs.get("response_format", {}).get("type")
+            for request in provider.requests] == [
+        "json_schema", "json_object", None, None,
+        None, "json_schema", "json_schema",
+    ]
 
 
 def test_custom_endpoint_refusing_both_json_and_native_tools_fails_without_a_cycle(monkeypatch):

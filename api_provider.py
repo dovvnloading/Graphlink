@@ -12,6 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, NamedTuple, NoReturn
 from urllib.parse import urlencode, urlparse
+from weakref import WeakKeyDictionary
 
 import ollama
 try:
@@ -272,6 +273,40 @@ def llama_cpp_inference_lock(client):
 # old client/key). The module globals stay authoritative (and monkeypatchable) - the
 # snapshot is a per-request view.
 _PROVIDER_STATE_LOCK = threading.Lock()
+
+# A custom endpoint's successful native recovery belongs to the configured
+# SDK client, not to the short-lived provider adapter built for each turn.
+# Weak keys expire on client/credential replacement; endpoint and model are
+# included so unrelated configurations never inherit the decision.
+_CUSTOM_NATIVE_ONLY: WeakKeyDictionary[object, set[tuple[str, str, str]]] = WeakKeyDictionary()
+_CUSTOM_NATIVE_ONLY_LOCK = threading.Lock()
+
+
+def _custom_native_only_cached(client: object | None, key: tuple[str, str, str]) -> bool:
+    if client is None:
+        return False
+    with _CUSTOM_NATIVE_ONLY_LOCK:
+        try:
+            return key in _CUSTOM_NATIVE_ONLY.get(client, ())
+        except TypeError:
+            # Unhashable/non-weakrefable test clients are not cached globally.
+            return False
+
+
+def _set_custom_native_only(client: object | None, key: tuple[str, str, str], enabled: bool) -> None:
+    if client is None:
+        return
+    with _CUSTOM_NATIVE_ONLY_LOCK:
+        try:
+            if enabled:
+                _CUSTOM_NATIVE_ONLY.setdefault(client, set()).add(key)
+            else:
+                cached = _CUSTOM_NATIVE_ONLY.get(client)
+                if cached is not None:
+                    cached.discard(key)
+        except TypeError:
+            # Never keep clients or credentials alive via a strong fallback.
+            pass
 
 
 class _ProviderSnapshot(NamedTuple):
@@ -2270,6 +2305,18 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                 or (profile is not None and profile.key_slot == "openai")
             )
         )
+        native_cache_client = (
+            state.api_client if profile is not None and profile.key_slot == "openai" else None
+        )
+        native_cache_key = (str(provider_name or ""), str(state.api_base_url or ""), str(model_label))
+        reused_native_after_json = bool(
+            use_json_protocol and provider.capabilities.tools
+            and _custom_native_only_cached(native_cache_client, native_cache_key)
+        )
+        if reused_native_after_json:
+            # Both JSON formats were explicitly rejected on a previous turn,
+            # and native tools completed successfully against this client/model.
+            use_json_protocol = False
         # Other named OpenAI-compatible services advertise structured_output=False
         # because response formats vary by endpoint. An explicit tools-unsupported
         # response is a reason to PROBE JSON mode, not assume it is absent.
@@ -2427,6 +2474,11 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                             tried_native_after_json = True
                             attempt = 0
                             continue
+                        if tried_native_after_json:
+                            raise RuntimeError(
+                                f"The selected model ({model_label}) cannot run the workspace agent: "
+                                "this endpoint rejected both native tools and constrained JSON output."
+                            ) from retry_exc
                         raise RuntimeError(
                             f"The selected model ({model_label}) cannot run the workspace agent: "
                             "this endpoint rejected grammar/schema-constrained JSON output. "
@@ -2435,7 +2487,13 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                 elif tools and json_tool_fallback:
                     from backend.providers.json_tool_protocol import native_tools_rejected
                     if native_tools_rejected(retry_exc):
-                        if tried_native_after_json:
+                        if reused_native_after_json:
+                            # A previously successful native path was withdrawn:
+                            # evict it and probe JSON again, without cycling back.
+                            _set_custom_native_only(native_cache_client, native_cache_key, False)
+                            reused_native_after_json = False
+                            tried_native_after_json = True
+                        elif tried_native_after_json:
                             # Both JSON modes already failed; do not cycle
                             # back to JSON or try unconstrained text parsing.
                             raise RuntimeError(
@@ -2473,6 +2531,9 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
             # Match the structured JSON path: a single native turn must not
             # schedule an unbounded batch of workspace tool executions.
             raise RuntimeError("Workspace model requested more than 8 tool calls in one turn.")
+        if tried_native_after_json and not use_json_protocol:
+            # Record only a completed native turn, never a failed probe.
+            _set_custom_native_only(native_cache_client, native_cache_key, True)
         assistant_message: dict[str, Any] = {"content": full_response_content or "", "role": "assistant"}
         if reasoning_parts:
             assistant_message["provider_reasoning"] = {
