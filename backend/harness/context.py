@@ -149,11 +149,17 @@ def read_instructions(workspace: Path) -> str:
 _COMMON_COMMANDS = ("git", "node", "npm", "uv", "docker", "podman", "rg")
 
 
+def _env_value(env: dict[str, str], name: str) -> str | None:
+    # The subprocess allowlist is case-insensitive, including on Windows
+    # where an inherited environment key may be spelled Path or ComSpec.
+    return next((value for key, value in env.items() if key.upper() == name), None)
+
+
 def _command_shell(env: dict[str, str], *, os_name: str) -> str:
     """The actual subprocess(shell=True) command shell, not the user's
     login shell ($SHELL is NOT used by shell=True on POSIX)."""
     if os_name == "nt":
-        return f"{env.get('COMSPEC') or 'cmd.exe'} /c"
+        return f"{_env_value(env, 'COMSPEC') or 'cmd.exe'} /c"
     return "/bin/sh -c"
 
 
@@ -167,7 +173,7 @@ def describe_machine(workspace: Path) -> str:
     backend interpreter's version. Nothing here authorizes tool use.
     """
     env = safe_subprocess_env()
-    path = env.get("PATH", os.defpath)
+    path = _env_value(env, "PATH") or os.defpath
     lines = [
         "## Workspace execution environment (session snapshot)",
         f"OS: {platform.platform()} ({platform.machine()})",
