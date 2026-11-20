@@ -19,6 +19,7 @@ never a crash.
 from __future__ import annotations
 
 import asyncio
+import difflib
 import os
 import secrets
 import stat
@@ -240,6 +241,82 @@ def _iter_under_root(root: Path, pattern: str):
             raise WorkspaceError("Too many files match the glob; use a narrower pattern.")
     for item in sorted(discovered, key=lambda row: row[1]):
         yield item
+
+
+def preview_harness_file_change(call: ToolCall, root: Path | None) -> str:
+    """Disclose the *result* of a pending fs.write/fs.edit, without writing.
+
+    Resolve and read through the same confined, byte-bounded helpers as the
+    actual tools. An overwrite or edit is shown as a unified diff against the
+    file on disk when consent is requested; a new file shows its entire body.
+    Never invent a diff if the current file cannot safely be read.
+    """
+    path = str(call.arguments.get("path") or "")
+    heading = f"{call.name} {path}"
+    if root is None:
+        return f"{heading}\nPreview unavailable: No harness workspace is bound to this run."
+
+    try:
+        target = resolve_under_root(root, path)
+        if target == root:
+            raise WorkspaceError("path names the workspace root, not a file.")
+        if _is_metadata_path(target):
+            raise WorkspaceError("VCS metadata cannot be modified by harness filesystem tools.")
+        is_new = not target.exists()
+        if is_new:
+            if call.name == "fs.edit":
+                raise WorkspaceError(f"Not a file: {path!r}.")
+            current = ""
+        else:
+            if not target.is_file():
+                raise WorkspaceError(f"Not a file: {path!r}.")
+            current = _read_bounded_text(target)
+
+        if call.name == "fs.write":
+            proposed = call.arguments.get("content")
+            if not isinstance(proposed, str):
+                raise WorkspaceError("fs.write needs string content.")
+            if len(proposed) > _WRITE_CAP_CHARS:
+                raise WorkspaceError(f"Content longer than {_WRITE_CAP_CHARS} characters.")
+        elif call.name == "fs.edit":
+            old = call.arguments.get("old_string")
+            new = call.arguments.get("new_string")
+            if not isinstance(old, str) or not old or not isinstance(new, str):
+                raise WorkspaceError("fs.edit needs a non-empty old_string and a new_string.")
+            if len(new) > _WRITE_CAP_CHARS:
+                raise WorkspaceError(f"Replacement longer than {_WRITE_CAP_CHARS} characters.")
+            count = current.count(old)
+            if count != 1:
+                raise WorkspaceError(f"old_string occurs {count} times; expected exactly once.")
+            proposed = current.replace(old, new, 1)
+            if len(proposed.encode("utf-8")) > _MAX_FS_FILE_BYTES:
+                raise WorkspaceError("Edited file would exceed the permitted size.")
+        else:
+            raise WorkspaceError("Not a workspace file mutation.")
+    except (WorkspaceError, OSError, UnicodeError) as exc:
+        return f"{heading}\nPreview unavailable: {exc}\nReview the current file before approving."
+
+    if is_new:
+        # Do not add a diff prefix to proposed content: it must be shown
+        # exactly as supplied, including any whitespace and final newline.
+        return f"{heading}\n--- new file: {path} (full content)\n{proposed}"
+
+    relative = target.relative_to(root.resolve()).as_posix()
+    changes = difflib.unified_diff(
+        current.splitlines(keepends=True),
+        proposed.splitlines(keepends=True),
+        fromfile=f"a/{relative}",
+        tofile=f"b/{relative}",
+        lineterm="\n",
+    )
+    preview: list[str] = []
+    for line in changes:
+        preview.append(line)
+        if not line.endswith(("\n", "\r")):
+            # The last line of a text file need not have a newline.
+            # Without a marker, -old and +new would run together.
+            preview.append("\n\\ No newline at end of file\n")
+    return f"{heading}\n{''.join(preview)}" if preview else f"{heading}\nNo content changes."
 
 
 def register_harness_fs_tools(registry: ToolRegistry) -> None:
