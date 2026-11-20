@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import threading
 import zipfile
 
 import pytest
@@ -122,7 +123,8 @@ def test_valid_image_is_served_from_assets_and_undone_with_run(publisher):
     assert document.get_image_asset(asset_id) == (picture.getvalue(), "image/png")
 
 
-def _xlsx(path, *, chartsheet_first=False, sparse_first_row=False, whitespace_header=False):
+def _xlsx(path, *, chartsheet_first=False, sparse_first_row=False, whitespace_header=False,
+          bad_shared_index=None):
     """A two-sheet OOXML workbook with shared strings and sparse second sheet."""
     main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
     office = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -167,6 +169,11 @@ def _xlsx(path, *, chartsheet_first=False, sparse_first_row=False, whitespace_he
                 '<row r="2"><c r="A2" t="inlineStr"><is><t>Alpha</t></is></c>'
                 '<c r="B2"><v>7</v></c></row>'
                 '</sheetData></worksheet>'
+            )
+        if bad_shared_index is not None:
+            overview = overview.replace(
+                '<c r="A2" t="inlineStr"><is><t>Alpha</t></is></c>',
+                f'<c r="A2" t="s"><v>{bad_shared_index}</v></c>',
             )
         z.writestr("xl/worksheets/sheet1.xml", overview)
         z.writestr("xl/worksheets/sheet2.xml", (
@@ -231,6 +238,58 @@ def test_excel_first_actual_worksheet_skips_chartsheet(publisher):
     assert invalid.is_error
     assert len(document.nodes) == before
 
+
+
+
+@pytest.mark.parametrize("index", [-1, 1])
+def test_invalid_excel_shared_string_does_not_publish_a_table(publisher, index):
+    root, document, agent, _ctx, _registry, _approvals, publish = publisher
+    _xlsx(root / "bad.xlsx", bad_shared_index=index)
+    result = publish("bad.xlsx")
+    assert result.is_error and "invalid shared-string index" in result.content
+    assert set(document.nodes) == {agent.id}
+    assert not document.command_log
+    assert not document.edges
+
+
+@pytest.mark.parametrize("identity_field", ["current_chat_id", "current_workspace_id"])
+def test_publish_discarded_when_canvas_identity_changes_during_load(
+    publisher, monkeypatch, identity_field,
+):
+    from backend.harness import tools_publish
+
+    root, document, agent, ctx, registry, _approvals, _publish = publisher
+    (root / "report.md").write_text("# Original workspace", encoding="utf-8")
+    setattr(document, identity_field, "original")
+    entered, release = threading.Event(), threading.Event()
+    load = tools_publish._load_file
+
+    def delayed_load(path, sheet):
+        entered.set()
+        if not release.wait(timeout=2):
+            raise RuntimeError("Timed out waiting for a workspace switch")
+        return load(path, sheet)
+
+    monkeypatch.setattr(tools_publish, "_load_file", delayed_load)
+
+    async def drive():
+        task = asyncio.create_task(registry.invoke(
+            ToolCall(id="switch", name="graph.publish_file",
+                     arguments={"path": "report.md"}), ctx,
+        ))
+        try:
+            assert await asyncio.to_thread(entered.wait, 1)
+            setattr(document, identity_field, "different")
+        finally:
+            release.set()
+        return await task
+
+    result = asyncio.run(drive())
+    assert result.is_error and "chat or workspace changed" in result.content
+    assert set(document.nodes) == {agent.id}
+    assert not document.edges
+    assert not document.command_log
+    assert not document.image_assets
 
 
 def test_file_confinement_and_invalid_inputs_never_mutate_scene(publisher, tmp_path):

@@ -175,7 +175,10 @@ def _sheet_rows(archive: zipfile.ZipFile, member: str, strings: list[str]):
             raw = (value.text or "") if value is not None else ""
             if cell_type == "s" and raw:
                 try:
-                    raw = strings[int(raw)]
+                    index = int(raw)
+                    if not 0 <= index < len(strings):
+                        raise IndexError(index)
+                    raw = strings[index]
                 except (ValueError, IndexError) as exc:
                     raise DocumentReadError("XLSX has an invalid shared-string index.") from exc
             elif cell_type == "inlineStr":

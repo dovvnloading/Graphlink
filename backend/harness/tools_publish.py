@@ -82,7 +82,10 @@ def _excel_value(cell, strings: list[str]) -> str:
     kind = cell.get("t")
     if kind == "s" and raw:
         try:
-            raw = strings[int(raw)]
+            index = int(raw)
+            if not 0 <= index < len(strings):
+                raise IndexError(index)
+            raw = strings[index]
         except (ValueError, IndexError) as exc:
             raise WorkspaceError("Excel file has an invalid shared-string index.") from exc
     elif kind == "inlineStr":
@@ -239,6 +242,7 @@ def register_workspace_tools(registry: ToolRegistry, dispatcher, document: Scene
         agent = document.nodes.get(agent_id)
         if agent is None or agent.kind != "harness" or getattr(agent.state, "harness_run_id", None) != run_id:
             return ToolResult(content="This workspace-agent run is no longer active.", is_error=True)
+        identity = (document.current_chat_id, document.current_workspace_id)
         try:
             source = resolve_under_root(root, raw_path)
             if _is_metadata_path(source):
@@ -250,6 +254,8 @@ def register_workspace_tools(registry: ToolRegistry, dispatcher, document: Scene
             return ToolResult(content=f"Could not publish file: {exc}", is_error=True)
 
         _raise_if_cancelled(ctx.cancel.event if ctx.cancel is not None else None)
+        if (document.current_chat_id, document.current_workspace_id) != identity:
+            return ToolResult(content="The active chat or workspace changed during file loading.", is_error=True)
         agent = document.nodes.get(agent_id)
         if agent is None or agent.kind != "harness" or getattr(agent.state, "harness_run_id", None) != run_id:
             return ToolResult(content="This workspace-agent run is no longer active.", is_error=True)
