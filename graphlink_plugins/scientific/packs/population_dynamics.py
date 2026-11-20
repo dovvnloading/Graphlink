@@ -188,41 +188,171 @@ def _power_iterate(matrix, iterations=4000):
     return None
 
 
-def _asymptotic_multiplier(matrix):
-    """Return (dominant multiplier, stable stage fractions, oscillates).
-
-    Every nonnegative matrix has a real dominant (Perron) eigenvalue, but
-    plain power iteration does not converge for periodic (imprimitive)
-    matrices such as semelparous Leslie matrices. Iterating A + I instead
-    shares A's Perron eigenvector and converges for those matrices too.
-    The result is reported only when A v = lambda v is verified, and the
-    oscillates flag records that the plain projection cycles instead of
-    approaching the stable structure.
-    """
+def _matrix_components(matrix):
+    """Strongly connected stage groups, determined from positive entries."""
     size = len(matrix)
-    # A nonnegative matrix is nilpotent (dominant multiplier 0) exactly when
-    # A^n applied to a positive vector vanishes.
-    probe = [1.0] * size
-    for _ in range(size):
-        probe = _matrix_vector(matrix, probe)
-    if not any(probe):
-        return 0.0, (), False
-    shifted = [[a + (1.0 if i == j else 0.0) for j, a in enumerate(row)]
-               for i, row in enumerate(matrix)]
+    edges = [[j for j, a in enumerate(row) if a > 0] for row in matrix]
+    reverse = [[] for _ in range(size)]
+    for i, row in enumerate(edges):
+        for j in row:
+            reverse[j].append(i)
+    visited = set()
+    order = []
+
+    def visit(i):
+        visited.add(i)
+        for j in edges[i]:
+            if j not in visited:
+                visit(j)
+        order.append(i)
+
+    for i in range(size):
+        if i not in visited:
+            visit(i)
+    visited.clear()
+    groups = []
+
+    def collect(i, group):
+        visited.add(i)
+        group.append(i)
+        for j in reverse[i]:
+            if j not in visited:
+                collect(j, group)
+
+    for i in reversed(order):
+        if i not in visited:
+            group = []
+            collect(i, group)
+            groups.append(group)
+    return groups
+
+
+def _component_period(matrix):
+    """GCD of cycle lengths for an irreducible positive-entry graph."""
+    n = len(matrix)
+    distances = [None] * n
+    distances[0] = 0
+    pending = [0]
+    while pending:
+        i = pending.pop()
+        for j, a in enumerate(matrix[i]):
+            if a > 0 and distances[j] is None:
+                distances[j] = distances[i] + 1
+                pending.append(j)
+    cycle_gcd = 0
+    for i, row in enumerate(matrix):
+        for j, a in enumerate(row):
+            if a > 0:
+                cycle_gcd = math.gcd(cycle_gcd, distances[i] + 1 - distances[j])
+    return cycle_gcd
+
+
+def _irreducible_perron(matrix):
+    """Verified Perron eigenpair of a strongly connected positive-entry graph.
+
+    Max-cycle-mean diagonal similarity balances disparate stage units, so
+    a large fecundity does not hide a small survival edge under floating-point
+    scaling. A growth-sized shift makes a periodic matrix aperiodic rapidly.
+    """
+    n = len(matrix)
+    if n == 1:
+        return float(matrix[0][0]), [1.0]
+    # Karp's maximum cycle mean in log space; all vertices share a component.
+    logs = [[math.log(a) if a > 0 else -math.inf for a in row] for row in matrix]
+    lengths = [[0.0] * n]
+    for _ in range(n):
+        previous = lengths[-1]
+        lengths.append([max((a + previous[j] for j, a in enumerate(row) if a > -math.inf),
+                            default=-math.inf) for row in logs])
+    cycle_mean = max(
+        min((lengths[n][i] - lengths[k][i]) / (n - k) for k in range(n))
+        for i in range(n)
+    )
+    # Longest-path potentials make every normalized edge <= about 1.
+    potentials = [0.0] * n
+    for _ in range(n):
+        potentials = [max(potentials[i], *(a + potentials[j] - cycle_mean
+                                         for j, a in enumerate(row) if a > -math.inf))
+                      for i, row in enumerate(logs)]
+    balanced = [[math.exp(a + potentials[j] - potentials[i] - cycle_mean)
+                 if a > -math.inf else 0.0 for j, a in enumerate(row)]
+                for i, row in enumerate(logs)]
+    # Growth logs cancel the within-period oscillation without multiplying
+    # tiny factors together (or assuming that adding a unit shift suffices).
+    fractions = [1.0 / n] * n
+    growth = 0.0
+    for _ in range(2 * n):
+        projected = _matrix_vector(balanced, fractions)
+        total = math.fsum(projected)
+        if total <= 0:
+            return None
+        growth += math.log(total)
+        fractions = [a / total for a in projected]
+    shift = math.exp(growth / (2 * n))
+    shifted = [[a + (shift if i == j else 0.0) for j, a in enumerate(row)]
+               for i, row in enumerate(balanced)]
     stable = _power_iterate(shifted)
     if stable is None:
-        return "undefined (dominant multiplier did not converge)", (), False
-    check = _matrix_vector(matrix, stable)
-    eigenvalue = math.fsum(check)
-    if not math.isfinite(eigenvalue):
-        raise ValueError("Matrix coefficients exceed the numeric range.")
-    scale = max(eigenvalue, max(stable))
-    if max(abs(a - eigenvalue * b) for a, b in zip(check, stable)) > 1e-9 * scale:
-        return "undefined (dominant multiplier did not converge)", (), False
-    if eigenvalue <= 0:
+        return None
+    check = _matrix_vector(balanced, stable)
+    root = math.fsum(check)
+    if root <= 0 or max(abs(a - root * b) for a, b in zip(check, stable)) > 1e-9 * root:
+        return None
+    logroot = math.log(root) + cycle_mean
+    try:
+        multiplier = math.exp(logroot)
+    except OverflowError as exc:
+        raise ValueError("Matrix coefficients exceed the numeric range.") from exc
+    if multiplier == 0:
+        # A positive cycle can have a Perron root below float's range;
+        # numerical underflow is never proof of nilpotency.
+        return None
+    # Undo diagonal similarity in log space; direct exponentials could overflow.
+    weights = [math.log(a) + p if a else -math.inf for a, p in zip(stable, potentials)]
+    largest = max(weights)
+    weights = [math.exp(a - largest) for a in weights]
+    total = math.fsum(weights)
+    return multiplier, [a / total for a in weights]
+
+
+def _asymptotic_multiplier(matrix):
+    """Return dominant multiplier, verified Perron fractions, periodic flag.
+
+    Block Perron roots determine growth even for reducible matrices. The
+    directed graph distinguishes nilpotency and true cyclic stage structure.
+    """
+    blocks = []
+    for indices in _matrix_components(matrix):
+        component = [[matrix[i][j] for j in indices] for i in indices]
+        estimate = _irreducible_perron(component)
+        if estimate is None:
+            return "undefined (dominant multiplier did not converge)", (), False
+        root, fractions = estimate
+        blocks.append((indices, root, fractions, _component_period(component)))
+    multiplier = max(root for _, root, _, _ in blocks)
+    if multiplier == 0:
         return 0.0, (), False
-    oscillates = _power_iterate(matrix) is None
-    return eigenvalue, stable, oscillates
+    oscillates = any(period > 1 and math.isclose(root, multiplier, rel_tol=1e-12)
+                     for _, root, _, period in blocks)
+    if len(blocks) == 1:
+        return multiplier, blocks[0][2], oscillates
+
+    # Coupled/reducible populations may not have a unique stable structure;
+    # still report the independently determined Perron multiplier.
+    scale = max(a for row in matrix for a in row)
+    normalized = [[a / scale for a in row] for row in matrix]
+    shift = multiplier / scale
+    if shift == 0:
+        return multiplier, (), oscillates
+    shifted = [[a + (shift if i == j else 0.0) for j, a in enumerate(row)]
+               for i, row in enumerate(normalized)]
+    stable = _power_iterate(shifted)
+    if stable is None:
+        return multiplier, (), oscillates
+    check = _matrix_vector(normalized, stable)
+    if max(abs(a - shift * b) for a, b in zip(check, stable)) > 1e-9 * shift:
+        return multiplier, (), oscillates
+    return multiplier, stable, oscillates
 
 
 def matrix_population_projection(data):
@@ -382,12 +512,13 @@ OPERATIONS = (
             "For a nonnegative square Leslie age-class or Lefkovitch stage-class "
             "projection matrix A, iterate nₜ₊₁=A nₜ exactly for each requested "
             "step. Report total and stage abundance, and the finite-horizon geometric "
-            "factor (N_end/N_initial)^(1/steps). The dominant (Perron) multiplier "
-            "and stable stage fractions come from normalized power iteration on "
-            "A + I, which shares A's Perron eigenvector and also converges for "
-            "periodic (imprimitive) matrices such as semelparous Leslie matrices; "
-            "they are reported only after A v = λ v is verified, and periodic "
-            "matrices are flagged because their stage proportions cycle. "
+            "factor (N_end/N_initial)^(1/steps). Perron multipliers are computed "
+            "from positive-entry strongly connected blocks, with logarithmic "
+            "balancing and a growth-scaled shift for their eigenvectors. "
+            "Nilpotency and periodicity are classified from directed cycle "
+            "structure rather than iteration timeouts. Stable stage fractions "
+            "are reported only for a verified eigenpair; reducible matrices "
+            "may not have a unique asymptotic stage structure. "
             "Time invariant, no density dependence, environmental variability or "
             "integer rounding of expected counts."
         ),
