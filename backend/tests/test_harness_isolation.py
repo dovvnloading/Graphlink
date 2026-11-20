@@ -9,7 +9,7 @@ import pytest
 
 from backend.harness.shell_isolation import (
     CONTAINER_IMAGE, IsolationUnavailableError, available_engine,
-    container_invocation, normalize_execution_profile,
+    container_invocation, network_request_error, normalize_execution_profile,
 )
 from backend.harness.shell_sessions import ShellSessionRegistry
 
@@ -41,6 +41,32 @@ def test_isolated_argv_enforces_no_network_and_resource_caps(tmp_path):
     assert argv[-4:] == [CONTAINER_IMAGE, "/bin/sh", "-c", "echo hi; touch pwned"]
     assert "echo hi; touch pwned" not in argv[:-1]
     assert not any(item.startswith("--network=host") for item in argv)
+
+
+def test_network_request_requires_an_isolated_reason_and_strict_types():
+    assert network_request_error({}, "isolated") is None
+    assert network_request_error({"network": True}, "isolated").startswith("Explain why")
+    assert network_request_error({"network": True, "network_reason": " "}, "isolated")
+    assert network_request_error({"network": True, "network_reason": "download"}, "host")
+    assert network_request_error({"network": "yes", "network_reason": "download"}, "isolated")
+    assert network_request_error({"network": True, "network_reason": "a" * 501}, "isolated")
+    assert network_request_error({"network_reason": "download"}, "isolated")
+    assert network_request_error({"network": True, "network_reason": "download"}, "isolated") is None
+
+
+def test_networked_isolated_invocation_retains_limits_and_no_host_network(tmp_path):
+    with patch("backend.harness.shell_isolation.shutil.which", return_value="/usr/bin/docker"):
+        argv, engine, _ = container_invocation(
+            "python -m pip download requests", tmp_path, env={"PATH": "/usr/bin"},
+            network_enabled=True,
+        )
+    assert engine == "docker"
+    assert "--network=none" not in argv
+    assert "--network=host" not in argv
+    assert not any(flag.startswith("--privileged") for flag in argv)
+    for flag in ("--pull=never", "--cpus=1", "--memory=512m", "--read-only",
+                 "--cap-drop=ALL", "--security-opt=no-new-privileges"):
+        assert flag in argv
 
 
 def test_missing_engine_fails_closed_before_host_spawn(tmp_path):
@@ -127,6 +153,24 @@ def test_shell_session_selects_isolated_backend_and_pipes_stdin(tmp_path):
     finally:
         registry.stop_all()
     assert len(isolated.stopped) == 1
+
+
+def test_rebinding_network_preference_retires_existing_sessions(tmp_path):
+    class Existing:
+        def __init__(self):
+            self.stopped = False
+
+        def stop(self):
+            self.stopped = True
+
+    registry = ShellSessionRegistry()
+    registry.bind_root("ws", tmp_path, "isolated", False)
+    previous = Existing()
+    registry._by_workspace["ws"] = {"long-lived": previous}
+    registry.bind_root("ws", tmp_path, "isolated", True)
+    assert previous.stopped
+    assert registry.names("ws") == []
+    assert registry._networks["ws"] is True
 
 
 def test_rebinding_same_directory_to_isolated_retires_host_sessions(tmp_path):

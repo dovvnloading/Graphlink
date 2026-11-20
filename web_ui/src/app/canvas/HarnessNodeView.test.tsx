@@ -18,6 +18,7 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     harnessMaxContextTokens: 48000,
     harnessCompactions: 0,
     harnessApprovalSessionOffered: false,
+    harnessApprovalNetworkRequested: false,
     harnessPlan: [],
     harnessAwaitingQuestion: false,
     harnessQuestion: "",
@@ -25,6 +26,7 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     harnessWorkspaceActive: "",
     harnessShell: "auto",
     harnessExecutionProfile: "host",
+    harnessNetworkAlways: false,
     harnessAwaitingApproval: false,
     harnessApprovalToolName: "",
     harnessApprovalSummary: "",
@@ -41,6 +43,7 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     onUndoRun: vi.fn(),
     onApproveTool: vi.fn(),
     onApproveToolForSession: vi.fn(),
+    onApproveNetworkForTask: vi.fn(),
     onDenyTool: vi.fn(),
     onAnswerQuestion: vi.fn(),
     onPickWorkspace: vi.fn(),
@@ -52,6 +55,7 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     onRevealWorkspace: vi.fn(),
     onSetShell: vi.fn(),
     onSetExecutionProfile: vi.fn(),
+    onSetNetworkAlways: vi.fn(),
     onGetIsolationEngine: vi.fn(async () => "docker"),
     ...overrides,
   };
@@ -153,6 +157,17 @@ describe("HarnessNodeView", () => {
     expect(select).toHaveValue("host");
     await user.selectOptions(select, "isolated");
     expect(data.onSetExecutionProfile).toHaveBeenCalledWith("isolated");
+  });
+
+  it("lets a node allow networking for every future Isolated task", async () => {
+    const user = userEvent.setup();
+    const data = makeData({ harnessExecutionProfile: "isolated" });
+    renderHarness(data);
+    await user.click(screen.getByRole("button", { name: "Agent settings" }));
+    const checkbox = screen.getByRole("checkbox", { name: "Allow network for every task" });
+    expect(checkbox).not.toBeChecked();
+    await user.click(checkbox);
+    expect(data.onSetNetworkAlways).toHaveBeenCalledExactlyOnceWith(true);
   });
 
   it("explains what to install without an engine and never suggests host fallback", async () => {
@@ -278,6 +293,40 @@ describe("HarnessNodeView", () => {
     expect(data.onApproveTool).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole("button", { name: "Deny" }));
     expect(data.onDenyTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the network reason and binds both grant scopes to the disclosure", async () => {
+    const user = userEvent.setup();
+    const summary = "shell.exec\ncurl example.com\n--- Isolated network access request\nWhy network is needed: Download dependencies";
+    const data = makeData({
+      harnessAwaitingApproval: true,
+      harnessExecutionProfile: "isolated",
+      harnessApprovalToolName: "shell.exec",
+      harnessApprovalNetworkRequested: true,
+      harnessApprovalId: "network-consent-1",
+      harnessApprovalSummary: summary,
+      harnessApprovalSessionOffered: true,
+    });
+    const { unmount } = renderHarness(data);
+    expect(screen.getByRole("region", { name: "Proposed tool call" })).toHaveTextContent("Download dependencies");
+    expect(screen.queryByRole("button", { name: "Approve once" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Always allow this tool" })).toBeNull();
+    await user.dblClick(screen.getByRole("button", { name: "Allow network for task" }));
+    expect(data.onApproveNetworkForTask).toHaveBeenCalledExactlyOnceWith("network-consent-1");
+    expect(data.onApproveTool).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Allow network once" })).toBeDisabled();
+    unmount();
+
+    const once = makeData({
+      harnessAwaitingApproval: true,
+      harnessApprovalToolName: "shell.exec",
+      harnessApprovalNetworkRequested: true,
+      harnessApprovalId: "network-consent-2",
+    });
+    renderHarness(once);
+    await user.click(screen.getByRole("button", { name: "Allow network once" }));
+    expect(once.onApproveTool).toHaveBeenCalledExactlyOnceWith("network-consent-2");
+    expect(once.onApproveNetworkForTask).not.toHaveBeenCalled();
   });
 
   it("shows a highlighted file diff without changing or interpreting its text", () => {

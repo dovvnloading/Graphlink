@@ -1130,6 +1130,11 @@ export class SceneStore {
     this.transport.fireIntent("harness", "denyTool", approvalId ? [requestId, approvalId] : [requestId]);
   }
 
+  // This stronger network decision is disclosure-bound and task-local.
+  approveHarnessNetworkForTask(requestId: string, approvalId: string): void {
+    this.transport.fireIntent("harness", "approveNetworkForTask", [requestId, approvalId]);
+  }
+
   // PLAN §2.4 graded consent: approve AND stop asking for this tool for the
   // rest of the agent's session. A separate intent from approveHarnessTool
   // by design - two decisions with different blast radii should not share
@@ -1174,6 +1179,10 @@ export class SceneStore {
 
   setHarnessExecutionProfile(nodeId: string, profile: string): void {
     this.transport.fireIntent("harness", "setExecutionProfile", [nodeId, profile]);
+  }
+
+  setHarnessNetworkAlways(nodeId: string, enabled: boolean): void {
+    this.transport.fireIntent("harness", "setNetworkAlways", [nodeId, enabled]);
   }
 
   async getHarnessIsolationEngine(): Promise<string | null> {

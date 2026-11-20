@@ -923,6 +923,10 @@ function makeHarnessFns(id: string, liveRef: { current: DispatcherLive }) {
       const { n, store } = liveRef.current;
       if (n.pendingRequestId) store.denyHarnessTool(n.pendingRequestId, approvalId);
     },
+    onApproveNetworkForTask: (approvalId: string) => {
+      const { n, store } = liveRef.current;
+      if (n.pendingRequestId) store.approveHarnessNetworkForTask(n.pendingRequestId, approvalId);
+    },
     onApproveToolForSession: () => {
       const { n, store } = liveRef.current;
       if (n.pendingRequestId) store.approveHarnessToolForSession(n.pendingRequestId);
@@ -945,6 +949,7 @@ function makeHarnessFns(id: string, liveRef: { current: DispatcherLive }) {
     onRevealWorkspace: () => liveRef.current.store.revealHarnessWorkspace(id),
     onSetShell: (shell: string) => liveRef.current.store.setHarnessShell(id, shell),
     onSetExecutionProfile: (profile: string) => liveRef.current.store.setHarnessExecutionProfile(id, profile),
+    onSetNetworkAlways: (enabled: boolean) => liveRef.current.store.setHarnessNetworkAlways(id, enabled),
     onGetIsolationEngine: () => liveRef.current.store.getHarnessIsolationEngine(),
   };
 }
@@ -1660,11 +1665,13 @@ export function toFlowNodes(
           harnessWorkspaceActive: n.harnessWorkspaceActive,
           harnessShell: n.harnessShell,
           harnessExecutionProfile: n.harnessExecutionProfile,
+          harnessNetworkAlways: n.harnessNetworkAlways,
           harnessAwaitingApproval: n.harnessAwaitingApproval,
           harnessApprovalToolName: n.harnessApprovalToolName,
           harnessApprovalSummary: n.harnessApprovalSummary,
           harnessApprovalId: n.harnessApprovalId,
           harnessApprovalSessionOffered: n.harnessApprovalSessionOffered,
+          harnessApprovalNetworkRequested: n.harnessApprovalNetworkRequested,
           harnessPlan: n.harnessPlan,
           harnessAwaitingQuestion: n.harnessAwaitingQuestion,
           harnessQuestion: n.harnessQuestion,

@@ -1205,6 +1205,139 @@ class TestApprovalFlow:
         assert node.state.harness_status == "done"
 
 
+class TestIsolatedNetworkConsent:
+    """End-to-end consent from the exact shell tool call to container launch."""
+
+    def test_task_grant_applies_only_during_this_run(self, workspace_root, monkeypatch):
+        from backend.harness.tools_shell import register_harness_shell_tool
+        from backend.harness import tools_shell
+
+        node = SceneDocument().add_harness_node(0, 0, "download")
+        node.state.harness_execution_profile = "isolated"
+        document = SceneDocument()
+        document.nodes[node.id] = node
+        dispatcher = LoopDispatcher()
+        registry = ToolRegistry()
+        register_harness_shell_tool(registry)
+        bus = FakeBus()
+        launches = []
+
+        def fake_run(command, cwd, cancel_event, on_output, shell, profile, network_enabled):
+            launches.append((command, profile, network_enabled))
+            return "", 0, "ok"
+
+        monkeypatch.setattr(tools_shell, "_run_command", fake_run)
+        monkeypatch.setattr(context_module, "describe_machine", lambda *a, **k: "Isolated shell")
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("net1", "shell.exec", command="curl example.com",
+                                 network=True, network_reason="Read public API schema")]},
+            {"tool_calls": [call("net2", "shell.exec", command="echo following command")]},
+            {"content": "Task 1 done."},
+        ])
+
+        async def run_task(decision):
+            cancel_event = threading.Event()
+            handle = dispatcher._runs.claim("harness", node_id=node.id, cancel_event=cancel_event)
+            prompts = []
+
+            async def drive_task():
+                try:
+                    await run_harness(
+                        document=document, dispatcher=dispatcher, registry=registry,
+                        bus=bus, notifications=None, harness_node_id=node.id,
+                        user_text="go", request_id=handle.request_id, handle=handle,
+                        cancel_event=cancel_event,
+                    )
+                finally:
+                    dispatcher._runs.release(handle.request_id)
+
+            task = asyncio.create_task(drive_task())
+            while not task.done():
+                future = handle.approval_future
+                if node.state.harness_awaiting_approval and future is not None and not future.done():
+                    prompts.append((
+                        node.state.harness_approval_network_requested,
+                        node.state.harness_approval_summary,
+                        handle.approval_token,
+                    ))
+                    future.set_result(decision if len(prompts) == 1 else True)
+                await asyncio.sleep(0)
+            await task
+            return prompts
+
+        first = asyncio.run(run_task("network_task"))
+        assert len(first) == 2
+        assert first[0][0] and "Read public API schema" in first[0][1] and first[0][2]
+        assert not first[1][0]
+        assert launches == [
+            ("curl example.com", "isolated", True),
+            ("echo following command", "isolated", True),
+        ]
+
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("offline", "shell.exec", command="echo new task")]},
+            {"content": "Task 2 done."},
+        ])
+        second = asyncio.run(run_task(True))
+        assert len(second) == 1
+        assert not second[0][0]
+        assert launches[-1] == ("echo new task", "isolated", False)
+
+    def test_once_requests_again_and_denial_never_launches(self, workspace_root, monkeypatch):
+        from backend.harness.tools_shell import register_harness_shell_tool
+        from backend.harness import tools_shell
+
+        document = SceneDocument()
+        node = document.add_harness_node(0, 0, "download")
+        node.state.harness_execution_profile = "isolated"
+        registry = ToolRegistry()
+        register_harness_shell_tool(registry)
+        dispatcher = LoopDispatcher()
+        bus = FakeBus()
+        launches = []
+        monkeypatch.setattr(context_module, "describe_machine", lambda *a, **k: "Isolated shell")
+        monkeypatch.setattr(tools_shell, "_run_command", lambda command, *args:
+                            (launches.append(command) or "", 0, "ok"))
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("n1", "shell.exec", command="curl a.example",
+                                 network=True, network_reason="Fetch schema A")]},
+            {"tool_calls": [call("n2", "shell.exec", command="curl b.example",
+                                 network=True, network_reason="Fetch schema B")]},
+            {"content": "Done."},
+        ])
+
+        async def main():
+            event = threading.Event()
+            handle = dispatcher._runs.claim("harness", node_id=node.id, cancel_event=event)
+            approvals = []
+
+            async def run():
+                try:
+                    await run_harness(
+                        document=document, dispatcher=dispatcher, registry=registry,
+                        bus=bus, notifications=None, harness_node_id=node.id,
+                        user_text="go", request_id=handle.request_id, handle=handle,
+                        cancel_event=event,
+                    )
+                finally:
+                    dispatcher._runs.release(handle.request_id)
+
+            task = asyncio.create_task(run())
+            while not task.done():
+                future = handle.approval_future
+                if node.state.harness_awaiting_approval and future is not None and not future.done():
+                    approvals.append((node.state.harness_approval_network_requested, handle.approval_token))
+                    future.set_result(True if len(approvals) == 1 else False)
+                await asyncio.sleep(0)
+            await task
+            return approvals
+
+        approvals = asyncio.run(main())
+        assert len(approvals) == 2 and all(flag and token for flag, token in approvals)
+        assert approvals[0][1] != approvals[1][1]
+        assert launches == ["curl a.example"]
+
+
 class TestContextPrompt:
     def test_prompt_is_byte_stable_and_starts_with_the_pinned_core(self, workspace_root):
         from graphlink_prompts import resolve_prompt_text
@@ -1356,6 +1489,18 @@ class TestPersistence:
         assert _restore_harness_payload(payload).state.harness_execution_profile == "host"
         del payload["execution_profile"]
         assert _restore_harness_payload(payload).state.harness_execution_profile == "host"
+
+    def test_isolated_network_preference_roundtrips_and_is_strictly_boolean(self):
+        node = SceneDocument().add_harness_node(0, 0, "goal")
+        assert node.state.harness_network_always is False
+        node.state.harness_network_always = True
+        payload = _serialize_harness_node(node)
+        assert payload["network_always"] is True
+        assert _restore_harness_payload(payload).state.harness_network_always is True
+        payload["network_always"] = "true"  # do not trust manually edited session state
+        assert _restore_harness_payload(payload).state.harness_network_always is False
+        del payload["network_always"]
+        assert _restore_harness_payload(payload).state.harness_network_always is False
 
     def test_blank_workspace_id_is_self_healed_on_load(self):
         document = SceneDocument()

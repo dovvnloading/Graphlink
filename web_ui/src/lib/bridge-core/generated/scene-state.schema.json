@@ -992,6 +992,10 @@
             "default": "",
             "type": "string"
           },
+          "harnessApprovalNetworkRequested": {
+            "default": false,
+            "type": "boolean"
+          },
           "harnessApprovalSessionOffered": {
             "default": false,
             "type": "boolean"
@@ -1035,6 +1039,10 @@
           "harnessMaxTurns": {
             "default": 0,
             "type": "integer"
+          },
+          "harnessNetworkAlways": {
+            "default": false,
+            "type": "boolean"
           },
           "harnessPlan": {
             "default": [],

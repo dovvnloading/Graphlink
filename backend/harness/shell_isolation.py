@@ -97,7 +97,7 @@ def container_invocation(
     args = [
         executable, "run", "--rm", "--interactive", "--pull=never",
         "--name", name,
-        *( [] if network_enabled else ["--network=none"] ), "--cpus=" + CONTAINER_CPUS,
+        *(["--network=none"] if not network_enabled else []), "--cpus=" + CONTAINER_CPUS,
         "--memory=" + CONTAINER_MEMORY, "--memory-swap=" + CONTAINER_MEMORY,
         "--pids-limit=128", "--read-only",
         "--cap-drop=ALL", "--security-opt=no-new-privileges",
