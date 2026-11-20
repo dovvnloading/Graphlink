@@ -233,7 +233,7 @@ def _approval_summary(call: ToolCall, *, workspace_root: Path | None = None) -> 
             return f"shell.session write {name}\n--- stdin\n{call.arguments.get('input') or ''}"
         return f"shell.session {action} {name}".rstrip()
     if call.name in ("fs.write", "fs.edit"):
-        return preview_harness_file_change(call, workspace_root)
+        return preview_harness_file_change(call, workspace_root).summary
     args = json.dumps(call.arguments, sort_keys=True, ensure_ascii=False)
     if call.name.startswith("fal."):
         # Show every field sent to Fal, including billing options and result bindings.
@@ -337,11 +337,19 @@ async def run_harness(
         node.state.harness_awaiting_approval = True
         node.state.harness_approval_tool_name = call.name
         root = ctx.harness_workspace_dir if isinstance(ctx.harness_workspace_dir, Path) else None
-        node.state.harness_approval_summary = _approval_summary(call, workspace_root=root)
+        preview_available = True
+        if call.name in ("fs.write", "fs.edit"):
+            # Reading and diffing a workspace file can be expensive. Keep it
+            # off the event loop so other sessions remain responsive.
+            preview = await asyncio.to_thread(preview_harness_file_change, call, root)
+            node.state.harness_approval_summary = preview.summary
+            preview_available = preview.available
+        else:
+            node.state.harness_approval_summary = _approval_summary(call)
         # Executable commands and interactive stdin always ask fresh, even
         # when a previous call was approved for the session. The panel must
         # not suggest session consent that the registry will reject.
-        node.state.harness_approval_session_offered = not bind_approval and not _is_dangerous_call(call)
+        node.state.harness_approval_session_offered = preview_available and not bind_approval and not _is_dangerous_call(call)
         await bus.publish("scene")
         try:
             approved = await future
@@ -356,7 +364,9 @@ async def run_harness(
                 node.state.harness_approval_id = ""
             handle.approval_token = ""
         await bus.publish("scene")
-        return approved
+        # UI controls are not an authorization boundary. A forged or stale
+        # client approval cannot permit a write whose preview was unavailable.
+        return approved if preview_available else False
 
     async def set_plan(steps: list) -> None:
         node.state.harness_plan = list(steps)
