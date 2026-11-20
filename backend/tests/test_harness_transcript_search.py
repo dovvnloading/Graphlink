@@ -32,9 +32,7 @@ def test_writer_indexes_messages_calls_and_compaction_without_rewriting_history(
 
     transcript = transcript_path(tmp_path)
     assert index_path(transcript).is_file()  # indexed on write, not just on search
-    assert [hit["role"] for hit in search_index(transcript, "chrysanthemum")] == [
-        "user", "summary",
-    ] or {hit["role"] for hit in search_index(transcript, "chrysanthemum")} == {
+    assert {hit["role"] for hit in search_index(transcript, "chrysanthemum")} == {
         "user", "summary",
     }
     calls = search_index(transcript, "stellar notes")
@@ -109,6 +107,11 @@ def test_search_excludes_search_tool_output_and_bounds_excerpts(tmp_path):
         "content": "result duplicated old kiwi history",
     })
     append_message(tmp_path, {
+        "role": "assistant", "content": "",
+        "tool_calls": [{"id": "lookup", "name": "session.search",
+                        "arguments": {"query": "notrealhistory"}}],
+    })
+    append_message(tmp_path, {
         "role": "tool", "name": "fs.read",
         "content": "a real kiwi observation " + "a " * 1000,
     })
@@ -117,6 +120,7 @@ def test_search_excludes_search_tool_output_and_bounds_excerpts(tmp_path):
     assert len(hits) == 1
     assert hits[0]["role"] == "tool"
     assert len(hits[0]["excerpt"]) <= MAX_EXCERPT_CHARS + 1
+    assert not search_index(transcript_path(tmp_path), "notrealhistory")
 
     with pytest.raises(ValueError):
         search_index(transcript_path(tmp_path), '"')
