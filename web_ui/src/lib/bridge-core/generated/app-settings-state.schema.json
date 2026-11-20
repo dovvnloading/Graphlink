@@ -176,6 +176,12 @@
     "hasCompletedOnboarding": {
       "type": "boolean"
     },
+    "harnessTrustedDirs": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "llamaCppChatFormat": {
       "type": "string"
     },
@@ -392,6 +398,7 @@
     "llamaCppScanSummary",
     "llamaCppScanStatus",
     "llamaCppNotice",
+    "harnessTrustedDirs",
     "mcpServers"
   ],
   "title": "AppSettingsState",
