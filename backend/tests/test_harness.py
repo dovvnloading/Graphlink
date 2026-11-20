@@ -431,6 +431,28 @@ class TestLoop:
         roles = [m["role"] for m in load_messages(ws)]
         assert roles == ["user", "assistant", "tool", "assistant"]
 
+
+    def test_failed_followup_drops_first_tasks_reply_and_checklist(
+        self, workspace_root, monkeypatch,
+    ):
+        document, dispatcher, registry, bus, node = self._make(workspace_root)
+        scripted_turns(monkeypatch, [{"content": "ANSWER_FROM_A"}])
+        asyncio.run(drive(document, dispatcher, registry, bus, node, "Task A"))
+        assert node.state.harness_status == "done"
+        assert node.state.harness_reply == "ANSWER_FROM_A"
+        node.state.harness_plan = [{"text": "Task A checklist", "status": "done"}]
+
+        # The normal worker must clear task-local output even if Task B
+        # fails before its first model turn and supplies no new answer.
+        def unavailable_workspace(_workspace_id):
+            raise WorkspaceError("unavailable")
+
+        monkeypatch.setattr("backend.harness.loop.ensure_workspace", unavailable_workspace)
+        asyncio.run(drive(document, dispatcher, registry, bus, node, "Task B"))
+        assert node.state.harness_status == "failed"
+        assert node.state.harness_reply == ""
+        assert node.state.harness_plan == []
+
     def test_live_output_updates_one_row_before_tool_result(self, workspace_root, monkeypatch):
         document, dispatcher, _registry, _bus, node = self._make(workspace_root)
         registry = ToolRegistry()

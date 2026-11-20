@@ -162,6 +162,10 @@ def register_control_agent_task_api(app: FastAPI, bus: EventBus) -> None:
                 node.state.harness_run_id = run_id
                 node.state.harness_status = "running"
                 node.state.harness_status_detail = ""
+                # The worker has not started yet: the new run must never
+                # expose the previous task's answer or checklist.
+                node.state.harness_reply = ""
+                node.state.harness_plan = []
                 node.state.harness_goal = body.text.strip()
                 node.pending_request_id = run_id
             receipts[body.operation_id] = (

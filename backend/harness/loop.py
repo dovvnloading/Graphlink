@@ -728,6 +728,10 @@ async def run_harness(
         return approved if preview_available else False
 
     async def set_plan(steps: list) -> None:
+        # A cancelled worker can still unwind after a follow-up claims the
+        # node; never publish its old checklist onto the newer task.
+        if cancel_event.is_set() or not _alive() or node.state.harness_run_id != request_id:
+            return
         node.state.harness_plan = list(steps)
         await bus.publish("scene")
 
@@ -792,6 +796,10 @@ async def run_harness(
 
     node.state.harness_status = "running"
     node.state.harness_status_detail = ""
+    # Each new task resumes the workspace transcript, not the last task's
+    # display state; failure/Stop may never provide a replacement reply.
+    node.state.harness_reply = ""
+    node.state.harness_plan = []
     node.state.harness_run_id = request_id
     node.state.harness_goal = user_text
     node.pending_request_id = request_id
