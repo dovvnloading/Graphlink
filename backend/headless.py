@@ -149,7 +149,16 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run_headless_owned(args: argparse.Namespace) -> int:
     import uvicorn
-    from backend.app import create_app
+    from backend.app import SPA_DIST_DIR, create_app
+
+    # An explicit operator browser must have the real app to display Agent
+    # nodes and consent prompts. Fail at launch rather than opening a 404.
+    if args.open_ui and not (SPA_DIST_DIR / "index.html").is_file():
+        sys.stderr.write(
+            "Graphlink headless cannot open the operator UI: SPA build missing. "
+            "Run `cd web_ui && npm run build` first.\n"
+        )
+        return 1
 
     # Preserve the final path component: resolving it here would follow a
     # pre-existing symlink BEFORE _write_token_file can refuse it.
