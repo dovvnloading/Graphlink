@@ -379,10 +379,14 @@ class TestGradedConsentAndReprompt:
         # grant; ordinary approved tools still have graded-consent behavior.
         tool_name = "example.approved"
         registry, prompts, grants = _registry(tool_name=tool_name), [], set()
+        from backend.harness.loop import _session_grant_eligible
+
+        first = ToolCall(id="c1", name=tool_name, arguments={"value": "first"})
+        assert _session_grant_eligible(first, registry), (
+            "ordinary 'always' tools must still offer session consent"
+        )
         ctx = _ctx(prompts, decision="session", session_grants=grants)
-        asyncio.run(registry.invoke(
-            ToolCall(id="c1", name=tool_name, arguments={"value": "first"}), ctx,
-        ))
+        asyncio.run(registry.invoke(first, ctx))
         # Different arguments are not covered by the fingerprint memo.
         asyncio.run(registry.invoke(
             ToolCall(id="c2", name=tool_name, arguments={"value": "second"}), ctx,
