@@ -11,19 +11,31 @@ for that agent and that project. Scratch workspaces have their own managed
 virtualenv. No environment path, index URL, requirements-file path, or pip
 option is supplied by the model.
 
+In the workspace agent's **Isolated** profile, both Python tools instead run
+in the restricted Docker/Podman container. A compatible Linux project `.venv`
+or `venv` is selected first; otherwise a separate, lazily created
+container-native virtualenv is used. Its scratch/project binding and
+node-deletion cleanup match the host environment rules, but it never runs
+host Python. A host-only project venv cannot be used inside the image.
+
 ## Consent
 
 python.install has code.execute scope and approval="always" with fresh
 re-prompting even for identical requests or previously granted sessions.
 Before showing the prompt, the harness computes (without creating) the
 interpreter that python.exec would use. The approval panel shows the full
-interpreter path and each requested requirement. The approval identity is
-unique per call; old or replayed approvals cannot authorize a new install.
+interpreter path and each requested requirement. In Isolated mode it also
+explicitly discloses that network access may be granted to download wheels
+from PyPI inside the container. The approval identity is unique per call;
+old or replayed approvals cannot authorize a new install.
 
 The selected interpreter is recorded only after consent and checked again
 before package installation. If a different .venv appears or the workspace
 is rebound while the prompt is open, the install is refused and must be
-approved again. Rejected or mutated arguments never reach the handler.
+approved again. An Isolated approval is additionally bound to the resolved
+workspace root and execution profile, so an identical container path cannot
+authorize a different project. Rejected or mutated arguments never reach
+the handler.
 
 Wheels contain executable Python code. Wheel-only is not a security sandbox;
 the approval is still necessary for every change to an environment.
@@ -58,6 +70,13 @@ PIP_CONFIG_FILE set to os.devnull to disable global/user config and external
 extra indexes. The online download uses the explicit default PyPI URL; the
 installation phase uses --no-index. Neither step runs a shell. Subprocess
 execution is guarded, time-bounded and cancellable with the agent run.
+
+In Isolated mode, virtualenv bootstrap, cached wheel installation and the
+final offline install all use `--network=none`; **only the approved
+`pip download` container invocation** uses bridge networking. Every
+invocation uses the same fixed image and bounded container resources. The
+cache is mounted read/write only for install operations; `python.exec`
+never gets network access or the shared cache mount.
 
 The cache is an optimization, not an offline package repository guarantee:
 uncached requirements need network access, and availability of new platform

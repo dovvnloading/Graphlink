@@ -107,11 +107,6 @@ _HARNESS_TOOL_NAME_EXCLUSIONS = ("builder.",)
 # unrelated net.fetch tools merely because the harness grants that scope.
 _HARNESS_WEB_TOOLS = frozenset({"web.search", "web.fetch"})
 
-# Isolated containers confine shell tools, not the host REPL or installer.
-# Omit these from the model's schemas and the registry's invoke-time catalog.
-_ISOLATED_HOST_EXECUTION_TOOLS = frozenset({"python.exec", "python.install"})
-
-
 def _offered_harness_specs(registry: ToolRegistry, execution_profile: str) -> tuple[ToolSpec, ...]:
     """Profile-aware catalog, enforced both at model offer and registry invoke."""
     return tuple(
@@ -121,10 +116,6 @@ def _offered_harness_specs(registry: ToolRegistry, execution_profile: str) -> tu
         and (
             NET_FETCH not in (registry.scopes_for(spec.name) or frozenset())
             or spec.name in _HARNESS_WEB_TOOLS
-        )
-        and (
-            execution_profile != "isolated"
-            or spec.name not in _ISOLATED_HOST_EXECUTION_TOOLS
         )
     )
 
@@ -215,6 +206,7 @@ class HarnessRunContext(RunContext):
     ask_user: object = None
     # The interpreter disclosed for a fresh python.install authorization.
     python_install_approved_interpreter: object = None
+    python_install_approved_binding: object = None
     # Attached only while a shell.exec/python.exec handler is running. The
     # callback may be invoked by a worker thread, so it must not touch the
     # scene or event bus itself.
@@ -552,7 +544,9 @@ async def run_harness(
         # Show the environment selected by python.exec, without creating a
         # virtualenv before consent. Pin the choice against a late rebind.
         install_target = None
+        install_binding = None
         ctx.python_install_approved_interpreter = None
+        ctx.python_install_approved_binding = None
         if call.name == "python.install":
             from backend.harness.python_install import (
                 planned_install_interpreter, workspace_install_binding,
@@ -562,6 +556,11 @@ async def run_harness(
                 workspace_id, root, is_scratch = workspace_install_binding(ctx)
                 install_target = planned_install_interpreter(
                     workspace_id, root, is_scratch=is_scratch,
+                    profile=ctx.harness_execution_profile,
+                )
+                install_binding = (
+                    workspace_id, root.resolve(), is_scratch,
+                    ctx.harness_execution_profile, install_target,
                 )
             except (WorkspaceError, OSError):
                 return False
@@ -592,6 +591,7 @@ async def run_harness(
 
             node.state.harness_approval_summary = install_approval_summary(
                 call.arguments["packages"], install_target,
+                isolated=ctx.harness_execution_profile == "isolated",
             )
         else:
             node.state.harness_approval_summary = (
@@ -635,6 +635,7 @@ async def run_harness(
         # client approval cannot permit a write whose preview was unavailable.
         if call.name == "python.install" and approved and preview_available:
             ctx.python_install_approved_interpreter = install_target
+            ctx.python_install_approved_binding = install_binding
         return approved if preview_available else False
 
     async def set_plan(steps: list) -> None:
@@ -717,11 +718,11 @@ async def run_harness(
                 sessions.bind_root, node.state.harness_workspace_id, root,
                 ctx.harness_execution_profile,
             )
-        if ctx.harness_execution_profile == "isolated":
-            # A persistent Host REPL may survive an earlier Host task even
-            # when this task never calls python.exec. Stop it on transition.
+        repls = getattr(dispatcher, "_harness_python_repls", None)
+        if repls is not None:
             await asyncio.to_thread(
-                _retire_host_repl_for_isolated, dispatcher, node.state.harness_workspace_id,
+                repls.bind_root, node.state.harness_workspace_id, root,
+                ctx.harness_execution_profile,
             )
         # The root this run ACTUALLY bound, scratch included: a "" here
         # means "no run yet", which is what lets the card distinguish a

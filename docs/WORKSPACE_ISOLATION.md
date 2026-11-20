@@ -3,12 +3,12 @@
 Open an Agent node's **Agent settings** and select **Execution profile**.
 
 - **Host** (default): `shell.exec`, `shell.session`, `python.exec` and `python.install` use the host's execution environment under their existing approval, subprocess-environment and execution-guard policies. The persistent Python REPL and its package installer are **not sandboxes**.
-- **Isolated**: `shell.exec` and `shell.session` run in Docker (preferred when both CLIs are present) or Podman. The currently bound trusted/scratch workspace is mounted read/write at `/workspace`. The fixed `python:3.12-slim` image runs `/bin/sh` with **no container network** (`--network=none`), **1 CPU**, **512 MiB RAM and swap**, 128 processes, dropped Linux capabilities, no-new-privileges, a read-only image filesystem and a 64 MiB temporary filesystem. Only the workspace is bind-mounted; host executables and backend secrets are not passed into the container.
-- **No host Python escape hatch**: `python.exec` and `python.install` are **not offered** in Isolated. A direct/forged call also fails closed rather than creating a host interpreter or downloading packages. A persistent REPL left from a prior Host task is stopped on entry to Isolated. To run Python in Isolated, use `shell.exec` with the container's `python`. That is **not** a persistent REPL, and the container has no network for `pip` downloads.
+- **Isolated**: `shell.exec`, `shell.session`, `python.exec`, and `python.install` run in Docker (preferred) or Podman, using the fixed `python:3.12-slim` image and the bound trusted/scratch workspace at `/workspace`. Containers have **1 CPU**, **512 MiB RAM and swap**, 128 processes, dropped capabilities, no-new-privileges, a read-only image filesystem, and a 64 MiB temporary filesystem. All command stages are network-disabled (`--network=none`) except the explicitly approved PyPI wheel-download phase of `python.install`. Shell tools mount only the workspace; Python tools may also mount scoped app-owned virtualenvs and a shared wheel cache. Host executables and backend secrets are not passed in.
+- **No host Python escape hatch**: Python execution and package installation use container-native interpreters, never host Python or host pip. A Host REPL is retired on the switch to Isolated; no tool falls back to Host if the engine, daemon or image is missing. Only the separately disclosed PyPI wheel-download subprocess can use temporary container networking.
 
 ## Network grants are separate from container networking
 
-The Isolated setting does **not** turn the Graphlink backend into an offline process. Model/provider requests and other explicit backend services can use the host's network. The `--network=none` rule applies **only** to commands running inside the shell container.
+The Isolated setting does **not** turn the Graphlink backend into an offline process. Model/provider requests and explicit backend services can still use the host's network. Container commands use `--network=none` except the separately approved PyPI wheel-download phase of `python.install`.
 
 The workspace agent's `net.fetch` grant offers only `web.search` and `web.fetch` when the built-in Web Research plugin is enabled, not every tool that happens to require `net.fetch`:
 
@@ -27,8 +27,12 @@ docker pull python:3.12-slim
 # or: podman pull python:3.12-slim
 ```
 
-The image is deliberately **not** downloaded during an agent command (`--pull=never`). If the CLI/daemon/image is unavailable, shell execution reports an error and **never falls back to Host**. Workspace paths containing commas or newlines are rejected in Isolated because the container CLI's `--mount` option parses comma-separated fields even when constructed as one argv element.
+The image is deliberately **not** downloaded during an agent command (`--pull=never`). If the CLI, daemon or image is unavailable, shell and Python tools fail closed and **never fall back to Host**. Workspace and extra-mount source paths containing commas or newlines are rejected because the container CLI parses comma-separated `--mount` fields even without a host shell.
 
-Shell commands retain per-call approval and timeout/cancellation behavior. Long-running sessions are retired when a node switches workspace or profile, and removed from the container engine on stop or app teardown. The preference is saved with the graph and snapshotted per task; changing it during a task affects subsequent tasks. An installed CLI is not proof that its daemon is running.
+Shell and Python tools retain per-call approval and timeout/cancellation behavior. Persistent shell sessions and Python interpreters are retired on workspace/profile changes and stopped on teardown. The preference is saved with the graph and snapshotted per task; changing it during a task affects subsequent tasks. An installed CLI is not proof its daemon is running.
 
-This is a **shell-execution isolation profile**, not whole-application confinement, a guarantee against malicious Docker/Podman daemons or images, or a claim that approved network tools cannot exfiltrate data. See [the independent security audit](WORKSPACE_ISOLATION_NETWORK_AUDIT_2026-11-20.md) for the threat model, changes, tests, and residual risks.
+`python.exec` uses a persistent container REPL. Python tools prefer container-compatible project `.venv`/`venv` environments, otherwise create separate container-native environments. Scratch environments stay in the scratch workspace; trusted projects use scoped app-owned per-agent/per-project directories. Host virtualenvs cannot run in the Linux container and are never executed or repaired on the host.
+
+`python.install` requires a fresh approval bound to the workspace, profile, interpreter and packages, explicitly disclosing possible network access. It first uses cached binary wheels; if needed, only `pip download` contacts the canonical PyPI index. The following `pip install --no-index` runs offline.
+
+This is a **workspace execution isolation profile**, not whole-application confinement, a guarantee against malicious Docker/Podman daemons or images, or a claim that approved backend network tools cannot exfiltrate data. See [the independent security audit](WORKSPACE_ISOLATION_NETWORK_AUDIT_2026-11-20.md) for the earlier shell-only threat model and residual risks; container Python support was added subsequently.

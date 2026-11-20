@@ -1,8 +1,8 @@
 # Fresh approval for persistent Python execution
 
-`python.exec` executes Python with the local process's privileges. This
-change hardens the approval path; it does not make Python a sandbox or
-reverse effects after execution. Interpreter state persists between calls,
+`python.exec` executes approved code with the local process's privileges in Host mode, or inside the restricted, network-disabled container in Isolated mode. This
+change hardens the approval path; the Host profile is not a sandbox and
+neither profile can reverse effects after execution. Interpreter state persists between calls,
 so the same source can do something different the next time it runs.
 
 ## Reproduced on main

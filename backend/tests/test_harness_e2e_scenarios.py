@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shlex
+import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -262,7 +264,18 @@ def test_fix_failing_sample_project_test_and_re_run_it(scenario, monkeypatch):
         b"    def test_double(self):\n"
         b"        self.assertEqual(double(3), 6)\n"
     )
-    test_command = "python -m unittest discover -s sample_project"
+    # Invoke pytest's interpreter rather than an unrelated Windows PATH alias.
+    # PowerShell -Command must propagate the native program's exit status so
+    # the first run is reported as failing and the re-run as passing.
+    if sys.platform == "win32":
+        test_command = (
+            f'& "{sys.executable}" -m unittest discover -s sample_project; '
+            'exit $LASTEXITCODE'
+        )
+    else:
+        test_command = (
+            f"{shlex.quote(sys.executable)} -m unittest discover -s sample_project"
+        )
 
     def fix_after_failure(request):
         assert "return value + 1" in _result(request, "inspect")

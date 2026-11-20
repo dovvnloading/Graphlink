@@ -23,7 +23,8 @@ import subprocess
 import sys
 import threading
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from typing import Callable
 
 import api_provider
 import graphlink_task_config as config
@@ -88,7 +89,10 @@ class PythonREPL:
     created it nor may we re-permission it. The caller that supplies a cwd
     is asserting it already exists and is already governed.
     """
-    def __init__(self, repl_id=None, cwd=None, manage_cwd=True, python_executable=None):
+    def __init__(
+        self, repl_id=None, cwd=None, manage_cwd=True, python_executable=None,
+        command_builder: Callable[[str], tuple[list[str], Callable[[], None]]] | None = None,
+    ):
         self.process = None
         self.last_run_failed = False
         self._boundary_prefix = ""
@@ -115,13 +119,20 @@ class PythonREPL:
         self._manage_cwd = bool(manage_cwd) and cwd is None
         self.cwd = Path(cwd) if cwd is not None else PYTHON_REPL_ROOT / safe_scratch_id(repl_id)
         self.python_executable = (
-            Path(python_executable) if python_executable is not None else Path(sys.executable)
+            python_executable
+            if command_builder is not None and isinstance(python_executable, PurePosixPath)
+            else Path(python_executable) if python_executable is not None else Path(sys.executable)
         )
         # An explicit interpreter comes from a venv. Keep subprocesses
         # launched by executed code (python, pip, etc.) in that same venv.
         self._venv_dir = (
             self.python_executable.parent.parent if python_executable is not None else None
         )
+        # Optional harness-provided container launcher. It returns the local
+        # CLI argv plus a daemon-side teardown callback; no model input is
+        # interpolated into a host shell.
+        self._command_builder = command_builder
+        self._command_cleanup: Callable[[], None] | None = None
 
     def start(self):
         with self._lock:
@@ -141,6 +152,9 @@ class PythonREPL:
             if self.guard:
                 self.guard.close()
                 self.guard = None
+            if self._command_cleanup is not None:
+                cleanup, self._command_cleanup = self._command_cleanup, None
+                cleanup()
             old_process = self.process
             self.process = None
             if old_process is not None:
@@ -176,7 +190,7 @@ while True:
             # including any provider API key configured as an environment
             # variable.
             child_env = safe_subprocess_env()
-            if self._venv_dir is not None:
+            if self._venv_dir is not None and self._command_builder is None:
                 child_env["VIRTUAL_ENV"] = str(self._venv_dir)
                 path_key = next((k for k in child_env if k.upper() == "PATH"), "PATH")
                 child_env[path_key] = (
@@ -204,8 +218,11 @@ while True:
             self.guard = create_execution_guard()
 
             try:
+                argv = [str(self.python_executable), '-u', '-c', script]
+                if self._command_builder is not None:
+                    argv, self._command_cleanup = self._command_builder(script)
                 self.process = spawn_guarded_subprocess(self.guard,
-                    [str(self.python_executable), '-u', '-c', script],
+                    argv,
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
@@ -240,6 +257,9 @@ while True:
                 guard, self.guard = self.guard, None
                 if guard is not None:
                     guard.close()
+                if self._command_cleanup is not None:
+                    cleanup, self._command_cleanup = self._command_cleanup, None
+                    cleanup()
                 raise
 
     def execute(self, code, on_output=None, cancel_event=None):
@@ -351,6 +371,11 @@ while True:
                         if stream is not None:
                             stream.close()
                     self.process = None
+            if self._command_cleanup is not None:
+                # Stopping the Docker/Podman CLI alone need not terminate a
+                # still-running daemon-side container.
+                cleanup, self._command_cleanup = self._command_cleanup, None
+                cleanup()
 
 
 class CodeAnalysisAgent:
