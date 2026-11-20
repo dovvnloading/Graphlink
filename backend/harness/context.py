@@ -167,7 +167,7 @@ def _command_shell(env: dict[str, str], *, os_name: str, shell: str = "auto") ->
     return " ".join(argv[:-1])
 
 
-def describe_machine(workspace: Path, *, shell: str = "auto") -> str:
+def describe_machine(workspace: Path, *, shell: str = "auto", profile: str = "host") -> str:
     """Capture machine facts for a workspace agent, without executing tools.
 
     which() reports executable presence on the allowlisted subprocess PATH.
@@ -176,6 +176,21 @@ def describe_machine(workspace: Path, *, shell: str = "auto") -> str:
     The Python REPL starts with sys.executable, so its version is the
     backend interpreter's version. Nothing here authorizes tool use.
     """
+    if profile == "isolated":
+        from backend.harness.shell_isolation import CONTAINER_IMAGE, available_engine
+
+        engine = available_engine()
+        return "\n".join([
+            "## Workspace execution environment (session snapshot)",
+            f"Host OS: {platform.platform()} ({platform.machine()})",
+            f"shell.exec / shell.session: /bin/sh -c in isolated {CONTAINER_IMAGE} container",
+            f"Container engine: {engine or 'none installed (Docker or Podman required)'}",
+            "Container network: disabled; limits: 1 CPU, 512 MiB RAM",
+            "Container workspace: /workspace (read/write bind mount)",
+            f"Host workspace root: {workspace.resolve()}",
+            "Host executables are NOT automatically available inside the container.",
+            f"Python (python.exec) remains on host: {platform.python_version()} ({sys.executable})",
+        ])
     env = safe_subprocess_env()
     path = _env_value(env, "PATH") or os.defpath
     lines = [
