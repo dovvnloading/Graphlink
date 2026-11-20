@@ -114,6 +114,10 @@ class _FakeBus:
     def register_intent(self, topic, name, fn):
         self.intents[(topic, name)] = fn
 
+    def has_topic(self, topic):
+        # The real session has Settings registered alongside Harness.
+        return topic == "app-settings"
+
     async def publish(self, topic):
         self.published.append(topic)
 
@@ -200,6 +204,7 @@ def test_picking_a_launch_workspace_grants_it_and_answers_with_the_path(
 
     assert answer == str(project.resolve())
     assert settings.granted == [str(project.resolve())], "the pick IS the grant"
+    assert "app-settings" in bus.published, "Settings must refresh after a folder grant"
 
 
 def test_a_cancelled_launch_picker_grants_nothing(workspace_root, monkeypatch):
@@ -208,3 +213,18 @@ def test_a_cancelled_launch_picker_grants_nothing(workspace_root, monkeypatch):
 
     assert asyncio.run(bus.dispatch("harness", "pickLaunchWorkspace", [])) is None
     assert settings.granted == []
+
+
+def test_revoked_folder_falls_back_to_scratch_on_the_next_run(workspace_root, tmp_path):
+    from graphlink_settings_store import SettingsManager
+
+    project = tmp_path / "project"
+    project.mkdir()
+    settings = SettingsManager(tmp_path / "settings.dat")
+    settings.add_harness_trusted_dir(str(project.resolve()))
+
+    assert bound_root("ws1", str(project), settings_manager=settings) == (project.resolve(), True)
+
+    settings.revoke_harness_trusted_dir(str(project.resolve()))
+    root, is_user_dir = bound_root("ws1", str(project), settings_manager=settings)
+    assert not is_user_dir and root == ensure_workspace("ws1")
