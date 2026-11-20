@@ -383,6 +383,7 @@ async def install_packages(
                 content="Isolated Python workspace changed since approval; ask again.",
                 is_error=True,
             )
+        interpreter: Path | PurePosixPath
         if profile == "isolated":
             plan = planned_isolated_python_environment(
                 workspace_id, root, is_scratch=is_scratch,
