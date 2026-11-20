@@ -43,8 +43,8 @@ from backend.harness import context as context_module
 from backend.harness import shell_policy
 from backend.harness.shell_selection import normalize_shell
 from backend.harness.shell_isolation import normalize_execution_profile
-from backend.harness.permission_modes import effective_permission_mode
-from backend.harness.tools_fs import preview_harness_file_change
+from backend.harness.permission_modes import effective_permission_mode, requires_explicit_workspace_approval
+from backend.harness.tools_fs import FileApprovalState, preview_harness_file_change
 from backend.harness.retry import (
     ACTION_COMPACT_AND_RETRY,
     ACTION_FAIL,
@@ -219,6 +219,9 @@ class HarnessRunContext(RunContext):
     # The interpreter disclosed for a fresh python.install authorization.
     python_install_approved_interpreter: object = None
     python_install_approved_binding: object = None
+    # Per-call source-file versions disclosed for a human-approved write.
+    # Never persisted; the file handlers consume them just before replacing.
+    harness_file_approval_states: dict[str, FileApprovalState] = field(default_factory=dict)
     # Attached only while a shell.exec/python.exec handler is running. The
     # callback may be invoked by a worker thread, so it must not touch the
     # scene or event bus itself.
@@ -602,16 +605,10 @@ async def run_harness(
         future: asyncio.Future = loop_handle.create_future()
         handle.approval_future = future
         handle.harness_network_approval = network_offered
-        # A run can pause many times. Its request_id alone is not consent
-        # for the next Python call: a delayed/replayed click must still name
-        # the exact disclosure that was on screen when the user decided.
-        # Web domains are once-per-task, never session-wide. A unique token
-        # also prevents a stale click from approving a later redirect host.
-        bind_approval = (
-            call.name in ("python.exec", "python.install", "shell.exec", "web.fetch", "web.search")
-            or call.name.startswith("fal.")
-        )
-        approval_token = uuid.uuid4().hex if bind_approval else ""
+        # One run can contain many consent prompts. Every one must have a
+        # fresh identity, including shell.session start/stdin and fs.write/edit:
+        # a delayed click from the previous prompt can never authorize this one.
+        approval_token = uuid.uuid4().hex
         shell_rules = (
             shell_policy.shell_allow_rule_candidates(
                 str(call.arguments.get("command") or ""), shell=ctx.harness_shell,
@@ -619,9 +616,16 @@ async def run_harness(
                 profile=ctx.harness_execution_profile,
             ) if call.name == "shell.exec" else []
         )
-        can_save_shell_rules = not network_offered and bool(shell_rules) and len(set(
-            node.state.harness_shell_allow_rules + shell_rules
-        )) <= shell_policy.MAX_SHELL_ALLOW_RULES
+        # A syntactically saveable shell rule is not necessarily reusable.
+        # The independent permission-mode gate forces fresh consent for
+        # commands like git status; never promise an inert "Always allow".
+        can_save_shell_rules = (
+            not network_offered
+            and not requires_explicit_workspace_approval(call, ctx)
+            and bool(shell_rules)
+            and len(set(node.state.harness_shell_allow_rules + shell_rules))
+            <= shell_policy.MAX_SHELL_ALLOW_RULES
+        )
         handle.approval_token = approval_token
         node.state.harness_approval_id = handle.approval_token
         node.state.harness_awaiting_approval = True
@@ -651,20 +655,32 @@ async def run_harness(
                     network_status=network_status,
                 )
             )
-        # Shell commands can save only exact, root/profile-scoped commands, never tool-wide
-        # session consent. Python and interactive stdin still ask every time.
+        # Token binding is independent of whether a durable grant is useful.
+        # Shell grants are exact rules; Python, Web, Fal and interactive shell
+        # actions never offer tool-wide session consent.
+        session_grant_eligible = (
+            call.name not in (
+                "python.exec", "python.install", "shell.exec", "shell.session",
+                "web.fetch", "web.search",
+            )
+            and not call.name.startswith("fal.")
+        )
         node.state.harness_approval_session_offered = preview_available and (
             can_save_shell_rules if call.name == "shell.exec"
             else ctx.session_grants is not None
-            and not bind_approval and not _is_dangerous_call(call)
+            and session_grant_eligible and not _is_dangerous_call(call)
+        )
+        handle.harness_session_approval_kind = (
+            ("shell_rule" if call.name == "shell.exec" else "session")
+            if node.state.harness_approval_session_offered else ""
         )
         await bus.publish("scene")
         try:
             approved = await future
         finally:
             # Cancellation releases a run before this coroutine unwinds.
-            # An older Python prompt must not clear a newer run's surface.
-            if not approval_token or node.state.harness_approval_id == approval_token:
+            # A late, older prompt must not clear a newer run's surface.
+            if node.state.harness_approval_id == approval_token:
                 node.state.harness_awaiting_approval = False
                 node.state.harness_approval_tool_name = ""
                 node.state.harness_approval_summary = ""
@@ -672,6 +688,7 @@ async def run_harness(
                 node.state.harness_approval_network_offered = False
                 node.state.harness_approval_id = ""
             handle.approval_token = ""
+            handle.harness_session_approval_kind = ""
             handle.harness_network_approval = False
         await bus.publish("scene")
         # A normal tool approval can never grant networking. Only a
@@ -701,6 +718,13 @@ async def run_harness(
         if call.name == "python.install" and approved and preview_available:
             ctx.python_install_approved_interpreter = install_target
             ctx.python_install_approved_binding = install_binding
+        if preview is not None and approved and preview_available:
+            if preview.state is None:
+                return False
+            # The handler checks this exact target/content version, including
+            # "absent", immediately before writing. Approval alone is not a
+            # license to overwrite an externally changed file.
+            ctx.harness_file_approval_states[call.id] = preview.state
         return approved if preview_available else False
 
     async def set_plan(steps: list) -> None:

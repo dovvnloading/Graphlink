@@ -927,8 +927,11 @@ class DispatcherCoreOps(DispatcherParts):
         handle = self._runs.get(request_id)
         if handle is None or handle.approval_future is None:
             return False
-        # Both directions matter: an old Python token also cannot approve
-        # a later non-Python prompt whose token is empty.
+        # Each workspace consent prompt has a fresh, nonempty token. A
+        # missing ID must not resolve a later prompt (or a user.ask future).
+        # Legacy non-harness approval surfaces retain their own semantics.
+        if handle.kind == "harness" and not handle.approval_token:
+            return False
         if approval_id != handle.approval_token:
             return False
         # A normal approveTool click must not widen Isolated networking.

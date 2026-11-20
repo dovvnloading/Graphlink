@@ -429,25 +429,23 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   const [settingsPosition, setSettingsPosition] = useState<MenuPosition | null>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
   const shellApproval = data.harnessApprovalToolName === "shell.exec";
-  const boundApproval = shellApproval || data.harnessApprovalNetworkOffered ||
-    ["python.exec", "python.install", "web.fetch", "web.search"].includes(data.harnessApprovalToolName) ||
-    data.harnessApprovalToolName.startsWith("fal.");
+  // Every human consent prompt carries a unique ID, not just Python, Web
+  // and shell.exec. The UI must never submit an unbound approval for files
+  // or interactive shell commands.
+  const sessionGrantTool = ![
+    "shell.exec", "shell.session", "python.exec", "python.install",
+    "web.fetch", "web.search",
+  ].includes(data.harnessApprovalToolName) && !data.harnessApprovalToolName.startsWith("fal.");
   const fileApproval = data.harnessApprovalToolName === "fs.write" || data.harnessApprovalToolName === "fs.edit";
   // Never ask someone to approve an unseen mutation. The backend explains
   // when it cannot safely read the existing file to build the preview.
   const previewUnavailable = fileApproval &&
     data.harnessApprovalSummary.slice(data.harnessApprovalSummary.indexOf("\n") + 1)
       .startsWith("Preview unavailable:");
-  const decisionPending = boundApproval && (
-    !data.harnessApprovalId || submittedApprovalId === data.harnessApprovalId
-  );
+  const decisionPending = !data.harnessApprovalId || submittedApprovalId === data.harnessApprovalId;
 
   function decideTool(approved: boolean, alwaysAllow = false): void {
     const decide = alwaysAllow ? data.onApproveToolForSession : approved ? data.onApproveTool : data.onDenyTool;
-    if (!boundApproval) {
-      decide();
-      return;
-    }
     const approvalId = data.harnessApprovalId;
     if (!approvalId || submittedApprovalRef.current === approvalId) return;
     submittedApprovalRef.current = approvalId;
@@ -767,7 +765,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
                 Approve once
               </button>
             )}
-            {data.harnessApprovalSessionOffered && (!boundApproval || shellApproval) && !previewUnavailable && (
+            {data.harnessApprovalSessionOffered && (sessionGrantTool || shellApproval) && !previewUnavailable && (
               <button
                 type="button"
                 className="plan-node-button nodrag"

@@ -71,10 +71,13 @@ class HarnessDispatchOps(DispatcherParts):
         future = handle.approval_future
         if future is None or future.done() or approval_id != handle.approval_token:
             return False
-        # Non-tokenized tools retain their existing session grant. A shell
-        # approval is token-bound, and the harness callback separately
-        # verifies its command is safe before persisting any prefixes.
-        future.set_result("shell_rule" if handle.approval_token else "session")
+        # Token identity is necessary but not sufficient: only the backend
+        # can offer a durable grant, and it must identify the offered kind.
+        # Every consent prompt has a token now, including file writes.
+        kind = handle.harness_session_approval_kind
+        if kind not in ("shell_rule", "session") or not approval_id:
+            return False
+        future.set_result(kind)
         return True
 
     def approve_harness_network(self, request_id: str, approval_id: str, *, for_task: bool = False) -> bool:

@@ -294,6 +294,11 @@ class ToolRegistry:
             if error is not None:
                 return ToolResult(content=error, is_error=True)
             call = ToolCall(id=call.id, name=call.name, arguments=deepcopy(call.arguments))
+        # Interactive session start and stdin write execute code too. Snapshot
+        # their arguments independently of the disclosure callback.
+        original_session_call = call if call.name == "shell.session" else None
+        if original_session_call is not None:
+            call = ToolCall(id=call.id, name=call.name, arguments=deepcopy(call.arguments))
         original_python_call = call if call.name in ("python.exec", "python.install") else None
         if original_python_call is not None:
             if call.name == "python.exec":
@@ -313,6 +318,11 @@ class ToolRegistry:
         # pending approval nor Auto-edit can execute a changed request.
         original_file_call = call if call.name in ("fs.write", "fs.edit") else None
         if original_file_call is not None:
+            # A provider may reuse a call id. Never inherit a precondition
+            # from a prior denied/stale approval or an Auto-edit invocation.
+            file_states = getattr(ctx, "harness_file_approval_states", None)
+            if isinstance(file_states, dict):
+                file_states.pop(call.id, None)
             call = ToolCall(id=call.id, name=call.name, arguments=deepcopy(call.arguments))
 
         # Only selected workspace operations may bypass an ordinary approval.
@@ -386,7 +396,7 @@ class ToolRegistry:
                 # once-only branch exactly as it always did.
                 disclosure_call = deepcopy(call) if (
                     original_python_call is not None or original_shell_call is not None
-                    or original_file_call is not None
+                    or original_file_call is not None or original_session_call is not None
                 ) else call
                 decision = await ctx.request_approval(disclosure_call)
                 approved = bool(decision)
@@ -403,12 +413,17 @@ class ToolRegistry:
                 original_approved_call = (
                     original_python_call if original_python_call is not None
                     else original_shell_call if original_shell_call is not None
-                    else original_file_call
+                    else original_file_call if original_file_call is not None
+                    else original_session_call
                 )
                 if original_approved_call is not None and (
                     original_approved_call.arguments != call.arguments
                     or disclosure_call.arguments != call.arguments
                 ):
+                    if original_file_call is not None:
+                        file_states = getattr(ctx, "harness_file_approval_states", None)
+                        if isinstance(file_states, dict):
+                            file_states.pop(call.id, None)
                     if original_shell_call is not None:
                         network_once = getattr(ctx, "harness_network_once_approved", None)
                         if network_once is not None:
