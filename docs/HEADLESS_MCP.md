@@ -2,8 +2,10 @@
 
 Graphlink's FastAPI server already owns the real graph state, database,
 assets, intent handlers and harness. The headless launcher starts that SAME
-application without opening the pywebview desktop. A separate local MCP
-stdio adapter connects back to its protected read-only control routes.
+application without opening the pywebview desktop. An explicitly requested
+local browser can provide the app's human-approval UI for MCP-controlled Agent
+tasks; by default no browser opens. A separate local MCP stdio adapter
+connects back to its protected control routes.
 
 The default setup supports **inspection only**. Optional canvas writes
 and workspace-agent task control require an explicit opt-in and a separate
@@ -20,9 +22,11 @@ python -m backend.headless --port 8765
 ```
 
 The backend binds **only 127.0.0.1** and generates **two independent random
-credentials** on each launch. The full-access WebSocket/backend credential
-stays in the backend process; ONLY the limited MCP-read credential is
-written to the token file. By default this file is:
+credentials** on each read-only launch. By default, the full-access
+WebSocket/backend credential stays in the backend process; ONLY the limited
+MCP-read credential is written to the token file. The explicit `--open-ui`
+mode described below hands the full credential only to a local operator
+browser via a URL fragment, never to an MCP token file. By default this file is:
 
 ```text
 ~/.graphlink/headless.token
@@ -135,8 +139,29 @@ read tools until explicitly given a write-token-file path. To enable
 scoped editing and workspace-agent task control on the **currently open canvas**:
 
 ```powershell
-python -m backend.headless --port 8765 --allow-mcp-writes
+python -m backend.headless --port 8765 --allow-mcp-writes --open-ui
 ```
+
+**`--open-ui` is the supported live-Agent / human-consent path.** It requires
+`--allow-mcp-writes` and opens the normal Graphlink SPA in the local default
+browser with the same `/#token=...` capability fragment as the desktop
+window. In that browser, create an Agent using the Agent composer or open a
+saved graph with an Agent; let any initial Agent run finish or stop it.
+`graphlink_list_nodes` will then see the **same live harness node** in this
+headless backend. MCP may start follow-up tasks against it, and the browser's
+Agent panel displays approvals/questions and sends the human's decisions
+through the normal authenticated app WebSocket. Keep this window connected
+while awaiting consent. No MCP endpoint can approve a task or create an Agent.
+
+This flag is **explicit**, not a bypass for MCP: the browser gets the full
+app capability, and the MCP read and write files remain restricted. Never
+share the browser's token-bearing URL, use it in an untrusted browser profile,
+or leave it in a shared browser history. The fragment is never sent in HTTP
+requests and Graphlink does not save the full credential to disk. If a local
+graphical browser cannot be opened (for example, on a remote server without
+a desktop), the launcher warns without printing the token; do **not** run
+MCP Agent tasks requiring approval until an authenticated operator UI is
+available on the same instance. For inspection-only use, omit both flags.
 
 Then configure your MCP client to launch the adapter with the explicit
 write capability:
@@ -146,7 +171,7 @@ python -m backend.mcp_server --url http://127.0.0.1:8765 --write-token-file ~/.g
 ```
 
 The headless launcher creates three independent secrets: an administrative
-backend token that is never published, a read-only token in
+backend token passed to the operator browser **only with `--open-ui`**, a read-only token in
 `~/.graphlink/headless.token`, and a write token in
 `~/.graphlink/headless.write.token`. Both files use the same secure
 atomic creation and Windows DACL/POSIX permission protection. The write
@@ -194,8 +219,9 @@ available agent reply, truncated to 16,000 characters with
 and the exact `run_id` returned by start; a stale run cannot cancel
 a newer task.
 
-**Approval remains exclusively inside the Graphlink app.** An MCP-started
-agent can pause for a sensitive tool approval or user question; status
+**Approval remains exclusively inside the Graphlink app (including its
+explicit `--open-ui` local browser).** An MCP-started agent can pause for a
+sensitive tool approval or user question; status
 indicates `awaiting_app_approval` or `awaiting_app_answer`. Neither
 MCP tool schemas nor the write-token HTTP routes expose an approval,
 denial, question answer, tool grant, workspace-folder selection, or
@@ -212,7 +238,7 @@ handling. The UI remains usable through its existing WebSocket intents.
 ## Verification
 
 ```powershell
-python -m pytest -q backend/tests/test_control_api.py backend/tests/test_control_writes.py backend/tests/test_control_agent_tasks.py backend/tests/test_mcp_server.py
+python -m pytest -q backend/tests/test_control_api.py backend/tests/test_control_writes.py backend/tests/test_control_agent_tasks.py backend/tests/test_mcp_server.py backend/tests/test_mcp_operator_ui.py backend/tests/test_web_research_fetch_policy.py
 ```
 
 The tests include a real stdio subprocess connecting to a real loopback
@@ -221,9 +247,12 @@ WebSocket and administrative API access for that credential, modern/legacy
 MCP negotiation, invalid arguments, and POSIX token-file permissions.
 On Windows, real filesystem DACL tests verify protected user/SYSTEM/admin
 access after atomic replacement, rotation and fail-closed behavior when
-DACL verification fails. The tests also verify that the launcher writes
-ONLY the read-only token and that Graphlink's own legacy MCP client
-can connect successfully.
+DACL verification fails. The tests also verify that the launcher does not put its administrative
+credential in the MCP token files, and that Graphlink's own legacy MCP
+client can connect successfully. The operator smoke starts the actual
+headless launcher, uses the real stdio adapter, creates an Agent via the
+app-authorized WebSocket, and completes a token-bound approval through
+that WebSocket while MCP status remains unable to approve it.
 
 ## Next increments
 
