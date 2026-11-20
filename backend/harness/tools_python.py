@@ -261,6 +261,7 @@ def register_harness_python_tool(
                 interpreter = await asyncio.to_thread(
                     lambda: ensure_python_environment(
                         workspace_id, cwd, is_scratch=is_scratch,
+                        cancel_event=cancel_event,
                     ),
                 )
             if cancel_event is not None and cancel_event.is_set():
