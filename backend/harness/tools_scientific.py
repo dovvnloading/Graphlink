@@ -249,7 +249,10 @@ def register_workspace_tools(registry: ToolRegistry, dispatcher, document) -> No
             return _error("The scientific worker returned an invalid or unverified receipt.")
 
         state_data = {"version": 1, "nodeKey": uuid4().hex, "latest": result}
-        state_type = TableState if "table" in result or "tableAsset" in result else PluginStateSnapshot
+        # Match the manual Workbench: inline result tables stay on the
+        # immutable plugin snapshot; only externalized typed table assets
+        # require TableState's metadata/storage lifecycle.
+        state_type = TableState if "tableAsset" in result else PluginStateSnapshot
         state = state_type.from_data(state_data)
         kind = f"science_{pack_id}.workbench"
         x, y = document.place_child(agent.id, kind, prefer="right")
