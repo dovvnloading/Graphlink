@@ -17,6 +17,8 @@ from backend.api._settings_shared import run_locked
 from backend.api._shared import make_publish_scene
 from backend.domain.graph import SceneDocument
 from backend.domain.node_states import HarnessState
+from backend.harness.workspace import WorkspaceError, bound_root
+from backend.harness.workspace_files import list_workspace_files, read_workspace_file, reveal_workspace
 from backend.harness.shell_selection import VALID_SHELLS
 from backend.events import SessionBus
 from backend.notifications import NotificationState
@@ -135,6 +137,11 @@ def register_harness_intents(
             # other settings mutation uses (save_recipe's precedent), so it
             # cannot land mid-write against a concurrent settings save.
             await asyncio.to_thread(run_locked, lambda: settings.add_harness_trusted_dir(resolved))
+        # A Settings dialog may already be subscribed. Publish the newly
+        # recorded grant so its trusted-folder list cannot stay stale until
+        # some unrelated settings change.
+        if bus.has_topic("app-settings"):
+            await bus.publish("app-settings")
         return resolved
 
     async def pick_launch_workspace():
@@ -180,6 +187,37 @@ def register_harness_intents(
         node.state.harness_workspace_path = ""
         node.state.harness_workspace_active = ""
         await publish_scene()
+
+    def _workspace_for_node(node_id: str):
+        """Resolve the current local grant on EACH request. A serialized node
+        path (or its last-run active path) never conveys permission by itself.
+        This is also the run's scratch fallback for an untrusted user folder.
+        """
+        node = document.nodes.get(node_id)
+        if node is None or not isinstance(node.state, HarnessState):
+            raise WorkspaceError("This agent node no longer exists.")
+        return bound_root(
+            node.state.harness_workspace_id,
+            node.state.harness_workspace_path,
+            settings_manager=agent_dispatcher._settings_manager,
+        )
+
+    async def list_files(node_id: str, relative_path: str = ""):
+        root, user_dir = _workspace_for_node(node_id)
+        listing = await asyncio.to_thread(list_workspace_files, root, relative_path)
+        return {"root": str(root), "isScratch": not user_dir, **listing}
+
+    async def read_file(node_id: str, relative_path: str):
+        root, _ = _workspace_for_node(node_id)
+        return await asyncio.to_thread(read_workspace_file, root, relative_path)
+
+    async def reveal_folder(node_id: str):
+        root, _ = _workspace_for_node(node_id)
+        try:
+            await asyncio.to_thread(reveal_workspace, root)
+        except OSError as exc:
+            notifications.show(f"Could not open the workspace folder: {exc}", "error")
+            await bus.publish("notification")
 
     async def set_shell(node_id, shell):
         """Save a node preference for subsequent tasks, not the live run."""
@@ -231,4 +269,7 @@ def register_harness_intents(
     bus.register_intent("harness", "pickLaunchWorkspace", pick_launch_workspace)
     bus.register_intent("harness", "pickWorkspace", pick_workspace)
     bus.register_intent("harness", "useScratch", use_scratch)
+    bus.register_intent("harness", "listWorkspaceFiles", list_files)
+    bus.register_intent("harness", "readWorkspaceFile", read_file)
+    bus.register_intent("harness", "revealWorkspace", reveal_folder)
     bus.register_intent("harness", "setShell", set_shell)

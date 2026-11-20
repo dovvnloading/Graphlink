@@ -2194,6 +2194,51 @@ def test_mcp_servers_is_exposed_on_the_app_settings_snapshot(manager):
     assert "enabled_tools" not in servers[0]
 
 
+# -- Workspace Agent: trusted folders can be reviewed and revoked --------
+
+
+def test_workspace_agent_trusted_folders_are_listed_and_revoked_individually(manager):
+    project_a, project_b = "/projects/alpha", "/projects/beta"
+    manager.add_harness_trusted_dir(project_a)
+    manager.add_harness_trusted_dir(project_b)
+    bus = SessionBus("settings-workspace-trust-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.publish("app-settings"))
+    assert recorder.messages[-1]["payload"]["harnessTrustedDirs"] == [project_a, project_b]
+    assert ("app-settings", "revokeHarnessTrustedDir") in bus._intents
+
+    asyncio.run(bus.dispatch_intent("app-settings", "revokeHarnessTrustedDir", [project_a]))
+    assert recorder.messages[-1]["payload"]["harnessTrustedDirs"] == [project_b]
+    assert manager.get_harness_trusted_dirs() == [project_b]
+    assert SettingsManager(manager.state_file).get_harness_trusted_dirs() == [project_b]
+
+
+def test_workspace_agent_revocation_rejects_invalid_or_unlisted_paths(manager):
+    project = "/projects/keep"
+    manager.add_harness_trusted_dir(project)
+    bus = SessionBus("settings-workspace-trust-invalid-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    for invalid in (None, "", [], {"path": project}):
+        asyncio.run(bus.dispatch_intent("app-settings", "revokeHarnessTrustedDir", [invalid]))
+        assert manager.get_harness_trusted_dirs() == [project]
+    assert not recorder.messages, "malformed requests must not publish a settings change"
+
+    # An unlisted path cannot revoke a different grant, even if its name is
+    # a parent of the trusted directory.
+    asyncio.run(bus.dispatch_intent("app-settings", "revokeHarnessTrustedDir", ["/projects"]))
+    assert manager.get_harness_trusted_dirs() == [project]
+
+    asyncio.run(bus.dispatch_intent("app-settings", "revokeHarnessTrustedDir", [project]))
+    asyncio.run(bus.dispatch_intent("app-settings", "revokeHarnessTrustedDir", [project]))
+    assert manager.get_harness_trusted_dirs() == []
+
+
 # -- ADR-008 stage 8.6: Builder recipes ---------------------------------------
 
 def test_get_recipes_defaults_to_an_empty_list(manager):

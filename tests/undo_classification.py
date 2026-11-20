@@ -322,6 +322,9 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("harness", "pickLaunchWorkspace", "B", "run-config: the launcher's folder pick, before any node exists - writes the settings trust grant and answers with the path, touching no document content"),
     Classified("harness", "pickWorkspace", "B", "run-config: binds the node to a trusted user dir and writes the settings trust grant, not document content"),
     Classified("harness", "useScratch", "B", "run-config: reverts the node to the scratch workspace"),
+    Classified("harness", "listWorkspaceFiles", "B", "read-only: lists files and directories in the currently authorized workspace without modifying the document"),
+    Classified("harness", "readWorkspaceFile", "B", "read-only: previews a file in the currently authorized workspace without modifying the document"),
+    Classified("harness", "revealWorkspace", "B", "read-only: opens the authorized workspace in the native file manager without modifying the document"),
     Classified("harness", "setShell", "B", "run-config: persists the node shell choice for subsequent tasks, not an in-flight execution"),
 
     # -- backend/api/intents_fal_media.py (scene) ----------------------------
@@ -353,6 +356,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
     # ADR-012 stage 12.6:
     Classified("app-settings", "setHasCompletedOnboarding", "B", "preference: first-run wizard's own completion flag, not document content"),
     Classified("app-settings", "setMcpServers", "B", "preference: MCP server list is settings-store configuration, not document content"),
+    Classified("app-settings", "revokeHarnessTrustedDir", "B", "preference: revokes a single workspace-agent folder consent in the settings store, not document content"),
 
     # -- backend/api/intents_settings_fal.py (app-settings) ------------------
     Classified("app-settings", "searchFalModels", "B", "read-only: fetch Fal live model catalog"),

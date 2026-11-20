@@ -85,6 +85,7 @@ const snapshot = {
   llamaCppScanStatus: "idle",
   llamaCppNotice: "",
   // ADR-012 stage 12.6: required by the app-settings-state contract.
+  harnessTrustedDirs: [],
   mcpServers: [],
 };
 
@@ -206,6 +207,16 @@ async function goToMcpServers(
   await user.click(screen.getByText("open settings"));
   await user.click(screen.getByRole("button", { name: "MCP Servers" }));
   act(() => push({ ...snapshot, ...overrides, activeSection: "mcp servers" }));
+}
+
+async function goToWorkspaceAgent(
+  user: ReturnType<typeof userEvent.setup>,
+  push: (payload: Record<string, unknown>) => void,
+  overrides: Record<string, unknown> = {},
+) {
+  await user.click(screen.getByText("open settings"));
+  await user.click(screen.getByRole("button", { name: "Workspace Agent" }));
+  act(() => push({ ...snapshot, ...overrides, activeSection: "workspace agent" }));
 }
 
 async function goToPlugins(
@@ -924,6 +935,33 @@ describe("SettingsDialog", () => {
     await goToResourceLimits(user, push);
 
     expect(screen.getByText("No resource limits have been reported by the backend yet.")).toBeInTheDocument();
+  });
+
+  describe("Workspace Agent trusted folders", () => {
+    it("opens a dedicated Settings section and explains the empty state", async () => {
+      const { user, push, intents } = setup();
+      await goToWorkspaceAgent(user, push);
+
+      expect(intents).toContainEqual(["app-settings", "setActiveSection", ["workspace agent"]]);
+      expect(screen.getByText(/No trusted folders yet/)).toBeInTheDocument();
+    });
+
+    it("shows the exact paths and revokes only the selected grant", async () => {
+      const alpha = "/home/user/projects/alpha";
+      const beta = "/home/user/projects/beta/nested";
+      const { user, push, intents } = setup();
+      await goToWorkspaceAgent(user, push, { harnessTrustedDirs: [alpha, beta] });
+
+      expect(screen.getByText(alpha)).toBeInTheDocument();
+      expect(screen.getByText(beta)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: `Revoke access to ${alpha}` })).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: `Revoke access to ${beta}` }));
+
+      expect(intents).toContainEqual(["app-settings", "revokeHarnessTrustedDir", [beta]]);
+      act(() => push({ ...snapshot, activeSection: "workspace agent", harnessTrustedDirs: [alpha] }));
+      expect(screen.getByText(alpha)).toBeInTheDocument();
+      expect(screen.queryByText(beta)).not.toBeInTheDocument();
+    });
   });
 
   // ADR-012 stage 12.6: the MCP Servers page - the deferred UI half of
