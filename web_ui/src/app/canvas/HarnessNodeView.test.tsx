@@ -275,7 +275,25 @@ describe("HarnessNodeView", () => {
     expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
   });
 
-  it.each(["python.exec", "fal.submit"])("sends the %s disclosure identity on denial and refuses a missing identity", async (tool) => {
+  it("shows python.install environment and packages with a one-call consent token", async () => {
+    const user = userEvent.setup();
+    const summary = "python.install\n--- environment\n/workspace/.venv/bin/python\n--- packages\nrequests>=2,<3\nnumpy==2.1.0";
+    const data = makeData({
+      harnessAwaitingApproval: true,
+      harnessApprovalToolName: "python.install",
+      harnessApprovalId: "install-disclosure-1",
+      harnessApprovalSummary: summary,
+      harnessApprovalSessionOffered: true,
+    });
+    const { container } = renderHarness(data);
+    expect(container.querySelector(".plan-node-approval-summary")?.textContent).toBe(summary);
+    expect(screen.queryByRole("button", { name: "Always allow this tool" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Approve once" }));
+    expect(data.onApproveTool).toHaveBeenCalledExactlyOnceWith("install-disclosure-1");
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+  });
+
+  it.each(["python.exec", "python.install", "fal.submit"])("sends the %s disclosure identity on denial and refuses a missing identity", async (tool) => {
     const user = userEvent.setup();
     const data = makeData({
       harnessAwaitingApproval: true,

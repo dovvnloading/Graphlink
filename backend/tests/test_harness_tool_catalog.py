@@ -50,6 +50,7 @@ def test_builtin_modules_keep_their_scopes_approvals_and_hints(tmp_path):
             "shell.exec": (CODE_EXECUTE, "always"),
             "shell.session": (CODE_EXECUTE, "always"),
             "python.exec": (CODE_EXECUTE, "always"),
+            "python.install": (CODE_EXECUTE, "always"),
             "plan.update": (GRAPH_READ, "auto"),
             "user.ask": (PROVIDER_CALL, "auto"),
             "subagent.spawn": (PROVIDER_CALL, "auto"),
