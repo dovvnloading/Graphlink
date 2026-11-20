@@ -97,13 +97,13 @@ def test_shell_session_selects_isolated_backend_and_pipes_stdin(tmp_path):
             self.stdin = io.StringIO()
             self.stdout = io.StringIO()
             self.stderr = None
-            self.code = None
+            self.exit_code = None
         def poll(self):
-            return self.code
+            return self.exit_code
         def kill(self):
-            self.code = -9
+            self.exit_code = -9
         def wait(self, timeout=None):
-            return self.code
+            return self.exit_code
 
     class StubBackend:
         def __init__(self):

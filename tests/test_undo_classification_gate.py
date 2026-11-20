@@ -307,7 +307,8 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # 244 -> 245: scene/cancelGraphRun cancels active Graph Runner steps.
     # 245 -> 246: scene/discussScientificResult creates an undoable chat from a verified result.
     # 246 -> 247: scene/exportScientificWorkspaceMethods reads verified receipts without mutating the graph.
-    assert len(real) == 248, (
+    # 248 -> 250: harness/setExecutionProfile and harness/getIsolationEngine.
+    assert len(real) == 250, (
         f"expected exactly 248 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "

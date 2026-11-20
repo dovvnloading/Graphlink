@@ -323,6 +323,8 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("harness", "pickWorkspace", "B", "run-config: binds the node to a trusted user dir and writes the settings trust grant, not document content"),
     Classified("harness", "useScratch", "B", "run-config: reverts the node to the scratch workspace"),
     Classified("harness", "setShell", "B", "run-config: persists the node shell choice for subsequent tasks, not an in-flight execution"),
+    Classified("harness", "setExecutionProfile", "B", "run-config: persists the node execution profile for subsequent tasks and retires idle sessions; not wrapped in an undo command"),
+    Classified("harness", "getIsolationEngine", "B", "read-only: probes Docker/Podman CLI availability on the backend host"),
 
     # -- backend/api/intents_fal_media.py (scene) ----------------------------
     Classified("scene", "saveFalMediaDraft", "A", "content: undoable Fal Studio draft edit"),
