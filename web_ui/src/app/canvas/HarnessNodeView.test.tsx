@@ -133,7 +133,7 @@ describe("HarnessNodeView", () => {
     });
     renderHarness(agent);
     await user.click(screen.getByRole("button", { name: "Agent settings" }));
-    expect(screen.getByRole("list", { name: "Allowed command prefixes" })).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Allowed exact commands" })).toBeInTheDocument();
     expect(screen.getByText("git status")).toBeInTheDocument();
     expect(screen.getByText("Get-ChildItem")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Remove rule: git status (bash)" }));

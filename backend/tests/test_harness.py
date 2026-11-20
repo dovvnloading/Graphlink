@@ -1345,22 +1345,22 @@ class TestPersistence:
         del payload["shell"]
         assert _restore_harness_payload(payload).state.harness_shell == "auto"
 
-    def test_shell_allow_rules_round_trip_and_invalid_data_fails_closed(self):
+    def test_serialized_shell_rules_are_not_trusted_consent(self):
         node = SceneDocument().add_harness_node(0, 0, "goal")
-        node.state.harness_shell_allow_rules[:] = ["bash\tgit status", "powershell\tGet-ChildItem"]
-        payload = _serialize_harness_node(node)
-        assert payload["shell_allow_rules"] == ["bash\tgit status", "powershell\tGet-ChildItem"]
-        restored = _restore_harness_payload(payload)
-        assert restored.state.harness_shell_allow_rules == payload["shell_allow_rules"]
-        assert restored.state.harness_shell_allow_rules is not node.state.harness_shell_allow_rules
-
-        payload["shell_allow_rules"] = [
-            "bash\tgit status", "bash\tgit status", "", "bad-shell\tgit status",
-            "bash\t", "bash\techo hello\nrm -rf out", 42,
+        node.state.harness_shell_allow_rules[:] = [
+            "v2:host:bash:fakehash\tgit status", "bash\tgit status",
         ]
-        assert _restore_harness_payload(payload).state.harness_shell_allow_rules == ["bash\tgit status"]
+        payload = _serialize_harness_node(node)
+        assert payload["shell_allow_rules"] == []
+        assert _restore_harness_payload(payload).state.harness_shell_allow_rules == []
 
-        payload["shell_allow_rules"] = {"bad": "shape"}
+        # An import or hand-edited graph cannot grant unattended execution.
+        payload["shell_allow_rules"] = [
+            "v2:host:bash:123456789abcdef0\tgit status",
+            "bash\tgit status", "bash\teval rm -rf important",
+        ]
+        assert _restore_harness_payload(payload).state.harness_shell_allow_rules == []
+        payload["shell_allow_rules"] = {"untrusted": "shape"}
         assert _restore_harness_payload(payload).state.harness_shell_allow_rules == []
 
     def test_execution_profile_roundtrips_and_invalid_values_default_to_host(self):

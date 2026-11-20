@@ -164,60 +164,83 @@ class TestShellPolicy:
 
 
 class TestShellAllowRules:
-    def test_command_prefixes_are_scoped_to_shell_and_each_chain_segment(self):
+    def test_exact_grants_are_scoped_to_root_profile_and_shell(self, tmp_path):
         from backend.harness.shell_policy import (
             effective_shell_for_rules, shell_allow_rule_candidates, shell_command_allowed,
         )
 
-        # "auto" runs Bash on POSIX and defaults to PowerShell on Windows.
-        # Rules are stored under the effective shell, not the requested alias.
-        active_shell = effective_shell_for_rules("auto")
-        rules = shell_allow_rule_candidates("git status && npm test", shell="auto")
-        assert rules == [active_shell + "\tgit status", active_shell + "\tnpm test"]
-        assert shell_allow_rule_candidates("git status", shell="bash") == [active_shell + "\tgit status"]
-        assert shell_command_allowed("git status && npm test", rules, shell="auto")
-        assert shell_command_allowed("git status --short; npm test -- --runInBand", rules, shell="auto")
-        assert not shell_command_allowed("git status && npm build", rules, shell="auto")
-        assert not shell_command_allowed("git statuses && npm test", rules, shell="auto")
-        assert not shell_command_allowed("git status && npm test && echo bonus", rules, shell="auto")
-
-        other_shell = "cmd" if active_shell == "powershell" else "powershell"
-        assert not shell_command_allowed(
-            "git status && npm test",
-            [other_shell + "\tgit status", other_shell + "\tnpm test"],
-            shell="auto",
-        )
-
-    def test_dangerous_and_ambiguous_commands_always_require_a_prompt(self):
-        from backend.harness.shell_policy import (
-            effective_shell_for_rules, shell_allow_rule_candidates, shell_command_allowed,
-        )
-
-        active_shell = effective_shell_for_rules("auto")
-        for command in (
-            "git status && rm -rf out",
-            "echo $(rm -rf out)",
-            "python -c 'print(1)'",
-            '"rm" -rf build',
-            "(rm -rf build)",
-            "echo ${PATH}",
+        root = tmp_path / "workspace"
+        root.mkdir()
+        other = tmp_path / "other"
+        other.mkdir()
+        command = "git status && echo ready"
+        shell = effective_shell_for_rules("auto")
+        rules = shell_allow_rule_candidates(command, shell="auto", workspace_root=root)
+        assert len(rules) == 2
+        assert all(rule.startswith(f"v2:host:{shell}:") for rule in rules)
+        assert shell_command_allowed(command, rules, workspace_root=root)
+        for changed in (
+            "git status --short && echo ready",
+            "git statuses && echo ready",
+            "git status && echo changed",
+            "git status && echo ready && pwd",
         ):
-            assert shell_allow_rule_candidates(command, shell="auto") == []
-
-        assert not shell_command_allowed("git -C other push", [active_shell + "\tgit"], shell="auto")
-        assert not shell_command_allowed(
-            "git status && rm -rf out",
-            [active_shell + "\tgit status", active_shell + "\trm -rf out"],
-            shell="auto",
+            assert not shell_command_allowed(changed, rules, workspace_root=root)
+        assert not shell_command_allowed(command, rules, workspace_root=other)
+        assert not shell_command_allowed(command, rules, profile="isolated", workspace_root=root)
+        assert not shell_command_allowed(command, rules)
+        assert shell_allow_rule_candidates(command) == []
+        assert not shell_command_allowed(command, ["bash\tgit status"], workspace_root=root)
+        isolated = shell_allow_rule_candidates(
+            "pwd", shell="powershell", profile="isolated", workspace_root=root,
         )
-        assert not shell_command_allowed("rm -rf out", [active_shell + "\trm -rf out"], shell="auto")
-        # Verify PowerShell-specific destructive verbs even on POSIX hosts.
-        assert analyze("Get-ChildItem; Remove-Item file", shell="powershell").is_dangerous
+        assert len(isolated) == 1 and isolated[0].startswith("v2:isolated:sh:")
 
-    def test_live_registry_only_bypasses_approval_for_matching_node_rules(self):
+    @pytest.mark.parametrize("command", [
+        "git status && rm -rf out",
+        "echo $(rm -rf out)",
+        "python -c print",
+        "python -m pip",
+        '"rm" -rf build',
+        "(rm -rf build)",
+        "echo $PATH",
+        "env -S sh -c rm",
+        "eval rm -rf out",
+        "exec rm -rf out",
+        "command rm -rf out",
+        "busybox rm -rf out",
+        "call del important.txt",
+        "cd ..",
+        "cd .. && git status",
+        "ls /etc",
+        "ls ../private",
+        "ls link-to-outside",
+        "cat README.md",
+        "cat ../secret",
+        "git -C ../other status",
+        "git status --output=../outside",
+        "npm test",
+        "node -p process",
+        "powershell -enc ABC",
+        "cmd /c del",
+        "echo safe # comment",
+        "echo x\\nrm -rf out",
+        "echo foo; eval rm -rf out",
+        "echo 'unclosed",
+    ])
+    def test_unsafe_commands_never_create_or_reuse_grants(self, tmp_path, command):
+        from backend.harness.shell_policy import shell_allow_rule_candidates, shell_command_allowed
+
+        assert shell_allow_rule_candidates(command, workspace_root=tmp_path) == []
+        assert not shell_command_allowed(
+            command, [f"v2:host:bash:fakehash\t{command}"], workspace_root=tmp_path,
+        )
+
+    def test_live_registry_only_bypasses_for_exact_context_grants(self, tmp_path):
         from backend.harness.shell_policy import requires_fresh_shell_approval, shell_allow_rule_candidates
 
         registry = ToolRegistry()
+
         async def handler(call, ctx):
             return ToolResult("ran")
 
@@ -226,30 +249,46 @@ class TestShellAllowRules:
             handler, scopes={CODE_EXECUTE}, approval="always",
             always_reprompt=lambda call: requires_fresh_shell_approval(call.name, call.arguments),
         )
-        requests = []
+        requested = []
+
         async def deny(call):
-            requests.append(call.arguments["command"])
+            requested.append(call.arguments["command"])
             return False
 
-        rules = shell_allow_rule_candidates("git status && npm test", shell="auto")
+        rules = shell_allow_rule_candidates(
+            "git status && echo ready", workspace_root=tmp_path,
+        )
         assert len(rules) == 2
         ctx = RunContext(
             granted_scopes=frozenset({CODE_EXECUTE}), request_approval=deny,
-            session_grants={"shell.exec"}, shell_allow_rules=rules,
+            session_grants={"shell.exec"}, shell_allow_rules=rules.copy(),
         )
         ctx.harness_shell = "auto"
+        ctx.harness_workspace_dir = tmp_path
+        ctx.harness_execution_profile = "host"
+
         def invoke(command):
             return asyncio.run(registry.invoke(
                 ToolCall(id=command, name="shell.exec", arguments={"command": command}), ctx,
             ))
 
-        assert not invoke("git status && npm test").is_error
-        assert invoke("git status && npm build").is_error
+        assert not invoke("git status && echo ready").is_error
+        assert invoke("git status && echo changed").is_error
+        assert invoke("git status --short && echo ready").is_error
         assert invoke("git status && rm -rf out").is_error
-        assert requests == ["git status && npm build", "git status && rm -rf out"]
+        assert requested == [
+            "git status && echo changed", "git status --short && echo ready",
+            "git status && rm -rf out",
+        ]
         ctx.shell_allow_rules.remove(rules[1])
-        assert invoke("git status && npm test").is_error
-        assert requests[-1] == "git status && npm test"
+        assert invoke("git status && echo ready").is_error
+        ctx.shell_allow_rules[:] = rules
+        ctx.harness_execution_profile = "isolated"
+        assert invoke("git status && echo ready").is_error
+        ctx.harness_execution_profile = "host"
+        ctx.harness_workspace_dir = tmp_path / "different"
+        assert invoke("git status && echo ready").is_error
+
 
 
 def _ctx(record: list, *, decision, session_grants=None) -> RunContext:
