@@ -969,7 +969,8 @@ class ChatState(NodeState):
     # was started from (backend/api/intents_nodes.py's
     # _create_scientific_discussion): string-valued keys named exactly as
     # contracts/graphlink_scene_payload.py's ScienceReferenceRow. A display
-    # summary only - `content` keeps the complete snapshot the model reads.
+    # summary only - `content` keeps the exact context the model reads: full
+    # JSON for small results, explicitly truncated excerpts for large ones.
     # None for every other chat node.
     science_reference: dict[str, str] | None = None
     # ADR-018 stage 18.2: an explicit model PIN, the opposite direction from

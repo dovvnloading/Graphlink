@@ -711,6 +711,50 @@ describe("typed table import and numeric selections", () => {
     expect(args.text).toBeUndefined();
   });
 
+  it("clears a selected file when the importer closes and requires a new visible selection", async () => {
+    const { request } = mount();
+    openImporter();
+    fireEvent.change(screen.getByLabelText("Table data source"), { target: { value: "file" } });
+    const oldFile = new File(["X\n1"], "old.csv", { type: "text/csv" });
+    const oldInput = screen.getByLabelText("CSV or TSV file") as HTMLInputElement;
+    fireEvent.change(oldInput, { target: { files: [oldFile] } });
+    expect(oldInput.files?.[0]).toBe(oldFile);
+
+    openImporter();
+    expect(screen.queryByLabelText("CSV or TSV file")).not.toBeInTheDocument();
+    openImporter();
+    const newInput = screen.getByLabelText("CSV or TSV file") as HTMLInputElement;
+    expect(newInput).not.toBe(oldInput);
+    expect(newInput.files).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Choose a CSV or TSV file.");
+    expect(request).not.toHaveBeenCalled();
+
+    const freshFile = new File(["X\n2"], "fresh.csv", { type: "text/csv" });
+    Object.defineProperty(freshFile, "arrayBuffer", { value: async () => new TextEncoder().encode("X\n2").buffer });
+    fireEvent.change(newInput, { target: { files: [freshFile] } });
+    fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
+    await waitFor(() => expect(request).toHaveBeenCalledOnce());
+    const args = request.mock.lastCall?.[2]?.[2] as Record<string, unknown>;
+    expect(args.filename).toBe("fresh.csv");
+    expect(atob(args.encoded_file as string)).toBe("X\n2");
+  });
+
+  it("clears a file selection when switching between file and paste sources", async () => {
+    const { request } = mount();
+    openImporter();
+    fireEvent.change(screen.getByLabelText("Table data source"), { target: { value: "file" } });
+    fireEvent.change(screen.getByLabelText("CSV or TSV file"), {
+      target: { files: [new File(["X\n1"], "hidden.csv", { type: "text/csv" })] },
+    });
+    fireEvent.change(screen.getByLabelText("Table data source"), { target: { value: "paste" } });
+    fireEvent.change(screen.getByLabelText("Table data source"), { target: { value: "file" } });
+    expect((screen.getByLabelText("CSV or TSV file") as HTMLInputElement).files).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Choose a CSV or TSV file.");
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("renders typed previews and selects a numeric column only after an explicit missing-value choice", async () => {
     const parentTable = { nodeId: "parent", title: "Samples", raw: JSON.stringify({
       ...state, nodeKey: "d".repeat(32), latest: null, table: meta,
