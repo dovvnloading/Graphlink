@@ -219,7 +219,8 @@ async def _drive(case: Case, runtime, model_ref, timeout: float, max_turns: int)
     node = document.add_harness_node(0, 0, case.prompt)
     state = node.state
     # The newly created harness node always owns this concrete state type.
-    assert isinstance(state, HarnessState)
+    if not isinstance(state, HarnessState):
+        raise TypeError("New harness node must own HarnessState")
     state.harness_max_turns = max_turns
     workspace = ensure_workspace(state.harness_workspace_id)
     for relpath, content in case.inputs.items():
@@ -378,8 +379,8 @@ def _print_report(report: dict) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", action="store_true", help="Explicitly allow live provider calls and temporary file writes")
-    parser.add_argument("--provider", required=True, help="Graphlink provider name, e.g. OpenAI, Anthropic Claude, Ollama")
-    parser.add_argument("--model", required=True, help="Exact model ID (for Llama.cpp, the path to a local .gguf file)")
+    parser.add_argument("--provider", dest="benchmark_provider", required=True, help="Graphlink provider name, e.g. OpenAI, Anthropic Claude, Ollama")
+    parser.add_argument("--model", dest="benchmark_model", required=True, help="Exact model ID (for Llama.cpp, the path to a local .gguf file)")
     parser.add_argument("--base-url", help="Optional cloud API base URL")
     parser.add_argument("--api-key-env", help="Environment variable holding the selected provider API key (never pass the key itself)")
     parser.add_argument("--timeout", type=float, default=120, help="Timeout per task in seconds (default: 120)")
@@ -392,7 +393,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("Live benchmarks are opt-in. Pass --run to make provider calls.")
     if "CI" in os.environ or "GITHUB_ACTIONS" in os.environ:
         parser.error("Live workspace benchmarks are disabled in CI.")
-    if not args.provider.strip() or not args.model.strip():
+    if not args.benchmark_provider.strip() or not args.benchmark_model.strip():
         parser.error("Provider and model must be nonempty.")
     if not 0 < args.timeout <= 3600 or not 1 <= args.max_turns <= 50:
         parser.error("Use --timeout between 0 and 3600 and --max-turns between 1 and 50.")
@@ -406,7 +407,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"API key environment variable {args.api_key_env!r} is not set")
     api_key = os.environ.get(args.api_key_env, "") if args.api_key_env else ""
     try:
-        report = asyncio.run(run_suite(args.provider, args.model, base_url=args.base_url,
+        report = asyncio.run(run_suite(args.benchmark_provider, args.benchmark_model, base_url=args.base_url,
                                        timeout=args.timeout, max_turns=args.max_turns,
                                        prices=prices, api_key=api_key))
     except Exception as exc:
