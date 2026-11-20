@@ -322,6 +322,9 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("harness", "pickLaunchWorkspace", "B", "run-config: the launcher's folder pick, before any node exists - writes the settings trust grant and answers with the path, touching no document content"),
     Classified("harness", "pickWorkspace", "B", "run-config: binds the node to a trusted user dir and writes the settings trust grant, not document content"),
     Classified("harness", "useScratch", "B", "run-config: reverts the node to the scratch workspace"),
+    Classified("harness", "listWorkspaceFiles", "B", "read-only: lists files and directories in the currently authorized workspace without modifying the document"),
+    Classified("harness", "readWorkspaceFile", "B", "read-only: previews a file in the currently authorized workspace without modifying the document"),
+    Classified("harness", "revealWorkspace", "B", "read-only: opens the authorized workspace in the native file manager without modifying the document"),
 
     # -- backend/api/intents_fal_media.py (scene) ----------------------------
     Classified("scene", "saveFalMediaDraft", "A", "content: undoable Fal Studio draft edit"),
