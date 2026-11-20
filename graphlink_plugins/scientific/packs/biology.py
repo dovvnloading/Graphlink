@@ -622,6 +622,7 @@ OPERATIONS: tuple[Operation, ...] = (
                 "https://doi.org/10.1038/163688a0",
             ),
         ),
+        headline="gini_simpson",
     ),
     Operation(
         "quadrat_density",
@@ -675,6 +676,7 @@ OPERATIONS: tuple[Operation, ...] = (
                 "https://refs.drheap.org/sorensen1948method/",
             ),
         ),
+        headline="jaccard_similarity",
     ),
     Operation(
         "logistic_growth_fit", "Fit logistic population growth",
@@ -698,6 +700,7 @@ OPERATIONS: tuple[Operation, ...] = (
                 "https://www.graphpad.com/guides/prism/latest/curve-fitting/reg_logistic-growth.htm",
             ),
         ),
+        headline="carrying_capacity",
     ),
     Operation(
         "gompertz_growth_fit", "Fit Gompertz population growth",
@@ -721,6 +724,7 @@ OPERATIONS: tuple[Operation, ...] = (
                 "https://www.graphpad.com/guides/prism/latest/curve-fitting/reg_gompertz-growth.htm",
             ),
         ),
+        headline="carrying_capacity",
     ),
     Operation(
         "michaelis_menten_fit", "Fit Michaelis–Menten enzyme kinetics",
@@ -891,6 +895,7 @@ OPERATIONS: tuple[Operation, ...] = (
                 "https://cran.rstudio.org/web/packages/spacc/vignettes/richness-estimation.html",
             ),
         ),
+        headline="chao1_estimated_richness",
     ),
 )
 

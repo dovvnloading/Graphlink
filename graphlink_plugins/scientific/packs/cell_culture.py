@@ -724,6 +724,7 @@ OPERATIONS = (
         ),
         {"input_kind": "rpm", "input_value": 3000, "rotor_radius_cm": 10},
         centrifuge_rcf_rpm,
+        headline="rcf_x_g",
     ),
     Operation(
         "plate_count_cfu", "Plate counts and CFU/mL",
@@ -736,6 +737,7 @@ OPERATIONS = (
         {"colony_counts": [45, 55], "reciprocal_dilutions": [1000, 1000],
          "plated_volume_ml": 0.1},
         plate_count_cfu,
+        headline="cfu_per_ml",
     ),
     Operation(
         "microplate_map", "96/384-well microplate map",
@@ -809,5 +811,6 @@ OPERATIONS = (
         {"initial_abundance": 100_000, "final_abundance": 800_000,
          "elapsed_time": 6, "time_unit": "h", "abundance_unit": "CFU/mL"},
         doubling_time,
+        headline="doubling_time",
     ),
 )

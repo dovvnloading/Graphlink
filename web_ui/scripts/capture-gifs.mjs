@@ -404,8 +404,9 @@ async function biologyFlow(page) {
   await click(page, actions, 700);
   const discuss = card.getByRole("button", { name: "Discuss in chat" });
   await revealInCard(page, card, discuss);
-  await click(page, discuss, 1200);
-  await fitAll(page, 1600);
+  await click(page, discuss, 600);
+  await page.getByRole("region", { name: /^Scientific result: / }).waitFor();
+  await fitAll(page, 2000);
 }
 
 // -- main -------------------------------------------------------------------

@@ -583,6 +583,7 @@ OPERATIONS: tuple[Operation, ...] = (
         ),
         {"latitude_a": 0, "longitude_a": 179, "latitude_b": 0, "longitude_b": -179},
         great_circle_distance,
+        headline="distance_km",
     ),
     Operation(
         "geothermal_gradient",
@@ -624,6 +625,7 @@ OPERATIONS: tuple[Operation, ...] = (
          "latitude_b_deg": -37.65282113888889, "longitude_b_deg": 143.92649552777777},
         geodesic_inverse,
         reference_datasets=("earth.wgs84_ellipsoid",),
+        headline="distance_m",
     ),
     Operation(
         "utm_forward", "Convert WGS84 latitude/longitude to UTM",
@@ -633,6 +635,7 @@ OPERATIONS: tuple[Operation, ...] = (
          Field("longitude_deg", "WGS84 longitude", "number", unit="°E")),
         {"latitude_deg": 40.0, "longitude_deg": -105.0}, utm_forward,
         reference_datasets=("earth.wgs84_ellipsoid",),
+        headline="easting_m",
     ),
     Operation(
         "utm_inverse", "Convert WGS84 UTM to latitude/longitude",
@@ -644,6 +647,7 @@ OPERATIONS: tuple[Operation, ...] = (
         {"zone_1": 13, "hemisphere": "N", "easting_m": 500000.0, "northing_m": 4427757.2189},
         utm_inverse,
         reference_datasets=("earth.wgs84_ellipsoid",),
+        headline="latitude_deg",
     ),
     Operation(
         "radiometric_age", "Calculate closed-system radiometric age",
@@ -656,6 +660,7 @@ OPERATIONS: tuple[Operation, ...] = (
          Field("half_life_standard_uncertainty_ma", "Half-life 1σ standard uncertainty", "number", unit="Ma")),
         {"parent_ratio_1": 1, "radiogenic_daughter_ratio_1": 1,
          "half_life_ma": 1250, "half_life_standard_uncertainty_ma": 5}, radiometric_age,
+        headline="age_ma",
     ),
     Operation(
         "darcy_flow", "Darcy groundwater flow and pore velocity",
@@ -669,6 +674,7 @@ OPERATIONS: tuple[Operation, ...] = (
          Field("effective_porosity_1", "Effective connected porosity", "number", unit="1")),
         {"hydraulic_conductivity_m_s": 0.0001, "head_upstream_m": 10, "head_downstream_m": 9,
          "flow_length_m": 100, "cross_section_area_m2": 20, "effective_porosity_1": 0.25}, darcy_flow,
+        headline="darcy_flux_m_s",
     ),
     Operation(
         "theis_drawdown", "Theis confined aquifer well drawdown",
@@ -681,6 +687,7 @@ OPERATIONS: tuple[Operation, ...] = (
          Field("time_since_pumping_s", "Elapsed pumping time", "number", unit="s")),
         {"pumping_rate_m3_s": 0.02, "transmissivity_m2_s": 0.001,
          "storativity_1": 0.0001, "radial_distance_m": 100, "time_since_pumping_s": 3600}, theis_drawdown,
+        headline="drawdown_m",
     ),
     Operation(
         "moment_magnitude", "Seismic moment to moment magnitude Mw",

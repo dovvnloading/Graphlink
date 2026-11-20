@@ -155,6 +155,30 @@ export function formatScienceSummary(summary: string): string {
   });
 }
 
+/** On-screen text for any result value: numbers at display precision, nested
+ * arrays and objects as compact JSON-like text, strings unchanged. */
+export function formatScienceValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  // Never parse formatted "1,000" or "2 × 10⁻⁶" back into a Number:
+  // that would turn nested scientific values into null in JSON previews.
+  const nested = (item: unknown): string => {
+    if (typeof item === "number") return formatScienceNumber(item);
+    if (Array.isArray(item)) return "[" + item.map(nested).join(", ") + "]";
+    if (item !== null && typeof item === "object")
+      return "{" + Object.entries(item).map(([key, entry]) =>
+        JSON.stringify(key) + ": " + nested(entry)).join(", ") + "}";
+    return JSON.stringify(item) ?? "";
+  };
+  return nested(value);
+}
+
+/** Result keys are snake_case identifiers; headlines show them as words and
+ * keep the exact key as a tooltip. */
+export function readableScienceKey(key: string): string {
+  const words = key.replace(/_+/g, " ").trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : key;
+}
+
 /** Short captions; increase precision where adjacent endpoints would collapse. */
 export function formatScienceRange(low: number, high: number): string {
   let digits = SCIENCE_DIGITS;

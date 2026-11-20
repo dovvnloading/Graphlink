@@ -127,6 +127,7 @@ OPERATIONS = (
         (Field("observations", "Observations", "vector", description="At least two finite values."),),
         {"observations": [2, 4, 4, 5, 7, 8]},
         _describe,
+        headline="mean",
     ),
     Operation(
         "linear_regression",
@@ -156,5 +157,6 @@ OPERATIONS = (
          Field("group_column", "Group column", "column", table_field="table")),
         {"table": None, "value_column": None, "group_column": None},
         _grouped_table,
+        headline="group_count",
     ),
 )

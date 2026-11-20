@@ -138,6 +138,7 @@ export interface SceneNodeRow {
   htmlSplitterState?: number | null;
   chatScrollValue: number;
   toolCalls: ToolInvocationRow[];
+  scienceReference?: ScienceReferenceRow | null;
   overrideProvider: string;
   overrideModelId: string;
   indexIntoKnowledge: boolean;
@@ -345,6 +346,18 @@ export interface ToolInvocationRow {
   argumentsJson: string;
   result: string;
   isError: boolean;
+}
+
+export interface ScienceReferenceRow {
+  packId: string;
+  packTitle: string;
+  operationId: string;
+  operationTitle: string;
+  summary: string;
+  headlineKey: string;
+  headlineValueJson: string;
+  resultHash: string;
+  receiptHash: string;
 }
 
 export interface PlanStepRow {
@@ -576,6 +589,18 @@ const TOOL_INVOCATION_ROW_FIELDS: WireFields = [
   ["isError", "b", 0],
 ];
 
+const SCIENCE_REFERENCE_ROW_FIELDS: WireFields = [
+  ["packId", "s", 0],
+  ["packTitle", "s", 0],
+  ["operationId", "s", 0],
+  ["operationTitle", "s", 0],
+  ["summary", "s", 0],
+  ["headlineKey", "s", 0],
+  ["headlineValueJson", "s", 0],
+  ["resultHash", "s", 0],
+  ["receiptHash", "s", 0],
+];
+
 const PLAN_STEP_ROW_FIELDS: WireFields = [
   ["id", "s", 0],
   ["title", "s", 0],
@@ -735,6 +760,7 @@ const SCENE_NODE_ROW_FIELDS: WireFields = [
   ["htmlSplitterState", "n", 1, null],
   ["chatScrollValue", "n", 0, 0.0],
   ["toolCalls", { a: { o: TOOL_INVOCATION_ROW_FIELDS } }, 0, []],
+  ["scienceReference", { o: SCIENCE_REFERENCE_ROW_FIELDS }, 1, null],
   ["overrideProvider", "s", 0, ""],
   ["overrideModelId", "s", 0, ""],
   ["indexIntoKnowledge", "b", 0, false],

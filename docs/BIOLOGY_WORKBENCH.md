@@ -33,7 +33,7 @@ The packs analyse numbers you supply. They do not fetch data from biological dat
 - **Units.** Every numeric input declares a default unit. You can type a compatible unit after a value (for example `25 mm`); the receipt records the unit you used.
 - **Receipts.** Each result stores hashes of its inputs and outputs, and the version and checksum of any bundled reference data it used. Saved results are re-verified when they are loaded, connected or exported.
 - **Typed views.** Some results include a view built for the data: a plate map, Kaplan–Meier survival curves, a forest plot, a phylogenetic tree or a volcano plot.
-- **Discuss in chat.** **Actions & exports → Discuss in chat** opens a chat node linked to the result. Its first message contains the verified result as reference data.
+- **Discuss in chat.** **Actions & exports → Discuss in chat** opens a chat node linked to the result. The node shows a compact card: the pack and operation, the headline value, the summary and the receipt. The complete verified result, which is what the model reads, is under **Data sent to the model**.
 - **Copy methods.** **Actions & exports → Copy methods** copies a methods paragraph built from the result's receipt; **Export methods** in the toolbar collects the methods for every verified result in the workspace.
 - **Assumptions are stated, not hidden.** Summaries and methods say what each calculation assumes (for example, that 2^-ΔΔCt assumes 100% efficiency for every assay).
 

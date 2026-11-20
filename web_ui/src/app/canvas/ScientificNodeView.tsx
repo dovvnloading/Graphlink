@@ -9,7 +9,7 @@ import { writeTableCsv } from "./tableCsv";
 import { createLinearScale } from "./charts/chartScales";
 import { ScientificResultViews } from "./ScientificResultViews";
 import {
-  chartableScienceTypes, columnChoices, compatibleOptions, connectedInputText, draftInputs, FieldError, fieldText, formatMeasurement, formatScienceNumber, formatScienceRange, formatScienceSummary, matchesSource, parseInputs, readScienceState, resultMeasurement, sourceOptions,
+  chartableScienceTypes, columnChoices, compatibleOptions, connectedInputText, draftInputs, FieldError, fieldText, formatMeasurement, formatScienceNumber, formatScienceRange, formatScienceSummary, formatScienceValue, matchesSource, parseInputs, readableScienceKey, readScienceState, resultMeasurement, sourceOptions,
   type EditorDraft, type ScienceField, type ScienceLimits, type ScienceOperation, type ScienceParent, type SciencePlot, type ScienceResult,
   type ScienceChartLink, type ScienceChartType, type ScienceState, type ScienceRunnerConfiguration, type ScientificColumnType, type Sources, type SourceOption, type SourceReference,
 } from "./scientificWorkbench";
@@ -18,21 +18,6 @@ import "./ScientificNodeView.css";
 export type ScientificFlowNode = Node<{
   title: string; raw: string; pluginId: string; store: SceneStore; parents: ScienceParent[]; charts?: ScienceChartLink[];
 }, "scientific">;
-
-function display(value: unknown): string {
-  if (typeof value === "string") return value;
-  // Never parse formatted "1,000" or "2 × 10⁻⁶" back into a Number:
-  // that would turn nested scientific values into null in JSON previews.
-  const nested = (item: unknown): string => {
-    if (typeof item === "number") return formatScienceNumber(item);
-    if (Array.isArray(item)) return "[" + item.map(nested).join(", ") + "]";
-    if (item !== null && typeof item === "object")
-      return "{" + Object.entries(item).map(([key, entry]) =>
-        JSON.stringify(key) + ": " + nested(entry)).join(", ") + "}";
-    return JSON.stringify(item) ?? "";
-  };
-  return nested(value);
-}
 
 /** Budget and interval cells: a rounded number, or a dash when absent. */
 function numberCell(value: number | undefined): string {
@@ -97,13 +82,6 @@ function headlineScienceValue(result: ScienceResult, declared?: string): [string
     !best || rank(entry[0]) < rank(best[0]) ? entry : best, undefined);
 }
 
-/** Result keys are snake_case identifiers; the headline shows them as words
- * and keeps the exact key as a tooltip. */
-function readableKey(key: string): string {
-  const words = key.replace(/_+/g, " ").trim();
-  return words ? words.charAt(0).toUpperCase() + words.slice(1) : key;
-}
-
 /** Closed disclosures do not mount wide plots, tables or thousands of cells. */
 function ResultDisclosure({ label, children, className = "" }: {
   label: string; children: ReactNode; className?: string;
@@ -141,9 +119,9 @@ function Results({ result, title, headlineKey, exportJson, exportCsv, exportMeth
     <div className="science-result-head">
       <h4>Last successful run · {title}</h4>
       {headline ? <div className="science-result-highlight">
-        <span title={headline[0]}>{readableKey(headline[0])}</span>
-        <strong>{uncertaintyUnavailable ? `${display(headline[1])} · uncertainty unavailable`
-          : measurement ? formatMeasurement(measurement) : display(headline[1])}</strong>
+        <span title={headline[0]}>{readableScienceKey(headline[0])}</span>
+        <strong>{uncertaintyUnavailable ? `${formatScienceValue(headline[1])} · uncertainty unavailable`
+          : measurement ? formatMeasurement(measurement) : formatScienceValue(headline[1])}</strong>
       </div> : (table || tableAsset) && <div className="science-result-highlight">
         <span>Result table</span>
         <strong>{tableRows.toLocaleString()} {tableRows === 1 ? "row" : "rows"}</strong>
@@ -160,7 +138,7 @@ function Results({ result, title, headlineKey, exportJson, exportCsv, exportMeth
         <dl className="science-result-values">{values.map(([label, value]) => {
           const measured = resultMeasurement(result, label);
           const unpropagatable = result.uncertainty?.unsupportedOutputs?.[label];
-          return <div key={label}><dt>{label}</dt><dd>{unpropagatable ? `${display(value)} · uncertainty unavailable` : measured ? formatMeasurement(measured) : display(value)}</dd></div>;
+          return <div key={label}><dt>{label}</dt><dd>{unpropagatable ? `${formatScienceValue(value)} · uncertainty unavailable` : measured ? formatMeasurement(measured) : formatScienceValue(value)}</dd></div>;
         })}</dl>
       </ResultDisclosure>}
       {result.uncertainty && <ResultDisclosure className="science-uncertainty-budget"
@@ -191,7 +169,7 @@ function Results({ result, title, headlineKey, exportJson, exportCsv, exportMeth
           {table && <div className="science-table">
       <table aria-label="Result table"><thead><tr>{table.columns.map((col, i) => <th key={i} scope="col">{col}</th>)}</tr></thead>
         <tbody>{table.rows.slice(0, PREVIEW_ROWS).map((row, i) =>
-          <tr key={i}>{row.map((cell, j) => <td key={j}>{display(cell)}</td>)}</tr>)}</tbody>
+          <tr key={i}>{row.map((cell, j) => <td key={j}>{formatScienceValue(cell)}</td>)}</tr>)}</tbody>
       </table>
       {table.rows.length > PREVIEW_ROWS && <small>Showing {PREVIEW_ROWS} of {table.rows.length} rows. Export CSV for all rows.</small>}
           </div>}
@@ -201,7 +179,7 @@ function Results({ result, title, headlineKey, exportJson, exportCsv, exportMeth
         <thead><tr>{tableAsset.columns.slice(0, tableAsset.previewColumns).map((col, i) =>
           <th key={i} scope="col" title={col.type + ", " + col.missingCount + " missing"}>{col.label}<small>{col.type}{col.missingCount ? " · " + col.missingCount + " missing" : ""}</small></th>)}</tr></thead>
         <tbody>{tableAsset.preview.map((row, i) =>
-          <tr key={i}>{row.map((cell, j) => <td key={j}>{cell === null ? "—" : display(cell)}</td>)}</tr>)}</tbody>
+          <tr key={i}>{row.map((cell, j) => <td key={j}>{cell === null ? "—" : formatScienceValue(cell)}</td>)}</tr>)}</tbody>
       </table>
       <small>Preview: {tableAsset.preview.length} of {tableAsset.rowCount.toLocaleString()} rows. Export CSV for the full table or connect this node to use its typed columns.</small>
           </div>}
@@ -454,7 +432,7 @@ function TableEditor({ state, nodeId, pluginId, store }: {
           <thead><tr>{table.columns.slice(0, table.previewColumns).map((col, i) =>
             <th scope="col" key={i} title={col.type + ", " + col.missingCount + " missing"}>{col.label}<small>{col.type}{col.missingCount ? " · " + col.missingCount + " missing" : ""}</small></th>)}</tr></thead>
           <tbody>{table.preview.map((row, i) => <tr key={i}>{row.map((cell, j) =>
-            <td key={j}>{cell === null ? "—" : display(cell)}</td>)}</tr>)}</tbody>
+            <td key={j}>{cell === null ? "—" : formatScienceValue(cell)}</td>)}</tr>)}</tbody>
         </table>
       </div>
       <small>Preview: {table.preview.length} rows, {table.previewColumns} columns. Connect this workbench to another to use the complete typed table with text, categorical and numeric column pickers, or select a bounded numeric vector.</small>

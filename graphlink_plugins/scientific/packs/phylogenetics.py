@@ -684,6 +684,7 @@ OPERATIONS = (
                  "is half the intercluster distance. Assumes approximately clocklike distances."),
         citations=(Citation("Sokal and Michener (1958), UPGMA",
                             "https://doi.org/10.2307/2412447"),),
+        headline="total_branch_length",
     ),
     Operation(
         "neighbor_joining", "Neighbor-joining distance tree",
@@ -695,6 +696,7 @@ OPERATIONS = (
                  "join; fitted negative limbs are clipped to zero and reported."),
         citations=(Citation("Saitou and Nei (1987), neighbor-joining method",
                             "https://doi.org/10.1093/oxfordjournals.molbev.a040454"),),
+        headline="total_branch_length",
     ),
     Operation(
         "parse_newick", "Parse Newick tree", "Validate and canonicalize a Newick tree with labeled tips.",
@@ -702,6 +704,7 @@ OPERATIONS = (
         methods=("Recursive Newick parser with single-quoted labels, escaped apostrophes, "
                  "bracket comments, polytomies and optional nonnegative branch lengths."),
         citations=(_NEWICK_CITATION,),
+        headline="total_branch_length",
     ),
     Operation(
         "reroot_tree", "Reroot phylogenetic tree", "Reroot on an outgroup edge or at the weighted midpoint.",
@@ -712,6 +715,7 @@ OPERATIONS = (
         methods=("Place root at midpoint of outgroup pendant edge or diameter of the "
                  "weighted tip-distance tree, contracting unary vertices without changing paths."),
         citations=(_NEWICK_CITATION,),
+        headline="total_branch_length",
     ),
     Operation(
         "compare_trees", "Compare phylogenetic trees",
@@ -724,6 +728,7 @@ OPERATIONS = (
         methods=("Symmetric difference of nontrivial bipartitions (unrooted) or "
                  "nontrivial clades (rooted); normalized by total feature count."),
         citations=(_RF_CITATION,),
+        headline="robinson_foulds",
     ),
     Operation(
         "patristic_distances", "Patristic tip distances",
@@ -732,6 +737,7 @@ OPERATIONS = (
         patristic_distances,
         methods="Sum the edge lengths along each unique leaf-to-leaf path; no molecular clock assumption.",
         citations=(_NEWICK_CITATION,),
+        headline="mean_distance",
     ),
     Operation(
         "consensus_tree", "Consensus phylogenetic tree",
@@ -744,5 +750,6 @@ OPERATIONS = (
                  "half the rooted input trees (majority); conflicting clades collapse to polytomies."),
         citations=(Citation("PHYLIP Consense documentation",
                             "https://evolution.genetics.washington.edu/phylip/doc/consense.html"),),
+        headline="retained_clades",
     ),
 )

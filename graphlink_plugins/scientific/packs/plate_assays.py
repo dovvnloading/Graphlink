@@ -368,6 +368,7 @@ OPERATIONS = (
                  "and measured calibration interval are reported; no amplification quality pass/fail is inferred."),
         citations=(Citation("Pfaffl (2001), Nucleic Acids Research",
                             "https://doi.org/10.1093/nar/29.9.e45"),),
+        headline="amplification_efficiency_percent",
     ),
     Operation(
         "qpcr_relative_expression", "qPCR ΔΔCt and efficiency-corrected Pfaffl ratio",
@@ -392,6 +393,7 @@ OPERATIONS = (
                             "https://doi.org/10.1093/nar/29.9.e45"),
                    Citation("Vandesompele et al. (2002), Genome Biology",
                             "https://doi.org/10.1186/gb-2002-3-7-research0034")),
+        headline="ddct_fold_change",
     ),
     Operation(
         "digital_pcr", "Digital PCR Poisson copy concentration",

@@ -944,6 +944,7 @@ OPERATIONS = (
         {"expression": "a+b*x", "parameters": '{"a": {"start": 0}, "b": {"start": 1, "lower": 0}}',
          "x": [0,1,2,3,4,5,6,7,8,9], "y": [1.1,2,2.9,4.2,5,6.1,6.9,8.1,9,10.2],
          "weights": [1]*10}, _custom_nonlinear,
+        headline="estimate_a",
     ),
     Operation(
         "compare_models", "Compare models by corrected Akaike information",

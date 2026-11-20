@@ -8,6 +8,7 @@ import { GROUP_MONO_COLORS, GROUP_NAMED_COLORS } from "./GroupColorPicker";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { ChatCitationChips, KNOWLEDGE_CITATION_RECORD } from "./ChatCitationChips";
+import { ChatScienceCard, type ScienceReferenceData } from "./ChatScienceCard";
 import { NodeMenu } from "./NodeMenu";
 import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
@@ -171,6 +172,10 @@ export interface ChatNodeData extends Record<string, unknown> {
   promptTokens: number | null;
   completionTokens: number | null;
   estimatedCostUsd: number | null;
+  // The verified Scientific Workbench result a "Discuss in chat" message was
+  // started from - rendered as a compact card (ChatScienceCard) instead of
+  // the raw snapshot text in `content`, which the model still reads in full.
+  scienceReference?: ScienceReferenceData | null;
 }
 
 // Mirrors the generated ToolInvocationRow (web_ui/src/lib/bridge-core/
@@ -725,6 +730,8 @@ export function chatNodePropsAreEqual(prev: NodeProps<ChatFlowNode>, next: NodeP
     a.promptTokens === b.promptTokens &&
     a.completionTokens === b.completionTokens &&
     a.estimatedCostUsd === b.estimatedCostUsd &&
+    // A reference is fixed once created; its receipt hash identifies it.
+    (a.scienceReference?.receiptHash ?? null) === (b.scienceReference?.receiptHash ?? null) &&
     a.onToggleCollapse === b.onToggleCollapse &&
     a.onDelete === b.onDelete &&
     a.onUndockChild === b.onUndockChild &&
@@ -855,8 +862,11 @@ export const ChatNodeView = memo(function ChatNodeView({
   // At map scale, keep a bounded plain-text excerpt; mounting Markdown for every
   // off-screen turn would defeat the level-of-detail optimization. Respect a
   // user's explicit fold even while the viewport is in overview.
+  const scienceReference = data.scienceReference ?? null;
   const overview = lodCollapsed && !data.isCollapsed
-    ? (data.pendingRequestId ? streamedContent : data.content).slice(0, 160).trim()
+    ? (scienceReference
+      ? `${scienceReference.operationTitle}: ${scienceReference.summary}`
+      : data.pendingRequestId ? streamedContent : data.content).slice(0, 160).trim()
     : "";
   const headerDetail = overview ? (
     <span className="node-overview-excerpt">{overview}</span>
@@ -968,42 +978,48 @@ export const ChatNodeView = memo(function ChatNodeView({
         )
       }
     >
-      <div className="chat-node-reading-area">
-        <div
-          className={`chat-node-content${contentExpanded ? " expanded" : ""}`}
-          ref={contentRef}
-          onScroll={onScroll}
-        >
-          {/* ADR-006 stage 6.4: while a Regenerate is in flight, shows live
-              streamed deltas instead of the persisted content; once it
-              completes (pendingRequestId back to null), falls back to the
-              static, already-persisted content field - same render swap as
-              CodeSandboxNodeView's live terminal. Review fix: before the
-              first delta lands, an empty markdown body rendered as a blank
-              card - the placeholder covers that window, same posture as
-              ConversationNodeView's own streaming bubble. */}
-          {data.pendingRequestId && !streamedContent ? (
-            <span className="chat-node-streaming-placeholder">Waiting for response…</span>
-          ) : (
-            <NodeMarkdown content={data.pendingRequestId ? streamedContent : data.content} />
+      {scienceReference ? (
+        <ChatScienceCard reference={scienceReference} content={data.content} />
+      ) : (
+        <>
+          <div className="chat-node-reading-area">
+            <div
+              className={`chat-node-content${contentExpanded ? " expanded" : ""}`}
+              ref={contentRef}
+              onScroll={onScroll}
+            >
+              {/* ADR-006 stage 6.4: while a Regenerate is in flight, shows live
+                  streamed deltas instead of the persisted content; once it
+                  completes (pendingRequestId back to null), falls back to the
+                  static, already-persisted content field - same render swap as
+                  CodeSandboxNodeView's live terminal. Review fix: before the
+                  first delta lands, an empty markdown body rendered as a blank
+                  card - the placeholder covers that window, same posture as
+                  ConversationNodeView's own streaming bubble. */}
+              {data.pendingRequestId && !streamedContent ? (
+                <span className="chat-node-streaming-placeholder">Waiting for response…</span>
+              ) : (
+                <NodeMarkdown content={data.pendingRequestId ? streamedContent : data.content} />
+              )}
+            </div>
+            {contentOverflows && !contentExpanded && (
+              <div className="chat-node-content-fade" aria-hidden="true" />
+            )}
+          </div>
+          {!data.isUser && !data.pendingRequestId && (
+            <ChatCitationChips content={data.content} toolInvocations={data.toolInvocations} />
           )}
-        </div>
-        {contentOverflows && !contentExpanded && (
-          <div className="chat-node-content-fade" aria-hidden="true" />
-        )}
-      </div>
-      {!data.isUser && !data.pendingRequestId && (
-        <ChatCitationChips content={data.content} toolInvocations={data.toolInvocations} />
-      )}
-      {contentOverflows && (
-        <button
-          type="button"
-          className="chat-node-show-more nodrag"
-          aria-expanded={contentExpanded}
-          onClick={() => setContentExpanded((expanded) => !expanded)}
-        >
-          {contentExpanded ? "Show less" : "Show more"}
-        </button>
+          {contentOverflows && (
+            <button
+              type="button"
+              className="chat-node-show-more nodrag"
+              aria-expanded={contentExpanded}
+              onClick={() => setContentExpanded((expanded) => !expanded)}
+            >
+              {contentExpanded ? "Show less" : "Show more"}
+            </button>
+          )}
+        </>
       )}
       {/* ADR-007 stage 7.4: an assistant turn's tool calls + results - the
           ADR's own "renders the calls and their results (collapsible)".

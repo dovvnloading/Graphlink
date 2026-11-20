@@ -360,6 +360,26 @@ class ToolInvocationRow:
 
 
 @dataclass
+class ScienceReferenceRow:
+    """The verified Scientific Workbench result a "Discuss in chat" node was
+    started from - see SceneNodeRow.scienceReference. A display summary only:
+    the chat node's `content` still carries the complete snapshot the model
+    reads. `headlineValueJson` is the operation's declared headline value,
+    JSON-encoded (a number or short string), or "" when the result has none;
+    the frontend formats it the way the Workbench node does."""
+
+    packId: str
+    packTitle: str
+    operationId: str
+    operationTitle: str
+    summary: str
+    headlineKey: str
+    headlineValueJson: str
+    resultHash: str
+    receiptHash: str
+
+
+@dataclass
 class PlanStepRow:
     """ADR-008 stage 8.3: one Builder plan step - the typed wire shape of
     PlanState.steps' own {"id","title","status","detail"} dicts (backend/
@@ -797,6 +817,10 @@ class SceneNodeRow:
     # section (the ADR's own "an assistant turn that calls tools renders
     # the calls and their results (collapsible)") in ChatNodeView.tsx.
     toolCalls: list[ToolInvocationRow] = field(default_factory=list)
+    # The verified Scientific Workbench result a "Discuss in chat" user node
+    # was started from; null for every other row. ChatNodeView renders it as
+    # a compact result card instead of the raw snapshot text in `content`.
+    scienceReference: ScienceReferenceRow | None = None
     # ADR-018 stage 18.3: an explicit model PIN - populated for kind=="chat"
     # rows that have one, "" (both fields together, never partial) for
     # every other row. The input-routing opposite of provider/model above

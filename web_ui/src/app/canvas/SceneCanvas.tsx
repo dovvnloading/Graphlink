@@ -1252,6 +1252,8 @@ export function toFlowNodes(
           // payload.py). Rendered as a collapsible section in
           // ChatNodeView.tsx.
           toolInvocations: n.toolCalls,
+          // Discuss in chat: the verified result card (null for every other chat).
+          scienceReference: n.scienceReference ?? null,
           // ADR-016 stage 16.2: real usage + the cost snapshot taken when it
           // was stamped - null for user messages and replies whose provider
           // reports nothing. See ChatNodeView.tsx's own render guard.

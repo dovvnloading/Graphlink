@@ -375,6 +375,8 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "completionTokens", "promptTokens",
     "researchResult", "researchRetainToKnowledge", "researchStage", "researchTotal",
     "responseIncomplete",
+    # Discuss in chat: the result card's verified source summary.
+    "scienceReference",
     "synthesisInstructions", "textInputOperation", "textInputSourceId", "textInputStatus", "title", "toolCalls", "x", "y",
     "isTableSource", "tableInputSourceId", "tableLabelColumn", "tableValueColumn",
     "tableInputStatus", "tableOutputEdited", "tableOutputVersion", "tableHasPrevious",

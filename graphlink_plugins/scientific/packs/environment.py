@@ -535,6 +535,7 @@ OPERATIONS: tuple[Operation, ...] = (
         ),
         {"flow_m3_s": [1, 2], "duration_s": [600, 600], "concentration_mg_l": [3, 6]},
         flow_weighted_concentration,
+        headline="mean_concentration_mg_l",
     ),
     Operation(
         "rainfall_runoff",
@@ -586,6 +587,7 @@ OPERATIONS: tuple[Operation, ...] = (
          "so2_24h_ppb": -1, "no2_1h_ppb": -1},
         air_quality_index,
         reference_datasets=("environment.epa_aqi_breakpoints",),
+        headline="aqi",
     ),
     Operation(
         "gaussian_plume",
@@ -645,6 +647,7 @@ OPERATIONS: tuple[Operation, ...] = (
         {"time_day": [0, 1, 2, 4, 6], "concentration_mg_l": [10, 7.4, 5.5, 3.0, 1.65],
          "prediction_time_day": 7},
         first_order_decay_fit,
+        headline="decay_constant_per_day",
     ),
     Operation(
         "rational_runoff",
@@ -679,6 +682,7 @@ OPERATIONS: tuple[Operation, ...] = (
         {"rainfall_mm": 80, "area_km2": 2, "curve_number": 75,
          "initial_abstraction_ratio": .2},
         scs_curve_number,
+        headline="direct_runoff_depth_mm",
     ),
     Operation(
         "fao56_evapotranspiration",

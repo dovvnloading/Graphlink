@@ -609,6 +609,88 @@ body {
   border-radius: 6px;
 }
 
+/* Discuss in chat: a verified Scientific Workbench result as a compact card.
+   The headline box mirrors the Workbench node's own .science-result-highlight
+   so the source and the discussion read as the same result. */
+.chat-science-card {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chat-science-card-source,
+.chat-science-card-receipt {
+  font-size: 0.85em;
+  color: var(--gl-surface-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.chat-science-card-title {
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.chat-science-card-highlight {
+  display: grid;
+  gap: 2px;
+  padding: 7px 9px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 5px;
+}
+
+.chat-science-card-highlight span {
+  font-size: 0.85em;
+  color: var(--gl-surface-text-secondary);
+}
+
+.chat-science-card-highlight strong {
+  font-size: 1.16em;
+  line-height: 1.2;
+  color: var(--gl-surface-text-primary);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.chat-science-card-summary {
+  margin: 0;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.chat-science-card-receipt code {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+
+.chat-science-card-sent {
+  padding-top: 6px;
+  border-top: 1px solid var(--gl-surface-border);
+  font-size: 0.9em;
+}
+
+.chat-science-card-sent summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--gl-surface-text-secondary);
+}
+
+.chat-science-card-sent pre {
+  max-height: 220px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
+  border-radius: 6px;
+}
+
 /* Node redesign, stage 2 ("typography and heading hierarchy"): headings
    were fixed px values (15/14/13/12) set independently of this element's
    own font-size, which itself is driven by the user-configurable

@@ -88,6 +88,7 @@ OPERATIONS: tuple[Operation, ...] = (
         ),
         {"mass_kg": 1.0, "stiffness_n_m": 4.0, "amplitude_m": 0.1},
         _oscillator,
+        headline="angular_frequency_rad_s",
     ),
     Operation(
         "thermal_layers",
@@ -102,6 +103,7 @@ OPERATIONS: tuple[Operation, ...] = (
         ),
         {"thickness_m": [0.1, 0.02], "conductivity_w_mk": [0.2, 0.04], "area_m2": 2, "left_k": 295, "right_k": 275},
         _conduction,
+        headline="heat_flux_w_m2",
     ),
     Operation(
         "sensible_heat",
@@ -640,7 +642,7 @@ OPERATIONS += (
                Field("width_m","Plate width","number",unit="m"),
                Field("parallel_axis_offset_m","Parallel-axis offset","number",unit="m")),
               {"shape":"solid_cylinder","mass_kg":2.0,"radius_m":0.3,
-               "length_m":1.0,"width_m":0.4,"parallel_axis_offset_m":0.2},_rigid_body_inertia),
+               "length_m":1.0,"width_m":0.4,"parallel_axis_offset_m":0.2},_rigid_body_inertia, headline="centroidal_inertia_kg_m2"),
     Operation("transient_heat_1d","Solve transient 1D heat conduction",
               "Explicit central-space finite differences with Fo stability limit, or unconditionally stable implicit backward Euler.",
               (Field("scheme","Method (explicit or implicit)","text",unit="1"),
@@ -681,7 +683,7 @@ OPERATIONS += (
                Field("index_transmitted_1","Transmitted refractive index","number",unit="1"),
                Field("incidence_angle_deg","Incidence from normal","number",unit="deg")),
               {"calculation":"thin_lens","focal_length_m":0.1,"object_distance_m":0.3,
-               "index_incident_1":1.5,"index_transmitted_1":1.0,"incidence_angle_deg":30.0},_geometric_optics),
+               "index_incident_1":1.5,"index_transmitted_1":1.0,"incidence_angle_deg":30.0},_geometric_optics, headline="image_distance_m"),
     Operation("slit_diffraction","Model single/double slit intensity",
               "Fraunhofer sinc-squared aperture envelope and optional coherent two-slit fringes on a flat screen.",
               (Field("pattern","Pattern (single or double)","text",unit="1"),
