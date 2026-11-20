@@ -107,6 +107,109 @@ def register_harness_composer_intent(
     bus.register_intent("harness", "composerSend", composer_send)
 
 
+def register_harness_preferences_intents(
+    bus: SessionBus,
+    document: SceneDocument,
+    notifications: NotificationState,
+    agent_dispatcher,
+    publish_scene,
+) -> None:
+    """Register saved agent preferences separately from run lifecycle controls."""
+
+    async def set_shell(node_id, shell):
+        """Save a node preference for subsequent tasks, not the live run."""
+        node = document.nodes.get(node_id)
+        if node is None or not isinstance(node.state, HarnessState):
+            return
+        if not isinstance(shell, str) or shell not in VALID_SHELLS:
+            notifications.show("Unsupported agent shell.", "warning")
+            await bus.publish("notification")
+            return
+        node.state.harness_shell = shell
+        await publish_scene()
+
+    async def set_execution_profile(node_id, profile):
+        """Save for future tasks. The shell tools enforce it at launch time."""
+        node = document.nodes.get(node_id)
+        if node is None or not isinstance(node.state, HarnessState):
+            return
+        if not isinstance(profile, str) or profile not in VALID_EXECUTION_PROFILES:
+            notifications.show("Unsupported agent execution profile.", "warning")
+            await bus.publish("notification")
+            return
+        changed = node.state.harness_execution_profile != profile
+        node.state.harness_execution_profile = profile
+        if profile != "isolated" and node.state.harness_permission_mode == AUTONOMOUS:
+            # Autonomous cannot remain selected under a Host profile. A
+            # running task retains its already-snapshotted isolated profile.
+            node.state.harness_permission_mode = "ask"
+        if changed and node.state.harness_status != "running":
+            # A stopped task has no reason to retain interactive processes
+            # from its previous execution profile.
+            sessions = getattr(agent_dispatcher, "_harness_shell_sessions", None)
+            if sessions is not None:
+                await asyncio.to_thread(sessions.stop_workspace, node.state.harness_workspace_id)
+        await publish_scene()
+
+    async def set_permission_mode(node_id, mode):
+        """The next task captures this preference at claim time."""
+        node = document.nodes.get(node_id)
+        if node is None or not isinstance(node.state, HarnessState):
+            return
+        if not isinstance(mode, str) or mode not in VALID_PERMISSION_MODES:
+            notifications.show("Unsupported workspace permission mode.", "warning")
+            await bus.publish("notification")
+            return
+        if mode == AUTONOMOUS and node.state.harness_execution_profile != "isolated":
+            notifications.show("Autonomous requires the Isolated execution profile.", "warning")
+            await bus.publish("notification")
+            return
+        node.state.harness_permission_mode = mode
+        if mode == AUTONOMOUS:
+            # The old broad network preference must not silently revive on
+            # a later task or be mistaken for per-request network consent.
+            node.state.harness_network_always = False
+        await publish_scene()
+
+    async def set_network_always(node_id, enabled):
+        """Persist explicit opt-in; the active task retains its snapshot."""
+        node = document.nodes.get(node_id)
+        if node is None or not isinstance(node.state, HarnessState):
+            return
+        if not isinstance(enabled, bool):
+            notifications.show("Network setting must be true or false.", "warning")
+            await bus.publish("notification")
+            return
+        if enabled and node.state.harness_permission_mode == AUTONOMOUS:
+            notifications.show("Autonomous always asks before network access.", "warning")
+            await bus.publish("notification")
+            return
+        node.state.harness_network_always = enabled
+        await publish_scene()
+
+    async def get_isolation_engine():
+        """Probe the BACKEND host, not the browser or a saved graph."""
+        return available_engine()
+
+    async def remove_shell_allow_rule(node_id, rule):
+        """Revoke one persisted prefix from this node, effective immediately."""
+        node = document.nodes.get(node_id)
+        if node is None or not isinstance(node.state, HarnessState):
+            return
+        if not isinstance(rule, str):
+            return
+        # In-place mutation preserves the live run's rule-list reference.
+        if rule in node.state.harness_shell_allow_rules:
+            node.state.harness_shell_allow_rules.remove(rule)
+            await publish_scene()
+
+    bus.register_intent("harness", "setShell", set_shell)
+    bus.register_intent("harness", "removeShellAllowRule", remove_shell_allow_rule)
+    bus.register_intent("harness", "setExecutionProfile", set_execution_profile)
+    bus.register_intent("harness", "setPermissionMode", set_permission_mode)
+    bus.register_intent("harness", "setNetworkAlways", set_network_always)
+    bus.register_intent("harness", "getIsolationEngine", get_isolation_engine)
+
 def register_harness_intents(
     bus: SessionBus,
     document: SceneDocument,
@@ -213,7 +316,8 @@ def register_harness_intents(
             receipts = agent_dispatcher._harness_send_receipts
             fingerprint = (
                 node_id, message, allow_session_grants is True,
-                (model_ref.provider, model_ref.model_id) if model_ref is not None else None,
+                # ModelRef is frozen: equality covers provider and model ID.
+                model_ref,
                 node.state.harness_workspace_id,
             )
             previous = receipts.get(operation_id)
@@ -243,81 +347,6 @@ def register_harness_intents(
     async def cancel(request_id):
         agent_dispatcher.cancel_harness(request_id)
 
-    async def set_shell(node_id, shell):
-        """Save a node preference for subsequent tasks, not the live run."""
-        node = document.nodes.get(node_id)
-        if node is None or not isinstance(node.state, HarnessState):
-            return
-        if not isinstance(shell, str) or shell not in VALID_SHELLS:
-            notifications.show("Unsupported agent shell.", "warning")
-            await bus.publish("notification")
-            return
-        node.state.harness_shell = shell
-        await publish_scene()
-
-    async def set_execution_profile(node_id, profile):
-        """Save for future tasks. The shell tools enforce it at launch time."""
-        node = document.nodes.get(node_id)
-        if node is None or not isinstance(node.state, HarnessState):
-            return
-        if not isinstance(profile, str) or profile not in VALID_EXECUTION_PROFILES:
-            notifications.show("Unsupported agent execution profile.", "warning")
-            await bus.publish("notification")
-            return
-        changed = node.state.harness_execution_profile != profile
-        node.state.harness_execution_profile = profile
-        if profile != "isolated" and node.state.harness_permission_mode == AUTONOMOUS:
-            # Autonomous cannot remain selected under a Host profile. A
-            # running task retains its already-snapshotted isolated profile.
-            node.state.harness_permission_mode = "ask"
-        if changed and node.state.harness_status != "running":
-            # A stopped task has no reason to retain interactive processes
-            # from its previous execution profile.
-            sessions = getattr(agent_dispatcher, "_harness_shell_sessions", None)
-            if sessions is not None:
-                await asyncio.to_thread(sessions.stop_workspace, node.state.harness_workspace_id)
-        await publish_scene()
-
-    async def set_permission_mode(node_id, mode):
-        """The next task captures this preference at claim time."""
-        node = document.nodes.get(node_id)
-        if node is None or not isinstance(node.state, HarnessState):
-            return
-        if not isinstance(mode, str) or mode not in VALID_PERMISSION_MODES:
-            notifications.show("Unsupported workspace permission mode.", "warning")
-            await bus.publish("notification")
-            return
-        if mode == AUTONOMOUS and node.state.harness_execution_profile != "isolated":
-            notifications.show("Autonomous requires the Isolated execution profile.", "warning")
-            await bus.publish("notification")
-            return
-        node.state.harness_permission_mode = mode
-        if mode == AUTONOMOUS:
-            # The old broad network preference must not silently revive on
-            # a later task or be mistaken for per-request network consent.
-            node.state.harness_network_always = False
-        await publish_scene()
-
-    async def set_network_always(node_id, enabled):
-        """Persist explicit opt-in; the active task retains its snapshot."""
-        node = document.nodes.get(node_id)
-        if node is None or not isinstance(node.state, HarnessState):
-            return
-        if not isinstance(enabled, bool):
-            notifications.show("Network setting must be true or false.", "warning")
-            await bus.publish("notification")
-            return
-        if enabled and node.state.harness_permission_mode == AUTONOMOUS:
-            notifications.show("Autonomous always asks before network access.", "warning")
-            await bus.publish("notification")
-            return
-        node.state.harness_network_always = enabled
-        await publish_scene()
-
-    async def get_isolation_engine():
-        """Probe the BACKEND host, not the browser or a saved graph."""
-        return available_engine()
-
     async def approve_tool(request_id, approval_id=""):
         if approval_id:
             agent_dispatcher.approve_code_execution(request_id, approval_id)
@@ -344,18 +373,6 @@ def register_harness_intents(
         broader one in place of the narrower one is a UI that will."""
         agent_dispatcher.approve_harness_tool_for_session(request_id, approval_id)
 
-    async def remove_shell_allow_rule(node_id, rule):
-        """Revoke one persisted prefix from this node, effective immediately."""
-        node = document.nodes.get(node_id)
-        if node is None or not isinstance(node.state, HarnessState):
-            return
-        if not isinstance(rule, str):
-            return
-        # In-place mutation preserves the live run's rule-list reference.
-        if rule in node.state.harness_shell_allow_rules:
-            node.state.harness_shell_allow_rules.remove(rule)
-            await publish_scene()
-
     async def answer_question(request_id, answer):
         """Resolve a run parked on user.ask (§2.3). Distinct from
         approveTool because the payload is the user's TEXT, not a boolean -
@@ -377,9 +394,6 @@ def register_harness_intents(
     bus.register_intent("harness", "approveToolForSession", approve_tool_for_session)
     bus.register_intent("harness", "answer", answer_question)
     register_harness_workspace_intents(bus, document, notifications, agent_dispatcher)
-    bus.register_intent("harness", "setShell", set_shell)
-    bus.register_intent("harness", "removeShellAllowRule", remove_shell_allow_rule)
-    bus.register_intent("harness", "setExecutionProfile", set_execution_profile)
-    bus.register_intent("harness", "setPermissionMode", set_permission_mode)
-    bus.register_intent("harness", "setNetworkAlways", set_network_always)
-    bus.register_intent("harness", "getIsolationEngine", get_isolation_engine)
+    register_harness_preferences_intents(
+        bus, document, notifications, agent_dispatcher, publish_scene,
+    )
