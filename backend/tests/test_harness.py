@@ -423,6 +423,51 @@ class TestLoop:
         assert "first question" in contents and "first answer" in contents
         assert node.state.harness_reply == "second answer"
 
+    def test_machine_snapshot_stays_in_system_prompt_across_turns_and_followups(
+        self, workspace_root, monkeypatch,
+    ):
+        from backend.agent_dispatch.harness import HarnessDispatchOps
+
+        document, dispatcher, registry, bus, node = self._make(workspace_root)
+        monkeypatch.setattr(
+            LoopDispatcher, "harness_machine_snapshot",
+            HarnessDispatchOps.harness_machine_snapshot, raising=False,
+        )
+        probes = []
+        seen = []
+
+        def describe(root):
+            probes.append(str(root))
+            return f"## Workspace execution environment\nOS: test-machine\nWorkspace root: {root}"
+
+        monkeypatch.setattr(context_module, "describe_machine", describe)
+
+        def recording_turn(task, messages, tools=(), **kwargs):
+            seen.append(list(messages))
+            first = len(seen) == 1
+            return {
+                "message": {"content": "checking" if first else "done", "role": "assistant"},
+                "tool_calls": [call("t1", "fs.list", path=".")] if first else [],
+                "usage": None,
+            }
+
+        monkeypatch.setattr(api_provider, "chat_turn_with_tools", recording_turn)
+        asyncio.run(drive(document, dispatcher, registry, bus, node, "first task"))
+        asyncio.run(drive(document, dispatcher, registry, bus, node, "follow-up"))
+
+        assert len(probes) == 1, "the dispatcher should reuse the probe across tasks"
+        assert len(seen) == 3, "first task has two turns, second task one"
+        system_messages = [messages[0] for messages in seen]
+        assert all(message["role"] == "system" for message in system_messages)
+        assert all(message == system_messages[0] for message in system_messages)
+        assert "OS: test-machine" in system_messages[0]["content"]
+        assert "Workspace root:" in system_messages[0]["content"]
+
+        # Machine context must not be appended to the transcript, where it
+        # would be compacted and could change the cacheable model prefix.
+        ws = ensure_workspace(node.state.harness_workspace_id)
+        assert all("OS: test-machine" not in m.get("content", "") for m in load_messages(ws))
+
     def test_the_task_message_enters_history_exactly_once(self, workspace_root, monkeypatch):
         """load_messages crosses the flush barrier itself, so a task message
         appended BEFORE the reload comes back in it. Appending after the
