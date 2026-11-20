@@ -28,8 +28,10 @@ import secrets
 import stat
 import sys
 import time
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Callable
 
 import regex as re
 
@@ -191,7 +193,10 @@ def _read_bounded_bytes(path: Path, *, max_bytes: int | None = None) -> bytes:
     # these checked bytes, never a second unbounded read of the source path.
     if max_bytes is None:
         max_bytes = _MAX_FS_FILE_BYTES
-    with path.open("rb") as stream:
+    # An attacker may replace a resolved final component with a symlink
+    # between path validation and open. Do not follow it on POSIX.
+    flags = os.O_RDONLY | (getattr(os, "O_NOFOLLOW", 0) if os.name == "posix" else 0)
+    with os.fdopen(os.open(path, flags), "rb") as stream:
         data = stream.read(max_bytes + 1)
     if len(data) > max_bytes:
         raise WorkspaceError(f"File exceeds the {max_bytes}-byte harness read limit.")
@@ -431,8 +436,77 @@ def _replace_approved_existing(target: Path, staged_path: Path, approved: FileAp
             f"Inspect the destination and recovery paths: {exc}"
         ) from exc
 
+@contextmanager
+def _pinned_write_target(root: Path, target: Path):
+    """Bind publication to a workspace directory inode, never a mutable parent path.
+
+    A resolved path is only a point-in-time check: another process can
+    replace root/sub with a symlink after approval. Walk every ancestor from
+    the run's root with O_NOFOLLOW and keep the directory fd open through
+    staging, version validation, publication and recovery. On POSIX,
+    /proc/self/fd (Linux) or /dev/fd (other POSIX) addresses that exact
+    directory inode for the existing atomic rename/link routines. Refuse
+    writes if the host cannot provide this anchored path.
+    """
+    if os.name != "posix":
+        # Windows retains its separate ReplaceFileW/MoveFileExW publication
+        # mechanism; POSIX directory-fd primitives do not exist there.
+        yield target, lambda: None
+        return
+
+    try:
+        relative = target.relative_to(root)
+    except ValueError as exc:
+        raise WorkspaceError("File publication target is outside its workspace.") from exc
+    if not relative.parts or any(part in (".", "..") for part in relative.parts):
+        raise WorkspaceError("Invalid workspace publication path.")
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+    @contextmanager
+    def parent_handle(*, create: bool):
+        fd = os.open(root, directory_flags)
+        try:
+            for component in relative.parts[:-1]:
+                if create:
+                    try:
+                        os.mkdir(component, dir_fd=fd)
+                    except FileExistsError:
+                        pass
+                child_fd = os.open(component, directory_flags, dir_fd=fd)
+                os.close(fd)
+                fd = child_fd
+            yield fd
+        finally:
+            os.close(fd)
+
+    try:
+        with parent_handle(create=True) as directory_fd:
+            fd_root = "/proc/self/fd" if sys.platform.startswith("linux") else "/dev/fd"
+            anchored_parent = Path(fd_root) / str(directory_fd)
+            identity = os.fstat(directory_fd)
+            if not anchored_parent.is_dir() or anchored_parent.stat().st_ino != identity.st_ino:
+                raise WorkspaceError("This host cannot safely publish through a pinned directory handle.")
+
+            def verify_parent() -> None:
+                # A parent swapped before the last approval check must fail,
+                # not leave a surprising file in a renamed sibling. Even
+                # after this check, publication itself remains fd-anchored.
+                try:
+                    with parent_handle(create=False) as current_fd:
+                        actual = os.fstat(current_fd)
+                        if (actual.st_dev, actual.st_ino) != (identity.st_dev, identity.st_ino):
+                            raise WorkspaceError(_STALE_FILE_APPROVAL)
+                except OSError as exc:
+                    raise WorkspaceError(_STALE_FILE_APPROVAL) from exc
+
+            yield anchored_parent / relative.name, verify_parent
+    except OSError as exc:
+        raise WorkspaceError(f"Workspace write path changed or became unavailable: {exc}") from exc
+
+
 def _write_atomic_text(
     target: Path, content: str, *, approval_state: FileApprovalState | None = None,
+    before_publish: Callable[[], None] | None = None,
 ) -> None:
     """Replace text only after the complete UTF-8 payload is safely staged.
 
@@ -477,6 +551,8 @@ def _write_atomic_text(
         if approval_state is not None:
             if not _file_approval_state_matches(target, approval_state):
                 raise WorkspaceError(_STALE_FILE_APPROVAL)
+            if before_publish is not None:
+                before_publish()
             if approval_state.digest is None:
                 # Atomic create-if-absent: even a file appearing between the
                 # last check and commit must not be overwritten.
@@ -498,6 +574,8 @@ def _write_atomic_text(
                 return
             _replace_approved_existing(target, staged_path, approval_state)
             return
+        if before_publish is not None:
+            before_publish()
         os.replace(staged_path, target)
     except _ApprovedWriteRecoveryError:
         # A stale-write conflict or failed rollback can leave the external
@@ -560,7 +638,7 @@ def _file_approval_state_matches(target: Path, approved: FileApprovalState) -> b
     try:
         if approved.digest is None:
             return not target.exists() and not target.is_symlink()
-        if not target.is_file() or _file_version(target) != approved.version:
+        if target.is_symlink() or not target.is_file() or _file_version(target) != approved.version:
             return False
         actual = hashlib.sha256(_read_bounded_bytes(target)).hexdigest()
         return actual == approved.digest and _file_version(target) == approved.version
