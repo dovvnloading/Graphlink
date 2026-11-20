@@ -136,3 +136,74 @@ def test_unchanged_approved_overwrite_still_succeeds(tmp_path, operation):
         "agent version" if operation == "fs.write" else "agent original"
     )
     assert sorted(p.name for p in tmp_path.iterdir()) == ["reviewed.txt"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Requires POSIX no-follow directory handles")
+@pytest.mark.parametrize("tool", ("fs.write", "fs.edit"))
+def test_approved_publication_rejects_parent_symlink_swap_after_final_check(tmp_path, monkeypatch, tool):
+    workspace = tmp_path / "workspace"
+    parent = workspace / "sub"
+    outside = tmp_path / "outside"
+    parent.mkdir(parents=True)
+    outside.mkdir()
+    if tool == "fs.edit":
+        (parent / "new.txt").write_text("before", encoding="utf-8")
+
+    original_check = fs._file_approval_state_matches
+    checks = 0
+
+    def swap_after_last_approval_check(target, approved):
+        nonlocal checks
+        result = original_check(target, approved)
+        checks += 1
+        if checks == 2:
+            # The real tool first checked its pinned target, then staged the
+            # complete payload and did its final approval-version check.
+            # Swap the parent AFTER that check, just before publication.
+            parent.rename(workspace / "sub-old")
+            parent.symlink_to(outside, target_is_directory=True)
+        return result
+
+    monkeypatch.setattr(fs, "_file_approval_state_matches", swap_after_last_approval_check)
+    arguments = (
+        {"path": "sub/new.txt", "content": "agent data"}
+        if tool == "fs.write"
+        else {"path": "sub/new.txt", "old_string": "before", "new_string": "after"}
+    )
+    result = _approved_file_call(workspace, tool, **arguments)
+
+    assert checks == 2
+    assert result.is_error and "File changed since approval" in result.content
+    assert not (outside / "new.txt").exists(), "approved writes must never follow the swapped parent"
+    old_target = workspace / "sub-old" / "new.txt"
+    if tool == "fs.edit":
+        assert old_target.read_text(encoding="utf-8") == "before"
+    else:
+        assert not old_target.exists()
+    assert not list((workspace / "sub-old").glob(".*.tmp"))
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Requires POSIX no-follow directory handles")
+def test_parent_symlink_swap_before_staging_does_not_touch_outside(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    workspace = tmp_path / "workspace"
+    parent = workspace / "sub"
+    outside = tmp_path / "outside"
+    parent.mkdir(parents=True)
+    outside.mkdir()
+    original_pin = fs._pinned_write_target
+
+    @contextmanager
+    def swap_before_pin(root, target):
+        parent.rename(workspace / "sub-old")
+        parent.symlink_to(outside, target_is_directory=True)
+        with original_pin(root, target) as pinned:
+            yield pinned
+
+    monkeypatch.setattr(fs, "_pinned_write_target", swap_before_pin)
+    result = _approved_file_call(workspace, "fs.write", path="sub/new.txt", content="agent data")
+
+    assert result.is_error
+    assert not (outside / "new.txt").exists()
+    assert not (workspace / "sub-old" / "new.txt").exists()
