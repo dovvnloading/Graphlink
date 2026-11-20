@@ -186,6 +186,7 @@ class HarnessRunContext(RunContext):
     ask_user: object = None
     # The interpreter disclosed for a fresh python.install authorization.
     python_install_approved_interpreter: object = None
+    python_install_approved_binding: object = None
     # Attached only while a shell.exec/python.exec handler is running. The
     # callback may be invoked by a worker thread, so it must not touch the
     # scene or event bus itself.
@@ -510,7 +511,9 @@ async def run_harness(
         # Show the environment selected by python.exec, without creating a
         # virtualenv before consent. Pin the choice against a late rebind.
         install_target = None
+        install_binding = None
         ctx.python_install_approved_interpreter = None
+        ctx.python_install_approved_binding = None
         if call.name == "python.install":
             from backend.harness.python_install import (
                 planned_install_interpreter, workspace_install_binding,
@@ -520,6 +523,11 @@ async def run_harness(
                 workspace_id, root, is_scratch = workspace_install_binding(ctx)
                 install_target = planned_install_interpreter(
                     workspace_id, root, is_scratch=is_scratch,
+                    profile=ctx.harness_execution_profile,
+                )
+                install_binding = (
+                    workspace_id, root.resolve(), is_scratch,
+                    ctx.harness_execution_profile, install_target,
                 )
             except (WorkspaceError, OSError):
                 return False
@@ -542,6 +550,7 @@ async def run_harness(
 
             node.state.harness_approval_summary = install_approval_summary(
                 call.arguments["packages"], install_target,
+                isolated=ctx.harness_execution_profile == "isolated",
             )
         else:
             node.state.harness_approval_summary = (
@@ -569,6 +578,7 @@ async def run_harness(
         # client approval cannot permit a write whose preview was unavailable.
         if call.name == "python.install" and approved and preview_available:
             ctx.python_install_approved_interpreter = install_target
+            ctx.python_install_approved_binding = install_binding
         return approved if preview_available else False
 
     async def set_plan(steps: list) -> None:
