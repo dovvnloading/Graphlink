@@ -229,6 +229,7 @@ def register_harness_python_tool(
             raise RequestCancelledError("stopped")
         profile = normalize_execution_profile(getattr(ctx, "harness_execution_profile", "host"))
         try:
+            interpreter: Path | PurePosixPath
             if profile == "isolated":
                 plan = planned_isolated_python_environment(
                     workspace_id, cwd, is_scratch=is_scratch,
