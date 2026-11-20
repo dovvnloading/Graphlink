@@ -316,6 +316,7 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
         harnessCompactions: 0,
         harnessWorkspacePath: "",
         harnessWorkspaceActive: "",
+        harnessShellAllowRules: [],
         harnessAwaitingApproval: false,
         harnessApprovalToolName: "",
         harnessApprovalSummary: "",
