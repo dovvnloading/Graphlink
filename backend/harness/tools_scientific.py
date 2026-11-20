@@ -17,7 +17,7 @@ from api_provider import _raise_if_cancelled
 from backend.domain.model import SceneError
 from backend.domain.node_states import PluginStateSnapshot
 from backend.providers.base import ToolCall, ToolSpec
-from backend.tools import CODE_EXECUTE, GRAPH_MUTATE, GRAPH_READ, RunContext, ToolRegistry, ToolResult
+from backend.tools import CODE_EXECUTE, FS_READ, GRAPH_MUTATE, GRAPH_READ, RunContext, ToolRegistry, ToolResult
 from graphlink_plugins.scientific.catalog import PACKS, operations
 from graphlink_plugins.scientific.core import readable_result, validated_inputs_with_units
 from graphlink_plugins.scientific.data_table import TableState
@@ -274,5 +274,8 @@ def register_workspace_tools(registry: ToolRegistry, dispatcher, document) -> No
             "receipt": result["provenance"],
         }, allow_nan=False))
 
-    registry.register(SEARCH_SPEC, search, scopes={GRAPH_READ}, approval="auto")
-    registry.register(RUN_SPEC, run, scopes={CODE_EXECUTE, GRAPH_MUTATE}, approval="once")
+    # FS_READ is a harness-only capability ceiling. The shared Builder registry
+    # uses the same registration object, but must not offer these workspace-agent
+    # tools to a Builder context that cannot supply the live harness node.
+    registry.register(SEARCH_SPEC, search, scopes={FS_READ, GRAPH_READ}, approval="auto")
+    registry.register(RUN_SPEC, run, scopes={FS_READ, CODE_EXECUTE, GRAPH_MUTATE}, approval="once")
