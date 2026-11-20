@@ -7,7 +7,9 @@ scripted here; browser/transport coverage lives in the integrated evidence.
 from __future__ import annotations
 
 import asyncio
+import sys
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -287,11 +289,12 @@ def test_harness_issues_distinct_python_disclosures_without_session_option(tmp_p
     from backend.api.intents_harness import register_harness_intents
     from backend.domain.graph import SceneDocument
     from backend.events import SessionBus
+    from backend.harness import tools_python as tools_python_module
     from backend.harness import workspace as workspace_module
-    from backend.harness import python_env as python_env_module
     from backend.harness.loop import run_harness
     from backend.notifications import NotificationState
     from backend.tests.test_harness import scripted_turns
+    from graphlink_plugins.common.python_repl import PythonREPL
 
     monkeypatch.setattr(workspace_module, "HARNESS_WORKSPACE_ROOT", tmp_path / "workspaces")
     source = "# " + "visible padding " * 40 + "\nprint('approved fixture')\n"
@@ -315,14 +318,20 @@ def test_harness_issues_distinct_python_disclosures_without_session_option(tmp_p
         handle = dispatcher._runs.claim("harness", node_id=node.id, cancel_event=cancelled)
         observed = []
 
-        # This test measures two distinct approval tokens, not the duration
-        # of a first-time venv + pip bootstrap on a busy Windows CI runner.
-        # First-use creation is separately covered by test_harness_python_env.
-        scratch = workspace_module.ensure_workspace(node.state.harness_workspace_id)
-        await asyncio.to_thread(
-            python_env_module.ensure_python_environment,
-            node.state.harness_workspace_id, scratch, is_scratch=True,
+        # This tests the real harness/registry/intent approval flow, not venv
+        # provisioning or Windows subprocess startup. Other tests cover the
+        # real interpreter; avoid tying disclosure timing to a busy CI host.
+        executed = []
+
+        def fake_execute(_self, code, _on_output=None, _cancel_event=None):
+            executed.append(code)
+            return "approved fixture\n"
+
+        monkeypatch.setattr(
+            tools_python_module, "ensure_python_environment",
+            lambda *_args, **_kwargs: Path(sys.executable),
         )
+        monkeypatch.setattr(PythonREPL, "execute", fake_execute)
 
         async def decide():
             while len(observed) < 2:
@@ -333,18 +342,23 @@ def test_harness_issues_distinct_python_disclosures_without_session_option(tmp_p
                     assert node.state.harness_approval_session_offered is False
                     observed.append(token)
                     await bus.dispatch_intent("harness", "approveTool", [handle.request_id, token])
-                await asyncio.sleep(0)
+                if run_task.done():
+                    await run_task  # Propagate any unexpected exception.
+                    pytest.fail(
+                        f"Harness ended before two disclosures: {node.state.harness_status}: "
+                        f"{node.state.harness_status_detail} (observed {len(observed)})"
+                    )
+                await asyncio.sleep(0.01)
 
+        run_task = asyncio.create_task(run_harness(
+            document=document, dispatcher=dispatcher, registry=registry, bus=bus, notifications=None,
+            harness_node_id=node.id, user_text="go", request_id=handle.request_id,
+            handle=handle, cancel_event=cancelled,
+        ))
         try:
-            await asyncio.wait_for(asyncio.gather(
-                run_harness(
-                    document=document, dispatcher=dispatcher, registry=registry, bus=bus, notifications=None,
-                    harness_node_id=node.id, user_text="go", request_id=handle.request_id,
-                    handle=handle, cancel_event=cancelled,
-                ),
-                decide(),
-            ), timeout=30)
+            await asyncio.wait_for(asyncio.gather(run_task, decide()), timeout=30)
             assert len(observed) == 2 and observed[0] != observed[1]
+            assert executed == [source, source]
             assert node.state.harness_status == "done"
             assert node.state.harness_approval_id == handle.approval_token == ""
         finally:
