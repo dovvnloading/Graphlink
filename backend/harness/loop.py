@@ -303,6 +303,13 @@ async def run_harness(
     def _alive() -> bool:
         return dispatcher._runs.get(request_id) is not None
 
+    # A task may be cancelled after its handle was claimed but BEFORE
+    # asyncio schedules this coroutine. Cancellation/finalize already owns
+    # the terminal state; do not resurrect "running", write a transcript,
+    # or start any tools for a run whose slot has been released.
+    if cancel_event.is_set() or not _alive():
+        return
+
     # Set once the workspace resolves, below; _land flushes through it. None
     # until then, so a failure BEFORE the workspace exists has nothing to
     # flush and skips the barrier rather than erroring inside the error path.
