@@ -552,6 +552,7 @@ async def run_harness(
                             [{"role": "system", "content": system_prompt}, *history], specs,
                             model_ref=model_ref, cancellation_event=cancel_event,
                             settings_manager=settings_manager, runtime=runtime,
+                            json_tool_fallback=True,
                         ),
                         timeout=_agents.WATCHDOG_TIMEOUT_SECONDS,
                     )

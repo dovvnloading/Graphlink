@@ -140,7 +140,7 @@ If **Load available models** is unavailable or your deployment is missing from t
 
 Open **Builder** to give the graph a goal. Choose **Plan the build**, edit the checklist on its plan card, then choose **Start build**. **Co-pilot** asks before edits to the canvas. **Autopilot** can make ordinary canvas edits on its own within your step, token, and time budgets. Python execution and web fetches still require approval. A paused or interrupted build can resume from its plan card. **Stop** ends the run. [View the Builder and a recipe](assets/screenshots/builder-launcher.png).
 
-Open **Agent** for tasks that need files. It starts in a private scratch folder, or you can choose an existing project with **Choose folder…**. The agent can read files, propose edits, and request approval to run shell commands or Python. Its activity appears on the canvas.
+Open **Agent** for tasks that need files. It starts in a private scratch folder, or you can choose an existing project with **Choose folder…**. The agent can read files, propose edits, and request approval to run shell commands or Python. Its activity appears on the canvas. Models without native tool calling can use the agent if their runtime supports constrained JSON output. [JSON tool protocol](docs/WORKSPACE_JSON_TOOLS.md).
 
 ## Local data and privacy
 

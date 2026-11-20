@@ -2134,12 +2134,11 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
     routing live in backend/builder.py - this function is deliberately
     single-turn and stateless.
 
-    Tools capability is gated HERE, authoritatively: ChatRequest's own
-    contract (backend/providers/base.py) says a provider with
-    capabilities.tools=False must never receive non-empty tools, and the
-    caller is the checker - so a non-tools model (llama.cpp always;
-    Ollama per-model) raises an actionable RuntimeError before any
-    request is sent, rather than a provider-level surprise mid-build.
+    Native tool capability is gated here. Workspace/subagent callers may
+    explicitly enable json_tool_fallback: llama.cpp, non-tools Ollama and
+    custom OpenAI-compatible endpoints then use schema-constrained JSON
+    tool turns, which decode back to the SAME ToolCall objects. Builder
+    callers retain the strict native-tools requirement by default.
 
     No 18.5 fallback wrapper: builder tasks are correctness-sensitive
     (FALLBACK_ENABLED_TASKS covers naming/triage only), and a mid-build
@@ -2154,6 +2153,7 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
     model_ref = kwargs.pop("model_ref", None)
     runtime = kwargs.pop("runtime", None)
     settings_manager = kwargs.pop("settings_manager", None)
+    json_tool_fallback = bool(kwargs.pop("json_tool_fallback", False))
     state = runtime.snapshot() if runtime is not None else _snapshot_provider_state()
 
     try:
@@ -2168,12 +2168,13 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                 if not model:
                     auto_ref = _auto_fallback_model_ref(
                         task, settings_manager, state,
-                        extra_required=("tools",) if tools else (),
+                        extra_required=("tools",) if tools and not json_tool_fallback else (),
                     )
                     if auto_ref is not None:
                         return chat_turn_with_tools(
                             task, messages, tools, model_ref=auto_ref,
-                            settings_manager=settings_manager, runtime=runtime, **kwargs,
+                            settings_manager=settings_manager, runtime=runtime,
+                            json_tool_fallback=json_tool_fallback, **kwargs,
                         )
                     raise ValueError(f"No Ollama model configured for task: {task}")
                 from backend.providers.ollama_provider import OllamaProvider
@@ -2195,12 +2196,13 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
             if not api_model:
                 auto_ref = _auto_fallback_model_ref(
                     task, settings_manager, state,
-                    extra_required=("tools",) if tools else (),
+                    extra_required=("tools",) if tools and not json_tool_fallback else (),
                 )
                 if auto_ref is not None:
                     return chat_turn_with_tools(
                         task, messages, tools, model_ref=auto_ref,
-                        settings_manager=settings_manager, runtime=runtime, **kwargs,
+                        settings_manager=settings_manager, runtime=runtime,
+                        json_tool_fallback=json_tool_fallback, **kwargs,
                     )
                 raise RuntimeError(
                     f"No API model configured for task '{task}'.\n"
@@ -2208,8 +2210,8 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                 )
             provider = _cloud_provider(state, api_model)
 
-        if tools and not provider.capabilities.tools:
-            model_label = getattr(provider, "model_id", None) or type(provider).__name__
+        model_label = getattr(provider, "model_id", None) or type(provider).__name__
+        if tools and not provider.capabilities.tools and not json_tool_fallback:
             raise RuntimeError(
                 f"The selected model ({model_label}) does not support tool "
                 "calling. The Builder needs a tools-capable model - pick one "
@@ -2223,10 +2225,37 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
         )
         wire_tools = tuple(tools)
         profile = CLOUD_PROVIDERS.get(provider_name or "")
+        # Custom OpenAI-compatible endpoints have no reliable per-model tools
+        # probe. Prefer JSON for workspace runs there, not an optimistic
+        # native tools request which some servers silently ignore.
+        use_json_protocol = bool(
+            tools and json_tool_fallback and (
+                not provider.capabilities.tools
+                or (profile is not None and profile.key_slot == "openai")
+            )
+        )
+        # Other named OpenAI-compatible services advertise structured_output=False
+        # because response formats vary by endpoint. An explicit tools-unsupported
+        # response is a reason to PROBE JSON mode, not assume it is absent.
+        # Refuse only after the endpoint rejects both schema and JSON-object modes.
+        json_format_available = bool(
+            provider.capabilities.structured_output
+            or (profile is not None and profile.protocol == "openai")
+        )
+        if use_json_protocol and not json_format_available:
+            raise RuntimeError(
+                f"The selected model ({model_label}) cannot run the workspace agent: "
+                "native tool calling is unavailable and grammar/schema-constrained "
+                "JSON output is not supported. Choose a tools-capable model or "
+                "one with structured JSON output."
+            )
+        if use_json_protocol:
+            from backend.providers.json_tool_protocol import constrained_request
+            json_messages, json_kwargs = constrained_request(messages, tuple(tools), str(provider_name or ""))
         # DeepSeek/Kimi/GLM can require the previous assistant reasoning on
         # tool turns. Keep it scoped to its originating profile and model,
         # and never pass Graphlink's private history metadata to another API.
-        replay = bool(tools and profile and profile.replay_reasoning)
+        replay = bool(tools and profile and profile.replay_reasoning and not use_json_protocol)
         wire_messages = []
         for message in messages:
             if "provider_reasoning" in message:
@@ -2237,7 +2266,7 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                     message["reasoning_content"] = saved["text"]
             wire_messages.append(message)
         canonical_names: dict[str, str] = {}
-        if profile:
+        if profile and not use_json_protocol:
             from backend.providers.tool_names import cloud_tool_names
 
             wire_tools, wire_messages, canonical_names = cloud_tool_names(wire_tools, wire_messages)
@@ -2249,6 +2278,7 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                 or state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA
             )
         attempt = 0
+        json_object_mode = False
         while True:
             full_response_content = None
             reasoning_parts: list[str] = []
@@ -2257,8 +2287,11 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
             try:
                 for event in provider.stream(
                     ChatRequest(
-                        task=task, messages=wire_messages, extra_kwargs=kwargs,
-                        tools=wire_tools, model_ref=model_ref,
+                        task=task,
+                        messages=json_messages if use_json_protocol else wire_messages,
+                        extra_kwargs={**kwargs, **json_kwargs} if use_json_protocol else kwargs,
+                        tools=() if use_json_protocol else wire_tools,
+                        model_ref=model_ref,
                     ),
                     CancelToken(cancel_event),
                 ):
@@ -2280,6 +2313,39 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                         usage = getattr(event, "usage", None)
                 break
             except Exception as retry_exc:
+                if use_json_protocol:
+                    from backend.providers.json_tool_protocol import structured_output_rejected
+                    if structured_output_rejected(retry_exc):
+                        # Some OpenAI-compatible runtimes only implement
+                        # JSON-object mode, not the richer JSON-schema mode.
+                        # This still constrains syntax at generation time;
+                        # parse_tool_turn validates names and arguments.
+                        if profile and profile.protocol == "openai" and not json_object_mode:
+                            json_kwargs = {"response_format": {"type": "json_object"}}
+                            json_object_mode = True
+                            attempt = 0
+                            continue
+                        raise RuntimeError(
+                            f"The selected model ({model_label}) cannot run the workspace agent: "
+                            "this endpoint rejected grammar/schema-constrained JSON output. "
+                            "Choose a model/endpoint with native tools or structured JSON support."
+                        ) from retry_exc
+                elif tools and json_tool_fallback:
+                    from backend.providers.json_tool_protocol import native_tools_rejected
+                    if native_tools_rejected(retry_exc):
+                        if not json_format_available:
+                            raise RuntimeError(
+                                f"The selected model ({model_label}) cannot run the workspace agent: "
+                                "native tools were rejected and structured JSON output is unavailable."
+                            ) from retry_exc
+                        from backend.providers.json_tool_protocol import constrained_request
+                        json_messages, json_kwargs = constrained_request(
+                            messages, tuple(tools), str(provider_name or ""),
+                        )
+                        use_json_protocol = True
+                        replay = False
+                        attempt = 0
+                        continue
                 if (
                     not transport_retry_allowed
                     or attempt >= _TRANSPORT_RETRY_MAX_ATTEMPTS
@@ -2289,6 +2355,11 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                 _transport_retry_wait(retry_exc, attempt, cancel_event)
                 attempt += 1
 
+        if use_json_protocol:
+            from backend.providers.json_tool_protocol import parse_tool_turn
+            full_response_content, tool_calls = parse_tool_turn(
+                full_response_content or "", tuple(tools),
+            )
         assistant_message: dict[str, Any] = {"content": full_response_content or "", "role": "assistant"}
         if reasoning_parts:
             assistant_message["provider_reasoning"] = {

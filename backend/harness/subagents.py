@@ -148,6 +148,7 @@ async def run_subagent(
                 config.TASK_CHAT, list(messages), specs,
                 model_ref=model_ref, cancellation_event=cancel_event,
                 settings_manager=settings_manager, runtime=runtime,
+                json_tool_fallback=True,
             ),
             timeout=_agents.WATCHDOG_TIMEOUT_SECONDS,
         )
