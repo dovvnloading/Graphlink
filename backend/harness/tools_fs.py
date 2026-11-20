@@ -61,10 +61,13 @@ _GREP_TOTAL_BUDGET_SECONDS = 3.0
 FS_READ_SPEC = ToolSpec(
     name="fs.read",
     description=(
-        "Read a text file from the workspace. path is relative to the "
-        "workspace root. Optional offset (0-based line) and limit (line "
-        "count) window large files; output is truncated past "
-        f"{_READ_CAP_CHARS} characters."
+        "Read workspace text, PDF (.pdf), Word (.docx), or Excel (.xlsx/.xlsm) "
+        "as text. path is workspace-relative. Optional offset (0-based line) "
+        "and limit (line count) window the extracted lines. PDF page_start/"
+        "page_end and Excel sheet_start/sheet_end are 1-based inclusive "
+        "ranges; Excel sheet selects a sheet by name instead. The input "
+        f"file cap is {_MAX_FS_FILE_BYTES} bytes and output is truncated "
+        f"past {_READ_CAP_CHARS} characters."
     ),
     input_schema={
         "type": "object",
@@ -72,6 +75,11 @@ FS_READ_SPEC = ToolSpec(
             "path": {"type": "string"},
             "offset": {"type": "integer"},
             "limit": {"type": "integer"},
+            "page_start": {"type": "integer"},
+            "page_end": {"type": "integer"},
+            "sheet_start": {"type": "integer"},
+            "sheet_end": {"type": "integer"},
+            "sheet": {"type": "string"},
         },
         "required": ["path"],
     },
@@ -168,17 +176,21 @@ def _is_metadata_path(path: Path) -> bool:
     return any(part.casefold() in _PROTECTED_METADATA_DIRS for part in path.parts)
 
 
-def _read_bounded_text(path: Path, *, errors: str = "strict", max_bytes: int | None = None) -> str:
-    # read_text() allocates the full file before the caller applies any
-    # output cap. Reading one byte beyond the limit also catches files
-    # growing between an earlier stat() and the actual read.
+def _read_bounded_bytes(path: Path, *, max_bytes: int | None = None) -> bytes:
+    # Read one extra byte to detect growth even when a preceding stat()
+    # claimed that the file was within bounds. Office parsers consume only
+    # these checked bytes, never a second unbounded read of the source path.
     if max_bytes is None:
         max_bytes = _MAX_FS_FILE_BYTES
     with path.open("rb") as stream:
         data = stream.read(max_bytes + 1)
     if len(data) > max_bytes:
         raise WorkspaceError(f"File exceeds the {max_bytes}-byte harness read limit.")
-    return data.decode("utf-8", errors=errors)
+    return data
+
+
+def _read_bounded_text(path: Path, *, errors: str = "strict", max_bytes: int | None = None) -> str:
+    return _read_bounded_bytes(path, max_bytes=max_bytes).decode("utf-8", errors=errors)
 
 
 def _write_atomic_text(target: Path, content: str) -> None:
@@ -255,10 +267,36 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
             return ToolResult(content="VCS metadata is not accessible through harness filesystem tools.", is_error=True)
         if not target.is_file():
             return ToolResult(content=f"Not a file: {call.arguments.get('path')!r}.", is_error=True)
+        suffix = target.suffix.lower()
+        selectors = ("page_start", "page_end", "sheet_start", "sheet_end", "sheet")
+        if suffix in (".doc", ".xls"):
+            return ToolResult(
+                content="Legacy .doc/.xls files are not supported. Convert to .docx/.xlsx first.",
+                is_error=True,
+            )
+        if suffix not in (".pdf", ".docx", ".xlsx", ".xlsm") and any(
+            call.arguments.get(name) is not None for name in selectors
+        ):
+            return ToolResult(content="Page and sheet selectors require a PDF or Excel file.", is_error=True)
         try:
-            text = _read_bounded_text(target, errors="replace")
-        except (OSError, WorkspaceError) as exc:
+            if suffix in (".pdf", ".docx", ".xlsx", ".xlsm"):
+                from backend.harness.document_read import extract_document_text
+
+                data = _read_bounded_bytes(target)
+                text = await asyncio.to_thread(
+                    extract_document_text,
+                    data,
+                    suffix,
+                    **{name: call.arguments.get(name) for name in selectors},
+                )
+            else:
+                text = _read_bounded_text(target, errors="replace")
+        except (OSError, WorkspaceError, ValueError) as exc:
             return ToolResult(content=f"Could not read file: {exc}", is_error=True)
+        except Exception as exc:
+            # An encrypted/malformed Office package or a third-party parser
+            # error is a normal failed tool call, not a harness-loop crash.
+            return ToolResult(content=f"Could not read document: {exc}", is_error=True)
         lines = text.splitlines()
         try:
             offset = max(0, int(call.arguments.get("offset") or 0))
@@ -468,7 +506,7 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
     registry.register(FS_EDIT_SPEC, fs_edit, scopes={FS_WRITE}, approval="once")
 
 
-USAGE_HINT = "fs.list locates workspace files; fs.read opens them; fs.grep finds matching lines; fs.write and fs.edit change files (with approval)."
+USAGE_HINT = "fs.list locates files; fs.read reads text/PDF/Word/Excel (page and sheet ranges supported); fs.grep searches text; fs.write and fs.edit change files (with approval)."
 
 
 def register_workspace_tools(registry: ToolRegistry, dispatcher, document) -> None:
