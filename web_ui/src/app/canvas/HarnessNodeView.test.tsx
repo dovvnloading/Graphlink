@@ -23,6 +23,7 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     harnessQuestion: "",
     harnessWorkspacePath: "",
     harnessWorkspaceActive: "",
+    harnessShell: "auto",
     harnessAwaitingApproval: false,
     harnessApprovalToolName: "",
     harnessApprovalSummary: "",
@@ -43,6 +44,7 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     onAnswerQuestion: vi.fn(),
     onPickWorkspace: vi.fn(),
     onUseScratch: vi.fn(),
+    onSetShell: vi.fn(),
     ...overrides,
   };
 }
@@ -89,6 +91,48 @@ describe("HarnessNodeView", () => {
     expect(screen.getByText("Working…")).toBeInTheDocument();
     expect(screen.getByText("Turns 3 (max 16/task)")).toBeInTheDocument();
     expect(screen.getByText("Tokens 4,321")).toBeInTheDocument();
+  });
+
+  it("opens settings with Bash on non-Windows and explains next-task timing", async () => {
+    const user = userEvent.setup();
+    const platform = vi.spyOn(window.navigator, "userAgent", "get").mockReturnValue("Linux");
+    try {
+      renderHarness(makeData());
+      await user.click(screen.getByRole("button", { name: "Agent settings" }));
+      const dialog = screen.getByRole("dialog", { name: "Agent settings" });
+      expect(dialog).toBeInTheDocument();
+      const shell = screen.getByRole("combobox", { name: "Shell" });
+      expect(shell).toHaveValue("bash");
+      expect(shell).toBeDisabled();
+      expect(screen.getByText(/Changes apply from the next task/)).toBeInTheDocument();
+      await user.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog", { name: "Agent settings" })).not.toBeInTheDocument();
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
+  it("offers PowerShell, cmd, and Git Bash on Windows even while an agent runs", async () => {
+    const user = userEvent.setup();
+    const agent = makeData();
+    const platform = vi.spyOn(window.navigator, "userAgent", "get")
+      .mockReturnValue("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+    try {
+      renderHarness(agent);
+      await user.click(screen.getByRole("button", { name: "Agent settings" }));
+      const select = screen.getByRole("combobox", { name: "Shell" });
+      expect(select).toHaveValue("powershell");
+      expect(screen.getAllByRole("option").map((option) => (option as HTMLOptionElement).value))
+        .toEqual(["powershell", "cmd", "git-bash"]);
+      await user.selectOptions(select, "cmd");
+      expect(agent.onSetShell).toHaveBeenCalledWith("cmd");
+      await user.selectOptions(select, "git-bash");
+      expect(agent.onSetShell).toHaveBeenCalledWith("git-bash");
+      fireEvent.pointerDown(document.body);
+      expect(screen.queryByRole("dialog", { name: "Agent settings" })).not.toBeInTheDocument();
+    } finally {
+      platform.mockRestore();
+    }
   });
 
   // -- collapse/delete wiring (previously declared on HarnessNodeData with

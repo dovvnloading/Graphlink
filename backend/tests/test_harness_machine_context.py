@@ -38,17 +38,20 @@ def test_machine_snapshot_describes_execution_environment_without_running_comman
     assert checks == [(name, "/toolchain/bin") for name in context_module._COMMON_COMMANDS]
 
 
-def test_command_shell_is_the_execution_shell_not_the_login_shell():
+def test_command_shell_is_the_execution_shell_not_the_login_shell(monkeypatch):
+    monkeypatch.setattr(context_module.shutil, "which", lambda _name, *, path: None)
     assert context_module._command_shell(
         {"SHELL": "/bin/zsh"}, os_name="posix",
-    ) == "/bin/sh -c"
+    ) == "/bin/bash --noprofile --norc -c"
     assert context_module._command_shell(
-        {"COMSPEC": r"C:\Windows\System32\cmd.exe"}, os_name="nt",
+        {"COMSPEC": r"C:\Windows\System32\cmd.exe"}, os_name="nt", shell="cmd",
     ) == r"C:\Windows\System32\cmd.exe /c"
     assert context_module._command_shell(
-        {"ComSpec": r"C:\Windows\cmd.exe"}, os_name="nt",
+        {"ComSpec": r"C:\Windows\cmd.exe"}, os_name="nt", shell="cmd",
     ) == r"C:\Windows\cmd.exe /c"
-    assert context_module._command_shell({}, os_name="nt") == "cmd.exe /c"
+    assert context_module._command_shell({}, os_name="nt").startswith(
+        "powershell.exe -NoLogo -NoProfile -NonInteractive -Command"
+    )
 
 
 def test_machine_tier_is_cacheable_and_precedes_untrusted_workspace_instructions(tmp_path):
@@ -71,8 +74,8 @@ def test_dispatcher_collects_once_per_binding_and_recollects_on_rebind_or_dispos
     two.mkdir()
     calls = []
 
-    def spy(root):
-        calls.append(root)
+    def spy(root, *, shell="auto"):
+        calls.append((root, shell))
         time.sleep(0.01)  # Exercise simultaneous first-use probes.
         return f"machine snapshot {len(calls)} at {root}"
 
@@ -94,15 +97,19 @@ def test_dispatcher_collects_once_per_binding_and_recollects_on_rebind_or_dispos
     assert changed != snapshots[0]
     assert len(calls) == 2
 
+    other_shell = dispatcher.harness_machine_snapshot("workspace-1", two, "cmd")
+    assert other_shell != changed
+    assert len(calls) == 3
+
     dispatcher.dispose_harness_workspace("workspace-1")
     assert dispatcher.harness_machine_snapshot("workspace-1", two) != changed
-    assert len(calls) == 3
+    assert len(calls) == 4
 
     dispatcher.dispose_all_harness_processes()
     dispatcher.harness_machine_snapshot("workspace-1", two)
-    assert len(calls) == 4
+    assert len(calls) == 5
 
     # Two app sessions must not share a cached snapshot.
     another_session = HarnessDispatchOps()
     another_session.harness_machine_snapshot("workspace-1", two)
-    assert len(calls) == 5
+    assert len(calls) == 6

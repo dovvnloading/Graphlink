@@ -156,8 +156,8 @@ function AgentSettingsPopover({
   useEffect(() => {
     panelRef.current?.querySelector("select")?.focus();
     const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as EventTarget;
-      if (panelRef.current?.contains(target as globalThis.Node) || triggerRef.current?.contains(target as globalThis.Node)) return;
+      const target = event.target as HTMLElement;
+      if (panelRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
       onClose();
     };
     const onKeyDown = (event: KeyboardEvent) => {

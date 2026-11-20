@@ -1166,6 +1166,18 @@ class TestPersistence:
         assert restored.state.harness_status == "interrupted"
         assert "Interrupted" in restored.state.harness_status_detail
 
+    def test_agent_shell_persists_and_invalid_values_migrate_safely(self):
+        node = SceneDocument().add_harness_node(0, 0, "goal")
+        node.state.harness_shell = "git-bash"
+        payload = _serialize_harness_node(node)
+        assert payload["shell"] == "git-bash"
+        assert _restore_harness_payload(payload).state.harness_shell == "git-bash"
+
+        payload["shell"] = "unsupported"
+        assert _restore_harness_payload(payload).state.harness_shell == "auto"
+        del payload["shell"]
+        assert _restore_harness_payload(payload).state.harness_shell == "auto"
+
     def test_blank_workspace_id_is_self_healed_on_load(self):
         document = SceneDocument()
         node = document.add_harness_node(0, 0, "goal")
