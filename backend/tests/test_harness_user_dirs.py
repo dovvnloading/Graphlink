@@ -153,6 +153,8 @@ def _harness_bus(monkeypatch, settings, picked=None, composer_route=None, busy=F
     async def start_harness_run(**kwargs):
         dispatcher.started = kwargs
         bus.started = kwargs
+        # Snapshot what the dispatcher sees at claim, not a later node state.
+        bus.claimed_profile = kwargs["document"].nodes[kwargs["harness_node_id"]].state.harness_execution_profile
         return "run-1"
 
     dispatcher.start_harness_run = start_harness_run
@@ -298,3 +300,92 @@ def test_composer_send_refuses_busy_run_without_creating_an_agent(monkeypatch):
     assert asyncio.run(bus.dispatch("harness", "composerSend", ["do work", None])) is None
     assert not document.nodes
     assert not hasattr(bus, "started")
+
+
+# Issue #737: no entrypoint may accept an incomplete task and report success.
+
+@pytest.mark.parametrize("route_kind", ["launch", "send", "composer-new", "composer-selected"])
+def test_oversized_agent_task_is_rejected_before_dispatch(monkeypatch, route_kind):
+    route = {"mode": "ollama", "provider": "Ollama (Local)", "modelId": "local", "available": True}
+    bus, document = _harness_bus(monkeypatch, FakeSettings([]), composer_route=route)
+    agent = document.add_harness_node(0, 0, "existing") if route_kind in {"send", "composer-selected"} else None
+    original_nodes = set(document.nodes)
+    text = "x" * 20_000 + "FINAL_INSTRUCTION_MUST_APPEAR"
+
+    if route_kind == "launch":
+        args = ("start", [text])
+    elif route_kind == "send":
+        args = ("send", [agent.id, text])
+    else:
+        args = ("composerSend", [text, agent.id if agent else None])
+
+    assert asyncio.run(bus.dispatch("harness", *args)) is None
+    assert set(document.nodes) == original_nodes
+    assert not hasattr(bus, "started"), "no truncated task should reach the dispatcher"
+    assert "notification" in bus.published
+
+
+@pytest.mark.parametrize("route_kind", ["launch", "send", "composer-new", "composer-selected"])
+def test_agent_task_at_message_cap_is_dispatched_in_full(monkeypatch, route_kind):
+    route = {"mode": "ollama", "provider": "Ollama (Local)", "modelId": "local", "available": True}
+    bus, document = _harness_bus(monkeypatch, FakeSettings([]), composer_route=route)
+    agent = document.add_harness_node(0, 0, "existing") if route_kind in {"send", "composer-selected"} else None
+    text = "x" * (20_000 - len("FINAL")) + "FINAL"
+
+    if route_kind == "launch":
+        node_id = asyncio.run(bus.dispatch("harness", "start", [text]))
+    elif route_kind == "send":
+        asyncio.run(bus.dispatch("harness", "send", [agent.id, text]))
+        node_id = agent.id
+    else:
+        node_id = asyncio.run(bus.dispatch("harness", "composerSend", [text, agent.id if agent else None]))
+
+    assert bus.started["user_text"] == text
+    assert bus.started["harness_node_id"] == node_id
+
+
+# Issue #738: a first task must see Isolated before the dispatcher claims it.
+
+@pytest.mark.parametrize("via_composer", [False, True])
+def test_isolated_profile_is_bound_before_first_task_claim(monkeypatch, via_composer):
+    from backend.api import intents_harness
+
+    monkeypatch.setattr(intents_harness, "available_engine", lambda: "podman")
+    route = {"mode": "ollama", "provider": "Ollama (Local)", "modelId": "local", "available": True}
+    bus, document = _harness_bus(monkeypatch, FakeSettings([]), composer_route=route)
+    intent = "composerSend" if via_composer else "start"
+    args = ["work", None, "isolated"] if via_composer else ["work", 8, "", "isolated"]
+
+    node_id = asyncio.run(bus.dispatch("harness", intent, args))
+
+    assert node_id in document.nodes
+    assert document.nodes[node_id].state.harness_execution_profile == "isolated"
+    assert bus.claimed_profile == "isolated"
+    assert bus.started["harness_node_id"] == node_id
+
+
+@pytest.mark.parametrize("profile,engine", [("isolated", None), ("sandbox", "docker")])
+def test_first_task_rejects_unavailable_or_invalid_profile_before_node_creation(
+    monkeypatch, profile, engine,
+):
+    from backend.api import intents_harness
+
+    monkeypatch.setattr(intents_harness, "available_engine", lambda: engine)
+    bus, document = _harness_bus(monkeypatch, FakeSettings([]))
+
+    assert asyncio.run(bus.dispatch("harness", "start", ["work", 16, "", profile])) is None
+    assert not document.nodes
+    assert not hasattr(bus, "started")
+    assert "notification" in bus.published
+
+
+def test_selected_composer_agent_preserves_its_existing_profile(monkeypatch):
+    from backend.api import intents_harness
+
+    monkeypatch.setattr(intents_harness, "available_engine", lambda: None)
+    route = {"mode": "ollama", "provider": "Ollama (Local)", "modelId": "local", "available": True}
+    bus, document = _harness_bus(monkeypatch, FakeSettings([]), composer_route=route)
+    agent = document.add_harness_node(0, 0, "existing")
+
+    assert asyncio.run(bus.dispatch("harness", "composerSend", ["follow up", agent.id, "isolated"])) == agent.id
+    assert bus.claimed_profile == "host", "a launch choice cannot override an existing agent"

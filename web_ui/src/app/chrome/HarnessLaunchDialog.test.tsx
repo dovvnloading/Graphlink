@@ -10,7 +10,7 @@
  * every real piece of work was spent in scratch and then repeated.
  */
 import { ReactFlowProvider } from "@xyflow/react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { SceneStore } from "../canvas/sceneStore";
@@ -18,8 +18,11 @@ import { HarnessLaunchDialog } from "./HarnessLaunchDialog";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
 import { makeRequestOnlyTransport as makeTransport } from "../../lib/ws/transport.testUtils";
 
-function makeStore() {
-  return { getScene: () => ({ nodes: [] }) } as unknown as SceneStore;
+function makeStore(engine: string | null) {
+  return {
+    getScene: () => ({ nodes: [] }),
+    getHarnessIsolationEngine: () => Promise.resolve(engine),
+  } as unknown as SceneStore;
 }
 
 function OpenAgentButton() {
@@ -31,7 +34,7 @@ function OpenAgentButton() {
   );
 }
 
-async function setup(picked: unknown = "C:\\projects\\thing") {
+async function setup(picked: unknown = "C:\\projects\\thing", engine: string | null = "docker") {
   const user = userEvent.setup();
   const fake = makeTransport();
   fake.request.mockImplementation((_topic: string, intent: string) =>
@@ -41,7 +44,7 @@ async function setup(picked: unknown = "C:\\projects\\thing") {
     <OverlayProvider>
       <ReactFlowProvider>
         <OpenAgentButton />
-        <HarnessLaunchDialog transport={fake.transport} store={makeStore()} />
+        <HarnessLaunchDialog transport={fake.transport} store={makeStore(engine)} />
       </ReactFlowProvider>
     </OverlayProvider>,
   );
@@ -56,7 +59,7 @@ describe("HarnessLaunchDialog", () => {
     await user.type(screen.getByLabelText(/what should the agent work on/i), "summarize the repo");
     await user.click(screen.getByRole("button", { name: "Start the agent" }));
 
-    expect(intents).toContainEqual(["harness", "start", ["summarize the repo", 16, ""]]);
+    expect(intents).toContainEqual(["harness", "start", ["summarize the repo", 16, "", "host"]]);
   });
 
   it("carries a chosen folder into the very first run", async () => {
@@ -69,7 +72,7 @@ describe("HarnessLaunchDialog", () => {
     await user.click(screen.getByRole("button", { name: "Start the agent" }));
 
     expect(intents).toContainEqual([
-      "harness", "start", ["fix the failing test", 16, "C:\\projects\\thing"],
+      "harness", "start", ["fix the failing test", 16, "C:\\projects\\thing", "host"],
     ]);
   });
 
@@ -82,7 +85,7 @@ describe("HarnessLaunchDialog", () => {
     expect(screen.getByText("Private scratch folder")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Start the agent" }));
-    expect(intents).toContainEqual(["harness", "start", ["look around", 16, ""]]);
+    expect(intents).toContainEqual(["harness", "start", ["look around", 16, "", "host"]]);
   });
 
   it("Enter submits and Shift+Enter does not - the card composer's contract", async () => {
@@ -94,8 +97,39 @@ describe("HarnessLaunchDialog", () => {
 
     await user.type(task, "{Enter}");
     expect(intents).toContainEqual([
-      "harness", "start", ["first line\nsecond line", 16, ""],
+      "harness", "start", ["first line\nsecond line", 16, "", "host"],
     ]);
+  });
+
+
+  it("launches the first task as Isolated when Podman is detected", async () => {
+    const { user, intents } = await setup(undefined, "podman");
+    expect(await screen.findByText(/Podman detected on the backend/)).toBeInTheDocument();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Execution profile for new agent" }), "isolated");
+    await user.type(screen.getByLabelText(/what should the agent work on/i), "analyze files");
+    await user.click(screen.getByRole("button", { name: "Start the agent" }));
+
+    expect(intents).toContainEqual(["harness", "start", ["analyze files", 16, "", "isolated"]]);
+  });
+
+  it("does not offer Isolated without Docker or Podman", async () => {
+    await setup(undefined, null);
+    expect(await screen.findByText(/Docker or Podman is unavailable/)).toBeInTheDocument();
+    const isolated = screen.getByRole("option", { name: /Isolated \(Docker \/ Podman\)/ });
+    expect(isolated).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Execution profile for new agent" })).toHaveValue("host");
+  });
+
+  it("warns about tasks beyond 20k without starting or clearing the draft", async () => {
+    const { user, intents } = await setup();
+    const draft = screen.getByLabelText(/what should the agent work on/i);
+    const tooLong = "x".repeat(20_000) + "FINAL_INSTRUCTION";
+    fireEvent.change(draft, { target: { value: tooLong } });
+    await user.click(screen.getByRole("button", { name: "Start the agent" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("20,000 characters");
+    expect(draft).toHaveValue(tooLong);
+    expect(intents.some(([, intent]) => intent === "start")).toBe(false);
   });
 
   it("describes what the agent can actually do, approvals included", async () => {

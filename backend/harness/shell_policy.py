@@ -84,8 +84,8 @@ _DANGEROUS_PHRASES = (
 _POWERSHELL_DANGEROUS_PROGRAMS = frozenset({
     "remove-item", "ri", "remove-itemproperty", "clear-item",
     "clear-itemproperty", "clear-content", "clear-recyclebin",
-    "set-content", "out-file", "set-item", "set-itemproperty",
-    "copy-item", "move-item", "rename-item", "mi", "si", "sp",
+    "set-content", "add-content", "ac", "out-file", "set-item", "set-itemproperty",
+    "copy-item", "move-item", "rename-item", "rni", "mi", "si", "sp",
     "stop-process", "spps", "stop-service", "spsv", "restart-service",
     "stop-computer", "restart-computer", "stop-job", "remove-job",
     "remove-service", "remove-psdrive",

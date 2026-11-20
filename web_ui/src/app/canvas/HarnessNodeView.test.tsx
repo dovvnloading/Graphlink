@@ -89,6 +89,21 @@ function renderHarness(data: HarnessNodeData) {
 }
 
 describe("HarnessNodeView", () => {
+  it("preserves oversized follow-up drafts rather than sending partial tasks", async () => {
+    const user = userEvent.setup();
+    const data = makeData({ harnessStatus: "done", pendingRequestId: null });
+    renderHarness(data);
+    const draft = screen.getByRole("textbox", { name: "Follow-up message" });
+    const tooLong = "x".repeat(20_000) + "FINAL_INSTRUCTION_MUST_APPEAR";
+    fireEvent.change(draft, { target: { value: tooLong } });
+
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("20,000 characters");
+    expect(draft).toHaveValue(tooLong);
+    expect(data.onSend).not.toHaveBeenCalled();
+  });
+
   it("offers Undo run only for a completed run", async () => {
     const user = userEvent.setup();
     const data = makeData({ harnessStatus: "done", pendingRequestId: null });
@@ -414,6 +429,33 @@ describe("HarnessNodeView", () => {
     expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
   });
 
+  it.each(["shell.session", "fs.write", "fs.edit"])(
+    "token-binds %s approvals and disables duplicate submissions", async (tool) => {
+      const user = userEvent.setup();
+      const data = makeData({
+        harnessAwaitingApproval: true,
+        harnessApprovalToolName: tool,
+        harnessApprovalId: "prompt-unique-1",
+        harnessApprovalSummary: `${tool} proposed action`,
+      });
+      const { unmount } = renderHarness(data);
+      await user.dblClick(screen.getByRole("button", { name: "Approve once" }));
+      expect(data.onApproveTool).toHaveBeenCalledExactlyOnceWith("prompt-unique-1");
+      expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
+      unmount();
+
+      const missing = makeData({
+        harnessAwaitingApproval: true,
+        harnessApprovalToolName: tool,
+        harnessApprovalSummary: `${tool} proposed action`,
+      });
+      renderHarness(missing);
+      expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
+      expect(missing.onApproveTool).not.toHaveBeenCalled();
+    },
+  );
+
   it("shows a highlighted file diff without changing or interpreting its text", () => {
     const summary = "fs.edit config.txt\n--- a/config.txt\n+++ b/config.txt\n" +
       "@@ -1 +1 @@\n-old <script>alert(1)</script>\n+new <img src=x>\n";
@@ -449,6 +491,7 @@ describe("HarnessNodeView", () => {
       harnessAwaitingApproval: true,
       harnessApprovalToolName: "fs.write",
       harnessApprovalSummary: "fs.write hidden.txt\nPreview unavailable: File exceeds the read limit.",
+      harnessApprovalId: "unpreviewable-file",
       harnessApprovalSessionOffered: true,
     });
     renderHarness(data);
@@ -456,7 +499,7 @@ describe("HarnessNodeView", () => {
     expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Always allow this tool" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Deny" }));
-    expect(data.onDenyTool).toHaveBeenCalledOnce();
+    expect(data.onDenyTool).toHaveBeenCalledExactlyOnceWith("unpreviewable-file");
   });
 
   it("offers the session-scoped grant only when the backend says it may", async () => {
@@ -466,11 +509,12 @@ describe("HarnessNodeView", () => {
     const offered = makeData({
       harnessAwaitingApproval: true,
       harnessApprovalToolName: "fs.write",
+      harnessApprovalId: "file-grant",
       harnessApprovalSessionOffered: true,
     });
     const { unmount } = renderHarness(offered);
     await user.click(screen.getByRole("button", { name: "Always allow this tool" }));
-    expect(offered.onApproveToolForSession).toHaveBeenCalledTimes(1);
+    expect(offered.onApproveToolForSession).toHaveBeenCalledExactlyOnceWith("file-grant");
     unmount();
 
     renderHarness(makeData({
@@ -525,7 +569,7 @@ describe("HarnessNodeView", () => {
     expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
   });
 
-  it.each(["python.exec", "python.install", "fal.submit"])("sends the %s disclosure identity on denial and refuses a missing identity", async (tool) => {
+  it.each(["python.exec", "python.install", "fal.submit", "shell.session", "fs.write", "fs.edit"])("sends the %s disclosure identity on denial and refuses a missing identity", async (tool) => {
     const user = userEvent.setup();
     const data = makeData({
       harnessAwaitingApproval: true,

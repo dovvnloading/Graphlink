@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import difflib
+import hashlib
 import os
 import secrets
 import stat
@@ -198,7 +199,9 @@ def _read_bounded_text(path: Path, *, errors: str = "strict", max_bytes: int | N
     return _read_bounded_bytes(path, max_bytes=max_bytes).decode("utf-8", errors=errors)
 
 
-def _write_atomic_text(target: Path, content: str) -> None:
+def _write_atomic_text(
+    target: Path, content: str, *, approval_state: FileApprovalState | None = None,
+) -> None:
     """Replace text only after the complete UTF-8 payload is safely staged.
 
     In particular, a failed fs.edit must never truncate the source file.
@@ -236,6 +239,20 @@ def _write_atomic_text(target: Path, content: str) -> None:
             raise FileExistsError("Could not allocate an exclusive staging file.")
         if target.exists():
             os.chmod(staged_path, stat.S_IMODE(target.stat().st_mode))
+        # Check as late as possible, after staging but before committing any
+        # bytes. A human-approved diff is conditional on the exact version
+        # disclosed, not permission to overwrite an external edit.
+        if approval_state is not None:
+            if not _file_approval_state_matches(target, approval_state):
+                raise WorkspaceError(_STALE_FILE_APPROVAL)
+            if approval_state.digest is None:
+                # Atomic create-if-absent: even a file appearing between the
+                # last check and commit must not be overwritten.
+                try:
+                    os.link(staged_path, target)
+                except FileExistsError as exc:
+                    raise WorkspaceError(_STALE_FILE_APPROVAL) from exc
+                return
         os.replace(staged_path, target)
     finally:
         if staged_path is not None:
@@ -259,10 +276,43 @@ def _iter_under_root(root: Path, pattern: str):
         yield item
 
 
+_STALE_FILE_APPROVAL = "File changed since approval preview; review the current file and retry."
+
+
+@dataclass(frozen=True)
+class FileApprovalState:
+    # A missing file has no digest/version; a present file is bound to both
+    # exact bytes and its disk identity/timestamps (including same-byte rewrites).
+    target: Path
+    digest: str | None
+    version: tuple[int, int, int, int] | None
+
+
 @dataclass(frozen=True)
 class FileApprovalPreview:
     summary: str
     available: bool
+    state: FileApprovalState | None = None
+
+
+def _file_version(target: Path) -> tuple[int, int, int, int]:
+    info = target.stat()
+    return (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _file_approval_state_matches(target: Path, approved: FileApprovalState) -> bool:
+    """Fail closed if the disclosed target, absence or bytes changed."""
+    if target != approved.target:
+        return False
+    try:
+        if approved.digest is None:
+            return not target.exists() and not target.is_symlink()
+        if not target.is_file() or _file_version(target) != approved.version:
+            return False
+        actual = hashlib.sha256(_read_bounded_bytes(target)).hexdigest()
+        return actual == approved.digest and _file_version(target) == approved.version
+    except (WorkspaceError, OSError, UnicodeError):
+        return False
 
 
 def preview_harness_file_change(call: ToolCall, root: Path | None) -> FileApprovalPreview:
@@ -289,10 +339,15 @@ def preview_harness_file_change(call: ToolCall, root: Path | None) -> FileApprov
             if call.name == "fs.edit":
                 raise WorkspaceError(f"Not a file: {path!r}.")
             current = ""
+            state = FileApprovalState(target, None, None)
         else:
             if not target.is_file():
                 raise WorkspaceError(f"Not a file: {path!r}.")
-            current = _read_bounded_text(target)
+            source = _read_bounded_bytes(target)
+            current = source.decode("utf-8")
+            state = FileApprovalState(
+                target, hashlib.sha256(source).hexdigest(), _file_version(target),
+            )
 
         if call.name == "fs.write":
             proposed = call.arguments.get("content")
@@ -321,7 +376,7 @@ def preview_harness_file_change(call: ToolCall, root: Path | None) -> FileApprov
     if is_new:
         # Do not add a diff prefix to proposed content: it must be shown
         # exactly as supplied, including any whitespace and final newline.
-        return FileApprovalPreview(f"{heading}\n--- new file: {path} (full content)\n{proposed}", True)
+        return FileApprovalPreview(f"{heading}\n--- new file: {path} (full content)\n{proposed}", True, state)
 
     relative = target.relative_to(root.resolve()).as_posix()
     changes = difflib.unified_diff(
@@ -338,7 +393,7 @@ def preview_harness_file_change(call: ToolCall, root: Path | None) -> FileApprov
             # The last line of a text file need not have a newline.
             # Without a marker, -old and +new would run together.
             preview.append("\n\\ No newline at end of file\n")
-    return FileApprovalPreview(f"{heading}\n{''.join(preview)}" if preview else f"{heading}\nNo content changes.", True)
+    return FileApprovalPreview(f"{heading}\n{''.join(preview)}" if preview else f"{heading}\nNo content changes.", True, state)
 
 
 def register_harness_fs_tools(registry: ToolRegistry) -> None:
@@ -550,9 +605,13 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
             return ToolResult(content="path names the workspace root, not a file.", is_error=True)
         if _is_metadata_path(target):
             return ToolResult(content="VCS metadata cannot be modified by harness filesystem tools.", is_error=True)
+        states = getattr(ctx, "harness_file_approval_states", {})
+        approved_state = states.pop(call.id, None)
+        if approved_state is not None and not _file_approval_state_matches(target, approved_state):
+            return ToolResult(content=_STALE_FILE_APPROVAL, is_error=True)
         try:
-            _write_atomic_text(target, content)
-        except OSError as exc:
+            _write_atomic_text(target, content, approval_state=approved_state)
+        except (OSError, WorkspaceError) as exc:
             return ToolResult(content=f"Could not write file: {exc}", is_error=True)
         return ToolResult(content=f"Wrote {len(content)} characters to {call.arguments.get('path')}.")
 
@@ -574,6 +633,10 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
             return ToolResult(content=str(exc), is_error=True)
         if _is_metadata_path(target):
             return ToolResult(content="VCS metadata cannot be modified by harness filesystem tools.", is_error=True)
+        states = getattr(ctx, "harness_file_approval_states", {})
+        approved_state = states.pop(call.id, None)
+        if approved_state is not None and not _file_approval_state_matches(target, approved_state):
+            return ToolResult(content=_STALE_FILE_APPROVAL, is_error=True)
         if not target.is_file():
             return ToolResult(content=f"Not a file: {call.arguments.get('path')!r}.", is_error=True)
         try:
@@ -592,8 +655,8 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
         if len(replacement.encode("utf-8")) > _MAX_FS_FILE_BYTES:
             return ToolResult(content="Edited file would exceed the permitted size.", is_error=True)
         try:
-            _write_atomic_text(target, replacement)
-        except OSError as exc:
+            _write_atomic_text(target, replacement, approval_state=approved_state)
+        except (OSError, WorkspaceError) as exc:
             return ToolResult(content=f"Could not write file: {exc}", is_error=True)
         return ToolResult(content=f"Edited {call.arguments.get('path')}.")
 

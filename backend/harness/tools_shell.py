@@ -157,6 +157,7 @@ def _run_command(command: str, cwd, cancel_event, on_output=None, shell: str = "
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            errors="replace",  # Invalid subprocess bytes must not kill the pipe reader.
             cwd=str(cwd),
             **guard.popen_kwargs(),
             **kwargs,

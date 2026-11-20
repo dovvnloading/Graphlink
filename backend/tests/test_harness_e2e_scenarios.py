@@ -21,6 +21,7 @@ import api_provider
 import graphlink_task_config as config
 import pytest
 from backend import agents as agents_module
+from backend.agent_dispatch.core import DispatcherCoreOps
 from backend.agent_dispatch.harness import HarnessDispatchOps
 from backend.domain.graph import SceneDocument
 from backend.harness import skills as skills_module
@@ -113,6 +114,8 @@ class _Bus:
 
 
 class _Dispatcher:
+    _resolve_approval = DispatcherCoreOps._resolve_approval
+    approve_code_execution = DispatcherCoreOps.approve_code_execution
     approve_harness_tool_for_session = HarnessDispatchOps.approve_harness_tool_for_session
     approve_harness_network = HarnessDispatchOps.approve_harness_network
 
@@ -144,6 +147,7 @@ def scenario(tmp_path, monkeypatch):
 def _drive(
     scenario, monkeypatch, turns, *, approvals=(), json_tools=False,
     vision=False, settings_manager=None, timeout_seconds=30,
+    replay_first_approval=False, session_offers=None, before_approval=None,
 ):
     """Run a real harness task, resolving precisely the scripted human decisions."""
     model = _ScriptedTestModel(turns, json_tools=json_tools, vision=vision)
@@ -168,6 +172,7 @@ def _drive(
             execution_profile=scenario.agent.state.harness_execution_profile,
         ))
         seen_approvals = []
+        first_token = None
         cursor = 0
         deadline = asyncio.get_running_loop().time() + timeout_seconds
         try:
@@ -182,7 +187,28 @@ def _drive(
                     expected_tool, decision = expected_approvals[cursor]
                     actual_tool = scenario.agent.state.harness_approval_tool_name
                     assert actual_tool == expected_tool, (actual_tool, expected_tool)
+                    current_token = scenario.agent.state.harness_approval_id
                     seen_approvals.append((actual_tool, scenario.agent.state.harness_approval_summary))
+                    if replay_first_approval:
+                        assert current_token, "each prompt needs a nonempty identity"
+                        if first_token is None:
+                            first_token = current_token
+                        else:
+                            assert current_token != first_token
+                            assert not scenario.dispatcher.approve_code_execution(handle.request_id, first_token)
+                            assert not scenario.dispatcher.approve_code_execution(handle.request_id, "")
+                            assert not future.done(), "a stale response resolved the later approval"
+                    if session_offers is not None:
+                        assert scenario.agent.state.harness_approval_session_offered is session_offers[cursor]
+                        if not session_offers[cursor]:
+                            # An intent forged despite the missing UI option
+                            # must not persist an unusable grant or resolve consent.
+                            assert not scenario.dispatcher.approve_harness_tool_for_session(
+                                handle.request_id, current_token,
+                            )
+                            assert not future.done()
+                    if before_approval is not None:
+                        before_approval(cursor, actual_tool, scenario.agent.state.harness_approval_summary)
                     if decision == "shell_rule":
                         assert scenario.agent.state.harness_approval_session_offered
                         assert scenario.dispatcher.approve_harness_tool_for_session(
@@ -193,6 +219,8 @@ def _drive(
                         assert scenario.dispatcher.approve_harness_network(
                             handle.request_id, scenario.agent.state.harness_approval_id,
                         )
+                    elif replay_first_approval and decision is True:
+                        assert scenario.dispatcher.approve_code_execution(handle.request_id, current_token)
                     else:
                         future.set_result(decision)
                     cursor += 1
@@ -515,6 +543,78 @@ def test_bash_shell_exec_from_scripted_agent(scenario, monkeypatch):
     assert _activity(scenario) == [("shell.exec", "ok")]
     assert [tool for tool, _ in run.approvals] == ["shell.exec"]
     assert run.transcript[-1]["content"] == "Bash command completed."
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "first_args", "second_args"),
+    [
+        ("fs.write", {"path": "first.txt", "content": "reviewed first"},
+         {"path": "second.txt", "content": "reviewed second"}),
+        ("shell.session", {"action": "write", "name": "unopened", "input": "first stdin"},
+         {"action": "write", "name": "unopened", "input": "second stdin"}),
+    ],
+)
+def test_issue_730_replayed_approval_never_authorizes_the_next_prompt(
+    scenario, monkeypatch, tool_name, first_args, second_args,
+):
+    run = _drive(scenario, monkeypatch, [
+        {"calls": [_call("one", tool_name, **first_args)]},
+        {"calls": [_call("two", tool_name, **second_args)]},
+        {"answer": "Both decisions were independent."},
+    ], approvals=[(tool_name, True), (tool_name, True)], replay_first_approval=True)
+    assert len(run.approvals) == 2
+    if tool_name == "fs.write":
+        assert (scenario.workspace / "first.txt").read_text() == "reviewed first"
+        assert (scenario.workspace / "second.txt").read_text() == "reviewed second"
+
+
+def test_issue_732_inert_git_rules_are_never_offered_or_saved(scenario, monkeypatch):
+    run = _drive(scenario, monkeypatch, [
+        {"calls": [_call("git-one", "shell.exec", command="git status")]},
+        {"calls": [_call("git-two", "shell.exec", command="git status")]},
+        {"answer": "Both git commands required approval."},
+    ], approvals=[("shell.exec", True), ("shell.exec", True)], session_offers=[False, False])
+    assert len(run.approvals) == 2
+    assert scenario.agent.state.harness_shell_allow_rules == []
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "before", "external", "arguments"),
+    [
+        ("fs.write", None, "valuable external file",
+         {"path": "report.txt", "content": "agent version"}),
+        ("fs.write", "reviewed original", "external replacement",
+         {"path": "report.txt", "content": "agent version"}),
+        ("fs.edit", "old value\nkeep=yes\n", "old value\nkeep=external\n",
+         {"path": "report.txt", "old_string": "old", "new_string": "new"}),
+    ],
+)
+def test_issue_734_stale_file_preview_never_overwrites_external_content(
+    scenario, monkeypatch, tool_name, before, external, arguments,
+):
+    target = scenario.workspace / "report.txt"
+    if before is not None:
+        target.write_text(before, encoding="utf-8")
+    result_text = {}
+
+    def change_file_while_prompt_is_pending(index, actual_tool, summary):
+        assert index == 0 and actual_tool == tool_name
+        if before is None:
+            assert "--- new file: report.txt" in summary
+        else:
+            assert ("--- a/report.txt" in summary)
+        target.write_text(external, encoding="utf-8")
+
+    def finish(request):
+        result_text["tool"] = _result(request, "file-mutation")
+        return {"answer": "External changes were preserved."}
+
+    _drive(scenario, monkeypatch, [
+        {"calls": [_call("file-mutation", tool_name, **arguments)]},
+        finish,
+    ], approvals=[(tool_name, True)], before_approval=change_file_while_prompt_is_pending)
+    assert "changed since approval preview" in result_text["tool"]
+    assert target.read_text(encoding="utf-8") == external
 
 
 def test_saved_shell_rule_survives_a_task_but_not_a_changed_command(scenario, monkeypatch):

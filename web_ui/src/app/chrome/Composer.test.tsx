@@ -63,10 +63,14 @@ function makeSceneStore(
     synthesizeTargetNodeIds?: string[] | null;
     scene?: object;
     selectedNodeId?: string | null;
+    isolationEngine?: "docker" | "podman" | null;
   } = {},
 ) {
   const sendMessage = vi.fn();
   const sendComposerAgentMessage = vi.fn().mockResolvedValue(true);
+  const getHarnessIsolationEngine = vi.fn().mockResolvedValue(
+    overrides.isolationEngine === undefined ? "docker" : overrides.isolationEngine,
+  );
   const setReplyTargetNodeId = vi.fn();
   const setSynthesizeTargetNodeIds = vi.fn();
   const scene = { ...initialSceneState, ...overrides.scene };
@@ -75,6 +79,7 @@ function makeSceneStore(
   const sceneStore = {
     sendMessage,
     sendComposerAgentMessage,
+    getHarnessIsolationEngine,
     setReplyTargetNodeId,
     setSynthesizeTargetNodeIds,
     subscribe: () => () => {},
@@ -83,7 +88,8 @@ function makeSceneStore(
     getReplyTargetNodeId: () => replyTargetNodeId,
     getSynthesizeTargetNodeIds: () => synthesizeTargetNodeIds,
   };
-  return { sceneStore, sendMessage, sendComposerAgentMessage, setReplyTargetNodeId, setSynthesizeTargetNodeIds };
+  return { sceneStore, sendMessage, sendComposerAgentMessage, getHarnessIsolationEngine,
+    setReplyTargetNodeId, setSynthesizeTargetNodeIds };
 }
 
 describe("Composer", () => {
@@ -118,7 +124,7 @@ describe("Composer", () => {
     expect(screen.getByPlaceholderText("Give the workspace agent a task…")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Compare models" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Send message" }));
-    expect(sendComposerAgentMessage).toHaveBeenCalledWith("Review these changes");
+    expect(sendComposerAgentMessage).toHaveBeenCalledWith("Review these changes", "host");
     expect(sendMessage).not.toHaveBeenCalled();
     expect(updateDraft).not.toHaveBeenCalledWith("");
     finishSend(true);
@@ -147,7 +153,74 @@ describe("Composer", () => {
     await user.click(screen.getByRole("button", { name: "Send to workspace agent" }));
     expect(screen.getByLabelText("Agent destination")).toHaveTextContent("New agent · scratch workspace");
     await user.click(screen.getByRole("button", { name: "Send message" }));
-    expect(sendComposerAgentMessage).toHaveBeenCalledWith("Inventory the workspace");
+    expect(sendComposerAgentMessage).toHaveBeenCalledWith("Inventory the workspace", "host");
+  });
+
+  it("can choose Isolated for a new agent's first composer task", async () => {
+    const user = userEvent.setup();
+    const { store } = makeStore({
+      composer: {
+        draft: { ...initialComposerState.draft, text: "Run tests in isolation" },
+        route: { ...initialComposerState.route, modelId: "local-chat", available: true },
+        request: { ...initialComposerState.request, canSend: true },
+      },
+    });
+    const { sceneStore, sendComposerAgentMessage } = makeSceneStore({ isolationEngine: "podman" });
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - minimal test store */}
+        <Composer store={store} sceneStore={sceneStore} />
+      </OverlayProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Send to workspace agent" }));
+    expect(await screen.findByText(/Podman detected on the backend/)).toBeInTheDocument();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Execution profile for new agent" }), "isolated");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(sendComposerAgentMessage).toHaveBeenCalledWith("Run tests in isolation", "isolated");
+  });
+
+  it("disables new-agent isolation when no container engine is detected", async () => {
+    const user = userEvent.setup();
+    const { store } = makeStore({
+      composer: { request: { ...initialComposerState.request, canSend: true } },
+    });
+    const { sceneStore } = makeSceneStore({ isolationEngine: null });
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - minimal test store */}
+        <Composer store={store} sceneStore={sceneStore} />
+      </OverlayProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Send to workspace agent" }));
+    expect(await screen.findByText(/Docker or Podman is unavailable/)).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /Isolated/ })).toBeDisabled();
+  });
+
+  it("rejects oversized Agent tasks visibly without sending or clearing the draft", async () => {
+    const user = userEvent.setup();
+    const tooLong = "x".repeat(20_000) + "FINAL_INSTRUCTION_MUST_APPEAR";
+    const { store, updateDraft } = makeStore({
+      composer: {
+        draft: { ...initialComposerState.draft, text: tooLong },
+        route: { ...initialComposerState.route, modelId: "local-chat", available: true },
+        request: { ...initialComposerState.request, canSend: true },
+      },
+    });
+    const { sceneStore, sendComposerAgentMessage } = makeSceneStore();
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - minimal test store */}
+        <Composer store={store} sceneStore={sceneStore} />
+      </OverlayProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Send to workspace agent" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("20,000 characters");
+    expect(screen.getByRole("textbox", { name: "Message composer" })).toHaveValue(tooLong);
+    expect(sendComposerAgentMessage).not.toHaveBeenCalled();
+    expect(updateDraft).not.toHaveBeenCalledWith("");
   });
 
   it("keeps the composer text after a rejected agent dispatch and allows retry", async () => {

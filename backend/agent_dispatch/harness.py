@@ -71,10 +71,13 @@ class HarnessDispatchOps(DispatcherParts):
         future = handle.approval_future
         if future is None or future.done() or approval_id != handle.approval_token:
             return False
-        # Non-tokenized tools retain their existing session grant. A shell
-        # approval is token-bound, and the harness callback separately
-        # verifies its command is safe before persisting any prefixes.
-        future.set_result("shell_rule" if handle.approval_token else "session")
+        # Token identity is necessary but not sufficient: only the backend
+        # can offer a durable grant, and it must identify the offered kind.
+        # Every consent prompt has a token now, including file writes.
+        kind = handle.harness_session_approval_kind
+        if kind not in ("shell_rule", "session") or not approval_id:
+            return False
+        future.set_result(kind)
         return True
 
     def approve_harness_network(self, request_id: str, approval_id: str, *, for_task: bool = False) -> bool:
@@ -183,6 +186,50 @@ class HarnessDispatchOps(DispatcherParts):
         if repls is not None:
             repls.stop_all()
 
+    async def retire_revoked_harness_root(self, path: str) -> None:
+        """Revoke idle processes for this folder, deferring live tasks.
+
+        A shell.session or Python REPL can outlive its Agent task. Revoking
+        the root must retire those processes even if no new task is run.
+        In-progress tasks retain their bound root only until they finish.
+        """
+        pending = getattr(self, "_harness_revoked_roots", None)
+        if pending is None:
+            pending = set()
+            self._harness_revoked_roots = pending
+        pending.add(Path(path).resolve())
+        await self._retire_revoked_harness_roots()
+
+    async def _retire_revoked_harness_roots(self) -> None:
+        pending = getattr(self, "_harness_revoked_roots", None)
+        if not pending:
+            return
+        roots = tuple(pending)
+        # Keep cancelled-but-still-unwinding tasks protected too: RunRegistry
+        # releases their slot immediately, but their worker may still run.
+        active = set(getattr(self, "_harness_active_workspaces", {}).values())
+        sessions = getattr(self, "_harness_shell_sessions", None)
+        repls = getattr(self, "_harness_python_repls", None)
+
+        def retire() -> None:
+            for root in roots:
+                if sessions is not None:
+                    sessions.stop_root(root, excluding=active)
+                if repls is not None:
+                    repls.stop_root(root, excluding=active)
+                with _MACHINE_SNAPSHOT_LOCK:
+                    snapshots = getattr(self, "_harness_machine_snapshots", None)
+                    if snapshots is not None:
+                        for workspace_id, snapshot in list(snapshots.items()):
+                            if workspace_id not in active and snapshot[0] == str(root):
+                                snapshots.pop(workspace_id, None)
+
+        await asyncio.to_thread(retire)
+        # Retain deferred revocations only while a task is still unwinding.
+        # A folder granted again later must not lose its new sessions.
+        if not active:
+            pending.difference_update(roots)
+
     def harness_tool_registry(self, document) -> "ToolRegistry":
         """The harness rides the SAME per-session registry the Builder
         built (tools.py: one registry per session, RunContext is what's
@@ -273,6 +320,11 @@ class HarnessDispatchOps(DispatcherParts):
             "harness", node_id=harness_node_id, cancel_event=cancel_event, finalize=_finalize,
         )
         request_id = handle.request_id
+        active = getattr(self, "_harness_active_workspaces", None)
+        if active is None:
+            active = {}
+            self._harness_active_workspaces = active
+        active[request_id] = node.state.harness_workspace_id
 
         async def _run() -> None:
             from backend.harness import loop as harness_loop
@@ -290,7 +342,13 @@ class HarnessDispatchOps(DispatcherParts):
                     **self._runtime_kwargs(),
                 )
             finally:
-                self._runs.release(request_id)
+                self._harness_active_workspaces.pop(request_id, None)
+                try:
+                    # Retire processes that used a grant revoked during this
+                    # task, after it has finished using its frozen root.
+                    await self._retire_revoked_harness_roots()
+                finally:
+                    self._runs.release(request_id)
 
         self._runs.attach_task(handle, asyncio.create_task(_run()))
         return request_id

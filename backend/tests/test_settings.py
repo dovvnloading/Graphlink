@@ -2239,6 +2239,64 @@ def test_workspace_agent_revocation_rejects_invalid_or_unlisted_paths(manager):
     assert manager.get_harness_trusted_dirs() == []
 
 
+def test_workspace_agent_revocation_retires_idle_processes_but_defers_active_tasks(
+    manager, tmp_path,
+):
+    from unittest.mock import Mock
+
+    from backend.agent_dispatch.harness import HarnessDispatchOps
+    from backend.harness.shell_sessions import ShellSessionRegistry
+    from backend.harness.tools_python import PythonReplRegistry
+
+    project = tmp_path / "trusted"
+    other = tmp_path / "other"
+    project.mkdir()
+    other.mkdir()
+    manager.add_harness_trusted_dir(str(project))
+    manager.add_harness_trusted_dir(str(other))
+
+    dispatcher = HarnessDispatchOps()
+    shells = ShellSessionRegistry()
+    repls = PythonReplRegistry()
+    shell_processes = {}
+    interpreters = {}
+    for workspace_id, root in (("idle", project), ("active", project), ("other", other)):
+        shells.bind_root(workspace_id, root)
+        shell_processes[workspace_id] = Mock()
+        shells._by_workspace[workspace_id] = {"dev-server": shell_processes[workspace_id]}
+        interpreters[workspace_id] = Mock()
+        repls._repls[workspace_id] = (interpreters[workspace_id], root)
+        repls._profiles[workspace_id] = "host"
+    dispatcher._harness_shell_sessions = shells
+    dispatcher._harness_python_repls = repls
+    dispatcher._harness_active_workspaces = {"running-request": "active"}
+
+    bus = SessionBus("settings-revoke-processes-test")
+    register_settings(bus, manager, agent_dispatcher=dispatcher)
+    asyncio.run(bus.dispatch_intent(
+        "app-settings", "revokeHarnessTrustedDir", [str(project)],
+    ))
+
+    assert manager.get_harness_trusted_dirs() == [str(other)]
+    shell_processes["idle"].stop.assert_called_once_with()
+    interpreters["idle"].stop.assert_called_once_with()
+    shell_processes["active"].stop.assert_not_called()
+    interpreters["active"].stop.assert_not_called()
+    shell_processes["other"].stop.assert_not_called()
+    interpreters["other"].stop.assert_not_called()
+
+    # The running task's frozen root remains usable until the worker exits;
+    # then its finalizer drains the pending revocation.
+    dispatcher._harness_active_workspaces.pop("running-request")
+    asyncio.run(dispatcher._retire_revoked_harness_roots())
+    shell_processes["active"].stop.assert_called_once_with()
+    interpreters["active"].stop.assert_called_once_with()
+    assert not shells._roots.get("active")
+    assert "active" not in repls._repls
+    assert shells._roots["other"] == other.resolve()
+    assert "other" in repls._repls
+
+
 # -- ADR-008 stage 8.6: Builder recipes ---------------------------------------
 
 def test_get_recipes_defaults_to_an_empty_list(manager):
