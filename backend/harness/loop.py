@@ -319,22 +319,12 @@ def _is_dangerous_call(call: ToolCall) -> bool:
 
 
 def _session_grant_eligible(call: ToolCall, registry: ToolRegistry) -> bool:
-    """Offer graded consent to ordinary approval-gated tools.
+    """Offer tool-wide consent only where the registry permits it.
 
-    'always' can still permit an explicit session grant for ordinary tools,
-    but graph.delete_node must never reuse tool-wide consent across targets.
-    Shell, Python, Web and Fal retain their narrower consent rules.
+    A tool whose policy is 'always' (including plugins and MCP) must be
+    approved per distinct effect, regardless of the approval UI.
     """
-    return (
-        registry.approval_for(call.name) in ("once", "always")
-        and call.name not in (
-            "graph.delete_node",
-            "python.exec", "python.install", "shell.exec", "shell.session",
-            "web.fetch", "web.search",
-        )
-        and not call.name.startswith("fal.")
-        and not _is_dangerous_call(call)
-    )
+    return registry.allows_session_grant(call.name) and not _is_dangerous_call(call)
 
 
 def _approval_summary(
