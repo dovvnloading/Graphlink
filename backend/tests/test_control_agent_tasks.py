@@ -163,6 +163,36 @@ def test_live_agent_task_start_status_retry_and_cancel(app, client, monkeypatch)
     assert claimed[0].approval_future.result() is False, "cancel is DENY, never approval"
 
 
+def test_just_accepted_task_is_visible_before_background_worker_runs(app, client, monkeypatch):
+    node = _agent(app)
+    dispatcher = get_session_context(app.state.bus.session()).agent_dispatcher
+    claimed = []
+
+    async def claim_without_running(*, harness_node_id, user_text, **unused):
+        handle = dispatcher._runs.claim(
+            "harness", node_id=harness_node_id, cancel_event=threading.Event(),
+        )
+        claimed.append(handle)
+        # The real dispatcher only schedules run_harness here. It has NOT
+        # yet written harness_run_id or status onto the node.
+        return handle.request_id
+
+    monkeypatch.setattr(dispatcher, "start_harness_run", claim_without_running)
+    started = _start(client, app, node.id, operation_id="claim-first-0001")
+    assert started.status_code == 200, started.text
+    run_id = started.json()["run_id"]
+    status = client.get("/api/control/agent/task", headers=_auth(WRITE),
+                        params={"node_id": node.id, "run_id": run_id})
+    assert status.status_code == 200, status.text
+    assert status.json()["run_id"] == run_id
+    assert status.json()["status"] == "running"
+    assert node.pending_request_id == run_id
+    cancelled = client.post("/api/control/agent/task/cancel", headers=_auth(WRITE),
+                            json={"node_id": node.id, "run_id": run_id})
+    assert cancelled.status_code == 200, cancelled.text
+    assert claimed[0].cancel_event.is_set()
+
+
 def test_agent_node_and_payload_validation_prevents_approval_or_workspace_grants(app, client):
     node = _agent(app)
     document = get_session_context(app.state.bus.session()).canvas_document
