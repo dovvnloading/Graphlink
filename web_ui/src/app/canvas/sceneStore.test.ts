@@ -18,6 +18,46 @@ describe("Agent settings intent forwarding", () => {
   });
 });
 
+describe("Composer workspace-agent dispatch", () => {
+  it("passes the selected harness node id and only succeeds with a real node reply", async () => {
+    const { transport, listeners, requestResults, requests } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.connect();
+    const node = validScenePayload().nodes[0];
+    listeners.get("scene")?.(validScenePayload({
+      nodes: [{ ...node, id: "agent-1", kind: "harness" }],
+    }));
+    store.setSelectedNodeId("agent-1");
+    requestResults.push("agent-1");
+
+    await expect(store.sendComposerAgentMessage("Inspect the files")).resolves.toBe(true);
+    expect(requests).toContainEqual({
+      topic: "harness", intent: "composerSend", args: ["Inspect the files", "agent-1"],
+    });
+  });
+
+  it("routes non-agent and stale selection to a new node, and reports rejection", async () => {
+    const { transport, listeners, requestResults, requests } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.connect();
+    listeners.get("scene")?.(validScenePayload());
+    store.setSelectedNodeId("n0"); // existing but not a harness node
+    requestResults.push("new-agent");
+
+    await expect(store.sendComposerAgentMessage("Work on this")).resolves.toBe(true);
+    expect(requests[0]).toEqual({
+      topic: "harness", intent: "composerSend", args: ["Work on this", null],
+    });
+
+    store.setSelectedNodeId("deleted");
+    requestResults.push(null);
+    await expect(store.sendComposerAgentMessage("Try again")).resolves.toBe(false);
+    expect(requests[1]).toEqual({
+      topic: "harness", intent: "composerSend", args: ["Try again", null],
+    });
+  });
+});
+
 describe("Python approval identity forwarding", () => {
   it("forwards the displayed identity while preserving unrelated approval shapes", () => {
     const { transport, intents } = makeFakeTransport();
