@@ -247,11 +247,14 @@ def _harness_bus(monkeypatch, settings, picked=None, composer_route=None, busy=F
 
     monkeypatch.setattr(native_dialogs, "pick_folder", fake_pick_folder)
     bus, document = _FakeBus(), SceneDocument()
+    bus.starts = []
     dispatcher = type("D", (), {"_settings_manager": settings, "start_harness_run": None})()
+    bus.dispatcher = dispatcher
     if busy:
         dispatcher._runs = type("Runs", (), {"is_busy": lambda self, kind: kind == "harness"})()
 
     async def start_harness_run(**kwargs):
+        bus.starts.append(kwargs)
         dispatcher.started = kwargs
         bus.started = kwargs
         # Snapshot what the dispatcher sees at claim, not a later node state.
@@ -262,6 +265,61 @@ def _harness_bus(monkeypatch, settings, picked=None, composer_route=None, busy=F
     composer = type("Composer", (), {"route": lambda self: composer_route})() if composer_route else None
     register_harness_intents(bus, document, NotificationState(), dispatcher, composer)
     return bus, document
+
+
+def test_lost_harness_send_ack_replays_claimed_run_without_execution(workspace_root, monkeypatch):
+    """Drop the transport reply AFTER the fake dispatcher accepted the run."""
+    bus, document = _harness_bus(monkeypatch, _RecordingSettings())
+    node = document.add_harness_node(0, 0, "first task")
+    operation_id = "card-followup-0001"
+
+    async def lose_reply():
+        accepted = await bus.dispatch("harness", "send", [
+            node.id, "create the file", True, operation_id,
+        ])
+        assert accepted == "run-1"
+        raise ConnectionError("websocket reply lost after backend claim")
+
+    with pytest.raises(ConnectionError, match="reply lost"):
+        asyncio.run(lose_reply())
+    assert len(bus.starts) == 1
+
+    # The run may have completed before the card gets connectivity back.
+    node.state.harness_run_id = "run-1"
+    node.state.harness_status = "done"
+    node.pending_request_id = None
+    retried = asyncio.run(bus.dispatch("harness", "send", [
+        node.id, "create the file", True, operation_id,
+    ]))
+    assert retried == "run-1"
+    assert len(bus.starts) == 1, "no second backend invocation even after completion"
+
+    # Reusing a key for different input cannot smuggle another task past
+    # the receipt. A different, new key is a legitimate new follow-up.
+    assert asyncio.run(bus.dispatch("harness", "send", [
+        node.id, "delete the file", True, operation_id,
+    ])) is None
+    assert len(bus.starts) == 1
+    assert asyncio.run(bus.dispatch("harness", "send", [
+        node.id, "new task", True, "card-followup-0002",
+    ])) == "run-1"
+    assert len(bus.starts) == 2
+
+
+def test_rejected_harness_send_does_not_poison_operation_id(workspace_root, monkeypatch):
+    bus, document = _harness_bus(monkeypatch, _RecordingSettings())
+    node = document.add_harness_node(0, 0, "first task")
+    initial = bus.dispatcher.start_harness_run
+
+    async def refuse(**kwargs):
+        return None
+
+    bus.dispatcher.start_harness_run = refuse
+    args = [node.id, "start when idle", True, "card-followup-0003"]
+    assert asyncio.run(bus.dispatch("harness", "send", args)) is None
+    bus.dispatcher.start_harness_run = initial
+    assert asyncio.run(bus.dispatch("harness", "send", args)) == "run-1"
+    assert len(bus.starts) == 1
 
 
 def test_the_launcher_binds_its_folder_before_the_first_run(workspace_root, tmp_path, monkeypatch):

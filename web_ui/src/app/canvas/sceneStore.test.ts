@@ -93,11 +93,54 @@ describe("Agent-card follow-up admission", () => {
     await expect(store.sendHarnessMessage("agent-a", "busy with agent b")).resolves.toBe(false);
     await expect(store.sendHarnessMessage("agent-a", "invalid reply")).resolves.toBe(false);
     expect(requests).toEqual([
-      { topic: "harness", intent: "send", args: ["agent-a", "first follow-up"] },
-      { topic: "harness", intent: "send", args: ["agent-a", "busy with agent b"] },
-      { topic: "harness", intent: "send", args: ["agent-a", "invalid reply"] },
+      { topic: "harness", intent: "send", args: ["agent-a", "first follow-up", true, expect.stringMatching(/^send-[a-f0-9]{32}$/)] },
+      { topic: "harness", intent: "send", args: ["agent-a", "busy with agent b", true, expect.stringMatching(/^send-[a-f0-9]{32}$/)] },
+      { topic: "harness", intent: "send", args: ["agent-a", "invalid reply", true, expect.stringMatching(/^send-[a-f0-9]{32}$/)] },
     ]);
     expect(intents).toEqual([]);
+  });
+
+  it("releases an operation key after an explicit backend refusal", async () => {
+    const { transport, requestResults, requests } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    requestResults.push(null, "accepted-on-retry");
+    await expect(store.sendHarnessMessage("agent-a", "follow up")).resolves.toBe(false);
+    await expect(store.sendHarnessMessage("agent-a", "follow up")).resolves.toBe(true);
+    expect(requests).toHaveLength(2);
+    expect(requests[0].args[3]).not.toBe(requests[1].args[3]);
+  });
+
+  it("retries a lost acknowledgment with the same key after the accepted run finishes", async () => {
+    const { transport, requestImpl } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    const receipts = new Map<string, string>();
+    const executed: string[] = [];
+    let dropAcknowledgment = true;
+    requestImpl.mockImplementation((_topic, _intent, args) => {
+      const [nodeId, text, _grants, operationId] = args as [string, string, boolean, string];
+      const previous = receipts.get(operationId);
+      if (!previous) {
+        const runId = `run-${executed.length + 1}`;
+        receipts.set(operationId, runId);
+        executed.push(`${nodeId}:${text}`);
+      }
+      if (dropAcknowledgment) {
+        dropAcknowledgment = false; // fake backend accepted, but WS reply vanished
+        return Promise.reject(new Error("ack lost after run claim"));
+      }
+      return Promise.resolve(receipts.get(operationId));
+    });
+
+    await expect(store.sendHarnessMessage("agent-a", "write one file")).rejects.toThrow("ack lost");
+    // The simulated run has already finished; a retry must NOT claim run-2.
+    await expect(store.sendHarnessMessage("agent-a", "write one file")).resolves.toBe(true);
+    expect(executed).toEqual(["agent-a:write one file"]);
+    expect(requestImpl.mock.calls[0][2]![3]).toBe(requestImpl.mock.calls[1][2]![3]);
+
+    // After the acknowledged run, an intentional new follow-up has a new key.
+    await expect(store.sendHarnessMessage("agent-a", "write one file")).resolves.toBe(true);
+    expect(executed).toHaveLength(2);
+    expect(requestImpl.mock.calls[2][2]![3]).not.toBe(requestImpl.mock.calls[1][2]![3]);
   });
 
   it("propagates transport failure so the Agent card can preserve the draft", async () => {

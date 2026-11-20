@@ -296,6 +296,69 @@ def test_recorded_anthropic_signed_thinking_and_redaction_keep_block_order(
     assert requests[1]["messages"][-1]["content"][0]["tool_use_id"] == call.id
 
 
+def test_signed_claude_history_remaps_tool_uses_when_alias_collides(recordings, monkeypatch):
+    """A newly offered legal fs_write must never impersonate old fs.write."""
+    frames = json.loads(json.dumps(recordings["anthropic"]["first"]))
+    for frame in frames:
+        if "index" in frame:
+            frame["index"] += 1
+    frames[1:1] = [
+        {"type": "content_block_start", "index": 0,
+         "content_block": {"type": "thinking", "thinking": "", "signature": ""}},
+        {"type": "content_block_delta", "index": 0,
+         "delta": {"type": "thinking_delta", "thinking": "Use the workspace write tool."}},
+        {"type": "content_block_delta", "index": 0,
+         "delta": {"type": "signature_delta", "signature": "signed-original"}},
+        {"type": "content_block_stop", "index": 0},
+    ]
+    _, provider_name, requests = _provider_and_requests(
+        monkeypatch, "anthropic", [frames, recordings["anthropic"]["second"]],
+    )
+    first = _turn(provider_name, MESSAGES)
+    (call,) = first["tool_calls"]
+    original_blocks = first["message"]["provider_replay"]["content_blocks"]
+    assert [b["name"] for b in original_blocks if b["type"] == "tool_use"] == ["fs_write"]
+
+    history = [
+        *MESSAGES,
+        {**first["message"], "tool_calls": [call.history_entry()]},
+        {"role": "tool", "tool_call_id": call.id, "name": call.name, "content": "written"},
+    ]
+    conflicting_tool = ToolSpec(name="fs_write", description="A DIFFERENT tool", input_schema={"type": "object"})
+    api_provider.chat_turn_with_tools(
+        config.TASK_CHAT, history, (WRITE, conflicting_tool),
+        model_ref=ModelRef(provider_name, "unit-model"), json_tool_fallback=True,
+    )
+    assert {tool["name"] for tool in requests[1]["tools"]} == {"fs_write", "fs_write_1"}
+    replayed = requests[1]["messages"][-2]["content"]
+    assert replayed[0] == {
+        "type": "thinking", "thinking": "Use the workspace write tool.",
+        "signature": "signed-original",
+    }
+    assert [(b["id"], b["name"], b["input"]) for b in replayed if b["type"] == "tool_use"] == [
+        (call.id, "fs_write_1", ARGS),
+    ]
+    # The persisted historical wire name stays intact: remapping is purely
+    # a request-boundary copy, not a mutation of signed stored history.
+    assert [b["name"] for b in original_blocks if b["type"] == "tool_use"] == ["fs_write"]
+
+
+def test_inconsistent_signed_tool_use_falls_back_to_canonical_calls():
+    from backend.providers.tool_names import cloud_tool_names
+
+    history = [{
+        "role": "assistant",
+        "tool_calls": [{"id": "toolu_1", "name": "fs.write", "arguments": ARGS}],
+        "_anthropic_content_blocks": [
+            {"type": "thinking", "thinking": "Thought.", "signature": "signed"},
+            {"type": "tool_use", "id": "toolu_1", "name": "fs_write", "input": {"path": "other.txt"}},
+        ],
+    }]
+    _, translated, _ = cloud_tool_names((WRITE,), history)
+    assert translated[0]["tool_calls"][0]["name"] == "fs_write"
+    assert "_anthropic_content_blocks" not in translated[0]
+
+
 def test_recorded_ollama_streamed_thinking_replays_with_native_tools(recordings, monkeypatch):
     frames = json.loads(json.dumps(recordings["ollama"]["first"]))
     frames[0:0] = [

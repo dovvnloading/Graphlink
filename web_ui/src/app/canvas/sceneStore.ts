@@ -244,6 +244,9 @@ export class SceneStore {
   // React Flow unmounts cards outside the viewport. Keep unsubmitted science inputs
   // in this session across virtualization, zoom changes and operation switches.
   private readonly scientificEditors = new Map<string, ScienceEditorSession>();
+  // An unknown harness/send outcome must keep the same idempotency key,
+  // even when React Flow unmounts/remounts the Agent card.
+  private readonly uncertainHarnessSends = new Map<string, { text: string; operationId: string }>();
 
   scientificEditor(nodeId: string, nodeKey?: string): ScienceEditorSession {
     let session = this.scientificEditors.get(nodeId);
@@ -1153,11 +1156,23 @@ export class SceneStore {
   // per task) and the standard requestId-shaped cancel. `harness/start`
   // itself is fired by HarnessLaunchDialog via transport.request (it
   // answers with the new node's id - the BuilderLaunchDialog precedent).
-  /** A follow-up is accepted only when the backend has claimed a run.
-   * An idle card can still be rejected while another agent is busy; do
-   * not make the caller discard its draft on a fire-and-forget send. */
+  /** The transport can time out AFTER the backend claims the run.
+   * Retain its operation ID on an uncertain outcome and replay that ID,
+   * never a fresh run, even after the first task finishes. A definitive
+   * backend rejection releases the key for a later explicit attempt. */
   async sendHarnessMessage(nodeId: string, text: string): Promise<boolean> {
-    const requestId = await this.transport.request("harness", "send", [nodeId, text]);
+    const previous = this.uncertainHarnessSends.get(nodeId);
+    const send = previous?.text === text ? previous : {
+      text, operationId: `send-${Array.from(
+        globalThis.crypto.getRandomValues(new Uint8Array(16)),
+        (byte) => byte.toString(16).padStart(2, "0"),
+      ).join("")}`,
+    };
+    this.uncertainHarnessSends.set(nodeId, send);
+    // Timeout/disconnect is not a server refusal. Leave the key cached so a
+    // subsequent Send is a deduplicated lookup, not a second execution.
+    const requestId = await this.transport.request("harness", "send", [nodeId, text, true, send.operationId]);
+    if (this.uncertainHarnessSends.get(nodeId) === send) this.uncertainHarnessSends.delete(nodeId);
     return typeof requestId === "string" && requestId.length > 0;
   }
 

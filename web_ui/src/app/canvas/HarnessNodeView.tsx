@@ -515,7 +515,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
         setDraftError("This agent task was not started. Another agent may be running; your draft is preserved.");
       }
     } catch {
-      setDraftError("The agent task could not be sent. Your draft is preserved; check the connection and retry.");
+      setDraftError("No send acknowledgment arrived. The task may already have started; your draft is preserved. Retrying this draft uses the same operation ID, so it cannot start that task twice.");
     } finally {
       setSending(false);
     }

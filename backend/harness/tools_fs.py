@@ -28,9 +28,10 @@ import secrets
 import stat
 import sys
 import time
-from contextlib import ExitStack
-from dataclasses import dataclass
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Callable
 
 import regex as re
 
@@ -227,6 +228,21 @@ def _open_bounded_file_fd(path: Path) -> int:
     ):
         raise WorkspaceError("Safe workspace file reads are unavailable on this platform.")
     absolute = path.absolute()
+    # Approved writes address their pinned parent as /proc/self/fd/<fd> or
+    # /dev/fd/<fd>. Use that open directory descriptor directly: walking
+    # the magic link with O_NOFOLLOW would reject otherwise-safe reads.
+    # Normal workspace paths still use the complete no-follow walk below.
+    parts = absolute.parts
+    if (
+        len(parts) >= 5
+        and parts[:-2] in (("/", "proc", "self", "fd"), ("/", "dev", "fd"))
+        and parts[-2].isdecimal()
+    ):
+        parent_fd = int(parts[-2])
+        if not stat.S_ISDIR(os.fstat(parent_fd).st_mode):
+            raise WorkspaceError("Pinned workspace parent is not a directory.")
+        return os.open(parts[-1], flags | os.O_NOFOLLOW, dir_fd=parent_fd)
+
     with ExitStack() as stack:
         dir_flags = flags | os.O_DIRECTORY | os.O_NOFOLLOW
         directory_fd = os.open(absolute.anchor, dir_flags)
@@ -491,8 +507,77 @@ def _replace_approved_existing(target: Path, staged_path: Path, approved: FileAp
             f"Inspect the destination and recovery paths: {exc}"
         ) from exc
 
+@contextmanager
+def _pinned_write_target(root: Path, target: Path):
+    """Bind publication to a workspace directory inode, never a mutable parent path.
+
+    A resolved path is only a point-in-time check: another process can
+    replace root/sub with a symlink after approval. Walk every ancestor from
+    the run's root with O_NOFOLLOW and keep the directory fd open through
+    staging, version validation, publication and recovery. On POSIX,
+    /proc/self/fd (Linux) or /dev/fd (other POSIX) addresses that exact
+    directory inode for the existing atomic rename/link routines. Refuse
+    writes if the host cannot provide this anchored path.
+    """
+    if os.name != "posix":
+        # Windows retains its separate ReplaceFileW/MoveFileExW publication
+        # mechanism; POSIX directory-fd primitives do not exist there.
+        yield target, lambda: None
+        return
+
+    try:
+        relative = target.relative_to(root)
+    except ValueError as exc:
+        raise WorkspaceError("File publication target is outside its workspace.") from exc
+    if not relative.parts or any(part in (".", "..") for part in relative.parts):
+        raise WorkspaceError("Invalid workspace publication path.")
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+    @contextmanager
+    def parent_handle(*, create: bool):
+        fd = os.open(root, directory_flags)
+        try:
+            for component in relative.parts[:-1]:
+                if create:
+                    try:
+                        os.mkdir(component, dir_fd=fd)
+                    except FileExistsError:
+                        pass
+                child_fd = os.open(component, directory_flags, dir_fd=fd)
+                os.close(fd)
+                fd = child_fd
+            yield fd
+        finally:
+            os.close(fd)
+
+    try:
+        with parent_handle(create=True) as directory_fd:
+            fd_root = "/proc/self/fd" if sys.platform.startswith("linux") else "/dev/fd"
+            anchored_parent = Path(fd_root) / str(directory_fd)
+            identity = os.fstat(directory_fd)
+            if not anchored_parent.is_dir() or anchored_parent.stat().st_ino != identity.st_ino:
+                raise WorkspaceError("This host cannot safely publish through a pinned directory handle.")
+
+            def verify_parent() -> None:
+                # A parent swapped before the last approval check must fail,
+                # not leave a surprising file in a renamed sibling. Even
+                # after this check, publication itself remains fd-anchored.
+                try:
+                    with parent_handle(create=False) as current_fd:
+                        actual = os.fstat(current_fd)
+                        if (actual.st_dev, actual.st_ino) != (identity.st_dev, identity.st_ino):
+                            raise WorkspaceError(_STALE_FILE_APPROVAL)
+                except OSError as exc:
+                    raise WorkspaceError(_STALE_FILE_APPROVAL) from exc
+
+            yield anchored_parent / relative.name, verify_parent
+    except OSError as exc:
+        raise WorkspaceError(f"Workspace write path changed or became unavailable: {exc}") from exc
+
+
 def _write_atomic_text(
     target: Path, content: str, *, approval_state: FileApprovalState | None = None,
+    before_publish: Callable[[], None] | None = None,
 ) -> None:
     """Replace text only after the complete UTF-8 payload is safely staged.
 
@@ -501,6 +586,23 @@ def _write_atomic_text(
     same filesystem. newline="" preserves caller-supplied LF/CRLF exactly.
     Existing POSIX mode bits (including executable) survive an edit.
     """
+    # The lower-level writer is also used directly by safety harnesses.
+    # A preview knows its granted root; never let a direct nested write
+    # publish through an unpinned, previously approved parent pathname.
+    # The first/only child of the trusted root has no mutable child parent.
+    if (approval_state is not None and approval_state.root is not None
+            and before_publish is None and target.parent != approval_state.root):
+        if target != approval_state.target:
+            raise WorkspaceError(_STALE_FILE_APPROVAL)
+        with _pinned_write_target(approval_state.root, target) as (pinned, verify_parent):
+            pinned_approval = replace(approval_state, target=pinned)
+            if not _file_approval_state_matches(pinned, pinned_approval):
+                raise WorkspaceError(_STALE_FILE_APPROVAL)
+            _write_atomic_text(
+                pinned, content, approval_state=pinned_approval, before_publish=verify_parent,
+            )
+        return
+
     target.parent.mkdir(parents=True, exist_ok=True)
     staged_path: Path | None = None
     try:
@@ -537,6 +639,8 @@ def _write_atomic_text(
         if approval_state is not None:
             if not _file_approval_state_matches(target, approval_state):
                 raise WorkspaceError(_STALE_FILE_APPROVAL)
+            if before_publish is not None:
+                before_publish()
             if approval_state.digest is None:
                 # Atomic create-if-absent: even a file appearing between the
                 # last check and commit must not be overwritten.
@@ -558,6 +662,8 @@ def _write_atomic_text(
                 return
             _replace_approved_existing(target, staged_path, approval_state)
             return
+        if before_publish is not None:
+            before_publish()
         os.replace(staged_path, target)
     except _ApprovedWriteRecoveryError:
         # A stale-write conflict or failed rollback can leave the external
@@ -596,6 +702,8 @@ class FileApprovalState:
     target: Path
     digest: str | None
     version: tuple[int, int, int, int, int, int, int] | None
+    # Captured from the approved preview, not re-resolved at publication.
+    root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -620,7 +728,7 @@ def _file_approval_state_matches(target: Path, approved: FileApprovalState) -> b
     try:
         if approved.digest is None:
             return not target.exists() and not target.is_symlink()
-        if not target.is_file() or _file_version(target) != approved.version:
+        if target.is_symlink() or not target.is_file() or _file_version(target) != approved.version:
             return False
         actual = hashlib.sha256(_read_bounded_bytes(target)).hexdigest()
         return actual == approved.digest and _file_version(target) == approved.version
@@ -652,14 +760,14 @@ def preview_harness_file_change(call: ToolCall, root: Path | None) -> FileApprov
             if call.name == "fs.edit":
                 raise WorkspaceError(f"Not a file: {path!r}.")
             current = ""
-            state = FileApprovalState(target, None, None)
+            state = FileApprovalState(target, None, None, root.resolve())
         else:
             if not target.is_file():
                 raise WorkspaceError(f"Not a file: {path!r}.")
             source = _read_bounded_bytes(target)
             current = source.decode("utf-8")
             state = FileApprovalState(
-                target, hashlib.sha256(source).hexdigest(), _file_version(target),
+                target, hashlib.sha256(source).hexdigest(), _file_version(target), root.resolve(),
             )
 
         if call.name == "fs.write":
@@ -921,10 +1029,14 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
             return ToolResult(content="VCS metadata cannot be modified by harness filesystem tools.", is_error=True)
         states = getattr(ctx, "harness_file_approval_states", {})
         approved_state = states.pop(call.id, None)
-        if approved_state is not None and not _file_approval_state_matches(target, approved_state):
+        if approved_state is not None and approved_state.target != target:
             return ToolResult(content=_STALE_FILE_APPROVAL, is_error=True)
         try:
-            _write_atomic_text(target, content, approval_state=approved_state)
+            with _pinned_write_target(root, target) as (pinned, verify_parent):
+                approval = replace(approved_state, target=pinned) if approved_state is not None else None
+                if approval is not None and not _file_approval_state_matches(pinned, approval):
+                    return ToolResult(content=_STALE_FILE_APPROVAL, is_error=True)
+                _write_atomic_text(pinned, content, approval_state=approval, before_publish=verify_parent)
         except (OSError, WorkspaceError) as exc:
             return ToolResult(content=f"Could not write file: {exc}", is_error=True)
         return ToolResult(content=f"Wrote {len(content)} characters to {call.arguments.get('path')}.")
@@ -949,27 +1061,31 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
             return ToolResult(content="VCS metadata cannot be modified by harness filesystem tools.", is_error=True)
         states = getattr(ctx, "harness_file_approval_states", {})
         approved_state = states.pop(call.id, None)
-        if approved_state is not None and not _file_approval_state_matches(target, approved_state):
+        if approved_state is not None and approved_state.target != target:
             return ToolResult(content=_STALE_FILE_APPROVAL, is_error=True)
-        if not target.is_file():
-            return ToolResult(content=f"Not a file: {call.arguments.get('path')!r}.", is_error=True)
         try:
-            text = _read_bounded_text(target)
-        except (OSError, UnicodeError, WorkspaceError) as exc:
-            return ToolResult(content=f"Could not read file: {exc}", is_error=True)
-        occurrences = text.count(old_string)
-        if occurrences == 0:
-            return ToolResult(content="old_string was not found in the file - fs.read it and retry with exact text.", is_error=True)
-        if occurrences > 1:
-            return ToolResult(
-                content=f"old_string occurs {occurrences} times - include more surrounding context so it is unique.",
-                is_error=True,
-            )
-        replacement = text.replace(old_string, new_string, 1)
-        if len(replacement.encode("utf-8")) > _MAX_FS_FILE_BYTES:
-            return ToolResult(content="Edited file would exceed the permitted size.", is_error=True)
-        try:
-            _write_atomic_text(target, replacement, approval_state=approved_state)
+            with _pinned_write_target(root, target) as (pinned, verify_parent):
+                approval = replace(approved_state, target=pinned) if approved_state is not None else None
+                if approval is not None and not _file_approval_state_matches(pinned, approval):
+                    return ToolResult(content=_STALE_FILE_APPROVAL, is_error=True)
+                if not pinned.is_file():
+                    return ToolResult(content=f"Not a file: {call.arguments.get('path')!r}.", is_error=True)
+                try:
+                    text = _read_bounded_text(pinned)
+                except (OSError, UnicodeError, WorkspaceError) as exc:
+                    return ToolResult(content=f"Could not read file: {exc}", is_error=True)
+                occurrences = text.count(old_string)
+                if occurrences == 0:
+                    return ToolResult(content="old_string was not found in the file - fs.read it and retry with exact text.", is_error=True)
+                if occurrences > 1:
+                    return ToolResult(
+                        content=f"old_string occurs {occurrences} times - include more surrounding context so it is unique.",
+                        is_error=True,
+                    )
+                replacement = text.replace(old_string, new_string, 1)
+                if len(replacement.encode("utf-8")) > _MAX_FS_FILE_BYTES:
+                    return ToolResult(content="Edited file would exceed the permitted size.", is_error=True)
+                _write_atomic_text(pinned, replacement, approval_state=approval, before_publish=verify_parent)
         except (OSError, WorkspaceError) as exc:
             return ToolResult(content=f"Could not write file: {exc}", is_error=True)
         return ToolResult(content=f"Edited {call.arguments.get('path')}.")
