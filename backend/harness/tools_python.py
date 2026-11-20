@@ -82,11 +82,16 @@ class PythonReplRegistry:
         # Value is (repl, cwd): the cwd is kept so a rebound workspace can
         # be detected - see get().
         self._repls: dict[str, tuple[PythonREPL, Path]] = {}
+        # A Stop releases the run's slot before its worker has unwound.
+        # Track the cancel event of the last run that borrowed each REPL,
+        # so a new task can never reuse a still-stopping interpreter.
+        self._owner_events: dict[str, threading.Event] = {}
         self._lock = threading.RLock()
 
     def get(
         self, workspace_id: str, cwd: Path, *, manage_cwd: bool,
         python_executable: Path | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> PythonREPL:
         """The workspace's interpreter, started on first use.
 
@@ -101,11 +106,17 @@ class PythonReplRegistry:
         with self._lock:
             stale = self._repls.get(workspace_id)
             selected = python_executable or Path(sys.executable)
+            previous_event = self._owner_events.get(workspace_id)
             if (
                 stale is not None
                 and stale[1] == cwd
                 and stale[0].python_executable == selected
+                and (previous_event is None or not previous_event.is_set())
             ):
+                if cancel_event is not None:
+                    self._owner_events[workspace_id] = cancel_event
+                else:
+                    self._owner_events.pop(workspace_id, None)
                 return stale[0]
             # Replace the entry under the lock, so two callers can never
             # race two interpreters into one workspace; the retired one is
@@ -116,6 +127,10 @@ class PythonReplRegistry:
                 python_executable=python_executable,
             )
             self._repls[workspace_id] = (repl, cwd)
+            if cancel_event is not None:
+                self._owner_events[workspace_id] = cancel_event
+            else:
+                self._owner_events.pop(workspace_id, None)
         if stale is not None:
             stale[0].stop()
         return repl
@@ -132,6 +147,7 @@ class PythonReplRegistry:
                 expected_repl is None or current[0] is expected_repl
             ):
                 entry = self._repls.pop(workspace_id)
+                self._owner_events.pop(workspace_id, None)
             else:
                 entry = None
         if expected_repl is not None:
@@ -143,6 +159,7 @@ class PythonReplRegistry:
         with self._lock:
             entries = list(self._repls.values())
             self._repls.clear()
+            self._owner_events.clear()
         for repl, _cwd in entries:
             repl.stop()
 
@@ -189,6 +206,7 @@ def register_harness_python_tool(
                 raise RequestCancelledError("stopped")
             repl = repl_registry.get(
                 workspace_id, cwd, manage_cwd=manage, python_executable=interpreter,
+                cancel_event=cancel_event,
             )
         except (PythonEnvironmentError, OSError) as exc:
             return ToolResult(content=f"Could not prepare Python environment: {exc}", is_error=True)
