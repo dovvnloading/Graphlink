@@ -223,7 +223,10 @@ def test_multiple_calls_get_distinct_ids_and_approvals_are_not_bypassed():
 
     registry.register(WRITE, write, scopes={FS_WRITE}, approval="always")
     ctx = RunContext(granted_scopes=frozenset({FS_WRITE}), request_approval=deny)
-    results = asyncio.run(asyncio.gather(*(registry.invoke(call, ctx) for call in calls)))
+    async def invoke_all():
+        return await asyncio.gather(*(registry.invoke(call, ctx) for call in calls))
+
+    results = asyncio.run(invoke_all())
     assert all(result.is_error and "denied" in result.content for result in results)
     assert ran == []
 
