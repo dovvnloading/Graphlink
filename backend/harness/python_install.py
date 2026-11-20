@@ -14,7 +14,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -37,9 +36,9 @@ from graphlink_process_env import safe_subprocess_env
 from graphlink_scratch_dirs import prepare_scratch_dir
 
 DEFAULT_PYPI_INDEX = "https://pypi.org/simple/"
-# Shared between scratch and trusted-project workspaces; never removed with a
-# harness node or swept as abandoned workspace state.
-PYTHON_WHEEL_CACHE_ROOT = Path(tempfile.gettempdir()) / "graphlink_harness_python_wheel_cache"
+# Stable across application restarts and workspace deletion, even when the
+# operating system clears temporary directories. Never age-swept.
+PYTHON_WHEEL_CACHE_ROOT = Path.home() / ".graphlink" / "python-wheel-cache"
 MAX_INSTALL_PACKAGES = 32
 MAX_PACKAGE_CHARS = 180
 _PIP_TIMEOUT_SECONDS = 300
