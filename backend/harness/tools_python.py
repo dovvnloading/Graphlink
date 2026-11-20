@@ -36,6 +36,7 @@ import sys
 import threading
 from pathlib import Path
 
+from api_provider import RequestCancelledError
 from backend.harness.python_env import PythonEnvironmentError, ensure_python_environment
 from backend.harness.python_policy import source_error
 from backend.harness.workspace import WorkspaceError, ensure_workspace, workspace_dir
@@ -81,11 +82,16 @@ class PythonReplRegistry:
         # Value is (repl, cwd): the cwd is kept so a rebound workspace can
         # be detected - see get().
         self._repls: dict[str, tuple[PythonREPL, Path]] = {}
+        # A Stop releases the run's slot before its worker has unwound.
+        # Track the cancel event of the last run that borrowed each REPL,
+        # so a new task can never reuse a still-stopping interpreter.
+        self._owner_events: dict[str, threading.Event] = {}
         self._lock = threading.RLock()
 
     def get(
         self, workspace_id: str, cwd: Path, *, manage_cwd: bool,
         python_executable: Path | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> PythonREPL:
         """The workspace's interpreter, started on first use.
 
@@ -100,11 +106,17 @@ class PythonReplRegistry:
         with self._lock:
             stale = self._repls.get(workspace_id)
             selected = python_executable or Path(sys.executable)
+            previous_event = self._owner_events.get(workspace_id)
             if (
                 stale is not None
                 and stale[1] == cwd
                 and stale[0].python_executable == selected
+                and (previous_event is None or not previous_event.is_set())
             ):
+                if cancel_event is not None:
+                    self._owner_events[workspace_id] = cancel_event
+                else:
+                    self._owner_events.pop(workspace_id, None)
                 return stale[0]
             # Replace the entry under the lock, so two callers can never
             # race two interpreters into one workspace; the retired one is
@@ -115,20 +127,39 @@ class PythonReplRegistry:
                 python_executable=python_executable,
             )
             self._repls[workspace_id] = (repl, cwd)
+            if cancel_event is not None:
+                self._owner_events[workspace_id] = cancel_event
+            else:
+                self._owner_events.pop(workspace_id, None)
         if stale is not None:
             stale[0].stop()
         return repl
 
-    def stop_workspace(self, workspace_id: str) -> None:
+    def stop_workspace(
+        self, workspace_id: str, *, expected_repl: PythonREPL | None = None,
+    ) -> None:
+        # A cancelled task can still be unwinding when Stop frees its slot
+        # and a new run creates an interpreter for the SAME workspace.
+        # Retire only the interpreter belonging to the cancelled task.
         with self._lock:
-            entry = self._repls.pop(workspace_id, None)
-        if entry is not None:
+            current = self._repls.get(workspace_id)
+            if current is not None and (
+                expected_repl is None or current[0] is expected_repl
+            ):
+                entry = self._repls.pop(workspace_id)
+                self._owner_events.pop(workspace_id, None)
+            else:
+                entry = None
+        if expected_repl is not None:
+            expected_repl.stop()
+        elif entry is not None:
             entry[0].stop()
 
     def stop_all(self) -> None:
         with self._lock:
             entries = list(self._repls.values())
             self._repls.clear()
+            self._owner_events.clear()
         for repl, _cwd in entries:
             repl.stop()
 
@@ -164,26 +195,59 @@ def register_harness_python_tool(
         except (WorkspaceError, OSError) as exc:
             return ToolResult(content=f"Could not prepare the workspace: {exc}", is_error=True)
 
+        cancel_event = ctx.cancel.event if ctx.cancel is not None else None
+        if cancel_event is not None and cancel_event.is_set():
+            raise RequestCancelledError("stopped")
         try:
             interpreter = await asyncio.to_thread(
                 ensure_python_environment, workspace_id, cwd, is_scratch=is_scratch,
             )
+            if cancel_event is not None and cancel_event.is_set():
+                raise RequestCancelledError("stopped")
             repl = repl_registry.get(
                 workspace_id, cwd, manage_cwd=manage, python_executable=interpreter,
+                cancel_event=cancel_event,
             )
         except (PythonEnvironmentError, OSError) as exc:
             return ToolResult(content=f"Could not prepare Python environment: {exc}", is_error=True)
+
+        on_output = getattr(ctx, "on_tool_output", None)
+        if on_output is not None:
+            on_output("")  # execution has passed its approval gate
+        # asyncio.wait_for(to_thread(...)) only stops waiting: it does NOT
+        # terminate user code in the child. Poll the same Stop event as the
+        # shell tool and kill/retire this exact interpreter on cancellation
+        # or timeout. The child guard kills spawned descendants as well.
+        # Keep the old single-argument REPL contract for standalone
+        # callers without a live/cancellable run (including instrumented
+        # wrappers around execute). The harness passes the extra hooks.
+        if on_output is None and cancel_event is None:
+            invocation = asyncio.to_thread(repl.execute, code)
+        else:
+            invocation = asyncio.to_thread(repl.execute, code, on_output, cancel_event)
+        worker = asyncio.create_task(invocation)
+        deadline = asyncio.get_running_loop().time() + PYTHON_EXEC_TIMEOUT_SECONDS
         try:
-            output = await asyncio.wait_for(
-                asyncio.to_thread(repl.execute, code),
-                timeout=PYTHON_EXEC_TIMEOUT_SECONDS,
+            while not worker.done():
+                if cancel_event is not None and cancel_event.is_set():
+                    raise RequestCancelledError("stopped")
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError
+                await asyncio.wait({worker}, timeout=min(0.1, remaining))
+            if cancel_event is not None and cancel_event.is_set():
+                raise RequestCancelledError("stopped")
+            output = await worker
+        except (RequestCancelledError, asyncio.TimeoutError, asyncio.CancelledError) as exc:
+            await asyncio.to_thread(
+                repl_registry.stop_workspace, workspace_id, expected_repl=repl,
             )
-        except asyncio.TimeoutError:
-            # A hung interpreter cannot be reused - its stdin/stdout framing
-            # is desynchronized past the boundary line it never printed. Tear
-            # it down so the NEXT call transparently starts a fresh one
-            # (PythonREPL.execute restarts a dead process on demand).
-            await asyncio.to_thread(repl_registry.stop_workspace, workspace_id)
+            # The worker may have been reading stdout while Stop closed it;
+            # drain its completion/exception so it cannot leak into a later
+            # run or produce an unhandled task exception.
+            await asyncio.gather(worker, return_exceptions=True)
+            if not isinstance(exc, asyncio.TimeoutError):
+                raise
             return ToolResult(
                 content=(
                     f"Code timed out after {PYTHON_EXEC_TIMEOUT_SECONDS}s; the interpreter "
