@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { HarnessWorkspaceFiles } from "./HarnessWorkspaceFiles";
+import { HarnessWorkspaceFiles } from "./AgentWorkspaceBrowser";
 import type { HarnessWorkspaceListing } from "./harnessWorkspaceFiles";
 
 function listing(path: string): HarnessWorkspaceListing {
