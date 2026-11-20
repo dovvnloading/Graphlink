@@ -146,7 +146,9 @@ def register_control_agent_task_api(app: FastAPI, bus: EventBus) -> None:
             # The app's existing validated send intent owns run claiming,
             # workspace trust checks and the human-only approval mechanism.
             # No MCP request can supply a workspace, tool grant or approval.
-            run_id = await session.dispatch_intent("harness", "send", [node.id, body.text.strip()])
+            # External MCP callers may control tasks, not inherit previous
+            # in-app "approve for session" grants on this workspace.
+            run_id = await session.dispatch_intent("harness", "send", [node.id, body.text.strip(), False])
             if not isinstance(run_id, str) or not run_id:
                 raise HTTPException(status_code=409, detail="the agent task could not start")
             # start_harness_run claims a RunHandle synchronously but schedules

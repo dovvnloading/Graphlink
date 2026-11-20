@@ -438,6 +438,7 @@ async def run_harness(
     model_ref=None,
     settings_manager=None,
     runtime=None,
+    allow_session_grants: bool = True,
 ) -> None:
     """One harness task, claimed as kind="harness" by
     AgentDispatcher.start_harness_run (which create_tasks this)."""
@@ -550,7 +551,10 @@ async def run_harness(
         # Executable commands and interactive stdin always ask fresh, even
         # when a previous call was approved for the session. The panel must
         # not suggest session consent that the registry will reject.
-        node.state.harness_approval_session_offered = preview_available and not bind_approval and not _is_dangerous_call(call)
+        node.state.harness_approval_session_offered = (
+            preview_available and ctx.session_grants is not None
+            and not bind_approval and not _is_dangerous_call(call)
+        )
         await bus.publish("scene")
         try:
             approved = await future
@@ -602,7 +606,10 @@ async def run_harness(
         # design - a dispatcher that does not offer session grants yields
         # None, which RunContext reads as "no session-scoped option exists",
         # leaving every prompt once-or-deny.
-        session_grants=_session_grants_of(dispatcher, node.state.harness_workspace_id),
+        session_grants=(
+            _session_grants_of(dispatcher, node.state.harness_workspace_id)
+            if allow_session_grants else None
+        ),
         set_plan=set_plan,
         ask_user=ask_user,
         cancel=CancelToken(cancel_event),

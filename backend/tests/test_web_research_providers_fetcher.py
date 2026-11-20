@@ -711,3 +711,105 @@ def test_denied_redirect_domain_does_not_contact_redirect_target(limits, token):
     assert [called for called, _ in session.get_calls] == [
         "https://first.example/robots.txt", original,
     ]
+
+
+class TestConsentPrecedesDnsAndTransport:
+    """Workspace fetches must not resolve an unapproved hostname, even after redirects."""
+
+    def test_denied_initial_domain_causes_no_dns_lookup_or_http_request(self, limits, token):
+        lookups = []
+        disclosed = []
+
+        def resolver(host, port, type=None):
+            lookups.append(host)
+            return [(2, 1, 6, "", ("93.184.216.34", port))]
+
+        session = _FakeSession([])
+        fetcher = RequestsDocumentFetcher(
+            policy=FetchPolicy(resolver=resolver),
+            etiquette=CrawlEtiquette(default_crawl_delay_seconds=0),
+        )
+
+        def deny(url):
+            disclosed.append(url)
+            raise ResearchFailure("Domain approval denied", code="domain_approval_denied")
+
+        with patch.object(providers_module, "requests") as fake_requests:
+            fake_requests.Session.return_value = session
+            fake_requests.RequestException = Exception
+            with pytest.raises(ResearchFailure, match="Domain approval denied") as exc:
+                fetcher.fetch(_search_result(), limits=limits, token=token, on_request=deny)
+
+        assert exc.value.code == "domain_approval_denied"
+        assert disclosed == ["https://example.com/page"]
+        assert lookups == []
+        assert session.get_calls == []
+
+    def test_denied_redirect_domain_is_not_resolved_or_contacted(self, limits, token):
+        lookups = []
+        disclosed = []
+
+        def resolver(host, port, type=None):
+            lookups.append(host)
+            return [(2, 1, 6, "", ("93.184.216.34", port))]
+
+        session = _FakeSession([
+            _FakeResponse(status_code=404, body=b""),  # approved site's robots.txt
+            _FakeResponse(status_code=302, location="https://leak.bad.example/secret"),
+        ])
+        fetcher = RequestsDocumentFetcher(
+            policy=FetchPolicy(resolver=resolver),
+            etiquette=CrawlEtiquette(default_crawl_delay_seconds=0),
+        )
+
+        def consent(url):
+            disclosed.append(url)
+            if "leak.bad.example" in url:
+                raise ResearchFailure("Redirect not approved", code="domain_approval_denied")
+
+        with patch.object(providers_module, "requests") as fake_requests:
+            fake_requests.Session.return_value = session
+            fake_requests.RequestException = Exception
+            with pytest.raises(ResearchFailure, match="Redirect not approved"):
+                fetcher.fetch(_search_result(), limits=limits, token=token, on_request=consent)
+
+        assert disclosed == [
+            "https://example.com/page", "https://leak.bad.example/secret",
+        ]
+        assert lookups and set(lookups) == {"example.com"}
+        assert all("leak.bad.example" not in url for url, _ in session.get_calls)
+        assert len(session.get_calls) == 2
+
+    def test_private_ip_literal_is_blocked_before_consent(self, limits, token):
+        disclosed = []
+        session = _FakeSession([])
+        fetcher = RequestsDocumentFetcher(policy=FetchPolicy(), etiquette=CrawlEtiquette())
+
+        with patch.object(providers_module, "requests") as fake_requests:
+            fake_requests.Session.return_value = session
+            fake_requests.RequestException = Exception
+            with pytest.raises(ResearchFailure) as exc:
+                fetcher.fetch(
+                    _search_result("https://127.0.0.1/private"), limits=limits, token=token,
+                    on_request=lambda url: disclosed.append(url),
+                )
+
+        assert exc.value.code == "url_blocked_by_policy"
+        assert disclosed == [] and session.get_calls == []
+
+    def test_false_from_pre_request_hook_is_an_explicit_denial(self, limits, token):
+        lookups = []
+        session = _FakeSession([])
+        policy = FetchPolicy(resolver=lambda *args, **kwargs: lookups.append(args))
+        fetcher = RequestsDocumentFetcher(policy=policy, etiquette=CrawlEtiquette())
+
+        with patch.object(providers_module, "requests") as fake_requests:
+            fake_requests.Session.return_value = session
+            fake_requests.RequestException = Exception
+            with pytest.raises(ResearchFailure) as exc:
+                fetcher.fetch(
+                    _search_result(), limits=limits, token=token,
+                    on_request=lambda url: False,
+                )
+        assert exc.value.code == "domain_approval_denied"
+        assert lookups == [] and session.get_calls == []
