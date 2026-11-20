@@ -312,8 +312,9 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # 249 -> 252: harness workspace listing, preview and native reveal do not mutate the canvas document.
     # 252 -> 254: harness/setExecutionProfile stores a task profile and
     # harness/getIsolationEngine probes engine availability.
-    assert len(real) == 254, (
-        f"expected exactly 252 real registered intents, found {len(real)} - "
+    # 254 -> 255: harness/removeShellAllowRule revokes saved execution consent.
+    assert len(real) == 255, (
+        f"expected exactly 255 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"
