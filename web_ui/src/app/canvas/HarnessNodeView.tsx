@@ -388,7 +388,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
       collapsed={collapsed}
       onMenuChange={(position) => {
         setMenuPosition(position);
-        if (position) setSettingsPosition(null);
+        setSettingsPosition(null);
       }}
       header={
         <NodeHeading className="plan-node-title">
@@ -420,26 +420,23 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
       }
       bodyClassName="plan-node-body"
       menu={
-        <>
-          {menuPosition && (
-            <HarnessNodeMenu
-              position={menuPosition}
-              isCollapsed={data.isCollapsed}
-              onToggleCollapse={data.onToggleCollapse}
-              onDelete={data.onDelete}
-              onClose={() => setMenuPosition(null)}
-            />
-          )}
-          {settingsPosition && (
-            <AgentSettingsPopover
-              position={settingsPosition}
-              shell={data.harnessShell}
-              onSetShell={data.onSetShell}
-              onClose={() => setSettingsPosition(null)}
-              triggerRef={settingsTriggerRef}
-            />
-          )}
-        </>
+        menuPosition ? (
+          <HarnessNodeMenu
+            position={menuPosition}
+            isCollapsed={data.isCollapsed}
+            onToggleCollapse={data.onToggleCollapse}
+            onDelete={data.onDelete}
+            onClose={() => setMenuPosition(null)}
+          />
+        ) : settingsPosition ? (
+          <AgentSettingsPopover
+            position={settingsPosition}
+            shell={data.harnessShell}
+            onSetShell={data.onSetShell}
+            onClose={() => setSettingsPosition(null)}
+            triggerRef={settingsTriggerRef}
+          />
+        ) : null
       }
     >
       <div className={`plan-node-status ${statusClass(data)}`}>{statusLabel(data)}</div>

@@ -147,6 +147,24 @@ describe("HarnessNodeView", () => {
     expect(data.onToggleCollapse).toHaveBeenCalledOnce();
   });
 
+  it("keeps the node-actions button usable before and after the settings popover", async () => {
+    const user = userEvent.setup();
+    renderHarness(makeData());
+    const actions = screen.getByRole("button", { name: "Node actions" });
+    expect(actions).toHaveAttribute("aria-expanded", "false");
+    await user.click(actions);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    await user.click(actions);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Agent settings" }));
+    expect(screen.getByRole("dialog", { name: "Agent settings" })).toBeInTheDocument();
+    await user.click(actions);
+    expect(screen.queryByRole("dialog", { name: "Agent settings" })).not.toBeInTheDocument();
+    await user.click(actions);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+  });
+
   it("the node-level right-click menu shows exactly Collapse/Expand + Delete Node", async () => {
     const user = userEvent.setup();
     const data = makeData();
