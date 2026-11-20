@@ -173,9 +173,17 @@ def test_pagination_reuses_snapshot_and_only_resolves_page_candidates(tmp_path, 
     assert counts["resolve"] < 920  # Not 905 path resolves * three pages.
 
 
-def test_directory_snapshot_is_invalidated_by_content_changes(tmp_path):
+def test_directory_snapshot_is_invalidated_by_content_changes(tmp_path, monkeypatch):
     root = tmp_path / "project"
     root.mkdir()
+    # Simulate Windows returning unchanged directory metadata after a create.
+    original_stat = type(root).stat
+    frozen_stat = root.stat()
+
+    def stale_directory_stat(path, *args, **kwargs):
+        return frozen_stat if path == root else original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(root), "stat", stale_directory_stat)
     (root / "b.txt").touch()
     assert [e["name"] for e in list_workspace_files(root)["entries"]] == ["b.txt"]
     (root / "a.txt").touch()

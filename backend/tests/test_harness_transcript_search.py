@@ -224,6 +224,25 @@ def test_writer_appends_reuse_hash_checkpoint_instead_of_rereading_prefix(tmp_pa
     assert flush(tmp_path)
     transcript = transcript_path(tmp_path)
 
+    # Windows can expose different ctime values via path.stat and fstat for
+    # the same file. Reproduce that disagreement on all platforms.
+    original_stat = type(transcript).stat
+
+    class DifferentPathCtime:
+        def __init__(self, stats):
+            self.stats = stats
+
+        def __getattr__(self, name):
+            if name == "st_ctime_ns":
+                return self.stats.st_ctime_ns + 1_000_000
+            return getattr(self.stats, name)
+
+    def different_path_stat(path, *args, **kwargs):
+        stats = original_stat(path, *args, **kwargs)
+        return DifferentPathCtime(stats) if path == transcript else stats
+
+    monkeypatch.setattr(type(transcript), "stat", different_path_stat)
+
     rescans = []
     original = index_module._prefix_hasher
 

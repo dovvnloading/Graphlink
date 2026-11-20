@@ -49,6 +49,7 @@ old synchronous behavior rather than to silent loss.
 from __future__ import annotations
 
 import json
+import os
 import queue
 import sqlite3
 import subprocess
@@ -106,15 +107,15 @@ class _Writer:
                 line, done = item
                 if line:
                     try:
-                        if not needs_index:
-                            # Snapshot the indexed source *before* our first
-                            # append. The index may reuse its SHA checkpoint
-                            # only if nobody else changed the file meanwhile.
-                            try:
-                                append_origin = self.path.stat()
-                            except OSError:
-                                append_origin = None
                         with self.path.open("a", encoding="utf-8") as fh:
+                            if not needs_index:
+                                # Capture the pre-append state using fstat, as
+                                # sync_index does. On Windows, path.stat and
+                                # fstat may disagree on st_ctime_ns.
+                                try:
+                                    append_origin = os.fstat(fh.fileno())
+                                except OSError:
+                                    append_origin = None
                             fh.write(line)
                             fh.flush()
                         needs_index = True

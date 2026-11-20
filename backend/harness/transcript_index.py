@@ -118,6 +118,8 @@ _MAX_HASH_CHECKPOINTS = 16
 
 
 def _source_stamp(stats: os.stat_result) -> tuple[int, int, int, int, int]:
+    # Compare fstat snapshots only: Windows path.stat can report birth time
+    # as st_ctime_ns while fstat reports the last metadata-change time.
     return (stats.st_dev, stats.st_ino, stats.st_size, stats.st_mtime_ns, stats.st_ctime_ns)
 
 

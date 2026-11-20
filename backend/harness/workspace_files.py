@@ -109,6 +109,11 @@ def list_workspace_files(root: Path, relative_path: str = "", cursor: str | None
     except OSError as exc:
         raise WorkspaceError(f"Could not list workspace folder: {exc}") from exc
     signature = (stats.st_dev, stats.st_ino, stats.st_mtime_ns, stats.st_ctime_ns)
+    if cursor is None:
+        # A new listing must see recently created names even when Windows
+        # leaves a directory's timestamps unchanged. Only cursor follow-ups
+        # reuse the sorted snapshot.
+        _directory_keys.cache_clear()
     keys = _directory_keys(directory, signature, int(time.monotonic() // _SNAPSHOT_SECONDS))
     start = bisect_right(keys, after) if after is not None else 0
 
