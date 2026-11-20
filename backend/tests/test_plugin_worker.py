@@ -1035,6 +1035,75 @@ def test_register_plugin_tools_works_for_an_in_process_plugins_intent_too(tmp_pa
         _close_workers(registry)
 
 
+def test_always_plugin_tool_reprompts_for_each_different_effect(tmp_path):
+    """A genuinely registered plugin intent may not gain name-wide consent."""
+    from backend.harness.loop import _session_grant_eligible
+
+    plugin_dir = tmp_path / "plugins" / "consent_test"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "plugin.toml").write_text(
+        textwrap.dedent("""\\
+            [plugin]
+            id = "consent_test"
+            name = "Consent Test"
+            version = "0.1.0"
+            sdk_api_version = 1
+            entry_point = "plugin:register"
+
+            [scopes]
+            grants = ["graph.mutate"]
+        """),
+        encoding="utf-8",
+    )
+    (plugin_dir / "plugin.py").write_text(
+        textwrap.dedent("""\\
+            from dataclasses import dataclass
+            from backend.plugin_sdk import HostContext
+
+            @dataclass
+            class Args:
+                target: str
+
+            def remove(document, run_ctx, args: Args):
+                return f"acted on {args.target}"
+
+            def register(host: HostContext) -> None:
+                host.register_intent("remove", remove, args_schema=Args)
+        """),
+        encoding="utf-8",
+    )
+    plugins = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
+    try:
+        settings = SettingsManager(tmp_path / "store" / "session.dat")
+        settings.set_plugin_grant("consent_test", True)
+        tools = ToolRegistry()
+        assert register_plugin_tools(tools, plugins, settings, SceneDocument()) == (
+            "plugin:consent_test:remove",
+        )
+        name = "plugin:consent_test:remove"
+        first = ToolCall(id="1", name=name, arguments={"target": "draft"})
+        second = ToolCall(id="2", name=name, arguments={"target": "production"})
+        assert not _session_grant_eligible(first, tools)
+
+        prompts = []
+
+        async def approve(call):
+            prompts.append(call.arguments["target"])
+            return "session"
+
+        grants = {name}
+        ctx = RunContext(
+            granted_scopes=frozenset({"graph.mutate"}),
+            request_approval=approve, session_grants=grants,
+        )
+        assert _run(tools.invoke(first, ctx)).content == "acted on draft"
+        assert _run(tools.invoke(second, ctx)).content == "acted on production"
+        assert prompts == ["draft", "production"]
+        assert grants == {name}
+    finally:
+        _close_workers(plugins)
+
+
 def test_register_plugin_tools_isolates_a_registration_failure_so_a_later_plugins_tools_still_register(tmp_path):
     """ADR-014 review-fix (finding 1): register_plugin_tools now wraps each
     spec's registration in its own try/except, mirroring
