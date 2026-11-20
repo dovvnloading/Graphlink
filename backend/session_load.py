@@ -1045,6 +1045,8 @@ def _restore_harness_payload(payload: dict[str, Any]) -> SceneNode:
     scratch GC refuses to delete through."""
     x, y = _position(payload)
     goal = str(payload.get("goal", ""))
+    from backend.harness.permission_modes import effective_permission_mode, normalize_permission_mode
+
     raw_status = str(payload.get("harness_status", "idle") or "idle")
     status = raw_status if raw_status in _HARNESS_TERMINAL_STATUSES + ("idle",) else "interrupted"
     activity = []
@@ -1081,6 +1083,11 @@ def _restore_harness_payload(payload: dict[str, Any]) -> SceneNode:
             harness_shell=normalize_shell(payload.get("shell", "auto")),
             harness_shell_allow_rules=_restore_harness_shell_allow_rules(payload.get("shell_allow_rules")),
             harness_execution_profile=normalize_execution_profile(payload.get("execution_profile", "host")),
+            harness_permission_mode=effective_permission_mode(
+                payload.get("permission_mode", "ask"),
+                normalize_execution_profile(payload.get("execution_profile", "host")),
+            ),
+            harness_task_permission_mode=normalize_permission_mode(payload.get("task_permission_mode", "ask")),
             harness_network_always=payload.get("network_always") is True,
             harness_activity=activity,
             harness_max_turns=_positive_int(payload.get("max_turns"), 16),
