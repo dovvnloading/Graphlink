@@ -250,6 +250,11 @@ class OpenAIProvider:
             **kwargs,
         )
         _raise_if_cancelled(cancel.event)
+        # Blocking completions must honor the same terminal reasons as streams.
+        require_successful_stop(
+            "OpenAI-compatible", getattr(response.choices[0], "finish_reason", None),
+            {"stop", "tool_calls", "function_call"},
+        )
         # ADR-006 stage 6.8: response.usage is in hand here - captured on a
         # side attribute (complete() returns a bare str by protocol). Note
         # api_provider.chat() deliberately does not surface API-mode blocking

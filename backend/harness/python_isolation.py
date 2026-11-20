@@ -1,9 +1,9 @@
 """Container-native Python environments for the isolated workspace profile.
 
-Isolated Python always uses an app-owned container-native environment scoped
-to workspace id and project root. A host-visible project venv is not proof
-that its interpreter can run inside the fixed container image, so it is never
-selected. All interpreter startup and virtualenv creation occur in the container.
+In trusted projects, conservatively recognize .venv/venv environments created
+for python:3.12-slim and verify them inside the container before using them.
+Host-only or unrecognized interpreters fall back to app-owned container-native
+environments. No Python is run on the host for Isolated tools.
 """
 
 from __future__ import annotations
@@ -36,6 +36,8 @@ managed = sys.argv[2] == "1"
 python = venv / "bin" / "python"
 if venv.is_symlink():
     sys.exit("Refusing symlinked Python environment: " + str(venv))
+if not managed and ((venv / "bin").is_symlink() or python.is_symlink()):
+    sys.exit("Refusing symlinked project Python interpreter: " + str(python))
 if not ((venv / "pyvenv.cfg").is_file() and python.is_file()):
     if not managed:
         sys.exit("Project Python environment cannot run inside the container: " + str(venv))
@@ -45,6 +47,22 @@ if not ((venv / "pyvenv.cfg").is_file() and python.is_file()):
         shutil.rmtree(venv)
     venv.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run([sys.executable, "-m", "venv", "--copies", str(venv)], check=True)
+if not managed:
+    # Host metadata only marks this as a candidate. Prove the interpreter
+    # actually launches with this image's Python version and uses this venv,
+    # before either running the REPL or allowing pip to modify it.
+    try:
+        probe = subprocess.run(
+            [str(python), "-c",
+             "import sys; sys.exit(0 if (sys.prefix == sys.argv[1] "
+             "and sys.version_info[:2] == tuple(int(n) for n in sys.argv[2].split('.'))) else 1)",
+             str(venv), f"{sys.version_info.major}.{sys.version_info.minor}"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        sys.exit("Project Python environment cannot run inside the container: " + str(venv))
+    if probe.returncode != 0:
+        sys.exit("Project Python environment is incompatible with python:3.12-slim: " + str(venv))
 if len(sys.argv) > 3:
     os.execv(str(python), [str(python), "-u", "-c", sys.argv[3]])
 """
@@ -62,16 +80,51 @@ class IsolatedPythonPlan:
         return self.interpreter.parent.parent
 
 
+def _project_container_venv_exists(venv: Path) -> bool:
+    """Recognize likely image-built --copies venvs without executing host Python.
+
+    Approval planning is pure and cannot prove runtime compatibility. Only
+    select regular, non-symlinked Python files with the fixed image's venv
+    home and Python minor version; the bootstrap verifies them IN the image.
+    """
+    python = venv / "bin" / "python"
+    cfg = venv / "pyvenv.cfg"
+    if (
+        venv.is_symlink() or (venv / "bin").is_symlink()
+        or python.is_symlink() or not python.is_file() or cfg.is_symlink()
+    ):
+        return False
+    try:
+        values = {}
+        for line in cfg.read_text(encoding="utf-8").splitlines():
+            key, sep, value = line.partition("=")
+            if sep:
+                values[key.strip().lower()] = value.strip()
+    except (OSError, UnicodeError):
+        return False
+    return (
+        values.get("home") == "/usr/local/bin"
+        and values.get("version", "").split(".")[:2] == ["3", "12"]
+    )
+
+
 def planned_isolated_python_environment(
     workspace_id: str, cwd: Path, *, is_scratch: bool,
 ) -> IsolatedPythonPlan:
-    """Pure selection for approval: no image pull, daemon call or file writes.
+    """Pure, conservative selection for exec and install approval.
 
-    Project .venv/bin/python may resolve on the host but be broken or point
-    outside the image inside the container. Only the container could verify
-    compatibility; approval planning cannot contact it, so never pin an
-    unverified project interpreter. Both exec and install share this plan.
+    A host-visible project venv is never proof of container usability. The
+    image's bootstrap verifies every selected candidate before executing it.
     """
+    if not is_scratch:
+        for name in (".venv", "venv"):
+            candidate = cwd / name
+            if _project_container_venv_exists(candidate):
+                return IsolatedPythonPlan(
+                    PurePosixPath("/workspace") / name / "bin" / "python",
+                    candidate, False,
+                )
+
     if is_scratch:
         host_venv = cwd / ".graphlink-isolated-python-venv"
         return IsolatedPythonPlan(

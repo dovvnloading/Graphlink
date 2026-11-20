@@ -47,7 +47,18 @@ The image is deliberately **not** downloaded during an agent command (`--pull=ne
 
 Shell and Python tools retain per-call approval and timeout/cancellation behavior, and every `python.exec` call requires fresh approval. Persistent shell sessions and Python interpreters are retired on workspace/profile changes and stopped on teardown. The execution profile is saved with the graph and snapshotted per task; changing it during a task affects subsequent tasks. On graph reopen, the permission mode resets to Ask and approval grants are cleared. An installed CLI is not proof its daemon is running.
 
-`python.exec` uses a persistent container REPL. Python tools prefer container-compatible project `.venv`/`venv` environments, otherwise create separate container-native environments. Scratch environments stay in the scratch workspace; trusted projects use scoped app-owned per-agent/per-project directories. Host virtualenvs cannot run in the Linux container and are never executed or repaired on the host.
+`python.exec` uses a persistent container REPL. In a trusted project, Python tools
+select `.venv` then `venv` only when the configuration identifies a copied
+Python 3.12 environment built for `python:3.12-slim` (`pyvenv.cfg` home
+`/usr/local/bin`, version 3.12 and a non-symlinked `bin/python`). This is
+only a planning check: the interpreter is **launched and checked inside the
+container** before `python.exec` or `python.install` can use it. If it is
+not actually compatible, the command fails closed without running host Python
+or installing into another, undisclosed environment. Unrecognized project
+venvs use separate app-owned per-agent/per-project container environments;
+scratch workspaces use a managed venv inside the scratch workspace. Project
+environments are never executed or repaired on the host. For a setup example,
+see [Python installs](PYTHON_INSTALL.md).
 
 In Ask/Auto-edit, `python.install` requires fresh approval bound to the workspace, profile, interpreter and packages (even when wheels are cached). In Isolated Autonomous it first tries cached wheels offline without a prompt; on a miss, it stops and asks for fresh, interpreter/package-bound consent before contacting PyPI. Only the separately approved `pip download` accesses the canonical PyPI index; the following `pip install --no-index` runs offline.
 

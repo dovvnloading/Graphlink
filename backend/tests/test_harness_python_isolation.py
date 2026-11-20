@@ -4,7 +4,11 @@ from __future__ import annotations
 import asyncio
 import io
 import os
+import subprocess
+import sys
 from pathlib import Path, PurePosixPath
+
+import pytest
 from unittest.mock import Mock
 
 from backend.harness import python_env, python_install, python_isolation, tools_python
@@ -59,7 +63,7 @@ def test_container_argv_and_mounts_respect_network_exception(tmp_path, monkeypat
         assert flag in offline and flag in online
 
 
-def test_isolated_env_uses_scoped_managed_venv_even_with_project_venv(tmp_path, monkeypatch):
+def test_isolated_env_uses_scoped_managed_venv_for_unverified_project_venv(tmp_path, monkeypatch):
     monkeypatch.setattr(python_env, "HARNESS_PYTHON_ENV_ROOT", tmp_path / "env-root")
     project, other = tmp_path / "project", tmp_path / "other"
     project.mkdir()
@@ -343,3 +347,118 @@ def test_missing_container_engine_fails_closed_without_host_python(tmp_path, mon
         assert not plan.host_venv.exists(), "No virtualenv is created on the host"
     finally:
         repls.stop_all()
+
+
+def _container_native_stub(project_venv: Path) -> None:
+    """A --copies Python 3.12 venv's host-visible layout (never run on host)."""
+    (project_venv / "bin").mkdir(parents=True)
+    (project_venv / "pyvenv.cfg").write_text(
+        "home = /usr/local/bin\ninclude-system-site-packages = false\nversion = 3.12.9\n",
+        encoding="utf-8",
+    )
+    (project_venv / "bin/python").write_bytes(b"container-only Python placeholder")
+
+
+@pytest.mark.parametrize("name", [".venv", "venv"])
+def test_isolated_selects_container_native_project_venv_for_exec_and_install(tmp_path, monkeypatch, name):
+    project = tmp_path / "project"
+    project.mkdir()
+    supplied = project / name
+    _container_native_stub(supplied)
+    monkeypatch.setattr(python_env, "HARNESS_PYTHON_ENV_ROOT", tmp_path / "env-root")
+    monkeypatch.setattr("backend.harness.shell_isolation.shutil.which", Mock(return_value="/usr/bin/docker"))
+
+    plan = planned_isolated_python_environment("agent", project, is_scratch=False)
+    expected = PurePosixPath("/workspace") / name / "bin" / "python"
+    assert not plan.managed
+    assert plan.host_venv == supplied
+    assert plan.interpreter == expected
+    assert plan.mounts == ()
+    assert python_install.planned_install_interpreter(
+        "agent", project, is_scratch=False, profile="isolated",
+    ) == expected
+    argv, _cleanup = isolated_repl_command(plan, project, "print('hello')")
+    assert "--network=none" in argv
+    assert argv[-3:] == [str(plan.container_venv), "0", "print('hello')"]
+    assert "VIRTUAL_ENV=/workspace/" + name in argv
+    assert not (tmp_path / "env-root").exists(), "Planning must not create host Python"
+
+
+def test_isolated_prefers_dot_venv_then_compatible_venv_and_skips_host_symlinks(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setattr(python_env, "HARNESS_PYTHON_ENV_ROOT", tmp_path / "env-root")
+    _container_native_stub(project / "venv")
+    assert planned_isolated_python_environment("ws", project, is_scratch=False).host_venv == project / "venv"
+
+    _container_native_stub(project / ".venv")
+    assert planned_isolated_python_environment("ws", project, is_scratch=False).host_venv == project / ".venv"
+
+    (project / ".venv" / "bin/python").unlink()
+    if os.name == "nt":
+        # Symlink creation can require Windows privileges; test the fallback
+        # with incompatible metadata on this host instead.
+        (project / ".venv" / "bin/python").write_text("host-only Python")
+        (project / ".venv" / "pyvenv.cfg").write_text("home = /opt/python\nversion = 3.11.9\n")
+    else:
+        (project / ".venv" / "bin/python").symlink_to("/usr/local/bin/python")
+    assert planned_isolated_python_environment("ws", project, is_scratch=False).host_venv == project / "venv"
+
+    # Even a plausible home path is insufficient for the wrong Python minor.
+    (project / "venv" / "pyvenv.cfg").write_text("home = /usr/local/bin\nversion = 3.11.9\n")
+    fallback = planned_isolated_python_environment("ws", project, is_scratch=False)
+    assert fallback.managed and fallback.interpreter != PurePosixPath("/workspace/venv/bin/python")
+
+
+def test_isolated_project_install_targets_selected_venv_and_bootstraps_unmanaged(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    _container_native_stub(project / ".venv")
+    monkeypatch.setattr(python_env, "HARNESS_PYTHON_ENV_ROOT", tmp_path / "env-root")
+    monkeypatch.setattr("backend.harness.shell_isolation.shutil.which", Mock(return_value="/usr/bin/docker"))
+    monkeypatch.setattr(python_install, "cleanup_container", lambda *_args, **_kwargs: None)
+    calls = []
+
+    def fake_checked(argv, _cwd, _cancel):
+        calls.append(argv)
+        assert "--network=none" in argv
+        return 0, "ok"
+
+    monkeypatch.setattr(python_install, "_checked_pip", fake_checked)
+    plan = planned_isolated_python_environment("ws", project, is_scratch=False)
+    result = python_install._install_in_worker(
+        plan.interpreter, project, ["example==1"], None, tmp_path / "cache",
+        isolated_plan=plan,
+    )
+    assert not result.is_error, result.content
+    assert len(calls) == 2  # bootstrap probe, then cached offline pip install
+    assert calls[0][-2:] == ["/workspace/.venv", "0"]
+    assert calls[1][calls[1].index(CONTAINER_IMAGE) + 1] == "/workspace/.venv/bin/python"
+    assert not (tmp_path / "env-root").exists()
+    assert (project / ".venv/bin/python").read_bytes() == b"container-only Python placeholder"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Container-style virtualenvs have POSIX bin/python")
+def test_project_venv_bootstrap_probes_real_interpreter_and_rejects_broken_one(tmp_path):
+    """Exercise the same preflight used in the image without a Docker dependency."""
+    actual = tmp_path / "real"
+    subprocess.run(
+        [sys.executable, "-m", "venv", "--copies", "--without-pip", str(actual)],
+        check=True, capture_output=True, text=True,
+    )
+    command = [sys.executable, "-u", "-c", python_isolation.VENV_BOOTSTRAP_SCRIPT]
+    success = subprocess.run(
+        [*command, str(actual), "0", "import sys; print(sys.prefix)"],
+        capture_output=True, text=True, check=False,
+    )
+    assert success.returncode == 0, success.stderr
+    assert success.stdout.strip() == str(actual)
+
+    broken = tmp_path / "broken"
+    (broken / "bin").mkdir(parents=True)
+    (broken / "pyvenv.cfg").write_text("home = /usr/local/bin\nversion = 3.12.9\n")
+    (broken / "bin/python").write_text("not executable Python")
+    failed = subprocess.run([*command, str(broken), "0"], capture_output=True, text=True, check=False)
+    assert failed.returncode != 0
+    assert "cannot run inside the container" in failed.stderr
+    assert (broken / "bin/python").read_text() == "not executable Python"

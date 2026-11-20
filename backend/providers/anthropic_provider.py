@@ -188,6 +188,11 @@ class AnthropicProvider:
                 api_key=self.api_key,
             )
         _raise_if_cancelled(cancel.event)
+        # Check before extracting text OR the forced tool's structured JSON.
+        require_successful_stop(
+            "Anthropic", _extract_response_field(response, "stop_reason", None),
+            {"end_turn", "tool_use", "stop_sequence"},
+        )
         # ADR-006 stage 6.8: blocking usage captured on a side attribute
         # (complete() returns a bare str by protocol); api_provider.chat()
         # deliberately does not surface API-mode blocking usage today (the

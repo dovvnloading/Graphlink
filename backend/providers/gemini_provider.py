@@ -128,6 +128,13 @@ class GeminiProvider:
             for file_name in uploaded_files:
                 _gemini_delete_file(file_name, api_key=self.api_key)
 
+        # Reject explicit candidate truncation and safety/filter stops before
+        # extracting text; cleanup above still runs on every outcome.
+        for candidate in payload.get("candidates", []) or []:
+            require_successful_stop(
+                "Gemini", candidate.get("finishReason") or candidate.get("finish_reason"), {"stop"},
+            )
+
         # ADR-006 stage 6.8: blocking usage captured on a side attribute
         # (complete() returns a bare str by protocol); api_provider.chat()
         # deliberately does not surface API-mode blocking usage today.

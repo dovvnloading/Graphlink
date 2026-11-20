@@ -11,12 +11,32 @@ for that agent and that project. Scratch workspaces have their own managed
 virtualenv. No environment path, index URL, requirements-file path, or pip
 option is supplied by the model.
 
-In the workspace agent's **Isolated** profile, both Python tools instead run
-in the restricted Docker/Podman container. They always use a separate,
-lazily created container-native virtualenv scoped to the workspace and project.
-The host's `.venv` or `venv` is never selected: even a working host
-interpreter may not exist inside the container image. Scratch/project binding
-and node-deletion cleanup still match the host environment rules.
+In the workspace agent's **Isolated** profile, both Python tools run in
+the restricted Docker/Podman container. For a trusted project, they prefer
+`.venv`, then `venv`, **only** when its metadata matches the fixed
+`python:3.12-slim` runtime (`pyvenv.cfg` has `home = /usr/local/bin`
+and Python version 3.12, with a regular, non-symlinked `bin/python`).
+This host-side check identifies a candidate, **not proof it works**: before
+either tool uses it, the bootstrap launches the interpreter inside the
+container to verify its Python version and `sys.prefix`. A selected but
+broken interpreter fails closed; it is never run or repaired on the host.
+If no candidate is recognized, both tools use a separate, lazily created
+container-native virtualenv scoped to the workspace and project. Scratch
+workspaces always use their managed environment, and node-deletion cleanup
+still applies to app-owned environments.
+
+To prepare a compatible project environment on Linux with Docker, run from
+the trusted project root:
+
+```sh
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/workspace" -w /workspace \
+  python:3.12-slim python -m venv --copies .venv
+```
+
+The `--copies` flag matters: a host interpreter symlink (or a different
+Python version) does not establish container compatibility. Install packages
+with approved `python.install`, which targets the same selected environment
+as `python.exec`.
 
 ## Consent
 
