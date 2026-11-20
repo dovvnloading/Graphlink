@@ -308,6 +308,13 @@ class ToolRegistry:
                 return ToolResult(content=error, is_error=True)
             call = ToolCall(id=call.id, name=call.name, arguments=deepcopy(call.arguments))
 
+        # File paths and content are untrusted mutable dict entries too.
+        # Freeze them before policy evaluation and preview so neither a
+        # pending approval nor Auto-edit can execute a changed request.
+        original_file_call = call if call.name in ("fs.write", "fs.edit") else None
+        if original_file_call is not None:
+            call = ToolCall(id=call.id, name=call.name, arguments=deepcopy(call.arguments))
+
         # Only selected workspace operations may bypass an ordinary approval.
         # The scope gate and all handler-level confinement stay in force.
         from backend.harness.permission_modes import (
@@ -377,7 +384,10 @@ class ToolRegistry:
                 # session; anything else truthy approves this call only. Every
                 # pre-existing caller returns a plain bool, which lands on the
                 # once-only branch exactly as it always did.
-                disclosure_call = deepcopy(call) if (original_python_call is not None or original_shell_call is not None) else call
+                disclosure_call = deepcopy(call) if (
+                    original_python_call is not None or original_shell_call is not None
+                    or original_file_call is not None
+                ) else call
                 decision = await ctx.request_approval(disclosure_call)
                 approved = bool(decision)
                 # The approval prompt is the one place this function can be
@@ -391,7 +401,9 @@ class ToolRegistry:
                 if not approved:
                     return ToolResult(content=f"Tool call {call.name!r} was denied approval.", is_error=True)
                 original_approved_call = (
-                    original_python_call if original_python_call is not None else original_shell_call
+                    original_python_call if original_python_call is not None
+                    else original_shell_call if original_shell_call is not None
+                    else original_file_call
                 )
                 if original_approved_call is not None and (
                     original_approved_call.arguments != call.arguments

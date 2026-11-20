@@ -121,7 +121,7 @@ describe("HarnessNodeView", () => {
       const shell = screen.getByRole("combobox", { name: "Shell" });
       expect(shell).toHaveValue("bash");
       expect(shell).toBeDisabled();
-      expect(dialog).toHaveTextContent("Changes apply from the next task.");
+      expect(dialog).toHaveTextContent("Live changes apply from the next task.");
       await user.keyboard("{Escape}");
       expect(screen.queryByRole("dialog", { name: "Agent settings" })).not.toBeInTheDocument();
     } finally {

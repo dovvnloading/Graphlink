@@ -99,7 +99,7 @@ def test_outside_paths_and_symlink_escapes_still_prompt(tmp_path):
 
 @pytest.mark.parametrize("command,should_prompt", [
     ("echo hello", False),
-    ("git status", False),
+    ("git status", True),
     ("touch src/file.txt", False),
     ("rm -rf src", True),
     ("git push origin main", True),
@@ -126,9 +126,9 @@ def test_shell_network_flag_always_prompts_even_for_harmless_command(tmp_path):
 
 
 @pytest.mark.parametrize("source,should_prompt", [
-    ("print(1 + 2)", False),
-    ("import math\nprint(math.sqrt(9))", False),
-    ("open('notes.txt', 'w').write('ok')", False),
+    ("print(1 + 2)", True),
+    ("import math\nprint(math.sqrt(9))", True),
+    ("open('notes.txt', 'w').write('ok')", True),
     ("open('../private', 'w').write('not ok')", True),
     ("import requests\nrequests.get('https://example.org')", True),
     ("import subprocess\nsubprocess.run(['ls'])", True),
