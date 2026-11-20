@@ -17,7 +17,7 @@ def _write_skill(base, folder, *, name, description, body="## Procedure\nDo the 
     package = base / folder
     package.mkdir(parents=True)
     text = f"---\nname: {name}\ndescription: {description}\n---\n{body}"
-    (package / "SKILL.md").write_text(text, encoding="utf-8")
+    (package / "SKILL.md").write_bytes(text.encode("utf-8"))
     return text
 
 
