@@ -4,7 +4,7 @@ import { Popover, useOverlays } from "../overlays/overlays";
 import type { ComparisonModel, ComposerStore } from "./composerStore";
 import { TokenCounter } from "./TokenCounter";
 import {
-  HarnessExecutionProfileSelect, MAX_HARNESS_TASK_LENGTH, type HarnessExecutionProfile,
+  HarnessExecutionProfileSelect, MAX_HARNESS_TASK_LENGTH, exceedsHarnessTaskLimit, type HarnessExecutionProfile,
 } from "./HarnessLaunchOptions";
 
 /**
@@ -148,7 +148,7 @@ export function Composer({
     const text = composer.draft.text.trim();
     if (!text || !composer.request.canSend) return;
     if (agentMode) {
-      if (text.length > MAX_HARNESS_TASK_LENGTH) {
+      if (exceedsHarnessTaskLimit(text)) {
         setAgentError(`Agent tasks cannot exceed ${MAX_HARNESS_TASK_LENGTH.toLocaleString()} characters. Shorten the task; your draft is preserved.`);
         return;
       }

@@ -223,6 +223,30 @@ describe("Composer", () => {
     expect(updateDraft).not.toHaveBeenCalledWith("");
   });
 
+  // Regression #768: JS .length would reject this valid 10,001-code-point task.
+  it("sends supplementary Unicode Agent tasks through the main composer", async () => {
+    const user = userEvent.setup();
+    const text = "😀".repeat(10_001);
+    const { store } = makeStore({
+      composer: {
+        draft: { ...initialComposerState.draft, text },
+        route: { ...initialComposerState.route, modelId: "local-chat", available: true },
+        request: { ...initialComposerState.request, canSend: true },
+      },
+    });
+    const { sceneStore, sendComposerAgentMessage } = makeSceneStore();
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - minimal test store */}
+        <Composer store={store} sceneStore={sceneStore} />
+      </OverlayProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Send to workspace agent" }));
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(sendComposerAgentMessage).toHaveBeenCalledWith(text, "host");
+  });
+
   it("keeps the composer text after a rejected agent dispatch and allows retry", async () => {
     const user = userEvent.setup();
     const { store, updateDraft } = makeStore({

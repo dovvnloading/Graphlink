@@ -12,16 +12,16 @@
 import { ReactFlowProvider } from "@xyflow/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SceneStore } from "../canvas/sceneStore";
 import { HarnessLaunchDialog } from "./HarnessLaunchDialog";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
 import { makeRequestOnlyTransport as makeTransport } from "../../lib/ws/transport.testUtils";
 
-function makeStore(engine: string | null) {
+function makeStore(engine: string | null, probe = () => Promise.resolve(engine)) {
   return {
     getScene: () => ({ nodes: [] }),
-    getHarnessIsolationEngine: () => Promise.resolve(engine),
+    getHarnessIsolationEngine: probe,
   } as unknown as SceneStore;
 }
 
@@ -34,7 +34,11 @@ function OpenAgentButton() {
   );
 }
 
-async function setup(picked: unknown = "C:\\projects\\thing", engine: string | null = "docker") {
+async function setup(
+  picked: unknown = "C:\\projects\\thing",
+  engine: string | null = "docker",
+  store: SceneStore = makeStore(engine),
+) {
   const user = userEvent.setup();
   const fake = makeTransport();
   fake.request.mockImplementation((_topic: string, intent: string) =>
@@ -44,7 +48,7 @@ async function setup(picked: unknown = "C:\\projects\\thing", engine: string | n
     <OverlayProvider>
       <ReactFlowProvider>
         <OpenAgentButton />
-        <HarnessLaunchDialog transport={fake.transport} store={makeStore(engine)} />
+        <HarnessLaunchDialog transport={fake.transport} store={store} />
       </ReactFlowProvider>
     </OverlayProvider>,
   );
@@ -120,6 +124,50 @@ describe("HarnessLaunchDialog", () => {
     expect(screen.getByRole("combobox", { name: "Execution profile for new agent" })).toHaveValue("host");
   });
 
+  // Regression #767: a temporary transport failure is not proof that the
+  // backend lacks a container engine. Retry without reloading the app.
+  it("recovers from a failed first engine check and rechecks on reopening", async () => {
+    const getHarnessIsolationEngine = vi.fn()
+      .mockRejectedValueOnce(new Error("connection lost"))
+      .mockResolvedValue("docker");
+    const { user, intents } = await setup(
+      undefined, "docker", makeStore("docker", getHarnessIsolationEngine),
+    );
+
+    expect(await screen.findByText(/Could not check Docker or Podman availability/)).toBeInTheDocument();
+    expect(getHarnessIsolationEngine).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("option", { name: /Isolated/ })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Recheck Docker / Podman" }));
+    expect(await screen.findByText(/Docker detected on the backend/)).toBeInTheDocument();
+    expect(getHarnessIsolationEngine).toHaveBeenCalledTimes(2);
+    await user.click(screen.getByRole("button", { name: "Close Agent" }));
+    await user.click(screen.getByRole("button", { name: "open agent" }));
+    expect(await screen.findByText(/Docker detected on the backend/)).toBeInTheDocument();
+    expect(getHarnessIsolationEngine).toHaveBeenCalledTimes(3);
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Execution profile for new agent" }), "isolated");
+    await user.type(screen.getByLabelText(/what should the agent work on/i), "inspect files");
+    await user.click(screen.getByRole("button", { name: "Start the agent" }));
+    expect(intents).toContainEqual(["harness", "start", ["inspect files", 16, "", "isolated"]]);
+  });
+
+  it("allows a fresh probe after an engine is installed later", async () => {
+    const getHarnessIsolationEngine = vi.fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue("podman");
+    const { user } = await setup(
+      undefined, "docker", makeStore("docker", getHarnessIsolationEngine),
+    );
+
+    expect(await screen.findByText(/Docker or Podman is unavailable/)).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /Isolated/ })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Recheck Docker / Podman" }));
+    expect(await screen.findByText(/Podman detected on the backend/)).toBeInTheDocument();
+    expect(getHarnessIsolationEngine).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("option", { name: /Isolated/ })).toBeEnabled();
+  });
+
   it("warns about tasks beyond 20k without starting or clearing the draft", async () => {
     const { user, intents } = await setup();
     const draft = screen.getByLabelText(/what should the agent work on/i);
@@ -130,6 +178,19 @@ describe("HarnessLaunchDialog", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("20,000 characters");
     expect(draft).toHaveValue(tooLong);
     expect(intents.some(([, intent]) => intent === "start")).toBe(false);
+  });
+
+  // Regression #768: this is 20,002 UTF-16 units but only 10,001
+  // Python/Unicode code points, so the backend accepts it.
+  it("allows a first task containing supplementary Unicode under the backend limit", async () => {
+    const { user, intents } = await setup();
+    const text = "😀".repeat(10_001);
+    fireEvent.change(screen.getByLabelText(/what should the agent work on/i), {
+      target: { value: text },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Start the agent" }));
+    expect(intents).toContainEqual(["harness", "start", [text, 16, "", "host"]]);
   });
 
   it("describes what the agent can actually do, approvals included", async () => {

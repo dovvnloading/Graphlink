@@ -181,6 +181,37 @@ def test_the_launcher_binds_its_folder_before_the_first_run(workspace_root, tmp_
     assert is_user_dir and root == project.resolve()
 
 
+# Regression #765: redo must restore exactly the profile and folder selected
+# when the agent was created, not HarnessState's initial host/scratch defaults.
+def test_isolated_launcher_undo_redo_preserves_profile_and_workspace(
+    workspace_root, tmp_path, monkeypatch,
+):
+    from backend.api import intents_harness
+
+    monkeypatch.setattr(intents_harness, "available_engine", lambda: "docker")
+    project = tmp_path / "project"
+    project.mkdir()
+    bus, document = _harness_bus(monkeypatch, _RecordingSettings([str(project.resolve())]))
+
+    node_id = asyncio.run(bus.dispatch(
+        "harness", "start", ["inspect files", 8, str(project), "isolated"],
+    ))
+
+    assert bus.claimed_profile == "isolated"
+    (creation,) = document.command_log
+    assert creation.command_type == "harnessCreate"
+    snapshot = creation.node_after[node_id]
+    assert snapshot.state.harness_execution_profile == "isolated"
+    assert snapshot.state.harness_workspace_path == str(project)
+
+    document.undo()
+    assert node_id not in document.nodes
+    document.redo()
+    restored = document.nodes[node_id]
+    assert restored.state.harness_execution_profile == "isolated"
+    assert restored.state.harness_workspace_path == str(project)
+
+
 def test_a_launcher_path_is_a_request_not_a_grant(workspace_root, tmp_path, monkeypatch):
     """The wire can name any folder; naming it must not make it trusted.
     The run-time gate is what settles it, exactly as for a session file."""
@@ -342,6 +373,18 @@ def test_agent_task_at_message_cap_is_dispatched_in_full(monkeypatch, route_kind
 
     assert bus.started["user_text"] == text
     assert bus.started["harness_node_id"] == node_id
+
+
+# Regression #768: the wire cap counts Python Unicode code points, including
+# non-BMP characters; frontend editors must accept this exact same boundary.
+def test_non_bmp_task_at_message_cap_reaches_dispatcher(monkeypatch):
+    bus, document = _harness_bus(monkeypatch, FakeSettings([]))
+    text = "😀" * 20_000
+
+    node_id = asyncio.run(bus.dispatch("harness", "start", [text]))
+
+    assert node_id in document.nodes
+    assert bus.started["user_text"] == text
 
 
 # Issue #738: a first task must see Isolated before the dispatcher claims it.
