@@ -991,6 +991,53 @@ class TestApprovalFlow:
         assert node.state.harness_approval_summary == ""
 
 
+    def test_unpreviewable_overwrite_cannot_be_forced_through_approval(self, workspace_root, monkeypatch):
+        document = SceneDocument()
+        node = document.add_harness_node(0, 0, "replace binary")
+        root = ensure_workspace(node.state.harness_workspace_id)
+        target = root / "binary.txt"
+        target.write_bytes(b"\xff")
+        registry = ToolRegistry()
+        register_harness_fs_tools(registry)
+        dispatcher = LoopDispatcher()
+        bus = FakeBus()
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("t1", "fs.write", path="binary.txt", content="replacement")]},
+            {"content": "Done."},
+        ])
+        cancel_event = threading.Event()
+        handle = dispatcher._runs.claim("harness", node_id=node.id, cancel_event=cancel_event)
+        summaries = []
+
+        async def main():
+            async def run():
+                try:
+                    await run_harness(
+                        document=document, dispatcher=dispatcher, registry=registry,
+                        bus=bus, notifications=None, harness_node_id=node.id,
+                        user_text="replace binary", request_id=handle.request_id,
+                        handle=handle, cancel_event=cancel_event,
+                    )
+                finally:
+                    dispatcher._runs.release(handle.request_id)
+
+            task = asyncio.create_task(run())
+            while not task.done():
+                pending = handle.approval_future
+                if node.state.harness_awaiting_approval and pending is not None and not pending.done():
+                    summaries.append(node.state.harness_approval_summary)
+                    assert node.state.harness_approval_session_offered is False
+                    pending.set_result(True)  # A forged approval must not bypass the backend guard.
+                await asyncio.sleep(0)
+            await task
+
+        asyncio.run(main())
+        assert len(summaries) == 1
+        assert "Preview unavailable:" in summaries[0]
+        assert target.read_bytes() == b"\xff"
+        assert node.state.harness_status == "done"
+
+
 class TestContextPrompt:
     def test_prompt_is_byte_stable_and_starts_with_the_pinned_core(self, workspace_root):
         from graphlink_prompts import resolve_prompt_text
