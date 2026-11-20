@@ -1,7 +1,6 @@
 """Isolated shell profile: no host fallback, restricted CLI, session binding."""
 from __future__ import annotations
 
-import asyncio
 import io
 import os
 from types import SimpleNamespace
@@ -9,13 +8,13 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from backend.harness.loop import HarnessRunContext, _offered_harness_specs, _retire_host_repl_for_isolated
+from backend.harness.loop import _offered_harness_specs, _retire_host_repl_for_isolated
 from backend.harness.shell_isolation import (
     CONTAINER_IMAGE, IsolationUnavailableError, available_engine,
     container_invocation, normalize_execution_profile,
 )
 from backend.harness.shell_sessions import ShellSessionRegistry
-from backend.providers.base import ToolCall, ToolSpec
+from backend.providers.base import ToolSpec
 from backend.tools import CODE_EXECUTE, GRAPH_READ, NET_FETCH, ToolRegistry, ToolResult
 
 
