@@ -1,10 +1,9 @@
 """Container-native Python environments for the isolated workspace profile.
 
-The *selection rules* mirror host Python: prefer a usable project .venv/venv,
-otherwise use an app-owned environment scoped to workspace id and project root.
-Container environments are deliberately distinct from host environments; a
-Windows/macOS host venv must never be executed or repaired on the host.
-All interpreter startup and virtualenv creation occur inside the container.
+Isolated Python always uses an app-owned container-native environment scoped
+to workspace id and project root. A host-visible project venv is not proof
+that its interpreter can run inside the fixed container image, so it is never
+selected. All interpreter startup and virtualenv creation occur in the container.
 """
 
 from __future__ import annotations
@@ -63,24 +62,16 @@ class IsolatedPythonPlan:
         return self.interpreter.parent.parent
 
 
-def _project_container_venv_exists(venv: Path) -> bool:
-    python = venv / "bin" / "python"
-    return (venv / "pyvenv.cfg").is_file() and (
-        python.is_file() or python.is_symlink()
-    )
-
-
 def planned_isolated_python_environment(
     workspace_id: str, cwd: Path, *, is_scratch: bool,
 ) -> IsolatedPythonPlan:
-    """Pure selection for approval: no image pull, daemon call or file writes."""
-    for name in (".venv", "venv"):
-        candidate = cwd / name
-        if _project_container_venv_exists(candidate):
-            return IsolatedPythonPlan(
-                PurePosixPath("/workspace") / name / "bin" / "python", candidate, False,
-            )
+    """Pure selection for approval: no image pull, daemon call or file writes.
 
+    Project .venv/bin/python may resolve on the host but be broken or point
+    outside the image inside the container. Only the container could verify
+    compatibility; approval planning cannot contact it, so never pin an
+    unverified project interpreter. Both exec and install share this plan.
+    """
     if is_scratch:
         host_venv = cwd / ".graphlink-isolated-python-venv"
         return IsolatedPythonPlan(

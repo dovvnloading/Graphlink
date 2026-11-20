@@ -36,6 +36,7 @@ from backend.providers.base import (
     ChatRequest,
     ProviderCapabilities,
     ProviderEvent,
+    require_successful_stop,
     normalize_usage,
 )
 
@@ -128,6 +129,7 @@ class LlamaCppProvider:
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
         saw_finish_reason = False
+        finish_reason = None
         # Held across the ENTIRE stream, not just the call that opens it: a
         # llama.cpp generation advances its one native context incrementally
         # as chunks are pulled, so releasing after the opening call would let
@@ -154,8 +156,10 @@ class LlamaCppProvider:
                     choices = _extract_response_field(chunk, "choices", []) or []
                     if not choices:
                         continue
-                    if _extract_response_field(choices[0], "finish_reason", None) is not None:
+                    reason = _extract_response_field(choices[0], "finish_reason", None)
+                    if reason is not None:
                         saw_finish_reason = True
+                        finish_reason = reason
                     delta = _extract_response_field(choices[0], "delta", {}) or {}
                     delta_content = _extract_response_field(delta, "content") or ""
                     if delta_content:
@@ -181,6 +185,7 @@ class LlamaCppProvider:
 
         if not saw_finish_reason:
             raise RuntimeError("llama.cpp stream ended unexpectedly before completion. Please try again.")
+        require_successful_stop("llama.cpp", finish_reason, {"stop", "tool_calls"})
 
         # Streamed and blocking paths compose through the SAME extraction:
         # a synthetic blocking-shaped response through _extract_llama_cpp_text

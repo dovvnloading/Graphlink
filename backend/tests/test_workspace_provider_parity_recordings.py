@@ -308,3 +308,34 @@ def test_native_recording_rejects_non_object_arguments(kind, recordings, monkeyp
             ChatRequest(task=config.TASK_CHAT, messages=MESSAGES, tools=(WRITE,)),
             CancelToken(),
         ))
+
+
+@pytest.mark.parametrize("kind", CASES)
+@pytest.mark.parametrize("tool_turn", (False, True))
+def test_recorded_output_limit_never_commits_agent_final_or_tool_turn(
+    kind, tool_turn, recordings, monkeypatch,
+):
+    """All six wire adapters must reject a terminal max-token marker before done/tool calls."""
+    frames = json.loads(json.dumps(recordings[kind]["first" if tool_turn else "second"]))
+    if kind in {"openai", "compatible", "llama"}:
+        for frame in frames:
+            for choice in frame.get("choices", []):
+                if choice.get("finish_reason") is not None:
+                    choice["finish_reason"] = "length"
+    elif kind == "anthropic":
+        for frame in frames:
+            if frame.get("type") == "message_delta":
+                frame["delta"]["stop_reason"] = "max_tokens"
+    elif kind == "gemini":
+        for frame in frames:
+            for candidate in frame.get("candidates", []):
+                if candidate.get("finishReason") is not None:
+                    candidate["finishReason"] = "MAX_TOKENS"
+    else:
+        for frame in frames:
+            if frame.get("done"):
+                frame["done_reason"] = "length"
+
+    _, provider_name, _ = _provider_and_requests(monkeypatch, kind, [frames])
+    with pytest.raises(RuntimeError, match="generation incomplete"):
+        _turn(provider_name, MESSAGES)

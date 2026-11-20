@@ -53,14 +53,22 @@ def _request(*, tools=()):
 
 
 def _openai_chunk(delta=None, finish_reason=None):
-    return ChatCompletionChunk.model_validate({
+    # SDK models enforce standard stop reasons; OpenAI-compatible servers
+    # can return vendor-specific reasons that the provider must still reject.
+    sdk_reason = None if finish_reason == "unknown_stop" else finish_reason
+    chunk = ChatCompletionChunk.model_validate({
         "id": "chatcmpl-1",
         "object": "chat.completion.chunk",
         "created": 0,
         "model": "gpt-4o",
-        "choices": [{"index": 0, "delta": delta if delta is not None else {}, "finish_reason": finish_reason}],
+        "choices": [{"index": 0, "delta": delta if delta is not None else {}, "finish_reason": sdk_reason}],
         "usage": None,
     })
+    if finish_reason == "unknown_stop":
+        # Simulate a permissive compatible transport without making a
+        # nonstandard value fail SDK validation before stream() receives it.
+        object.__setattr__(chunk.choices[0], "finish_reason", finish_reason)
+    return chunk
 
 
 def _openai_usage_chunk(prompt_tokens=12, completion_tokens=5):
@@ -193,16 +201,14 @@ def test_openai_tool_call_only_stream_passes():
     assert events[0].tool_call.arguments == {"city": "Paris"}
 
 
-def test_openai_length_finish_passes():
-    # A max_tokens cut-off is a FINISHED generation the server reported -
-    # not a transport truncation.
-    events = _openai_events(_openai_text_stream("A long answer that", finish_reason="length"))
-    assert events[-1].text == "A long answer that"
+@pytest.mark.parametrize("finish_reason", ["length", "content_filter", "unknown_stop"])
+def test_openai_incomplete_finish_is_not_a_success(finish_reason):
+    with pytest.raises(RuntimeError, match="generation incomplete"):
+        _openai_events(_openai_text_stream("partial", finish_reason=finish_reason))
 
 
-@pytest.mark.parametrize("finish_reason", ["content_filter", "function_call"])
-def test_openai_every_other_finish_reason_counts_as_complete(finish_reason):
-    events = _openai_events(_openai_text_stream("text", finish_reason=finish_reason))
+def test_openai_legacy_function_call_finish_is_complete():
+    events = _openai_events(_openai_text_stream("text", finish_reason="function_call"))
     assert events[-1].type == "done"
 
 
@@ -303,16 +309,11 @@ def test_gemini_tool_call_only_stream_passes(monkeypatch):
     assert events[0].tool_call.arguments == {"city": "Paris"}
 
 
-def test_gemini_max_tokens_finish_passes(monkeypatch):
-    frames = [_gemini_frame({"text": "A long answer"}), _gemini_frame({"text": " that"}, finish_reason="MAX_TOKENS")]
-    assert _gemini_events(monkeypatch, frames)[-1].text == "A long answer that"
-
-
-def test_gemini_safety_finish_with_partial_text_counts_as_complete(monkeypatch):
-    # The server reported WHY it stopped; that is a finished generation,
-    # not a dropped connection.
-    frames = [_gemini_frame({"text": "Partial"}), _gemini_frame(finish_reason="SAFETY")]
-    assert _gemini_events(monkeypatch, frames)[-1].text == "Partial"
+@pytest.mark.parametrize("reason", ["MAX_TOKENS", "SAFETY", "RECITATION"])
+def test_gemini_incomplete_finish_with_partial_text_is_not_a_success(monkeypatch, reason):
+    frames = [_gemini_frame({"text": "Partial"}), _gemini_frame(finish_reason=reason)]
+    with pytest.raises(RuntimeError, match="generation incomplete"):
+        _gemini_events(monkeypatch, frames)
 
 
 def test_gemini_truncation_through_chat_stream_delivers_the_partial_then_raises(monkeypatch):

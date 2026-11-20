@@ -389,3 +389,62 @@ def test_selected_composer_agent_preserves_its_existing_profile(monkeypatch):
 
     assert asyncio.run(bus.dispatch("harness", "composerSend", ["follow up", agent.id, "isolated"])) == agent.id
     assert bus.claimed_profile == "host", "a launch choice cannot override an existing agent"
+
+@pytest.mark.parametrize("intent", ("start", "composerSend"))
+def test_concurrent_new_agent_starts_do_not_leave_orphan_nodes_or_undo_entries(intent):
+    """The second caller races while the winning start's scene publish is blocked."""
+    import threading
+
+    from backend.api.intents_harness import register_harness_intents
+    from backend.domain.graph import SceneDocument
+    from backend.notifications import NotificationState
+    from backend.run_lifecycle import RunRegistry
+
+    route = {"mode": "ollama", "modelId": "local-chat", "available": True}
+    composer = type("Composer", (), {"route": lambda self: route})()
+
+    class Dispatcher:
+        def __init__(self):
+            self._runs = RunRegistry()
+
+        async def start_harness_run(self, **kwargs):
+            if self._runs.is_busy("harness"):
+                return None
+            handle = self._runs.claim(
+                "harness", node_id=kwargs["harness_node_id"], cancel_event=threading.Event(),
+            )
+            return handle.request_id
+
+    async def run():
+        bus, document = _FakeBus(), SceneDocument()
+        register_harness_intents(bus, document, NotificationState(), Dispatcher(), composer)
+        original_publish = bus.publish
+        publishing = asyncio.Event()
+        release_publish = asyncio.Event()
+
+        async def pause_scene_publish(topic):
+            if topic == "scene":
+                publishing.set()
+                await release_publish.wait()
+            await original_publish(topic)
+
+        bus.publish = pause_scene_publish
+        args = ["do work", None, None] if intent == "start" else ["do work", None]
+        first = asyncio.create_task(bus.dispatch("harness", intent, args))
+        await asyncio.wait_for(publishing.wait(), timeout=2)
+        second = asyncio.create_task(bus.dispatch("harness", intent, args))
+        await asyncio.sleep(0)
+        assert len(document.nodes) == 1
+        assert len(document.command_log) == 1
+        release_publish.set()
+        accepted, rejected = await asyncio.gather(first, second)
+        assert accepted in document.nodes
+        assert rejected is None
+        assert len(document.nodes) == 1
+        assert len(document.command_log) == 1
+        (creation,) = document.command_log
+        assert creation.command_type == "harnessCreate"
+        assert creation.run_id is not None
+        assert accepted in creation.node_after
+
+    asyncio.run(run())

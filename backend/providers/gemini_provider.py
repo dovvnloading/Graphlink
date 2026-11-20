@@ -35,6 +35,7 @@ from backend.providers.base import (
     ChatRequest,
     ProviderCapabilities,
     ProviderEvent,
+    require_successful_stop,
     ToolCall,
     normalize_usage,
     tool_arguments,
@@ -166,6 +167,7 @@ class GeminiProvider:
             # frames carry none. Same sentinel posture as
             # AnthropicProvider.stream()'s message_stop.
             saw_finish_reason = False
+            finish_reason = None
             sse = _gemini_stream_sse(
                 f"{GEMINI_BASE_URL}/v1beta/models/{self.model_id}:streamGenerateContent?alt=sse",
                 request_body,
@@ -207,8 +209,10 @@ class GeminiProvider:
                         )
                     for candidate in payload.get("candidates", []) or []:
                         # snake_case tolerated, mirroring block_reason above.
-                        if candidate.get("finishReason") or candidate.get("finish_reason"):
+                        reason = candidate.get("finishReason") or candidate.get("finish_reason")
+                        if reason is not None:
                             saw_finish_reason = True
+                            finish_reason = reason
                         content = candidate.get("content", {}) or {}
                         for part in content.get("parts", []) or []:
                             # ADR-007 stage 7.1: Gemini delivers a function
@@ -255,6 +259,7 @@ class GeminiProvider:
                 raise RuntimeError(
                     "Gemini stream ended unexpectedly before completion. Please try again."
                 )
+            require_successful_stop("Gemini", finish_reason, {"stop"})
 
             # Deliberate parity with complete(): _extract_gemini_text
             # concatenates EVERY text part, thought or not, and never calls
