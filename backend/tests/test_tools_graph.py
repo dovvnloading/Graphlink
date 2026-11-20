@@ -343,6 +343,7 @@ class RecordingDispatcher:
 
     def __init__(self):
         self.removed_sandboxes: list[str] = []
+        self.disposed_workspaces: list[str] = []
         self.cancelled: list[tuple] = []
 
     async def remove_code_sandbox_scratch_dir(self, sandbox_id):
@@ -356,6 +357,9 @@ class RecordingDispatcher:
 
     def cancel_harness(self, request_id):
         self.cancelled.append(("harness", request_id))
+
+    def dispose_harness_workspace(self, workspace_id):
+        self.disposed_workspaces.append(workspace_id)
 
 
 def make_registry_with_delete(document: SceneDocument):
@@ -464,6 +468,35 @@ class TestDeleteNode:
         assert not result.is_error
         assert sandbox.id not in document.nodes
         assert dispatcher.removed_sandboxes == [sandbox.state.code_sandbox_sandbox_id]
+
+    def test_deleting_harness_node_cleans_its_managed_python_environments(
+        self, tmp_path, monkeypatch,
+    ):
+        from backend import tools_graph
+
+        scratch_root = tmp_path / "scratch"
+        managed_root = tmp_path / "managed"
+        monkeypatch.setattr(tools_graph, "HARNESS_WORKSPACE_ROOT", scratch_root)
+        monkeypatch.setattr(tools_graph, "HARNESS_PYTHON_ENV_ROOT", managed_root)
+
+        document = SceneDocument()
+        agent = document.add_harness_node(0, 0, "test task")
+        workspace_id = agent.state.harness_workspace_id
+        (scratch_root / workspace_id / ".graphlink-python-venv").mkdir(parents=True)
+        (managed_root / workspace_id / "project-hash" / "venv").mkdir(parents=True)
+        user_project = tmp_path / "user-project"
+        (user_project / ".venv").mkdir(parents=True)
+        (user_project / ".venv" / "keep.txt").write_text("owned by user", encoding="utf-8")
+
+        registry, dispatcher = make_registry_with_delete(document)
+        ctx, _ = make_ctx()
+        result = invoke(registry, ctx, "graph.delete_node", {"node_id": agent.id})
+
+        assert not result.is_error, result.content
+        assert dispatcher.disposed_workspaces == [workspace_id]
+        assert not (scratch_root / workspace_id).exists()
+        assert not (managed_root / workspace_id).exists()
+        assert (user_project / ".venv" / "keep.txt").is_file()
 
     def test_delete_is_undoable_and_run_stamped(self):
         document = SceneDocument()
