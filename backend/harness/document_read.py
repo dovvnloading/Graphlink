@@ -16,7 +16,6 @@ import zipfile
 
 from backend import attachments
 
-_DOCUMENT_TEXT_CAP = attachments.MAX_DOCUMENT_TEXT_CHARS
 _XLSX_SHEET_CAP = 400
 _SPREADSHEET_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 _OFFICE_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -40,7 +39,7 @@ def _selected_range(start: int | None, end: int | None, count: int, kind: str) -
 
 def _append_bounded(parts: list[str], text: str, length: int) -> int:
     length += len(text) + 1
-    if length > _DOCUMENT_TEXT_CAP:
+    if length > attachments.MAX_DOCUMENT_TEXT_CHARS:
         raise DocumentReadError("Document exceeds the extracted-text limit.")
     parts.append(text)
     return length
@@ -50,17 +49,21 @@ def _preflight_office_zip(data: bytes, label: str) -> zipfile.ZipFile:
     """Check central-directory expansion before an XML/Office parser runs."""
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
-        members = archive.infolist()
-        if len(members) > attachments.MAX_DOCX_MEMBERS:
-            raise DocumentReadError(f"{label} contains too many ZIP members.")
-        total = 0
-        for member in members:
-            total += member.file_size
-            if total > attachments.MAX_DOCX_UNCOMPRESSED_BYTES:
-                raise DocumentReadError(f"{label} exceeds the uncompressed ZIP size limit.")
-            if (member.filename.lower().endswith((".xml", ".rels"))
-                    and member.file_size > attachments.MAX_DOCX_XML_PART_BYTES):
-                raise DocumentReadError(f"{label} XML part exceeds the expanded-size limit.")
+        try:
+            members = archive.infolist()
+            if len(members) > attachments.MAX_DOCX_MEMBERS:
+                raise DocumentReadError(f"{label} contains too many ZIP members.")
+            total = 0
+            for member in members:
+                total += member.file_size
+                if total > attachments.MAX_DOCX_UNCOMPRESSED_BYTES:
+                    raise DocumentReadError(f"{label} exceeds the uncompressed ZIP size limit.")
+                if (member.filename.lower().endswith((".xml", ".rels"))
+                        and member.file_size > attachments.MAX_DOCX_XML_PART_BYTES):
+                    raise DocumentReadError(f"{label} XML part exceeds the expanded-size limit.")
+        except BaseException:
+            archive.close()
+            raise
         return archive
     except (zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
         raise DocumentReadError(f"{label} is not a readable ZIP archive.") from exc
@@ -223,7 +226,7 @@ def _read_xlsx(
                 raise DocumentReadError(f"XLSX sheet {sheet!r} was not found.")
             selected = matches
         else:
-            selected = _selected_range(start, end, len(entries), "sheet")
+            selected = list(_selected_range(start, end, len(entries), "sheet"))
 
         strings = _shared_strings(archive)
         parts: list[str] = []
