@@ -68,9 +68,12 @@ def cloud_tool_names(
                 uses = [block for block in blocks if isinstance(block, dict)
                         and block.get("type") == "tool_use"]
                 valid = (
-                    len(uses) == len(calls)
+                    all(isinstance(block, dict) for block in blocks)
+                    and len(uses) == len(calls)
+                    and len({call.get("id") for call in calls}) == len(calls)
                     and all(
-                        block.get("id") == call.get("id")
+                        isinstance(call.get("id"), str) and bool(call["id"])
+                        and block.get("id") == call["id"]
                         and isinstance(block.get("name"), str) and bool(block["name"])
                         and block.get("input") == call.get("arguments")
                         for block, call in zip(uses, calls)
