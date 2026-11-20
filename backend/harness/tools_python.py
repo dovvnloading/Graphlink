@@ -17,7 +17,8 @@ tool broke" - the model needs that difference to decide whether to fix its
 code or its approach.
 
 The REPL's cwd is the run's BOUND WORKSPACE (not a repl_id scratch dir),
-so `open("data.csv")` in executed code sees the same files `fs.read` and
+while the interpreter comes from that workspace's .venv/venv or a lazily
+created managed virtualenv outside a user's project folder. Thus `open("data.csv")` in executed code sees the same files `fs.read` and
 `shell.exec` do. When that workspace is a user's own project folder the
 REPL is constructed with `manage_cwd=False` - we never chmod or age-sweep
 a directory the person owns (see PythonREPL's own docstring).
@@ -53,7 +54,7 @@ PYTHON_EXEC_SPEC = ToolSpec(
     description=(
         "Run Python in a persistent interpreter whose working directory is "
         "the workspace, using its .venv/venv or a managed virtual environment. "
-        "calls, so build up state across turns instead of re-running setup. "
+        "Variables, imports, and loaded data survive between calls. "
         "Returns stdout/stderr plus whether the code raised. Use print() - "
         "expression values are not echoed. Every call needs the user's "
         f"approval. Hard timeout {PYTHON_EXEC_TIMEOUT_SECONDS}s."
