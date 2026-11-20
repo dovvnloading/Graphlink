@@ -31,11 +31,13 @@ execution with potentially different effects.
 from __future__ import annotations
 
 import asyncio
+import sys
 import threading
 from pathlib import Path
 
+from backend.harness.python_env import PythonEnvironmentError, ensure_python_environment
 from backend.harness.python_policy import source_error
-from backend.harness.workspace import WorkspaceError, ensure_workspace
+from backend.harness.workspace import WorkspaceError, ensure_workspace, workspace_dir
 from backend.providers.base import ToolCall, ToolSpec
 from backend.tools import CODE_EXECUTE, RunContext, ToolRegistry, ToolResult
 from graphlink_plugins.common.python_repl import PythonREPL
@@ -50,7 +52,7 @@ PYTHON_EXEC_SPEC = ToolSpec(
     name="python.exec",
     description=(
         "Run Python in a persistent interpreter whose working directory is "
-        "the workspace. Variables, imports, and loaded data survive between "
+        "the workspace, using its .venv/venv or a managed virtual environment. "
         "calls, so build up state across turns instead of re-running setup. "
         "Returns stdout/stderr plus whether the code raised. Use print() - "
         "expression values are not echoed. Every call needs the user's "
@@ -80,7 +82,10 @@ class PythonReplRegistry:
         self._repls: dict[str, tuple[PythonREPL, Path]] = {}
         self._lock = threading.RLock()
 
-    def get(self, workspace_id: str, cwd: Path, *, manage_cwd: bool) -> PythonREPL:
+    def get(
+        self, workspace_id: str, cwd: Path, *, manage_cwd: bool,
+        python_executable: Path | None = None,
+    ) -> PythonREPL:
         """The workspace's interpreter, started on first use.
 
         A REPL's cwd is fixed at spawn, so an interpreter kept across a
@@ -93,13 +98,21 @@ class PythonReplRegistry:
         """
         with self._lock:
             stale = self._repls.get(workspace_id)
-            if stale is not None and stale[1] == cwd:
+            selected = python_executable or Path(sys.executable)
+            if (
+                stale is not None
+                and stale[1] == cwd
+                and stale[0].python_executable == selected
+            ):
                 return stale[0]
             # Replace the entry under the lock, so two callers can never
             # race two interpreters into one workspace; the retired one is
             # stopped outside it, since killing a process is slow and no
             # other workspace should wait on it.
-            repl = PythonREPL(repl_id=workspace_id, cwd=cwd, manage_cwd=manage_cwd)
+            repl = PythonREPL(
+                repl_id=workspace_id, cwd=cwd, manage_cwd=manage_cwd,
+                python_executable=python_executable,
+            )
             self._repls[workspace_id] = (repl, cwd)
         if stale is not None:
             stale[0].stop()
@@ -138,14 +151,27 @@ def register_harness_python_tool(
         bound = getattr(ctx, "harness_workspace_dir", None)
         try:
             if isinstance(bound, Path):
-                # A user's own project directory: bound but NOT managed by us.
+                # A bound project OR the run's managed scratch workspace.
                 cwd, manage = bound, False
+                is_scratch = (
+                    getattr(ctx, "harness_workspace_is_user_dir", None) is False
+                    or cwd.resolve() == workspace_dir(workspace_id).resolve()
+                )
             else:
                 cwd, manage = ensure_workspace(workspace_id), True
+                is_scratch = True
         except (WorkspaceError, OSError) as exc:
             return ToolResult(content=f"Could not prepare the workspace: {exc}", is_error=True)
 
-        repl = repl_registry.get(workspace_id, cwd, manage_cwd=manage)
+        try:
+            interpreter = await asyncio.to_thread(
+                ensure_python_environment, workspace_id, cwd, is_scratch=is_scratch,
+            )
+            repl = repl_registry.get(
+                workspace_id, cwd, manage_cwd=manage, python_executable=interpreter,
+            )
+        except (PythonEnvironmentError, OSError) as exc:
+            return ToolResult(content=f"Could not prepare Python environment: {exc}", is_error=True)
         try:
             output = await asyncio.wait_for(
                 asyncio.to_thread(repl.execute, code),
@@ -182,7 +208,11 @@ def register_harness_python_tool(
     )
 
 
-USAGE_HINT = "python.exec runs Python in a persistent workspace interpreter whose variables survive between calls; every execution requires fresh approval."
+USAGE_HINT = (
+    "python.exec runs in the workspace's .venv/venv when available, or a persistent "
+    "managed virtual environment created on first use. State survives between "
+    "calls; every execution requires fresh approval."
+)
 
 
 def register_workspace_tools(registry: ToolRegistry, dispatcher, document) -> None:
