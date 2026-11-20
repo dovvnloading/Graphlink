@@ -17,6 +17,7 @@ from backend.api._settings_shared import run_locked
 from backend.api._shared import make_publish_scene
 from backend.domain.graph import SceneDocument
 from backend.domain.node_states import HarnessState
+from backend.harness.shell_selection import VALID_SHELLS
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 
@@ -185,6 +186,18 @@ def register_harness_intents(
         node.state.harness_workspace_active = ""
         await publish_scene()
 
+    async def set_shell(node_id, shell):
+        """Save a node preference for subsequent tasks, not the live run."""
+        node = document.nodes.get(node_id)
+        if node is None or not isinstance(node.state, HarnessState):
+            return
+        if not isinstance(shell, str) or shell not in VALID_SHELLS:
+            notifications.show("Unsupported agent shell.", "warning")
+            await bus.publish("notification")
+            return
+        node.state.harness_shell = shell
+        await publish_scene()
+
     async def approve_tool(request_id, approval_id=""):
         if approval_id:
             agent_dispatcher.approve_code_execution(request_id, approval_id)
@@ -223,3 +236,4 @@ def register_harness_intents(
     bus.register_intent("harness", "pickLaunchWorkspace", pick_launch_workspace)
     bus.register_intent("harness", "pickWorkspace", pick_workspace)
     bus.register_intent("harness", "useScratch", use_scratch)
+    bus.register_intent("harness", "setShell", set_shell)

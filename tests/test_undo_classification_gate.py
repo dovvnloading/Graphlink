@@ -307,9 +307,10 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # 244 -> 245: scene/cancelGraphRun cancels active Graph Runner steps.
     # 245 -> 246: scene/discussScientificResult creates an undoable chat from a verified result.
     # 246 -> 247: scene/exportScientificWorkspaceMethods reads verified receipts without mutating the graph.
-    # 247 -> 248: Settings workspace-agent trusted-folder revocation.
-    assert len(real) == 248, (
-        f"expected exactly 247 real registered intents, found {len(real)} - "
+    # 247 -> 248: harness/setShell stores a per-agent shell preference.
+    # 248 -> 249: Settings workspace-agent trusted-folder revocation.
+    assert len(real) == 249, (
+        f"expected exactly 249 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"

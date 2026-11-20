@@ -1138,6 +1138,8 @@ class HarnessState(NodeState):
     # binding it predates.
     harness_workspace_path: str = ""
     harness_workspace_active: str = ""
+    # Durable node preference; each task snapshots it before executing tools.
+    harness_shell: str = "auto"
     harness_activity: list[dict[str, Any]] = field(default_factory=list)
     harness_max_turns: int = 16
     harness_spent_turns: int = 0
