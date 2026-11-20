@@ -480,6 +480,22 @@ class TestPythonExec:
         finally:
             repls.stop_all()
 
+    def test_new_run_cannot_reuse_interpreter_from_stopped_run(self, tmp_path, monkeypatch):
+        _registry, repls, workspace = self._setup(tmp_path, monkeypatch)
+        cancelled = threading.Event()
+        fresh_event = threading.Event()
+        try:
+            old = repls.get("ws-h6", workspace, manage_cwd=False, cancel_event=cancelled)
+            cancelled.set()  # Stop frees the run slot before its worker exits
+            fresh = repls.get("ws-h6", workspace, manage_cwd=False, cancel_event=fresh_event)
+            assert fresh is not old
+            assert repls.get("ws-h6", workspace, manage_cwd=False, cancel_event=fresh_event) is fresh
+            # A late cleanup from the old worker must not retire the new one.
+            repls.stop_workspace("ws-h6", expected_repl=old)
+            assert repls.get("ws-h6", workspace, manage_cwd=False, cancel_event=fresh_event) is fresh
+        finally:
+            repls.stop_all()
+
     def test_stop_for_old_interpreter_cannot_retire_new_workspace_binding(self, tmp_path, monkeypatch):
         _registry, repls, workspace = self._setup(tmp_path, monkeypatch)
         other = tmp_path / "new-root"
