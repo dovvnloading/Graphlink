@@ -63,6 +63,20 @@ def test_a_failed_execution_is_reported_without_killing_the_repl():
         repl.stop()
 
 
+def test_invalid_stdout_bytes_do_not_desynchronize_the_persistent_repl():
+    repl = PythonREPL(repl_id="core-invalid-stdout-test")
+    try:
+        # 0x81 is undecodable under UTF-8 and the usual Windows cp1252 locale.
+        output = repl.execute("import os; os.write(1, b'\\x81\\n')")
+        assert "\ufffd" in output
+        assert repl.last_run_failed is False
+        # The status boundary must still have been consumed by the same read.
+        assert repl.execute("print('synchronized')") == "synchronized"
+        assert repl.last_run_failed is False
+    finally:
+        repl.stop()
+
+
 def test_cwd_is_a_private_scratch_dir_not_the_apps_own_working_directory():
     repl = PythonREPL(repl_id="core-cwd-test")
     try:
