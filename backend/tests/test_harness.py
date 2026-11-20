@@ -1318,6 +1318,18 @@ class TestPersistence:
         del payload["shell"]
         assert _restore_harness_payload(payload).state.harness_shell == "auto"
 
+    def test_execution_profile_roundtrips_and_invalid_values_default_to_host(self):
+        node = SceneDocument().add_harness_node(0, 0, "goal")
+        assert node.state.harness_execution_profile == "host"
+        node.state.harness_execution_profile = "isolated"
+        payload = _serialize_harness_node(node)
+        assert payload["execution_profile"] == "isolated"
+        assert _restore_harness_payload(payload).state.harness_execution_profile == "isolated"
+        payload["execution_profile"] = "untrusted"
+        assert _restore_harness_payload(payload).state.harness_execution_profile == "host"
+        del payload["execution_profile"]
+        assert _restore_harness_payload(payload).state.harness_execution_profile == "host"
+
     def test_blank_workspace_id_is_self_healed_on_load(self):
         document = SceneDocument()
         node = document.add_harness_node(0, 0, "goal")

@@ -51,6 +51,10 @@ from pathlib import Path
 from api_provider import RequestCancelledError
 from backend.harness.shell_policy import requires_fresh_shell_approval
 from backend.harness.shell_selection import ShellUnavailableError, shell_invocation
+from backend.harness.shell_isolation import (
+    IsolationUnavailableError, cleanup_container, container_invocation,
+    normalize_execution_profile,
+)
 from backend.harness.shell_sessions import ShellSessionError, ShellSessionRegistry
 from backend.harness.workspace import WorkspaceError, ensure_workspace
 from backend.providers.base import ToolCall, ToolSpec
@@ -112,7 +116,7 @@ SHELL_EXEC_SPEC = ToolSpec(
 )
 
 
-def _run_command(command: str, cwd, cancel_event, on_output=None, shell: str = "auto") -> tuple[str, "int | None", str]:
+def _run_command(command: str, cwd, cancel_event, on_output=None, shell: str = "auto", profile: str = "host") -> tuple[str, "int | None", str]:
     """Blocking worker (called via to_thread): returns (output, exit_code,
     ended) where ended is "ok" | "timeout" | "cancelled". Guarded spawn,
     then a poll loop so cancel/timeout kill the whole tree promptly.
@@ -128,7 +132,14 @@ def _run_command(command: str, cwd, cancel_event, on_output=None, shell: str = "
     kwargs: dict = {"env": safe_subprocess_env()}
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-    argv, via_shell = shell_invocation(command, shell, env=kwargs["env"])
+    container = None
+    argv: str | list[str]
+    if normalize_execution_profile(profile) == "isolated":
+        argv, engine, name = container_invocation(command, cwd, env=kwargs["env"])
+        via_shell = False
+        container = (engine, name)
+    else:
+        argv, via_shell = shell_invocation(command, shell, env=kwargs["env"])
     guard = create_execution_guard()
     try:
         # Preserve raw cmd.exe quoting; PS/Bash receive one command argument.
@@ -191,7 +202,11 @@ def _run_command(command: str, cwd, cancel_event, on_output=None, shell: str = "
     finally:
         # Kills the whole tree for the cancelled/timeout paths; a no-op
         # beyond bookkeeping for a process that already exited.
-        guard.close()
+        try:
+            guard.close()
+        finally:
+            if container is not None:
+                cleanup_container(*container, env=kwargs["env"])
 
 
 SHELL_SESSION_SPEC = ToolSpec(
@@ -287,7 +302,8 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
             # must not leave an old interactive shell accessible via stdin.
             # Do this for EVERY action, not only start: an immediate 'write'
             # after a rebind used to skip root validation entirely.
-            await asyncio.to_thread(session_registry.bind_root, workspace_id, workspace)
+            profile = normalize_execution_profile(getattr(ctx, "harness_execution_profile", "host"))
+            await asyncio.to_thread(session_registry.bind_root, workspace_id, workspace, profile)
             if action == "list":
                 rows = session_registry.names(workspace_id)
                 if not rows:
@@ -308,7 +324,7 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
                     )
                 session = await asyncio.to_thread(
                     session_registry.start, workspace_id, name, command, workspace,
-                    getattr(ctx, "harness_shell", "auto"),
+                    getattr(ctx, "harness_shell", "auto"), profile,
                 )
                 # A process that dies instantly (bad command, missing binary)
                 # is the common failure, and reporting it as a successful
@@ -362,7 +378,7 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
                 content=f"Unknown action {action!r} - use start, write, read, stop, or list.",
                 is_error=True,
             )
-        except (ShellSessionError, ShellUnavailableError) as exc:
+        except (ShellSessionError, ShellUnavailableError, IsolationUnavailableError) as exc:
             return ToolResult(content=str(exc), is_error=True)
         except (WorkspaceError, OSError) as exc:
             return ToolResult(content=f"Could not prepare the workspace: {exc}", is_error=True)
@@ -398,8 +414,9 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
             output, exit_code, ended = await asyncio.to_thread(
                 _run_command, command, workspace, cancel_event, on_output,
                 getattr(ctx, "harness_shell", "auto"),
+                getattr(ctx, "harness_execution_profile", "host"),
             )
-        except (ShellUnavailableError, OSError) as exc:
+        except (ShellUnavailableError, IsolationUnavailableError, OSError) as exc:
             return ToolResult(content=f"Could not launch the selected shell: {exc}", is_error=True)
         if ended == "cancelled":
             # The one exception invoke() propagates - cancellation is the
