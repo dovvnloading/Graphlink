@@ -159,7 +159,7 @@ class PythonReplRegistry:
                 stale[1] != cwd
                 or self._profiles.get(workspace_id, "host") != profile
             )
-        if retire:
+        if retire and stale is not None:
             self.stop_workspace(workspace_id, expected_repl=stale[0])
 
     def stop_workspace(
