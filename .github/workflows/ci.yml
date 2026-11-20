@@ -117,7 +117,7 @@ jobs:
     # this file's own module comment above.
     name: Python checks (Windows, DPAPI)
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -169,12 +169,11 @@ jobs:
           # Keep the checkout unbuilt for desktop tests that exercise missing SPA assets.
           Remove-Item -Recurse -Force dist
 
-      # Cap workers below -n auto on Windows: coverage + real venv creation
-      # and scientific integration tests can starve async/event and disk
-      # writers when all hosted-runner cores are occupied. Keep parallelism
-      # for the large suite while leaving headroom for subprocesses.
+      # Four fixed workers restore Windows suite throughput now that
+      # timing-sensitive tests have been hardened. The perf suite below
+      # remains serial and uninstrumented for stable timing assertions.
       - name: Run pytest (with coverage floor - see pyproject.toml's own [tool.coverage])
-        run: python -m pytest -q -n 2 --cov --cov-report=term-missing --ignore=backend/tests/perf
+        run: python -m pytest -q -n 4 --cov --cov-report=term-missing --ignore=backend/tests/perf
 
       # ADR-015 stage 15.4 review: coverage.py's line tracer adds real
       # per-line overhead - enough to trip test_loop_watchdog.py's own
