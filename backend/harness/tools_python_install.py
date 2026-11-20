@@ -15,7 +15,9 @@ PYTHON_INSTALL_SPEC = ToolSpec(
         "requirements files, or paths. Each install requires fresh user "
         "approval displaying the exact environment and packages. Only binary "
         "wheels from the default PyPI index are downloaded; compatible wheels "
-        "are kept in a shared cache for future offline installs."
+        "are kept in a shared cache for future offline installs. In Isolated "
+        "mode Python runs in a container: network is enabled only for the "
+        "approved pip download step, never for python.exec."
     ),
     input_schema={
         "type": "object",
@@ -55,7 +57,8 @@ def register_harness_python_install_tool(registry: ToolRegistry) -> None:
 USAGE_HINT = (
     "python.install adds named packages to the same workspace virtualenv "
     "as python.exec, using PyPI binary wheels and a shared offline wheel cache; "
-    "each install needs fresh approval for the environment and packages."
+    "each install needs fresh approval for the environment and packages. "
+    "Isolated installs use the container; only PyPI downloads get network access."
 )
 
 
