@@ -97,7 +97,7 @@ def read_workspace_file(root: Path, relative_path: str) -> dict:
 
             content = extract_document_text(data, suffix)
         else:
-            if b"\\x00" in data:
+            if b"\x00" in data:
                 raise WorkspaceError("Binary files cannot be opened in Document View.")
             try:
                 content = data.decode("utf-8")
