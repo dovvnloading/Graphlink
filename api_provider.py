@@ -2063,7 +2063,6 @@ def _chat_stream_dispatch(task: str, messages: list, on_chunk: Callable[[str, bo
                 or state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA
             )
         attempt = 0
-        json_object_mode = False
         while True:
             full_response_content = None
             usage = None
@@ -2085,39 +2084,6 @@ def _chat_stream_dispatch(task: str, messages: list, on_chunk: Callable[[str, bo
                         usage = getattr(event, "usage", None)
                 break
             except Exception as retry_exc:
-                if use_json_protocol:
-                    from backend.providers.json_tool_protocol import structured_output_rejected
-                    if structured_output_rejected(retry_exc):
-                        # Some OpenAI-compatible runtimes only implement
-                        # JSON-object mode, not the richer JSON-schema mode.
-                        # This still constrains syntax at generation time;
-                        # parse_tool_turn validates names and arguments.
-                        if profile and profile.protocol == "openai" and not json_object_mode:
-                            json_kwargs = {"response_format": {"type": "json_object"}}
-                            json_object_mode = True
-                            attempt = 0
-                            continue
-                        raise RuntimeError(
-                            f"The selected model ({model_label}) cannot run the workspace agent: "
-                            "this endpoint rejected grammar/schema-constrained JSON output. "
-                            "Choose a model/endpoint with native tools or structured JSON support."
-                        ) from retry_exc
-                elif tools and json_tool_fallback:
-                    from backend.providers.json_tool_protocol import native_tools_rejected
-                    if native_tools_rejected(retry_exc):
-                        if not provider.capabilities.structured_output:
-                            raise RuntimeError(
-                                f"The selected model ({model_label}) cannot run the workspace agent: "
-                                "native tools were rejected and structured JSON output is unavailable."
-                            ) from retry_exc
-                        from backend.providers.json_tool_protocol import constrained_request
-                        json_messages, json_kwargs = constrained_request(
-                            messages, tuple(tools), provider_name,
-                        )
-                        use_json_protocol = True
-                        replay = False
-                        attempt = 0
-                        continue
                 if (
                     not transport_retry_allowed
                     or delivered_any
@@ -2304,6 +2270,7 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                 or state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA
             )
         attempt = 0
+        json_object_mode = False
         while True:
             full_response_content = None
             reasoning_parts: list[str] = []
@@ -2338,6 +2305,39 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                         usage = getattr(event, "usage", None)
                 break
             except Exception as retry_exc:
+                if use_json_protocol:
+                    from backend.providers.json_tool_protocol import structured_output_rejected
+                    if structured_output_rejected(retry_exc):
+                        # Some OpenAI-compatible runtimes only implement
+                        # JSON-object mode, not the richer JSON-schema mode.
+                        # This still constrains syntax at generation time;
+                        # parse_tool_turn validates names and arguments.
+                        if profile and profile.protocol == "openai" and not json_object_mode:
+                            json_kwargs = {"response_format": {"type": "json_object"}}
+                            json_object_mode = True
+                            attempt = 0
+                            continue
+                        raise RuntimeError(
+                            f"The selected model ({model_label}) cannot run the workspace agent: "
+                            "this endpoint rejected grammar/schema-constrained JSON output. "
+                            "Choose a model/endpoint with native tools or structured JSON support."
+                        ) from retry_exc
+                elif tools and json_tool_fallback:
+                    from backend.providers.json_tool_protocol import native_tools_rejected
+                    if native_tools_rejected(retry_exc):
+                        if not provider.capabilities.structured_output:
+                            raise RuntimeError(
+                                f"The selected model ({model_label}) cannot run the workspace agent: "
+                                "native tools were rejected and structured JSON output is unavailable."
+                            ) from retry_exc
+                        from backend.providers.json_tool_protocol import constrained_request
+                        json_messages, json_kwargs = constrained_request(
+                            messages, tuple(tools), provider_name,
+                        )
+                        use_json_protocol = True
+                        replay = False
+                        attempt = 0
+                        continue
                 if (
                     not transport_retry_allowed
                     or attempt >= _TRANSPORT_RETRY_MAX_ATTEMPTS
