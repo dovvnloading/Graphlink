@@ -10,6 +10,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import type { SceneEdgeRow, SceneNodeRow, SceneState } from "../../lib/bridge-core/generated/scene-state";
 import type { StreamListener } from "../../lib/ws/transport";
 import { BridgeErrorState } from "../../lib/ui/BridgeErrorState";
@@ -2601,12 +2602,18 @@ function CanvasInner({
   store,
   onOpenDocumentView,
   getComposerRoute,
+  hudContainer,
 }: {
   store: SceneStore;
   onOpenDocumentView: (markdown: string, sourceLabel: string) => void;
   // ADR-018 stage 18.3: passed straight through to toFlowNodes - see that
   // function's own comment on why a getter, not a subscribed value.
   getComposerRoute: () => { provider: string; modelId: string };
+  // The composer row's HUD slot (App.tsx). React Flow clips its own stage, so
+  // the zoom dock and minimap portal there to share the composer card's
+  // baseline; React context still flows through the portal. Without a slot
+  // (tests, standalone renders) they stay inside the stage.
+  hudContainer: HTMLElement | null;
 }) {
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
   // Live mirror for event handlers that must read current scene values
@@ -2953,6 +2960,13 @@ function CanvasInner({
     return () => store.setViewportCenterProvider(null);
   }, [screenToFlowPosition, store]);
 
+  const canvasHud = (
+    <>
+      <ViewportDock hasNodes={scene.nodes.length > 0} />
+      <SceneMinimap store={store} />
+    </>
+  );
+
   return (
     <div
       className="scene-canvas"
@@ -3065,8 +3079,7 @@ function CanvasInner({
           />
         )}
         <CanvasGrid grid={grid} />
-        <ViewportDock hasNodes={scene.nodes.length > 0} />
-        <SceneMinimap store={store} />
+        {hudContainer ? createPortal(canvasHud, hudContainer) : canvasHud}
         {/* R7.5b-3: smart-guide lines. Legacy's guides were QGraphicsLineItems
             in the same unified scene as the nodes, panning/zooming for free -
             ViewportPortal is the direct React Flow analog (children render
@@ -3153,10 +3166,13 @@ export function SceneCanvas({
   // App.tsx's real render supplies the composer's live route. See
   // toFlowNodes' own comment for why this is a getter, not a value.
   getComposerRoute = () => ({ provider: "", modelId: "" }),
+  hudContainer = null,
 }: {
   store: SceneStore;
   onOpenDocumentView: (markdown: string, sourceLabel: string) => void;
   getComposerRoute?: () => { provider: string; modelId: string };
+  /** Where the zoom dock and minimap render; see CanvasInner's own prop. */
+  hudContainer?: HTMLElement | null;
 }) {
   // ADR-003 stage 3.5: renders BridgeErrorState INSTEAD of the canvas - not
   // alongside it - the moment the scene topic's schema version is rejected.
@@ -3179,5 +3195,6 @@ export function SceneCanvas({
       <BridgeErrorState title="Canvas unavailable" rejection={versionRejection} className="scene-bridge-error" />
     );
   }
-  return <CanvasInner store={store} onOpenDocumentView={onOpenDocumentView} getComposerRoute={getComposerRoute} />;
+  return <CanvasInner store={store} onOpenDocumentView={onOpenDocumentView} getComposerRoute={getComposerRoute}
+    hudContainer={hudContainer} />;
 }
