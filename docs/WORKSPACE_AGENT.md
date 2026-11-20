@@ -87,6 +87,8 @@ For verified calculations, enable **Scientific Core** and the needed `science_<p
 
 **Host** is the default execution profile. To move shell and Python execution into a restricted environment, open the Agent’s **Agent settings → Execution profile → Isolated (Docker / Podman)**.
 
+**First-task caveat:** The launcher starts a new Agent’s first task immediately and does not yet offer a profile selector. That initial task uses **Host**. If you need Isolated for your real work, start with a harmless read-only setup task, deny any Host shell/Python requests, and switch profiles before sending the next task.
+
 1. Install and start **Docker** or **Podman** on the backend machine. Pull the fixed image in advance:
 
    ```sh
@@ -100,7 +102,7 @@ For verified calculations, enable **Scientific Core** and the needed `science_<p
 
 The container mounts the **bound scratch/project workspace** at `/workspace` and uses a read-only image filesystem, a small temporary filesystem, 1 CPU, 512 MiB RAM/swap, a 128-process limit, dropped capabilities and no-new-privileges. Container shell and Python operations have **no network** by default. Container-native virtualenvs and the installer’s cache are mounted only where those Python operations require them. Host executables and backend secrets are not passed through.
 
-**Isolated limits command execution, not the whole Graphlink application.** Cloud model calls, approved Web Research and separately approved integrations (such as Fal) can still use the backend’s host network. An approved `python.install` PyPI download is the sole container-command exception to the network-disabled default. Isolation is not a guarantee against a malicious container engine/image. [Execution profiles and network boundaries](WORKSPACE_ISOLATION.md).
+**Isolated limits command execution, not the whole Graphlink application.** File browsing/edits and graph tools still run through the backend under their own workspace and approval rules. Cloud model calls, approved Web Research and separately approved integrations (such as Fal) can still use the backend’s host network. An approved `python.install` PyPI download is the sole container-command exception to the network-disabled default. Isolation is not a guarantee against a malicious container engine/image. [Execution profiles and network boundaries](WORKSPACE_ISOLATION.md).
 
 ## Web research and network approval
 
