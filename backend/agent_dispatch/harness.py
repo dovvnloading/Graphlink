@@ -40,6 +40,35 @@ _MACHINE_SNAPSHOT_LOCK = threading.Lock()
 _REVOCATION_GUARD_SETUP_LOCK = threading.Lock()
 
 
+class _LiveHarnessSessionGrants(set[str]):
+    """One revocable generation of tool-wide consent.
+
+    An active RunContext may retain this object after a folder revocation.
+    Clearing a plain set is insufficient: a late approval would add to it
+    again. Revocation permanently seals this generation, including reads,
+    while the dispatcher hands later runs an entirely new object.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._guard = threading.RLock()
+        self._revoked = False
+
+    def add(self, name: str) -> None:
+        with self._guard:
+            if not self._revoked:
+                super().add(name)
+
+    def __contains__(self, name: object) -> bool:
+        with self._guard:
+            return not self._revoked and super().__contains__(name)
+
+    def revoke(self) -> None:
+        with self._guard:
+            self._revoked = True
+            super().clear()
+
+
 class HarnessDispatchOps(DispatcherParts):
     """The Harness agent: grants, process bookkeeping, and the Harness run (mixin - see module docstring)."""
 
@@ -110,21 +139,18 @@ class HarnessDispatchOps(DispatcherParts):
             if store is None:
                 store = {}
                 self._harness_session_grants = store
-            return store.setdefault(workspace_id, set())
+            return store.setdefault(workspace_id, _LiveHarnessSessionGrants())
 
     def _discard_harness_session_grants(self, workspace_id: str) -> None:
-        """Retire the live set, not just its dictionary entry.
-
-        Called under the revocation lock: an already-running task may hold
-        the old set while waiting for approval, so clearing it also removes
-        its previously approved conveniences immediately. Any later consent
-        written into that detached set cannot rearm a future task.
-        """
+        """Permanently revoke this generation, including active RunContexts."""
         grants = getattr(self, "_harness_session_grants", None)
         if grants is not None:
             old = grants.pop(workspace_id, None)
             if old is not None:
-                old.clear()
+                if isinstance(old, _LiveHarnessSessionGrants):
+                    old.revoke()
+                else:
+                    old.clear()
 
     def bind_harness_session_grants(self, workspace_id: str, root: Path) -> set:
         """Bind session consent to the effective root, including scratch.
@@ -154,7 +180,10 @@ class HarnessDispatchOps(DispatcherParts):
             grants = getattr(self, "_harness_session_grants", None)
             if grants is not None:
                 for old in grants.values():
-                    old.clear()
+                    if isinstance(old, _LiveHarnessSessionGrants):
+                        old.revoke()
+                    else:
+                        old.clear()
                 grants.clear()
             roots = getattr(self, "_harness_grant_roots", None)
             if roots is not None:
