@@ -161,4 +161,5 @@ def register_knowledge_tools(
         ),
         scopes={KNOWLEDGE_READ},
         approval="auto",
+        parallel_safe=True,
     )

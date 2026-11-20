@@ -19,9 +19,9 @@ needing their own machinery:
 
 - DEPTH-1: subagent.spawn is registered under provider.call, which the
   child is NOT granted, so subagent.spawn is filtered off the child's own
-  menu. A subagent cannot spawn a subagent - no recursion, no fan-out
-  tree, and (since the parent loop dispatches tool calls one at a time)
-  no concurrent swarm either.
+  menu. A subagent cannot spawn a subagent - no recursion or fan-out
+  tree. Independent parent-level read-only spawns are bounded by the
+  harness's parallel read limit.
 """
 
 from __future__ import annotations
@@ -223,4 +223,7 @@ def register_subagent_tool(registry: ToolRegistry) -> None:
     # provider.call, so this tool is filtered off the child's own menu -
     # that IS the depth-1 guard (see the module docstring). auto approval:
     # the child can only read, exposing no capability the parent lacks.
-    registry.register(SUBAGENT_SPAWN_SPEC, spawn, scopes={PROVIDER_CALL}, approval="auto")
+    registry.register(
+        SUBAGENT_SPAWN_SPEC, spawn, scopes={PROVIDER_CALL},
+        approval="auto", parallel_safe=True,
+    )

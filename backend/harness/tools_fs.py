@@ -579,9 +579,9 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
             return ToolResult(content=f"Could not write file: {exc}", is_error=True)
         return ToolResult(content=f"Edited {call.arguments.get('path')}.")
 
-    registry.register(FS_READ_SPEC, fs_read, scopes={FS_READ}, approval="auto")
-    registry.register(FS_LIST_SPEC, fs_list, scopes={FS_READ}, approval="auto")
-    registry.register(FS_GREP_SPEC, fs_grep, scopes={FS_READ}, approval="auto")
+    registry.register(FS_READ_SPEC, fs_read, scopes={FS_READ}, approval="auto", parallel_safe=True)
+    registry.register(FS_LIST_SPEC, fs_list, scopes={FS_READ}, approval="auto", parallel_safe=True)
+    registry.register(FS_GREP_SPEC, fs_grep, scopes={FS_READ}, approval="auto", parallel_safe=True)
     # H2: writes prompt once per distinct call in a run (the managed-
     # workspace posture the plan's §3.2.6 sets; "always" with its
     # fingerprint memory would re-prompt only on ARGUMENT changes anyway -
