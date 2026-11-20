@@ -313,6 +313,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
     # content (an ordinary Ctrl+Z-undoable command, run_id-stamped after the
     # claim); the run itself and its transcript live outside the undo domain.
     Classified("harness", "start", "A", "content: creates the harness node (the run it then starts is separate lifecycle; history lives in the workspace transcript, not the document)"),
+    Classified("harness", "composerSend", "A", "content: creates an undoable harness node if none is selected; dispatch to an existing agent is run-lifecycle only"),
     Classified("harness", "send", "B", "run-lifecycle: start a follow-up task against the existing node's transcript"),
     Classified("harness", "cancel", "B", "run-lifecycle: cancel"),
     Classified("harness", "approveTool", "B", "security: harness tool-call approval gate"),
@@ -322,6 +323,9 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("harness", "pickLaunchWorkspace", "B", "run-config: the launcher's folder pick, before any node exists - writes the settings trust grant and answers with the path, touching no document content"),
     Classified("harness", "pickWorkspace", "B", "run-config: binds the node to a trusted user dir and writes the settings trust grant, not document content"),
     Classified("harness", "useScratch", "B", "run-config: reverts the node to the scratch workspace"),
+    Classified("harness", "listWorkspaceFiles", "B", "read-only: lists files and directories in the currently authorized workspace without modifying the document"),
+    Classified("harness", "readWorkspaceFile", "B", "read-only: previews a file in the currently authorized workspace without modifying the document"),
+    Classified("harness", "revealWorkspace", "B", "read-only: opens the authorized workspace in the native file manager without modifying the document"),
     Classified("harness", "setShell", "B", "run-config: persists the node shell choice for subsequent tasks, not an in-flight execution"),
 
     # -- backend/api/intents_fal_media.py (scene) ----------------------------

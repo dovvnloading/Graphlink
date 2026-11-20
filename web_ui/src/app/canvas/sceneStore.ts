@@ -32,6 +32,12 @@ import type { BridgeRejection } from "../../lib/bridge-core/islandState";
 import type { EditorDraft, Sources, ScienceResult } from "./scientificWorkbench";
 import { announce } from "../announcer";
 import { describeNodeRunTransition } from "./nodeRunAnnouncements";
+import {
+  parseHarnessWorkspaceDocument,
+  parseHarnessWorkspaceListing,
+  type HarnessWorkspaceDocument,
+  type HarnessWorkspaceListing,
+} from "./harnessWorkspaceFiles";
 
 // ADR-003 stage 3.1 review-fix: matches composerStore's own
 // NATIVE_DIALOG_TIMEOUT_MS - pickGitlinkLocalRoot opens a native OS folder
@@ -1158,6 +1164,22 @@ export class SceneStore {
 
   useHarnessScratch(nodeId: string): void {
     this.transport.fireIntent("harness", "useScratch", [nodeId]);
+  }
+
+  // Read-only workspace browsing is request/response: a file list or preview
+  // belongs to the Files panel, not to the persisted canvas scene snapshot.
+  async listHarnessWorkspaceFiles(nodeId: string, path = ""): Promise<HarnessWorkspaceListing> {
+    const result: unknown = await this.transport.request("harness", "listWorkspaceFiles", [nodeId, path]);
+    return parseHarnessWorkspaceListing(result);
+  }
+
+  async readHarnessWorkspaceFile(nodeId: string, path: string): Promise<HarnessWorkspaceDocument> {
+    const result: unknown = await this.transport.request("harness", "readWorkspaceFile", [nodeId, path]);
+    return parseHarnessWorkspaceDocument(result);
+  }
+
+  revealHarnessWorkspace(nodeId: string): void {
+    this.transport.fireIntent("harness", "revealWorkspace", [nodeId]);
   }
 
   setHarnessShell(nodeId: string, shell: string): void {
