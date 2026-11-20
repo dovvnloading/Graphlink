@@ -237,6 +237,15 @@ class HarnessDispatchOps(DispatcherParts):
             await bus.publish("notification")
             return None
 
+        # Freeze the effective mode at the task claim, before the queued run
+        # can observe any looser preference selected mid-task.
+        from backend.harness.permission_modes import effective_permission_mode
+        from backend.harness.shell_isolation import normalize_execution_profile
+
+        task_profile = normalize_execution_profile(node.state.harness_execution_profile)
+        task_mode = effective_permission_mode(node.state.harness_permission_mode, task_profile)
+        node.state.harness_task_permission_mode = task_mode
+
         cancel_event = threading.Event()
 
         async def _finalize() -> None:
@@ -277,6 +286,7 @@ class HarnessDispatchOps(DispatcherParts):
                     request_id=request_id, handle=handle, cancel_event=cancel_event,
                     model_ref=model_ref, settings_manager=self._settings_manager,
                     allow_session_grants=allow_session_grants,
+                    permission_mode=task_mode, execution_profile=task_profile,
                     **self._runtime_kwargs(),
                 )
             finally:
