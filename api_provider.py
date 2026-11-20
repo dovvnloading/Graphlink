@@ -2234,7 +2234,15 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                 or (profile is not None and profile.key_slot == "openai")
             )
         )
-        if use_json_protocol and not provider.capabilities.structured_output:
+        # Other named OpenAI-compatible services advertise structured_output=False
+        # because response formats vary by endpoint. An explicit tools-unsupported
+        # response is a reason to PROBE JSON mode, not assume it is absent.
+        # Refuse only after the endpoint rejects both schema and JSON-object modes.
+        json_format_available = bool(
+            provider.capabilities.structured_output
+            or (profile is not None and profile.protocol == "openai")
+        )
+        if use_json_protocol and not json_format_available:
             raise RuntimeError(
                 f"The selected model ({model_label}) cannot run the workspace agent: "
                 "native tool calling is unavailable and grammar/schema-constrained "
@@ -2325,7 +2333,7 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                 elif tools and json_tool_fallback:
                     from backend.providers.json_tool_protocol import native_tools_rejected
                     if native_tools_rejected(retry_exc):
-                        if not provider.capabilities.structured_output:
+                        if not json_format_available:
                             raise RuntimeError(
                                 f"The selected model ({model_label}) cannot run the workspace agent: "
                                 "native tools were rejected and structured JSON output is unavailable."
