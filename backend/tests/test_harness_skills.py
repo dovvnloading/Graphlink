@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 
 import pytest
 
@@ -136,6 +137,35 @@ def test_symlink_packages_and_symlinked_workspace_metadata_are_excluded(roots, t
     other.mkdir()
     (other / ".graphlink").symlink_to(user.parent, target_is_directory=True)
     assert not any(item.source == "workspace" for item in skills.discover_skills(other))
+
+
+def test_skill_catalog_bounds_invalid_candidate_scan_and_warns(roots, monkeypatch):
+    workspace, local, _ = roots
+    local.mkdir(parents=True)
+    for index in range(20):
+        (local / f"invalid-{index:04d}").mkdir()
+    monkeypatch.setattr(skills, "_MAX_SCANNED_CANDIDATES", 4)
+    original_scandir = skills.os.scandir
+    scanned = []
+
+    @contextmanager
+    def counted_scandir(path):
+        with original_scandir(path) as entries:
+            def counted():
+                for entry in entries:
+                    if path == local:
+                        scanned.append(entry.name)
+                    yield entry
+            yield counted()
+
+    monkeypatch.setattr(skills.os, "scandir", counted_scandir)
+    prompt = skills.skills_prompt(workspace)
+    assert "Skill catalog incomplete for workspace" in prompt
+    assert len(scanned) == 5  # four candidate entries plus one lookahead
+    scanned.clear()
+    with pytest.raises(skills.SkillError, match="catalog scan incomplete"):
+        skills.load_skill(workspace, source="workspace", name="missing")
+    assert len(scanned) == 5
 
 
 def test_skill_disappearance_after_prompt_is_an_error_not_a_fallback(roots):

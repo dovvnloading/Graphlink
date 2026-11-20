@@ -523,11 +523,28 @@ class BeautifulSoupContentExtractor:
                 for element in soup(["script", "style", "nav", "footer", "header", "aside", "form", "noscript", "template"]):
                     element.decompose()
                 main = soup.find("main") or soup.find("article") or soup.body or soup
-                sections = tuple(
-                    re.sub(r"\s+", " ", element.get_text(" ", strip=True))
-                    for element in main.find_all(["h1", "h2", "h3", "p", "li", "blockquote", "pre"])
-                    if element.get_text(" ", strip=True)
-                )
+                readable: list[str] = []
+                # Include table rows in DOM order alongside prose. A single
+                # paragraph must not suppress all tabular values, and cell
+                # paragraphs must not appear twice as independent sections.
+                for element in main.find_all(["h1", "h2", "h3", "p", "li", "blockquote", "pre", "table"]):
+                    if element.find_parent("table") is not None:
+                        continue
+                    if element.name == "table":
+                        for row in element.find_all("tr"):
+                            if row.find_parent("table") is not element:
+                                continue  # nested tables are rendered by their parent cell
+                            cells = [
+                                re.sub(r"\s+", " ", cell.get_text(" ", strip=True))
+                                for cell in row.find_all(["th", "td"], recursive=False)
+                            ]
+                            if any(cells):
+                                readable.append(" | ".join(cells))
+                    else:
+                        content = re.sub(r"\s+", " ", element.get_text(" ", strip=True))
+                        if content:
+                            readable.append(content)
+                sections = tuple(readable)
                 text = "\n".join(sections) or re.sub(r"\s+", " ", main.get_text(" ", strip=True))
             text = "\n".join(line.strip() for line in text.splitlines() if line.strip())
             truncated = payload.truncated or len(text) > limits.max_chars_per_source

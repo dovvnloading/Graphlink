@@ -12,6 +12,7 @@ from backend.providers.base import ToolCall, CancelToken
 from backend.tools import NET_FETCH, RunContext, ToolRegistry
 from graphlink_plugins.web_research.domain import FetchedDocument, FetchedPayload, SearchResult
 from graphlink_plugins.web_research import service as service_module
+from graphlink_plugins.web_research.crawl_etiquette import CrawlEtiquette
 
 
 def _call(name: str, **arguments) -> ToolCall:
@@ -200,6 +201,66 @@ def test_fetch_approves_each_redirect_domain_and_reuses_same_domain(monkeypatch)
     assert reference["type"] == "untrusted_web_reference"
     assert reference["url"] == "https://elsewhere.example/new"
     assert reference["text"] == _Extractor.text
+
+
+def test_fetch_preserves_robots_and_crawl_delay_for_task_only(monkeypatch):
+    # The live fetcher waits out gate()'s delay; here we inspect that gate
+    # state without sleeping or making any network requests.
+    registry = _registry(monkeypatch)
+    services = []
+    approvals = []
+
+    class PoliteFetcher:
+        def __init__(self):
+            self.etiquette = CrawlEtiquette(default_crawl_delay_seconds=2.0)
+            self.delays = []
+            self.robots_reads = []
+
+        def fetch(self, result, *, limits, token, on_request=None):
+            token.raise_if_cancelled()
+            if on_request is not None:
+                on_request(result.canonical_url)
+
+            def robots(url):
+                self.robots_reads.append(url)
+                return (200, b"User-agent: *\nCrawl-delay: 15\n")
+
+            self.delays.append(self.etiquette.gate(result.canonical_url, robots))
+            self.etiquette.record_fetch(result.canonical_url)
+            return FetchedPayload(
+                source_id=result.source_id, requested_url=result.url,
+                final_url=result.canonical_url, content_type="text/plain", body=b"page",
+            )
+
+    def make_service():
+        service = SimpleNamespace(
+            fetcher=PoliteFetcher(), extractor=_Extractor(), search_provider=_Search(),
+        )
+        services.append(service)
+        return service
+
+    monkeypatch.setattr(service_module, "WebResearchService", make_service)
+
+    async def approve(call):
+        approvals.append(call.arguments["domain"])
+        return True
+
+    async def run():
+        ctx = _ctx(approve)
+        a = await registry.invoke(_call("web.fetch", url="https://pages.example/a"), ctx)
+        b = await registry.invoke(_call("web.fetch", url="https://pages.example/b"), ctx)
+        c = await registry.invoke(_call("web.fetch", url="https://pages.example/c"), _ctx(approve))
+        return a, b, c
+
+    assert all(not result.is_error for result in asyncio.run(run()))
+    assert len(services) == 2
+    first, second = (item.fetcher for item in services)
+    assert first.delays[0] == 0.0
+    assert first.delays[1] > 10.0  # robots.txt Crawl-delay, not a new first request
+    assert first.robots_reads == ["https://pages.example/robots.txt"]
+    assert second.delays == [0.0]  # no state crosses task boundaries
+    assert second.robots_reads == ["https://pages.example/robots.txt"]
+    assert approvals == ["pages.example", "pages.example"]
 
 
 def test_denied_redirect_never_reaches_next_domain(monkeypatch):

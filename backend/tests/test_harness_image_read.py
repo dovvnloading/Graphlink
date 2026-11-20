@@ -73,6 +73,39 @@ def test_large_image_is_downscaled_not_relayed_at_original_resolution(fs):
         assert preview.size == (1024, 512)
 
 
+def test_large_image_is_reduced_before_exif_copy(monkeypatch):
+    # Regression for #799: EXIF transposition used to copy all 20 MP pixels,
+    # followed by another full-resolution copy for every preview size.
+    from backend.harness import image_read
+
+    original = image_read.ImageOps.exif_transpose
+    inspected = []
+
+    def checked_transpose(image):
+        inspected.append(image.size)
+        assert max(image.size) <= image_read.MAX_PREVIEW_SIDE
+        return original(image)
+
+    monkeypatch.setattr(image_read.ImageOps, "exif_transpose", checked_transpose)
+    preview = read_image_preview(_image_bytes("PNG", (4000, 5000)))
+    assert inspected and max(inspected[0]) <= 1024
+    assert "4000 x 5000 pixels" in preview.description
+    with Image.open(io.BytesIO(preview.image_bytes)) as output:
+        assert output.size == (819, 1024)
+
+
+def test_exif_orientation_still_reports_original_display_dimensions():
+    exif = Image.Exif()
+    exif[274] = 6  # rotate 90 degrees clockwise
+    stream = io.BytesIO()
+    Image.new("RGB", (2400, 1200), "navy").save(stream, format="JPEG", exif=exif)
+    result = read_image_preview(stream.getvalue())
+    assert "1200 x 2400 pixels" in result.description
+    assert "Preview: 512 x 1024 pixels" in result.description
+    with Image.open(io.BytesIO(result.image_bytes)) as output:
+        assert output.size == (512, 1024)
+
+
 def test_animated_gif_uses_first_frame(fs):
     workspace, read = fs
     stream = io.BytesIO()

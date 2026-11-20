@@ -59,24 +59,34 @@ def read_image_preview(data: bytes) -> ImagePreview:
                 )
             frames = int(getattr(source, "n_frames", 1))
             source.seek(0)
-            # Apply EXIF orientation before reporting dimensions or resizing.
+            # Read the display orientation without allocating a second full-
+            # resolution image. EXIF orientations 5-8 swap width and height.
+            orientation = source.getexif().get(274, 1)
+            display_width, display_height = (
+                (height, width) if orientation in (5, 6, 7, 8)
+                else (width, height)
+            )
+            # Thumbnail the decoder-owned image *before* EXIF transposition
+            # (which copies pixels). Pillow can also draft-decode JPEGs here.
+            # No additional full-resolution image is ever needed.
+            source.thumbnail((MAX_PREVIEW_SIDE, MAX_PREVIEW_SIDE), Image.Resampling.LANCZOS)
             oriented = ImageOps.exif_transpose(source)
-            display_width, display_height = oriented.size
 
             # A bounded output independent of the original format and frame
             # count. Never serialize original bytes into a model request.
             preview_bytes = None
             preview_size = None
             for side in (MAX_PREVIEW_SIDE, 768, 512):
-                thumbnail = oriented.copy()
-                thumbnail.thumbnail((side, side), Image.Resampling.LANCZOS)
-                rgb = _rgb(thumbnail)
+                # Retry at smaller sizes in place; copying the original
+                # high-resolution image for every quality attempt is unsafe.
+                oriented.thumbnail((side, side), Image.Resampling.LANCZOS)
+                rgb = _rgb(oriented)
                 for quality in (80, 65):
                     output = io.BytesIO()
                     rgb.save(output, format="JPEG", quality=quality, optimize=True)
                     if output.tell() <= MAX_PREVIEW_BYTES:
                         preview_bytes = output.getvalue()
-                        preview_size = thumbnail.size
+                        preview_size = oriented.size
                         break
                 if preview_bytes is not None:
                     break

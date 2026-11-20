@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from itertools import islice
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +24,8 @@ WORKSPACE_SKILLS_DIR = Path(".graphlink") / "skills"
 _METADATA_MAX_BYTES = 16 * 1024
 _SKILL_MAX_BYTES = 128 * 1024
 _MAX_LISTED_SKILLS = 64
+# Count inspected directory entries, not just accepted skill packages.
+_MAX_SCANNED_CANDIDATES = 256
 _MAX_DESCRIPTION_CHARS = 300
 _NAME_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}\Z")
 _FIELD_RE = re.compile(r"^(name|description):\s*(.*)$")
@@ -113,28 +116,35 @@ def _root_for(workspace: Path, source: str) -> Path:
     raise SkillError("Source must be 'workspace' or 'user'.")
 
 
-def _discover_from(workspace: Path, source: str) -> list[Skill]:
+def _discover_from(workspace: Path, source: str) -> tuple[list[Skill], bool]:
+    """Scan a bounded number of directory entries; report incomplete scans."""
     base = _root_for(workspace, source)
     # Do not let a symlinked .graphlink directory escape the bound workspace.
     if source == "workspace" and (workspace.resolve() / ".graphlink").is_symlink():
-        return []
+        return [], False
     if (source == "workspace" and not base.resolve().is_relative_to(workspace.resolve())) or base.is_symlink() or not base.is_dir():
-        return []
+        return [], False
     found: list[Skill] = []
     seen: set[str] = set()
     try:
-        candidates = sorted(base.iterdir(), key=lambda path: path.name)
+        # scandir is lazy; sample at most one more than the cap to detect
+        # truncation, then sort only that small sample for stable presentation.
+        with os.scandir(base) as entries:
+            sample = list(islice(entries, _MAX_SCANNED_CANDIDATES + 1))
     except OSError:
-        return []
-    for directory in candidates:
+        return [], False
+    incomplete = len(sample) > _MAX_SCANNED_CANDIDATES
+    for entry in sorted(sample[:_MAX_SCANNED_CANDIDATES], key=lambda item: item.name):
         if len(found) >= _MAX_LISTED_SKILLS:
+            incomplete = True
             break
-        if directory.is_symlink() or not directory.is_dir():
-            continue
-        skill_file = directory / "SKILL.md"
-        if skill_file.is_symlink() or not skill_file.is_file():
-            continue
         try:
+            if entry.is_symlink() or not entry.is_dir(follow_symlinks=False):
+                continue
+            directory = Path(entry.path)
+            skill_file = directory / "SKILL.md"
+            if skill_file.is_symlink() or not skill_file.is_file():
+                continue
             # Require the package to stay directly beneath the chosen root.
             if skill_file.resolve().parent != directory.resolve() or directory.resolve().parent != base.resolve():
                 continue
@@ -146,18 +156,29 @@ def _discover_from(workspace: Path, source: str) -> list[Skill]:
         name, description = metadata
         seen.add(name)
         found.append(Skill(source, name, description, skill_file))
-    return found
+    return found, incomplete
+
+
+def _discover_catalog(workspace: Path) -> tuple[list[Skill], list[str]]:
+    found: list[Skill] = []
+    incomplete_sources: list[str] = []
+    for source in ("workspace", "user"):
+        skills, incomplete = _discover_from(workspace, source)
+        found.extend(skills)
+        if incomplete:
+            incomplete_sources.append(source)
+    return found, incomplete_sources
 
 
 def discover_skills(workspace: Path) -> tuple[Skill, ...]:
-    """Deterministic catalog with explicit source for colliding names."""
-    return tuple([*_discover_from(workspace, "workspace"), *_discover_from(workspace, "user")])
+    """Bounded catalog; names are sorted within each scanned sample."""
+    return tuple(_discover_catalog(workspace)[0])
 
 
 def skills_prompt(workspace: Path) -> str:
     """Only names/descriptions enter the cacheable system prompt."""
-    discovered = discover_skills(workspace)
-    if not discovered:
+    discovered, incomplete_sources = _discover_catalog(workspace)
+    if not discovered and not incomplete_sources:
         return ""
     rows = [
         "## Available skills (metadata only)",
@@ -171,6 +192,12 @@ def skills_prompt(workspace: Path) -> str:
         rows.append(f"- {skill.source} / {skill.name}: {skill.description}")
     if len(discovered) > _MAX_LISTED_SKILLS:
         rows.append(f"[{len(discovered) - _MAX_LISTED_SKILLS} additional skills omitted from prompt.]")
+    if incomplete_sources:
+        rows.append(
+            "[Skill catalog incomplete for " + ", ".join(incomplete_sources)
+            + f": scanned at most {_MAX_SCANNED_CANDIDATES} candidate entries per source; "
+            "some skills may be unavailable.]"
+        )
     return "\n".join(rows)
 
 
@@ -183,9 +210,11 @@ def load_skill(workspace: Path, *, source: str, name: str) -> str:
     """
     if source not in ("workspace", "user") or not isinstance(name, str) or not _NAME_RE.fullmatch(name):
         raise SkillError("skills.load requires a valid source ('workspace' or 'user') and skill name.")
-    chosen = next((s for s in _discover_from(workspace, source) if s.name == name), None)
+    discovered, incomplete = _discover_from(workspace, source)
+    chosen = next((s for s in discovered if s.name == name), None)
     if chosen is None:
-        raise SkillError(f"Skill {source} / {name} was not found.")
+        detail = " (catalog scan incomplete)" if incomplete else ""
+        raise SkillError(f"Skill {source} / {name} was not found{detail}.")
     if chosen.path.parent.is_symlink() or chosen.path.is_symlink():
         raise SkillError("Skill package is a symlink and cannot be read.")
     try:
