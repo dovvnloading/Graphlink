@@ -2224,13 +2224,15 @@ def test_workspace_agent_revocation_rejects_invalid_or_unlisted_paths(manager):
     recorder = Recorder()
     bus.attach(recorder)
 
-    for invalid in (None, "", [], {"path": project}, "/projects"):
+    for invalid in (None, "", [], {"path": project}):
         asyncio.run(bus.dispatch_intent("app-settings", "revokeHarnessTrustedDir", [invalid]))
         assert manager.get_harness_trusted_dirs() == [project]
+    assert not recorder.messages, "malformed requests must not publish a settings change"
 
-    # Reject malformed wire values without emitting a misleading updated snapshot.
-    assert all(msg["topic"] != "app-settings" for msg in recorder.messages
-               if msg["payload"].get("harnessTrustedDirs") == [])
+    # An unlisted path cannot revoke a different grant, even if its name is
+    # a parent of the trusted directory.
+    asyncio.run(bus.dispatch_intent("app-settings", "revokeHarnessTrustedDir", ["/projects"]))
+    assert manager.get_harness_trusted_dirs() == [project]
 
     asyncio.run(bus.dispatch_intent("app-settings", "revokeHarnessTrustedDir", [project]))
     asyncio.run(bus.dispatch_intent("app-settings", "revokeHarnessTrustedDir", [project]))
