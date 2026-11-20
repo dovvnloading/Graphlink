@@ -219,6 +219,7 @@ class HarnessRunContext(RunContext):
     # The interpreter disclosed for a fresh python.install authorization.
     python_install_approved_interpreter: object = None
     python_install_approved_binding: object = None
+    python_install_approved_identity: object = None
     # Per-call source-file versions disclosed for a human-approved write.
     # Never persisted; the file handlers consume them just before replacing.
     harness_file_approval_states: dict[str, FileApprovalState] = field(default_factory=dict)
@@ -592,11 +593,14 @@ async def run_harness(
         # virtualenv before consent. Pin the choice against a late rebind.
         install_target = None
         install_binding = None
+        install_identity = None
         ctx.python_install_approved_interpreter = None
         ctx.python_install_approved_binding = None
+        ctx.python_install_approved_identity = None
         if call.name == "python.install":
             from backend.harness.python_install import (
-                planned_install_interpreter, workspace_install_binding,
+                install_interpreter_identity, planned_install_interpreter,
+                workspace_install_binding,
             )
 
             try:
@@ -609,6 +613,8 @@ async def run_harness(
                     workspace_id, root.resolve(), is_scratch,
                     ctx.harness_execution_profile, install_target,
                 )
+                if ctx.harness_execution_profile == "host":
+                    install_identity = install_interpreter_identity(Path(install_target))
             except (WorkspaceError, OSError):
                 return False
         network_offered = (
@@ -736,6 +742,7 @@ async def run_harness(
         if call.name == "python.install" and approved and preview_available:
             ctx.python_install_approved_interpreter = install_target
             ctx.python_install_approved_binding = install_binding
+            ctx.python_install_approved_identity = install_identity
         if preview is not None and approved and preview_available:
             if preview.state is None:
                 return False
