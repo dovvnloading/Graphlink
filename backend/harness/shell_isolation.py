@@ -95,7 +95,7 @@ def container_invocation(
     ]
     for source, target in extra_mounts:
         mount_source_extra = str(source.resolve())
-        if any(c in mount_source_extra or c in target for c in (", "\r", "\n")):
+        if any(c in mount_source_extra or c in target for c in (",", "\r", "\n")):
             raise IsolationUnavailableError(
                 "Isolated execution cannot mount paths containing commas or newlines. "
                 "Host execution was NOT attempted."
