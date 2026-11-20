@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ReactFlowProvider } from "@xyflow/react";
 import { describe, expect, it, vi } from "vitest";
@@ -218,9 +218,10 @@ describe("HarnessNodeView", () => {
     expect(await screen.findByText(/No container engine found/)).toHaveTextContent("Docker");
     expect(screen.getByText(/No container engine found/)).toHaveTextContent("Podman");
     expect(screen.getByText(/No container engine found/)).toHaveTextContent("never fall back to Host");
-    expect(screen.getByRole("combobox", { name: "Execution profile" })).toHaveValue("isolated");
-    expect(screen.getByRole("option", { name: /Isolated/ })).toBeDisabled();
-    await user.selectOptions(screen.getByRole("combobox", { name: "Execution profile" }), "host");
+    const profileSelect = screen.getByRole("combobox", { name: "Execution profile" });
+    expect(profileSelect).toHaveValue("isolated");
+    expect(within(profileSelect).getByRole("option", { name: /Isolated/ })).toBeDisabled();
+    await user.selectOptions(profileSelect, "host");
     expect(data.onSetExecutionProfile).toHaveBeenCalledWith("host");
   });
 
