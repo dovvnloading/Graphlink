@@ -52,13 +52,14 @@ def _result(request, call_id):
 class _ScriptedTestModel:
     """One deterministic response per turn; also checks native/JSON transport."""
 
-    def __init__(self, turns, *, json_tools=False):
+    def __init__(self, turns, *, json_tools=False, vision=False):
         self.turns = list(turns)
         self.json_tools = json_tools
         self.requests = []
         self.model_id = "scripted-workspace-test"
         self.capabilities = ProviderCapabilities(
             streaming=True, tools=not json_tools, structured_output=json_tools,
+            vision=vision,
         )
 
     def stream(self, request, cancel):
@@ -128,9 +129,12 @@ def scenario(tmp_path, monkeypatch):
     )
 
 
-def _drive(scenario, monkeypatch, turns, *, approvals=(), json_tools=False):
+def _drive(
+    scenario, monkeypatch, turns, *, approvals=(), json_tools=False,
+    vision=False, settings_manager=None, timeout_seconds=30,
+):
     """Run a real harness task, resolving precisely the scripted human decisions."""
-    model = _ScriptedTestModel(turns, json_tools=json_tools)
+    model = _ScriptedTestModel(turns, json_tools=json_tools, vision=vision)
     monkeypatch.setattr(api_provider, "_provider_for_model_ref", lambda _ref, _state: model)
     provider = config.LOCAL_PROVIDER_LLAMACPP if json_tools else "DeepSeek"
     expected_approvals = list(approvals)
@@ -146,10 +150,11 @@ def _drive(scenario, monkeypatch, turns, *, approvals=(), json_tools=False):
             harness_node_id=scenario.agent.id, user_text="Complete the scenario.",
             request_id=handle.request_id, handle=handle, cancel_event=cancel_event,
             model_ref=ModelRef(provider, model.model_id),
+            settings_manager=settings_manager,
         ))
         seen_approvals = []
         cursor = 0
-        deadline = asyncio.get_running_loop().time() + 30
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
         try:
             while not task.done():
                 future = handle.approval_future
@@ -166,7 +171,7 @@ def _drive(scenario, monkeypatch, turns, *, approvals=(), json_tools=False):
                     future.set_result(decision)
                     cursor += 1
                 if asyncio.get_running_loop().time() >= deadline:
-                    raise AssertionError("workspace-agent scenario exceeded 30 seconds")
+                    raise AssertionError(f"workspace-agent scenario exceeded {timeout_seconds} seconds")
                 await asyncio.sleep(0.002)
             await task
             assert cursor == len(expected_approvals), (seen_approvals, expected_approvals)
