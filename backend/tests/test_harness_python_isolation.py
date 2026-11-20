@@ -270,3 +270,41 @@ def test_isolated_install_requires_bound_approval_and_discloses_network(tmp_path
     assert not result.is_error and result.content == "installed"
     assert ctx.python_install_approved_interpreter is None
     assert ctx.python_install_approved_binding is None
+
+
+def test_profile_switch_retires_live_host_python_even_without_next_exec(tmp_path):
+    repls = PythonReplRegistry()
+    old = Mock()
+    repls._repls["ws"] = (old, tmp_path)
+    repls._profiles["ws"] = "host"
+    repls.bind_root("ws", tmp_path, "isolated")
+    old.stop.assert_called_once()
+    assert "ws" not in repls._repls
+    assert "ws" not in repls._profiles
+
+
+def test_missing_container_engine_fails_closed_without_host_python(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setattr(python_env, "HARNESS_PYTHON_ENV_ROOT", tmp_path / "managed")
+    monkeypatch.setattr("backend.harness.shell_isolation.shutil.which", return_value=None)
+
+    def forbid_host_python(*args, **kwargs):
+        raise AssertionError("Missing Docker/Podman must not fall back to host Python")
+    monkeypatch.setattr(tools_python, "ensure_python_environment", forbid_host_python)
+    async def approve(_call):
+        return True
+
+    registry, repls = ToolRegistry(), PythonReplRegistry()
+    register_harness_python_tool(registry, repls)
+    try:
+        result = asyncio.run(registry.invoke(
+            ToolCall("missing-engine", "python.exec", {"code": "print('hi')"}),
+            _isolated_context(project, approve),
+        ))
+        assert result.is_error
+        assert "Docker or Podman" in result.content
+        assert not (project / ".venv").exists()
+        assert not (tmp_path / "managed").joinpath("isolated-test").exists()
+    finally:
+        repls.stop_all()
