@@ -144,22 +144,23 @@ def register_harness_intents(
             except (TypeError, ValueError):
                 return _DEFAULT_TURNS
 
-        node, command = document.record_command(
-            "harnessCreate", "agent",
-            lambda: document.add_harness_node(x, y, goal_text, max_turns=clamp(max_turns)),
-        )
-        # The launcher's folder choice, bound BEFORE the run starts so the
-        # first task already works where the person meant it to - without
-        # this they had to let a scratch run finish, rebind the node, and
-        # re-send the same task. Wire input is a REQUEST, never a grant:
-        # bound_root re-checks the trust list at run time and silently
-        # falls back to scratch, so a path that was never picked here
-        # (a hand-edited session file, a replayed intent) buys nothing.
+        # The launcher's folder choice is bound BEFORE the first run, not
+        # trusted by naming alone: bound_root re-checks the trusted-directory
+        # list at run time and falls back to scratch if it was not granted.
         requested_workspace = str(workspace_path or "").strip()[:_PATH_CAP]
-        if requested_workspace:
-            node.state.harness_workspace_path = requested_workspace
-        # The dispatcher snapshots the profile as it claims the first task.
-        node.state.harness_execution_profile = execution_profile
+
+        def create_with_launch_options():
+            created = document.add_harness_node(x, y, goal_text, max_turns=clamp(max_turns))
+            if requested_workspace:
+                created.state.harness_workspace_path = requested_workspace
+            # record_command deep-copies the node as soon as this mutator
+            # returns. Both options must be present in the redo snapshot.
+            created.state.harness_execution_profile = execution_profile
+            return created
+
+        node, command = document.record_command(
+            "harnessCreate", "agent", create_with_launch_options,
+        )
 
         # The busy guard above and the dispatcher's synchronous run claim
         # must not yield to a second start. Publishing here previously let

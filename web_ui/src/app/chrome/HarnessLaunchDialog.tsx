@@ -5,7 +5,7 @@ import type { SceneStore } from "../canvas/sceneStore";
 import { motionDuration } from "../reducedMotion";
 import { Dialog, useOverlays } from "../overlays/overlays";
 import {
-  HarnessExecutionProfileSelect, MAX_HARNESS_TASK_LENGTH, type HarnessExecutionProfile,
+  HarnessExecutionProfileSelect, MAX_HARNESS_TASK_LENGTH, exceedsHarnessTaskLimit, type HarnessExecutionProfile,
 } from "./HarnessLaunchOptions";
 
 /**
@@ -67,7 +67,7 @@ export function HarnessLaunchDialog({ transport, store }: { transport: WsTranspo
   function startAgent() {
     const trimmed = task.trim();
     if (!trimmed || starting) return;
-    if (trimmed.length > MAX_HARNESS_TASK_LENGTH) {
+    if (exceedsHarnessTaskLimit(trimmed)) {
       setError(`Agent tasks cannot exceed ${MAX_HARNESS_TASK_LENGTH.toLocaleString()} characters. Shorten the task; your draft is preserved.`);
       return;
     }

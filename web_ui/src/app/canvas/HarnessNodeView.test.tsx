@@ -104,6 +104,21 @@ describe("HarnessNodeView", () => {
     expect(data.onSend).not.toHaveBeenCalled();
   });
 
+  // Regression #768: the follow-up editor must use the backend's code-point
+  // definition rather than UTF-16 units, just like first-task editors.
+  it("sends a supplementary Unicode follow-up within the backend limit", async () => {
+    const user = userEvent.setup();
+    const data = makeData({ harnessStatus: "done", pendingRequestId: null });
+    renderHarness(data);
+    const text = "😀".repeat(10_001);
+    fireEvent.change(screen.getByRole("textbox", { name: "Follow-up message" }), {
+      target: { value: text },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(data.onSend).toHaveBeenCalledWith(text);
+  });
+
   it("offers Undo run only for a completed run", async () => {
     const user = userEvent.setup();
     const data = makeData({ harnessStatus: "done", pendingRequestId: null });

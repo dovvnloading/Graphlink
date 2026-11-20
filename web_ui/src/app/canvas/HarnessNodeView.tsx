@@ -9,7 +9,7 @@ import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 import { HarnessWorkspaceFiles } from "./AgentWorkspaceBrowser";
 import type { HarnessWorkspaceListing } from "./harnessWorkspaceFiles";
-import { MAX_HARNESS_TASK_LENGTH } from "../../lib/harnessTaskLimit";
+import { MAX_HARNESS_TASK_LENGTH, exceedsHarnessTaskLimit } from "../../lib/harnessTaskLimit";
 
 /**
  * PLAN-2026-08-24 H1: the workspace agent node. Everything rendered here
@@ -498,7 +498,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   function sendDraft(): void {
     const text = draft.trim();
     if (!text || !acceptsInput(data.harnessStatus)) return;
-    if (text.length > MAX_HARNESS_TASK_LENGTH) {
+    if (exceedsHarnessTaskLimit(text)) {
       setDraftError(`Agent tasks cannot exceed ${MAX_HARNESS_TASK_LENGTH.toLocaleString()} characters. Shorten the task; your draft is preserved.`);
       return;
     }
