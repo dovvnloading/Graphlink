@@ -179,10 +179,26 @@ def test_provider_without_either_capability_is_refused_before_generation(monkeyp
     assert provider.requests == []
 
 
-def test_endpoint_rejecting_json_schema_fails_with_clear_model_guidance(monkeypatch):
-    provider = ScriptedProvider([RuntimeError("400: response_format json_schema unsupported")])
+def test_compatible_endpoint_can_downgrade_from_json_schema_to_json_object(monkeypatch):
+    provider = ScriptedProvider([
+        RuntimeError("400: response_format json_schema unsupported"),
+        _json_reply(answer="JSON-object mode worked."),
+    ])
+    result = _turn(monkeypatch, provider, config.API_PROVIDER_OPENAI)
+    assert result["message"]["content"] == "JSON-object mode worked."
+    assert len(provider.requests) == 2
+    assert provider.requests[0].extra_kwargs["response_format"]["type"] == "json_schema"
+    assert provider.requests[1].extra_kwargs["response_format"] == {"type": "json_object"}
+
+
+def test_endpoint_without_any_json_mode_fails_with_clear_model_guidance(monkeypatch):
+    provider = ScriptedProvider([
+        RuntimeError("400: response_format json_schema unsupported"),
+        RuntimeError("400: response_format json_object unsupported"),
+    ])
     with pytest.raises(RuntimeError, match="rejected grammar/schema-constrained JSON"):
         _turn(monkeypatch, provider, config.API_PROVIDER_OPENAI)
+    assert len(provider.requests) == 2
 
 
 @pytest.mark.parametrize(
