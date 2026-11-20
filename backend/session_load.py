@@ -1017,6 +1017,24 @@ def _restore_plan_payload(payload: dict[str, Any]) -> SceneNode:
 _HARNESS_TERMINAL_STATUSES = ("done", "failed", "stopped", "interrupted")
 
 
+def _restore_harness_shell_allow_rules(raw: object) -> list[str]:
+    """Bound malformed/legacy saved lists before putting them on a node."""
+    if not isinstance(raw, list):
+        return []
+    result: list[str] = []
+    for item in raw:
+        if not isinstance(item, str) or len(item) > 272:
+            continue
+        shell, separator, prefix = item.partition("\t")
+        if (separator and shell in {"bash", "git-bash", "cmd", "powershell"}
+                and prefix and not any(c in prefix for c in "\r\n\t")
+                and item not in result):
+            result.append(item)
+        if len(result) >= 100:
+            break
+    return result
+
+
 def _restore_harness_payload(payload: dict[str, Any]) -> SceneNode:
     """PLAN-2026-08-24 H1. Same load-time normalization as the plan node: a
     non-terminal harness_status describes a RunHandle that cannot survive a
@@ -1061,6 +1079,7 @@ def _restore_harness_payload(payload: dict[str, Any]) -> SceneNode:
             harness_workspace_id=str(payload.get("workspace_id") or uuid.uuid4().hex[:12]),
             harness_workspace_path=str(payload.get("workspace_path", "")),
             harness_shell=normalize_shell(payload.get("shell", "auto")),
+            harness_shell_allow_rules=_restore_harness_shell_allow_rules(payload.get("shell_allow_rules")),
             harness_execution_profile=normalize_execution_profile(payload.get("execution_profile", "host")),
             harness_activity=activity,
             harness_max_turns=_positive_int(payload.get("max_turns"), 16),

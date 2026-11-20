@@ -46,6 +46,10 @@ from backend.tools import (
 )
 
 
+# Deadlock watchdog only: the subprocess gate, not elapsed time, proves overlap.
+_PYTHON_STREAM_WATCHDOG_S = 120
+
+
 class TestFaultClassification:
     @pytest.mark.parametrize(
         "message, expected",
@@ -159,6 +163,95 @@ class TestShellPolicy:
         assert "not parsed" in plan.disclosure()
 
 
+class TestShellAllowRules:
+    def test_command_prefixes_are_scoped_to_shell_and_each_chain_segment(self):
+        from backend.harness.shell_policy import (
+            effective_shell_for_rules, shell_allow_rule_candidates, shell_command_allowed,
+        )
+
+        # "auto" runs Bash on POSIX and defaults to PowerShell on Windows.
+        # Rules are stored under the effective shell, not the requested alias.
+        active_shell = effective_shell_for_rules("auto")
+        rules = shell_allow_rule_candidates("git status && npm test", shell="auto")
+        assert rules == [active_shell + "\tgit status", active_shell + "\tnpm test"]
+        assert shell_allow_rule_candidates("git status", shell="bash") == [active_shell + "\tgit status"]
+        assert shell_command_allowed("git status && npm test", rules, shell="auto")
+        assert shell_command_allowed("git status --short; npm test -- --runInBand", rules, shell="auto")
+        assert not shell_command_allowed("git status && npm build", rules, shell="auto")
+        assert not shell_command_allowed("git statuses && npm test", rules, shell="auto")
+        assert not shell_command_allowed("git status && npm test && echo bonus", rules, shell="auto")
+
+        other_shell = "cmd" if active_shell == "powershell" else "powershell"
+        assert not shell_command_allowed(
+            "git status && npm test",
+            [other_shell + "\tgit status", other_shell + "\tnpm test"],
+            shell="auto",
+        )
+
+    def test_dangerous_and_ambiguous_commands_always_require_a_prompt(self):
+        from backend.harness.shell_policy import (
+            effective_shell_for_rules, shell_allow_rule_candidates, shell_command_allowed,
+        )
+
+        active_shell = effective_shell_for_rules("auto")
+        for command in (
+            "git status && rm -rf out",
+            "echo $(rm -rf out)",
+            "python -c 'print(1)'",
+            '"rm" -rf build',
+            "(rm -rf build)",
+            "echo ${PATH}",
+        ):
+            assert shell_allow_rule_candidates(command, shell="auto") == []
+
+        assert not shell_command_allowed("git -C other push", [active_shell + "\tgit"], shell="auto")
+        assert not shell_command_allowed(
+            "git status && rm -rf out",
+            [active_shell + "\tgit status", active_shell + "\trm -rf out"],
+            shell="auto",
+        )
+        assert not shell_command_allowed("rm -rf out", [active_shell + "\trm -rf out"], shell="auto")
+        # Verify PowerShell-specific destructive verbs even on POSIX hosts.
+        assert analyze("Get-ChildItem; Remove-Item file", shell="powershell").is_dangerous
+
+    def test_live_registry_only_bypasses_approval_for_matching_node_rules(self):
+        from backend.harness.shell_policy import requires_fresh_shell_approval, shell_allow_rule_candidates
+
+        registry = ToolRegistry()
+        async def handler(call, ctx):
+            return ToolResult("ran")
+
+        registry.register(
+            ToolSpec(name="shell.exec", description="test", input_schema={"type": "object"}),
+            handler, scopes={CODE_EXECUTE}, approval="always",
+            always_reprompt=lambda call: requires_fresh_shell_approval(call.name, call.arguments),
+        )
+        requests = []
+        async def deny(call):
+            requests.append(call.arguments["command"])
+            return False
+
+        rules = shell_allow_rule_candidates("git status && npm test", shell="auto")
+        assert len(rules) == 2
+        ctx = RunContext(
+            granted_scopes=frozenset({CODE_EXECUTE}), request_approval=deny,
+            session_grants={"shell.exec"}, shell_allow_rules=rules,
+        )
+        ctx.harness_shell = "auto"
+        def invoke(command):
+            return asyncio.run(registry.invoke(
+                ToolCall(id=command, name="shell.exec", arguments={"command": command}), ctx,
+            ))
+
+        assert not invoke("git status && npm test").is_error
+        assert invoke("git status && npm build").is_error
+        assert invoke("git status && rm -rf out").is_error
+        assert requests == ["git status && npm build", "git status && rm -rf out"]
+        ctx.shell_allow_rules.remove(rules[1])
+        assert invoke("git status && npm test").is_error
+        assert requests[-1] == "git status && npm test"
+
+
 def _ctx(record: list, *, decision, session_grants=None) -> RunContext:
     async def request_approval(call: ToolCall):
         record.append(call.name)
@@ -171,14 +264,14 @@ def _ctx(record: list, *, decision, session_grants=None) -> RunContext:
     )
 
 
-def _registry(*, always_reprompt=None) -> ToolRegistry:
+def _registry(*, always_reprompt=None, tool_name="shell.exec") -> ToolRegistry:
     registry = ToolRegistry()
 
     async def handler(call, ctx):
         return ToolResult(content="ran")
 
     registry.register(
-        ToolSpec(name="shell.exec", description="d", input_schema={"type": "object"}),
+        ToolSpec(name=tool_name, description="d", input_schema={"type": "object"}),
         handler, scopes={CODE_EXECUTE}, approval="always", always_reprompt=always_reprompt,
     )
     return registry
@@ -273,17 +366,20 @@ class TestGradedConsentAndReprompt:
         assert prompts == ["shell.exec", "shell.exec"], "every rm asks again"
 
     def test_a_session_grant_covers_later_differing_calls(self):
-        registry, prompts, grants = _registry(), [], set()
+        # Shell execution intentionally cannot acquire a tool-wide session
+        # grant; ordinary approved tools still have graded-consent behavior.
+        tool_name = "example.approved"
+        registry, prompts, grants = _registry(tool_name=tool_name), [], set()
         ctx = _ctx(prompts, decision="session", session_grants=grants)
         asyncio.run(registry.invoke(
-            ToolCall(id="c1", name="shell.exec", arguments={"command": "ls"}), ctx,
+            ToolCall(id="c1", name=tool_name, arguments={"value": "first"}), ctx,
         ))
-        # A DIFFERENT command - the fingerprint memo would not cover this.
+        # Different arguments are not covered by the fingerprint memo.
         asyncio.run(registry.invoke(
-            ToolCall(id="c2", name="shell.exec", arguments={"command": "pwd"}), ctx,
+            ToolCall(id="c2", name=tool_name, arguments={"value": "second"}), ctx,
         ))
-        assert prompts == ["shell.exec"]
-        assert grants == {"shell.exec"}
+        assert prompts == [tool_name]
+        assert grants == {tool_name}
 
     def test_a_session_grant_never_covers_a_dangerous_command(self):
         """§2.4's "deny always wins": the broader grant must not be the hole
@@ -447,28 +543,46 @@ class TestPythonExec:
         cancel = threading.Event()
         ctx = _tool_ctx(workspace, cancel=CancelToken(cancel))
         chunks: list[str] = []
-        ctx.on_tool_output = chunks.append
+        release = workspace / "release_python.txt"
+        # A parent-controlled gate keeps the call in flight even if Windows
+        # takes a long time to start the interpreter or deliver stdout.
         code = (
-            "marker = 42; import time; print('started'); "
-            "time.sleep(30); open('too_late.txt', 'w').write('bad')"
+            "marker = 42; import pathlib, time; print('started', flush=True)\n"
+            "while not pathlib.Path('release_python.txt').exists():\n"
+            "    time.sleep(0.02)\n"
+            "open('too_late.txt', 'w').write('bad')"
         )
 
         async def go():
+            loop = asyncio.get_running_loop()
+            streamed = asyncio.Event()
+
+            def on_output(chunk: str) -> None:
+                chunks.append(chunk)
+                if "started" in chunk:
+                    loop.call_soon_threadsafe(streamed.set)
+
+            ctx.on_tool_output = on_output
             task = asyncio.create_task(registry.invoke(
                 ToolCall(id="stream", name="python.exec", arguments={"code": code}), ctx,
             ))
-            for _ in range(1500):
-                if "started" in "".join(chunks):
-                    break
-                await asyncio.sleep(0.02)
-            assert "started" in "".join(chunks), "Python stdout must arrive before return"
-            assert not task.done()
-            cancel.set()
-            with pytest.raises(RequestCancelledError):
-                await asyncio.wait_for(task, timeout=7)
+            try:
+                await asyncio.wait_for(streamed.wait(), timeout=_PYTHON_STREAM_WATCHDOG_S)
+                assert "started" in "".join(chunks), "Python stdout must arrive before return"
+                assert not task.done()
+                # Check the actual child, not only removal of the registry entry.
+                old_process = repls._repls["ws-h6"][0].process
+                assert old_process is not None and old_process.poll() is None
+                cancel.set()
+                with pytest.raises(RequestCancelledError):
+                    await asyncio.wait_for(task, timeout=_PYTHON_STREAM_WATCHDOG_S)
+                assert old_process.poll() is not None
+            finally:
+                cancel.set()
 
         try:
             asyncio.run(go())
+            release.touch()
             assert not (workspace / "too_late.txt").exists()
             # Stop kills the persistent interpreter: a later call must use a
             # fresh one, rather than the half-executed old process.

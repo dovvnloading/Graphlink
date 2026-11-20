@@ -276,7 +276,8 @@ def _is_dangerous_call(call: ToolCall) -> bool:
     return call.name in ("python.exec", "python.install") or shell_policy.requires_fresh_shell_approval(call.name, call.arguments)
 
 
-def _approval_summary(call: ToolCall, *, workspace_root: Path | None = None) -> str:
+def _approval_summary(call: ToolCall, *, workspace_root: Path | None = None,
+                      shell: str = "auto") -> str:
     """What the approval panel shows for one parked call. The mutating
     tools disclose their EFFECT verbatim (the command that will run, the
     content that will land on disk) rather than a JSON blob - and
@@ -291,7 +292,12 @@ def _approval_summary(call: ToolCall, *, workspace_root: Path | None = None) -> 
     if call.name == "shell.exec":
         # §2.4: disclose one line per thing that will actually run, so a
         # dangerous tail cannot hide behind a benign head in a chain.
-        return f"shell.exec\n{shell_policy.analyze(str(call.arguments.get('command') or '')).disclosure()}"
+        selected = shell_policy.effective_shell_for_rules(shell)
+        plan = shell_policy.analyze(
+            str(call.arguments.get("command") or ""),
+            shell="bash" if selected == "git-bash" else selected,
+        )
+        return f"shell.exec\n{plan.disclosure()}"
     if call.name == "shell.session":
         action = str(call.arguments.get("action") or "")
         name = str(call.arguments.get("name") or "")
@@ -438,6 +444,7 @@ async def run_harness(
     model_ref=None,
     settings_manager=None,
     runtime=None,
+    allow_session_grants: bool = True,
 ) -> None:
     """One harness task, claimed as kind="harness" by
     AgentDispatcher.start_harness_run (which create_tasks this)."""
@@ -530,8 +537,16 @@ async def run_harness(
         # the exact disclosure that was on screen when the user decided.
         # Web domains are once-per-task, never session-wide. A unique token
         # also prevents a stale click from approving a later redirect host.
-        bind_approval = call.name in ("python.exec", "python.install", "web.fetch", "web.search") or call.name.startswith("fal.")
+        bind_approval = call.name in ("python.exec", "python.install", "shell.exec", "web.fetch", "web.search") or call.name.startswith("fal.")
         approval_token = uuid.uuid4().hex if bind_approval else ""
+        shell_rules = (
+            shell_policy.shell_allow_rule_candidates(
+                str(call.arguments.get("command") or ""), shell=ctx.harness_shell,
+            ) if call.name == "shell.exec" else []
+        )
+        can_save_shell_rules = bool(shell_rules) and len(set(
+            node.state.harness_shell_allow_rules + shell_rules
+        )) <= shell_policy.MAX_SHELL_ALLOW_RULES
         handle.approval_token = approval_token
         node.state.harness_approval_id = handle.approval_token
         node.state.harness_awaiting_approval = True
@@ -545,12 +560,16 @@ async def run_harness(
             )
         else:
             node.state.harness_approval_summary = (
-                preview.summary if preview is not None else _approval_summary(call)
+                preview.summary if preview is not None
+                else _approval_summary(call, shell=ctx.harness_shell)
             )
-        # Executable commands and interactive stdin always ask fresh, even
-        # when a previous call was approved for the session. The panel must
-        # not suggest session consent that the registry will reject.
-        node.state.harness_approval_session_offered = preview_available and not bind_approval and not _is_dangerous_call(call)
+        # Shell commands can save only safe command prefixes, never tool-wide
+        # session consent. Python and interactive stdin still ask every time.
+        node.state.harness_approval_session_offered = preview_available and (
+            can_save_shell_rules if call.name == "shell.exec"
+            else ctx.session_grants is not None
+            and not bind_approval and not _is_dangerous_call(call)
+        )
         await bus.publish("scene")
         try:
             approved = await future
@@ -565,6 +584,18 @@ async def run_harness(
                 node.state.harness_approval_id = ""
             handle.approval_token = ""
         await bus.publish("scene")
+        # A shell prefix grant is made *only* from the backend's snapshotted
+        # command, never a client-supplied rule. A forged "always allow" on
+        # Python, a dangerous command, or a cancelled run is denied.
+        if approved == "shell_rule":
+            if (call.name != "shell.exec" or not can_save_shell_rules
+                    or cancel_event.is_set() or not _alive()):
+                return False
+            node.state.harness_shell_allow_rules[:] = list(dict.fromkeys(
+                node.state.harness_shell_allow_rules + shell_rules
+            ))
+            await bus.publish("scene")
+            return True
         # UI controls are not an authorization boundary. A forged or stale
         # client approval cannot permit a write whose preview was unavailable.
         if call.name == "python.install" and approved and preview_available:
@@ -602,7 +633,11 @@ async def run_harness(
         # design - a dispatcher that does not offer session grants yields
         # None, which RunContext reads as "no session-scoped option exists",
         # leaving every prompt once-or-deny.
-        session_grants=_session_grants_of(dispatcher, node.state.harness_workspace_id),
+        session_grants=(
+            _session_grants_of(dispatcher, node.state.harness_workspace_id)
+            if allow_session_grants else None
+        ),
+        shell_allow_rules=node.state.harness_shell_allow_rules,
         set_plan=set_plan,
         ask_user=ask_user,
         cancel=CancelToken(cancel_event),
