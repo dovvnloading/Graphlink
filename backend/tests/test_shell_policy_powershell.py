@@ -141,16 +141,23 @@ def test_nested_or_ambiguous_powershell_syntax_fails_closed(command):
     assert "PowerShell" in plan.disclosure()
 
 
-def test_legacy_cmd_posix_and_default_behavior_are_unchanged():
-    # The legacy regex even splits inside quotes; changing that belongs to a
-    # separate review, not a PowerShell-only change.
+def test_cmd_posix_and_default_disclose_real_quoted_segments():
     command = 'echo "a;b" & rm -rf out'
-    expected = ['echo "a', 'b"', "rm -rf out"]
+    expected = ['echo "a;b"', "rm -rf out"]
     for shell in (None, "cmd", "cmd.exe", "posix", "sh", "bash", "zsh"):
         plan = analyze(command, shell=shell)
         assert plan.segments == expected
         assert plan.dangerous == ["rm -rf out"]
         assert not plan.unsplittable
+
+    # cmd does NOT interpret apostrophes as quotes; & still executes the tail.
+    cmd = analyze("echo 'hello & rm -rf out", shell="cmd")
+    assert cmd.segments == ["echo 'hello", "rm -rf out"]
+    assert cmd.dangerous == ["rm -rf out"]
+    assert not cmd.unsplittable
+    posix = analyze("echo 'hello & rm -rf out'", shell="bash")
+    assert not posix.is_dangerous
+    assert posix.segments == ["echo 'hello & rm -rf out'"]
 
 
 def test_unrecognized_shell_is_reviewed_whole_rather_than_guessed():

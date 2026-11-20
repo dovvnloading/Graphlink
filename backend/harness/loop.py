@@ -311,7 +311,7 @@ def _is_dangerous_call(call: ToolCall) -> bool:
 
 def _approval_summary(
     call: ToolCall, *, workspace_root: Path | None = None,
-    shell: str = "auto", network_status: str = "",
+    shell: str = "auto", profile: str = "host", network_status: str = "",
 ) -> str:
     """What the approval panel shows for one parked call. The mutating
     tools disclose their EFFECT verbatim (the command that will run, the
@@ -327,7 +327,7 @@ def _approval_summary(
     if call.name == "shell.exec":
         # §2.4: disclose one line per thing that will actually run, so a
         # dangerous tail cannot hide behind a benign head in a chain.
-        selected = shell_policy.effective_shell_for_rules(shell)
+        selected = shell_policy.effective_shell_for_rules(shell, profile=profile)
         plan = shell_policy.analyze(
             str(call.arguments.get("command") or ""),
             shell="bash" if selected == "git-bash" else selected,
@@ -343,7 +343,11 @@ def _approval_summary(
         action = str(call.arguments.get("action") or "")
         name = str(call.arguments.get("name") or "")
         if action == "start":
-            plan = shell_policy.analyze(str(call.arguments.get("command") or ""))
+            selected = shell_policy.effective_shell_for_rules(shell, profile=profile)
+            plan = shell_policy.analyze(
+                str(call.arguments.get("command") or ""),
+                shell="bash" if selected == "git-bash" else selected,
+            )
             return f"shell.session start {name}\n{plan.disclosure()}"
         if action == "write":
             return f"shell.session write {name}\n--- stdin\n{call.arguments.get('input') or ''}"
@@ -611,6 +615,8 @@ async def run_harness(
         shell_rules = (
             shell_policy.shell_allow_rule_candidates(
                 str(call.arguments.get("command") or ""), shell=ctx.harness_shell,
+                workspace_root=ctx.harness_workspace_dir,
+                profile=ctx.harness_execution_profile,
             ) if call.name == "shell.exec" else []
         )
         can_save_shell_rules = not network_offered and bool(shell_rules) and len(set(
@@ -640,9 +646,12 @@ async def run_harness(
                     network_status = "requested; requires your permission"
             node.state.harness_approval_summary = (
                 preview.summary if preview is not None
-                else _approval_summary(call, shell=ctx.harness_shell, network_status=network_status)
+                else _approval_summary(
+                    call, shell=ctx.harness_shell, profile=ctx.harness_execution_profile,
+                    network_status=network_status,
+                )
             )
-        # Shell commands can save only safe command prefixes, never tool-wide
+        # Shell commands can save only exact, root/profile-scoped commands, never tool-wide
         # session consent. Python and interactive stdin still ask every time.
         node.state.harness_approval_session_offered = preview_available and (
             can_save_shell_rules if call.name == "shell.exec"
@@ -675,7 +684,7 @@ async def run_harness(
             else:
                 return False
             approved = True
-        # A shell prefix grant is made *only* from the backend's snapshotted
+        # An exact scoped shell grant is made *only* from the backend's snapshotted
         # command, never a client-supplied rule. A forged "always allow" on
         # Python, a dangerous command, or a cancelled run is denied.
         if approved == "shell_rule":

@@ -164,57 +164,59 @@ class TestShellPolicy:
 
 
 class TestShellAllowRules:
-    def test_command_prefixes_are_scoped_to_shell_and_each_chain_segment(self):
+    def test_rules_are_exact_and_bound_to_root_profile_and_shell(self, tmp_path):
         from backend.harness.shell_policy import (
             effective_shell_for_rules, shell_allow_rule_candidates, shell_command_allowed,
         )
 
-        # "auto" runs Bash on POSIX and defaults to PowerShell on Windows.
-        # Rules are stored under the effective shell, not the requested alias.
         active_shell = effective_shell_for_rules("auto")
-        rules = shell_allow_rule_candidates("git status && npm test", shell="auto")
-        assert rules == [active_shell + "\tgit status", active_shell + "\tnpm test"]
-        assert shell_allow_rule_candidates("git status", shell="bash") == [active_shell + "\tgit status"]
-        assert shell_command_allowed("git status && npm test", rules, shell="auto")
-        assert shell_command_allowed("git status --short; npm test -- --runInBand", rules, shell="auto")
-        assert not shell_command_allowed("git status && npm build", rules, shell="auto")
-        assert not shell_command_allowed("git statuses && npm test", rules, shell="auto")
-        assert not shell_command_allowed("git status && npm test && echo bonus", rules, shell="auto")
+        command = "git status && npm test"
+        rules = shell_allow_rule_candidates(command, shell="auto", workspace_root=tmp_path)
+        assert len(rules) == 1
+        assert rules[0].startswith(f"v2\t{active_shell}\thost\t")
+        assert shell_command_allowed(command, rules, shell="auto", workspace_root=tmp_path)
+        for changed in (
+            "git status --short && npm test",
+            "git status && npm test -- --runInBand",
+            "git status", "npm test", "npm test && git status",
+            "git status && npm build", "git status && npm test && echo bonus",
+        ):
+            assert not shell_command_allowed(changed, rules, shell="auto", workspace_root=tmp_path)
+        other = tmp_path / "different"
+        other.mkdir()
+        assert not shell_command_allowed(command, rules, workspace_root=other)
+        assert not shell_command_allowed(command, rules, workspace_root=tmp_path, profile="isolated")
+        assert not shell_command_allowed(command, ["bash\tgit status"], workspace_root=tmp_path)
 
-        other_shell = "cmd" if active_shell == "powershell" else "powershell"
-        assert not shell_command_allowed(
-            "git status && npm test",
-            [other_shell + "\tgit status", other_shell + "\tnpm test"],
-            shell="auto",
-        )
-
-    def test_dangerous_and_ambiguous_commands_always_require_a_prompt(self):
+    def test_dangerous_and_ambiguous_commands_always_require_a_prompt(self, tmp_path):
         from backend.harness.shell_policy import (
             effective_shell_for_rules, shell_allow_rule_candidates, shell_command_allowed,
         )
 
         active_shell = effective_shell_for_rules("auto")
         for command in (
-            "git status && rm -rf out",
-            "echo $(rm -rf out)",
-            "python -c 'print(1)'",
-            '"rm" -rf build',
-            "(rm -rf build)",
-            "echo ${PATH}",
+            "git status && rm -rf out", "echo $(rm -rf out)",
+            "python -c 'print(1)'", '"rm" -rf build',
+            "(rm -rf build)", "echo $PATH",
+            "echo okay; bash -c whoami", "echo safe && cd ..",
+            "ls /etc", "cat ../secrets", "git -C ../ status",
+            "git status --work-tree=../../",
         ):
-            assert shell_allow_rule_candidates(command, shell="auto") == []
+            assert shell_allow_rule_candidates(command, shell="auto", workspace_root=tmp_path) == []
 
-        assert not shell_command_allowed("git -C other push", [active_shell + "\tgit"], shell="auto")
         assert not shell_command_allowed(
-            "git status && rm -rf out",
-            [active_shell + "\tgit status", active_shell + "\trm -rf out"],
-            shell="auto",
+            "git -C other push", [active_shell + "\tgit"], workspace_root=tmp_path,
         )
-        assert not shell_command_allowed("rm -rf out", [active_shell + "\trm -rf out"], shell="auto")
-        # Verify PowerShell-specific destructive verbs even on POSIX hosts.
+        assert not shell_command_allowed(
+            "git status && rm -rf out", ["bash\tgit status", "bash\trm -rf out"],
+            workspace_root=tmp_path,
+        )
+        assert not shell_command_allowed(
+            "rm -rf out", ["bash\trm -rf out"], workspace_root=tmp_path,
+        )
         assert analyze("Get-ChildItem; Remove-Item file", shell="powershell").is_dangerous
 
-    def test_live_registry_only_bypasses_approval_for_matching_node_rules(self):
+    def test_live_registry_only_bypasses_approval_for_exact_bound_rule(self, tmp_path):
         from backend.harness.shell_policy import requires_fresh_shell_approval, shell_allow_rule_candidates
 
         registry = ToolRegistry()
@@ -231,25 +233,32 @@ class TestShellAllowRules:
             requests.append(call.arguments["command"])
             return False
 
-        rules = shell_allow_rule_candidates("git status && npm test", shell="auto")
-        assert len(rules) == 2
+        command = "git status && npm test"
+        rules = shell_allow_rule_candidates(command, shell="auto", workspace_root=tmp_path)
+        assert len(rules) == 1
         ctx = RunContext(
             granted_scopes=frozenset({CODE_EXECUTE}), request_approval=deny,
             session_grants={"shell.exec"}, shell_allow_rules=rules,
         )
         ctx.harness_shell = "auto"
+        ctx.harness_workspace_dir = tmp_path
+        ctx.harness_execution_profile = "host"
         def invoke(command):
             return asyncio.run(registry.invoke(
                 ToolCall(id=command, name="shell.exec", arguments={"command": command}), ctx,
             ))
 
-        assert not invoke("git status && npm test").is_error
+        assert not invoke(command).is_error
         assert invoke("git status && npm build").is_error
         assert invoke("git status && rm -rf out").is_error
         assert requests == ["git status && npm build", "git status && rm -rf out"]
-        ctx.shell_allow_rules.remove(rules[1])
-        assert invoke("git status && npm test").is_error
-        assert requests[-1] == "git status && npm test"
+        ctx.harness_execution_profile = "isolated"
+        assert invoke(command).is_error
+        ctx.harness_execution_profile = "host"
+        ctx.shell_allow_rules.clear()
+        assert invoke(command).is_error
+        assert requests[-1] == command
+
 
 
 def _ctx(record: list, *, decision, session_grants=None) -> RunContext:
