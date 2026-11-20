@@ -420,7 +420,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
       }
       bodyClassName="plan-node-body"
       menu={
-        menuPosition ? (
+        menuPosition && (
           <HarnessNodeMenu
             position={menuPosition}
             isCollapsed={data.isCollapsed}
@@ -428,7 +428,10 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
             onDelete={data.onDelete}
             onClose={() => setMenuPosition(null)}
           />
-        ) : settingsPosition ? (
+        )
+      }
+      footer={
+        settingsPosition && (
           <AgentSettingsPopover
             position={settingsPosition}
             shell={data.harnessShell}
@@ -436,7 +439,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
             onClose={() => setSettingsPosition(null)}
             triggerRef={settingsTriggerRef}
           />
-        ) : null
+        )
       }
     >
       <div className={`plan-node-status ${statusClass(data)}`}>{statusLabel(data)}</div>

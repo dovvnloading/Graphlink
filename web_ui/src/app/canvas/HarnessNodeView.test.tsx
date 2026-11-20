@@ -161,7 +161,6 @@ describe("HarnessNodeView", () => {
     expect(screen.getByRole("dialog", { name: "Agent settings" })).toBeInTheDocument();
     await user.click(actions);
     expect(screen.queryByRole("dialog", { name: "Agent settings" })).not.toBeInTheDocument();
-    await user.click(actions);
     expect(screen.getByRole("menu")).toBeInTheDocument();
   });
 
