@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import subprocess
 import sys
+import threading
 import venv
 from pathlib import Path
 
 import pytest
 
+from api_provider import RequestCancelledError
 from backend.harness import python_env, workspace
 from backend.harness.loop import HarnessRunContext
 from backend.harness.tools_python import PythonReplRegistry, register_harness_python_tool
@@ -223,12 +226,31 @@ def test_managed_venv_creation_uses_secret_free_env_and_reports_failures(tmp_pat
     monkeypatch.setenv("GRAPHLINK_FAKE_PROVIDER_SECRET", "must-not-leak")
     passed_envs = []
 
-    def fail_create(*args, **kwargs):
-        passed_envs.append(kwargs["env"])
-        assert args[0][:3] == [sys.executable, "-m", "venv"]
-        return subprocess.CompletedProcess(args[0], 1, "venv setup failed")
+    class FailedProcess:
+        returncode = 1
+        stdout = io.StringIO("venv setup failed\n")
 
-    monkeypatch.setattr(python_env.subprocess, "run", fail_create)
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    class Guard:
+        def popen_kwargs(self):
+            return {}
+
+        def close(self):
+            pass
+
+    def fail_create(guard, argv, **kwargs):
+        passed_envs.append(kwargs["env"])
+        assert argv[:3] == [sys.executable, "-m", "venv"]
+        return FailedProcess()
+
+    monkeypatch.setattr(python_env, "create_execution_guard", Guard)
+    monkeypatch.setattr(python_env, "spawn_guarded_subprocess", fail_create)
+    monkeypatch.setattr(python_env, "assign_guarded_subprocess", lambda *args: None)
     with pytest.raises(python_env.PythonEnvironmentError, match="venv setup failed"):
         python_env.ensure_python_environment("failed-agent", project, is_scratch=False)
     assert len(passed_envs) == 1
@@ -236,3 +258,53 @@ def test_managed_venv_creation_uses_secret_free_env_and_reports_failures(tmp_pat
     assert not python_env.managed_venv_dir(
         "failed-agent", project, is_scratch=False,
     ).exists()
+
+
+def test_stop_kills_and_reaps_an_inflight_first_use_venv_creation(tmp_path, monkeypatch):
+    """to_thread may outlive the task, but its guarded subprocess must not."""
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setattr(python_env, "HARNESS_PYTHON_ENV_ROOT", tmp_path / "envs")
+    real_spawn = python_env.spawn_guarded_subprocess
+    launched = threading.Event()
+    cancel = threading.Event()
+    processes = []
+    errors = []
+
+    def slow_bootstrap(guard, argv, **kwargs):
+        assert argv[:3] == [sys.executable, "-m", "venv"]
+        process = real_spawn(
+            guard,
+            [sys.executable, "-u", "-c", "import time; time.sleep(30)"],
+            **kwargs,
+        )
+        processes.append(process)
+        launched.set()
+        return process
+
+    monkeypatch.setattr(python_env, "spawn_guarded_subprocess", slow_bootstrap)
+
+    def create():
+        try:
+            python_env.ensure_python_environment(
+                "stop-bootstrap", project, is_scratch=False, cancel_event=cancel,
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=create, daemon=True)
+    worker.start()
+    try:
+        assert launched.wait(10), "the venv child must be running when Stop occurs"
+        assert processes[0].poll() is None
+        cancel.set()
+        worker.join(timeout=8)
+        assert not worker.is_alive(), "Stop must interrupt environment creation"
+        assert len(errors) == 1 and isinstance(errors[0], RequestCancelledError)
+        assert processes[0].poll() is not None, "Stop must reap the child process"
+        assert not python_env.managed_venv_dir(
+            "stop-bootstrap", project, is_scratch=False,
+        ).exists()
+    finally:
+        cancel.set()
+        worker.join(timeout=8)
