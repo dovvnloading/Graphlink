@@ -278,7 +278,7 @@ function AgentSettingsPopover({
             type="checkbox"
             className="nodrag"
             aria-label="Allow network for every task"
-            checked={allowNetwork}
+            checked={allowNetwork && permissionMode !== "autonomous"}
             disabled={profile !== "isolated" || permissionMode === "autonomous"}
             onChange={(event) => onSetNetworkAlways(event.target.checked)}
           />
