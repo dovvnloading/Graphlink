@@ -142,6 +142,31 @@ def test_posix_resolves_bash_from_execution_path():
     assert not use_shell
 
 
+def test_posix_absolute_bash_is_not_rebased_by_host_path_rules():
+    # Windows abspath("/bin/bash") turns the POSIX path into a drive path.
+    # Check this on every host so Linux CI also catches the regression.
+    with patch("backend.harness.shell_selection.shutil.which", return_value="/bin/bash") as which:
+        with patch("backend.harness.shell_selection.os.path.abspath") as abspath:
+            args, use_shell = shell_invocation(
+                "pwd", "auto", env={"PATH": "/bin"}, os_name="posix",
+            )
+    which.assert_called_once_with("bash", path="/bin")
+    abspath.assert_not_called()
+    assert args == ["/bin/bash", "--noprofile", "--norc", "-c", "pwd"]
+    assert not use_shell
+
+
+def test_posix_relative_bash_is_absolutized_on_every_host():
+    # A relative result from which() must still survive Popen's cwd change.
+    discovered = os.path.join("tools", "bash")
+    with patch("backend.harness.shell_selection.shutil.which", return_value=discovered):
+        args, use_shell = shell_invocation(
+            "pwd", "auto", env={"PATH": "tools"}, os_name="posix",
+        )
+    assert args[0] == os.path.abspath(discovered)
+    assert not use_shell
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX relative PATH resolution")
 def test_posix_relative_path_bash_still_launches_from_workspace(tmp_path, monkeypatch):
     backend_dir = tmp_path / "backend"
