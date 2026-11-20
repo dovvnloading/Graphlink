@@ -357,8 +357,11 @@ class ToolRegistry:
                 _raise_if_cancelled(ctx.cancel.event if ctx.cancel is not None else None)
                 if not approved:
                     return ToolResult(content=f"Tool call {call.name!r} was denied approval.", is_error=True)
-                if (original_python_call is not None or original_shell_call is not None) and (
-                    (original_python_call or original_shell_call).arguments != call.arguments
+                original_approved_call = (
+                    original_python_call if original_python_call is not None else original_shell_call
+                )
+                if original_approved_call is not None and (
+                    original_approved_call.arguments != call.arguments
                     or disclosure_call.arguments != call.arguments
                 ):
                     return ToolResult(
