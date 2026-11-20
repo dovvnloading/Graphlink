@@ -15,6 +15,8 @@ test_execution_guard.py).
 
 from __future__ import annotations
 
+from threading import Event, Thread
+
 from graphlink_plugins.common.python_repl import PythonREPL
 
 
@@ -136,3 +138,35 @@ def test_exactly_sized_reader_chunk_preserves_repl_framing():
     finally:
         repl.stop()
 
+
+
+def test_repl_emits_unbuffered_output_before_execution_finishes():
+    """Output must reach the callback while the child is still sleeping."""
+    repl = PythonREPL(repl_id="core-live-output-test")
+    first_line = Event()
+    pieces: list[str] = []
+    finished: list[str] = []
+
+    def on_output(text: str) -> None:
+        pieces.append(text)
+        if "first" in text:
+            first_line.set()
+
+    def run() -> None:
+        finished.append(repl.execute(
+            "import time; print('first'); time.sleep(1); print('second')",
+            on_output=on_output,
+        ))
+
+    worker = Thread(target=run, daemon=True)
+    try:
+        worker.start()
+        assert first_line.wait(5), "first line must stream before the sleep ends"
+        assert worker.is_alive(), "the callback must fire before execute() returns"
+        worker.join(timeout=5)
+        assert not worker.is_alive()
+        assert "first" in "".join(pieces) and "second" in "".join(pieces)
+        assert finished == ["first\nsecond"]
+    finally:
+        repl.stop()
+        worker.join(timeout=5)
