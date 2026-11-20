@@ -10,6 +10,7 @@ import pytest
 
 from api_provider import RequestCancelledError
 from backend.domain.graph import SceneDocument
+from backend.domain.node_states import PluginStateSnapshot
 from backend.harness.loop import HarnessRunContext, _approval_summary
 from backend.harness.tools_scientific import register_workspace_tools
 from backend.plugin_sdk import HostContext
@@ -138,6 +139,7 @@ def test_real_worker_creates_linked_verified_workbench_and_returns_receipt(setup
 
     node = document.nodes[body["node_id"]]
     assert node.kind == "science_mathematics.workbench"
+    assert type(node.state) is PluginStateSnapshot  # manual Workbench inline-table parity
     assert node.content == body["summary"]
     assert node.x > agent.x
     assert any(edge.source == agent.id and edge.target == node.id
