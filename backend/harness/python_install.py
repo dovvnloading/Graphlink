@@ -251,9 +251,13 @@ def _checked_isolated_command(
         cleanup_container(engine, name, env=env)
 
 
+OFFLINE_WHEELS_UNAVAILABLE = "Cached wheels unavailable; network download needs approval."
+
+
 def _install_in_worker(
     interpreter: Path | PurePosixPath, cwd: Path, packages: list[str], cancel_event,
     cache_root: Path, *, isolated_plan: IsolatedPythonPlan | None = None,
+    offline_only: bool = False,
 ) -> ToolResult:
     # Concurrent tools cannot download into the same wheel filename at once.
     while not _CACHE_LOCK.acquire(timeout=_POLL_SECONDS):
@@ -314,6 +318,11 @@ def _install_in_worker(
 
         downloaded = False
         if code:
+            if offline_only:
+                # An unprompted Autonomous install may never start pip
+                # download or turn on container networking. Its caller
+                # requests a fresh approval before retrying with PyPI.
+                return ToolResult(content=OFFLINE_WHEELS_UNAVAILABLE, is_error=True)
             # Cache was missing at least one wheel. Add only binary wheels
             # from the canonical default index, then install OFFLINE from
             # that same wheelhouse. A failed download leaves prior wheels
@@ -357,8 +366,9 @@ def _install_in_worker(
 async def install_packages(
     ctx: RunContext, packages: list[str], *,
     cache_root: Path | None = None,
+    offline_only: bool = False,
 ) -> ToolResult:
-    """Install only into the environment whose path was freshly approved."""
+    """Install into the pinned environment. Offline-only calls never download."""
     import asyncio
 
     try:
@@ -406,7 +416,7 @@ async def install_packages(
         if plan is not None:
             return await asyncio.to_thread(
                 _install_in_worker, interpreter, root, packages, cancel_event,
-                wheel_cache, isolated_plan=plan,
+                wheel_cache, isolated_plan=plan, offline_only=offline_only,
             )
         return await asyncio.to_thread(
             _install_in_worker, interpreter, root, packages, cancel_event, wheel_cache,

@@ -308,16 +308,23 @@ class ToolRegistry:
                 return ToolResult(content=error, is_error=True)
             call = ToolCall(id=call.id, name=call.name, arguments=deepcopy(call.arguments))
 
-        if registration.approval != "auto":
+        # Only selected workspace operations may bypass an ordinary approval.
+        # The scope gate and all handler-level confinement stay in force.
+        from backend.harness.permission_modes import (
+            may_skip_workspace_approval, requires_explicit_workspace_approval,
+        )
+
+        if registration.approval != "auto" and not may_skip_workspace_approval(call, ctx):
             fingerprint = _tool_call_fingerprint(call) if registration.approval == "always" else None
             # §2.4's dangerous-command rule: a predicate that says "always
             # ask" wins over the memo AND declines to write a new memo entry
             # below, so a second identical dangerous call asks again too.
-            forced = False
+            sensitive = requires_explicit_workspace_approval(call, ctx)
+            forced = sensitive
             reprompt_failed = False
             if registration.always_reprompt is not None:
                 try:
-                    forced = bool(registration.always_reprompt(call))
+                    forced = bool(registration.always_reprompt(call)) or sensitive
                 except Exception:
                     # A predicate that blows up must fail CLOSED (ask), never
                     # silently reuse a grant it was supposed to veto.
@@ -347,7 +354,7 @@ class ToolRegistry:
                 from backend.harness.shell_policy import shell_command_allowed
 
                 try:
-                    already_approved = not reprompt_failed and shell_command_allowed(
+                    already_approved = not sensitive and not reprompt_failed and shell_command_allowed(
                         str(call.arguments.get("command") or ""),
                         ctx.shell_allow_rules, shell=getattr(ctx, "harness_shell", "auto"),
                     )

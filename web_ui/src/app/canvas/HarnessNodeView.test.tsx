@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ReactFlowProvider } from "@xyflow/react";
 import { describe, expect, it, vi } from "vitest";
@@ -27,6 +27,8 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     harnessShell: "auto",
     harnessShellAllowRules: [],
     harnessExecutionProfile: "host",
+    harnessPermissionMode: "ask",
+    harnessTaskPermissionMode: "ask",
     harnessNetworkAlways: false,
     harnessAwaitingApproval: false,
     harnessApprovalToolName: "",
@@ -57,6 +59,7 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     onSetShell: vi.fn(),
     onRemoveShellAllowRule: vi.fn(),
     onSetExecutionProfile: vi.fn(),
+    onSetPermissionMode: vi.fn(),
     onSetNetworkAlways: vi.fn(),
     onGetIsolationEngine: vi.fn(async () => "docker"),
     ...overrides,
@@ -126,6 +129,35 @@ describe("HarnessNodeView", () => {
     }
   });
 
+  it("offers Ask and Auto-edit on Host, but reserves Autonomous for Isolated", async () => {
+    const user = userEvent.setup();
+    const data = makeData({ harnessPermissionMode: "ask" });
+    renderHarness(data);
+    await user.click(screen.getByRole("button", { name: "Agent settings" }));
+    const select = screen.getByRole("combobox", { name: "Permission mode" });
+    expect(select).toHaveValue("ask");
+    expect(screen.getByRole("option", { name: /Autonomous/ })).toBeDisabled();
+    await user.selectOptions(select, "auto_edit");
+    expect(data.onSetPermissionMode).toHaveBeenCalledExactlyOnceWith("auto_edit");
+  });
+
+  it("permits Autonomous under Isolated while preserving the task's old mode", async () => {
+    const user = userEvent.setup();
+    const data = makeData({
+      harnessExecutionProfile: "isolated",
+      harnessPermissionMode: "auto_edit",
+      harnessTaskPermissionMode: "ask",
+    });
+    renderHarness(data);
+    expect(screen.getByText("Task permission: Ask")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Agent settings" }));
+    const select = screen.getByRole("combobox", { name: "Permission mode" });
+    expect(screen.getByRole("option", { name: /Autonomous/ })).not.toBeDisabled();
+    await user.selectOptions(select, "autonomous");
+    expect(data.onSetPermissionMode).toHaveBeenCalledExactlyOnceWith("autonomous");
+    expect(screen.getByText("Task permission: Ask")).toBeInTheDocument();
+  });
+
   it("lists per-node rules by shell and allows removal", async () => {
     const user = userEvent.setup();
     const agent = makeData({
@@ -186,9 +218,10 @@ describe("HarnessNodeView", () => {
     expect(await screen.findByText(/No container engine found/)).toHaveTextContent("Docker");
     expect(screen.getByText(/No container engine found/)).toHaveTextContent("Podman");
     expect(screen.getByText(/No container engine found/)).toHaveTextContent("never fall back to Host");
-    expect(screen.getByRole("combobox", { name: "Execution profile" })).toHaveValue("isolated");
-    expect(screen.getByRole("option", { name: /Isolated/ })).toBeDisabled();
-    await user.selectOptions(screen.getByRole("combobox", { name: "Execution profile" }), "host");
+    const profileSelect = screen.getByRole("combobox", { name: "Execution profile" });
+    expect(profileSelect).toHaveValue("isolated");
+    expect(within(profileSelect).getByRole("option", { name: /Isolated/ })).toBeDisabled();
+    await user.selectOptions(profileSelect, "host");
     expect(data.onSetExecutionProfile).toHaveBeenCalledWith("host");
   });
 

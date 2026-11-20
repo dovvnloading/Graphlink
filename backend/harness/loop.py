@@ -43,6 +43,7 @@ from backend.harness import context as context_module
 from backend.harness import shell_policy
 from backend.harness.shell_selection import normalize_shell
 from backend.harness.shell_isolation import normalize_execution_profile
+from backend.harness.permission_modes import effective_permission_mode
 from backend.harness.tools_fs import preview_harness_file_change
 from backend.harness.retry import (
     ACTION_COMPACT_AND_RETRY,
@@ -53,6 +54,7 @@ from backend.harness.retry import (
 from backend.harness.transcript import (
     append_compaction,
     append_message,
+    append_task_start,
     build_profile,
     check_profile,
     flush as flush_transcript,
@@ -165,7 +167,7 @@ HARNESS_SYSTEM_PROMPT = (
     "invent file contents or command output.\n"
     "- Choose from the available tools described below, honoring "
     "their input schemas and approval requirements.\n"
-    "- Mutating tools ask the user for approval before running. A denial "
+    "- Some mutating tools need approval depending on this task's permission mode. A denial "
     "is an answer, not an obstacle: adjust your approach or explain what "
     "you would have done - never re-submit the same call hoping for a "
     "different decision.\n"
@@ -200,6 +202,7 @@ class HarnessRunContext(RunContext):
     harness_workspace_is_user_dir: bool | None = None
     harness_shell: str = "auto"
     harness_execution_profile: str = "host"
+    harness_permission_mode: str = "ask"
     # Only the explicit node setting can outlive a task; temporary consent
     # stays in this per-run context, never in the dispatcher/session store.
     harness_network_always: bool = False
@@ -483,6 +486,8 @@ async def run_harness(
     settings_manager=None,
     runtime=None,
     allow_session_grants: bool = True,
+    permission_mode: str = "ask",
+    execution_profile: str | None = None,
 ) -> None:
     """One harness task, claimed as kind="harness" by
     AgentDispatcher.start_harness_run (which create_tasks this)."""
@@ -585,7 +590,10 @@ async def run_harness(
             call.name == "shell.exec"
             and ctx.harness_execution_profile == "isolated"
             and call.arguments.get("network") is True
-            and not (ctx.harness_network_always or ctx.harness_network_task_approved)
+            and (
+                ctx.harness_permission_mode == "autonomous"
+                or not (ctx.harness_network_always or ctx.harness_network_task_approved)
+            )
         )
         future: asyncio.Future = loop_handle.create_future()
         handle.approval_future = future
@@ -660,7 +668,7 @@ async def run_harness(
         # A normal tool approval can never grant networking. Only a
         # dedicated, token-bound network decision authorizes this command.
         if network_offered:
-            if approved == "network-task":
+            if approved == "network-task" and ctx.harness_permission_mode != "autonomous":
                 ctx.harness_network_task_approved = True
             elif approved == "network-once":
                 ctx.harness_network_once_approved.add(call.id)
@@ -729,8 +737,21 @@ async def run_harness(
         harness_node_id=harness_node_id,
         harness_workspace_id=node.state.harness_workspace_id,
         harness_shell=normalize_shell(node.state.harness_shell),
-        harness_execution_profile=normalize_execution_profile(node.state.harness_execution_profile),
-        harness_network_always=node.state.harness_network_always is True,
+        harness_execution_profile=normalize_execution_profile(
+            execution_profile if execution_profile is not None else node.state.harness_execution_profile
+        ),
+        harness_permission_mode=effective_permission_mode(
+            permission_mode,
+            normalize_execution_profile(
+                execution_profile if execution_profile is not None else node.state.harness_execution_profile
+            ),
+        ),
+        # A broad node/network grant cannot silently enable network in
+        # Autonomous; a network request still needs a one-command decision.
+        harness_network_always=(
+            node.state.harness_network_always is True
+            and effective_permission_mode(permission_mode, execution_profile) != "autonomous"
+        ),
         model_ref=model_ref,
         settings_manager=settings_manager,
         runtime=runtime,
@@ -822,6 +843,12 @@ async def run_harness(
         # remain in the cacheable system message, outside compactable history.
         system_prompt = context_module.build_system_prompt(
             root, machine_context=machine_context,
+        )
+        append_task_start(
+            transcript_dir, run_id=request_id,
+            permission_mode=ctx.harness_permission_mode,
+            execution_profile=ctx.harness_execution_profile,
+            profile=profile, root=root,
         )
         user_message = {"role": "user", "content": user_text}
         # Load the PRIOR history BEFORE appending this task's own message.

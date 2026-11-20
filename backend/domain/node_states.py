@@ -1144,6 +1144,9 @@ class HarnessState(NodeState):
     # They are created only by explicit shell approval and may be revoked.
     harness_shell_allow_rules: list[str] = field(default_factory=list)
     harness_execution_profile: str = "host"
+    # User preference (persisted) and mode captured at the latest task claim.
+    harness_permission_mode: str = "ask"
+    harness_task_permission_mode: str = "ask"
     # Explicit node preference; Isolated remains offline by default.
     harness_network_always: bool = False
     harness_activity: list[dict[str, Any]] = field(default_factory=list)

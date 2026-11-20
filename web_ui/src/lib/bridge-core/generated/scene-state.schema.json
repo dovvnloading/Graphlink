@@ -1044,6 +1044,10 @@
             "default": false,
             "type": "boolean"
           },
+          "harnessPermissionMode": {
+            "default": "ask",
+            "type": "string"
+          },
           "harnessPlan": {
             "default": [],
             "items": {
@@ -1101,6 +1105,10 @@
           },
           "harnessStatusDetail": {
             "default": "",
+            "type": "string"
+          },
+          "harnessTaskPermissionMode": {
+            "default": "ask",
             "type": "string"
           },
           "harnessWorkspaceActive": {

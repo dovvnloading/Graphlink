@@ -888,6 +888,8 @@ class SceneNodeRow:
     harnessShell: str = "auto"
     harnessShellAllowRules: list[str] = field(default_factory=list)
     harnessExecutionProfile: str = "host"
+    harnessPermissionMode: str = "ask"
+    harnessTaskPermissionMode: str = "ask"
     harnessNetworkAlways: bool = False
     harnessMaxTurns: int = 0
     harnessSpentTurns: int = 0

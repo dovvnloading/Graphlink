@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from backend.harness.python_install import install_packages, install_requirements_error
+from backend.harness.python_install import (
+    OFFLINE_WHEELS_UNAVAILABLE, install_packages, install_requirements_error,
+    planned_install_interpreter, workspace_install_binding,
+)
+from backend.harness.permission_modes import may_skip_workspace_approval
 from backend.providers.base import ToolCall, ToolSpec
 from backend.tools import CODE_EXECUTE, RunContext, ToolRegistry, ToolResult
 
@@ -41,6 +45,29 @@ def register_harness_python_install_tool(registry: ToolRegistry) -> None:
         error = install_requirements_error(call.arguments)
         if error is not None:
             return ToolResult(content=error, is_error=True)
+        if may_skip_workspace_approval(call, ctx):
+            # Autonomous is Isolated-only. Pin the workspace interpreter for
+            # a no-network cached-wheel attempt, even without a human prompt.
+            workspace_id, root, is_scratch = workspace_install_binding(ctx)
+            target = planned_install_interpreter(
+                workspace_id, root, is_scratch=is_scratch, profile="isolated",
+            )
+            ctx.python_install_approved_interpreter = target
+            ctx.python_install_approved_binding = (
+                workspace_id, root.resolve(), is_scratch, "isolated", target,
+            )
+            offline = await install_packages(
+                ctx, call.arguments["packages"], offline_only=True,
+            )
+            if offline.content != OFFLINE_WHEELS_UNAVAILABLE:
+                return offline
+            # A cache miss is a network request. Use the real approval panel,
+            # with its fresh token and pinned interpreter, before retrying.
+            if not await ctx.request_approval(call):
+                return ToolResult(
+                    content="PyPI download was denied approval; cached wheels were insufficient.",
+                    is_error=True,
+                )
         return await install_packages(ctx, call.arguments["packages"])
 
     registry.register(

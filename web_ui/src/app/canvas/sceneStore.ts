@@ -1197,6 +1197,10 @@ export class SceneStore {
     this.transport.fireIntent("harness", "removeShellAllowRule", [nodeId, rule]);
   }
 
+  setHarnessPermissionMode(nodeId: string, mode: string): void {
+    this.transport.fireIntent("harness", "setPermissionMode", [nodeId, mode]);
+  }
+
   setHarnessExecutionProfile(nodeId: string, profile: string): void {
     this.transport.fireIntent("harness", "setExecutionProfile", [nodeId, profile]);
   }

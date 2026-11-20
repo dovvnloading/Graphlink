@@ -213,6 +213,8 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
         harnessShellAllowRules: [],
   harnessShell: "auto",
   harnessExecutionProfile: "host",
+  harnessPermissionMode: "ask",
+  harnessTaskPermissionMode: "ask",
   harnessNetworkAlways: false,
   harnessAwaitingApproval: false,
   harnessApprovalToolName: "",

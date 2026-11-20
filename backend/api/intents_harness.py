@@ -16,6 +16,7 @@ from backend.domain.graph import SceneDocument
 from backend.domain.node_states import HarnessState
 from backend.harness.shell_selection import VALID_SHELLS
 from backend.harness.shell_isolation import VALID_EXECUTION_PROFILES, available_engine
+from backend.harness.permission_modes import AUTONOMOUS, VALID_PERMISSION_MODES
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 from graphlink_cloud_providers import CLOUD_PROVIDERS
@@ -202,12 +203,36 @@ def register_harness_intents(
             return
         changed = node.state.harness_execution_profile != profile
         node.state.harness_execution_profile = profile
+        if profile != "isolated" and node.state.harness_permission_mode == AUTONOMOUS:
+            # Autonomous cannot remain selected under a Host profile. A
+            # running task retains its already-snapshotted isolated profile.
+            node.state.harness_permission_mode = "ask"
         if changed and node.state.harness_status != "running":
             # A stopped task has no reason to retain interactive processes
             # from its previous execution profile.
             sessions = getattr(agent_dispatcher, "_harness_shell_sessions", None)
             if sessions is not None:
                 await asyncio.to_thread(sessions.stop_workspace, node.state.harness_workspace_id)
+        await publish_scene()
+
+    async def set_permission_mode(node_id, mode):
+        """The next task captures this preference at claim time."""
+        node = document.nodes.get(node_id)
+        if node is None or not isinstance(node.state, HarnessState):
+            return
+        if not isinstance(mode, str) or mode not in VALID_PERMISSION_MODES:
+            notifications.show("Unsupported workspace permission mode.", "warning")
+            await bus.publish("notification")
+            return
+        if mode == AUTONOMOUS and node.state.harness_execution_profile != "isolated":
+            notifications.show("Autonomous requires the Isolated execution profile.", "warning")
+            await bus.publish("notification")
+            return
+        node.state.harness_permission_mode = mode
+        if mode == AUTONOMOUS:
+            # The old broad network preference must not silently revive on
+            # a later task or be mistaken for per-request network consent.
+            node.state.harness_network_always = False
         await publish_scene()
 
     async def set_network_always(node_id, enabled):
@@ -217,6 +242,10 @@ def register_harness_intents(
             return
         if not isinstance(enabled, bool):
             notifications.show("Network setting must be true or false.", "warning")
+            await bus.publish("notification")
+            return
+        if enabled and node.state.harness_permission_mode == AUTONOMOUS:
+            notifications.show("Autonomous always asks before network access.", "warning")
             await bus.publish("notification")
             return
         node.state.harness_network_always = enabled
@@ -288,5 +317,6 @@ def register_harness_intents(
     bus.register_intent("harness", "setShell", set_shell)
     bus.register_intent("harness", "removeShellAllowRule", remove_shell_allow_rule)
     bus.register_intent("harness", "setExecutionProfile", set_execution_profile)
+    bus.register_intent("harness", "setPermissionMode", set_permission_mode)
     bus.register_intent("harness", "setNetworkAlways", set_network_always)
     bus.register_intent("harness", "getIsolationEngine", get_isolation_engine)
