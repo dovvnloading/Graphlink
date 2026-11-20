@@ -1345,7 +1345,7 @@ class TestPersistence:
         del payload["shell"]
         assert _restore_harness_payload(payload).state.harness_shell == "auto"
 
-    def test_shell_allow_rules_round_trip_and_invalid_data_fails_closed(self):
+    def test_serialized_shell_rules_are_history_not_authorization(self):
         node = SceneDocument().add_harness_node(0, 0, "goal")
         digest = "a" * 32
         valid = [
@@ -1356,7 +1356,7 @@ class TestPersistence:
         payload = _serialize_harness_node(node)
         assert payload["shell_allow_rules"] == valid
         restored = _restore_harness_payload(payload)
-        assert restored.state.harness_shell_allow_rules == valid
+        assert restored.state.harness_shell_allow_rules == []
         assert restored.state.harness_shell_allow_rules is not node.state.harness_shell_allow_rules
 
         payload["shell_allow_rules"] = [
@@ -1365,7 +1365,7 @@ class TestPersistence:
             f"v2\tbash\thost\t{digest}\tgit status\nrm -rf out",
             f"v2\tbash\tunknown\t{digest}\tgit status",
         ]
-        assert _restore_harness_payload(payload).state.harness_shell_allow_rules == [valid[0]]
+        assert _restore_harness_payload(payload).state.harness_shell_allow_rules == []
 
         payload["shell_allow_rules"] = {"bad": "shape"}
         assert _restore_harness_payload(payload).state.harness_shell_allow_rules == []
@@ -1383,17 +1383,29 @@ class TestPersistence:
         del payload["execution_profile"]
         assert _restore_harness_payload(payload).state.harness_execution_profile == "host"
 
-    def test_network_node_setting_is_opt_in_and_persists_only_true(self):
+    def test_network_node_setting_requires_fresh_consent_after_reopen(self):
         node = SceneDocument().add_harness_node(0, 0, "goal")
         assert node.state.harness_network_always is False
         node.state.harness_network_always = True
         payload = _serialize_harness_node(node)
         assert payload["network_always"] is True
-        assert _restore_harness_payload(payload).state.harness_network_always is True
+        assert _restore_harness_payload(payload).state.harness_network_always is False
         payload["network_always"] = "true"  # A tampered graph is not consent.
         assert _restore_harness_payload(payload).state.harness_network_always is False
         del payload["network_always"]
         assert _restore_harness_payload(payload).state.harness_network_always is False
+
+    def test_loaded_autonomous_mode_defaults_to_ask_but_preserves_task_audit(self):
+        node = SceneDocument().add_harness_node(0, 0, "goal")
+        node.state.harness_execution_profile = "isolated"
+        node.state.harness_permission_mode = "autonomous"
+        node.state.harness_task_permission_mode = "autonomous"
+        payload = _serialize_harness_node(node)
+        assert payload["permission_mode"] == "autonomous"
+        restored = _restore_harness_payload(payload).state
+        assert restored.harness_execution_profile == "isolated"
+        assert restored.harness_permission_mode == "ask"
+        assert restored.harness_task_permission_mode == "autonomous"
 
     def test_blank_workspace_id_is_self_healed_on_load(self):
         document = SceneDocument()
