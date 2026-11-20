@@ -139,6 +139,27 @@ def test_unmatched_quotes_and_cmd_single_quotes_fail_closed(tmp_path):
     assert not bash.is_dangerous
 
 
+@pytest.mark.parametrize("payload", ["echo hi # comment", "env FOO=1 git status"])
+def test_powershell_comments_and_env_wrappers_cannot_be_remembered(
+    tmp_path, monkeypatch, payload,
+):
+    from backend.harness import shell_selection
+
+    # Exercise both explicit PowerShell and auto selection on Windows,
+    # even when the test itself runs on POSIX.
+    monkeypatch.setattr(shell_selection, "effective_shell", lambda shell: "powershell")
+    for shell in ("powershell", "auto"):
+        safe_rule = rule("git status", tmp_path, shell=shell)
+        assert safe_rule
+        assert rule(payload, tmp_path, shell=shell) == []
+
+        # Even a preexisting v2 rule with this exact unsafe payload must
+        # not bypass a fresh approval.
+        forged = safe_rule[0].rsplit("\t", 1)[0] + "\t" + payload
+        assert valid_shell_allow_rule(forged)
+        assert not allowed(payload, [forged], tmp_path, shell=shell)
+
+
 def test_powershell_injection_is_not_remembered(tmp_path, monkeypatch):
     from backend.harness import shell_selection
 
