@@ -35,6 +35,9 @@ if TYPE_CHECKING:
 # Serializes first-use snapshots across concurrent harness tasks. The
 # contents remain per-dispatcher (one app session), never process-global.
 _MACHINE_SNAPSHOT_LOCK = threading.Lock()
+# The guard itself must be installed once even when workers first touch a
+# dispatcher concurrently (the guard it creates remains per dispatcher).
+_REVOCATION_GUARD_SETUP_LOCK = threading.Lock()
 
 
 class HarnessDispatchOps(DispatcherParts):
@@ -136,21 +139,27 @@ class HarnessDispatchOps(DispatcherParts):
         HERE, not per-run, because a dev server started in one task must
         still be alive in the next - and torn down on the same triggers
         every other live resource is (node delete, session evict)."""
-        if getattr(self, "_harness_shell_sessions", None) is None:
-            from backend.harness.shell_sessions import ShellSessionRegistry
+        with self._harness_revocation_guard():
+            if getattr(self, "_harness_shell_sessions", None) is None:
+                from backend.harness.shell_sessions import ShellSessionRegistry
 
-            self._harness_shell_sessions = ShellSessionRegistry()
-        return self._harness_shell_sessions
+                self._harness_shell_sessions = ShellSessionRegistry(
+                    lock=self._harness_revocation_guard(),
+                )
+            return self._harness_shell_sessions
 
     def harness_python_repls(self):
         """The session's python.exec interpreters - same per-session
         lifetime and teardown triggers as the shell sessions above, for the
         same reason (state surviving between calls IS the feature)."""
-        if getattr(self, "_harness_python_repls", None) is None:
-            from backend.harness.tools_python import PythonReplRegistry
+        with self._harness_revocation_guard():
+            if getattr(self, "_harness_python_repls", None) is None:
+                from backend.harness.tools_python import PythonReplRegistry
 
-            self._harness_python_repls = PythonReplRegistry()
-        return self._harness_python_repls
+                self._harness_python_repls = PythonReplRegistry(
+                    lock=self._harness_revocation_guard(),
+                )
+            return self._harness_python_repls
 
     def dispose_harness_workspace(self, workspace_id: str) -> None:
         """Node-delete teardown for one harness workspace's live processes.
@@ -186,12 +195,15 @@ class HarnessDispatchOps(DispatcherParts):
         if repls is not None:
             repls.stop_all()
 
-    def _harness_revocation_guard(self) -> threading.Lock:
-        guard = getattr(self, "_harness_revocation_lock", None)
-        if guard is None:
-            guard = threading.Lock()
-            self._harness_revocation_lock = guard
-        return guard
+    def _harness_revocation_guard(self) -> threading.RLock:
+        with _REVOCATION_GUARD_SETUP_LOCK:
+            guard = getattr(self, "_harness_revocation_lock", None)
+            if guard is None:
+                # Registry start/get/bind_root use this SAME guard. RLock
+                # allows the revoker to call stop_root while holding it.
+                guard = threading.RLock()
+                self._harness_revocation_lock = guard
+            return guard
 
     def harness_root_granted(self, path: str) -> None:
         """Invalidate an old deferred revocation before the picker returns.
@@ -224,21 +236,17 @@ class HarnessDispatchOps(DispatcherParts):
         if not pending:
             return
         guard = self._harness_revocation_guard()
-        with guard:
-            roots = tuple(pending)
-        # Keep cancelled-but-still-unwinding tasks protected too: RunRegistry
-        # releases their slot immediately, but their worker may still run.
-        active = set(getattr(self, "_harness_active_workspaces", {}).values())
-        sessions = getattr(self, "_harness_shell_sessions", None)
-        repls = getattr(self, "_harness_python_repls", None)
 
         def retire() -> None:
             with guard:
-                # The folder picker may re-grant a root while an old worker
-                # unwinds. A path-only deferred stop_root would also kill
-                # brand-new sessions from the renewed grant. Re-check actual
-                # Settings trust at teardown, even if the grant didn't come
-                # through this dispatcher's picker notification.
+                # Capture active runs, current registries and Settings trust
+                # under the SAME lock as new shell/REPL registration. The
+                # previous pre-thread snapshot could go stale while waiting
+                # for a worker, and stop_root then killed new sessions.
+                roots = tuple(pending)
+                active = set(getattr(self, "_harness_active_workspaces", {}).values())
+                sessions = getattr(self, "_harness_shell_sessions", None)
+                repls = getattr(self, "_harness_python_repls", None)
                 settings = getattr(self, "_settings_manager", None)
                 trusted_paths = (
                     getattr(settings, "get_harness_trusted_dirs", lambda: [])()
@@ -249,6 +257,9 @@ class HarnessDispatchOps(DispatcherParts):
                     if root not in pending or root in trusted:
                         pending.discard(root)
                         continue
+                    # Both registries' start/get hold this guard throughout
+                    # process registration. Nothing started after re-grant
+                    # can be enumerated by an obsolete in-flight stop_root.
                     if sessions is not None:
                         sessions.stop_root(root, excluding=active)
                     if repls is not None:

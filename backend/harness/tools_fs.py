@@ -25,7 +25,6 @@ import errno
 import hashlib
 import os
 import secrets
-import shutil
 import stat
 import sys
 import time
@@ -204,31 +203,39 @@ def _read_bounded_text(path: Path, *, errors: str = "strict", max_bytes: int | N
 
 
 def _create_exclusively_without_links(staged_path: Path, target: Path) -> None:
-    """Create only if absent when the workspace cannot hard-link.
+    """Atomically create only if absent on filesystems without hard links.
 
-    O_EXCL (Path.open("xb")) is the race-proof absence precondition here.
-    Unlike a hard link the fallback cannot publish all bytes in one step;
-    remove our own partial file on an I/O failure, but never delete a file
-    another process has since replaced.
+    An exclusive open followed by a copy publishes an empty/partial file.
+    Use a native no-replace rename instead. If the filesystem cannot honor
+    that primitive, fail closed rather than weaken an approved write.
     """
-    created = None
-    try:
-        with target.open("xb") as destination:
-            created = os.fstat(destination.fileno())
-            with staged_path.open("rb") as source:
-                shutil.copyfileobj(source, destination)
-            destination.flush()
-            os.fsync(destination.fileno())
-    except BaseException:
-        if created is not None:
-            try:
-                current = target.lstat()
-                if (current.st_dev, current.st_ino) == (created.st_dev, created.st_ino):
-                    target.unlink()
-            except OSError:
-                pass
-        raise
+    if os.name == "nt":
+        # Windows os.rename uses MoveFileExW without REPLACE_EXISTING.
+        os.rename(staged_path, target)
+        return
 
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform.startswith("linux"):
+        rename = getattr(libc, "renameat2", None)
+        cwd_fd, flags = getattr(os, "AT_FDCWD", -100), 0x1  # RENAME_NOREPLACE
+    elif sys.platform == "darwin":
+        rename = getattr(libc, "renameatx_np", None)
+        cwd_fd, flags = getattr(os, "AT_FDCWD", -2), 0x4  # RENAME_EXCL
+    else:
+        rename = None
+    if rename is None:
+        raise WorkspaceError("This filesystem cannot atomically create an approved file without hard links.")
+    rename.argtypes = [
+        ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint,
+    ]
+    rename.restype = ctypes.c_int
+    if rename(cwd_fd, os.fsencode(staged_path), cwd_fd, os.fsencode(target), flags) != 0:
+        error = ctypes.get_errno()
+        if error in (errno.EOPNOTSUPP, errno.ENOSYS, errno.EINVAL):
+            raise WorkspaceError(
+                "This filesystem cannot atomically create an approved file without hard links."
+            ) from OSError(error, os.strerror(error))
+        raise OSError(error, os.strerror(error))
 
 def _exchange_approved_file(target: Path, staged_path: Path) -> Path:
     """Publish while retaining the *actual* displaced file for validation.
@@ -275,48 +282,154 @@ def _exchange_approved_file(target: Path, staged_path: Path) -> Path:
 
 
 def _displaced_file_matches_approval(displaced: Path, approved: FileApprovalState) -> bool:
-    """Check the file actually displaced by the atomic commit, not its path.
+    """Validate the actual displaced inode, ignoring rename-induced ctime.
 
-    A rename updates the displaced inode's ctime even without an external
-    edit, so compare its identity and mtime plus exact bytes, not ctime.
+    Unlike ctime, mode and ownership do not change when an inode is renamed.
+    They MUST still match the preview: a raced chmod/chown is a stale approval
+    even if the inode, mtime and contents are unchanged.
     """
-    if approved.digest is None or approved.version is None:
+    if approved.digest is None or approved.version is None or len(approved.version) != 7:
         return False
+    expected = (
+        approved.version[0], approved.version[1], approved.version[2],
+        *approved.version[4:],
+    )
+
+    def matches() -> bool:
+        info = displaced.lstat()
+        return stat.S_ISREG(info.st_mode) and (
+            info.st_dev, info.st_ino, info.st_mtime_ns,
+            stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid,
+        ) == expected
+
     try:
-        if not displaced.is_file():
-            return False
-        info = displaced.stat()
-        expected = approved.version[:3]  # device, inode, mtime_ns
-        actual = (info.st_dev, info.st_ino, info.st_mtime_ns)
-        if actual != expected:
+        if not matches():
             return False
         digest = hashlib.sha256(_read_bounded_bytes(displaced)).hexdigest()
-        info = displaced.stat()
-        return digest == approved.digest and (info.st_dev, info.st_ino, info.st_mtime_ns) == expected
+        return digest == approved.digest and matches()
+    except (OSError, WorkspaceError):
+        return False
+
+
+class _ApprovedWriteRecoveryError(WorkspaceError):
+    """The staging/backup path holds data that cleanup must not unlink."""
+
+
+def _staged_output_identity(path: Path) -> tuple[int, ...]:
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise WorkspaceError("The staged approved write is no longer a regular file.")
+    return (
+        info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size,
+        stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid,
+    )
+
+
+def _is_our_published_file(
+    path: Path, identity: tuple[int, ...], digest: str, *, ctime_ns: int | None = None,
+) -> bool:
+    """Check that a recovery would move only the version we published.
+
+    This is a best-effort recovery precondition; an external rename after the
+    exchange must never be blindly swapped out and then unlinked as our temp.
+    """
+    try:
+        before = path.lstat()
+        if (ctime_ns is not None and before.st_ctime_ns != ctime_ns):
+            return False
+        if _staged_output_identity(path) != identity:
+            return False
+        actual = hashlib.sha256(_read_bounded_bytes(path)).hexdigest()
+        after = path.lstat()
+        return (
+            actual == digest
+            and after.st_ctime_ns == before.st_ctime_ns
+            and (ctime_ns is None or after.st_ctime_ns == ctime_ns)
+            and _staged_output_identity(path) == identity
+        )
     except (OSError, WorkspaceError):
         return False
 
 
 def _replace_approved_existing(target: Path, staged_path: Path, approved: FileApprovalState) -> None:
-    displaced = _exchange_approved_file(target, staged_path)
-    if not _displaced_file_matches_approval(displaced, approved):
-        # An editor may have written or atomically renamed a newer file
-        # AFTER our pre-commit check. Put precisely that displaced version
-        # back, not the version from the earlier approval preview.
-        try:
-            if displaced == staged_path:
-                _exchange_approved_file(target, staged_path)
-            else:
-                os.replace(displaced, target)
-        except OSError as exc:
-            raise WorkspaceError(
-                f"{_STALE_FILE_APPROVAL} Could not restore the external version; "
-                f"the displaced file is at {displaced}: {exc}"
+    # Fingerprint our staged inode before publishing. If someone writes to
+    # the published pathname afterwards, rollback cannot treat it as ours.
+    staged_identity = _staged_output_identity(staged_path)
+    staged_digest = hashlib.sha256(_read_bounded_bytes(staged_path)).hexdigest()
+    try:
+        displaced = _exchange_approved_file(target, staged_path)
+    except BaseException as exc:
+        # Native exchange errors normally leave both paths untouched, but
+        # defensively retain staging if a partial OS failure or wrapper has
+        # already moved the displaced external version there.
+        backup = staged_path.with_name(staged_path.name + ".before")
+        external_may_be_staged = (
+            staged_path.exists()
+            and not _is_our_published_file(staged_path, staged_identity, staged_digest)
+        )
+        if external_may_be_staged or (os.name == "nt" and backup.exists()):
+            raise _ApprovedWriteRecoveryError(
+                f"{_STALE_FILE_APPROVAL} Publication failed after moving filesystem "
+                f"data; inspect {target}, {staged_path} and {backup}: {exc}"
             ) from exc
-        raise WorkspaceError(_STALE_FILE_APPROVAL)
-    if displaced != staged_path:
-        displaced.unlink(missing_ok=True)
+        raise
 
+    restored = False
+    try:
+        try:
+            published_ctime = target.lstat().st_ctime_ns
+        except OSError:
+            published_ctime = None
+
+        if not _displaced_file_matches_approval(displaced, approved):
+            # If target has changed since our exchange, a rollback would
+            # overwrite a newer writer's result. Preserve BOTH paths.
+            if published_ctime is None or not _is_our_published_file(
+                target, staged_identity, staged_digest, ctime_ns=published_ctime,
+            ):
+                raise _ApprovedWriteRecoveryError(
+                    f"{_STALE_FILE_APPROVAL} A newer destination was left untouched. "
+                    f"The displaced external version is preserved at {displaced}; "
+                    f"inspect both paths before retrying."
+                )
+            try:
+                if displaced == staged_path:
+                    _exchange_approved_file(target, staged_path)
+                else:
+                    # Windows ReplaceFileW keeps the displaced version in a
+                    # backup. Rename moves the current target out of the way;
+                    # unlike replace, the second rename won't overwrite a
+                    # new file that appeared at the destination.
+                    os.rename(target, staged_path)
+                    os.rename(displaced, target)
+            except (OSError, WorkspaceError) as exc:
+                raise _ApprovedWriteRecoveryError(
+                    f"{_STALE_FILE_APPROVAL} Automatic restoration failed; "
+                    f"recovery data is preserved at {displaced} and possibly {staged_path}. "
+                    f"The destination may contain the unapproved agent version: {exc}"
+                ) from exc
+            # A writer can race even this conditional restore. Check what
+            # landed at staging and never unlink it unless it is still ours.
+            if not _is_our_published_file(staged_path, staged_identity, staged_digest):
+                raise _ApprovedWriteRecoveryError(
+                    f"{_STALE_FILE_APPROVAL} A concurrent write was displaced during "
+                    f"recovery and is preserved at {staged_path}; inspect both paths."
+                )
+            restored = True
+            raise WorkspaceError(_STALE_FILE_APPROVAL)
+
+        if displaced != staged_path:
+            displaced.unlink(missing_ok=True)
+    except BaseException as exc:
+        if restored or isinstance(exc, _ApprovedWriteRecoveryError):
+            raise
+        # Any unexpected exception AFTER the first exchange can leave the
+        # external version at staging. Do not let caller cleanup destroy it.
+        raise _ApprovedWriteRecoveryError(
+            f"{_STALE_FILE_APPROVAL} Validation or cleanup failed after publication; "
+            f"data was retained at {displaced} (and possibly {staged_path}). "
+            f"Inspect the destination and recovery paths: {exc}"
+        ) from exc
 
 def _write_atomic_text(
     target: Path, content: str, *, approval_state: FileApprovalState | None = None,
@@ -386,6 +499,11 @@ def _write_atomic_text(
             _replace_approved_existing(target, staged_path, approval_state)
             return
         os.replace(staged_path, target)
+    except _ApprovedWriteRecoveryError:
+        # A stale-write conflict or failed rollback can leave the external
+        # writer's only copy in staging. It must survive this error path.
+        staged_path = None
+        raise
     finally:
         if staged_path is not None:
             try:
@@ -417,7 +535,7 @@ class FileApprovalState:
     # exact bytes and its disk identity/timestamps (including same-byte rewrites).
     target: Path
     digest: str | None
-    version: tuple[int, int, int, int] | None
+    version: tuple[int, int, int, int, int, int, int] | None
 
 
 @dataclass(frozen=True)
@@ -427,9 +545,12 @@ class FileApprovalPreview:
     state: FileApprovalState | None = None
 
 
-def _file_version(target: Path) -> tuple[int, int, int, int]:
+def _file_version(target: Path) -> tuple[int, int, int, int, int, int, int]:
     info = target.stat()
-    return (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns)
+    return (
+        info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns,
+        stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid,
+    )
 
 
 def _file_approval_state_matches(target: Path, approved: FileApprovalState) -> bool:

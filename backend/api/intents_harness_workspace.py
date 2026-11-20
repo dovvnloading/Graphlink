@@ -50,12 +50,26 @@ def register_harness_workspace_intents(
             # The grant write goes through the same locked writer every
             # other settings mutation uses (save_recipe's precedent), so it
             # cannot land mid-write against a concurrent settings save.
-            await asyncio.to_thread(run_locked, lambda: settings.add_harness_trusted_dir(resolved))
-            # Serialize the re-grant with any deferred process retirement
-            # before the picker returns and the renewed root can start work.
-            on_grant = getattr(agent_dispatcher, "harness_root_granted", None)
-            if on_grant is not None:
-                await asyncio.to_thread(on_grant, resolved)
+            def commit_grant() -> None:
+                # Do not expose the new trust entry between the Settings
+                # mutation and the dispatcher notification. This same
+                # lifecycle lock protects shell/REPL registration against
+                # a revocation already inside stop_root.
+                get_guard = getattr(agent_dispatcher, "_harness_revocation_guard", None)
+                on_grant = getattr(agent_dispatcher, "harness_root_granted", None)
+
+                def save_and_notify() -> None:
+                    run_locked(lambda: settings.add_harness_trusted_dir(resolved))
+                    if on_grant is not None:
+                        on_grant(resolved)
+
+                if get_guard is None:
+                    save_and_notify()
+                else:
+                    with get_guard():
+                        save_and_notify()
+
+            await asyncio.to_thread(commit_grant)
         # A Settings dialog may already be subscribed. Publish the newly
         # recorded grant so its trusted-folder list cannot stay stale until
         # some unrelated settings change.
