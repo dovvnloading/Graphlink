@@ -48,11 +48,12 @@ _REPL_CAPTURE_CHARS = 19_000
 _REPL_TRUNCATION_NOTICE = "\n...[output truncated at 19,000 characters]"
 
 
-def _stdout_fragments(stream):
+def _stdout_fragments(stream, decoder):
     """Yield decoded, flushed pipe bytes without waiting for a full line.
 
-    os.read() returns the bytes currently available from a pipe. Decode
-    incrementally so UTF-8 characters split across reads are not corrupted.
+    os.read() returns the bytes currently available from a pipe. The decoder
+    belongs to the interpreter, not this generator: execute() can stop at a
+    completion marker while the decoder still buffers part of a UTF-8 character.
     A bounded readline fallback supports streams supplied by test doubles.
     """
     try:
@@ -66,12 +67,6 @@ def _stdout_fragments(stream):
                 return
             yield piece
     else:
-        decoder = io.IncrementalNewlineDecoder(
-            codecs.getincrementaldecoder(
-                getattr(stream, "encoding", None) or "utf-8"
-            )(errors="replace"),
-            translate=True,
-        )
         while True:
             raw = os.read(fd, _REPL_READ_CHARS)
             piece = decoder.decode(raw, final=not raw)
@@ -132,6 +127,8 @@ class PythonREPL:
         self._boundary_prefix = ""
         # A pipe read can coalesce the boundary line with output from another thread.
         self._stdout_pending = ""
+        # Preserve undecoded UTF-8 bytes past the marker across execute() calls.
+        self._stdout_decoder = None
         # ADR-005 stage 5.2: the resource guard for whichever process
         # `start()` currently owns - see stop()'s own comment for why
         # closing this, not just process.kill(), is what makes "Stop"
@@ -174,6 +171,7 @@ class PythonREPL:
         with self._lock:
             # Never replay output belonging to a retired interpreter.
             self._stdout_pending = ""
+            self._stdout_decoder = None
             # Adversarial-review fix: execute() calls start() again to
             # restart a dead REPL process (poll() is not None) WITHOUT
             # going through stop() first - stop() is what normally closes
@@ -358,8 +356,17 @@ while True:
             if on_output is not None:
                 on_output(fragment)
 
+        # A marker can terminate this generator with incomplete UTF-8 bytes
+        # still in its decoder. Reuse that decoder until the process is retired.
+        if self._stdout_decoder is None:
+            self._stdout_decoder = io.IncrementalNewlineDecoder(
+                codecs.getincrementaldecoder(
+                    getattr(process.stdout, "encoding", None) or "utf-8"
+                )(errors="replace"),
+                translate=True,
+            )
         try:
-            for fragment in _stdout_fragments(process.stdout):
+            for fragment in _stdout_fragments(process.stdout, self._stdout_decoder):
                 pending += fragment
                 while pending:
                     newline = pending.find("\n")
@@ -414,6 +421,7 @@ while True:
         # nulling self.process out from under the other's later use of it).
         with self._lock:
             self._stdout_pending = ""
+            self._stdout_decoder = None
             if self.process:
                 process = self.process
                 # ADR-005 stage 5.2: close the resource guard FIRST - on

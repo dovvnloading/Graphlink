@@ -107,9 +107,11 @@ on:
 permissions:
   contents: read
 
+# Keep PR supersession, but isolate every scheduled/manual invocation: a
+# manual dispatch on main must never cancel the nightly browser run.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Only browser E2E runs on the nightly schedule; regular checks stay PR/manual.
@@ -374,10 +376,15 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run Playwright E2E suite
+        id: smoke
         working-directory: web_ui
         run: npm run test:e2e
 
+      # Safety coverage is independent of smoke: run it after either smoke
+      # outcome, but not after setup failures or a cancelled run. Smoke's
+      # nonzero exit status still fails the overall job.
       - name: Run authenticated approval and review browser evidence
+        if: ${{ !cancelled() && (steps.smoke.outcome == 'success' || steps.smoke.outcome == 'failure') }}
         working-directory: web_ui
         run: npm run test:e2e:safety
 
