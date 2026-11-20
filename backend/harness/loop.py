@@ -443,10 +443,21 @@ async def run_harness(
             if (registry.scopes_for(spec.name) or frozenset()) <= HARNESS_GRANTED_SCOPES
             and not spec.name.startswith(_HARNESS_TOOL_NAME_EXCLUSIONS)
         )
-        # H3: built ONCE, here, and never rebuilt inside the loop - the
-        # byte-stable prefix a provider's prompt cache keys on (see
-        # backend/harness/context.py's own docstring).
-        system_prompt = context_module.build_system_prompt(root)
+        # Probe the actual execution machine once per dispatcher session
+        # and bound root, not on every model turn (or every follow-up task).
+        # The fallback supports lightweight stand-alone dispatchers in tests.
+        snapshot = getattr(dispatcher, "harness_machine_snapshot", None)
+        if callable(snapshot):
+            machine_context = await asyncio.to_thread(
+                snapshot, node.state.harness_workspace_id, root,
+            )
+        else:
+            machine_context = await asyncio.to_thread(context_module.describe_machine, root)
+        # H3: all three stable tiers - core, tool guide, machine snapshot -
+        # remain in the cacheable system message, outside compactable history.
+        system_prompt = context_module.build_system_prompt(
+            root, machine_context=machine_context,
+        )
         user_message = {"role": "user", "content": user_text}
         # Load the PRIOR history BEFORE appending this task's own message.
         # load_messages crosses the flush barrier itself, so appending
