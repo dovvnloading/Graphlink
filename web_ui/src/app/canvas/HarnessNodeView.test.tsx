@@ -168,6 +168,51 @@ describe("HarnessNodeView", () => {
     expect(data.onDenyTool).toHaveBeenCalledTimes(1);
   });
 
+  it("shows a highlighted file diff without changing or interpreting its text", () => {
+    const summary = "fs.edit config.txt\n--- a/config.txt\n+++ b/config.txt\n" +
+      "@@ -1 +1 @@\n-old <script>alert(1)</script>\n+new <img src=x>\n";
+    const { container } = renderHarness(makeData({
+      harnessAwaitingApproval: true,
+      harnessApprovalToolName: "fs.edit",
+      harnessApprovalSummary: summary,
+    }));
+    const region = screen.getByRole("region", { name: "Proposed tool call" });
+    expect(region.textContent).toBe(summary);
+    expect(container.querySelector(".harness-approval-diff-removed")).toHaveTextContent("-old");
+    expect(container.querySelector(".harness-approval-diff-added")).toHaveTextContent("+new");
+    expect(container.querySelector(".harness-approval-diff-hunk")).toHaveTextContent("@@");
+    expect(region.querySelector("script")).toBeNull();
+    expect(region.querySelector("img")).toBeNull();
+  });
+
+  it("shows a new file verbatim, including leading +/- characters", () => {
+    const summary = "fs.write new.txt\n--- new file: new.txt (full content)\n+literal\n-minus\n";
+    const { container } = renderHarness(makeData({
+      harnessAwaitingApproval: true,
+      harnessApprovalToolName: "fs.write",
+      harnessApprovalSummary: summary,
+    }));
+    expect(screen.getByRole("region", { name: "Proposed tool call" }).textContent).toBe(summary);
+    expect(container.querySelector(".harness-approval-diff-added")).toBeNull();
+    expect(container.querySelector(".harness-approval-diff-removed")).toBeNull();
+  });
+
+  it("does not allow approval when the current file could not be previewed", async () => {
+    const user = userEvent.setup();
+    const data = makeData({
+      harnessAwaitingApproval: true,
+      harnessApprovalToolName: "fs.write",
+      harnessApprovalSummary: "fs.write hidden.txt\nPreview unavailable: File exceeds the read limit.",
+      harnessApprovalSessionOffered: true,
+    });
+    renderHarness(data);
+    expect(screen.getByRole("alert")).toHaveTextContent("could not be previewed");
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Always allow this tool" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Deny" }));
+    expect(data.onDenyTool).toHaveBeenCalledOnce();
+  });
+
   it("offers the session-scoped grant only when the backend says it may", async () => {
     // PLAN §2.4: the backend decides (shell_policy), because it is the side
     // that knows the command is dangerous - the panel must not infer it.
