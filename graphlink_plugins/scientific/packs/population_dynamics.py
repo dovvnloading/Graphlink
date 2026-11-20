@@ -256,7 +256,7 @@ def _irreducible_perron(matrix):
     """
     n = len(matrix)
     if n == 1:
-        return matrix[0][0], [1.0]
+        return float(matrix[0][0]), [1.0]
     # Karp's maximum cycle mean in log space; all vertices share a component.
     logs = [[math.log(a) if a > 0 else -math.inf for a in row] for row in matrix]
     lengths = [[0.0] * n]
