@@ -1,11 +1,13 @@
 # Fresh approval for persistent Python execution
 
+**Current-mode qualification:** This records the earlier Ask-mode approval hardening. Since #721, Ask and Auto-edit still prompt for every `python.exec` call, but Isolated Autonomous can skip the prompt for conservatively screened Python source. Unscreened code still asks; Host remains unsandboxed. See [permission modes](WORKSPACE_PERMISSION_MODES.md).
+
 `python.exec` executes approved code with the local process's privileges in Host mode, or inside the restricted, network-disabled container in Isolated mode. This
 change hardens the approval path; the Host profile is not a sandbox and
 neither profile can reverse effects after execution. Interpreter state persists between calls,
 so the same source can do something different the next time it runs.
 
-## Reproduced on main
+## Historical baseline regression evidence
 
 The starting production code was commit
 `72eec3cb7871a9b76f10bbd5fa85ed0356c27ae6`. Before changing implementation,
@@ -31,10 +33,7 @@ the first writes `1`, denial leaves `1`, and fresh approval then writes `2`.
 
 ## Enforced behavior
 
-The production Python registration always requires a fresh backend prompt,
-ignoring both per-run fingerprints and session grants. The registry copies
-arguments before disclosure, gives the approval callback a separate copy,
-and refuses a changed pending request before starting the interpreter.
+When a call reaches the approval gate, the production Python registration forces a fresh prompt, ignoring per-run fingerprints and session grants. Ask/Auto-edit always take that route; Isolated Autonomous may bypass it for safely screened source only. The registry copies arguments before disclosure, gives the approval callback a separate copy, and refuses a changed pending request before starting the interpreter.
 Accepted source is never stripped, coerced, or truncated. Requests above
 20,000 characters, non-string/blank code, and invisible controls that cannot
 be presented faithfully are refused explicitly. Tab, CR and LF remain

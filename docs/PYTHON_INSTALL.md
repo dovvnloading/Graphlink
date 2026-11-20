@@ -20,25 +20,13 @@ host Python. A host-only project venv cannot be used inside the image.
 
 ## Consent
 
-python.install has code.execute scope and approval="always" with fresh
-re-prompting even for identical requests or previously granted sessions.
-Before showing the prompt, the harness computes (without creating) the
-interpreter that python.exec would use. The approval panel shows the full
-interpreter path and each requested requirement. In Isolated mode it also
-explicitly discloses that network access may be granted to download wheels
-from PyPI inside the container. The approval identity is unique per call;
-old or replayed approvals cannot authorize a new install.
+The tool requires `code.execute` scope. **Ask** and **Auto-edit** require fresh per-install approval even for identical or already cached requirements; prior session/fingerprint grants never suffice. **Isolated Autonomous** instead first attempts a compatible cached-wheel installation **offline** without a prompt. If the cache is incomplete, it stops **before contacting PyPI** and requests new authorization bound to the exact packages and interpreter before downloading anything. Existing shell approvals cannot authorize that download.
 
-The selected interpreter is recorded only after consent and checked again
-before package installation. If a different .venv appears or the workspace
-is rebound while the prompt is open, the install is refused and must be
-approved again. An Isolated approval is additionally bound to the resolved
-workspace root and execution profile, so an identical container path cannot
-authorize a different project. Rejected or mutated arguments never reach
-the handler.
+When a prompt is needed, the harness computes (without creating) the interpreter that `python.exec` would use. The approval panel shows that interpreter and every requirement; Isolated also discloses the temporary container networking required for approved PyPI wheel downloads. Each prompt has a fresh ID; stale/replayed approvals cannot authorize another install.
 
-Wheels contain executable Python code. Wheel-only is not a security sandbox;
-the approval is still necessary for every change to an environment.
+The chosen interpreter is pinned and rechecked at installation. If a different `.venv` appears or the workspace/profile changes during consent, the request is refused and must be approved again. Isolated consent is also bound to the resolved workspace root and execution profile so an identical container interpreter path cannot authorize a different project. Rejected or mutated arguments cannot reach the handler.
+
+**Wheels contain executable Python code.** Wheel-only does not make an installation harmless. In Autonomous, cached packages can change the environment without a per-install prompt; use Ask if you want to approve every installation. See [permission modes](WORKSPACE_PERMISSION_MODES.md).
 
 ## Download and offline behavior
 

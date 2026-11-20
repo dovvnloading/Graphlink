@@ -17,10 +17,16 @@
 
 ## Approval boundary and compatibility
 
-- The ToolRegistry still requests fresh approval for shell.exec unless a scoped exact rule passes; shell.session start and write retain mandatory fresh approval. Network approvals remain separately gated.
+- The exact-rule matcher validates workspace/profile/shell-bound commands, but the current central approval integration has a fail-closed limitation described below. `shell.session` start/write still request fresh approval; network consent is separately gated.
 - The **Always allow** UI now describes exact, workspace- and profile-bound commands. The settings view exposes the shell and profile while allowing rule revocation.
 - This is a deliberately stricter compatibility change: previously saved prefix rules will no longer bypass prompts. Users must explicitly approve a command again to create a v2 rule. A separately approved new argument or a newly composed chain also prompts.
 - Rules are a consent convenience, **not** a claim that the command cannot change files. Even an exact command can have different effects if scripts, project configuration, executables or environment state change.
+
+## Post-merge integration limitation on current `main`
+
+The standalone v2 rule generator and matcher validate eligible exact commands correctly. **The live approval shortcut does not currently activate.** `backend/harness/permission_modes.py::_safe_shell()` invokes `shell_allow_rule_candidates()` without a `workspace_root`; the validator therefore returns an empty candidate list. Its sensitive-call gate marks all workspace `shell.exec` commands and `shell.session` starts as requiring fresh approval. Since the ToolRegistry checks that sensitive result before consulting stored rules, an **Always allow** exact command can be saved but still prompts when repeated. The intended Isolated Autonomous safe-command and session-start exemptions are also blocked.
+
+This is fail-closed *over-prompting*, not an unintended auto-approval. These audit tests verify the exact-rule matcher; they do not prove that a saved rule suppresses a prompt in the fully integrated registry. [Permission modes](WORKSPACE_PERMISSION_MODES.md) describes the current user-facing behavior.
 
 ## Regression coverage added or updated
 

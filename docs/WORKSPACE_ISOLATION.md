@@ -8,17 +8,21 @@ Open an Agent node's **Agent settings** and select **Execution profile**.
 
 ### Network approval for a command
 
-Isolated `shell.exec` commands remain offline by default. When the agent needs network access for **one command**, it must request it explicitly with `network: true` and a nonblank `network_reason`, e.g. `{"command":"python -m pip index versions requests","network":true,"network_reason":"Check the available package versions"}`. The command-approval panel shows the complete command **and why network is needed**, with distinct choices:
+Isolated `shell.exec` is offline by default. The Agent can request networking for **one command** using `network: true` and a nonblank `network_reason`:
 
-- **Allow network once** — enable the container's bridge network only for that approved command; the next command is offline again unless separately approved.
-- **Allow network for this task** — enable the bridge network for that command and subsequent `shell.exec` commands in the *current* task. This grant disappears when the task ends; it is not a session-wide permission.
-- **Deny** — do not run the proposed command.
+```json
+{"command":"python -m pip index versions requests","network":true,"network_reason":"Check the available package versions"}
+```
 
-The agent node's **Agent settings → Allow network for every task** checkbox is an explicit, **off-by-default** persistent opt-in. It is available only in the Isolated profile and applies to future tasks; ordinary shell approval and saved safe-prefix rules remain separate from network consent. Changes to the setting during a running task cannot silently expand that task's permissions. `shell.session` remains network-disabled in Isolated mode. Network-enabled containers use bridge networking, **not** host networking; all other container resource, filesystem and privilege restrictions remain in force.
+The approval panel discloses the command and reason. In **Ask** or **Auto-edit**, the options are **Allow network once** (one command), **Allow network for this task** (that command and subsequent `shell.exec` commands in the current task) and **Deny**. Neither temporary grant survives the task. In **Autonomous**, network requests always need a fresh **Allow network once** decision; task-wide consent is not offered.
+
+**Agent settings → Allow network for every task** is an explicit, off-by-default persistent opt-in for Isolated Ask/Auto-edit only. It enables bridge networking for future `shell.exec` commands, including those without `network: true`. Enabling Autonomous clears/disables this setting. Changes made during a task cannot expand that task's snapshot. Ordinary shell approval and saved exact-command rules are separate from network consent. On current `main`, even eligible saved shell rules still prompt: see [permission modes](WORKSPACE_PERMISSION_MODES.md).
+
+`shell.session` and `python.exec` are always offline in Isolated. Network-enabled containers use bridge rather than host networking; filesystem, process and privilege constraints remain in force.
 
 ## Network grants are separate from container networking
 
-The Isolated setting does **not** turn the Graphlink backend into an offline process. Model/provider requests and other explicit backend services can use the host's network. Container commands are offline by default: `shell.exec` may use approved bridge networking for a command, task, or node setting; only the separately approved PyPI wheel-download phase of `python.install` may use install networking. `shell.session` and `python.exec` remain offline.
+The Isolated setting does **not** turn the Graphlink backend into an offline process. Model/provider requests and other explicit backend services can use the host's network. Container commands are offline by default: `shell.exec` can use consented bridge networking for a command, or in Ask/Auto-edit a task/node setting; Autonomous permits per-command network consent only. Only the separately approved PyPI wheel-download phase of `python.install` may use installer networking. `shell.session` and `python.exec` remain offline.
 
 The workspace agent's `net.fetch` grant offers only `web.search` and `web.fetch` when the built-in Web Research plugin is enabled, not every tool that happens to require `net.fetch`:
 
@@ -29,6 +33,8 @@ The workspace agent's `net.fetch` grant offers only `web.search` and `web.fetch`
 Other backend-host network operations (including model calls and separately approved Fal operations) are outside the container boundary and follow their **own** grants/approval rules. Granting an external domain is not data-loss prevention: model-authored queries and URLs can still disclose data to that approved service. Read untrusted web results as reference material, never as instructions.
 
 ## Setup, failures and lifecycle
+
+**First-task caveat:** The Agent launcher starts a new Agent's first task immediately with the default **Host** profile; it does not offer a profile selector. Begin with a harmless read-only setup task and deny Host execution requests if you intend to use Isolated for later tasks.
 
 Install [Docker Desktop](https://docs.docker.com/desktop/) (Windows/macOS), [Docker Engine](https://docs.docker.com/engine/install/) (Linux), or [Podman](https://podman.io/docs/installation). Start the daemon/service where required. Pull the image *before* using Isolated:
 
@@ -43,6 +49,6 @@ Shell and Python tools retain per-call approval and timeout/cancellation behavio
 
 `python.exec` uses a persistent container REPL. Python tools prefer container-compatible project `.venv`/`venv` environments, otherwise create separate container-native environments. Scratch environments stay in the scratch workspace; trusted projects use scoped app-owned per-agent/per-project directories. Host virtualenvs cannot run in the Linux container and are never executed or repaired on the host.
 
-`python.install` requires a fresh approval bound to the workspace, profile, interpreter and packages, explicitly disclosing possible network access. It first uses cached binary wheels; if needed, only `pip download` contacts the canonical PyPI index. The following `pip install --no-index` runs offline.
+In Ask/Auto-edit, `python.install` requires fresh approval bound to the workspace, profile, interpreter and packages (even when wheels are cached). In Isolated Autonomous it first tries cached wheels offline without a prompt; on a miss, it stops and asks for fresh, interpreter/package-bound consent before contacting PyPI. Only the separately approved `pip download` accesses the canonical PyPI index; the following `pip install --no-index` runs offline.
 
 This is a **workspace execution isolation profile**, not whole-application confinement, a guarantee against malicious Docker/Podman daemons or images, or a claim that approved backend network tools cannot exfiltrate data. See [the independent security audit](WORKSPACE_ISOLATION_NETWORK_AUDIT_2026-11-20.md) for the earlier shell-only threat model and residual risks; container Python support was added subsequently.
