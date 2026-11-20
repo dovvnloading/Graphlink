@@ -35,7 +35,11 @@ def test_machine_snapshot_describes_execution_environment_without_running_comman
     assert "- uv: /toolchain/bin/uv" in snapshot
     for absent in ("node", "npm", "docker", "podman", "rg"):
         assert f"- {absent}: not on PATH" in snapshot
-    assert checks == [(name, "/toolchain/bin") for name in context_module._COMMON_COMMANDS]
+    # Resolving PowerShell on Windows probes pwsh/powershell on this same PATH.
+    assert all(used_path == "/toolchain/bin" for _, used_path in checks)
+    assert [item for item in checks if item[0] in context_module._COMMON_COMMANDS] == [
+        (name, "/toolchain/bin") for name in context_module._COMMON_COMMANDS
+    ]
 
 
 def test_command_shell_is_the_execution_shell_not_the_login_shell(monkeypatch):
