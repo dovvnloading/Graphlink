@@ -149,6 +149,18 @@ def register_control_agent_task_api(app: FastAPI, bus: EventBus) -> None:
             run_id = await session.dispatch_intent("harness", "send", [node.id, body.text.strip()])
             if not isinstance(run_id, str) or not run_id:
                 raise HTTPException(status_code=409, detail="the agent task could not start")
+            # start_harness_run claims a RunHandle synchronously but schedules
+            # run_harness on the next event-loop turn. Expose that claim now
+            # so an immediate MCP status/cancel cannot see the PREVIOUS
+            # task's ID or state before the worker has started.
+            handle = dispatcher._runs.get(run_id)
+            if (handle is not None and handle.kind == "harness"
+                    and handle.node_id == node.id and node.state.harness_run_id != run_id):
+                node.state.harness_run_id = run_id
+                node.state.harness_status = "running"
+                node.state.harness_status_detail = ""
+                node.state.harness_goal = body.text.strip()
+                node.pending_request_id = run_id
             receipts[body.operation_id] = (
                 fingerprint, epoch, node.state.harness_workspace_id, run_id,
             )
