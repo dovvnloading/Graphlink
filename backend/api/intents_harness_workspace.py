@@ -51,6 +51,11 @@ def register_harness_workspace_intents(
             # other settings mutation uses (save_recipe's precedent), so it
             # cannot land mid-write against a concurrent settings save.
             await asyncio.to_thread(run_locked, lambda: settings.add_harness_trusted_dir(resolved))
+            # Serialize the re-grant with any deferred process retirement
+            # before the picker returns and the renewed root can start work.
+            on_grant = getattr(agent_dispatcher, "harness_root_granted", None)
+            if on_grant is not None:
+                await asyncio.to_thread(on_grant, resolved)
         # A Settings dialog may already be subscribed. Publish the newly
         # recorded grant so its trusted-folder list cannot stay stale until
         # some unrelated settings change.

@@ -186,6 +186,24 @@ class HarnessDispatchOps(DispatcherParts):
         if repls is not None:
             repls.stop_all()
 
+    def _harness_revocation_guard(self) -> threading.Lock:
+        guard = getattr(self, "_harness_revocation_lock", None)
+        if guard is None:
+            guard = threading.Lock()
+            self._harness_revocation_lock = guard
+        return guard
+
+    def harness_root_granted(self, path: str) -> None:
+        """Invalidate an old deferred revocation before the picker returns.
+
+        Serialize this with process teardown so a newly approved run cannot
+        start a session while old cleanup is still retiring that root.
+        """
+        with self._harness_revocation_guard():
+            pending = getattr(self, "_harness_revoked_roots", None)
+            if pending is not None:
+                pending.discard(Path(path).resolve())
+
     async def retire_revoked_harness_root(self, path: str) -> None:
         """Revoke idle processes for this folder, deferring live tasks.
 
@@ -193,18 +211,21 @@ class HarnessDispatchOps(DispatcherParts):
         the root must retire those processes even if no new task is run.
         In-progress tasks retain their bound root only until they finish.
         """
-        pending = getattr(self, "_harness_revoked_roots", None)
-        if pending is None:
-            pending = set()
-            self._harness_revoked_roots = pending
-        pending.add(Path(path).resolve())
+        with self._harness_revocation_guard():
+            pending = getattr(self, "_harness_revoked_roots", None)
+            if pending is None:
+                pending = set()
+                self._harness_revoked_roots = pending
+            pending.add(Path(path).resolve())
         await self._retire_revoked_harness_roots()
 
     async def _retire_revoked_harness_roots(self) -> None:
         pending = getattr(self, "_harness_revoked_roots", None)
         if not pending:
             return
-        roots = tuple(pending)
+        guard = self._harness_revocation_guard()
+        with guard:
+            roots = tuple(pending)
         # Keep cancelled-but-still-unwinding tasks protected too: RunRegistry
         # releases their slot immediately, but their worker may still run.
         active = set(getattr(self, "_harness_active_workspaces", {}).values())
@@ -212,23 +233,37 @@ class HarnessDispatchOps(DispatcherParts):
         repls = getattr(self, "_harness_python_repls", None)
 
         def retire() -> None:
-            for root in roots:
-                if sessions is not None:
-                    sessions.stop_root(root, excluding=active)
-                if repls is not None:
-                    repls.stop_root(root, excluding=active)
-                with _MACHINE_SNAPSHOT_LOCK:
-                    snapshots = getattr(self, "_harness_machine_snapshots", None)
-                    if snapshots is not None:
-                        for workspace_id, snapshot in list(snapshots.items()):
-                            if workspace_id not in active and snapshot[0] == str(root):
-                                snapshots.pop(workspace_id, None)
+            with guard:
+                # The folder picker may re-grant a root while an old worker
+                # unwinds. A path-only deferred stop_root would also kill
+                # brand-new sessions from the renewed grant. Re-check actual
+                # Settings trust at teardown, even if the grant didn't come
+                # through this dispatcher's picker notification.
+                settings = getattr(self, "_settings_manager", None)
+                trusted_paths = (
+                    getattr(settings, "get_harness_trusted_dirs", lambda: [])()
+                    if settings is not None else []
+                )
+                trusted = {Path(path).resolve() for path in trusted_paths}
+                for root in roots:
+                    if root not in pending or root in trusted:
+                        pending.discard(root)
+                        continue
+                    if sessions is not None:
+                        sessions.stop_root(root, excluding=active)
+                    if repls is not None:
+                        repls.stop_root(root, excluding=active)
+                    with _MACHINE_SNAPSHOT_LOCK:
+                        snapshots = getattr(self, "_harness_machine_snapshots", None)
+                        if snapshots is not None:
+                            for workspace_id, snapshot in list(snapshots.items()):
+                                if workspace_id not in active and snapshot[0] == str(root):
+                                    snapshots.pop(workspace_id, None)
+                # Retain only still-revoked roots while an old run unwinds.
+                if not active:
+                    pending.difference_update(roots)
 
         await asyncio.to_thread(retire)
-        # Retain deferred revocations only while a task is still unwinding.
-        # A folder granted again later must not lose its new sessions.
-        if not active:
-            pending.difference_update(roots)
 
     def harness_tool_registry(self, document) -> "ToolRegistry":
         """The harness rides the SAME per-session registry the Builder
