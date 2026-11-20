@@ -257,7 +257,7 @@ def test_completion_marker_chunk_preserves_stdout_for_next_execution(
     ))
     monkeypatch.setattr(
         python_repl_module, "_stdout_fragments",
-        lambda _stream: iter((next(fragments),)),
+        lambda _stream, _decoder: iter((next(fragments),)),
     )
     live: list[str] = []
     try:
@@ -270,3 +270,46 @@ def test_completion_marker_chunk_preserves_stdout_for_next_execution(
     finally:
         repl.stop()
     assert repl._stdout_pending == ""
+
+@pytest.mark.parametrize("split_bytes", [b"\\xe2", b"\\xe2\\x82"])
+@pytest.mark.parametrize("status", ["OK", "ERROR"])
+def test_completion_marker_preserves_split_utf8_for_next_execution(
+    monkeypatch, tmp_path, split_bytes, status,
+):
+    """An os.read can end after the marker and partway through a UTF-8 character."""
+    class FakeStdout:
+        encoding = "utf-8"
+
+        def fileno(self):
+            return 99
+
+        def close(self):
+            pass
+
+    repl = PythonREPL(cwd=tmp_path, manage_cwd=False)
+    repl._boundary_prefix = "---GRAPHLINK_EXEC_BOUNDARY:fixture:"
+    repl.process = SimpleNamespace(
+        stdin=StringIO(), stdout=FakeStdout(), stderr=None,
+        poll=lambda: None, kill=lambda: None, wait=lambda: None,
+    )
+    first_marker = f"{repl._boundary_prefix}{status}---\\n".encode()
+    next_marker = f"{repl._boundary_prefix}OK---\\n".encode()
+    euro = "€".encode("utf-8")
+    reads = iter((
+        b"first\\n" + first_marker + split_bytes,
+        euro[len(split_bytes):] + b" after\\n" + next_marker,
+    ))
+    monkeypatch.setattr(python_repl_module.os, "read", lambda _fd, _size: next(reads))
+
+    live: list[str] = []
+    try:
+        assert repl.execute("pass") == "first"
+        assert repl.last_run_failed is (status == "ERROR")
+        assert repl._stdout_decoder.getstate()[0] == split_bytes
+        assert repl.execute("pass", on_output=live.append) == "€ after"
+        assert "".join(live) == "€ after\\n"
+        assert repl.last_run_failed is False
+        assert repl._stdout_decoder.getstate()[0] == b""
+    finally:
+        repl.stop()
+    assert repl._stdout_decoder is None
