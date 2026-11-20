@@ -1114,8 +1114,12 @@ export class SceneStore {
   // per task) and the standard requestId-shaped cancel. `harness/start`
   // itself is fired by HarnessLaunchDialog via transport.request (it
   // answers with the new node's id - the BuilderLaunchDialog precedent).
-  sendHarnessMessage(nodeId: string, text: string): void {
-    this.transport.fireIntent("harness", "send", [nodeId, text]);
+  /** A follow-up is accepted only when the backend has claimed a run.
+   * An idle card can still be rejected while another agent is busy; do
+   * not make the caller discard its draft on a fire-and-forget send. */
+  async sendHarnessMessage(nodeId: string, text: string): Promise<boolean> {
+    const requestId = await this.transport.request("harness", "send", [nodeId, text]);
+    return typeof requestId === "string" && requestId.length > 0;
   }
 
   /** One-shot composer dispatch: reuse the selected harness node, otherwise

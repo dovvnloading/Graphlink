@@ -901,8 +901,8 @@ function makeHarnessFns(id: string, liveRef: { current: DispatcherLive }) {
       store.setChatCollapsed(id, !n.isCollapsed);
     },
     onDelete: () => liveRef.current.store.removeNodes([id]),
-    // Node-id-shaped: which AGENT, not which run - the backend claims a
-    // fresh run per follow-up task (the startBuilderExecution shape).
+    // Node-id-shaped: which AGENT, not which run. Return the backend's
+    // run-claim acknowledgment so a rejected follow-up retains its draft.
     onSend: (text: string) => liveRef.current.store.sendHarnessMessage(id, text),
     onCancel: () => {
       const { n, store } = liveRef.current;

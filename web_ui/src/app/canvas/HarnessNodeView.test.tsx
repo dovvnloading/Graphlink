@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ReactFlowProvider } from "@xyflow/react";
 import { describe, expect, it, vi } from "vitest";
@@ -41,7 +41,7 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     pendingRequestId: "run-1",
     onToggleCollapse: vi.fn(),
     onDelete: vi.fn(),
-    onSend: vi.fn(),
+    onSend: vi.fn().mockResolvedValue(true),
     onCancel: vi.fn(),
     onUndoRun: vi.fn(),
     onApproveTool: vi.fn(),
@@ -117,6 +117,64 @@ describe("HarnessNodeView", () => {
 
     await user.click(screen.getByRole("button", { name: "Send" }));
     expect(data.onSend).toHaveBeenCalledWith(text);
+  });
+
+  it("preserves an unaccepted follow-up while another Agent is running", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn().mockResolvedValue(false);
+    renderHarness(makeData({ harnessStatus: "done", pendingRequestId: null, onSend }));
+    const input = screen.getByRole("textbox", { name: "Follow-up message" });
+    const text = "Please analyze these logs when available";
+    await user.type(input, text);
+
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(onSend).toHaveBeenCalledExactlyOnceWith(text);
+    expect(await screen.findByRole("alert")).toHaveTextContent("draft is preserved");
+    expect(input).toHaveValue(text);
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+  });
+
+  it("waits for admission, blocks duplicate sends, and keeps in-flight edits", async () => {
+    const user = userEvent.setup();
+    let admit!: (accepted: boolean) => void;
+    const onSend = vi.fn(() => new Promise<boolean>((resolve) => { admit = resolve; }));
+    renderHarness(makeData({ harnessStatus: "done", pendingRequestId: null, onSend }));
+    const input = screen.getByRole("textbox", { name: "Follow-up message" });
+    await user.type(input, "First task");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(input).toHaveValue("First task");
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+    expect(onSend).toHaveBeenCalledTimes(1);
+    fireEvent.change(input, { target: { value: "Additional instructions" } });
+    await act(async () => { admit(true); });
+    expect(input).toHaveValue("Additional instructions");
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await act(async () => { admit(true); });
+    expect(input).toHaveValue("");
+    expect(onSend).toHaveBeenNthCalledWith(1, "First task");
+    expect(onSend).toHaveBeenNthCalledWith(2, "Additional instructions");
+  });
+
+  it("keeps a draft on a transport error and allows retry", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn()
+      .mockRejectedValueOnce(new Error("socket closed"))
+      .mockResolvedValueOnce(true);
+    renderHarness(makeData({ harnessStatus: "done", pendingRequestId: null, onSend }));
+    const input = screen.getByRole("textbox", { name: "Follow-up message" });
+    await user.type(input, "Retry this task");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("draft is preserved");
+    expect(input).toHaveValue("Retry this task");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(input).toHaveValue(""));
+    expect(onSend).toHaveBeenCalledTimes(2);
   });
 
   it("offers Undo run only for a completed run", async () => {
