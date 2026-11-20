@@ -1134,8 +1134,8 @@ export class SceneStore {
   // rest of the agent's session. A separate intent from approveHarnessTool
   // by design - two decisions with different blast radii should not share
   // one call shape a UI could send by accident.
-  approveHarnessToolForSession(requestId: string): void {
-    this.transport.fireIntent("harness", "approveToolForSession", [requestId]);
+  approveHarnessToolForSession(requestId: string, approvalId?: string): void {
+    this.transport.fireIntent("harness", "approveToolForSession", approvalId ? [requestId, approvalId] : [requestId]);
   }
 
   // §2.3's user.ask resolution. A blank answer is a deliberate dismissal,
@@ -1170,6 +1170,10 @@ export class SceneStore {
 
   setHarnessShell(nodeId: string, shell: string): void {
     this.transport.fireIntent("harness", "setShell", [nodeId, shell]);
+  }
+
+  removeHarnessShellAllowRule(nodeId: string, rule: string): void {
+    this.transport.fireIntent("harness", "removeShellAllowRule", [nodeId, rule]);
   }
 
   // R5.2: real Artifact/Drafter plugin - sendArtifactMessage appends a real
