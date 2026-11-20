@@ -162,7 +162,7 @@ def test_native_tool_capability_keeps_the_existing_path(monkeypatch):
 def test_explicit_native_tools_rejection_falls_back_to_constrained_json(monkeypatch):
     provider = ScriptedProvider(
         [RuntimeError("400: model does not support tools"), _json_reply(("fs.read", {"path": "a"}))],
-        native_tools=True, structured_output=True,
+        native_tools=True, structured_output=False,
     )
     response = _turn(monkeypatch, provider, "DeepSeek")
     assert response["tool_calls"][0].name == "fs.read"
@@ -170,6 +170,27 @@ def test_explicit_native_tools_rejection_falls_back_to_constrained_json(monkeypa
     assert provider.requests[0].tools
     assert provider.requests[1].tools == ()
     assert provider.requests[1].extra_kwargs["response_format"]["type"] == "json_schema"
+
+
+def test_named_openai_compatible_endpoint_without_schema_support_is_refused(monkeypatch):
+    provider = ScriptedProvider([
+        RuntimeError("400: model does not support tools"),
+        RuntimeError("400: response_format json_schema unsupported"),
+        RuntimeError("400: response_format json_object unsupported"),
+    ], native_tools=True, structured_output=False)
+    with pytest.raises(RuntimeError, match="rejected grammar/schema-constrained JSON output"):
+        _turn(monkeypatch, provider, "DeepSeek")
+    assert len(provider.requests) == 3
+    assert provider.requests[0].tools
+    assert provider.requests[1].extra_kwargs["response_format"]["type"] == "json_schema"
+    assert provider.requests[2].extra_kwargs["response_format"]["type"] == "json_object"
+
+
+def test_ollama_old_server_rejecting_format_is_actionable(monkeypatch):
+    provider = ScriptedProvider([RuntimeError("400: model does not support format")])
+    with pytest.raises(RuntimeError, match="rejected grammar/schema-constrained JSON output"):
+        _turn(monkeypatch, provider, config.LOCAL_PROVIDER_OLLAMA)
+    assert len(provider.requests) == 1
 
 
 def test_provider_without_either_capability_is_refused_before_generation(monkeypatch):
