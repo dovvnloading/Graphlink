@@ -18,6 +18,7 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     harnessMaxContextTokens: 48000,
     harnessCompactions: 0,
     harnessApprovalSessionOffered: false,
+    harnessApprovalNetworkOffered: false,
     harnessPlan: [],
     harnessAwaitingQuestion: false,
     harnessQuestion: "",
@@ -25,6 +26,7 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     harnessWorkspaceActive: "",
     harnessShell: "auto",
     harnessExecutionProfile: "host",
+    harnessNetworkAlways: false,
     harnessAwaitingApproval: false,
     harnessApprovalToolName: "",
     harnessApprovalSummary: "",
@@ -40,6 +42,7 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     onCancel: vi.fn(),
     onUndoRun: vi.fn(),
     onApproveTool: vi.fn(),
+    onApproveNetwork: vi.fn(),
     onApproveToolForSession: vi.fn(),
     onDenyTool: vi.fn(),
     onAnswerQuestion: vi.fn(),
@@ -52,6 +55,7 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     onRevealWorkspace: vi.fn(),
     onSetShell: vi.fn(),
     onSetExecutionProfile: vi.fn(),
+    onSetNetworkAlways: vi.fn(),
     onGetIsolationEngine: vi.fn(async () => "docker"),
     ...overrides,
   };
@@ -262,6 +266,54 @@ describe("HarnessNodeView", () => {
     );
     expect(screen.getByRole("alert")).toHaveTextContent("rate limited");
     expect(screen.getByLabelText("Follow-up message")).toBeInTheDocument();
+  });
+
+  it("lets isolated nodes persist a network opt-in, while Host cannot toggle it", async () => {
+    const user = userEvent.setup();
+    const data = makeData({ harnessExecutionProfile: "isolated" });
+    const { unmount } = renderHarness(data);
+    await user.click(screen.getByRole("button", { name: "Agent settings" }));
+    const checkbox = screen.getByRole("checkbox", { name: "Allow network for every task" });
+    expect(checkbox).not.toBeChecked();
+    await user.click(checkbox);
+    expect(data.onSetNetworkAlways).toHaveBeenCalledExactlyOnceWith(true);
+    unmount();
+
+    renderHarness(makeData({ harnessExecutionProfile: "host" }));
+    await user.click(screen.getByRole("button", { name: "Agent settings" }));
+    expect(screen.getByRole("checkbox", { name: "Allow network for every task" })).toBeDisabled();
+  });
+
+  it.each([
+    ["once", "Allow network once"],
+    ["task", "Allow network for this task"],
+  ] as const)("shows the network reason and token-binds a %s grant", async (scope, label) => {
+    const user = userEvent.setup();
+    const data = makeData({
+      harnessExecutionProfile: "isolated",
+      harnessAwaitingApproval: true,
+      harnessApprovalToolName: "shell.exec",
+      harnessApprovalId: "unique-command-token",
+      harnessApprovalNetworkOffered: true,
+      harnessApprovalSummary: "shell.exec\\nNetwork: requested; requires your permission\\nWhy network is needed: download packages\\ncurl example.com",
+    });
+    const { unmount } = renderHarness(data);
+    expect(screen.getByText(/Why network is needed: download packages/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve once" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Always allow this tool" })).toBeNull();
+    await user.dblClick(screen.getByRole("button", { name: label }));
+    expect(data.onApproveNetwork).toHaveBeenCalledExactlyOnceWith("unique-command-token", scope);
+    expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
+    unmount();
+
+    const missing = makeData({
+      harnessAwaitingApproval: true,
+      harnessApprovalToolName: "shell.exec",
+      harnessApprovalNetworkOffered: true,
+    });
+    renderHarness(missing);
+    expect(screen.getByRole("button", { name: label })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
   });
 
   it("shows the approval panel with the verbatim summary and fires approve/deny", async () => {

@@ -574,6 +574,7 @@ def _serialize_harness_node(raw_node: SceneNode) -> dict[str, Any]:
         "workspace_path": node.state.harness_workspace_path,
         "shell": node.state.harness_shell,
         "execution_profile": node.state.harness_execution_profile,
+        "network_always": node.state.harness_network_always is True,
         "activity": [dict(a) for a in node.state.harness_activity],
         "max_turns": node.state.harness_max_turns,
         "spent_turns": node.state.harness_spent_turns,

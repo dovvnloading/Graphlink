@@ -1141,6 +1141,8 @@ class HarnessState(NodeState):
     # Durable node preference; each task snapshots it before executing tools.
     harness_shell: str = "auto"
     harness_execution_profile: str = "host"
+    # Explicit node preference; Isolated remains offline by default.
+    harness_network_always: bool = False
     harness_activity: list[dict[str, Any]] = field(default_factory=list)
     harness_max_turns: int = 16
     harness_spent_turns: int = 0
@@ -1158,6 +1160,8 @@ class HarnessState(NodeState):
     # session" alongside once/deny. False for Python/executable shell, which is
     # only ever once-or-deny - see backend/harness/shell_policy.py.
     harness_approval_session_offered: bool = False
+    # Live per-command network question; never persisted with the graph.
+    harness_approval_network_offered: bool = False
     # H3 context accounting. `context_tokens` is the live estimate of the
     # reloaded history the NEXT model call would carry (not a cumulative
     # spend counter - spent_tokens above is that); it drives the node's

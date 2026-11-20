@@ -876,6 +876,7 @@ class SceneNodeRow:
     # "approve for this session" alongside once/deny. False for a dangerous
     # command, which is only ever once-or-deny.
     harnessApprovalSessionOffered: bool = False
+    harnessApprovalNetworkOffered: bool = False
     # §2.3's todo surface (plan.update) - rows are {"text","status"} with
     # status in pending|active|done.
     harnessPlan: list[HarnessPlanStepRow] = field(default_factory=list)
@@ -886,6 +887,7 @@ class SceneNodeRow:
     harnessWorkspaceActive: str = ""
     harnessShell: str = "auto"
     harnessExecutionProfile: str = "host"
+    harnessNetworkAlways: bool = False
     harnessMaxTurns: int = 0
     harnessSpentTurns: int = 0
     harnessSpentTokens: int = 0

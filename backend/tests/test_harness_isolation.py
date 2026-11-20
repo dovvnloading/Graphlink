@@ -9,7 +9,7 @@ import pytest
 
 from backend.harness.shell_isolation import (
     CONTAINER_IMAGE, IsolationUnavailableError, available_engine,
-    container_invocation, normalize_execution_profile,
+    container_invocation, normalize_execution_profile, network_request_error,
 )
 from backend.harness.shell_sessions import ShellSessionRegistry
 
@@ -41,6 +41,34 @@ def test_isolated_argv_enforces_no_network_and_resource_caps(tmp_path):
     assert argv[-4:] == [CONTAINER_IMAGE, "/bin/sh", "-c", "echo hi; touch pwned"]
     assert "echo hi; touch pwned" not in argv[:-1]
     assert not any(item.startswith("--network=host") for item in argv)
+
+
+def test_network_enabled_container_preserves_isolation_and_defaults_off(tmp_path):
+    with patch("backend.harness.shell_isolation.shutil.which", return_value="/usr/bin/docker"):
+        enabled, _, _ = container_invocation("echo hi", tmp_path, env={"PATH": "/usr/bin"}, allow_network=True)
+        offline, _, _ = container_invocation("echo hi", tmp_path, env={"PATH": "/usr/bin"})
+    assert "--network=bridge" in enabled
+    assert "--network=none" not in enabled
+    assert "--network=none" in offline
+    assert "--network=bridge" not in offline
+    for flag in ("--pull=never", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges"):
+        assert flag in enabled
+
+
+@pytest.mark.parametrize("args,expected", [
+    ({"command": "curl https://example.org", "network": True}, "reason"),
+    ({"command": "curl https://example.org", "network": True, "network_reason": "   "}, "reason"),
+    ({"command": "curl https://example.org", "network": True, "network_reason": "x" * 1001}, "reason"),
+    ({"command": "echo hi", "network": "true"}, "boolean"),
+])
+def test_network_request_requires_explicit_boolean_and_reason(args, expected):
+    assert expected in network_request_error(args)
+
+
+def test_network_request_allows_offline_or_explained_access():
+    assert network_request_error({"command": "ls"}) is None
+    assert network_request_error({"command": "ls", "network": False}) is None
+    assert network_request_error({"command": "curl example.org", "network": True, "network_reason": "Fetch build dependencies"}) is None
 
 
 def test_missing_engine_fails_closed_before_host_spawn(tmp_path):

@@ -251,6 +251,18 @@ def register_harness_intents(
                 await asyncio.to_thread(sessions.stop_workspace, node.state.harness_workspace_id)
         await publish_scene()
 
+    async def set_network_always(node_id, enabled):
+        """Persist explicit opt-in; the active task retains its snapshot."""
+        node = document.nodes.get(node_id)
+        if node is None or not isinstance(node.state, HarnessState):
+            return
+        if not isinstance(enabled, bool):
+            notifications.show("Network setting must be true or false.", "warning")
+            await bus.publish("notification")
+            return
+        node.state.harness_network_always = enabled
+        await publish_scene()
+
     async def get_isolation_engine():
         """Probe the BACKEND host, not the browser or a saved graph."""
         return available_engine()
@@ -260,6 +272,12 @@ def register_harness_intents(
             agent_dispatcher.approve_code_execution(request_id, approval_id)
         else:
             agent_dispatcher.approve_code_execution(request_id)
+
+    async def approve_network_once(request_id, approval_id):
+        agent_dispatcher.approve_harness_network(request_id, approval_id)
+
+    async def approve_network_for_task(request_id, approval_id):
+        agent_dispatcher.approve_harness_network(request_id, approval_id, for_task=True)
 
     async def deny_tool(request_id, approval_id=""):
         if approval_id:
@@ -287,6 +305,8 @@ def register_harness_intents(
     bus.register_intent("harness", "send", send)
     bus.register_intent("harness", "cancel", cancel)
     bus.register_intent("harness", "approveTool", approve_tool)
+    bus.register_intent("harness", "approveNetworkOnce", approve_network_once)
+    bus.register_intent("harness", "approveNetworkForTask", approve_network_for_task)
     bus.register_intent("harness", "denyTool", deny_tool)
     bus.register_intent("harness", "approveToolForSession", approve_tool_for_session)
     bus.register_intent("harness", "answer", answer_question)
@@ -298,4 +318,5 @@ def register_harness_intents(
     bus.register_intent("harness", "revealWorkspace", reveal_folder)
     bus.register_intent("harness", "setShell", set_shell)
     bus.register_intent("harness", "setExecutionProfile", set_execution_profile)
+    bus.register_intent("harness", "setNetworkAlways", set_network_always)
     bus.register_intent("harness", "getIsolationEngine", get_isolation_engine)

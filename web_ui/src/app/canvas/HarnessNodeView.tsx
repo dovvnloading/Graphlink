@@ -48,6 +48,7 @@ export interface HarnessNodeData extends Record<string, unknown> {
   harnessApprovalSummary: string;
   harnessApprovalId: string;
   harnessApprovalSessionOffered: boolean;
+  harnessApprovalNetworkOffered: boolean;
   harnessPlan: HarnessPlanStepData[];
   harnessAwaitingQuestion: boolean;
   harnessQuestion: string;
@@ -58,6 +59,7 @@ export interface HarnessNodeData extends Record<string, unknown> {
   harnessWorkspaceActive: string;
   harnessShell: string;
   harnessExecutionProfile: string;
+  harnessNetworkAlways: boolean;
   harnessMaxTurns: number;
   harnessSpentTurns: number;
   harnessSpentTokens: number;
@@ -69,6 +71,7 @@ export interface HarnessNodeData extends Record<string, unknown> {
   onCancel: () => void;
   onUndoRun: () => void;
   onApproveTool: (approvalId?: string) => void;
+  onApproveNetwork: (approvalId: string, scope: "once" | "task") => void;
   onApproveToolForSession: () => void;
   onDenyTool: (approvalId?: string) => void;
   onAnswerQuestion: (answer: string) => void;
@@ -79,6 +82,7 @@ export interface HarnessNodeData extends Record<string, unknown> {
   onRevealWorkspace: () => void;
   onSetShell: (shell: string) => void;
   onSetExecutionProfile: (profile: string) => void;
+  onSetNetworkAlways: (enabled: boolean) => void;
   onGetIsolationEngine: () => Promise<string | null>;
 }
 
@@ -131,13 +135,16 @@ function HarnessNodeMenu({
 /** Node settings are portaled to the document, not rendered inside the
  * transformed React Flow node. Otherwise fixed coordinates drift with zoom. */
 function AgentSettingsPopover({
-  position, shell, onSetShell, profile, onSetExecutionProfile, onGetIsolationEngine, onClose, triggerRef,
+  position, shell, onSetShell, profile, onSetExecutionProfile,
+  allowNetwork, onSetNetworkAlways, onGetIsolationEngine, onClose, triggerRef,
 }: {
   position: MenuPosition;
   shell: string;
   onSetShell: (shell: string) => void;
   profile: string;
   onSetExecutionProfile: (profile: string) => void;
+  allowNetwork: boolean;
+  onSetNetworkAlways: (enabled: boolean) => void;
   onGetIsolationEngine: () => Promise<string | null>;
   onClose: () => void;
   triggerRef: RefObject<HTMLButtonElement | null>;
@@ -240,14 +247,27 @@ function AgentSettingsPopover({
           <option value="isolated" disabled={engine === null}>Isolated (Docker / Podman)</option>
         </select>
       </label>
+      <label className="harness-node-settings-field">
+        <span>
+          <input
+            type="checkbox"
+            className="nodrag"
+            aria-label="Allow network for every task"
+            checked={allowNetwork}
+            disabled={profile !== "isolated"}
+            onChange={(event) => onSetNetworkAlways(event.target.checked)}
+          />
+          {" "}Allow network for every task
+        </span>
+      </label>
       {engine === undefined ? (
         <p role="status">Checking Docker / Podman availability…</p>
       ) : engine === null ? (
         <p role="status">No container engine found. Install Docker Desktop (Windows/macOS), Docker Engine (Linux), or Podman to use Isolated execution. Isolated commands never fall back to Host.</p>
       ) : (
-        <p role="status">{engine === "docker" ? "Docker" : "Podman"} detected. Isolated uses a network-disabled container with 1 CPU, 512 MiB RAM and your workspace mounted at /workspace. Pull python:3.12-slim with {engine} before your first run.</p>
+        <p role="status">{engine === "docker" ? "Docker" : "Podman"} detected. Isolated uses a container with 1 CPU, 512 MiB RAM and your workspace mounted at /workspace. Network is {allowNetwork ? "enabled by this node setting" : "off by default; the agent can request it for a command"}. Pull python:3.12-slim with {engine} before your first run.</p>
       )}
-      <p>Saved with this graph. Changes apply from the next task.</p>
+      <p>Network access only applies to Isolated shell.exec commands. Each command still needs approval. Settings are saved with this graph; changes apply from the next task.</p>
     </div>,
     document.body,
   );
@@ -351,7 +371,9 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
   const [settingsPosition, setSettingsPosition] = useState<MenuPosition | null>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
-  const boundApproval = ["python.exec", "python.install", "web.fetch", "web.search"].includes(data.harnessApprovalToolName) || data.harnessApprovalToolName.startsWith("fal.");
+  const boundApproval = data.harnessApprovalNetworkOffered ||
+    ["python.exec", "python.install", "web.fetch", "web.search"].includes(data.harnessApprovalToolName) ||
+    data.harnessApprovalToolName.startsWith("fal.");
   const fileApproval = data.harnessApprovalToolName === "fs.write" || data.harnessApprovalToolName === "fs.edit";
   // Never ask someone to approve an unseen mutation. The backend explains
   // when it cannot safely read the existing file to build the preview.
@@ -373,6 +395,15 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
     submittedApprovalRef.current = approvalId;
     setSubmittedApprovalId(approvalId);
     decide(approvalId);
+  }
+
+  function approveNetwork(scope: "once" | "task"): void {
+    if (!data.harnessApprovalNetworkOffered) return;
+    const approvalId = data.harnessApprovalId;
+    if (!approvalId || submittedApprovalRef.current === approvalId) return;
+    submittedApprovalRef.current = approvalId;
+    setSubmittedApprovalId(approvalId);
+    data.onApproveNetwork(approvalId, scope);
   }
 
   // Deny is the safe default, so focus lands there the moment the panel
@@ -477,6 +508,8 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
             onSetShell={data.onSetShell}
             profile={data.harnessExecutionProfile}
             onSetExecutionProfile={data.onSetExecutionProfile}
+            allowNetwork={data.harnessNetworkAlways}
+            onSetNetworkAlways={data.onSetNetworkAlways}
             onGetIsolationEngine={data.onGetIsolationEngine}
             onClose={() => setSettingsPosition(null)}
             triggerRef={settingsTriggerRef}
@@ -635,14 +668,35 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
             </p>
           )}
           <div className="plan-node-approval-actions">
-            <button
-              type="button"
-              className="plan-node-button nodrag"
-              onClick={() => decideTool(true)}
-              disabled={decisionPending || previewUnavailable}
-            >
-              Approve once
-            </button>
+            {data.harnessApprovalNetworkOffered ? (
+              <>
+                <button
+                  type="button"
+                  className="plan-node-button nodrag"
+                  onClick={() => approveNetwork("once")}
+                  disabled={decisionPending}
+                >
+                  Allow network once
+                </button>
+                <button
+                  type="button"
+                  className="plan-node-button nodrag"
+                  onClick={() => approveNetwork("task")}
+                  disabled={decisionPending}
+                >
+                  Allow network for this task
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="plan-node-button nodrag"
+                onClick={() => decideTool(true)}
+                disabled={decisionPending || previewUnavailable}
+              >
+                Approve once
+              </button>
+            )}
             {data.harnessApprovalSessionOffered && !boundApproval && !previewUnavailable && (
               <button
                 type="button"

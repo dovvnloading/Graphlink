@@ -106,17 +106,24 @@ SHELL_EXEC_SPEC = ToolSpec(
         "command needs the user's approval before it runs. Hard timeout "
         f"{SHELL_EXEC_TIMEOUT_SECONDS}s; output truncated past "
         f"{_OUTPUT_CAP_CHARS} characters. One command per call - no "
-        "interactive stdin."
+        "interactive stdin. In Isolated mode, networking is off unless "
+        "the node allows it or you request it with network=true and "
+        "network_reason explaining why. The user can allow that command "
+        "once or enable network for the current task."
     ),
     input_schema={
         "type": "object",
-        "properties": {"command": {"type": "string"}},
+        "properties": {
+            "command": {"type": "string"},
+            "network": {"type": "boolean", "description": "Isolated only: request network access for this command."},
+            "network_reason": {"type": "string", "description": "Required when network=true: why the command needs network access."},
+        },
         "required": ["command"],
     },
 )
 
 
-def _run_command(command: str, cwd, cancel_event, on_output=None, shell: str = "auto", profile: str = "host") -> tuple[str, "int | None", str]:
+def _run_command(command: str, cwd, cancel_event, on_output=None, shell: str = "auto", profile: str = "host", allow_network: bool = False) -> tuple[str, "int | None", str]:
     """Blocking worker (called via to_thread): returns (output, exit_code,
     ended) where ended is "ok" | "timeout" | "cancelled". Guarded spawn,
     then a poll loop so cancel/timeout kill the whole tree promptly.
@@ -135,7 +142,9 @@ def _run_command(command: str, cwd, cancel_event, on_output=None, shell: str = "
     container = None
     argv: str | list[str]
     if normalize_execution_profile(profile) == "isolated":
-        argv, engine, name = container_invocation(command, cwd, env=kwargs["env"])
+        argv, engine, name = container_invocation(
+            command, cwd, env=kwargs["env"], allow_network=allow_network is True,
+        )
         via_shell = False
         container = (engine, name)
     else:
@@ -395,6 +404,17 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
             return ToolResult(content="shell.exec needs a non-empty command.", is_error=True)
         if len(command) > _COMMAND_CAP_CHARS:
             return ToolResult(content=f"Command longer than {_COMMAND_CAP_CHARS} characters.", is_error=True)
+        profile = normalize_execution_profile(getattr(ctx, "harness_execution_profile", "host"))
+        requested = call.arguments.get("network") is True
+        # The node preference and task grant cover all commands in that task.
+        # A one-off grant is instead bound to this exact approved tool call.
+        allow_network = profile == "isolated" and (
+            getattr(ctx, "harness_network_always", False) is True
+            or getattr(ctx, "harness_network_task_approved", False) is True
+            or (requested and call.id in getattr(ctx, "harness_network_once_approved", set()))
+        )
+        if profile == "isolated" and requested and not allow_network:
+            return ToolResult(content="Network access was not approved for this command.", is_error=True)
         try:
             if isinstance(bound, Path):
                 workspace = bound
@@ -414,10 +434,13 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
             output, exit_code, ended = await asyncio.to_thread(
                 _run_command, command, workspace, cancel_event, on_output,
                 getattr(ctx, "harness_shell", "auto"),
-                getattr(ctx, "harness_execution_profile", "host"),
+                profile, allow_network,
             )
         except (ShellUnavailableError, IsolationUnavailableError, OSError) as exc:
             return ToolResult(content=f"Could not launch the selected shell: {exc}", is_error=True)
+        finally:
+            # A one-command grant cannot authorize a replay of the call id.
+            getattr(ctx, "harness_network_once_approved", set()).discard(call.id)
         if ended == "cancelled":
             # The one exception invoke() propagates - cancellation is the
             # loop's mechanism, never a tool "error" fed to the model.

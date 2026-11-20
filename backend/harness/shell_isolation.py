@@ -47,12 +47,14 @@ def available_engine(env: dict[str, str] | None = None) -> str | None:
 
 def container_invocation(
     command: str, workspace: Path, *, env: dict[str, str] | None = None,
+    allow_network: bool = False,
 ) -> tuple[list[str], str, str]:
     """Return (argv, engine, unique name) for a restricted Linux container.
 
-    A fixed image, offline container, no privileged caps, read-only image
-    filesystem and explicitly bounded resources are non-optional. Only the
-    trusted/bound workspace is writable; /tmp is a small scratch tmpfs.
+    A fixed image, no privileged caps, read-only image filesystem and
+    bounded resources are non-optional. Networking is off unless the caller
+    explicitly passes an authorized grant. Only the bound workspace is
+    writable; /tmp is a small scratch tmpfs.
     """
     environment = safe_subprocess_env() if env is None else env
     engine = available_engine(environment)
@@ -69,7 +71,8 @@ def container_invocation(
     args = [
         executable, "run", "--rm", "--interactive", "--pull=never",
         "--name", name,
-        "--network=none", "--cpus=" + CONTAINER_CPUS,
+        "--network=bridge" if allow_network is True else "--network=none",
+        "--cpus=" + CONTAINER_CPUS,
         "--memory=" + CONTAINER_MEMORY, "--memory-swap=" + CONTAINER_MEMORY,
         "--pids-limit=128", "--read-only",
         "--cap-drop=ALL", "--security-opt=no-new-privileges",
@@ -87,6 +90,18 @@ def container_invocation(
             args.extend(["--user", f"{getuid()}:{getgid()}"])
     args.extend([CONTAINER_IMAGE, "/bin/sh", "-c", command])
     return args, engine, name
+
+
+def network_request_error(arguments: dict) -> str | None:
+    """Reject malformed network requests before exposing an approval panel."""
+    requested = arguments.get("network", False)
+    if not isinstance(requested, bool):
+        return "shell.exec 'network' must be a boolean."
+    if requested:
+        reason = arguments.get("network_reason")
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 1000:
+            return "shell.exec network access requires a non-empty reason (at most 1000 characters)."
+    return None
 
 
 def cleanup_container(engine: str, name: str, *, env: dict[str, str] | None = None) -> None:

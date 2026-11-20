@@ -283,6 +283,14 @@ class ToolRegistry:
         # dict is still mutable. Keep private execution arguments distinct
         # from both the caller's object and the object sent to the approval
         # callback. Refuse a changed pending request, without caching consent.
+        original_shell_call = call if call.name == "shell.exec" else None
+        if original_shell_call is not None:
+            from backend.harness.shell_isolation import network_request_error
+
+            error = network_request_error(call.arguments)
+            if error is not None:
+                return ToolResult(content=error, is_error=True)
+            call = ToolCall(id=call.id, name=call.name, arguments=deepcopy(call.arguments))
         original_python_call = call if call.name in ("python.exec", "python.install") else None
         if original_python_call is not None:
             if call.name == "python.exec":
@@ -332,7 +340,7 @@ class ToolRegistry:
                 # session; anything else truthy approves this call only. Every
                 # pre-existing caller returns a plain bool, which lands on the
                 # once-only branch exactly as it always did.
-                disclosure_call = deepcopy(call) if original_python_call is not None else call
+                disclosure_call = deepcopy(call) if (original_python_call is not None or original_shell_call is not None) else call
                 decision = await ctx.request_approval(disclosure_call)
                 approved = bool(decision)
                 # The approval prompt is the one place this function can be
@@ -351,6 +359,22 @@ class ToolRegistry:
                 ):
                     return ToolResult(
                         content="Python request changed while approval was pending; submit it for fresh approval.",
+                        is_error=True,
+                    )
+                if original_shell_call is not None and (
+                    original_shell_call.arguments != call.arguments
+                    or disclosure_call.arguments != call.arguments
+                ):
+                    # The loop's network grant is tentatively recorded when
+                    # its approval future resolves. A changed call must not
+                    # leave that grant available to a later command.
+                    network_once = getattr(ctx, "harness_network_once_approved", None)
+                    if network_once is not None:
+                        network_once.discard(call.id)
+                    if decision == "network-task":
+                        ctx.harness_network_task_approved = False
+                    return ToolResult(
+                        content="Shell request changed while approval was pending; submit it for fresh approval.",
                         is_error=True,
                     )
                 if decision == "session" and ctx.session_grants is not None and not forced:

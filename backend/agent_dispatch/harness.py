@@ -74,6 +74,21 @@ class HarnessDispatchOps(DispatcherParts):
         future.set_result("session")
         return True
 
+    def approve_harness_network(self, request_id: str, approval_id: str, *, for_task: bool = False) -> bool:
+        """Resolve only the exact, still-open Isolated network disclosure."""
+        handle = self._runs.get(request_id)
+        if (
+            handle is None or handle.kind != "harness"
+            or not handle.harness_network_approval
+            or not approval_id or approval_id != handle.approval_token
+        ):
+            return False
+        future = handle.approval_future
+        if future is None or future.done():
+            return False
+        future.set_result("network-task" if for_task else "network-once")
+        return True
+
     def harness_session_grants(self, workspace_id: str) -> set:
         """The session-scoped grant set for one harness node. Keyed by
         workspace id (not node id, which is reassigned on every reload) and
@@ -236,6 +251,7 @@ class HarnessDispatchOps(DispatcherParts):
             node.state.harness_approval_summary = ""
             node.state.harness_approval_id = ""
             node.state.harness_approval_session_offered = False
+            node.state.harness_approval_network_offered = False
             if node.pending_request_id == handle.request_id:
                 node.pending_request_id = None
             await bus.publish("scene")
