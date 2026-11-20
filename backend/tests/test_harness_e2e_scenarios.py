@@ -9,6 +9,7 @@ No configured provider, credentials, network or LLM judge is required.
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import shlex
 import sys
@@ -20,12 +21,18 @@ import api_provider
 import graphlink_task_config as config
 import pytest
 from backend import agents as agents_module
+from backend.agent_dispatch.harness import HarnessDispatchOps
 from backend.domain.graph import SceneDocument
+from backend.harness import skills as skills_module
+from backend.harness import tools_web
 from backend.harness import workspace as workspace_module
 from backend.harness.loop import run_harness
 from backend.harness.tools_fs import register_harness_fs_tools
 from backend.harness.tools_publish import register_workspace_tools
 from backend.harness.tools_shell import register_harness_shell_tool
+from backend.harness.tools_skills import register_workspace_tools as register_skill_tools
+from backend.harness.tools_transcript import register_workspace_tools as register_transcript_tools
+from backend.harness.tools_web import register_workspace_tools as register_web_tools
 from backend.harness.transcript import load_messages
 from backend.harness.workspace import ensure_workspace
 from backend.providers.base import ProviderCapabilities, ProviderEvent, ToolCall
@@ -33,6 +40,8 @@ from backend.run_lifecycle import RunRegistry
 from backend.tools import ToolRegistry
 from backend.tools_graph import register_graph_tools, register_run_node_tool
 from graphlink_model_catalog import ModelRef
+from graphlink_plugins.web_research import service as research_service_module
+from graphlink_plugins.web_research.domain import FetchedDocument, FetchedPayload, SearchResult
 
 
 def _call(call_id, name, **arguments):
@@ -103,6 +112,9 @@ class _Bus:
 
 
 class _Dispatcher:
+    approve_harness_tool_for_session = HarnessDispatchOps.approve_harness_tool_for_session
+    approve_harness_network = HarnessDispatchOps.approve_harness_network
+
     def __init__(self):
         self._runs = RunRegistry()
 
@@ -134,6 +146,7 @@ def _drive(scenario, monkeypatch, turns, *, approvals=(), json_tools=False):
     monkeypatch.setattr(api_provider, "_provider_for_model_ref", lambda _ref, _state: model)
     provider = config.LOCAL_PROVIDER_LLAMACPP if json_tools else "DeepSeek"
     expected_approvals = list(approvals)
+    spent_before = scenario.agent.state.harness_spent_turns
 
     async def main():
         cancel_event = threading.Event()
@@ -146,6 +159,8 @@ def _drive(scenario, monkeypatch, turns, *, approvals=(), json_tools=False):
             harness_node_id=scenario.agent.id, user_text="Complete the scenario.",
             request_id=handle.request_id, handle=handle, cancel_event=cancel_event,
             model_ref=ModelRef(provider, model.model_id),
+            permission_mode=scenario.agent.state.harness_permission_mode,
+            execution_profile=scenario.agent.state.harness_execution_profile,
         ))
         seen_approvals = []
         cursor = 0
@@ -163,7 +178,18 @@ def _drive(scenario, monkeypatch, turns, *, approvals=(), json_tools=False):
                     actual_tool = scenario.agent.state.harness_approval_tool_name
                     assert actual_tool == expected_tool, (actual_tool, expected_tool)
                     seen_approvals.append((actual_tool, scenario.agent.state.harness_approval_summary))
-                    future.set_result(decision)
+                    if decision == "shell_rule":
+                        assert scenario.agent.state.harness_approval_session_offered
+                        assert scenario.dispatcher.approve_harness_tool_for_session(
+                            handle.request_id, scenario.agent.state.harness_approval_id,
+                        )
+                    elif decision == "network_once":
+                        assert scenario.agent.state.harness_approval_network_offered
+                        assert scenario.dispatcher.approve_harness_network(
+                            handle.request_id, scenario.agent.state.harness_approval_id,
+                        )
+                    else:
+                        future.set_result(decision)
                     cursor += 1
                 if asyncio.get_running_loop().time() >= deadline:
                     raise AssertionError("workspace-agent scenario exceeded 30 seconds")
@@ -185,7 +211,7 @@ def _drive(scenario, monkeypatch, turns, *, approvals=(), json_tools=False):
     assert scenario.agent.state.harness_awaiting_approval is False
     assert scenario.agent.pending_request_id is None
     assert not model.turns, "unused scripted model turns"
-    assert scenario.agent.state.harness_spent_turns == len(model.requests)
+    assert scenario.agent.state.harness_spent_turns - spent_before == len(model.requests)
     return SimpleNamespace(
         id=run_id, approvals=seen_approvals, scripted_model=model,
         transcript=load_messages(scenario.workspace),
@@ -442,3 +468,375 @@ def test_denied_approval_is_reported_without_changing_files(scenario, monkeypatc
     assert scenario.agent.state.harness_reply == "Approval was denied, so I left locked.txt unchanged."
     denied = [m for m in run.transcript if m["role"] == "tool" and m["name"] == "fs.write"]
     assert len(denied) == 1 and "denied approval" in denied[0]["content"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="PowerShell host scenario runs on Windows")
+def test_powershell_shell_exec_from_scripted_agent(scenario, monkeypatch):
+    scenario.agent.state.harness_shell = "powershell"
+    observed = {}
+
+    def finish(request):
+        observed["output"] = _result(request, "powershell_output")
+        return {"answer": "PowerShell command completed."}
+
+    run = _drive(scenario, monkeypatch, [
+        {"calls": [_call("powershell_output", "shell.exec", command="Write-Output POWERSHELL_READY")]},
+        finish,
+    ], approvals=[("shell.exec", True)])
+
+    assert observed["output"].startswith("exit code 0\n")
+    assert "POWERSHELL_READY" in observed["output"]
+    assert _activity(scenario) == [("shell.exec", "ok")]
+    assert [tool for tool, _ in run.approvals] == ["shell.exec"]
+    assert run.transcript[-1]["content"] == "PowerShell command completed."
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Bash host scenario runs on POSIX")
+def test_bash_shell_exec_from_scripted_agent(scenario, monkeypatch):
+    scenario.agent.state.harness_shell = "bash"
+    observed = {}
+
+    def finish(request):
+        observed["output"] = _result(request, "bash_output")
+        return {"answer": "Bash command completed."}
+
+    run = _drive(scenario, monkeypatch, [
+        {"calls": [_call("bash_output", "shell.exec", command="printf BASH_READY")]},
+        finish,
+    ], approvals=[("shell.exec", True)])
+
+    assert observed["output"].startswith("exit code 0\n")
+    assert "BASH_READY" in observed["output"]
+    assert _activity(scenario) == [("shell.exec", "ok")]
+    assert [tool for tool, _ in run.approvals] == ["shell.exec"]
+    assert run.transcript[-1]["content"] == "Bash command completed."
+
+
+def test_saved_shell_rule_survives_a_task_but_not_a_changed_command(scenario, monkeypatch):
+    first = _drive(scenario, monkeypatch, [
+        {"calls": [_call("remember", "shell.exec", command="echo remembered")]},
+        {"answer": "Remembered the safe command."},
+    ], approvals=[("shell.exec", "shell_rule")])
+    assert "exit code 0" in next(m["content"] for m in first.transcript if m.get("tool_call_id") == "remember")
+    assert len(scenario.agent.state.harness_shell_allow_rules) == 1
+    assert scenario.agent.state.harness_shell_allow_rules[0].startswith("v2\t")
+
+    observed = {}
+
+    def change_command(request):
+        observed["reused"] = _result(request, "reused")
+        return {"calls": [_call("changed", "shell.exec", command="echo different")]}
+
+    def finish(request):
+        observed["changed"] = _result(request, "changed")
+        return {"answer": "Reused only the exact saved command."}
+
+    second = _drive(scenario, monkeypatch, [
+        {"calls": [_call("reused", "shell.exec", command="echo remembered")]},
+        change_command, finish,
+    ], approvals=[("shell.exec", True)])
+    assert "remembered" in observed["reused"]
+    assert "different" in observed["changed"]
+    assert len(second.approvals) == 1
+    assert "echo different" in second.approvals[0][1]
+    assert len(scenario.agent.state.harness_shell_allow_rules) == 1
+
+
+def test_web_research_search_fetch_and_redirect_consent(scenario, monkeypatch):
+    monkeypatch.setattr(tools_web, "_plugin_enabled", lambda: True)
+    register_web_tools(scenario.registry, None, None)
+    queries, requested = [], []
+    redirected = "https://mirror.example/reference"
+
+    class SearchProvider:
+        name = "DuckDuckGo"
+
+        def search(self, query, *, limits, token):
+            token.raise_if_cancelled()
+            queries.append(query)
+            return [SearchResult(
+                "source-1", "Research result", "https://docs.example/first",
+                "https://docs.example/first", "Useful reference snippet",
+            )]
+
+    class Fetcher:
+        def fetch(self, result, *, limits, token, on_request=None):
+            for url in (result.canonical_url, redirected):
+                token.raise_if_cancelled()
+                on_request(url)
+                requested.append(url)
+            return FetchedPayload(
+                source_id=result.source_id, requested_url=result.url,
+                final_url=redirected, content_type="text/plain", body=b"fixture content",
+            )
+
+    class Extractor:
+        def extract(self, payload, *, limits, token):
+            token.raise_if_cancelled()
+            return FetchedDocument(
+                source_id=payload.source_id, title="Research reference",
+                final_url=payload.final_url, content_type=payload.content_type,
+                text="The verified fixture marker is BLUE_ORCHID.", truncated=False,
+            )
+
+    service = SimpleNamespace(search_provider=SearchProvider(), fetcher=Fetcher(), extractor=Extractor())
+    monkeypatch.setattr(research_service_module, "WebResearchService", lambda: service)
+    observed = {}
+
+    def research_more(request):
+        observed["search_one"] = _result(request, "search_one")
+        return {"calls": [
+            _call("search_two", "web.search", query="second research query"),
+            _call("fetch_one", "web.fetch", url="https://docs.example/first"),
+        ]}
+
+    def fetch_again(request):
+        observed["search_two"] = _result(request, "search_two")
+        observed["fetch_one"] = _result(request, "fetch_one")
+        return {"calls": [_call("fetch_two", "web.fetch", url="https://docs.example/second")]}
+
+    def finish(request):
+        observed["fetch_two"] = _result(request, "fetch_two")
+        return {"answer": "The reference states BLUE_ORCHID."}
+
+    run = _drive(scenario, monkeypatch, [
+        {"calls": [_call("search_one", "web.search", query="first research query")]},
+        research_more, fetch_again, finish,
+    ], approvals=[("web.search", True), ("web.fetch", True), ("web.fetch", True)])
+
+    assert queries == ["first research query", "second research query"]
+    assert requested == [
+        "https://docs.example/first", redirected,
+        "https://docs.example/second", redirected,
+    ]
+    assert "UNTRUSTED WEB SEARCH RESULTS" in observed["search_one"]
+    assert "UNTRUSTED WEB SEARCH RESULTS" in observed["search_two"]
+    assert all("BLUE_ORCHID" in observed[key] for key in ("fetch_one", "fetch_two"))
+    assert [tool for tool, _ in run.approvals] == ["web.search", "web.fetch", "web.fetch"]
+    assert "duckduckgo.com" in run.approvals[0][1]
+    assert "docs.example" in run.approvals[1][1]
+    assert "mirror.example" in run.approvals[2][1]
+    assert _activity(scenario) == [
+        ("web.search", "ok"), ("web.search", "ok"),
+        ("web.fetch", "ok"), ("web.fetch", "ok"),
+    ]
+
+
+def test_agent_discovers_and_loads_a_workspace_skill_before_writing(scenario, monkeypatch):
+    monkeypatch.setattr(skills_module, "USER_SKILLS_DIR", scenario.workspace / "no-user-skills")
+    skill_file = scenario.workspace / ".graphlink" / "skills" / "review" / "SKILL.md"
+    skill_file.parent.mkdir(parents=True)
+    skill_file.write_text(
+        "---\nname: review\ndescription: Prepare a concise review file.\n---\n"
+        "# Procedure\nUse the SKILL_BODY_MARKER for a review.\n", encoding="utf-8",
+    )
+    register_skill_tools(scenario.registry, None, None)
+    observed = {}
+
+    def load_skill(request):
+        prompt = request.messages[0]["content"]
+        observed["catalog"] = prompt
+        return {"calls": [_call("load_review", "skills.load", source="workspace", name="review")]}
+
+    def write_review(request):
+        observed["skill"] = _result(request, "load_review")
+        return {"calls": [_call("review_file", "fs.write", path="review.txt", content="SKILL_BODY_MARKER\n")]}
+
+    def finish(request):
+        observed["write"] = _result(request, "review_file")
+        return {"answer": "Created review.txt after reading the skill."}
+
+    run = _drive(scenario, monkeypatch, [load_skill, write_review, finish],
+                 approvals=[("fs.write", True)])
+    assert "workspace / review: Prepare a concise review file." in observed["catalog"]
+    assert "SKILL_BODY_MARKER" not in observed["catalog"]
+    assert "SKILL_BODY_MARKER" in observed["skill"]
+    assert (scenario.workspace / "review.txt").read_text(encoding="utf-8") == "SKILL_BODY_MARKER\n"
+    assert [tool for tool, _ in run.approvals] == ["fs.write"]
+    assert _activity(scenario) == [("skills.load", "ok"), ("fs.write", "ok")]
+
+
+def test_agent_searches_a_prior_task_transcript(scenario, monkeypatch):
+    register_transcript_tools(scenario.registry, None, None)
+    _drive(scenario, monkeypatch, [
+        {"answer": "Previous session recorded the orchidindex decision."},
+    ])
+    observed = {}
+
+    def finish(request):
+        observed["result"] = _result(request, "historical_search")
+        return {"answer": "Recovered the prior orchidindex decision."}
+
+    run = _drive(scenario, monkeypatch, [
+        {"calls": [_call("historical_search", "session.search", query="orchidindex")]},
+        finish,
+    ])
+    assert "transcript.jsonl:" in observed["result"]
+    assert "orchidindex" in observed["result"]
+    assert "assistant" in observed["result"]
+    assert run.approvals == []
+    assert _activity(scenario)[-1] == ("session.search", "ok")
+
+
+@pytest.mark.parametrize("mode,approval_names", [
+    ("ask", ("fs.write", "fs.edit", "shell.exec")),
+    ("auto_edit", ("shell.exec",)),
+])
+def test_ask_and_auto_edit_mode_journey(scenario, monkeypatch, mode, approval_names):
+    scenario.agent.state.harness_permission_mode = mode
+    observed = {}
+
+    def edit(request):
+        observed["written"] = _result(request, "mode_write")
+        return {"calls": [_call(
+            "mode_edit", "fs.edit", path="notes.txt",
+            old_string="draft", new_string="reviewed",
+        )]}
+
+    def run_command(request):
+        observed["edited"] = _result(request, "mode_edit")
+        return {"calls": [_call("mode_shell", "shell.exec", command="echo mode_ready")]}
+
+    def finish(request):
+        observed["shell"] = _result(request, "mode_shell")
+        return {"answer": "File edited and shell command checked."}
+
+    run = _drive(scenario, monkeypatch, [
+        {"calls": [_call("mode_write", "fs.write", path="notes.txt", content="draft")]},
+        edit, run_command, finish,
+    ], approvals=[(name, True) for name in approval_names])
+    assert (scenario.workspace / "notes.txt").read_text(encoding="utf-8") == "reviewed"
+    assert observed["shell"].startswith("exit code 0\n")
+    assert "mode_ready" in observed["shell"]
+    assert [name for name, _ in run.approvals] == list(approval_names)
+    assert _activity(scenario) == [
+        ("fs.write", "ok"), ("fs.edit", "ok"), ("shell.exec", "ok"),
+    ]
+
+
+def _fake_container_engine(monkeypatch):
+    """Capture Docker argv without starting a daemon or contacting a network."""
+    from backend.harness import shell_isolation, tools_shell
+
+    launched = []
+    real_which = shell_isolation.shutil.which
+    monkeypatch.setattr(shell_isolation, "available_engine", lambda _env: "docker")
+    monkeypatch.setattr(
+        shell_isolation.shutil, "which",
+        lambda name, **kwargs: "/fake/docker" if name == "docker" else real_which(name, **kwargs),
+    )
+    monkeypatch.setattr(
+        tools_shell, "create_execution_guard",
+        lambda: SimpleNamespace(popen_kwargs=lambda: {}, close=lambda: None),
+    )
+
+    class CompletedProcess:
+        def __init__(self):
+            self.stdout = io.StringIO("fake container output\n")
+            self.returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+    def spawn(_guard, argv, **kwargs):
+        assert kwargs["shell"] is False
+        launched.append(list(argv))
+        return CompletedProcess()
+
+    monkeypatch.setattr(tools_shell, "spawn_guarded_subprocess", spawn)
+    monkeypatch.setattr(tools_shell, "assign_guarded_subprocess", lambda *_args: None)
+    monkeypatch.setattr(tools_shell, "cleanup_container", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "backend.harness.context.describe_machine",
+        lambda *_args, **_kwargs: "Isolated fake-container test machine",
+    )
+    return launched
+
+
+def test_autonomous_mode_skips_safe_isolated_ops_but_prompts_for_danger(scenario, monkeypatch):
+    launched = _fake_container_engine(monkeypatch)
+    scenario.agent.state.harness_execution_profile = "isolated"
+    scenario.agent.state.harness_permission_mode = "autonomous"
+    observed = {}
+
+    def read_safe_file(request):
+        observed["write"] = _result(request, "auto_write")
+        return {"calls": [_call("auto_cat", "shell.exec", command="cat notes.txt")]}
+
+    def attempt_danger(request):
+        observed["read"] = _result(request, "auto_cat")
+        return {"calls": [_call("auto_danger", "shell.exec", command="rm -rf notes.txt")]}
+
+    def finish(request):
+        observed["denied"] = _result(request, "auto_danger")
+        return {"answer": "Safe actions ran; destructive command was denied."}
+
+    run = _drive(scenario, monkeypatch, [
+        {"calls": [_call("auto_write", "fs.write", path="notes.txt", content="safe content")]},
+        read_safe_file, attempt_danger, finish,
+    ], approvals=[("shell.exec", False)])
+    assert (scenario.workspace / "notes.txt").read_text(encoding="utf-8") == "safe content"
+    assert observed["read"].startswith("exit code 0\n")
+    assert "denied approval" in observed["denied"]
+    assert [tool for tool, _ in run.approvals] == ["shell.exec"]
+    assert [argv[-1] for argv in launched] == ["cat notes.txt"]
+    assert "--network=none" in launched[0]
+    assert _activity(scenario) == [
+        ("fs.write", "ok"), ("shell.exec", "ok"), ("shell.exec", "error"),
+    ]
+
+
+def test_isolated_network_needs_one_command_approval_with_fake_engine(scenario, monkeypatch):
+    launched = _fake_container_engine(monkeypatch)
+    scenario.agent.state.harness_execution_profile = "isolated"
+    scenario.agent.state.harness_permission_mode = "autonomous"
+    observed = {}
+
+    def request_network(request):
+        observed["offline"] = _result(request, "offline")
+        return {"calls": [_call(
+            "network_once", "shell.exec", command="curl https://docs.example/reference",
+            network=True, network_reason="Read approved reference documentation",
+        )]}
+
+    def request_other_network(request):
+        observed["approved"] = _result(request, "network_once")
+        return {"calls": [_call(
+            "network_denied", "shell.exec", command="curl https://other.example/data",
+            network=True, network_reason="Read a second site's documentation",
+        )]}
+
+    def continue_offline(request):
+        observed["denied"] = _result(request, "network_denied")
+        return {"calls": [_call("offline_after", "shell.exec", command="echo still_offline")]}
+
+    def finish(request):
+        observed["offline_after"] = _result(request, "offline_after")
+        return {"answer": "Only the first network command was approved."}
+
+    run = _drive(scenario, monkeypatch, [
+        {"calls": [_call("offline", "shell.exec", command="echo offline")]},
+        request_network, request_other_network, continue_offline, finish,
+    ], approvals=[("shell.exec", "network_once"), ("shell.exec", False)])
+    assert all(observed[key].startswith("exit code 0\n") for key in (
+        "offline", "approved", "offline_after",
+    ))
+    assert "denied approval" in observed["denied"]
+    assert [tool for tool, _ in run.approvals] == ["shell.exec", "shell.exec"]
+    assert "Why network is needed: Read approved reference documentation" in run.approvals[0][1]
+    assert "Why network is needed: Read a second site's documentation" in run.approvals[1][1]
+    assert [argv[-1] for argv in launched] == [
+        "echo offline", "curl https://docs.example/reference", "echo still_offline",
+    ]
+    assert [next(flag for flag in argv if flag.startswith("--network=")) for argv in launched] == [
+        "--network=none", "--network=bridge", "--network=none",
+    ]
+    for argv in launched:
+        assert argv[:2] == ["/fake/docker", "run"]
+        assert "--pull=never" in argv and "--cap-drop=ALL" in argv
+    assert scenario.agent.state.harness_approval_network_offered is False
+    assert scenario.agent.state.harness_network_always is False
+    assert _activity(scenario) == [
+        ("shell.exec", "ok"), ("shell.exec", "ok"),
+        ("shell.exec", "error"), ("shell.exec", "ok"),
+    ]
