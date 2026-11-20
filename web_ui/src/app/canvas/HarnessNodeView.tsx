@@ -273,25 +273,27 @@ function AgentSettingsPopover({
       )}
       <p>Network access only applies to Isolated shell.exec commands. Each command still needs approval. Settings are saved with this graph. Changes apply from the next task.</p>
       <div className="harness-node-allow-rules">
-        <strong>Allowed command prefixes</strong>
+        <strong>Allowed exact commands</strong>
         {rules.length === 0 ? (
           <p>No saved rules for this agent.</p>
         ) : (
-          <ul aria-label="Allowed command prefixes">
+          <ul aria-label="Allowed exact commands">
             {rules.map((rule) => {
-              const boundary = rule.indexOf("\t");
-              const ruleShell = boundary >= 0 ? rule.slice(0, boundary) : "";
-              const prefix = boundary >= 0 ? rule.slice(boundary + 1) : rule;
+              const parts = rule.split("\t");
+              const scoped = parts.length === 5 && parts[0] === "v2";
+              const ruleShell = scoped ? parts[1] : parts[0];
+              const command = scoped ? parts[4] : parts.slice(1).join("\t");
+              const context = scoped ? `${parts[2]} · workspace-bound` : "legacy (inactive)";
               return (
                 <li key={rule}>
                   <span className="harness-node-allow-rule-text">
-                    <code title={prefix}>{prefix}</code>
-                    <small>{ruleShell}</small>
+                    <code title={command}>{command}</code>
+                    <small>{ruleShell} · {context}</small>
                   </span>
                   <button
                     type="button"
                     className="nodrag"
-                    aria-label={`Remove rule: ${prefix} (${ruleShell})`}
+                    aria-label={`Remove rule: ${command} (${ruleShell})`}
                     onClick={() => onRemoveRule(rule)}
                   >
                     Remove
@@ -706,7 +708,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
           )}
           {shellApproval && data.harnessApprovalSessionOffered && (
             <p className="harness-approval-allow-explanation">
-              Always allow saves each displayed safe command as a prefix on this agent, for the selected shell.
+              Always allow remembers this exact command (including any chain) only for this agent, workspace, shell, and execution profile.
             </p>
           )}
           <div className="plan-node-approval-actions">
@@ -746,7 +748,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
                 disabled={decisionPending}
                 onClick={() => decideTool(true, true)}
                 title={shellApproval
-                  ? "Save a shell-scoped prefix for each safe command segment on this agent"
+                  ? "Remember this exact command in this workspace, shell, and execution profile"
                   : "Stop asking for this tool for the rest of this agent's session"}
               >
                 {shellApproval ? "Always allow" : "Always allow this tool"}

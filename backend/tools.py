@@ -343,13 +343,17 @@ class ToolRegistry:
                 # The real harness never accepts a whole-tool grant or a
                 # fingerprint for shell commands. Only explicit prefixes for
                 # *every* segment, with no dangerous or ambiguous segment,
-                # can bypass this command's fresh consent requirement.
+                # can bypass this command's fresh consent requirement. The
+                # command and workspace/profile must match the rule exactly.
                 from backend.harness.shell_policy import shell_command_allowed
 
                 try:
                     already_approved = not reprompt_failed and shell_command_allowed(
                         str(call.arguments.get("command") or ""),
-                        ctx.shell_allow_rules, shell=getattr(ctx, "harness_shell", "auto"),
+                        ctx.shell_allow_rules,
+                        shell=getattr(ctx, "harness_shell", "auto"),
+                        workspace_root=getattr(ctx, "harness_workspace_dir", None),
+                        profile=getattr(ctx, "harness_execution_profile", "host"),
                     )
                 except Exception:
                     already_approved = False

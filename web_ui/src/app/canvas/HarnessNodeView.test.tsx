@@ -129,15 +129,18 @@ describe("HarnessNodeView", () => {
   it("lists per-node rules by shell and allows removal", async () => {
     const user = userEvent.setup();
     const agent = makeData({
-      harnessShellAllowRules: ["bash\tgit status", "powershell\tGet-ChildItem"],
+      harnessShellAllowRules: [
+        "v2\tbash\thost\t" + "a".repeat(32) + "\tgit status",
+        "v2\tpowershell\thost\t" + "b".repeat(32) + "\tGet-ChildItem",
+      ],
     });
     renderHarness(agent);
     await user.click(screen.getByRole("button", { name: "Agent settings" }));
-    expect(screen.getByRole("list", { name: "Allowed command prefixes" })).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Allowed exact commands" })).toBeInTheDocument();
     expect(screen.getByText("git status")).toBeInTheDocument();
     expect(screen.getByText("Get-ChildItem")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Remove rule: git status (bash)" }));
-    expect(agent.onRemoveShellAllowRule).toHaveBeenCalledExactlyOnceWith("bash\tgit status");
+    expect(agent.onRemoveShellAllowRule).toHaveBeenCalledExactlyOnceWith(agent.harnessShellAllowRules[0]);
   });
 
   it("offers PowerShell, cmd, and Git Bash on Windows even while an agent runs", async () => {

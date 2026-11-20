@@ -1018,17 +1018,14 @@ _HARNESS_TERMINAL_STATUSES = ("done", "failed", "stopped", "interrupted")
 
 
 def _restore_harness_shell_allow_rules(raw: object) -> list[str]:
-    """Bound malformed/legacy saved lists before putting them on a node."""
+    """Keep only valid v2 scoped grants. Old unscoped prefixes are unsafe."""
+    from backend.harness.shell_policy import valid_shell_allow_rule
+
     if not isinstance(raw, list):
         return []
     result: list[str] = []
     for item in raw:
-        if not isinstance(item, str) or len(item) > 272:
-            continue
-        shell, separator, prefix = item.partition("\t")
-        if (separator and shell in {"bash", "git-bash", "cmd", "powershell"}
-                and prefix and not any(c in prefix for c in "\r\n\t")
-                and item not in result):
+        if valid_shell_allow_rule(item) and item not in result:
             result.append(item)
         if len(result) >= 100:
             break
