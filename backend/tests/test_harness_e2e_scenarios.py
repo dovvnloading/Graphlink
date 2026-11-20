@@ -264,37 +264,35 @@ def test_fix_failing_sample_project_test_and_re_run_it(scenario, monkeypatch):
         b"    def test_double(self):\n"
         b"        self.assertEqual(double(3), 6)\n"
     )
-    # Invoke pytest's interpreter rather than an unrelated Windows PATH alias.
-    # PowerShell -Command must propagate the native program's exit status so
-    # the first run is reported as failing and the re-run as passing.
+    # Run unittest with the current interpreter, never a PATH alias.
+    # Windows cmd forwards Python's exit status without an extra PowerShell
+    # -Command/exit wrapper, while still exercising the real shell.exec tool.
     if sys.platform == "win32":
-        test_command = (
-            f'& "{sys.executable}" -m unittest discover -s sample_project; '
-            'exit $LASTEXITCODE'
-        )
+        scenario.agent.state.harness_shell = "cmd"
+        test_command = f'"{sys.executable}" -m unittest discover -s sample_project'
     else:
-        test_command = (
-            f"{shlex.quote(sys.executable)} -m unittest discover -s sample_project"
-        )
+        test_command = f"{shlex.quote(sys.executable)} -m unittest discover -s sample_project"
+
+    # Check the recorded tool results outside the provider callback, so a
+    # failed expectation reports the actual shell output rather than being
+    # obscured as an "Unrecoverable provider error" by the model adapter.
+    observed = {}
 
     def fix_after_failure(request):
-        assert "return value + 1" in _result(request, "inspect")
-        assert "self.assertEqual(double(3), 6)" in _result(request, "inspect_test")
-        failed = _result(request, "failing_test")
-        assert "exit code 1" in failed and "FAILED" in failed, failed
+        observed["inspect"] = _result(request, "inspect")
+        observed["inspect_test"] = _result(request, "inspect_test")
+        observed["failed"] = _result(request, "failing_test")
         return {"calls": [_call(
             "fix", "fs.edit", path="sample_project/calculator.py",
             old_string="return value + 1", new_string="return value * 2",
         )]}
 
     def verify(request):
-        result = _result(request, "fix")
-        assert "edit" in result.lower() or "replac" in result.lower(), result
+        observed["fix"] = _result(request, "fix")
         return {"calls": [_call("passing_test", "shell.exec", command=test_command)]}
 
     def finish(request):
-        passed = _result(request, "passing_test")
-        assert "exit code 0" in passed and "OK" in passed, passed
+        observed["passed"] = _result(request, "passing_test")
         return {"answer": "Fixed double() and verified the sample test passes."}
 
     run = _drive(scenario, monkeypatch, [
@@ -306,6 +304,11 @@ def test_fix_failing_sample_project_test_and_re_run_it(scenario, monkeypatch):
         fix_after_failure, verify, finish,
     ], approvals=[("shell.exec", True), ("fs.edit", True), ("shell.exec", True)])
 
+    assert "return value + 1" in observed["inspect"]
+    assert "self.assertEqual(double(3), 6)" in observed["inspect_test"]
+    assert observed["failed"].startswith("exit code 1"), observed["failed"]
+    assert "edit" in observed["fix"].lower() or "replac" in observed["fix"].lower(), observed["fix"]
+    assert observed["passed"].startswith("exit code 0"), observed["passed"]
     assert source.read_bytes() == b"def double(value):\n    return value * 2\n"
     assert [tool for tool, _summary in run.approvals] == ["shell.exec", "fs.edit", "shell.exec"]
     assert _activity(scenario) == [

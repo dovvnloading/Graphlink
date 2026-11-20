@@ -286,8 +286,15 @@ class ToolRegistry:
         # dict is still mutable. Keep private execution arguments distinct
         # from both the caller's object and the object sent to the approval
         # callback. Refuse a changed pending request, without caching consent.
-        original_python_call = call if call.name in ("python.exec", "python.install") else None
         original_shell_call = call if call.name == "shell.exec" else None
+        if original_shell_call is not None:
+            from backend.harness.shell_isolation import network_request_error
+
+            error = network_request_error(call.arguments)
+            if error is not None:
+                return ToolResult(content=error, is_error=True)
+            call = ToolCall(id=call.id, name=call.name, arguments=deepcopy(call.arguments))
+        original_python_call = call if call.name in ("python.exec", "python.install") else None
         if original_python_call is not None:
             if call.name == "python.exec":
                 from backend.harness.python_policy import source_error
@@ -299,9 +306,6 @@ class ToolRegistry:
                 error = install_requirements_error(call.arguments)
             if error is not None:
                 return ToolResult(content=error, is_error=True)
-            call = ToolCall(id=call.id, name=call.name, arguments=deepcopy(call.arguments))
-        if original_shell_call is not None:
-            # Approval and execution must refer to the same immutable command.
             call = ToolCall(id=call.id, name=call.name, arguments=deepcopy(call.arguments))
 
         if registration.approval != "auto":
@@ -349,6 +353,13 @@ class ToolRegistry:
                     )
                 except Exception:
                     already_approved = False
+            # A saved safe shell prefix must not skip a fresh Isolated network disclosure.
+            if (call.name == "shell.exec" and getattr(ctx, "harness_execution_profile", "host") == "isolated"
+                    and call.arguments.get("network") is True
+                    and not (getattr(ctx, "harness_network_always", False)
+                             or getattr(ctx, "harness_network_task_approved", False)
+                             or call.id in getattr(ctx, "harness_network_once_approved", set()))):
+                already_approved = False
             if not already_approved:
                 # §2.4: the decision is now GRADED, not binary. False/None
                 # denies; the string "session" approves AND remembers for the
@@ -375,6 +386,12 @@ class ToolRegistry:
                     original_approved_call.arguments != call.arguments
                     or disclosure_call.arguments != call.arguments
                 ):
+                    if original_shell_call is not None:
+                        network_once = getattr(ctx, "harness_network_once_approved", None)
+                        if network_once is not None:
+                            network_once.discard(call.id)
+                        if decision == "network-task":
+                            setattr(ctx, "harness_network_task_approved", False)
                     return ToolResult(
                         content="Execution request changed while approval was pending; submit it for fresh approval.",
                         is_error=True,

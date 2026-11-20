@@ -1375,6 +1375,18 @@ class TestPersistence:
         del payload["execution_profile"]
         assert _restore_harness_payload(payload).state.harness_execution_profile == "host"
 
+    def test_network_node_setting_is_opt_in_and_persists_only_true(self):
+        node = SceneDocument().add_harness_node(0, 0, "goal")
+        assert node.state.harness_network_always is False
+        node.state.harness_network_always = True
+        payload = _serialize_harness_node(node)
+        assert payload["network_always"] is True
+        assert _restore_harness_payload(payload).state.harness_network_always is True
+        payload["network_always"] = "true"  # A tampered graph is not consent.
+        assert _restore_harness_payload(payload).state.harness_network_always is False
+        del payload["network_always"]
+        assert _restore_harness_payload(payload).state.harness_network_always is False
+
     def test_blank_workspace_id_is_self_healed_on_load(self):
         document = SceneDocument()
         node = document.add_harness_node(0, 0, "goal")

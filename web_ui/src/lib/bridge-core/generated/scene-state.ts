@@ -172,6 +172,7 @@ export interface SceneNodeRow {
   harnessApprovalSummary: string;
   harnessApprovalId: string;
   harnessApprovalSessionOffered: boolean;
+  harnessApprovalNetworkOffered: boolean;
   harnessPlan: HarnessPlanStepRow[];
   harnessAwaitingQuestion: boolean;
   harnessQuestion: string;
@@ -180,6 +181,7 @@ export interface SceneNodeRow {
   harnessShell: string;
   harnessShellAllowRules: string[];
   harnessExecutionProfile: string;
+  harnessNetworkAlways: boolean;
   harnessMaxTurns: number;
   harnessSpentTurns: number;
   harnessSpentTokens: number;
@@ -797,6 +799,7 @@ const SCENE_NODE_ROW_FIELDS: WireFields = [
   ["harnessApprovalSummary", "s", 0, ""],
   ["harnessApprovalId", "s", 0, ""],
   ["harnessApprovalSessionOffered", "b", 0, false],
+  ["harnessApprovalNetworkOffered", "b", 0, false],
   ["harnessPlan", { a: { o: HARNESS_PLAN_STEP_ROW_FIELDS } }, 0, []],
   ["harnessAwaitingQuestion", "b", 0, false],
   ["harnessQuestion", "s", 0, ""],
@@ -805,6 +808,7 @@ const SCENE_NODE_ROW_FIELDS: WireFields = [
   ["harnessShell", "s", 0, "auto"],
   ["harnessShellAllowRules", { a: "s" }, 0, []],
   ["harnessExecutionProfile", "s", 0, "host"],
+  ["harnessNetworkAlways", "b", 0, false],
   ["harnessMaxTurns", "n", 0, 0],
   ["harnessSpentTurns", "n", 0, 0],
   ["harnessSpentTokens", "n", 0, 0],

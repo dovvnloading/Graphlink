@@ -56,9 +56,9 @@ def container_invocation(
 
     A fixed image, no privileged caps, read-only image filesystem and
     explicitly bounded resources are non-optional. The default is offline.
-    Only an approved python.install PyPI download may request network=True;
-    extra mounts are app-chosen environment/cache directories, never
-    paths supplied by an agent. /tmp is a small scratch tmpfs.
+    Network requires either explicit shell.exec consent or an authorized
+    python.install PyPI wheel download. App-owned Python environments
+    may be separately mounted; /tmp is a small scratch tmpfs.
     """
     environment = safe_subprocess_env() if env is None else env
     engine = available_engine(environment)
@@ -117,6 +117,18 @@ def container_invocation(
     else:
         args.extend([CONTAINER_IMAGE, *command])
     return args, engine, name
+
+
+def network_request_error(arguments: dict) -> str | None:
+    """Reject malformed network requests before exposing an approval panel."""
+    requested = arguments.get("network", False)
+    if not isinstance(requested, bool):
+        return "shell.exec 'network' must be a boolean."
+    if requested:
+        reason = arguments.get("network_reason")
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 1000:
+            return "shell.exec network access requires a non-empty reason (at most 1000 characters)."
+    return None
 
 
 def cleanup_container(engine: str, name: str, *, env: dict[str, str] | None = None) -> None:

@@ -919,6 +919,10 @@ function makeHarnessFns(id: string, liveRef: { current: DispatcherLive }) {
       const { n, store } = liveRef.current;
       if (n.pendingRequestId) store.approveHarnessTool(n.pendingRequestId, approvalId);
     },
+    onApproveNetwork: (approvalId: string, scope: "once" | "task") => {
+      const { n, store } = liveRef.current;
+      if (n.pendingRequestId) store.approveHarnessNetwork(n.pendingRequestId, approvalId, scope);
+    },
     onDenyTool: (approvalId?: string) => {
       const { n, store } = liveRef.current;
       if (n.pendingRequestId) store.denyHarnessTool(n.pendingRequestId, approvalId);
@@ -946,6 +950,7 @@ function makeHarnessFns(id: string, liveRef: { current: DispatcherLive }) {
     onSetShell: (shell: string) => liveRef.current.store.setHarnessShell(id, shell),
     onRemoveShellAllowRule: (rule: string) => liveRef.current.store.removeHarnessShellAllowRule(id, rule),
     onSetExecutionProfile: (profile: string) => liveRef.current.store.setHarnessExecutionProfile(id, profile),
+    onSetNetworkAlways: (enabled: boolean) => liveRef.current.store.setHarnessNetworkAlways(id, enabled),
     onGetIsolationEngine: () => liveRef.current.store.getHarnessIsolationEngine(),
   };
 }
@@ -1662,11 +1667,13 @@ export function toFlowNodes(
           harnessShell: n.harnessShell,
           harnessShellAllowRules: n.harnessShellAllowRules,
           harnessExecutionProfile: n.harnessExecutionProfile,
+          harnessNetworkAlways: n.harnessNetworkAlways,
           harnessAwaitingApproval: n.harnessAwaitingApproval,
           harnessApprovalToolName: n.harnessApprovalToolName,
           harnessApprovalSummary: n.harnessApprovalSummary,
           harnessApprovalId: n.harnessApprovalId,
           harnessApprovalSessionOffered: n.harnessApprovalSessionOffered,
+          harnessApprovalNetworkOffered: n.harnessApprovalNetworkOffered,
           harnessPlan: n.harnessPlan,
           harnessAwaitingQuestion: n.harnessAwaitingQuestion,
           harnessQuestion: n.harnessQuestion,

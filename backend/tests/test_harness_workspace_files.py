@@ -5,7 +5,7 @@ import asyncio
 
 import pytest
 
-from backend.api import intents_harness
+from backend.api import intents_harness, intents_harness_workspace
 from backend.domain.graph import SceneDocument
 from backend.harness import workspace as workspace_module
 from backend.harness.workspace import WorkspaceError, workspace_dir
@@ -143,7 +143,7 @@ def test_intents_only_expose_currently_trusted_workspace(tmp_path, monkeypatch):
         bus2.call("readWorkspaceFile", node2.id, "private.txt")
 
     revealed = []
-    monkeypatch.setattr(intents_harness, "reveal_workspace", lambda root: revealed.append(root))
+    monkeypatch.setattr(intents_harness_workspace, "reveal_workspace", lambda root: revealed.append(root))
     bus2.call("revealWorkspace", node2.id)
     assert revealed == [workspace_dir(node2.state.harness_workspace_id)]
     with pytest.raises(WorkspaceError, match="no longer exists"):
@@ -155,6 +155,6 @@ def test_reveal_never_accepts_a_client_supplied_path(tmp_path, monkeypatch):
     project.mkdir()
     bus, node = harness_with_folder(project, trusted=[str(project.resolve())])
     revealed = []
-    monkeypatch.setattr(intents_harness, "reveal_workspace", lambda root: revealed.append(root))
+    monkeypatch.setattr(intents_harness_workspace, "reveal_workspace", lambda root: revealed.append(root))
     bus.call("revealWorkspace", node.id)
     assert revealed == [project.resolve()]

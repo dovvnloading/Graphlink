@@ -232,13 +232,25 @@ def test_rebound_output_cannot_accept_an_inflight_previous_model_reply(tmp_path,
 
         def slow_answer(**_kwargs):
             started.set()
-            assert released.wait(8)
+            assert released.wait(20)
             return {"message": {"content": "Stale reply must not win"}}
 
         monkeypatch.setattr(graph_model, "local_ollama_complete", slow_answer)
         pending = asyncio.create_task(send("executeGraphModel", *args, token, "bound-race-run"))
         try:
-            assert await asyncio.to_thread(started.wait, 5)
+            # Under Windows xdist, a durable SQLite checkpoint can take longer
+            # than five seconds. Avoid occupying another executor worker just
+            # to watch the event, and surface an early admission error instead
+            # of hiding it behind a spurious "assert False" timeout.
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 20
+            while not started.is_set():
+                if pending.done():
+                    await pending
+                    pytest.fail("The model run finished before inference began.")
+                if loop.time() >= deadline:
+                    pytest.fail("The model request did not dispatch within 20 seconds.")
+                await asyncio.sleep(0.02)
             changed = await send("bindGraphModel", source.id, target.id, LOCAL_PROVIDER_OLLAMA, "different:1")
             assert changed[0]["modelId"] == "different:1"
         finally:

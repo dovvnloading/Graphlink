@@ -3,12 +3,22 @@
 Open an Agent node's **Agent settings** and select **Execution profile**.
 
 - **Host** (default): `shell.exec`, `shell.session`, `python.exec` and `python.install` use the host's execution environment under their existing approval, subprocess-environment and execution-guard policies. The persistent Python REPL and its package installer are **not sandboxes**.
-- **Isolated**: `shell.exec`, `shell.session`, `python.exec`, and `python.install` run in Docker (preferred) or Podman, using the fixed `python:3.12-slim` image and the bound trusted/scratch workspace at `/workspace`. Containers have **1 CPU**, **512 MiB RAM and swap**, 128 processes, dropped capabilities, no-new-privileges, a read-only image filesystem, and a 64 MiB temporary filesystem. All command stages are network-disabled (`--network=none`) except the explicitly approved PyPI wheel-download phase of `python.install`. Shell tools mount only the workspace; Python tools may also mount scoped app-owned virtualenvs and a shared wheel cache. Host executables and backend secrets are not passed in.
+- **Isolated**: `shell.exec`, `shell.session`, `python.exec`, and `python.install` run in Docker (preferred) or Podman, using the fixed `python:3.12-slim` image and the bound trusted/scratch workspace at `/workspace`. Containers have **1 CPU**, **512 MiB RAM and swap**, 128 processes, dropped capabilities, no-new-privileges, a read-only image filesystem, and a 64 MiB temporary filesystem. Commands are offline by default (`--network=none`), except a separately authorized Isolated `shell.exec` command or the approved PyPI wheel-download phase of `python.install`. Shell tools mount only the workspace; Python tools may also mount scoped app-owned virtualenvs and a shared wheel cache. Host executables and backend secrets are not passed in.
 - **No host Python escape hatch**: Python execution and package installation use container-native interpreters, never host Python or host pip. A Host REPL is retired on the switch to Isolated; no tool falls back to Host if the engine, daemon or image is missing. Only the separately disclosed PyPI wheel-download subprocess can use temporary container networking.
+
+### Network approval for a command
+
+Isolated `shell.exec` commands remain offline by default. When the agent needs network access for **one command**, it must request it explicitly with `network: true` and a nonblank `network_reason`, e.g. `{"command":"python -m pip index versions requests","network":true,"network_reason":"Check the available package versions"}`. The command-approval panel shows the complete command **and why network is needed**, with distinct choices:
+
+- **Allow network once** — enable the container's bridge network only for that approved command; the next command is offline again unless separately approved.
+- **Allow network for this task** — enable the bridge network for that command and subsequent `shell.exec` commands in the *current* task. This grant disappears when the task ends; it is not a session-wide permission.
+- **Deny** — do not run the proposed command.
+
+The agent node's **Agent settings → Allow network for every task** checkbox is an explicit, **off-by-default** persistent opt-in. It is available only in the Isolated profile and applies to future tasks; ordinary shell approval and saved safe-prefix rules remain separate from network consent. Changes to the setting during a running task cannot silently expand that task's permissions. `shell.session` remains network-disabled in Isolated mode. Network-enabled containers use bridge networking, **not** host networking; all other container resource, filesystem and privilege restrictions remain in force.
 
 ## Network grants are separate from container networking
 
-The Isolated setting does **not** turn the Graphlink backend into an offline process. Model/provider requests and explicit backend services can still use the host's network. Container commands use `--network=none` except the separately approved PyPI wheel-download phase of `python.install`.
+The Isolated setting does **not** turn the Graphlink backend into an offline process. Model/provider requests and other explicit backend services can use the host's network. Container commands are offline by default: `shell.exec` may use approved bridge networking for a command, task, or node setting; only the separately approved PyPI wheel-download phase of `python.install` may use install networking. `shell.session` and `python.exec` remain offline.
 
 The workspace agent's `net.fetch` grant offers only `web.search` and `web.fetch` when the built-in Web Research plugin is enabled, not every tool that happens to require `net.fetch`:
 

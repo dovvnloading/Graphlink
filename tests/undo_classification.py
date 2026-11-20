@@ -317,6 +317,8 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("harness", "send", "B", "run-lifecycle: start a follow-up task against the existing node's transcript"),
     Classified("harness", "cancel", "B", "run-lifecycle: cancel"),
     Classified("harness", "approveTool", "B", "security: harness tool-call approval gate"),
+    Classified("harness", "approveNetworkOnce", "B", "security: token-bound authorization for one Isolated shell command; no document mutation"),
+    Classified("harness", "approveNetworkForTask", "B", "security: token-bound authorization for network in the current Isolated task; no document mutation"),
     Classified("harness", "denyTool", "B", "security: harness tool-call approval gate"),
     Classified("harness", "approveToolForSession", "B", "security: harness tool-call approval gate, session-scoped grant (PLAN §2.4 graded consent)"),
     Classified("harness", "answer", "B", "run-lifecycle: resolves a run parked on user.ask with the user's typed answer; the answer enters the workspace transcript, not the document"),
@@ -329,6 +331,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("harness", "setShell", "B", "run-config: persists the node shell choice for subsequent tasks, not an in-flight execution"),
     Classified("harness", "removeShellAllowRule", "B", "security: immediately revokes a node's saved shell prefix; undo must not silently restore execution consent"),
     Classified("harness", "setExecutionProfile", "B", "run-config: persists the node execution profile for subsequent tasks and retires idle sessions; not wrapped in an undo command"),
+    Classified("harness", "setNetworkAlways", "B", "run-config: persists the Isolated network preference for future tasks, like setExecutionProfile, not an undoable edit"),
     Classified("harness", "getIsolationEngine", "B", "read-only: probes Docker/Podman CLI availability on the backend host"),
 
     # -- backend/api/intents_fal_media.py (scene) ----------------------------

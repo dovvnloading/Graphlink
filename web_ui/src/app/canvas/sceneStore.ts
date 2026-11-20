@@ -1136,6 +1136,13 @@ export class SceneStore {
     this.transport.fireIntent("harness", "cancel", [requestId]);
   }
 
+  approveHarnessNetwork(requestId: string, approvalId: string, scope: "once" | "task"): void {
+    this.transport.fireIntent(
+      "harness", scope === "task" ? "approveNetworkForTask" : "approveNetworkOnce",
+      [requestId, approvalId],
+    );
+  }
+
   approveHarnessTool(requestId: string, approvalId?: string): void {
     this.transport.fireIntent("harness", "approveTool", approvalId ? [requestId, approvalId] : [requestId]);
   }
@@ -1192,6 +1199,10 @@ export class SceneStore {
 
   setHarnessExecutionProfile(nodeId: string, profile: string): void {
     this.transport.fireIntent("harness", "setExecutionProfile", [nodeId, profile]);
+  }
+
+  setHarnessNetworkAlways(nodeId: string, enabled: boolean): void {
+    this.transport.fireIntent("harness", "setNetworkAlways", [nodeId, enabled]);
   }
 
   async getHarnessIsolationEngine(): Promise<string | null> {

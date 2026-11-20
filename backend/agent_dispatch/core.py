@@ -931,6 +931,9 @@ class DispatcherCoreOps(DispatcherParts):
         # a later non-Python prompt whose token is empty.
         if approval_id != handle.approval_token:
             return False
+        # A normal approveTool click must not widen Isolated networking.
+        if approved and handle.harness_network_approval:
+            return False
         future = handle.approval_future
         if not future.done():
             if approved and handle.approval_snapshot_fn is not None:
