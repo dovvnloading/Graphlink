@@ -139,7 +139,7 @@ def test_incompatible_fts5_columns_rebuild_from_unchanged_jsonl(tmp_path, fts_co
 def test_incompatible_fts5_options_rebuild_even_with_matching_columns(tmp_path, fts_definition):
     transcript = transcript_path(tmp_path)
     transcript.write_text(
-        '{"t":"msg","role":"user","content":"violet ledger"}\\n', encoding="utf-8",
+        '{"t":"msg","role":"user","content":"violet ledger"}\n', encoding="utf-8",
     )
     original = transcript.read_bytes()
     with closing(sqlite3.connect(index_path(transcript))) as db:
@@ -186,7 +186,7 @@ def test_sidecar_open_race_never_follows_replaced_symlink(tmp_path, monkeypatch)
 
     transcript = transcript_path(tmp_path)
     transcript.write_text(
-        '{"t":"msg","role":"user","content":"violet ledger"}\\n', encoding="utf-8",
+        '{"t":"msg","role":"user","content":"violet ledger"}\n', encoding="utf-8",
     )
     sidecar = index_path(transcript)
     outside = tmp_path / "outside.sqlite3"
