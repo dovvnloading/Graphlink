@@ -325,6 +325,15 @@ async def run_harness(
     # awaiting fields for the panel, and clears them in a finally so no
     # exit path leaves a phantom prompt on the canvas.
     async def request_approval(call: ToolCall) -> "bool | str":
+        # Prepare the file preview before exposing any approval future. The
+        # diff computation yields to a worker thread: a Stop during that
+        # window must not publish a stale prompt or grant permission.
+        preview = None
+        if call.name in ("fs.write", "fs.edit"):
+            root = ctx.harness_workspace_dir if isinstance(ctx.harness_workspace_dir, Path) else None
+            preview = await asyncio.to_thread(preview_harness_file_change, call, root)
+            if cancel_event.is_set() or not _alive():
+                return False
         future: asyncio.Future = loop_handle.create_future()
         handle.approval_future = future
         # A run can pause many times. Its request_id alone is not consent
@@ -336,16 +345,10 @@ async def run_harness(
         node.state.harness_approval_id = handle.approval_token
         node.state.harness_awaiting_approval = True
         node.state.harness_approval_tool_name = call.name
-        root = ctx.harness_workspace_dir if isinstance(ctx.harness_workspace_dir, Path) else None
-        preview_available = True
-        if call.name in ("fs.write", "fs.edit"):
-            # Reading and diffing a workspace file can be expensive. Keep it
-            # off the event loop so other sessions remain responsive.
-            preview = await asyncio.to_thread(preview_harness_file_change, call, root)
-            node.state.harness_approval_summary = preview.summary
-            preview_available = preview.available
-        else:
-            node.state.harness_approval_summary = _approval_summary(call)
+        preview_available = preview.available if preview is not None else True
+        node.state.harness_approval_summary = (
+            preview.summary if preview is not None else _approval_summary(call)
+        )
         # Executable commands and interactive stdin always ask fresh, even
         # when a previous call was approved for the session. The panel must
         # not suggest session consent that the registry will reject.
