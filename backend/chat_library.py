@@ -42,6 +42,7 @@ import os
 import re
 import sqlite3
 import time
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -2192,6 +2193,7 @@ def make_load_chat(
     last_saved: dict[str, Any],
     settings_manager: "SettingsManager | None" = None,
     protect_current_canvas: Callable[..., Awaitable[bool]] | None = None,
+    agent_dispatcher=None,
 ):
     """Factory for register_chat_library's own loadChat intent - lifted out
     to a top-level function purely to keep register_chat_library itself
@@ -2270,6 +2272,12 @@ def make_load_chat(
             ):
                 return
 
+            # Loaded node preferences are disarmed by the serializer, but
+            # tool-name grants live on the dispatcher, keyed by durable
+            # workspace ID. Clear them before replacing the canvas: a
+            # reopened Agent may have exactly the same saved workspace ID.
+            if agent_dispatcher is not None:
+                agent_dispatcher.clear_harness_session_grants()
             restore_chat_into_document(
                 canvas_document, row, notes_rows, pins_rows,
                 asset_store=store_for(resolved_path), settings_manager=settings_manager,
@@ -2762,6 +2770,10 @@ def _disarm_imported_harness_permissions(data: dict[str, Any]) -> dict[str, Any]
                 node["permission_mode"] = "ask"
                 node["shell_allow_rules"] = []
                 node["network_always"] = False
+                # An imported copy is a new Agent, not a continuation of
+                # the source's live scratch/transcript or tool grants. Mint
+                # per-node IDs even when an archive is imported twice.
+                node["workspace_id"] = uuid.uuid4().hex[:12]
     return data
 
 
@@ -3212,6 +3224,7 @@ def make_new_chat(
     canvas_document: SceneDocument | None,
     _last_saved: dict[str, Any],
     _protect_current_canvas: Callable[..., Awaitable[bool]],
+    agent_dispatcher=None,
 ):
     async def new_chat(workspace_id: int | None = None, discard_incomplete: bool = False):
         # R6.5: the backend counterpart of legacy's "start with an empty
@@ -3259,6 +3272,10 @@ def make_new_chat(
         )
         if not protected:
             return "discard-required" if canvas_document.unrestored_node_count else None
+        # Starting a new graph is also a graph-incarnation boundary, even
+        # when its Agent IDs are subsequently restored from a saved graph.
+        if agent_dispatcher is not None:
+            agent_dispatcher.clear_harness_session_grants()
         canvas_document.clear_for_load()
         canvas_document.current_workspace_id = resolved_workspace_id
         # clear_for_load drops current_chat_id, so the save state that
@@ -3314,6 +3331,7 @@ def register_chat_library(
     *,
     autosave_interval_seconds: float | None = 30.0,
     settings_manager: "SettingsManager | None" = None,
+    agent_dispatcher=None,
 ) -> None:
     # ADR-014 review-fix: threaded through to build_chat_data/
     # restore_chat_into_document (via make_load_chat/make_save_chat/
@@ -3433,11 +3451,13 @@ def register_chat_library(
     load_chat = make_load_chat(
         bus, resolved_path, canvas_document, notifications, _record_saved, _last_saved, settings_manager,
         protect_current_canvas=_protect_current_canvas,
+        agent_dispatcher=agent_dispatcher,
     )
     load_graph_and_focus_node = make_load_graph_and_focus_node(resolved_path, canvas_document, load_chat)
 
     new_chat = make_new_chat(
         bus, resolved_path, canvas_document, _last_saved, _protect_current_canvas,
+        agent_dispatcher=agent_dispatcher,
     )
 
     # -- ADR-020 stage 20.2: the 6 new intents -------------------------------

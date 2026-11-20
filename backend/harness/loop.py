@@ -291,14 +291,19 @@ class _BoundedToolOutput:
             return prefix + self._text
 
 
-def _session_grants_of(dispatcher, workspace_id: str) -> "set | None":
-    """The dispatcher's session-grant set for this workspace, or None when
-    the dispatcher does not implement graded consent (see the call site)."""
+def _session_grants_of(dispatcher, workspace_id: str, root: Path) -> "set | None":
+    """Acquire consent only after the run's effective workspace root is known.
+
+    Real dispatchers bind grants to the root so switching directories or
+    revoking trust cannot reuse consent. Lightweight test dispatchers that
+    expose only the older accessor continue to work without root tracking.
+    """
+    binder = getattr(dispatcher, "bind_harness_session_grants", None)
     accessor = getattr(dispatcher, "harness_session_grants", None)
-    if accessor is None:
-        return None
     try:
-        return accessor(workspace_id)
+        if callable(binder):
+            return binder(workspace_id, root)
+        return accessor(workspace_id) if callable(accessor) else None
     except Exception:
         return None
 
@@ -311,6 +316,25 @@ def _is_dangerous_call(call: ToolCall) -> bool:
     interpreters and wrappers can execute anything after a benign command.
     """
     return call.name in ("python.exec", "python.install") or shell_policy.requires_fresh_shell_approval(call.name, call.arguments)
+
+
+def _session_grant_eligible(call: ToolCall, registry: ToolRegistry) -> bool:
+    """Offer graded consent to ordinary approval-gated tools.
+
+    'always' can still permit an explicit session grant for ordinary tools,
+    but graph.delete_node must never reuse tool-wide consent across targets.
+    Shell, Python, Web and Fal retain their narrower consent rules.
+    """
+    return (
+        registry.approval_for(call.name) in ("once", "always")
+        and call.name not in (
+            "graph.delete_node",
+            "python.exec", "python.install", "shell.exec", "shell.session",
+            "web.fetch", "web.search",
+        )
+        and not call.name.startswith("fal.")
+        and not _is_dangerous_call(call)
+    )
 
 
 def _approval_summary(
@@ -344,7 +368,10 @@ def _approval_summary(
         lines.append(plan.disclosure())
         return "\n".join(lines)
     if call.name == "shell.session":
-        action = str(call.arguments.get("action") or "")
+        # Mirror tools_shell.shell_session's accepted action normalization.
+        # The approval panel must disclose the exact command/stdin that the
+        # handler will execute for START, WRITE and whitespace variants.
+        action = str(call.arguments.get("action") or "").strip().lower()
         name = str(call.arguments.get("name") or "")
         if action == "start":
             selected = shell_policy.effective_shell_for_rules(shell, profile=profile)
@@ -682,19 +709,12 @@ async def run_harness(
                 )
             )
         # Token binding is independent of whether a durable grant is useful.
-        # Shell grants are exact rules; Python, Web, Fal and interactive shell
-        # actions never offer tool-wide session consent.
-        session_grant_eligible = (
-            call.name not in (
-                "python.exec", "python.install", "shell.exec", "shell.session",
-                "web.fetch", "web.search",
-            )
-            and not call.name.startswith("fal.")
-        )
+        # An 'always' tool (especially graph.delete_node) cannot offer a
+        # name-wide bypass of its per-target consent contract.
         node.state.harness_approval_session_offered = preview_available and (
             can_save_shell_rules if call.name == "shell.exec"
             else ctx.session_grants is not None
-            and session_grant_eligible and not _is_dangerous_call(call)
+            and _session_grant_eligible(call, registry)
         )
         handle.harness_session_approval_kind = (
             ("shell_rule" if call.name == "shell.exec" else "session")
@@ -791,15 +811,9 @@ async def run_harness(
     ctx = HarnessRunContext(
         granted_scopes=HARNESS_GRANTED_SCOPES,
         request_approval=request_approval,
-        # §2.4: the dispatcher owns this set (one per workspace) so a
-        # session grant survives from one task to the next. Optional by
-        # design - a dispatcher that does not offer session grants yields
-        # None, which RunContext reads as "no session-scoped option exists",
-        # leaving every prompt once-or-deny.
-        session_grants=(
-            _session_grants_of(dispatcher, node.state.harness_workspace_id)
-            if allow_session_grants else None
-        ),
+        # Install grants after bound_root resolves current folder trust,
+        # never against an unverified saved workspace_path.
+        session_grants=None,
         shell_allow_rules=node.state.harness_shell_allow_rules,
         set_plan=set_plan,
         ask_user=ask_user,
@@ -865,6 +879,10 @@ async def run_harness(
         )
         ctx.harness_workspace_dir = root
         ctx.harness_workspace_is_user_dir = is_user_dir
+        if allow_session_grants:
+            ctx.session_grants = _session_grants_of(
+                dispatcher, node.state.harness_workspace_id, root,
+            )
         # Retire prior-profile interactive sessions at the task boundary,
         # even if this task only uses shell.exec and never calls shell.session.
         sessions = getattr(dispatcher, "_harness_shell_sessions", None)

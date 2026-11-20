@@ -1172,6 +1172,9 @@ def register_run_node_tool(registry: ToolRegistry, document: SceneDocument, disp
     registry.register(
         GRAPH_DELETE_NODE_SPEC, make_delete_node_handler(document, dispatcher),
         scopes={GRAPH_MUTATE}, approval="always",
+        # A destructive delete is a new decision each time, even if a
+        # provider repeats identical arguments in the same run.
+        always_reprompt=lambda _call: True,
     )
 
 

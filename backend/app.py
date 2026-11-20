@@ -316,7 +316,10 @@ def _configure_session(
     # reason register_plugins gets it two lines up - a plugin node's own
     # serialize/deserialize hook must respect its Settings > Plugins grant
     # on save/load/autosave, not just live-wire scene publishes.
-    register_chat_library(bus, chat_db_path, canvas_document, notifications_state, settings_manager=settings_manager)
+    register_chat_library(
+        bus, chat_db_path, canvas_document, notifications_state,
+        settings_manager=settings_manager, agent_dispatcher=agent_dispatcher,
+    )
 
 
 def _evict_idle_session(bus: SessionBus) -> bool:

@@ -1751,6 +1751,81 @@ def _bus_with_canvas(db_path):
     return bus, document, notifications
 
 
+def test_reopening_saved_agent_and_new_chat_disarm_live_tool_grants(db_path, tmp_path):
+    from backend.agent_dispatch.harness import HarnessDispatchOps
+    from backend.providers.base import ToolCall, ToolSpec
+    from backend.tools import FS_WRITE, RunContext, ToolRegistry, ToolResult
+
+    data = {"nodes": [{
+        "node_type": "harness", "id": "n1", "goal": "edit files",
+        "workspace_id": "durable-agent", "permission_mode": "autonomous",
+        "position": {"x": 0, "y": 0},
+    }]}
+    saved_id = _insert_chat(db_path, "Agent graph", json.dumps(data))
+    dispatcher = HarnessDispatchOps()
+    bus = SessionBus("chat-reopen-disarms-live-grants")
+    document = SceneDocument()
+    bus.register_topic("scene", document.scene_payload)
+    register_chat_library(
+        bus, db_path, document, autosave_interval_seconds=None,
+        agent_dispatcher=dispatcher,
+    )
+
+    approvals = []
+
+    async def approve(call):
+        approvals.append(call.arguments["path"])
+        return "session"
+
+    async def fake_write(call, ctx):
+        return ToolResult(content=f"wrote {call.arguments['path']}")
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec(name="fs.write", description="write", input_schema={"type": "object"}),
+        fake_write, scopes={FS_WRITE}, approval="once",
+    )
+
+    live = dispatcher.bind_harness_session_grants("durable-agent", tmp_path)
+    ctx = RunContext(
+        granted_scopes=frozenset({FS_WRITE}), request_approval=approve,
+        session_grants=live,
+    )
+
+    def write(current_ctx, filename):
+        return asyncio.run(registry.invoke(
+            ToolCall(id=filename, name="fs.write",
+                     arguments={"path": filename, "content": "text"}),
+            current_ctx,
+        ))
+
+    assert not write(ctx, "first.txt").is_error
+    assert not write(ctx, "already-approved.txt").is_error
+    assert approvals == ["first.txt"], "session consent is reused before graph replacement"
+    assert live == {"fs.write"}
+
+    # The saved ID survives a reload; its old live tool-name grant must not.
+    asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [saved_id]))
+    restored = next(iter(document.nodes.values()))
+    assert restored.kind == "harness"
+    assert restored.state.harness_workspace_id == "durable-agent"
+    assert restored.state.harness_permission_mode == "ask"
+    assert not live
+    new_grants = dispatcher.bind_harness_session_grants("durable-agent", tmp_path)
+    assert new_grants is not live and not new_grants
+    new_ctx = RunContext(
+        granted_scopes=frozenset({FS_WRITE}), request_approval=approve,
+        session_grants=new_grants,
+    )
+    assert not write(new_ctx, "after-reopen.txt").is_error
+    assert approvals == ["first.txt", "after-reopen.txt"]
+
+    # newChat must also invalidate any consent from the graph it unloads.
+    asyncio.run(bus.dispatch_intent("app-chat-library", "newChat", []))
+    assert not new_grants
+    assert not document.nodes
+
+
 def test_load_chat_intent_restores_a_real_node_into_the_canvas_document(db_path):
     chat_data = {
         "nodes": [

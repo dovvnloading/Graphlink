@@ -99,16 +99,66 @@ class HarnessDispatchOps(DispatcherParts):
         return True
 
     def harness_session_grants(self, workspace_id: str) -> set:
-        """The session-scoped grant set for one harness node. Keyed by
-        workspace id (not node id, which is reassigned on every reload) and
-        held on the dispatcher so a grant made in one task still holds in
-        the next - that is what makes it SESSION-scoped rather than
-        run-scoped. Cleared with the rest of the node's live state."""
-        store = getattr(self, "_harness_session_grants", None)
-        if store is None:
-            store = {}
-            self._harness_session_grants = store
-        return store.setdefault(workspace_id, set())
+        """Live, non-serializable grants for one Agent incarnation.
+
+        Acquiring and retiring sets shares the revocation lock with trusted
+        root cleanup. Old RunContexts can retain an abandoned set, but a
+        later task must never receive it after a revocation or graph switch.
+        """
+        with self._harness_revocation_guard():
+            store = getattr(self, "_harness_session_grants", None)
+            if store is None:
+                store = {}
+                self._harness_session_grants = store
+            return store.setdefault(workspace_id, set())
+
+    def _discard_harness_session_grants(self, workspace_id: str) -> None:
+        """Retire the live set, not just its dictionary entry.
+
+        Called under the revocation lock: an already-running task may hold
+        the old set while waiting for approval, so clearing it also removes
+        its previously approved conveniences immediately. Any later consent
+        written into that detached set cannot rearm a future task.
+        """
+        grants = getattr(self, "_harness_session_grants", None)
+        if grants is not None:
+            old = grants.pop(workspace_id, None)
+            if old is not None:
+                old.clear()
+
+    def bind_harness_session_grants(self, workspace_id: str, root: Path) -> set:
+        """Bind session consent to the effective root, including scratch.
+
+        A changed workspace binding cannot inherit tool-name grants for the
+        previous root. The loop calls this only *after* bound_root has checked
+        current trusted-folder settings.
+        """
+        resolved_root = str(Path(root).resolve())
+        with self._harness_revocation_guard():
+            roots = getattr(self, "_harness_grant_roots", None)
+            if roots is None:
+                roots = {}
+                self._harness_grant_roots = roots
+            if workspace_id in roots and roots[workspace_id] != resolved_root:
+                self._discard_harness_session_grants(workspace_id)
+            roots[workspace_id] = resolved_root
+            return self.harness_session_grants(workspace_id)
+
+    def clear_harness_session_grants(self) -> None:
+        """Disarm all live grants before a graph is replaced or unloaded.
+
+        Saved node IDs may be restored with the same durable workspace ID,
+        but consent belongs to the current live graph incarnation only.
+        """
+        with self._harness_revocation_guard():
+            grants = getattr(self, "_harness_session_grants", None)
+            if grants is not None:
+                for old in grants.values():
+                    old.clear()
+                grants.clear()
+            roots = getattr(self, "_harness_grant_roots", None)
+            if roots is not None:
+                roots.clear()
 
     def harness_machine_snapshot(self, workspace_id: str, root: Path, shell: str = "auto", profile: str = "host") -> str:
         """Probe once per session/workspace binding, reuse on follow-ups.
@@ -167,9 +217,11 @@ class HarnessDispatchOps(DispatcherParts):
         workspace they never saw, so this is always callable."""
         if not workspace_id:
             return
-        grants = getattr(self, "_harness_session_grants", None)
-        if grants is not None:
-            grants.pop(workspace_id, None)
+        with self._harness_revocation_guard():
+            self._discard_harness_session_grants(workspace_id)
+            roots = getattr(self, "_harness_grant_roots", None)
+            if roots is not None:
+                roots.pop(workspace_id, None)
         with _MACHINE_SNAPSHOT_LOCK:
             snapshots = getattr(self, "_harness_machine_snapshots", None)
             if snapshots is not None:
@@ -182,8 +234,8 @@ class HarnessDispatchOps(DispatcherParts):
             repls.stop_workspace(workspace_id)
 
     def dispose_all_harness_processes(self) -> None:
-        """Session-evict/shutdown teardown: all harness session resources,
-        including the machine snapshot and live processes."""
+        """Session-evict/shutdown teardown of all live harness resources."""
+        self.clear_harness_session_grants()
         with _MACHINE_SNAPSHOT_LOCK:
             snapshots = getattr(self, "_harness_machine_snapshots", None)
             if snapshots is not None:
@@ -224,11 +276,21 @@ class HarnessDispatchOps(DispatcherParts):
         In-progress tasks retain their bound root only until they finish.
         """
         with self._harness_revocation_guard():
+            root = Path(path).resolve()
+            # Invalidate consent synchronously, BEFORE any deferred process
+            # teardown. A task can retain its frozen root until exit, but
+            # revoking and later regranting that path cannot resurrect an
+            # fs.write/fs.edit approval from the old trust grant.
+            roots = getattr(self, "_harness_grant_roots", {})
+            for workspace_id, bound in list(roots.items()):
+                if bound == str(root):
+                    self._discard_harness_session_grants(workspace_id)
+                    roots.pop(workspace_id, None)
             pending = getattr(self, "_harness_revoked_roots", None)
             if pending is None:
                 pending = set()
                 self._harness_revoked_roots = pending
-            pending.add(Path(path).resolve())
+            pending.add(root)
         await self._retire_revoked_harness_roots()
 
     async def _retire_revoked_harness_roots(self) -> None:

@@ -2270,6 +2270,12 @@ def test_workspace_agent_revocation_retires_idle_processes_but_defers_active_tas
     dispatcher._harness_shell_sessions = shells
     dispatcher._harness_python_repls = repls
     dispatcher._harness_active_workspaces = {"running-request": "active"}
+    idle_grants = dispatcher.bind_harness_session_grants("idle", project)
+    active_grants = dispatcher.bind_harness_session_grants("active", project)
+    other_grants = dispatcher.bind_harness_session_grants("other", other)
+    idle_grants.add("fs.write")
+    active_grants.add("fs.edit")
+    other_grants.add("fs.write")
 
     bus = SessionBus("settings-revoke-processes-test")
     register_settings(bus, manager, agent_dispatcher=dispatcher)
@@ -2278,6 +2284,8 @@ def test_workspace_agent_revocation_retires_idle_processes_but_defers_active_tas
     ))
 
     assert manager.get_harness_trusted_dirs() == [str(other)]
+    assert not idle_grants and not active_grants
+    assert other_grants == {"fs.write"}, "unrelated roots retain consent"
     shell_processes["idle"].stop.assert_called_once_with()
     interpreters["idle"].stop.assert_called_once_with()
     shell_processes["active"].stop.assert_not_called()
@@ -2295,6 +2303,45 @@ def test_workspace_agent_revocation_retires_idle_processes_but_defers_active_tas
     assert "active" not in repls._repls
     assert shells._roots["other"] == other.resolve()
     assert "other" in repls._repls
+
+    # A pending active-run approval may still resolve after revocation. It
+    # must land only in the detached old set, not in the next task's grants.
+    active_grants.add("fs.write")
+    manager.add_harness_trusted_dir(str(project))
+    dispatcher.harness_root_granted(str(project))
+    renewed = dispatcher.bind_harness_session_grants("active", project)
+    assert renewed is not active_grants
+    assert renewed == set(), "regranting a folder must not reapprove fs writes"
+    assert other_grants == {"fs.write"}
+
+    from backend.providers.base import ToolCall, ToolSpec
+    from backend.tools import FS_WRITE, RunContext, ToolRegistry, ToolResult
+
+    prompted = []
+
+    async def approve(call):
+        prompted.append(call.arguments["path"])
+        return True
+
+    async def write(call, ctx):
+        return ToolResult(content="ok")
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec(name="fs.write", description="write", input_schema={"type": "object"}),
+        write, scopes={FS_WRITE}, approval="once",
+    )
+    ctx = RunContext(
+        granted_scopes=frozenset({FS_WRITE}), request_approval=approve,
+        session_grants=renewed,
+    )
+    result = asyncio.run(registry.invoke(
+        ToolCall(id="new-file", name="fs.write",
+                 arguments={"path": "new-file.txt", "content": "new"}),
+        ctx,
+    ))
+    assert not result.is_error
+    assert prompted == ["new-file.txt"], "first write after regrant must prompt"
 
 
 # -- ADR-008 stage 8.6: Builder recipes ---------------------------------------
