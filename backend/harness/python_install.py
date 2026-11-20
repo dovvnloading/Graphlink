@@ -119,7 +119,7 @@ def _run_pip(argv: list[str], cwd: Path, cancel_event) -> tuple[int | None, str,
     # Disables all pip configuration files, including global extra-index-url
     # and find-links settings. The allowlisted parent env has no PIP_* vars.
     env["PIP_CONFIG_FILE"] = os.devnull
-    kwargs = {"env": env}
+    kwargs: dict = {"env": env}
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
 
@@ -185,7 +185,9 @@ def _checked_pip(argv: list[str], cwd: Path, cancel_event) -> tuple[int, str]:
         raise RequestCancelledError("stopped")
     if ended == "timeout":
         raise TimeoutError(f"Package operation timed out after {_PIP_TIMEOUT_SECONDS}s.\n{output}")
-    return int(code), output
+    if code is None:
+        raise RuntimeError("Package subprocess returned no exit code.")
+    return code, output
 
 
 def _prepare_cache(cache_root: Path) -> tuple[Path, Path]:
