@@ -108,6 +108,7 @@ class ShellPlan:
     command: str
     segments: list[str] = field(default_factory=list)
     unsplittable: bool = False
+    unsplittable_note: str | None = None
     # Segments that tripped the dangerous list, in order, deduplicated.
     dangerous: list[str] = field(default_factory=list)
 
@@ -123,10 +124,10 @@ class ShellPlan:
         prompt reappeared is visible in the prompt itself."""
         lines: list[str] = []
         if self.unsplittable:
-            lines.append(
+            lines.append(self.unsplittable_note or (
                 "! contains command substitution or a subshell - "
                 "reviewed as one unit, contents not parsed"
-            )
+            ))
         for segment in self.segments:
             marker = "!" if segment in self.dangerous else " "
             lines.append(f"{marker} {segment}")
@@ -281,7 +282,7 @@ def _split_powershell(text: str) -> list[str] | None:
 def _is_dangerous_powershell(segment: str) -> bool:
     # "& <script>" and ". <script>" can invoke arbitrary script content or
     # variable-held commands. Neither is a harmless standalone separator.
-    if re.match(r"^\s*[&.]\s+", segment):
+    if segment.lstrip().startswith("&") or re.match(r"^\s*\.\s+", segment):
         return True
 
     # Backticks can hide letters in cmdlet names: Rem-ove-Item can be
@@ -312,11 +313,16 @@ def analyze(command: str, *, shell: str | None = None) -> ShellPlan:
     # on Windows and /bin/sh on POSIX. PowerShell analysis is explicitly
     # requested by callers that actually execute PowerShell.
     shell_name = (shell or "").strip().lower()
+    dangerous_check = _is_dangerous
     if shell_name in _POWERSHELL_NAMES:
         segments = _split_powershell(text)
         dangerous_check = _is_dangerous_powershell
         if segments is None:
             plan.unsplittable = True
+            plan.unsplittable_note = (
+                "! contains nested or ambiguous PowerShell syntax - "
+                "reviewed as one unit, contents not parsed"
+            )
         else:
             plan.segments = segments
     elif shell_name in {"", "cmd", "cmd.exe", "posix", "sh", "bash", "zsh"}:
