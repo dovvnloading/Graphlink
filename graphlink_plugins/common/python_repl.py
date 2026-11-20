@@ -23,7 +23,7 @@ import subprocess
 import sys
 import threading
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable
 
 import api_provider
@@ -119,7 +119,9 @@ class PythonREPL:
         self._manage_cwd = bool(manage_cwd) and cwd is None
         self.cwd = Path(cwd) if cwd is not None else PYTHON_REPL_ROOT / safe_scratch_id(repl_id)
         self.python_executable = (
-            Path(python_executable) if python_executable is not None else Path(sys.executable)
+            python_executable
+            if command_builder is not None and isinstance(python_executable, PurePosixPath)
+            else Path(python_executable) if python_executable is not None else Path(sys.executable)
         )
         # An explicit interpreter comes from a venv. Keep subprocesses
         # launched by executed code (python, pip, etc.) in that same venv.
