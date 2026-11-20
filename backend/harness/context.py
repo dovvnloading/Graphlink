@@ -183,8 +183,9 @@ def describe_machine(workspace: Path, *, shell: str = "auto", profile: str = "ho
     which() reports executable presence on the allowlisted subprocess PATH.
     A missing command is *not on PATH* (not proof that it is uninstalled);
     an available CLI is not proof that its daemon/service is running.
-    The Python REPL starts with sys.executable, so its version is the
-    backend interpreter's version. Nothing here authorizes tool use.
+    The backend's sys.executable is not necessarily python.exec's selected
+    interpreter: that tool uses a project venv or a lazily managed venv.
+    Nothing here authorizes tool use.
     """
     if profile == "isolated":
         from backend.harness.shell_isolation import CONTAINER_IMAGE, available_engine
@@ -194,8 +195,8 @@ def describe_machine(workspace: Path, *, shell: str = "auto", profile: str = "ho
             "## Workspace execution environment (session snapshot)",
             f"Host OS: {platform.platform()} ({platform.machine()})",
             f"shell.exec / shell.session: /bin/sh -c in isolated {CONTAINER_IMAGE} container",
-            f"Container engine: {engine or 'none installed (Docker or Podman required)'}",
-            "Container network: disabled; limits: 1 CPU, 512 MiB RAM",
+            f"Container engine: {engine or 'Docker/Podman CLI not on execution PATH (isolation unavailable until configured)'}",
+            "Container network: disabled by default; shell.exec can request per-command or per-task user approval for network access; limits: 1 CPU, 512 MiB RAM",
             "Container workspace: /workspace (read/write bind mount)",
             f"Host workspace root: {workspace.resolve()}",
             "Host executables are NOT automatically available inside the container.",
@@ -209,7 +210,10 @@ def describe_machine(workspace: Path, *, shell: str = "auto", profile: str = "ho
         "## Workspace execution environment (session snapshot)",
         f"OS: {platform.platform()} ({platform.machine()})",
         f"Command shell (shell.exec / shell.session): {_command_shell(env, os_name=os.name, shell=shell)}",
-        f"Python (python.exec): {platform.python_version()} ({sys.executable})",
+        f"Backend Python (Graphlink process): {platform.python_version()} ({sys.executable})",
+        "python.exec: selects a usable workspace .venv or venv when present; "
+        "otherwise creates a managed virtualenv on first use. "
+        "Its interpreter/version may differ from backend Python.",
         f"Workspace root: {workspace.resolve()}",
         "Commands on the execution PATH (presence only; running them still needs approval):",
     ]

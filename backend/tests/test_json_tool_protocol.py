@@ -186,6 +186,46 @@ def test_named_openai_compatible_endpoint_without_schema_support_is_refused(monk
     assert provider.requests[2].extra_kwargs["response_format"]["type"] == "json_object"
 
 
+def test_custom_endpoint_recovers_native_tools_after_both_json_modes_are_rejected(monkeypatch):
+    from backend.providers.base import ToolCall
+
+    class NativeAfterJsonProvider(ScriptedProvider):
+        def stream(self, request, cancel):
+            self.requests.append(request)
+            if "response_format" in request.extra_kwargs:
+                raise RuntimeError("400: response_format unsupported")
+            assert request.tools, "native recovery must send actual tool declarations"
+            yield ProviderEvent(
+                "tool_call", tool_call=ToolCall("native_1", "fs_read", {"path": "notes.txt"}),
+            )
+            yield ProviderEvent("done", "")
+
+    provider = NativeAfterJsonProvider([], native_tools=True, structured_output=False)
+    result = _turn(monkeypatch, provider, config.API_PROVIDER_OPENAI)
+    assert [(call.name, call.arguments) for call in result["tool_calls"]] == [
+        ("fs.read", {"path": "notes.txt"}),
+    ]
+    assert result["message"]["content"] == ""
+    assert len(provider.requests) == 3
+    assert [request.extra_kwargs.get("response_format", {}).get("type")
+            for request in provider.requests] == ["json_schema", "json_object", None]
+    assert provider.requests[0].tools == provider.requests[1].tools == ()
+    assert provider.requests[2].tools[0].name == "fs_read"
+
+
+def test_custom_endpoint_refusing_both_json_and_native_tools_fails_without_a_cycle(monkeypatch):
+    provider = ScriptedProvider([
+        RuntimeError("400: response_format json_schema unsupported"),
+        RuntimeError("400: response_format json_object unsupported"),
+        RuntimeError("400: model does not support tools"),
+    ], native_tools=True, structured_output=False)
+    with pytest.raises(RuntimeError, match="rejected both native tools and constrained JSON output"):
+        _turn(monkeypatch, provider, config.API_PROVIDER_OPENAI)
+    assert len(provider.requests) == 3
+    assert provider.requests[2].tools
+    assert "response_format" not in provider.requests[2].extra_kwargs
+
+
 def test_ollama_old_server_rejecting_format_is_actionable(monkeypatch):
     provider = ScriptedProvider([RuntimeError("400: model does not support format")])
     with pytest.raises(RuntimeError, match="rejected grammar/schema-constrained JSON output"):
@@ -283,6 +323,34 @@ def test_history_preserves_order_and_groups_parallel_tool_results():
     results = json.loads(converted[-1]["content"].split("\n", 1)[1])
     assert [r["content"] for r in results] == ["one", "two"]
     assert "secret" not in json.dumps(converted)
+
+
+def test_native_assistant_history_replays_only_valid_json_tool_turns():
+    history = [
+        *MESSAGES,
+        {"role": "assistant", "content": "I'll inspect notes.txt.", "tool_calls": [
+            {"id": "native_1", "name": "fs.read", "arguments": {"path": "notes.txt"}},
+        ]},
+        {"role": "tool", "tool_call_id": "native_1", "name": "fs.read", "content": "hello"},
+        {"role": "assistant", "content": "The note says hello."},
+        {"role": "user", "content": "Continue with the next file."},
+    ]
+    converted = text_tool_history(history, TOOLS)
+    examples = [message["content"] for message in converted if message["role"] == "assistant"]
+    assert len(examples) == 2
+    tool_envelope, final_envelope = map(json.loads, examples)
+    assert tool_envelope == {
+        "tool_calls": [{"name": "fs.read", "arguments_json": '{"path": "notes.txt"}'}],
+        "final_answer": "",
+    }
+    assert final_envelope == {
+        "tool_calls": [],
+        "final_answer": "The note says hello.",
+    }
+    for example in examples:
+        parse_tool_turn(example, TOOLS)  # History must satisfy the same parser as a new reply.
+    assert history[2]["content"] == "I'll inspect notes.txt."
+    assert history[4]["content"] == "The note says hello."
 
 
 def test_harness_image_observation_is_grouped_with_json_tool_results():

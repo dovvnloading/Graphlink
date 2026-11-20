@@ -2262,8 +2262,8 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
         wire_tools = tuple(tools)
         profile = CLOUD_PROVIDERS.get(provider_name or "")
         # Custom OpenAI-compatible endpoints have no reliable per-model tools
-        # probe. Prefer JSON for workspace runs there, not an optimistic
-        # native tools request which some servers silently ignore.
+        # probe. Try JSON first, but recover via advertised native tools if
+        # both constrained response formats are explicitly rejected.
         use_json_protocol = bool(
             tools and json_tool_fallback and (
                 not provider.capabilities.tools
@@ -2355,6 +2355,7 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
             )
         attempt = 0
         json_object_mode = False
+        tried_native_after_json = False
         while True:
             full_response_content = None
             reasoning_parts: list[str] = []
@@ -2410,6 +2411,22 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                             json_object_mode = True
                             attempt = 0
                             continue
+                        if (
+                            profile is not None and profile.key_slot == "openai"
+                            and provider.capabilities.tools and not tried_native_after_json
+                        ):
+                            # JSON-first custom endpoints may support native
+                            # calls even when neither response_format works.
+                            # Apply the cloud aliases not needed in JSON mode.
+                            from backend.providers.tool_names import cloud_tool_names
+
+                            wire_tools, wire_messages, canonical_names = cloud_tool_names(
+                                tuple(tools), wire_messages,
+                            )
+                            use_json_protocol = False
+                            tried_native_after_json = True
+                            attempt = 0
+                            continue
                         raise RuntimeError(
                             f"The selected model ({model_label}) cannot run the workspace agent: "
                             "this endpoint rejected grammar/schema-constrained JSON output. "
@@ -2418,6 +2435,13 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                 elif tools and json_tool_fallback:
                     from backend.providers.json_tool_protocol import native_tools_rejected
                     if native_tools_rejected(retry_exc):
+                        if tried_native_after_json:
+                            # Both JSON modes already failed; do not cycle
+                            # back to JSON or try unconstrained text parsing.
+                            raise RuntimeError(
+                                f"The selected model ({model_label}) cannot run the workspace agent: "
+                                "this endpoint rejected both native tools and constrained JSON output."
+                            ) from retry_exc
                         if not json_format_available:
                             raise RuntimeError(
                                 f"The selected model ({model_label}) cannot run the workspace agent: "

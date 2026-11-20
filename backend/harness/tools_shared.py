@@ -1,8 +1,9 @@
 """Workspace-agent adapter for tools already shared with the Builder.
 
-The Builder populates the same session ToolRegistry first; the conditional
-fallbacks let a standalone registry use this catalog too. Implementation,
-scope and approval policy remain in the original shared tool modules.
+The Builder populates a base ToolRegistry first; the workspace Agent forks
+that catalog so it can reuse handlers without publishing Agent-only tools to
+Builder. The conditional fallbacks also support standalone registries.
+Implementation, scope and approval policy remain in the shared modules.
 """
 
 from __future__ import annotations

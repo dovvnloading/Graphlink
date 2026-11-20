@@ -49,9 +49,11 @@ routes cannot authorize a pending Python call. An old Python confirmation
 also cannot authorize a subsequent unrelated tool. Existing shell policies
 and unrelated-tool grant semantics remain in place.
 
-The shared Builder registry can expose the Python tool, but its unbound
-context is refused before interpreter startup. Its summary also discloses
-the full source. This change does not extend Python execution to Builder.
+Workspace Python is registered only in the Agent's fork of the Builder
+tool catalog, so it is not offered to Builder. Its handler also refuses
+an unbound context before interpreter startup. Its approval summary
+discloses the full source. This change does not extend Python execution
+to Builder.
 
 ## Re-run focused checks
 

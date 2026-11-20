@@ -419,9 +419,9 @@ def _approval_summary(call: ToolCall, document) -> str:
     code itself."""
     from backend.tools_graph import run_node_pending_disclosure
 
-    # The registry is shared with the harness. A Builder has no Python
-    # workspace and cannot execute this tool, but never disclose a truncated
-    # source if it is encountered through that shared registry.
+    # Python is registered only in the Agent's fork, but keep this
+    # disclosure safe if a malformed registry ever offers it to Builder:
+    # a Builder has no Python workspace and cannot execute the tool.
     if call.name == "python.exec":
         return f"python.exec\n--- source\n{call.arguments['code']}"
     if call.name == "python.install":
@@ -691,7 +691,7 @@ async def run_build(
         specs = tuple(
             spec for spec in registry.specs()
             if (registry.scopes_for(spec.name) or frozenset()) <= BUILDER_GRANTED_SCOPES
-            # web.* is a workspace-agent-only adapter in the shared registry.
+            # Defensive exclusion: web.* belongs only in the Agent's fork.
             and spec.name not in ("web.search", "web.fetch")
         )
         system_prompt = resolve_prompt_text("builder-executor")
