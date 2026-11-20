@@ -86,7 +86,7 @@ class HarnessDispatchOps(DispatcherParts):
             self._harness_session_grants = store
         return store.setdefault(workspace_id, set())
 
-    def harness_machine_snapshot(self, workspace_id: str, root: Path) -> str:
+    def harness_machine_snapshot(self, workspace_id: str, root: Path, shell: str = "auto") -> str:
         """Probe once per session/workspace binding, reuse on follow-ups.
 
         The workspace can be rebound from scratch to a trusted folder:
@@ -103,10 +103,10 @@ class HarnessDispatchOps(DispatcherParts):
                 snapshots = {}
                 self._harness_machine_snapshots = snapshots
             previous = snapshots.get(workspace_id)
-            if previous is not None and previous[0] == root_key:
-                return previous[1]
-            description = describe_machine(root)
-            snapshots[workspace_id] = (root_key, description)
+            if previous is not None and previous[:2] == (root_key, shell):
+                return previous[2]
+            description = describe_machine(root, shell=shell)
+            snapshots[workspace_id] = (root_key, shell, description)
             return description
 
     def harness_shell_sessions(self):

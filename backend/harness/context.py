@@ -34,6 +34,7 @@ from pathlib import Path
 
 import graphlink_task_config as config
 from graphlink_process_env import safe_subprocess_env
+from backend.harness.shell_selection import ShellUnavailableError, shell_invocation
 
 # The workspace file whose contents join the system prompt's contextual
 # tier. One name, at the workspace root: the harness binds exactly one
@@ -155,15 +156,18 @@ def _env_value(env: dict[str, str], name: str) -> str | None:
     return next((value for key, value in env.items() if key.upper() == name), None)
 
 
-def _command_shell(env: dict[str, str], *, os_name: str) -> str:
-    """The actual subprocess(shell=True) command shell, not the user's
-    login shell ($SHELL is NOT used by shell=True on POSIX)."""
-    if os_name == "nt":
+def _command_shell(env: dict[str, str], *, os_name: str, shell: str = "auto") -> str:
+    """Describe the same shell executable that the tools use."""
+    try:
+        argv, use_shell = shell_invocation("<command>", shell, env=env, os_name=os_name)
+    except ShellUnavailableError:
+        return "Git Bash (not found on this machine)"
+    if use_shell:
         return f"{_env_value(env, 'COMSPEC') or 'cmd.exe'} /c"
-    return "/bin/sh -c"
+    return " ".join(argv[:-1])
 
 
-def describe_machine(workspace: Path) -> str:
+def describe_machine(workspace: Path, *, shell: str = "auto") -> str:
     """Capture machine facts for a workspace agent, without executing tools.
 
     which() reports executable presence on the allowlisted subprocess PATH.
@@ -177,7 +181,7 @@ def describe_machine(workspace: Path) -> str:
     lines = [
         "## Workspace execution environment (session snapshot)",
         f"OS: {platform.platform()} ({platform.machine()})",
-        f"Command shell (shell.exec / shell.session): {_command_shell(env, os_name=os.name)}",
+        f"Command shell (shell.exec / shell.session): {_command_shell(env, os_name=os.name, shell=shell)}",
         f"Python (python.exec): {platform.python_version()} ({sys.executable})",
         f"Workspace root: {workspace.resolve()}",
         "Commands on the execution PATH (presence only; running them still needs approval):",
