@@ -8,18 +8,13 @@ freely use `self.state`, `self._save_state()` and the class constants
 on the composed whole - correct at runtime, and completely invisible to a
 type checker looking at one mixin in isolation.
 
-That invisibility was not free. `mypy settings_store` reported 115 errors,
-every single one `attr-defined`, and 101 of them were just three names:
-`state` (66), `_save_state` (33) and `_protect_and_track` (2). The
-remaining 14 were class constants. In other words the package was not
-badly typed - it was untypeable, because nothing declared the contract
-between a mixin and the class that composes it. That is the same shape as
-the 23 `*Ops` mixins across backend/agent_dispatch/ and backend/domain/,
-and it is a large part of why `[tool.mypy].files` has stayed at four
-entries while the real error count grew from 642 to over a thousand.
+Mixin-based components are difficult for static type checkers to analyze
+in isolation: the shared attributes are provided by the composed class,
+not declared on individual mixins. The same pattern appears in the
+backend/agent_dispatch/ and backend/domain/ mixin families.
 
-Declaring the contract in one place fixes all 115 without changing a line
-of behaviour.
+Declaring the contract in one place makes these attributes explicit
+without changing runtime behaviour.
 
 EVERYTHING HERE IS TYPE_CHECKING-ONLY. At runtime this class is empty, so
 inheriting it adds no attributes, no methods, and no `__init__` - the real

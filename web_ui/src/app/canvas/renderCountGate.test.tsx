@@ -220,6 +220,7 @@ function chatRow(id: string, x: number): SceneNodeRow {
         harnessCompactions: 0,
         harnessWorkspacePath: "",
         harnessWorkspaceActive: "",
+        harnessShellAllowRules: [],
         harnessAwaitingApproval: false,
         harnessApprovalToolName: "",
         harnessApprovalSummary: "",

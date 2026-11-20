@@ -18,9 +18,9 @@ from graphlink_plugins.scientific.execution import ExecutionFailure
 from graphlink_settings_store import SettingsManager
 
 # These deadlines only bound a hang: a passing test continues as soon as the
-# event fires. 5 s was too tight for loaded Windows CI runners that now import
-# many more scientific packs before the runner reaches the controlled step.
-EVENT_DEADLINE_S = 30
+# event fires. Windows CI under coverage can spend substantial time loading
+# packs while another worker starts subprocesses; this is a hang bound only.
+EVENT_DEADLINE_S = 60
 
 
 def open_session(path, settings):

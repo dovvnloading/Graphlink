@@ -229,96 +229,22 @@ def _collect_real_registrations() -> dict[tuple[str, str], _FileIntents]:
 
 
 def test_the_scan_finds_the_real_population_of_registered_intents():
-    # Guards the guard: a broken predicate here would make every check below
-    # vacuously pass. 145 is the exact count locked by ADR-010's close-out
-    # recon (scene=89, app-settings=30, app-composer=6, app-chat-library=5,
-    # grid-control=4, notification=3, app-plugins=1, system=1, diagnostics=2)
-    # - app-settings went 27 -> 28 when ADR-006 stage 6.5 added
-    # setProviderMode, 28 -> 29 when ADR-016 stage 16.1 added setLogLevel,
-    # 138 -> 140 when ADR-016 stage 16.4 added the diagnostics topic's two
-    # intents (exportDiagnosticBundle, openLogFolder), 140 -> 142 when
-    # ADR-018 stage 18.3 added scene's own setModelOverride/
-    # clearModelOverride, 142 -> 143 when ADR-018 stage 18.4 added
-    # app-settings' own setAutoModelPolicy, 143 -> 145 when ADR-017
-    # stage 17.5 added the new "knowledge" topic's own search intent plus
-    # scene's own setChatIndexIntoKnowledge, 145 -> 151 when ADR-008
-    # stage 8.3 added the "builder" topic's five run-lifecycle intents
-    # plus scene's own setPlanSteps, 151 -> 153 when stage 8.6 added
-    # builder's own listRecipes/saveRecipe pair, 153 -> 154 when
-    # ADR-012 stage 12.2 added app-settings' own setTheme, 154 -> 157 when
-    # ADR-012 stage 12.6 added scene's own loadSampleWorkspace plus
-    # app-settings' own setHasCompletedOnboarding/setMcpServers, and
-    # 157 -> 159 when ADR-014 stage 14.4 added app-plugins' own
-    # invokePluginIntent/setPluginGrant pair, and 159 -> 165 when ADR-020
-    # stage 20.2 added app-chat-library's own setGraphFavorite/
-    # setGraphArchived/setGraphTags/createWorkspace/renameWorkspace/
-    # archiveWorkspace sextet, 165 -> 166 when ADR-020 stage 20.3 added
-    # app-chat-library's own setWorkspaceDefaultModel, 166 -> 168 when
-    # ADR-020 stage 20.4 added app-chat-library's own loadGraphAndFocusNode
-    # plus the new "globalSearch" topic's own search intent, 168 -> 169
-    # when ADR-020 stage 20.5 added app-chat-library's own exportWorkspace,
-    # and 169 -> 170 when ADR-008 stage 8.7 added builder's own deleteRecipe,
-    # and 170 -> 171 when ADR-021 stage 21.5 added scene/
-    # setWebResearchRetainToKnowledge (the per-node knowledge-retention
-    # opt-in that finally makes ADR-017's retention path reachable), and
-    # 172 -> 175 (H1) -> 177 (H2 approveTool/denyTool) as the harness topic was added
-    # (PLAN-2026-08-24 H1: harness/start, harness/send, harness/cancel).
-    # 171 -> 172 when scene/reportNodeSizes was added (the frontend's own
-    # rendered-size report, without which frame/container bounds fall back
-    # to a flat 220x120 estimate per member and do not enclose them), and
-    # 179 -> 176 when PLAN-2026-08-24 H5 retired Py-Coder and removed
-    # scene/setPyCoderMode, scene/runPyCoder, and scene/cancelPyCoderRequest
-    # (approveCodeExecution/denyCodeExecution stayed registered - they
-    # relocated to backend/api/intents_code_sandbox.py, not deleted), and
-    # 176 -> 178 when H6 added harness/approveToolForSession (§2.4's
-    # graded consent) and harness/answer (§2.3's user.ask resolution), and
-    # 178 -> 179 when the agent launcher grew its own workspace pick
-    # (harness/pickLaunchWorkspace - the node-less sibling of
-    # harness/pickWorkspace, so the first run can already be bound to the
-    # right folder instead of spending itself in scratch), and 179 -> 186
-    # when Review Lens added scene's own setCodeReviewPrUrl/
-    # fetchCodeReviewDiff/fetchCodeReviewDiffText/runCodeReview/
-    # cancelCodeReviewRequest/askCodeReviewQuestion/dismissCodeReviewFinding
-    # septet (backend/api/intents_code_review.py), and 186 -> 187 when the
-    # HTML node got a real commit path for its edited source
-    # (scene/setHtmlContent, backend/api/intents_nodes.py), and 187 -> 188
-    # when Artifact/Drafter gained undoable, conflict-checked Markdown editing
-    # (scene/setArtifactContent, backend/api/intents_artifact.py).
-    # 188 -> 191: reviewable Artifact proposal fetch (read-only), accept,
-    # and discard (both undoable) in backend/api/intents_artifact.py.
-    real = _collect_real_registrations()
-    # 194 -> 196 when engine-v2 added scene/setEdgeRole and scene/getEdgeRoles.
-    # 196 -> 197 when archive restoration added app-chat-library/importWorkspace.
-    # 197 -> 204 when first-class fal.ai added seven settings intents.
-    # 204 -> 208 when fal.ai live model search/schema/pricing/estimate landed.
-    # 208 -> 216 when Fal Media Studio added eight scene intents.
-    # 216 -> 217 when ambiguous billed submissions gained explicit recovery:
-    # key storage/clear, queue submit/status/cancel, synchronous run, CDN upload.
-    # 217 -> 220 for binding, running and removing a note's text input.
-    # 220 -> 227 for table editing, derived outputs, revision history, and contributing rows.
-    # 227 -> 231 for graph run preview, execution, history and resume.
-    # 231 -> 233 for explicit local-model preview and execution.
-    # 233 -> 236 for saved model-port lookup, bind and unbind.
-    # 236 -> 238 for first-class Model creation and configuration.
-    # 238 -> 239 for connecting the Model's named text port from the canvas.
-    # 239 -> 240 for C3's read-only scene/inspectChatContext preview intent.
-    # 242 -> 243: read-only scene/exportPublicationChart publication file export.
-    # 243 -> 244: undoable scene/setChartAnalysis persists chart axis locks and annotations.
-    # 244 -> 245: scene/cancelGraphRun cancels active Graph Runner steps.
-    # 245 -> 246: scene/discussScientificResult creates an undoable chat from a verified result.
-    # 246 -> 247: scene/exportScientificWorkspaceMethods reads verified receipts without mutating the graph.
-    # 247 -> 248: harness/setShell saves a per-node shell preference.
-    # 248 -> 249: Settings workspace-agent trusted-folder revocation.
-    # 249 -> 252: harness workspace listing, preview and native reveal do not mutate the canvas document.
-    # 252 -> 255: composerSend adds one intent; execution isolation adds two.
-    # 255 -> 258: isolated networking adds two scoped approval intents and one node setting.
-    assert len(real) == 258, (
-        f"expected exactly 258 real registered intents, found {len(real)} - "
-        "either the scan broke, or the app's registered-intent surface "
-        "genuinely changed and tests/undo_classification.py's own count "
-        "comment (and this assertion) need a deliberate update alongside it"
+    # Guards the guard: a broken AST scan must not make the coverage checks
+    # below vacuously pass. The hand-authored classification table defines
+    # the expected population, so new intents need a classification but no
+    # separately maintained count. The named-intent checks below catch
+    # mismatches even when the total population happens to stay the same.
+    expected = len(CLASSIFICATION)
+    assert expected > 0, (
+        "tests/undo_classification.py is empty - there is no registered-intent "
+        "population against which to check the scan"
     )
-
+    real = _collect_real_registrations()
+    assert len(real) == expected, (
+        f"expected {expected} registered intents from tests/undo_classification.py, "
+        f"found {len(real)} - either the scan missed registrations or "
+        "the registered-intent surface and explicit A/B classification table differ"
+    )
 
 def test_every_registered_intent_is_classified():
     real = set(_collect_real_registrations().keys())

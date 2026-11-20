@@ -394,7 +394,8 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     # PLAN-2026-08-24 H1: the harness node's render surface (history stays
     # in the workspace transcript, never on the wire).
     "harnessGoal", "harnessReply", "harnessStatus", "harnessStatusDetail",
-    "harnessRunId", "harnessActivity", "harnessShell", "harnessExecutionProfile", "harnessNetworkAlways", "harnessMaxTurns", "harnessSpentTurns",
+    "harnessRunId", "harnessActivity", "harnessShell", "harnessShellAllowRules",
+    "harnessExecutionProfile", "harnessNetworkAlways", "harnessMaxTurns", "harnessSpentTurns",
     "harnessSpentTokens", "harnessAwaitingApproval", "harnessApprovalToolName",
     "harnessApprovalSummary", "harnessContextTokens", "harnessMaxContextTokens",
     # Per-call Python approval identity, added with the approval hardening.

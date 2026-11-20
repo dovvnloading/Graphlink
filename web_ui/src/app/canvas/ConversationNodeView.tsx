@@ -1,5 +1,5 @@
 import type { Node, NodeProps } from "@xyflow/react";
-import { memo, useState, type ReactNode } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import type { StreamListener } from "../../lib/ws/transport";
 import { CollapseToggleButton } from "./CollapseToggleButton";
 import type { MenuPosition } from "./menuPosition";
@@ -236,6 +236,21 @@ function ConversationBubble({
 }) {
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
   const [copied, setCopied] = useState(false);
+  const copyResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copyVersion = useRef(0);
+
+  // A bubble can unmount (or be reused for a different message) while a
+  // copy flash timer or clipboard write is pending. Neither may update it
+  // after that lifecycle ends.
+  useEffect(() => {
+    return () => {
+      copyVersion.current += 1;
+      if (copyResetTimer.current !== null) {
+        clearTimeout(copyResetTimer.current);
+        copyResetTimer.current = null;
+      }
+    };
+  }, [message.content]);
 
   // Adversarial review caught a real bug: bubbles are keyed by array index
   // (see the render loop below), and deleting an earlier message shifts
@@ -263,11 +278,17 @@ function ConversationBubble({
   // quick-action Copy button, for the identical reason: this one needs its
   // own transient "copied" flash independent of the menu's lifecycle.
   function onQuickCopy() {
+    const version = ++copyVersion.current;
     navigator.clipboard
       .writeText(message.content)
       .then(() => {
+        if (version !== copyVersion.current) return;
+        if (copyResetTimer.current !== null) clearTimeout(copyResetTimer.current);
         setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
+        copyResetTimer.current = setTimeout(() => {
+          copyResetTimer.current = null;
+          setCopied(false);
+        }, 1500);
       })
       .catch((error: unknown) => {
         console.error("[conversation-node] Copy message failed:", error);

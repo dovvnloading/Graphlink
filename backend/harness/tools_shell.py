@@ -9,14 +9,12 @@ cwd is the workspace directory - the same never-the-app's-own-cwd posture
 PythonREPL takes - and stdout/stderr are merged, bounded, and fed back as
 the tool result.
 
-Registered approval="always" under code.execute: EVERY distinct command
-prompts a human with the verbatim command text (the fingerprint means an
-identical repeat in the same run does not re-ask; any changed argument is
-a new decision). That is deliberately stricter than a dangerous-command
-list alone - in a scratch workspace the risk is not `rm` specifically, it
-is arbitrary code running as the user, which is exactly the risk class
-the builder's autopilot code.execute review-fix concluded always warrants
-a human look.
+Registered approval="always" under code.execute. A command normally asks
+for human consent, including an identical repeat. "Always allow" on a safe
+shell.exec approval persists a shell-specific command-prefix rule on that
+agent node. A future command can skip the prompt only when EVERY segment
+matches an existing rule and no segment is dangerous or ambiguous.
+Interactive shell.session start/write and interpreter code still ask fresh.
 
 §2.4's two additional permission mechanics ride on top of that baseline
 (backend/harness/shell_policy.py does the analysis):

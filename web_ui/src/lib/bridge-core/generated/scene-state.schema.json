@@ -1080,6 +1080,13 @@
             "default": "auto",
             "type": "string"
           },
+          "harnessShellAllowRules": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "harnessSpentTokens": {
             "default": 0,
             "type": "integer"

@@ -140,6 +140,9 @@ class RunContext:
     # None means this run offers no session-scoped option at all, which is
     # the case for every non-harness surface today.
     session_grants: set[str] | None = None
+    # None outside the workspace agent. The live node list is shared with the
+    # harness so adding/removing a rule takes effect during the same run.
+    shell_allow_rules: list[str] | None = None
     # Optional per-run catalog, narrower than the scope grant when needed.
     offered_tool_names: frozenset[str] | None = None
     _approved_fingerprints: set[str] = field(default_factory=set)
@@ -311,6 +314,7 @@ class ToolRegistry:
             # ask" wins over the memo AND declines to write a new memo entry
             # below, so a second identical dangerous call asks again too.
             forced = False
+            reprompt_failed = False
             if registration.always_reprompt is not None:
                 try:
                     forced = bool(registration.always_reprompt(call))
@@ -318,6 +322,7 @@ class ToolRegistry:
                     # A predicate that blows up must fail CLOSED (ask), never
                     # silently reuse a grant it was supposed to veto.
                     forced = True
+                    reprompt_failed = True
             if forced:
                 fingerprint = None
             # PLAN-2026-08-24 §2.4's graded consent: a SESSION-scoped grant
@@ -334,6 +339,27 @@ class ToolRegistry:
             already_approved = session_granted or (
                 fingerprint is not None and fingerprint in ctx._approved_fingerprints
             )
+            if call.name == "shell.exec" and ctx.shell_allow_rules is not None:
+                # The real harness never accepts a whole-tool grant or a
+                # fingerprint for shell commands. Only explicit prefixes for
+                # *every* segment, with no dangerous or ambiguous segment,
+                # can bypass this command's fresh consent requirement.
+                from backend.harness.shell_policy import shell_command_allowed
+
+                try:
+                    already_approved = not reprompt_failed and shell_command_allowed(
+                        str(call.arguments.get("command") or ""),
+                        ctx.shell_allow_rules, shell=getattr(ctx, "harness_shell", "auto"),
+                    )
+                except Exception:
+                    already_approved = False
+            # A saved safe shell prefix must not skip a fresh Isolated network disclosure.
+            if (call.name == "shell.exec" and getattr(ctx, "harness_execution_profile", "host") == "isolated"
+                    and call.arguments.get("network") is True
+                    and not (getattr(ctx, "harness_network_always", False)
+                             or getattr(ctx, "harness_network_task_approved", False)
+                             or call.id in getattr(ctx, "harness_network_once_approved", set()))):
+                already_approved = False
             if not already_approved:
                 # §2.4: the decision is now GRADED, not binary. False/None
                 # denies; the string "session" approves AND remembers for the
@@ -353,33 +379,24 @@ class ToolRegistry:
                 _raise_if_cancelled(ctx.cancel.event if ctx.cancel is not None else None)
                 if not approved:
                     return ToolResult(content=f"Tool call {call.name!r} was denied approval.", is_error=True)
-                if original_python_call is not None and (
-                    original_python_call.arguments != call.arguments
+                original_approved_call = (
+                    original_python_call if original_python_call is not None else original_shell_call
+                )
+                if original_approved_call is not None and (
+                    original_approved_call.arguments != call.arguments
                     or disclosure_call.arguments != call.arguments
                 ):
+                    if original_shell_call is not None:
+                        network_once = getattr(ctx, "harness_network_once_approved", None)
+                        if network_once is not None:
+                            network_once.discard(call.id)
+                        if decision == "network-task":
+                            setattr(ctx, "harness_network_task_approved", False)
                     return ToolResult(
-                        content="Python request changed while approval was pending; submit it for fresh approval.",
+                        content="Execution request changed while approval was pending; submit it for fresh approval.",
                         is_error=True,
                     )
-                if original_shell_call is not None and (
-                    original_shell_call.arguments != call.arguments
-                    or disclosure_call.arguments != call.arguments
-                ):
-                    # The loop's network grant is tentatively recorded when
-                    # its approval future resolves. A changed call must not
-                    # leave that grant available to a later command.
-                    network_once = getattr(ctx, "harness_network_once_approved", None)
-                    if network_once is not None:
-                        network_once.discard(call.id)
-                    if decision == "network-task":
-                        # Only HarnessRunContext owns this grant; the registry
-                        # accepts the shared RunContext type.
-                        setattr(ctx, "harness_network_task_approved", False)
-                    return ToolResult(
-                        content="Shell request changed while approval was pending; submit it for fresh approval.",
-                        is_error=True,
-                    )
-                if decision == "session" and ctx.session_grants is not None and not forced:
+                if decision == "session" and ctx.session_grants is not None and not forced and call.name != "shell.exec":
                     ctx.session_grants.add(call.name)
                 elif fingerprint is not None:
                     ctx._approved_fingerprints.add(fingerprint)

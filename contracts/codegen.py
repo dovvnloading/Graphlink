@@ -422,12 +422,8 @@ def _root_hydrator_for(root_name: str, sparse_fields: dict[str, tuple[type, bool
 # docstring), not something to infer by scanning the filesystem for anything
 # shaped like one.
 class _ArtifactEntry(TypedDict):
-    # ADR-015 stage 15.5: a TypedDict, not a plain dict, specifically so
-    # entry["ts_path"] etc. narrow to their own declared type (Path) instead
-    # of the union of every value type in the dict (mypy can't narrow a
-    # plain dict's value type from a string-literal key the way it does for
-    # TypedDict) - that union-typed-access was the actual root cause behind
-    # every mypy error this module used to have.
+    # A TypedDict lets entries such as entry["ts_path"] retain their
+    # declared type instead of a union of every field's value type.
     dataclass: type | None
     dataclass_import: tuple[str, str]
     title: str

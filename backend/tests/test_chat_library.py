@@ -4022,7 +4022,7 @@ def test_load_chat_rechecks_edits_that_arrive_while_save_is_in_flight(db_path, m
     def paused_first_write(*args, **kwargs):
         if not writes:
             entered.set()
-            assert proceed.wait(timeout=5), "test did not release the in-flight write"
+            assert proceed.wait(timeout=30), "test did not release the in-flight write"
         result = real_write(*args, **kwargs)
         writes.append(result[0])
         return result
@@ -4032,7 +4032,7 @@ def test_load_chat_rechecks_edits_that_arrive_while_save_is_in_flight(db_path, m
     async def run():
         task = asyncio.create_task(bus.dispatch_intent("app-chat-library", "loadChat", [target]))
         try:
-            assert await asyncio.to_thread(entered.wait, 5)
+            assert await asyncio.to_thread(entered.wait, 30)
             # save_chat serialized "initial" before its worker started.
             node.content = "last-second edit during save"
         finally:

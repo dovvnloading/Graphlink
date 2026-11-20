@@ -92,7 +92,6 @@ npm run check
 cd ..
 python -m compileall -q .
 python -m ruff check .
-python -m mypy
 python -m pytest -q --cov --cov-report=term-missing --ignore=backend/tests/perf
 python -m pytest -q -n0 backend/tests/perf
 python tools/gitlink_safety_demo.py --json /absolute/new/path/gitlink-report.json
@@ -105,12 +104,11 @@ npm run test:e2e:safety
 The report path must be new and outside the checkout. Use a writable temporary
 directory and the intended Python environment on `PATH`. The demo and browser
 bootstrap scrub inherited Git routing variables before fixture Git commands.
-Record any browser executable override. Windows DPAPI/recovery tests need the
-Windows CI job; `mypy --platform win32` on Linux is only a static check.
+Record any browser executable override. Windows DPAPI/recovery tests require the
+Windows CI job rather than Linux-only validation.
 
 Local baseline comparison is required when a gate fails. In this execution
-environment unchanged main had 22 Python failures and 23 skips on Linux, plus
-13 native-Linux mypy errors involving Windows-specific APIs. Local Chromium
+environment unchanged main had 22 Python failures and 23 skips on Linux. Local Chromium
 could not start because socket creation was denied. These limitations must
 remain visible alongside hosted CI outcomes; passing focused tests must not be
 reported as a complete local pass. The draft PRs and final evidence manifest

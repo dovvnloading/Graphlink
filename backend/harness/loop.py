@@ -59,7 +59,7 @@ from backend.harness.transcript import (
     load_messages,
 )
 from backend.harness.workspace import WorkspaceError, bound_root, ensure_workspace
-from backend.providers.base import CancelToken, ToolCall
+from backend.providers.base import CancelToken, ToolCall, ToolSpec
 from backend.tools import (
     CODE_EXECUTE,
     FS_READ,
@@ -106,6 +106,35 @@ _HARNESS_TOOL_NAME_EXCLUSIONS = ("builder.",)
 # Only Web Research adapters perform per-task domain consent. Do not expose
 # unrelated net.fetch tools merely because the harness grants that scope.
 _HARNESS_WEB_TOOLS = frozenset({"web.search", "web.fetch"})
+
+# Isolated containers confine shell tools, not the host REPL or installer.
+# Omit these from the model's schemas and the registry's invoke-time catalog.
+_ISOLATED_HOST_EXECUTION_TOOLS = frozenset({"python.exec", "python.install"})
+
+
+def _offered_harness_specs(registry: ToolRegistry, execution_profile: str) -> tuple[ToolSpec, ...]:
+    """Profile-aware catalog, enforced both at model offer and registry invoke."""
+    return tuple(
+        spec for spec in registry.specs()
+        if (registry.scopes_for(spec.name) or frozenset()) <= HARNESS_GRANTED_SCOPES
+        and not spec.name.startswith(_HARNESS_TOOL_NAME_EXCLUSIONS)
+        and (
+            NET_FETCH not in (registry.scopes_for(spec.name) or frozenset())
+            or spec.name in _HARNESS_WEB_TOOLS
+        )
+        and (
+            execution_profile != "isolated"
+            or spec.name not in _ISOLATED_HOST_EXECUTION_TOOLS
+        )
+    )
+
+
+def _retire_host_repl_for_isolated(dispatcher, workspace_id: str) -> None:
+    """Retire a Host task's persistent interpreter when switching profiles."""
+    repls = getattr(dispatcher, "_harness_python_repls", None)
+    if repls is not None:
+        repls.stop_workspace(workspace_id)
+
 
 # The approval prompt's cap applies ONLY to the generic JSON-arguments
 # fallback. A disclosed command or file body is NEVER truncated - the
@@ -286,7 +315,8 @@ def _is_dangerous_call(call: ToolCall) -> bool:
 
 
 def _approval_summary(
-    call: ToolCall, *, workspace_root: Path | None = None, network_status: str = "",
+    call: ToolCall, *, workspace_root: Path | None = None,
+    shell: str = "auto", network_status: str = "",
 ) -> str:
     """What the approval panel shows for one parked call. The mutating
     tools disclose their EFFECT verbatim (the command that will run, the
@@ -302,12 +332,17 @@ def _approval_summary(
     if call.name == "shell.exec":
         # §2.4: disclose one line per thing that will actually run, so a
         # dangerous tail cannot hide behind a benign head in a chain.
+        selected = shell_policy.effective_shell_for_rules(shell)
+        plan = shell_policy.analyze(
+            str(call.arguments.get("command") or ""),
+            shell="bash" if selected == "git-bash" else selected,
+        )
         lines = ["shell.exec"]
         if network_status:
             lines.append(f"Network: {network_status}")
         if call.arguments.get("network") is True:
             lines.append(f"Why network is needed: {call.arguments.get('network_reason', '')}")
-        lines.append(shell_policy.analyze(str(call.arguments.get("command") or "")).disclosure())
+        lines.append(plan.disclosure())
         return "\n".join(lines)
     if call.name == "shell.session":
         action = str(call.arguments.get("action") or "")
@@ -488,7 +523,13 @@ async def run_harness(
         # says the task is over, or a reload could reopen a "done" run whose
         # last turns never landed. Runs in a thread - flush blocks.
         if workspace_for_flush is not None:
-            await asyncio.to_thread(flush_transcript, workspace_for_flush)
+            flushed = await asyncio.to_thread(flush_transcript, workspace_for_flush)
+            if not flushed:
+                # Do not report success while tool results are still queued:
+                # a reload could otherwise mistake them for interrupted calls.
+                status = "failed"
+                detail = "The agent transcript is still being written; retry when it finishes."
+                reply = None
         if not _alive():
             return
         if node.state.harness_activity and node.state.harness_activity[-1]["outcome"] == "running":
@@ -556,11 +597,18 @@ async def run_harness(
         # Web domains are once-per-task, never session-wide. A unique token
         # also prevents a stale click from approving a later redirect host.
         bind_approval = (
-            network_offered
-            or call.name in ("python.exec", "python.install", "web.fetch", "web.search")
+            call.name in ("python.exec", "python.install", "shell.exec", "web.fetch", "web.search")
             or call.name.startswith("fal.")
         )
         approval_token = uuid.uuid4().hex if bind_approval else ""
+        shell_rules = (
+            shell_policy.shell_allow_rule_candidates(
+                str(call.arguments.get("command") or ""), shell=ctx.harness_shell,
+            ) if call.name == "shell.exec" else []
+        )
+        can_save_shell_rules = not network_offered and bool(shell_rules) and len(set(
+            node.state.harness_shell_allow_rules + shell_rules
+        )) <= shell_policy.MAX_SHELL_ALLOW_RULES
         handle.approval_token = approval_token
         node.state.harness_approval_id = handle.approval_token
         node.state.harness_awaiting_approval = True
@@ -584,13 +632,13 @@ async def run_harness(
                     network_status = "requested; requires your permission"
             node.state.harness_approval_summary = (
                 preview.summary if preview is not None
-                else _approval_summary(call, network_status=network_status)
+                else _approval_summary(call, shell=ctx.harness_shell, network_status=network_status)
             )
-        # Executable commands and interactive stdin always ask fresh, even
-        # when a previous call was approved for the session. The panel must
-        # not suggest session consent that the registry will reject.
-        node.state.harness_approval_session_offered = (
-            preview_available and ctx.session_grants is not None
+        # Shell commands can save only safe command prefixes, never tool-wide
+        # session consent. Python and interactive stdin still ask every time.
+        node.state.harness_approval_session_offered = preview_available and (
+            can_save_shell_rules if call.name == "shell.exec"
+            else ctx.session_grants is not None
             and not bind_approval and not _is_dangerous_call(call)
         )
         await bus.publish("scene")
@@ -619,6 +667,18 @@ async def run_harness(
             else:
                 return False
             approved = True
+        # A shell prefix grant is made *only* from the backend's snapshotted
+        # command, never a client-supplied rule. A forged "always allow" on
+        # Python, a dangerous command, or a cancelled run is denied.
+        if approved == "shell_rule":
+            if (call.name != "shell.exec" or not can_save_shell_rules
+                    or cancel_event.is_set() or not _alive()):
+                return False
+            node.state.harness_shell_allow_rules[:] = list(dict.fromkeys(
+                node.state.harness_shell_allow_rules + shell_rules
+            ))
+            await bus.publish("scene")
+            return True
         # UI controls are not an authorization boundary. A forged or stale
         # client approval cannot permit a write whose preview was unavailable.
         if call.name == "python.install" and approved and preview_available:
@@ -660,6 +720,7 @@ async def run_harness(
             _session_grants_of(dispatcher, node.state.harness_workspace_id)
             if allow_session_grants else None
         ),
+        shell_allow_rules=node.state.harness_shell_allow_rules,
         set_plan=set_plan,
         ask_user=ask_user,
         cancel=CancelToken(cancel_event),
@@ -705,6 +766,12 @@ async def run_harness(
                 sessions.bind_root, node.state.harness_workspace_id, root,
                 ctx.harness_execution_profile,
             )
+        if ctx.harness_execution_profile == "isolated":
+            # A persistent Host REPL may survive an earlier Host task even
+            # when this task never calls python.exec. Stop it on transition.
+            await asyncio.to_thread(
+                _retire_host_repl_for_isolated, dispatcher, node.state.harness_workspace_id,
+            )
         # The root this run ACTUALLY bound, scratch included: a "" here
         # means "no run yet", which is what lets the card distinguish a
         # refused grant from a binding that has simply not run.
@@ -722,15 +789,7 @@ async def run_harness(
         # ADR-021 stage 21.1 posture: offer only tools this run could
         # actually pass the scope gate with - anything else spends context
         # per turn to buy a guaranteed denial.
-        specs = tuple(
-            spec for spec in registry.specs()
-            if (registry.scopes_for(spec.name) or frozenset()) <= HARNESS_GRANTED_SCOPES
-            and not spec.name.startswith(_HARNESS_TOOL_NAME_EXCLUSIONS)
-            and (
-                NET_FETCH not in (registry.scopes_for(spec.name) or frozenset())
-                or spec.name in _HARNESS_WEB_TOOLS
-            )
-        )
+        specs = _offered_harness_specs(registry, ctx.harness_execution_profile)
         # Enforce this same catalog on calls returned by the model, even when
         # a model fabricates a tool name that was never in its schemas.
         ctx.offered_tool_names = frozenset(spec.name for spec in specs)

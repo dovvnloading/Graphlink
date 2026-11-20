@@ -927,9 +927,9 @@ function makeHarnessFns(id: string, liveRef: { current: DispatcherLive }) {
       const { n, store } = liveRef.current;
       if (n.pendingRequestId) store.denyHarnessTool(n.pendingRequestId, approvalId);
     },
-    onApproveToolForSession: () => {
+    onApproveToolForSession: (approvalId?: string) => {
       const { n, store } = liveRef.current;
-      if (n.pendingRequestId) store.approveHarnessToolForSession(n.pendingRequestId);
+      if (n.pendingRequestId) store.approveHarnessToolForSession(n.pendingRequestId, approvalId);
     },
     // Same current-snapshot posture as approve/deny: the run being answered
     // is whichever one this node currently has parked, never an id the view
@@ -948,6 +948,7 @@ function makeHarnessFns(id: string, liveRef: { current: DispatcherLive }) {
     },
     onRevealWorkspace: () => liveRef.current.store.revealHarnessWorkspace(id),
     onSetShell: (shell: string) => liveRef.current.store.setHarnessShell(id, shell),
+    onRemoveShellAllowRule: (rule: string) => liveRef.current.store.removeHarnessShellAllowRule(id, rule),
     onSetExecutionProfile: (profile: string) => liveRef.current.store.setHarnessExecutionProfile(id, profile),
     onSetNetworkAlways: (enabled: boolean) => liveRef.current.store.setHarnessNetworkAlways(id, enabled),
     onGetIsolationEngine: () => liveRef.current.store.getHarnessIsolationEngine(),
@@ -1664,6 +1665,7 @@ export function toFlowNodes(
           harnessWorkspacePath: n.harnessWorkspacePath,
           harnessWorkspaceActive: n.harnessWorkspaceActive,
           harnessShell: n.harnessShell,
+          harnessShellAllowRules: n.harnessShellAllowRules,
           harnessExecutionProfile: n.harnessExecutionProfile,
           harnessNetworkAlways: n.harnessNetworkAlways,
           harnessAwaitingApproval: n.harnessAwaitingApproval,

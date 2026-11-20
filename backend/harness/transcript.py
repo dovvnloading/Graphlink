@@ -37,7 +37,8 @@ wrote Y" in that history would silently now refer to somewhere else.
 
 THE WRITER (§2.6's "background single-writer with flush barriers") is one
 daemon thread per workspace draining a queue, so the turn loop never
-blocks on disk. `flush()` is the barrier: it blocks until everything
+blocks on disk. Search indexing is batched at flush boundaries (and can
+backfill on the next search after a crash). `flush()` is the barrier: it blocks until everything
 queued so far is on disk, and the loop calls it before reading history
 back and at every terminal transition. If the writer thread ever dies the
 append path falls back to writing inline, so durability degrades to the
@@ -71,7 +72,7 @@ MAX_RELOADED_MESSAGES = 200
 # able to flood a fresh context through one giant line.
 _RELOAD_CONTENT_CAP = 20_000
 
-_FLUSH_TIMEOUT_SECONDS = 5.0
+_FLUSH_TIMEOUT_SECONDS = 20.0
 _GIT_TIMEOUT_SECONDS = 2.0
 
 
@@ -112,12 +113,15 @@ class _Writer:
                         # must not kill a live agent run. The search sidecar
                         # is derived data and can always catch up later.
                         pass
-                if needs_index and (done is not None or self._queue.empty()):
+                # Index only at a flush boundary. Indexing whenever the queue
+                # is briefly empty can block later tool results behind SQLite
+                # work, causing a flush to time out under loaded Windows CI.
+                if needs_index and done is not None:
                     try:
                         # Batch queued appends into one SQLite transaction
                         # instead of opening and syncing FTS for every line.
-                        # A flush marker still indexes all preceding writes
-                        # before releasing its barrier.
+                        # Flush indexes all preceding writes before releasing
+                        # its barrier; search can also backfill after a crash.
                         sync_index(self.path)
                     except (OSError, sqlite3.Error):
                         pass  # search backfills from JSONL on next read
@@ -413,7 +417,10 @@ def load_messages(workspace: Path) -> list[dict]:
     has been appended" can differ by milliseconds, and reading a history
     that is missing its own last turn would silently re-ask the model
     something it already answered."""
-    flush(workspace)
+    if not flush(workspace):
+        # A slow writer is not an interrupted tool. Reading an incomplete
+        # transcript would synthesize false failure results for queued calls.
+        raise OSError("Transcript writer did not finish flushing; retry the load.")
     path = transcript_path(workspace)
     if not path.exists():
         return []
