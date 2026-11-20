@@ -1169,15 +1169,11 @@ export class SceneStore {
       ).join("")}`,
     };
     this.uncertainHarnessSends.set(nodeId, send);
-    try {
-      const requestId = await this.transport.request("harness", "send", [nodeId, text, true, send.operationId]);
-      if (this.uncertainHarnessSends.get(nodeId) === send) this.uncertainHarnessSends.delete(nodeId);
-      return typeof requestId === "string" && requestId.length > 0;
-    } catch (error) {
-      // Timeout/disconnect is not a server refusal. Preserve the key so a
-      // subsequent Send is a deduplicated lookup, not a second execution.
-      throw error;
-    }
+    // Timeout/disconnect is not a server refusal. Leave the key cached so a
+    // subsequent Send is a deduplicated lookup, not a second execution.
+    const requestId = await this.transport.request("harness", "send", [nodeId, text, true, send.operationId]);
+    if (this.uncertainHarnessSends.get(nodeId) === send) this.uncertainHarnessSends.delete(nodeId);
+    return typeof requestId === "string" && requestId.length > 0;
   }
 
   /** One-shot composer dispatch: reuse the selected harness node, otherwise
