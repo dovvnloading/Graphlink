@@ -86,8 +86,11 @@ def _drain_bounded_output(stream, chunks: list[str], on_output=None) -> None:
             retained = fragment[:budget - buffered]
             chunks.append(retained)
             buffered += len(retained)
-            if retained and on_output is not None:
-                on_output(retained)
+        # The tool result keeps its first 20K characters, but the activity
+        # preview is a separate bounded rolling tail. Keep forwarding even
+        # after capture fills so long-running commands continue to update.
+        if on_output is not None:
+            on_output(fragment)
 
 
 SHELL_EXEC_SPEC = ToolSpec(
