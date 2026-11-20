@@ -28,6 +28,8 @@ class Case:
     inputs: dict[str, str]
     expected: dict[str, str | dict[str, int]]
     required_tools: tuple[tuple[str, int], ...]
+    required_paths: tuple[tuple[str, str], ...] = ()
+    forbidden_tools: tuple[str, ...] = ()
 
 
 # Pinned inputs, expected artifacts, and tool evidence. Never sample tasks or
@@ -42,6 +44,7 @@ CASES = (
         inputs={"data/shipments.csv": "region,packages\nnorth,13\nwest,27\neast,19\nsouth,8\n"},
         expected={"answer.txt": "west"},
         required_tools=(("fs.read", 1), ("fs.write", 1)),
+        required_paths=(("fs.read", "data/shipments.csv"), ("fs.write", "answer.txt")),
     ),
     Case(
         name="combine_two_files",
@@ -56,6 +59,11 @@ CASES = (
         },
         expected={"totals.json": {"lynx": 19, "orca": 13, "heron": 15}},
         required_tools=(("fs.read", 2), ("fs.write", 1)),
+        required_paths=(
+            ("fs.read", "reports/january.csv"),
+            ("fs.read", "reports/february.csv"),
+            ("fs.write", "totals.json"),
+        ),
     ),
     Case(
         name="precise_edit",
@@ -67,6 +75,8 @@ CASES = (
         inputs={"config/runtime.ini": "[service]\nenabled=true\nretry_limit=2\ntimeout_ms=500\n"},
         expected={"config/runtime.ini": "[service]\nenabled=true\nretry_limit=5\ntimeout_ms=500\n"},
         required_tools=(("fs.read", 1), ("fs.edit", 1)),
+        required_paths=(("fs.read", "config/runtime.ini"), ("fs.edit", "config/runtime.ini")),
+        forbidden_tools=("fs.write",),
     ),
     Case(
         name="search_and_deduplicate",
@@ -82,6 +92,7 @@ CASES = (
         },
         expected={"incident_ids.txt": "INC-204\nINC-317"},
         required_tools=(("fs.grep", 1), ("fs.write", 1)),
+        required_paths=(("fs.write", "incident_ids.txt"),),
     ),
 )
 
@@ -93,23 +104,47 @@ class Result:
     status: str
     detail: str
     seconds: float
-    turns: int
-    prompt_tokens: int
-    completion_tokens: int
-    provider_reported_turns: int
-    metered_turns: int
+    turns: int | None
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    provider_reported_turns: int | None
+    metered_turns: int | None
     cost_usd: float | None
     tools: tuple[str, ...]
+    usage_complete: bool = True
+
+
+def _matches_tool_path(path: object, workspace: Path, relpath: str) -> bool:
+    """Compare actual untruncated tool arguments, never display summaries."""
+    if not isinstance(path, str):
+        return False
+    try:
+        root = workspace.resolve()
+        target = (workspace / path).resolve()
+        return target.is_relative_to(root) and target == (root / relpath).resolve()
+    except (OSError, ValueError):
+        return False
 
 
 def grade(case: Case, workspace: Path, status: str, activity: list[dict]) -> tuple[bool, str]:
     """Score observed artifacts and successful real tools, never model claims."""
     if status != "done":
         return False, f"agent ended with status {status}"
+    for tool in case.forbidden_tools:
+        if any(row.get("tool") == tool and row.get("outcome") == "ok" for row in activity):
+            return False, f"forbidden successful {tool} call"
     for tool, minimum in case.required_tools:
         count = sum(row.get("tool") == tool and row.get("outcome") == "ok" for row in activity)
         if count < minimum:
             return False, f"required {minimum} successful {tool} call(s), observed {count}"
+    for tool, relpath in case.required_paths:
+        if not any(
+            row.get("tool") == tool
+            and row.get("outcome") == "ok"
+            and _matches_tool_path(row.get("path"), workspace, relpath)
+            for row in activity
+        ):
+            return False, f"required successful {tool} on {relpath} not observed"
     for relpath, expected in case.expected.items():
         path = (workspace / relpath).resolve()
         if not path.is_relative_to(workspace.resolve()) or not path.is_file():
@@ -231,6 +266,24 @@ async def _drive(case: Case, runtime, model_ref, timeout: float, max_turns: int)
     # Intentionally exclude shell, Python, graph, network, provider-spawn and
     # MCP tools. This is a filesystem capability benchmark, not arbitrary code.
     register_harness_fs_tools(registry)
+    # The UI activity list is capped at 100 entries and has truncated JSON
+    # summaries. Observe the registry directly for lossless per-run grading,
+    # retaining only tool names, outcomes and file paths (never file content).
+    tool_audit: list[dict] = []
+    invoke_tool = registry.invoke
+
+    async def audited_invoke(call, context):
+        row = {"tool": call.name, "outcome": "pending", "path": call.arguments.get("path")}
+        tool_audit.append(row)
+        try:
+            result = await invoke_tool(call, context)
+        except BaseException:
+            row["outcome"] = "error"
+            raise
+        row["outcome"] = "error" if result.is_error else "ok"
+        return result
+
+    registry.invoke = audited_invoke
     dispatcher = SimpleNamespace(_runs=RunRegistry())
 
     async def publish(_topic: str) -> None:
@@ -243,6 +296,7 @@ async def _drive(case: Case, runtime, model_ref, timeout: float, max_turns: int)
     provider_call = api_provider.chat_turn_with_tools
     started = time.monotonic()
     timeout_hit = False
+    failure: Exception | None = None
 
     async def run() -> None:
         await run_harness(
@@ -286,27 +340,47 @@ async def _drive(case: Case, runtime, model_ref, timeout: float, max_turns: int)
                     cancel_event.set()
                     pending.cancel()
                     await asyncio.gather(pending, return_exceptions=True)
+    except Exception as exc:
+        failure = exc
     finally:
         dispatcher._runs.release(handle.request_id)
     elapsed = time.monotonic() - started
-    status = "timeout" if timeout_hit else state.harness_status
-    passed, detail = grade(case, workspace, status, state.harness_activity)
-    if not passed and state.harness_status_detail:
-        detail += f" ({state.harness_status_detail})"
+    status = "error" if failure is not None else "timeout" if timeout_hit else state.harness_status
+    if failure is not None:
+        passed, detail = False, f"benchmark error: {failure}"
+    else:
+        passed, detail = grade(case, workspace, status, tool_audit)
+        if not passed and state.harness_status_detail:
+            detail += f" ({state.harness_status_detail})"
+    # A failed/aborted provider request may have been billed without
+    # returning usage. Keep observed completed turns, but do not invent
+    # zero tokens when no provider turn could be metered.
+    usage_complete = failure is None and status == "done"
+    usage_unknown = not usage_complete and meter.metered_turns == 0
     return Result(
         name=case.name, passed=passed, status=status, detail=detail,
         seconds=round(elapsed, 3), turns=state.harness_spent_turns,
-        prompt_tokens=meter.prompt_tokens, completion_tokens=meter.completion_tokens,
-        provider_reported_turns=meter.provider_reported_turns,
-        metered_turns=meter.metered_turns, cost_usd=None,
-        tools=tuple(row.get("tool", "") for row in state.harness_activity),
+        prompt_tokens=None if usage_unknown else meter.prompt_tokens,
+        completion_tokens=None if usage_unknown else meter.completion_tokens,
+        provider_reported_turns=None if usage_unknown else meter.provider_reported_turns,
+        metered_turns=None if usage_unknown else meter.metered_turns,
+        cost_usd=None, tools=tuple(row["tool"] for row in tool_audit),
+        usage_complete=usage_complete,
     )
 
 
 def _price(result: Result, rates: tuple[float, float] | None) -> float | None:
-    if rates is None:
+    if (rates is None or not result.usage_complete
+            or result.prompt_tokens is None or result.completion_tokens is None):
         return None
     return round((result.prompt_tokens * rates[0] + result.completion_tokens * rates[1]) / 1_000_000, 6)
+
+
+def _known_total(values: list[int | None]) -> int | None:
+    """Do not turn unavailable case metrics into fabricated zero totals."""
+    if any(value is None for value in values):
+        return None
+    return sum(value for value in values if value is not None)
 
 
 async def run_suite(provider: str, model: str, *, base_url: str | None = None,
@@ -325,11 +399,20 @@ async def run_suite(provider: str, model: str, *, base_url: str | None = None,
         # still resolves, grants and confines paths through its usual code.
         with mock.patch.object(workspace_module, "HARNESS_WORKSPACE_ROOT", Path(temporary) / "workspaces"):
             for case in CASES:
+                started = time.monotonic()
                 try:
                     result = await _drive(case, runtime, model_ref, timeout, max_turns)
                 except Exception as exc:
-                    result = Result(case.name, False, "error", f"benchmark error: {exc}",
-                                    0.0, 0, 0, 0, 0, 0, None, ())
+                    # Even errors before _drive can create a meter consume wall time.
+                    # Usage is unknown unless the drive returned observed counts.
+                    result = Result(
+                        name=case.name, passed=False, status="error",
+                        detail=f"benchmark error: {exc}",
+                        seconds=round(time.monotonic() - started, 3),
+                        turns=None, prompt_tokens=None, completion_tokens=None,
+                        provider_reported_turns=None, metered_turns=None,
+                        cost_usd=None, tools=(), usage_complete=False,
+                    )
                 results.append(Result(**{**asdict(result), "cost_usd": _price(result, rates)}))
     passed = sum(r.passed for r in results)
     costs = [r.cost_usd for r in results]
@@ -340,10 +423,11 @@ async def run_suite(provider: str, model: str, *, base_url: str | None = None,
             "passed": passed, "total": len(results),
             "pass_rate": round(passed / len(results), 4),
             "seconds": round(sum(r.seconds for r in results), 3),
-            "prompt_tokens": sum(r.prompt_tokens for r in results),
-            "completion_tokens": sum(r.completion_tokens for r in results),
-            "provider_reported_turns": sum(r.provider_reported_turns for r in results),
-            "metered_turns": sum(r.metered_turns for r in results),
+            "usage_complete": all(r.usage_complete for r in results),
+            "prompt_tokens": _known_total([r.prompt_tokens for r in results]),
+            "completion_tokens": _known_total([r.completion_tokens for r in results]),
+            "provider_reported_turns": _known_total([r.provider_reported_turns for r in results]),
+            "metered_turns": _known_total([r.metered_turns for r in results]),
             "cost_usd": round(sum(c for c in costs if c is not None), 6) if all(c is not None for c in costs) else None,
             "pricing_usd_per_million_tokens": (
                 {"input": rates[0], "output": rates[1]} if rates is not None else None
@@ -362,18 +446,29 @@ def _print_report(report: dict) -> None:
     _write_line("Case                         Pass  Seconds  Input tok  Output tok  Cost USD")
     for row in report["cases"]:
         cost = "n/a" if row["cost_usd"] is None else f"USD {row['cost_usd']:.6f}"
+        prompt = "n/a" if row["prompt_tokens"] is None else str(row["prompt_tokens"])
+        completion = "n/a" if row["completion_tokens"] is None else str(row["completion_tokens"])
         _write_line(f"{row['name']:<28} {'yes' if row['passed'] else 'no':<5} "
-              f"{row['seconds']:>7.2f} {row['prompt_tokens']:>10} "
-              f"{row['completion_tokens']:>11} {cost:>9}")
+              f"{row['seconds']:>7.2f} {prompt:>10} "
+              f"{completion:>11} {cost:>9}")
         if not row["passed"]:
             _write_line(f"  FAIL: {row['detail']}")
+        if not row["usage_complete"]:
+            _write_line("  Usage incomplete; token counts, if present, are only observed values.")
     total = report["summary"]
-    cost = "n/a (unknown price)" if total["cost_usd"] is None else f"USD {total['cost_usd']:.6f}"
+    if total["cost_usd"] is not None:
+        cost = f"USD {total['cost_usd']:.6f}"
+    else:
+        cost = "n/a (incomplete usage)" if not total["usage_complete"] else "n/a (unknown price)"
+    prompt = "unknown" if total["prompt_tokens"] is None else str(total["prompt_tokens"])
+    completion = "unknown" if total["completion_tokens"] is None else str(total["completion_tokens"])
     _write_line(f"Pass rate: {total['passed']}/{total['total']} ({total['pass_rate']:.1%})")
-    _write_line(f"Elapsed: {total['seconds']:.2f}s; tokens: {total['prompt_tokens']} input + "
-          f"{total['completion_tokens']} output; estimated cost: {cost}")
+    _write_line(f"Elapsed: {total['seconds']:.2f}s; observed tokens: {prompt} input + "
+          f"{completion} output; estimated cost: {cost}")
     _write_line(f"Provider-reported usage: {total['provider_reported_turns']}/{total['metered_turns']} "
           "turns (remaining token counts are estimates)")
+    if not total["usage_complete"]:
+        _write_line("Usage is incomplete for at least one task; totals can omit unreturned provider calls.")
 
 
 def main(argv: list[str] | None = None) -> int:
