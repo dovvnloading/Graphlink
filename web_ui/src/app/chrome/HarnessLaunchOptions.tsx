@@ -16,20 +16,26 @@ export function HarnessExecutionProfileSelect({
   disabled?: boolean;
 }) {
   // undefined: checking; null: no CLI found or the probe failed.
-  const [engine, setEngine] = useState<string | null | undefined>(undefined);
-  const [probeFailed, setProbeFailed] = useState(false);
   const [probeAttempt, setProbeAttempt] = useState(0);
+  // Only the result for the current store and attempt can leave "checking".
+  // A retry or store change resets the displayed status without effect-time setState.
+  const [probe, setProbe] = useState<{
+    store: SceneStore;
+    attempt: number;
+    engine: string | null;
+    failed: boolean;
+  } | null>(null);
+  const currentProbe = probe?.store === store && probe.attempt === probeAttempt ? probe : null;
+  const engine = currentProbe?.engine;
+  const probeFailed = currentProbe?.failed ?? false;
   useEffect(() => {
     let active = true;
-    setEngine(undefined);
-    setProbeFailed(false);
     void store.getHarnessIsolationEngine()
-      .then((found) => { if (active) setEngine(found); })
+      .then((found) => {
+        if (active) setProbe({ store, attempt: probeAttempt, engine: found, failed: false });
+      })
       .catch(() => {
-        if (active) {
-          setEngine(null);
-          setProbeFailed(true);
-        }
+        if (active) setProbe({ store, attempt: probeAttempt, engine: null, failed: true });
       });
     return () => { active = false; };
   }, [store, probeAttempt]);
