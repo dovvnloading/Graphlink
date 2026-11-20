@@ -8,8 +8,7 @@ from unittest.mock import Mock
 
 from backend.harness import python_env, python_install, python_isolation, tools_python
 from backend.harness.python_isolation import (
-    CONTAINER_PYTHON, IsolatedPythonPlan,
-    isolated_repl_command, planned_isolated_python_environment,
+    CONTAINER_PYTHON, isolated_repl_command, planned_isolated_python_environment,
 )
 from backend.harness.shell_isolation import CONTAINER_IMAGE, container_invocation
 from backend.harness.tools_python import PythonReplRegistry, register_harness_python_tool
