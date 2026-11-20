@@ -400,15 +400,11 @@ _SHELL_RULE_SEPARATOR = "\t"
 # These forms have no caller-selected file operands, redirects, shell scripts,
 # working-directory changes or interpreter flags. Shell commands outside this
 # small set can still run after fresh approval; they just cannot be remembered.
-_REMEMBERABLE_COMMANDS = frozenset({
-    "pwd", "ls", "ls .", "ls -l", "ls -a", "ls -la", "ls -al",
-    "dir", "dir .",
-    "git status", "git status --short", "git status -s",
-    "git status --porcelain", "git status --porcelain=v1",
-    "git diff", "git log", "git show",
-    "git branch --show-current", "git rev-parse --show-toplevel",
+# External binaries may be replaced via PATH, the workspace, or repo hooks.
+# Only established shell builtins/cmdlets qualify for unattended reuse.
+_POWERSHELL_READ_ONLY = frozenset({
     "get-location", "get-childitem", "get-childitem .",
-    "get-item .", "get-process",
+    "get-item .", "get-process", "pwd", "ls", "ls .",
 })
 _PLAIN_SEGMENT_RE = re.compile(r"[A-Za-z0-9_./:@=+,-]+(?: [A-Za-z0-9_./:@=+,-]+)*")
 _PLAIN_CHAIN_RE = re.compile(r"[A-Za-z0-9_./:@=+,\-;|& \n]+")
@@ -444,20 +440,23 @@ def _rule_scope(shell: str, profile: str, workspace_root: Path | None) -> str | 
     return f"v2:{profile}:{selected}:{digest}"
 
 
-def _rememberable(segment: str) -> bool:
+def _rememberable(segment: str, selected: str) -> bool:
     if len(segment) > 256 or not _PLAIN_SEGMENT_RE.fullmatch(segment):
         return False
     normalized = segment.lower()
-    # echo/Write-Output print only literal, expansion-free operands under
-    # the plain-token grammar. Do not authorize arbitrary external commands
-    # (including test scripts, environment wrappers, interpreters or cd).
-    return (
-        normalized in _REMEMBERABLE_COMMANDS
-        or normalized == "echo"
-        or normalized.startswith("echo ")
-        or normalized == "write-output"
-        or normalized.startswith("write-output ")
-    )
+    # External commands may invoke changed binaries, git hooks or configured
+    # helpers. Exact text alone is not proof that the program is read-only.
+    if selected in {"bash", "git-bash", "sh"}:
+        return normalized == "pwd" or normalized == "echo" or normalized.startswith("echo ")
+    if selected == "cmd":
+        return normalized in {"dir", "dir .", "echo"} or normalized.startswith("echo ")
+    if selected == "powershell":
+        return (
+            normalized in _POWERSHELL_READ_ONLY
+            or normalized in {"echo", "write-output"}
+            or normalized.startswith(("echo ", "write-output "))
+        )
+    return False
 
 
 def shell_allow_rule_candidates(
@@ -479,7 +478,7 @@ def shell_allow_rule_candidates(
     plan = analyze(command, shell="bash" if selected == "git-bash" else selected)
     if plan.is_dangerous or not plan.segments:
         return []
-    if not all(_rememberable(segment) for segment in plan.segments):
+    if not all(_rememberable(segment, selected) for segment in plan.segments):
         return []
     return list(dict.fromkeys(
         f"{scope}{_SHELL_RULE_SEPARATOR}{segment}" for segment in plan.segments

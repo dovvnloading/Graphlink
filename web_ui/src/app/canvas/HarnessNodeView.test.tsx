@@ -140,6 +140,21 @@ describe("HarnessNodeView", () => {
     expect(agent.onRemoveShellAllowRule).toHaveBeenCalledExactlyOnceWith("bash\tgit status");
   });
 
+  it("shows live grant scope without exposing the workspace hash", async () => {
+    const user = userEvent.setup();
+    const rule = "v2:host:bash:0123456789abcdef0123456789abcdef\tpwd";
+    const agent = makeData({ harnessShellAllowRules: [rule] });
+    renderHarness(agent);
+    await user.click(screen.getByRole("button", { name: "Agent settings" }));
+    expect(screen.getByText("bash · host · workspace-bound")).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Agent settings" }))
+      .not.toHaveTextContent("0123456789abcdef");
+    await user.click(screen.getByRole("button", {
+      name: "Remove rule: pwd (bash · host · workspace-bound)",
+    }));
+    expect(agent.onRemoveShellAllowRule).toHaveBeenCalledWith(rule);
+  });
+
   it("offers PowerShell, cmd, and Git Bash on Windows even while an agent runs", async () => {
     const user = userEvent.setup();
     const agent = makeData();

@@ -173,17 +173,17 @@ class TestShellAllowRules:
         root.mkdir()
         other = tmp_path / "other"
         other.mkdir()
-        command = "git status && echo ready"
+        command = "pwd && echo ready"
         shell = effective_shell_for_rules("auto")
         rules = shell_allow_rule_candidates(command, shell="auto", workspace_root=root)
         assert len(rules) == 2
         assert all(rule.startswith(f"v2:host:{shell}:") for rule in rules)
         assert shell_command_allowed(command, rules, workspace_root=root)
         for changed in (
-            "git status --short && echo ready",
-            "git statuses && echo ready",
-            "git status && echo changed",
-            "git status && echo ready && pwd",
+            "pwd -P && echo ready",
+            "pwdx && echo ready",
+            "pwd && echo changed",
+            "pwd && echo ready && echo bonus",
         ):
             assert not shell_command_allowed(changed, rules, workspace_root=root)
         assert not shell_command_allowed(command, rules, workspace_root=other)
@@ -198,6 +198,9 @@ class TestShellAllowRules:
 
     @pytest.mark.parametrize("command", [
         "git status && rm -rf out",
+        "git status",
+        "git log",
+        "ls",
         "echo $(rm -rf out)",
         "python -c print",
         "python -m pip",
@@ -256,7 +259,7 @@ class TestShellAllowRules:
             return False
 
         rules = shell_allow_rule_candidates(
-            "git status && echo ready", workspace_root=tmp_path,
+            "pwd && echo ready", workspace_root=tmp_path,
         )
         assert len(rules) == 2
         ctx = RunContext(
@@ -272,22 +275,22 @@ class TestShellAllowRules:
                 ToolCall(id=command, name="shell.exec", arguments={"command": command}), ctx,
             ))
 
-        assert not invoke("git status && echo ready").is_error
-        assert invoke("git status && echo changed").is_error
-        assert invoke("git status --short && echo ready").is_error
-        assert invoke("git status && rm -rf out").is_error
+        assert not invoke("pwd && echo ready").is_error
+        assert invoke("pwd && echo changed").is_error
+        assert invoke("pwd -P && echo ready").is_error
+        assert invoke("pwd && rm -rf out").is_error
         assert requested == [
-            "git status && echo changed", "git status --short && echo ready",
+            "pwd && echo changed", "pwd -P && echo ready",
             "git status && rm -rf out",
         ]
         ctx.shell_allow_rules.remove(rules[1])
-        assert invoke("git status && echo ready").is_error
+        assert invoke("pwd && echo ready").is_error
         ctx.shell_allow_rules[:] = rules
         ctx.harness_execution_profile = "isolated"
-        assert invoke("git status && echo ready").is_error
+        assert invoke("pwd && echo ready").is_error
         ctx.harness_execution_profile = "host"
         ctx.harness_workspace_dir = tmp_path / "different"
-        assert invoke("git status && echo ready").is_error
+        assert invoke("pwd && echo ready").is_error
 
 
 

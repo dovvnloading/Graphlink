@@ -51,7 +51,7 @@ This is a **workspace execution isolation profile**, not whole-application confi
 ## Remembered shell commands: exact, context-bound, session-only
 
 "Always allow" is deliberately narrower than approving a one-off command.
-Only a small set of plainly read-only, fixed-shape commands can be remembered.
+Only fixed-shape shell builtins and built-in PowerShell cmdlets can be remembered. External programs (including Git) cannot be remembered because workspace contents or configuration can change what they execute.
 Every chained segment must match its exact previously reviewed text. Adding
 arguments, changing a segment, or introducing another command needs fresh
 approval. Arbitrary file operands, paths outside the root, interpreter
@@ -61,7 +61,7 @@ Those calls remain available with ordinary one-time approval.
 
 Each remembered command is scoped to the **resolved workspace root**, the
 **Host/Isolated execution profile**, and the **actual shell**. In the Isolated
-profile, the effective shell is always the container's \`/bin/sh\`, not the
+profile, the effective shell is always the container's `/bin/sh`, not the
 node's Host preference. Rebinding the node to another directory or changing
 profile/shell cannot reuse previous command consent.
 
@@ -76,6 +76,6 @@ settings.
 working directory of Host shell commands, not a process-wide path boundary.
 An explicitly approved once-only Host command can change directories,
 follow symlinks, invoke other programs or access files outside the workspace.
-Dedicated \`fs.*\` tools use path confinement, while arbitrary shell code does
+Dedicated `fs.*` tools use path confinement, while arbitrary shell code does
 not. Use Isolated execution for a container-mounted workspace boundary;
 inspect the command and any executables or repository hooks it may invoke.
