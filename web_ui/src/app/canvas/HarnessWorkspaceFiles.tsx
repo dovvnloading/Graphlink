@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { HarnessWorkspaceListing } from "./harnessWorkspaceFiles";
 
 /** On-demand folder browser. Only relative paths are sent; the backend
@@ -14,30 +14,47 @@ export function HarnessWorkspaceFiles({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [path, setPath] = useState("");
-  const [refresh, setRefresh] = useState(0);
+  const requestRef = useRef(0);
   const [listing, setListing] = useState<HarnessWorkspaceListing | null>(null);
   const [loading, setLoading] = useState(false);
   const [opening, setOpening] = useState<string | null>(null);
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    if (!expanded) return;
-    let cancelled = false;
+  // Fetch on user actions, not in an effect: this avoids an extra mount
+  // request and keeps one pending directory navigation from replacing a
+  // newer result if its response happens to arrive last.
+  function loadFolder(nextPath: string) {
+    const request = ++requestRef.current;
+    setPath(nextPath);
     setLoading(true);
     setError("");
     setListing(null);
-    void onList(path)
+    void onList(nextPath)
       .then((result) => {
-        if (!cancelled) setListing(result);
+        if (request === requestRef.current) setListing(result);
       })
       .catch((reason: unknown) => {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : "Could not list workspace files.");
+        if (request === requestRef.current) {
+          setError(reason instanceof Error ? reason.message : "Could not list workspace files.");
+        }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (request === requestRef.current) setLoading(false);
       });
-    return () => { cancelled = true; };
-  }, [expanded, path, refresh, onList]);
+  }
+
+  function toggle() {
+    if (expanded) {
+      requestRef.current++;
+      setExpanded(false);
+      return;
+    }
+    setExpanded(true);
+    loadFolder(path);
+  }
+
+  // Prevent a pending read from updating an unmounted (or rebound) agent.
+  useEffect(() => () => { requestRef.current++; }, []);
 
   async function openFile(filePath: string) {
     setError("");
@@ -59,7 +76,7 @@ export function HarnessWorkspaceFiles({
           type="button"
           className="plan-node-button nodrag"
           aria-expanded={expanded}
-          onClick={() => setExpanded((value) => !value)}
+          onClick={toggle}
         >
           {expanded ? "Hide files" : "Browse files"}
         </button>
@@ -71,12 +88,12 @@ export function HarnessWorkspaceFiles({
         <section className="harness-files-browser nodrag nowheel" aria-label="Workspace files" aria-busy={loading}>
           <div className="harness-files-toolbar">
             <button type="button" className="plan-node-button nodrag" disabled={!path || loading}
-              onClick={() => setPath(parent)} aria-label="Up one folder">
+              onClick={() => loadFolder(parent)} aria-label="Up one folder">
               Up
             </button>
             <span className="harness-files-current" title={path || "/"}>{path || "/"}</span>
             <button type="button" className="plan-node-button nodrag"
-              onClick={() => setRefresh((value) => value + 1)} aria-label="Refresh workspace files">
+              onClick={() => loadFolder(path)} aria-label="Refresh workspace files">
               Refresh
             </button>
           </div>
@@ -100,7 +117,7 @@ export function HarnessWorkspaceFiles({
                     aria-label={entry.isDir ? `Open folder ${entry.name}` : `Open ${entry.name} in Document View`}
                     disabled={opening !== null}
                     onClick={() => {
-                      if (entry.isDir) setPath(entry.path);
+                      if (entry.isDir) loadFolder(entry.path);
                       else void openFile(entry.path);
                     }}
                     title={entry.path}
