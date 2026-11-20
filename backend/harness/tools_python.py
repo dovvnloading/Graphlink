@@ -245,6 +245,9 @@ def register_harness_python_tool(
         cancel_event = ctx.cancel.event if ctx.cancel is not None else None
         if cancel_event is not None and cancel_event.is_set():
             raise RequestCancelledError("stopped")
+        on_output = getattr(ctx, "on_tool_output", None)
+        if on_output is not None:
+            on_output("")  # after approval, including first-use venv setup
         profile = normalize_execution_profile(getattr(ctx, "harness_execution_profile", "host"))
         try:
             interpreter: Path | PurePosixPath
@@ -276,9 +279,6 @@ def register_harness_python_tool(
         except (PythonEnvironmentError, OSError) as exc:
             return ToolResult(content=f"Could not prepare Python environment: {exc}", is_error=True)
 
-        on_output = getattr(ctx, "on_tool_output", None)
-        if on_output is not None:
-            on_output("")  # execution has passed its approval gate
         # asyncio.wait_for(to_thread(...)) only stops waiting: it does NOT
         # terminate user code in the child. Poll the same Stop event as the
         # shell tool and kill/retire this exact interpreter on cancellation
