@@ -232,9 +232,11 @@ def register_workspace_tools(registry: ToolRegistry, dispatcher, document) -> No
         if (_agent(document, ctx) is not agent or _identity(document) != identity
                 or not _enabled(ctx, pack_id) or not _ready(document, pack_id)):
             return _error("The agent, workspace or pack grant changed during calculation; result discarded.")
-        if (not isinstance(result, dict) or result.get("operationId") != op.id
+        receipt = result.get("provenance") if isinstance(result, dict) else None
+        if (not isinstance(receipt, dict)
+                or result.get("operationId") != op.id
                 or result.get("inputs") != inputs
-                or result.get("provenance", {}).get("sources") != {}
+                or receipt.get("sources") != {}
                 or not readable_result({"version": 1, "latest": result}, pack_id)):
             return _error("The scientific worker returned an invalid or unverified receipt.")
 
@@ -253,7 +255,7 @@ def register_workspace_tools(registry: ToolRegistry, dispatcher, document) -> No
         try:
             node, _ = document.record_command(
                 "harnessScientificRun", "agent", create,
-                node_ids=[agent.id], run_id=ctx.run_id,
+                node_ids=[agent.id], run_id=getattr(ctx, "run_id", None),
             )
         except (SceneError, ValueError) as exc:
             return _error(f"Could not create the scientific Workbench node: {exc}")
