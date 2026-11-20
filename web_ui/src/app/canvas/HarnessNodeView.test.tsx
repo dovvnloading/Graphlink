@@ -89,6 +89,21 @@ function renderHarness(data: HarnessNodeData) {
 }
 
 describe("HarnessNodeView", () => {
+  it("preserves oversized follow-up drafts rather than sending partial tasks", async () => {
+    const user = userEvent.setup();
+    const data = makeData({ harnessStatus: "done", pendingRequestId: null });
+    renderHarness(data);
+    const draft = screen.getByRole("textbox", { name: "Follow-up message" });
+    const tooLong = "x".repeat(20_000) + "FINAL_INSTRUCTION_MUST_APPEAR";
+    fireEvent.change(draft, { target: { value: tooLong } });
+
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("20,000 characters");
+    expect(draft).toHaveValue(tooLong);
+    expect(data.onSend).not.toHaveBeenCalled();
+  });
+
   it("offers Undo run only for a completed run", async () => {
     const user = userEvent.setup();
     const data = makeData({ harnessStatus: "done", pendingRequestId: null });

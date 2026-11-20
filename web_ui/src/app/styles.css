@@ -2962,6 +2962,43 @@ body {
   font-style: italic;
 }
 
+/* Shared first-task Host/Isolated choice in the launch dialog and composer. */
+.harness-launch-profile {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.harness-launch-profile label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--gl-surface-text-secondary);
+  font-size: 11px;
+}
+
+.harness-launch-profile select {
+  max-width: 100%;
+  padding: 5px 7px;
+  font: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-field, var(--gl-surface-inset));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+.harness-launch-profile select:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 1px;
+}
+
+.harness-launch-profile-status {
+  color: var(--gl-surface-text-muted);
+  font-size: 11px;
+}
+
 .composer-agent-error {
   margin: 4px 0;
   color: var(--gl-surface-text-primary);

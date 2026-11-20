@@ -9,6 +9,7 @@ import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 import { HarnessWorkspaceFiles } from "./AgentWorkspaceBrowser";
 import type { HarnessWorkspaceListing } from "./harnessWorkspaceFiles";
+import { MAX_HARNESS_TASK_LENGTH } from "../../lib/harnessTaskLimit";
 
 /**
  * PLAN-2026-08-24 H1: the workspace agent node. Everything rendered here
@@ -418,6 +419,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   const collapsed = useLodVisibility() || data.isCollapsed;
   const running = data.harnessStatus === "running";
   const [draft, setDraft] = useState("");
+  const [draftError, setDraftError] = useState("");
   const [answerDraft, setAnswerDraft] = useState("");
   const [submittedApprovalId, setSubmittedApprovalId] = useState("");
   const submittedApprovalRef = useRef("");
@@ -498,6 +500,11 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   function sendDraft(): void {
     const text = draft.trim();
     if (!text || !acceptsInput(data.harnessStatus)) return;
+    if (text.length > MAX_HARNESS_TASK_LENGTH) {
+      setDraftError(`Agent tasks cannot exceed ${MAX_HARNESS_TASK_LENGTH.toLocaleString()} characters. Shorten the task; your draft is preserved.`);
+      return;
+    }
+    setDraftError("");
     data.onSend(text);
     setDraft("");
   }
@@ -847,7 +854,10 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
             value={draft}
             rows={2}
             aria-label="Follow-up message"
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              setDraftError("");
+            }}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
@@ -863,6 +873,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
           >
             Send
           </button>
+          {draftError && <p className="composer-agent-error" role="alert">{draftError}</p>}
         </div>
       )}
 

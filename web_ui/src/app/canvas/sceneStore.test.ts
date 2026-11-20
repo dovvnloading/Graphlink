@@ -46,16 +46,16 @@ describe("Composer workspace-agent dispatch", () => {
     store.setSelectedNodeId("n0"); // existing but not a harness node
     requestResults.push("new-agent");
 
-    await expect(store.sendComposerAgentMessage("Work on this")).resolves.toBe(true);
+    await expect(store.sendComposerAgentMessage("Work on this", "isolated")).resolves.toBe(true);
     expect(requests[0]).toEqual({
-      topic: "harness", intent: "composerSend", args: ["Work on this", null],
+      topic: "harness", intent: "composerSend", args: ["Work on this", null, "isolated"],
     });
 
     store.setSelectedNodeId("deleted");
     requestResults.push(null);
     await expect(store.sendComposerAgentMessage("Try again")).resolves.toBe(false);
     expect(requests[1]).toEqual({
-      topic: "harness", intent: "composerSend", args: ["Try again", null],
+      topic: "harness", intent: "composerSend", args: ["Try again", null, "host"],
     });
   });
 });
