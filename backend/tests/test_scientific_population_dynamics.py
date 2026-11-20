@@ -201,6 +201,74 @@ def test_semelparous_leslie_matrix_reports_perron_root():
     assert primitive["values"]["stage_structure_behaviour"].startswith("converges")
 
 
+def test_high_fecundity_period_two_leslie_has_verified_perron_pair():
+    # Adding a fixed I makes this matrix converge too slowly in 4,000 steps.
+    result = run("matrix_population_projection",
+                 projection_matrix=[[0, 1_000_000], [1, 0]],
+                 initial_population=[1, 1], steps=1, time_step_unit="years")
+    values = result["values"]
+    assert values["asymptotic_growth_factor_per_step"] == pytest.approx(1000, rel=1e-10)
+    assert values["stable_stage_1_fraction"] == pytest.approx(1000 / 1001, rel=1e-10)
+    assert values["stable_stage_2_fraction"] == pytest.approx(1 / 1001, rel=1e-10)
+    assert values["stage_structure_behaviour"] == "periodic: stage proportions cycle"
+    assert "is periodic" in result["summary"]
+
+
+def test_perron_balancing_handles_extreme_fecundity_to_survival_ratio():
+    # The tiny survival edge must not disappear when scaling by the fecundity.
+    result = run("matrix_population_projection",
+                 projection_matrix=[[0, 1e300], [1e-300, 0]],
+                 initial_population=[1, 1], steps=1, time_step_unit="years")
+    values = result["values"]
+    assert values["asymptotic_growth_factor_per_step"] == pytest.approx(1, rel=1e-10)
+    assert values["stable_stage_2_fraction"] == pytest.approx(1e-300, rel=1e-9, abs=0)
+    assert values["stage_structure_behaviour"].startswith("periodic")
+
+
+def test_nearly_periodic_but_primitive_matrix_converges():
+    # The small positive diagonal makes this graph aperiodic, despite the
+    # unshifted second eigenvalue being nearly as large in magnitude.
+    result = run("matrix_population_projection",
+                 projection_matrix=[[.001, 4], [1, .001]],
+                 initial_population=[1, 1], steps=1, time_step_unit="years")
+    values = result["values"]
+    assert values["asymptotic_growth_factor_per_step"] == pytest.approx(2.001, rel=1e-10)
+    assert values["stable_stage_1_fraction"] == pytest.approx(2 / 3, rel=1e-9)
+    assert values["stable_stage_2_fraction"] == pytest.approx(1 / 3, rel=1e-9)
+    assert values["stage_structure_behaviour"] == "converges to the stable stage structure"
+    assert "is periodic" not in result["summary"]
+
+
+def test_tiny_positive_diagonal_perron_root_survives_many_stage_probe():
+    matrix = [[1e-100 if i == j else 0 for j in range(4)] for i in range(4)]
+    result = run("matrix_population_projection", projection_matrix=matrix,
+                 initial_population=[1, 1, 1, 1], steps=1, time_step_unit="years")
+    values = result["values"]
+    assert values["final_total"] == pytest.approx(4e-100, rel=1e-12, abs=0)
+    # Explicit abs=0: pytest's default absolute tolerance would accept zero.
+    assert values["asymptotic_growth_factor_per_step"] == pytest.approx(1e-100, rel=1e-12, abs=0)
+    assert values["asymptotic_log_growth_rate"] == pytest.approx(math.log(1e-100))
+    for i in range(1, 5):
+        assert values[f"stable_stage_{i}_fraction"] == pytest.approx(.25)
+    assert values["stage_structure_behaviour"].startswith("converges")
+
+
+def test_tiny_positive_triangular_root_and_genuinely_nilpotent_matrix():
+    # A^4 underflows even though the spectral radius is positive.
+    triangular = [[1e-100, 1e80, 0, 0], [0, 1e-100, 1e80, 0],
+                  [0, 0, 1e-100, 1e80], [0, 0, 0, 1e-100]]
+    result = run("matrix_population_projection", projection_matrix=triangular,
+                 initial_population=[1, 1, 1, 1], steps=1, time_step_unit="years")
+    assert result["values"]["asymptotic_growth_factor_per_step"] == pytest.approx(
+        1e-100, rel=1e-12, abs=0)
+
+    nilpotent = run("matrix_population_projection",
+                    projection_matrix=[[0, 2], [0, 0]],
+                    initial_population=[1, 1], steps=2, time_step_unit="years")
+    assert nilpotent["values"]["asymptotic_growth_factor_per_step"] == 0
+    assert "stable_stage_1_fraction" not in nilpotent["values"]
+
+
 @pytest.mark.parametrize("override", [
     {"projection_matrix": [[1, 2, 3], [4, 5, 6]]},
     {"projection_matrix": [[1, 1], [-1, 0]]},
