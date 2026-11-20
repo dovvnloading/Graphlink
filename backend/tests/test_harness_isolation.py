@@ -20,6 +20,38 @@ def test_profile_validation_defaults_old_or_tampered_graphs_to_host():
     assert normalize_execution_profile("isolated") == "isolated"
 
 
+def test_network_grant_intent_requires_live_matching_disclosure():
+    import asyncio
+
+    from backend.agent_dispatch.harness import HarnessDispatchOps
+    from backend.run_lifecycle import RunRegistry
+
+    class Dispatcher(HarnessDispatchOps):
+        def __init__(self):
+            self._runs = RunRegistry()
+
+    async def verify():
+        dispatcher = Dispatcher()
+        handle = dispatcher._runs.claim("harness")
+        handle.approval_future = asyncio.get_running_loop().create_future()
+        handle.approval_network_requested = True
+        handle.approval_token = "current-disclosure"
+
+        assert not dispatcher.approve_harness_network_for_task(handle.request_id, "stale-disclosure")
+        assert not handle.approval_future.done()
+
+        handle.approval_network_requested = False
+        assert not dispatcher.approve_harness_network_for_task(handle.request_id, "current-disclosure")
+        assert not handle.approval_future.done()
+
+        handle.approval_network_requested = True
+        assert dispatcher.approve_harness_network_for_task(handle.request_id, "current-disclosure")
+        assert handle.approval_future.result() == "network_task"
+        assert not dispatcher.approve_harness_network_for_task(handle.request_id, "current-disclosure")
+
+    asyncio.run(verify())
+
+
 def test_engine_detection_uses_sanitized_path_and_falls_back_to_podman():
     with patch("backend.harness.shell_isolation.shutil.which",
                side_effect=lambda name, *, path: "/trusted/podman" if name == "podman" and path == "/trusted" else None):
@@ -67,6 +99,37 @@ def test_networked_isolated_invocation_retains_limits_and_no_host_network(tmp_pa
     for flag in ("--pull=never", "--cpus=1", "--memory=512m", "--read-only",
                  "--cap-drop=ALL", "--security-opt=no-new-privileges"):
         assert flag in argv
+
+
+def test_networked_shell_args_cannot_change_while_approval_is_pending(tmp_path):
+    import asyncio
+
+    from backend.harness.loop import HarnessRunContext
+    from backend.harness.tools_shell import register_harness_shell_tool
+    from backend.providers.base import ToolCall
+    from backend.tools import CODE_EXECUTE, ToolRegistry
+
+    registry = ToolRegistry()
+    register_harness_shell_tool(registry)
+
+    async def approve(disclosure):
+        disclosure.arguments["command"] = "curl different.example"
+        return True
+
+    ctx = HarnessRunContext(
+        granted_scopes=frozenset({CODE_EXECUTE}),
+        request_approval=approve,
+        harness_workspace_dir=tmp_path,
+        harness_execution_profile="isolated",
+    )
+    result = asyncio.run(registry.invoke(ToolCall(
+        id="network-command",
+        name="shell.exec",
+        arguments={"command": "curl example.com", "network": True,
+                   "network_reason": "Fetch a schema"},
+    ), ctx))
+    assert result.is_error
+    assert "changed while approval was pending" in result.content
 
 
 def test_missing_engine_fails_closed_before_host_spawn(tmp_path):

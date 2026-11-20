@@ -1212,10 +1212,9 @@ class TestIsolatedNetworkConsent:
         from backend.harness.tools_shell import register_harness_shell_tool
         from backend.harness import tools_shell
 
-        node = SceneDocument().add_harness_node(0, 0, "download")
-        node.state.harness_execution_profile = "isolated"
         document = SceneDocument()
-        document.nodes[node.id] = node
+        node = document.add_harness_node(0, 0, "download")
+        node.state.harness_execution_profile = "isolated"
         dispatcher = LoopDispatcher()
         registry = ToolRegistry()
         register_harness_shell_tool(registry)

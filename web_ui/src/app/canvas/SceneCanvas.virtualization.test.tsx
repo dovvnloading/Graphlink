@@ -214,6 +214,7 @@ function chatRow(id: string, x: number, y = 0): SceneNodeRow {
   harnessApprovalSummary: "",
   harnessApprovalId: "",
   harnessApprovalSessionOffered: false,
+        harnessApprovalNetworkRequested: false,
   harnessPlan: [],
   harnessAwaitingQuestion: false,
   harnessQuestion: "",
