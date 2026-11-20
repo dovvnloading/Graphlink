@@ -47,19 +47,34 @@ test("starts a graph and navigates it using the canvas controls", async ({ page 
       expect(graphBox.height).toBeLessThan(emptyStage.height);
       expect(graphBox.y + graphBox.height).toBeLessThanOrEqual(footerBox.y + 1);
       expect(footerBox.y + footerBox.height).toBeLessThanOrEqual(viewport.height + 1);
-      const [navigationBox, minimapBox] = await Promise.all([bounds(navigation), bounds(minimap)]);
+      const [navigationBox, minimapBox, cardBox] = await Promise.all([
+        bounds(navigation), bounds(minimap), bounds(footer.locator(".composer-dock")),
+      ]);
       expect(navigationBox.x + navigationBox.width).toBeLessThanOrEqual(minimapBox.x + 1);
       for (const box of [navigationBox, minimapBox]) {
         expect(box.x).toBeGreaterThanOrEqual(graphBox.x - 1);
         expect(box.x + box.width).toBeLessThanOrEqual(graphBox.x + graphBox.width + 1);
         expect(box.y).toBeGreaterThanOrEqual(graphBox.y - 1);
-        expect(box.y + box.height).toBeLessThanOrEqual(graphBox.y + graphBox.height + 1);
+        if (width >= 1280) {
+          // Wide canvas: the zoom dock and minimap share the composer card's
+          // baseline, beside the card rather than over it.
+          expect(Math.abs(box.y + box.height - (cardBox.y + cardBox.height))).toBeLessThanOrEqual(1);
+        } else {
+          // Narrow canvas: they sit inside the graph, just above the composer.
+          expect(box.y + box.height).toBeLessThanOrEqual(graphBox.y + graphBox.height + 1);
+        }
+      }
+      if (width >= 1280) {
+        expect(navigationBox.x + navigationBox.width).toBeLessThanOrEqual(cardBox.x + 1);
+        expect(cardBox.x + cardBox.width).toBeLessThanOrEqual(minimapBox.x + 1);
       }
       await expect(input).toBeInViewport({ ratio: 1 });
       await expect(footer.getByRole("button", { name: "Send message" })).toBeInViewport({ ratio: 1 });
 
       for (const [name, label] of [["reasoning", "Choose a reasoning level"], ["model", "Choose a model"]]) {
         const trigger = footer.locator(`[data-overlay-trigger="${name}"]`);
+        // The reasoning chip only renders when the route exposes reasoning levels.
+        if (await trigger.count() === 0) continue;
         await expect(trigger).toBeInViewport({ ratio: 1 });
         if (await trigger.isDisabled()) continue; // Options depend on the provider and installed models.
         await trigger.click();

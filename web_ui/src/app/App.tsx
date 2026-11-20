@@ -240,6 +240,9 @@ function App() {
   const [documentViewContent, setDocumentViewContent] = useState<string | null>(null);
   const [documentViewSourceLabel, setDocumentViewSourceLabel] = useState<string | null>(null);
   const [isDocumentViewOpen, setIsDocumentViewOpen] = useState(false);
+  // The composer row's HUD slot: the canvas portals its zoom dock and minimap
+  // here so they share the composer card's baseline (see workspace.css).
+  const [canvasHud, setCanvasHud] = useState<HTMLDivElement | null>(null);
   const onOpenDocumentView = useCallback((markdown: string, sourceLabel: string) => {
     setDocumentViewContent(markdown);
     setDocumentViewSourceLabel(sourceLabel);
@@ -388,6 +391,7 @@ function App() {
                           store={sceneStore}
                           onOpenDocumentView={onOpenDocumentView}
                           getComposerRoute={getComposerRoute}
+                          hudContainer={canvasHud}
                         />
                       </Suspense>
                       <div className="app-search-layer">
@@ -409,18 +413,23 @@ function App() {
                       <NotificationBanner store={composerStore} />
                     </div>
                   </div>
-                  <footer className="app-composer-layer" aria-label="Message composer">
-                    <Composer
-                      store={composerStore}
-                      sceneStore={sceneStore}
-                      showTokenCounter={settingsVisibility.showTokenCounter !== false}
-                      contextInspector={
-                        <Suspense fallback={null}>
-                          <ContextInspectorLauncher sceneStore={sceneStore} composerStore={composerStore} transport={transport} />
-                        </Suspense>
-                      }
-                    />
-                  </footer>
+                  {/* The canvas HUD slot sits beside the composer footer, not
+                      inside its landmark, and overlays the same row. */}
+                  <div className="app-composer-row">
+                    <footer className="app-composer-layer" aria-label="Message composer">
+                      <Composer
+                        store={composerStore}
+                        sceneStore={sceneStore}
+                        showTokenCounter={settingsVisibility.showTokenCounter !== false}
+                        contextInspector={
+                          <Suspense fallback={null}>
+                            <ContextInspectorLauncher sceneStore={sceneStore} composerStore={composerStore} transport={transport} />
+                          </Suspense>
+                        }
+                      />
+                    </footer>
+                    <div className="app-canvas-hud" ref={setCanvasHud} />
+                  </div>
                   <LazySurface overlayName="palette">
                     <CommandPalette store={sceneStore} />
                   </LazySurface>

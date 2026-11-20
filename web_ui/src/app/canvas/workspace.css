@@ -33,7 +33,7 @@
 
 .scene-canvas .react-flow__background { z-index: -2; }
 
-.scene-canvas .viewport-dock {
+.viewport-dock.react-flow__panel {
   display: flex;
   align-items: center;
   gap: 1px;
@@ -105,16 +105,48 @@
 
 /* React Flow measures its own stage above this row. A growing draft, an
    attachment or a narrower document split changes the actual visible area. */
-.app-composer-layer {
+.app-composer-row {
+  /* Room for the widest canvas panel (the 172px minimap plus its border)
+     and a chrome inset on each side of it. */
+  --canvas-hud-reserve: calc(2 * var(--gl-chrome-inset) + 174px);
   position: relative;
   flex: none;
+  z-index: var(--gl-z-app-layer);
+}
+
+.app-composer-layer {
+  position: relative;
   display: flex;
   justify-content: center;
-  z-index: var(--gl-z-app-layer);
-  padding: 6px 16px 14px;
+  /* The bottom inset is the canvas chrome inset, so the composer card, the
+     zoom dock and the minimap share one baseline; the side padding keeps the
+     card clear of both. */
+  padding: 6px var(--canvas-hud-reserve) var(--gl-chrome-inset);
   /* The canvas colour, so the card floats on the canvas rather than sitting
      in a separate band. */
   background: var(--gl-graph-canvas);
+}
+
+/* SceneCanvas portals its zoom dock and minimap into this slot. Their
+   bottom-left/bottom-right panels sit on the composer card's baseline and
+   rise over the stage's bottom corners, as they did inside the stage. */
+.app-canvas-hud {
+  position: absolute;
+  inset: 0;
+  /* Its own level, so a composer popover (positive z-index) still paints
+     over the panels exactly as it did when they lived in the stage. */
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* Only the empty slot lets clicks through to the composer row and stage. */
+.app-canvas-hud > * { pointer-events: auto; }
+
+/* Too narrow for three items in a row (a document split, a small window):
+   the card takes the full width and the panels sit just above it. */
+@container graph-workspace (max-width: 976px) {
+  .app-composer-layer { padding-inline: var(--gl-chrome-inset); }
+  .app-canvas-hud { inset: auto 0 100%; }
 }
 
 /* The composer is one card: staged context, the draft, then one toolbar -
