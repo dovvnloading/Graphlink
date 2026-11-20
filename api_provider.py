@@ -2112,17 +2112,17 @@ def _chat_stream_dispatch(task: str, messages: list, on_chunk: Callable[[str, bo
 
 
 def _route_harness_image_observations(messages: list, *, vision_enabled: bool) -> list:
-    """Remove harness-only image markers before the provider sees messages.
+    """Gate ephemeral harness images before provider message conversion.
 
     Tool results remain text in the durable transcript. A temporary user
     message containing bounded image_bytes is sent only when this *actual*
     provider/model can see images; text-only providers see the tool's
     original size/format description without an extra synthetic turn.
     """
+    # Keep the marker until JSON tool history has converted the special
+    # observation. Native provider messages strip it immediately below.
     return [
-        {key: value for key, value in message.items() if key != "_harness_image_observation"}
-        if message.get("_harness_image_observation") is True else message
-        for message in messages
+        message for message in messages
         if message.get("_harness_image_observation") is not True or vision_enabled
     ]
 
@@ -2286,6 +2286,9 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
         replay = bool(tools and profile and profile.replay_reasoning and not use_json_protocol)
         wire_messages = []
         for message in messages:
+            if "_harness_image_observation" in message:
+                message = dict(message)
+                message.pop("_harness_image_observation")
             if "provider_reasoning" in message:
                 message = dict(message)
                 saved = message.pop("provider_reasoning")
