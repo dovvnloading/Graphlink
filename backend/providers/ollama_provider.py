@@ -70,6 +70,7 @@ from backend.providers.base import (
     ProviderEvent,
     ToolCall,
     normalize_usage,
+    tool_arguments,
 )
 
 _MAX_REASONING_ATTEMPTS = 3
@@ -196,13 +197,14 @@ class OllamaProvider:
         ToolCall has NO id field (see api_provider.ollama_supports_tools'
         own docstring), so a stable per-turn id is synthesized from the
         call's position - stable because Ollama's tool_calls list, once
-        delivered, is not re-ordered or re-delivered within the same turn."""
+        delivered, is not re-ordered or re-delivered within the same turn.
+        Collect successive tool-call chunks until the terminal done marker."""
         raw_calls = message.get("tool_calls") or []
         return tuple(
             ToolCall(
                 id=f"call_{index}",
                 name=raw["function"]["name"],
-                arguments=dict(raw["function"]["arguments"]),
+                arguments=tool_arguments(raw["function"]["arguments"], "Ollama"),
             )
             for index, raw in enumerate(raw_calls)
         )
@@ -223,13 +225,10 @@ class OllamaProvider:
 
             content_parts: list[str] = []
             thinking_parts: list[str] = []
-            tool_calls: tuple[ToolCall, ...] = ()
+            tool_call_parts: list = []
             usage = None
-            # A finished Ollama generation always ends on a terminal chunk:
-            # done:true (with its done_reason - stop, length, ...), or the
-            # tool_calls chunk the loop below already treats as terminal.
-            # Same sentinel posture as AnthropicProvider.stream()'s
-            # message_stop.
+            # Require done:true even when calls arrived in earlier chunks.
+            # A disconnected stream must not execute potentially torn calls.
             saw_done = False
             # ollama types its streaming chat() as `Iterator[ChatResponse]`,
             # which has no close() - but the object it actually returns is the
@@ -255,27 +254,9 @@ class OllamaProvider:
                     if delta_thinking:
                         thinking_parts.append(delta_thinking)
                         yield ProviderEvent("reasoning", delta_thinking)
-                    # ADR-007 stage 7.1: a tool-calling chunk is ALSO the
-                    # terminal chunk for this attempt (Ollama never streams
-                    # more content after tool_calls appear), so this check
-                    # sits ahead of the `done` check below rather than
-                    # inside it - `done` may not even be set the same chunk.
-                    if part["message"].get("tool_calls"):
-                        tool_calls = self._extract_tool_calls(part["message"])
-                        saw_done = True
-                        # review-fix: a tool-calling chunk IS the terminal
-                        # chunk (this comment block's own opening line) and
-                        # Ollama marks it done with real token counts, same
-                        # as the plain-answer path below - but this branch
-                        # broke out before ever reading them, so every
-                        # builder tool-call turn (almost the entire loop)
-                        # silently reported usage=None and the token budget
-                        # went unenforced on real spend.
-                        if part.get("done"):
-                            usage = normalize_usage(
-                                part.get("prompt_eval_count"), part.get("eval_count")
-                            )
-                        break
+                    # Collect native calls in model order across chunks.
+                    # A tool-call chunk is not a completion marker by itself.
+                    tool_call_parts.extend(part["message"].get("tool_calls") or ())
                     if part.get("done"):
                         saw_done = True
                         # ADR-006 stage 6.8: the terminal chunk carries
@@ -300,6 +281,7 @@ class OllamaProvider:
                     "Ollama stream ended unexpectedly before completion. Please try again."
                 )
 
+            tool_calls = self._extract_tool_calls({"tool_calls": tool_call_parts})
             if tool_calls:
                 # ADR-007 stage 7.1: a pure tool-call turn is a legitimate,
                 # complete outcome - it must NOT enter the reasoning-retry

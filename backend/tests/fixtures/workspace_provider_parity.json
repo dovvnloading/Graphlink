@@ -1,0 +1,300 @@
+{
+  "_description": "Synthetic, transport-faithful recorded responses. No live API credentials, endpoints or GGUF models are used.",
+  "openai": {
+    "first": [
+      {
+        "choices": [
+          {
+            "delta": {
+              "tool_calls": [
+                {
+                  "index": 0,
+                  "id": "call_oa_1",
+                  "type": "function",
+                  "function": {
+                    "name": "fs_write",
+                    "arguments": "{\"path\":\"notes.txt\","
+                  }
+                }
+              ]
+            },
+            "finish_reason": null
+          }
+        ]
+      },
+      {
+        "choices": [
+          {
+            "delta": {
+              "tool_calls": [
+                {
+                  "index": 0,
+                  "function": {
+                    "arguments": "\"content\":\"hello\"}"
+                  }
+                }
+              ]
+            },
+            "finish_reason": "tool_calls"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 15,
+          "completion_tokens": 5
+        }
+      }
+    ],
+    "second": [
+      {
+        "choices": [
+          {
+            "delta": {
+              "content": "Saved."
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 21,
+          "completion_tokens": 3
+        }
+      }
+    ]
+  },
+  "anthropic": {
+    "first": [
+      {
+        "type": "message_start",
+        "message": {
+          "usage": {
+            "input_tokens": 12,
+            "cache_creation_input_tokens": 2,
+            "cache_read_input_tokens": 1
+          }
+        }
+      },
+      {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {
+          "type": "tool_use",
+          "id": "toolu_parity_1",
+          "name": "fs_write"
+        }
+      },
+      {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "input_json_delta",
+          "partial_json": "{\"path\":\"notes.txt\","
+        }
+      },
+      {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "input_json_delta",
+          "partial_json": "\"content\":\"hello\"}"
+        }
+      },
+      {
+        "type": "message_delta",
+        "usage": {
+          "output_tokens": 5
+        },
+        "delta": {
+          "stop_reason": "tool_use"
+        }
+      },
+      {
+        "type": "message_stop"
+      }
+    ],
+    "second": [
+      {
+        "type": "message_start",
+        "message": {
+          "usage": {
+            "input_tokens": 18,
+            "cache_creation_input_tokens": 2,
+            "cache_read_input_tokens": 1
+          }
+        }
+      },
+      {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "text_delta",
+          "text": "Saved."
+        }
+      },
+      {
+        "type": "message_delta",
+        "delta": {
+          "stop_reason": "end_turn"
+        },
+        "usage": {
+          "output_tokens": 3
+        }
+      },
+      {
+        "type": "message_stop"
+      }
+    ]
+  },
+  "gemini": {
+    "first": [
+      {
+        "candidates": [
+          {
+            "content": {
+              "role": "model",
+              "parts": [
+                {
+                  "functionCall": {
+                    "id": "fc_parity_1",
+                    "name": "fs_write",
+                    "args": {
+                      "path": "notes.txt",
+                      "content": "hello"
+                    }
+                  },
+                  "thoughtSignature": "opaque-signature"
+                }
+              ]
+            },
+            "finishReason": "STOP"
+          }
+        ],
+        "usageMetadata": {
+          "promptTokenCount": 15,
+          "candidatesTokenCount": 5
+        }
+      }
+    ],
+    "second": [
+      {
+        "candidates": [
+          {
+            "content": {
+              "role": "model",
+              "parts": [
+                {
+                  "text": "Saved."
+                }
+              ]
+            },
+            "finishReason": "STOP"
+          }
+        ],
+        "usageMetadata": {
+          "promptTokenCount": 21,
+          "candidatesTokenCount": 3
+        }
+      }
+    ]
+  },
+  "compatible": {
+    "first": [
+      {
+        "choices": [
+          {
+            "delta": {
+              "content": "{\"tool_calls\":[{\"name\":\"fs.write\",\"arguments_json\":\"{\\\"path\\\":\\\"notes.txt\\\",\\\"content\\\":\\\"hello\\\"}\"}],\"final_answer\":\"\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 15,
+          "completion_tokens": 5
+        }
+      }
+    ],
+    "second": [
+      {
+        "choices": [
+          {
+            "delta": {
+              "content": "{\"tool_calls\":[],\"final_answer\":\"Saved.\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 21,
+          "completion_tokens": 3
+        }
+      }
+    ]
+  },
+  "ollama": {
+    "first": [
+      {
+        "message": {
+          "content": "",
+          "tool_calls": [
+            {
+              "function": {
+                "name": "fs.write",
+                "arguments": {
+                  "path": "notes.txt",
+                  "content": "hello"
+                }
+              }
+            }
+          ]
+        },
+        "done": false
+      },
+      {
+        "message": {
+          "content": ""
+        },
+        "done": true,
+        "done_reason": "stop",
+        "prompt_eval_count": 15,
+        "eval_count": 5
+      }
+    ],
+    "second": [
+      {
+        "message": {
+          "content": "Saved."
+        },
+        "done": true,
+        "done_reason": "stop",
+        "prompt_eval_count": 21,
+        "eval_count": 3
+      }
+    ]
+  },
+  "llama": {
+    "first": [
+      {
+        "choices": [
+          {
+            "delta": {
+              "content": "{\"tool_calls\":[{\"name\":\"fs.write\",\"arguments_json\":\"{\\\"path\\\":\\\"notes.txt\\\",\\\"content\\\":\\\"hello\\\"}\"}],\"final_answer\":\"\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ]
+      }
+    ],
+    "second": [
+      {
+        "choices": [
+          {
+            "delta": {
+              "content": "{\"tool_calls\":[],\"final_answer\":\"Saved.\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ]
+      }
+    ]
+  }
+}
