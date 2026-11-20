@@ -42,6 +42,16 @@ def test_machine_snapshot_describes_execution_environment_without_running_comman
     ]
 
 
+def test_isolated_machine_tier_describes_container_not_host_shell(tmp_path, monkeypatch):
+    monkeypatch.setattr("backend.harness.shell_isolation.available_engine", lambda: "podman")
+    snapshot = context_module.describe_machine(tmp_path, profile="isolated")
+    assert "podman" in snapshot
+    assert "/bin/sh -c in isolated" in snapshot
+    assert "Container network: disabled" in snapshot
+    assert "512 MiB RAM" in snapshot
+    assert "Host executables are NOT automatically available" in snapshot
+
+
 def test_command_shell_is_the_execution_shell_not_the_login_shell(monkeypatch):
     monkeypatch.setattr(context_module.shutil, "which", lambda _name, *, path: None)
     assert context_module._command_shell(

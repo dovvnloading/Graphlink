@@ -7,6 +7,8 @@ import { NodeMenu } from "./NodeMenu";
 import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
+import { HarnessWorkspaceFiles } from "./AgentWorkspaceBrowser";
+import type { HarnessWorkspaceListing } from "./harnessWorkspaceFiles";
 
 /**
  * PLAN-2026-08-24 H1: the workspace agent node. Everything rendered here
@@ -55,6 +57,7 @@ export interface HarnessNodeData extends Record<string, unknown> {
   harnessWorkspacePath: string;
   harnessWorkspaceActive: string;
   harnessShell: string;
+  harnessExecutionProfile: string;
   harnessMaxTurns: number;
   harnessSpentTurns: number;
   harnessSpentTokens: number;
@@ -71,7 +74,12 @@ export interface HarnessNodeData extends Record<string, unknown> {
   onAnswerQuestion: (answer: string) => void;
   onPickWorkspace: () => void;
   onUseScratch: () => void;
+  onListWorkspaceFiles: (path: string) => Promise<HarnessWorkspaceListing>;
+  onOpenWorkspaceFile: (path: string) => Promise<void>;
+  onRevealWorkspace: () => void;
   onSetShell: (shell: string) => void;
+  onSetExecutionProfile: (profile: string) => void;
+  onGetIsolationEngine: () => Promise<string | null>;
 }
 
 export type HarnessFlowNode = Node<HarnessNodeData, "harness">;
@@ -123,16 +131,28 @@ function HarnessNodeMenu({
 /** Node settings are portaled to the document, not rendered inside the
  * transformed React Flow node. Otherwise fixed coordinates drift with zoom. */
 function AgentSettingsPopover({
-  position, shell, onSetShell, onClose, triggerRef,
+  position, shell, onSetShell, profile, onSetExecutionProfile, onGetIsolationEngine, onClose, triggerRef,
 }: {
   position: MenuPosition;
   shell: string;
   onSetShell: (shell: string) => void;
+  profile: string;
+  onSetExecutionProfile: (profile: string) => void;
+  onGetIsolationEngine: () => Promise<string | null>;
   onClose: () => void;
   triggerRef: RefObject<HTMLButtonElement | null>;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const [placement, setPlacement] = useState(position);
+  // undefined = checking, null = neither Docker nor Podman on the backend PATH.
+  const [engine, setEngine] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    let mounted = true;
+    void onGetIsolationEngine()
+      .then((found) => { if (mounted) setEngine(found); })
+      .catch(() => { if (mounted) setEngine(null); });
+    return () => { mounted = false; };
+  }, [onGetIsolationEngine]);
   const windows = /Windows|Win32|Win64/i.test(
     typeof navigator === "undefined" ? "" : navigator.userAgent + " " + navigator.platform,
   );
@@ -151,7 +171,7 @@ function AgentSettingsPopover({
       ? Math.max(8, position.y - rect.height - 28)
       : position.y;
     setPlacement({ x, y });
-  }, [position.x, position.y]);
+  }, [position.x, position.y, engine]);
 
   useEffect(() => {
     panelRef.current?.querySelector("select")?.focus();
@@ -208,6 +228,25 @@ function AgentSettingsPopover({
           )}
         </select>
       </label>
+      <label className="harness-node-settings-field">
+        <span>Execution profile</span>
+        <select
+          className="nodrag nowheel"
+          aria-label="Execution profile"
+          value={profile === "isolated" ? "isolated" : "host"}
+          onChange={(event) => onSetExecutionProfile(event.target.value)}
+        >
+          <option value="host">Host (default)</option>
+          <option value="isolated" disabled={engine === null}>Isolated (Docker / Podman)</option>
+        </select>
+      </label>
+      {engine === undefined ? (
+        <p role="status">Checking Docker / Podman availability…</p>
+      ) : engine === null ? (
+        <p role="status">No container engine found. Install Docker Desktop (Windows/macOS), Docker Engine (Linux), or Podman to use Isolated execution. Isolated commands never fall back to Host.</p>
+      ) : (
+        <p role="status">{engine === "docker" ? "Docker" : "Podman"} detected. Isolated uses a network-disabled container with 1 CPU, 512 MiB RAM and your workspace mounted at /workspace. Pull python:3.12-slim with {engine} before your first run.</p>
+      )}
       <p>Saved with this graph. Changes apply from the next task.</p>
     </div>,
     document.body,
@@ -436,6 +475,9 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
             position={settingsPosition}
             shell={data.harnessShell}
             onSetShell={data.onSetShell}
+            profile={data.harnessExecutionProfile}
+            onSetExecutionProfile={data.onSetExecutionProfile}
+            onGetIsolationEngine={data.onGetIsolationEngine}
             onClose={() => setSettingsPosition(null)}
             triggerRef={settingsTriggerRef}
           />
@@ -494,6 +536,12 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
           </>
         )}
       </div>
+      <HarnessWorkspaceFiles
+        key={data.harnessWorkspacePath}
+        onList={data.onListWorkspaceFiles}
+        onOpen={data.onOpenWorkspaceFile}
+        onReveal={data.onRevealWorkspace}
+      />
 
       {data.harnessReply && (
         <div className="harness-node-reply nowheel nodrag">{data.harnessReply}</div>

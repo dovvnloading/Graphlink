@@ -1020,6 +1020,10 @@
             "default": 0,
             "type": "integer"
           },
+          "harnessExecutionProfile": {
+            "default": "host",
+            "type": "string"
+          },
           "harnessGoal": {
             "default": "",
             "type": "string"

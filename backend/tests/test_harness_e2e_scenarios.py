@@ -185,7 +185,7 @@ def _drive(scenario, monkeypatch, turns, *, approvals=(), json_tools=False):
     assert not model.turns, "unused scripted model turns"
     assert scenario.agent.state.harness_spent_turns == len(model.requests)
     return SimpleNamespace(
-        id=run_id, approvals=seen_approvals, model=model,
+        id=run_id, approvals=seen_approvals, scripted_model=model,
         transcript=load_messages(scenario.workspace),
     )
 
@@ -376,8 +376,8 @@ def test_execute_full_task_through_constrained_json_tool_calls(scenario, monkeyp
         finish,
     ], json_tools=True)
 
-    assert len(run.model.requests) == 2
-    first = run.model.requests[0]
+    assert len(run.scripted_model.requests) == 2
+    first = run.scripted_model.requests[0]
     assert first.tools == ()
     assert first.extra_kwargs["response_format"]["type"] == "json_object"
     assert "WORKSPACE JSON TOOL PROTOCOL" in first.messages[0]["content"]
