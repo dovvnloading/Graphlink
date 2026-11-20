@@ -271,7 +271,7 @@ def test_completion_marker_chunk_preserves_stdout_for_next_execution(
         repl.stop()
     assert repl._stdout_pending == ""
 
-@pytest.mark.parametrize("split_bytes", [b"\\xe2", b"\\xe2\\x82"])
+@pytest.mark.parametrize("split_bytes", [b"\xe2", b"\xe2\x82"])
 @pytest.mark.parametrize("status", ["OK", "ERROR"])
 def test_completion_marker_preserves_split_utf8_for_next_execution(
     monkeypatch, tmp_path, split_bytes, status,
@@ -292,12 +292,12 @@ def test_completion_marker_preserves_split_utf8_for_next_execution(
         stdin=StringIO(), stdout=FakeStdout(), stderr=None,
         poll=lambda: None, kill=lambda: None, wait=lambda: None,
     )
-    first_marker = f"{repl._boundary_prefix}{status}---\\n".encode()
-    next_marker = f"{repl._boundary_prefix}OK---\\n".encode()
+    first_marker = f"{repl._boundary_prefix}{status}---\n".encode()
+    next_marker = f"{repl._boundary_prefix}OK---\n".encode()
     euro = "€".encode("utf-8")
     reads = iter((
-        b"first\\n" + first_marker + split_bytes,
-        euro[len(split_bytes):] + b" after\\n" + next_marker,
+        b"first\n" + first_marker + split_bytes,
+        euro[len(split_bytes):] + b" after\n" + next_marker,
     ))
     monkeypatch.setattr(python_repl_module.os, "read", lambda _fd, _size: next(reads))
 
@@ -307,7 +307,7 @@ def test_completion_marker_preserves_split_utf8_for_next_execution(
         assert repl.last_run_failed is (status == "ERROR")
         assert repl._stdout_decoder.getstate()[0] == split_bytes
         assert repl.execute("pass", on_output=live.append) == "€ after"
-        assert "".join(live) == "€ after\\n"
+        assert "".join(live) == "€ after\n"
         assert repl.last_run_failed is False
         assert repl._stdout_decoder.getstate()[0] == b""
     finally:
