@@ -353,7 +353,7 @@ def analyze(command: str, *, shell: str | None = None) -> ShellPlan:
         # A full shell grammar is out of scope: display the entire original
         # text and require fresh consent instead of claiming parsed safety.
         if any(marker in text for marker in _UNSPLITTABLE_MARKERS) or any(
-            char in text for char in "\\'\\"\\\\$%^!(){}<>#\\r\\t*?[]~"
+            char in text for char in ('"', "'", "\\", "$", "%", "^", "!", "(", ")", "{", "}", "<", ">", "#", "\r", "\t", "*", "?", "[", "]", "~")
         ):
             plan.unsplittable = True
             plan.unsplittable_note = (
