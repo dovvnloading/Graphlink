@@ -494,6 +494,34 @@ def test_headless_write_mode_is_opt_in_and_cleans_both_token_files(tmp_path, mon
     assert not token_file.exists() and not write_file.exists()
 
 
+def test_headless_operator_ui_refuses_missing_spa(tmp_path, monkeypatch, capsys):
+    import backend.headless as headless
+    import backend.app as app_module
+
+    monkeypatch.setattr(app_module, "SPA_DIST_DIR", tmp_path / "unbuilt")
+    monkeypatch.setattr(
+        headless, "_bind_listener",
+        lambda _port: pytest.fail("missing operator SPA must be caught before binding"),
+    )
+    token_file = tmp_path / "read.token"
+    write_file = tmp_path / "write.token"
+    result = headless.main([
+        "--port", "0", "--chat-db", str(tmp_path / "chats.db"),
+        "--token-file", str(token_file), "--write-token-file", str(write_file),
+        "--allow-mcp-writes", "--open-ui",
+    ])
+    assert result == 1
+    assert "SPA build missing" in capsys.readouterr().err
+    assert not token_file.exists() and not write_file.exists()
+
+
+def test_headless_operator_ui_requires_mcp_write_opt_in(tmp_path):
+    import backend.headless as headless
+
+    with pytest.raises(SystemExit):
+        headless.main(["--open-ui", "--chat-db", str(tmp_path / "chats.db")])
+
+
 def test_headless_rejects_identical_read_write_token_file_paths(tmp_path):
     import backend.headless as headless
 
