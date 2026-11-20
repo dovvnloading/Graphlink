@@ -342,9 +342,9 @@ def test_agent_files_are_browsable_in_the_confined_files_view(scenario, monkeypa
     ], approvals=[("fs.write", True)])
 
     root_listing = list_workspace_files(scenario.workspace)
-    assert [(entry["name"], entry["isDir"]) for entry in root_listing["entries"]] == [
-        ("reports", True),
-    ]
+    # The managed scratch root also contains the agent transcript/index.
+    assert any(entry["name"] == "reports" and entry["isDir"] for entry in root_listing["entries"])
+    assert all(entry["name"] != ".git" for entry in root_listing["entries"])
     sub_listing = list_workspace_files(scenario.workspace, "reports")
     assert [entry["path"] for entry in sub_listing["entries"]] == ["reports/inspection.md"]
     assert read_workspace_file(scenario.workspace, "reports/inspection.md") == {
