@@ -6,7 +6,7 @@ import { NodeMenu } from "./NodeMenu";
 import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
-import { HarnessWorkspaceFiles } from "./HarnessWorkspaceFiles";
+import { HarnessWorkspaceFiles } from "./AgentWorkspaceBrowser";
 import type { HarnessWorkspaceListing } from "./harnessWorkspaceFiles";
 
 /**
