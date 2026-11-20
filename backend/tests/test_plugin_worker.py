@@ -1042,7 +1042,7 @@ def test_always_plugin_tool_reprompts_for_each_different_effect(tmp_path):
     plugin_dir = tmp_path / "plugins" / "consent_test"
     plugin_dir.mkdir(parents=True)
     (plugin_dir / "plugin.toml").write_text(
-        textwrap.dedent("""\\
+        textwrap.dedent("""\
             [plugin]
             id = "consent_test"
             name = "Consent Test"
@@ -1056,7 +1056,7 @@ def test_always_plugin_tool_reprompts_for_each_different_effect(tmp_path):
         encoding="utf-8",
     )
     (plugin_dir / "plugin.py").write_text(
-        textwrap.dedent("""\\
+        textwrap.dedent("""\
             from dataclasses import dataclass
             from backend.plugin_sdk import HostContext
 
