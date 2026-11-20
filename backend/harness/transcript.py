@@ -13,6 +13,7 @@ Line shapes (one JSON object per line):
   {"t": "meta", "v": 2, "profile": {...}, "app": ..., "git": {...}}
   {"t": "msg", "role": ..., "content": ..., ...}     - one history message
   {"t": "compact", "content": ...}                   - a compaction record
+  {"t": "task", "run_id": ..., "permission_mode": ...} - per-task audit record
 Unknown "t" values and corrupt lines are skipped on load, never fatal -
 the same tolerant-restore posture every session_load restorer takes with
 on-disk input this app cannot guarantee it wrote itself.
@@ -323,6 +324,25 @@ def append_message(
     path = transcript_path(workspace)
     _ensure_meta(path, profile, root)
     _emit(path, {"t": "msg", **message})
+
+
+def append_task_start(
+    workspace: Path, *, run_id: str, permission_mode: str,
+    execution_profile: str, profile: dict, root: Path,
+) -> None:
+    """Record the effective mode for each accepted task, before its user message.
+
+    These audit records are not replayed as model instructions; the transcript
+    persists them across a stop, restart or a change of node preferences.
+    """
+    path = transcript_path(workspace)
+    _ensure_meta(path, profile, root)
+    _emit(path, {
+        "t": "task", "run_id": run_id,
+        "permission_mode": permission_mode,
+        "execution_profile": execution_profile,
+        "created": time.time(),
+    })
 
 
 def append_compaction(workspace: Path, content: str) -> None:
