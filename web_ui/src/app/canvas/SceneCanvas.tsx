@@ -943,6 +943,7 @@ function makeHarnessFns(id: string, liveRef: { current: DispatcherLive }) {
       onOpenDocumentView(harnessFileDocumentMarkdown(file), `Workspace: ${file.path}`);
     },
     onRevealWorkspace: () => liveRef.current.store.revealHarnessWorkspace(id),
+    onSetShell: (shell: string) => liveRef.current.store.setHarnessShell(id, shell),
   };
 }
 
@@ -1655,6 +1656,7 @@ export function toFlowNodes(
           harnessCompactions: n.harnessCompactions,
           harnessWorkspacePath: n.harnessWorkspacePath,
           harnessWorkspaceActive: n.harnessWorkspaceActive,
+          harnessShell: n.harnessShell,
           harnessAwaitingApproval: n.harnessAwaitingApproval,
           harnessApprovalToolName: n.harnessApprovalToolName,
           harnessApprovalSummary: n.harnessApprovalSummary,

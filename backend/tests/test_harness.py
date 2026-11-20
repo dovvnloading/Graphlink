@@ -486,6 +486,58 @@ class TestLoop:
         assert len(latest) < 2_100, "later output must replace, not grow, the preview"
         assert latest != preview, "chatty commands must continue to update activity"
 
+    def test_image_read_is_ephemeral_and_transcript_remains_text_only(
+        self, workspace_root, monkeypatch,
+    ):
+        import io
+
+        from PIL import Image
+
+        document, dispatcher, registry, bus, node = self._make(workspace_root)
+        ws = ensure_workspace(node.state.harness_workspace_id)
+        stream = io.BytesIO()
+        Image.new("RGB", (1200, 600), "green").save(stream, format="PNG")
+        (ws / "diagram.png").write_bytes(stream.getvalue())
+
+        seen: list[list] = []
+
+        def observe_turn(task, messages, tools=(), **kwargs):
+            seen.append(messages)
+            return {
+                "message": {"role": "assistant", "content": "Read the image."},
+                "tool_calls": (
+                    [call("image-1", "fs.read", path="diagram.png")]
+                    if len(seen) == 1 else []
+                ),
+                "usage": None,
+            }
+
+        monkeypatch.setattr(api_provider, "chat_turn_with_tools", observe_turn)
+        asyncio.run(drive(document, dispatcher, registry, bus, node, "inspect this diagram"))
+
+        assert len(seen) == 2
+        assert not any(m.get("_harness_image_observation") for m in seen[0])
+        observations = [m for m in seen[1] if m.get("_harness_image_observation")]
+        assert len(observations) == 1
+        parts = observations[0]["content"]
+        assert parts[0]["type"] == "text"
+        assert "diagram.png" in parts[1]["text"]
+        assert parts[2]["type"] == "image_bytes"
+        with Image.open(io.BytesIO(parts[2]["data"])) as preview:
+            assert preview.size == (1024, 512)
+
+        saved = load_messages(ws)
+        assert [message["role"] for message in saved] == [
+            "user", "assistant", "tool", "assistant",
+        ]
+        assert all(isinstance(message.get("content"), str) for message in saved)
+        assert "Image: PNG, 1200 x 600 pixels" in saved[2]["content"]
+        assert "_harness_image_observation" not in transcript_path(ws).read_text(encoding="utf-8")
+
+        scripted_turns(monkeypatch, [{"content": "follow-up"}])
+        asyncio.run(drive(document, dispatcher, registry, bus, node, "what did we see?"))
+        assert node.state.harness_status == "done"
+
     def test_follow_up_reloads_history_from_the_transcript(self, workspace_root, monkeypatch):
         document, dispatcher, registry, bus, node = self._make(workspace_root)
         scripted_turns(monkeypatch, [{"content": "first answer"}])
@@ -516,8 +568,8 @@ class TestLoop:
         probes = []
         seen = []
 
-        def describe(root):
-            probes.append(str(root))
+        def describe(root, *, shell="auto"):
+            probes.append((str(root), shell))
             return f"## Workspace execution environment\nOS: test-machine\nWorkspace root: {root}"
 
         monkeypatch.setattr(context_module, "describe_machine", describe)
@@ -536,6 +588,7 @@ class TestLoop:
         asyncio.run(drive(document, dispatcher, registry, bus, node, "follow-up"))
 
         assert len(probes) == 1, "the dispatcher should reuse the probe across tasks"
+        assert probes[0][1] == "auto", "the snapshot uses the selected task shell"
         assert len(seen) == 3, "first task has two turns, second task one"
         system_messages = [messages[0] for messages in seen]
         assert all(message["role"] == "system" for message in system_messages)
@@ -1252,6 +1305,18 @@ class TestPersistence:
         restored = _restore_harness_payload(_serialize_harness_node(node))
         assert restored.state.harness_status == "interrupted"
         assert "Interrupted" in restored.state.harness_status_detail
+
+    def test_agent_shell_persists_and_invalid_values_migrate_safely(self):
+        node = SceneDocument().add_harness_node(0, 0, "goal")
+        node.state.harness_shell = "git-bash"
+        payload = _serialize_harness_node(node)
+        assert payload["shell"] == "git-bash"
+        assert _restore_harness_payload(payload).state.harness_shell == "git-bash"
+
+        payload["shell"] = "unsupported"
+        assert _restore_harness_payload(payload).state.harness_shell == "auto"
+        del payload["shell"]
+        assert _restore_harness_payload(payload).state.harness_shell == "auto"
 
     def test_blank_workspace_id_is_self_healed_on_load(self):
         document = SceneDocument()

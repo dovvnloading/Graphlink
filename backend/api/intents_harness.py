@@ -19,6 +19,7 @@ from backend.domain.graph import SceneDocument
 from backend.domain.node_states import HarnessState
 from backend.harness.workspace import WorkspaceError, bound_root
 from backend.harness.workspace_files import list_workspace_files, read_workspace_file, reveal_workspace
+from backend.harness.shell_selection import VALID_SHELLS
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 
@@ -213,6 +214,18 @@ def register_harness_intents(
             notifications.show(f"Could not open the workspace folder: {exc}", "error")
             await bus.publish("notification")
 
+    async def set_shell(node_id, shell):
+        """Save a node preference for subsequent tasks, not the live run."""
+        node = document.nodes.get(node_id)
+        if node is None or not isinstance(node.state, HarnessState):
+            return
+        if not isinstance(shell, str) or shell not in VALID_SHELLS:
+            notifications.show("Unsupported agent shell.", "warning")
+            await bus.publish("notification")
+            return
+        node.state.harness_shell = shell
+        await publish_scene()
+
     async def approve_tool(request_id, approval_id=""):
         if approval_id:
             agent_dispatcher.approve_code_execution(request_id, approval_id)
@@ -254,3 +267,4 @@ def register_harness_intents(
     bus.register_intent("harness", "listWorkspaceFiles", list_files)
     bus.register_intent("harness", "readWorkspaceFile", read_file)
     bus.register_intent("harness", "revealWorkspace", reveal_folder)
+    bus.register_intent("harness", "setShell", set_shell)

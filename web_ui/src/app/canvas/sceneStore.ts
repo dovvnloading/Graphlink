@@ -1168,6 +1168,10 @@ export class SceneStore {
     this.transport.fireIntent("harness", "revealWorkspace", [nodeId]);
   }
 
+  setHarnessShell(nodeId: string, shell: string): void {
+    this.transport.fireIntent("harness", "setShell", [nodeId, shell]);
+  }
+
   // R5.2: real Artifact/Drafter plugin - sendArtifactMessage appends a real
   // user instruction AND triggers ArtifactAgent.get_response(current_artifact,
   // history) for an existing artifact node; cancelArtifactRequest targets it

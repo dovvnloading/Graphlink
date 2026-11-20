@@ -2111,6 +2111,22 @@ def _chat_stream_dispatch(task: str, messages: list, on_chunk: Callable[[str, bo
         _translate_chat_exception(exc, state, messages)
 
 
+def _route_harness_image_observations(messages: list, *, vision_enabled: bool) -> list:
+    """Gate ephemeral harness images before provider message conversion.
+
+    Tool results remain text in the durable transcript. A temporary user
+    message containing bounded image_bytes is sent only when this *actual*
+    provider/model can see images; text-only providers see the tool's
+    original size/format description without an extra synthetic turn.
+    """
+    # Keep the marker until JSON tool history has converted the special
+    # observation. Native provider messages strip it immediately below.
+    return [
+        message for message in messages
+        if message.get("_harness_image_observation") is not True or vision_enabled
+    ]
+
+
 def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs) -> dict:
     """ADR-008 stage 8.1: ONE model turn that can call tools - the primitive
     the Builder loop alternates with ToolRegistry.invoke().
@@ -2223,6 +2239,18 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
         provider_name = model_ref.provider if model_ref is not None else (
             state.api_provider_type if state.use_api_mode else state.local_provider_type
         )
+        if any(msg.get("_harness_image_observation") is True for msg in messages):
+            vision_enabled = bool(provider.capabilities.vision)
+            # Ollama's generic provider advertises vision optimistically for
+            # attachments. When /api/show supplies real model capabilities,
+            # do not send an image to a text-only Ollama model.
+            if vision_enabled and provider_name == config.LOCAL_PROVIDER_OLLAMA:
+                observed_capabilities = _get_ollama_capabilities(model_label)
+                if observed_capabilities is not None:
+                    vision_enabled = "vision" in observed_capabilities
+            messages = _route_harness_image_observations(
+                messages, vision_enabled=vision_enabled,
+            )
         wire_tools = tuple(tools)
         profile = CLOUD_PROVIDERS.get(provider_name or "")
         # Custom OpenAI-compatible endpoints have no reliable per-model tools
@@ -2258,6 +2286,9 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
         replay = bool(tools and profile and profile.replay_reasoning and not use_json_protocol)
         wire_messages = []
         for message in messages:
+            if "_harness_image_observation" in message:
+                message = dict(message)
+                message.pop("_harness_image_observation")
             if "provider_reasoning" in message:
                 message = dict(message)
                 saved = message.pop("provider_reasoning")

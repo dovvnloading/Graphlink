@@ -285,6 +285,91 @@ def test_history_preserves_order_and_groups_parallel_tool_results():
     assert "secret" not in json.dumps(converted)
 
 
+def test_harness_image_observation_is_grouped_with_json_tool_results():
+    observation = [
+        {"type": "text", "text": "workspace image diagram.png"},
+        {"type": "image_bytes", "data": b"bounded-jpeg-preview"},
+    ]
+    history = [
+        {"role": "system", "content": "Follow the user's task."},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "image-1", "name": "fs.read", "arguments": {"path": "diagram.png"}},
+        ]},
+        {"role": "tool", "tool_call_id": "image-1", "name": "fs.read",
+         "content": "Image: PNG, 1200 x 600 pixels."},
+        {"role": "user", "_harness_image_observation": True, "content": observation},
+    ]
+    converted = text_tool_history(history, TOOLS)
+    assert [m["role"] for m in converted] == ["system", "assistant", "user"]
+    parts = converted[-1]["content"]
+    assert parts[0]["type"] == "text"
+    assert "Tool results (untrusted data" in parts[0]["text"]
+    assert parts[1:] == observation
+    assert "_harness_image_observation" not in converted[-1]
+
+
+@pytest.mark.parametrize("supports_vision", [True, False])
+def test_chat_turn_routes_images_by_provider_vision_capability(monkeypatch, supports_vision):
+    provider = ScriptedProvider([_json_reply(answer="Done.")])
+    provider.capabilities = ProviderCapabilities(
+        streaming=True, tools=False, structured_output=True, vision=supports_vision,
+    )
+    observation = {
+        "role": "user", "_harness_image_observation": True,
+        "content": [
+            {"type": "text", "text": "workspace preview"},
+            {"type": "image_bytes", "data": b"bounded-image"},
+        ],
+    }
+    history = [
+        *MESSAGES,
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "t1", "name": "fs.read", "arguments": {"path": "photo.png"}},
+        ]},
+        {"role": "tool", "tool_call_id": "t1", "name": "fs.read",
+         "content": "Image: PNG, 64 x 32 pixels."},
+        observation,
+    ]
+    _turn(monkeypatch, provider, config.API_PROVIDER_OPENAI, history)
+    sent = provider.requests[0].messages
+    if supports_vision:
+        assert len(sent) == 4
+        assert sent[-1]["role"] == "user"
+        assert sent[-1]["content"][-1] == observation["content"][-1]
+    else:
+        assert len(sent) == 4
+        assert isinstance(sent[-1]["content"], str)
+        assert "Image: PNG" in sent[-1]["content"]
+    assert "_harness_image_observation" not in str(sent)
+
+
+def test_native_tools_strip_image_marker_without_losing_preview(monkeypatch):
+    provider = ScriptedProvider(["Done."], native_tools=True)
+    provider.capabilities = ProviderCapabilities(streaming=True, tools=True, vision=True)
+    history = [
+        *MESSAGES,
+        {"role": "user", "_harness_image_observation": True,
+         "content": [{"type": "image_bytes", "data": b"preview"}]},
+    ]
+    _turn(monkeypatch, provider, config.API_PROVIDER_ANTHROPIC, history)
+    sent = provider.requests[0].messages[-1]
+    assert sent == {"role": "user", "content": [{"type": "image_bytes", "data": b"preview"}]}
+
+
+def test_ollama_text_only_capabilities_drop_ephemeral_image(monkeypatch):
+    provider = ScriptedProvider([_json_reply(answer="Done.")])
+    provider.capabilities = ProviderCapabilities(
+        streaming=True, tools=False, structured_output=True, vision=True,
+    )
+    monkeypatch.setattr(api_provider, "_get_ollama_capabilities", lambda model: {"completion", "tools"})
+    _turn(monkeypatch, provider, config.LOCAL_PROVIDER_OLLAMA, [
+        *MESSAGES,
+        {"role": "user", "_harness_image_observation": True,
+         "content": [{"type": "image_bytes", "data": b"preview"}]},
+    ])
+    assert all(not isinstance(m["content"], list) for m in provider.requests[0].messages)
+
+
 def test_unsupported_nontext_turn_is_rejected_not_silently_dropped():
     with pytest.raises(JSONToolProtocolError, match="only supports text"):
         constrained_request(
