@@ -122,15 +122,18 @@ def test_valid_image_is_served_from_assets_and_undone_with_run(publisher):
     assert document.get_image_asset(asset_id) == (picture.getvalue(), "image/png")
 
 
-def _xlsx(path):
+def _xlsx(path, *, chartsheet_first=False, sparse_first_row=False):
     """A two-sheet OOXML workbook with shared strings and sparse second sheet."""
     main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
     office = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
     package = "http://schemas.openxmlformats.org/package/2006/relationships"
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        if chartsheet_first:
+            z.writestr("xl/chartsheets/sheet1.xml", f'<chartsheet xmlns="{main}"/>')
         z.writestr("xl/workbook.xml", (
             f'<workbook xmlns="{main}" xmlns:r="{office}"><sheets>'
-            '<sheet name="Overview" sheetId="1" r:id="r1"/>'
+            + ('<sheet name="Charts" sheetId="3" r:id="r3"/>' if chartsheet_first else '')
+            + '<sheet name="Overview" sheetId="1" r:id="r1"/>'
             '<sheet name="Details" sheetId="2" r:id="r2"/>'
             '</sheets></workbook>'
         ))
@@ -138,19 +141,31 @@ def _xlsx(path):
             f'<Relationships xmlns="{package}">'
             f'<Relationship Id="r1" Type="{office}/worksheet" Target="worksheets/sheet1.xml"/>'
             f'<Relationship Id="r2" Type="{office}/worksheet" Target="worksheets/sheet2.xml"/>'
-            '</Relationships>'
+            + (f'<Relationship Id="r3" Type="{office}/chartsheet" '
+               'Target="chartsheets/sheet1.xml"/>' if chartsheet_first else '')
+            + '</Relationships>'
         ))
         z.writestr("xl/sharedStrings.xml", (
             f'<sst xmlns="{main}"><si><t>Name</t></si></sst>'
         ))
-        z.writestr("xl/worksheets/sheet1.xml", (
-            f'<worksheet xmlns="{main}"><sheetData>'
-            '<row r="1"><c r="A1" t="s"><v>0</v></c>'
-            '<c r="B1" t="inlineStr"><is><t>Amount</t></is></c></row>'
-            '<row r="2"><c r="A2" t="inlineStr"><is><t>Alpha</t></is></c>'
-            '<c r="B2"><v>7</v></c></row>'
-            '</sheetData></worksheet>'
-        ))
+        if sparse_first_row:
+            overview = (
+                f'<worksheet xmlns="{main}"><sheetData>'
+                '<row r="1"><c r="A1" t="inlineStr"><is><t>Name</t></is></c></row>'
+                '<row r="2"><c r="A2" t="inlineStr"><is><t>Alice</t></is></c>'
+                '<c r="B2" t="inlineStr"><is><t>Sales</t></is></c></row>'
+                '</sheetData></worksheet>'
+            )
+        else:
+            overview = (
+                f'<worksheet xmlns="{main}"><sheetData>'
+                '<row r="1"><c r="A1" t="s"><v>0</v></c>'
+                '<c r="B1" t="inlineStr"><is><t>Amount</t></is></c></row>'
+                '<row r="2"><c r="A2" t="inlineStr"><is><t>Alpha</t></is></c>'
+                '<c r="B2"><v>7</v></c></row>'
+                '</sheetData></worksheet>'
+            )
+        z.writestr("xl/worksheets/sheet1.xml", overview)
         z.writestr("xl/worksheets/sheet2.xml", (
             f'<worksheet xmlns="{main}"><sheetData>'
             '<row r="3"><c r="C3" t="s"><v>0</v></c>'
@@ -181,6 +196,30 @@ def test_excel_uses_first_sheet_by_default_or_a_named_sheet(publisher, extension
     assert document.undo_run("run-123") == 2
     assert set(document.nodes) == {agent.id}
     assert not document.edges
+
+
+def test_excel_sparse_header_expands_to_all_occupied_columns(publisher):
+    root, *_ = publisher
+    _xlsx(root / "sparse.xlsx", sparse_first_row=True)
+    node = _created(publisher, "sparse.xlsx")
+    assert node.state.is_table_source
+    # The missing B1 header must not hide the populated B2 cell; canvas
+    # requires a name for every CSV column, so one is generated for B.
+    assert node.content.replace("\r\n", "\n") == "Name,Column 2\nAlice,Sales"
+
+
+def test_excel_first_actual_worksheet_skips_chartsheet(publisher):
+    root, document, agent, _ctx, _registry, _approvals, publish = publisher
+    _xlsx(root / "charts-first.xlsx", chartsheet_first=True)
+    node = _created(publisher, "charts-first.xlsx")
+    assert node.content.replace("\r\n", "\n") == "Name,Amount\nAlpha,7"
+    named = _created(publisher, "charts-first.xlsx", sheet="Details")
+    assert named.content.replace("\r\n", "\n") == "Name,Amount\nBeta,13"
+    before = len(document.nodes)
+    invalid = publish("charts-first.xlsx", sheet="Charts")
+    assert invalid.is_error
+    assert len(document.nodes) == before
+
 
 
 def test_file_confinement_and_invalid_inputs_never_mutate_scene(publisher, tmp_path):

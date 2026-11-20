@@ -428,14 +428,16 @@ describe("toFlowNodes (R8a Open Document View wiring)", () => {
     const node = toFlowNodes(scene, store, onOpenDocumentView).find((entry) => entry.id === "agent-1");
     expect(node).toBeDefined();
     const actions = node!.data as {
-      onListWorkspaceFiles: (path: string) => Promise<unknown>;
+      onListWorkspaceFiles: (path: string, cursor?: string) => Promise<unknown>;
       onOpenWorkspaceFile: (path: string) => Promise<void>;
       onRevealWorkspace: () => void;
     };
     await actions.onListWorkspaceFiles("docs");
+    await actions.onListWorkspaceFiles("docs", "page-two");
     await actions.onOpenWorkspaceFile("docs/readme.md");
     actions.onRevealWorkspace();
-    expect(list).toHaveBeenCalledWith("agent-1", "docs");
+    expect(list).toHaveBeenNthCalledWith(1, "agent-1", "docs", undefined);
+    expect(list).toHaveBeenNthCalledWith(2, "agent-1", "docs", "page-two");
     expect(read).toHaveBeenCalledWith("agent-1", "docs/readme.md");
     expect(onOpenDocumentView).toHaveBeenCalledWith("# Hello", "Workspace: docs/readme.md");
     expect(reveal).toHaveBeenCalledWith("agent-1");

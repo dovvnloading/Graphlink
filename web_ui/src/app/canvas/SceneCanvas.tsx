@@ -940,7 +940,7 @@ function makeHarnessFns(id: string, liveRef: { current: DispatcherLive }) {
     },
     onPickWorkspace: () => liveRef.current.store.pickHarnessWorkspace(id),
     onUseScratch: () => liveRef.current.store.useHarnessScratch(id),
-    onListWorkspaceFiles: (path: string) => liveRef.current.store.listHarnessWorkspaceFiles(id, path),
+    onListWorkspaceFiles: (path: string, cursor?: string) => liveRef.current.store.listHarnessWorkspaceFiles(id, path, cursor),
     onOpenWorkspaceFile: async (path: string) => {
       const { store, onOpenDocumentView } = liveRef.current;
       const file = await store.readHarnessWorkspaceFile(id, path);

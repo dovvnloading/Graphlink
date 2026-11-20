@@ -116,9 +116,9 @@ def register_harness_workspace_intents(
             settings_manager=agent_dispatcher._settings_manager,
         )
 
-    async def list_files(node_id: str, relative_path: str = ""):
+    async def list_files(node_id: str, relative_path: str = "", cursor: str | None = None):
         root, user_dir = _workspace_for_node(node_id)
-        listing = await asyncio.to_thread(list_workspace_files, root, relative_path)
+        listing = await asyncio.to_thread(list_workspace_files, root, relative_path, cursor)
         return {"root": str(root), "isScratch": not user_dir, **listing}
 
     async def read_file(node_id: str, relative_path: str):

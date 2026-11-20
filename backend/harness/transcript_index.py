@@ -1,8 +1,9 @@
 """Incremental SQLite FTS5 index for one workspace agent's append-only JSONL.
 
 The transcript remains authoritative. This database is a disposable sidecar:
-each sync scans only bytes after its last committed offset, so it also catches
-up after a crash between the JSONL append and the index commit. An existing
+each sync validates a hash of the already indexed prefix, then parses only
+new records. This catches replacements/rewrites as well as crash gaps between
+the JSONL append and the index commit. An existing
 transcript is indexed on first search, without a migration or a full scan on
 every subsequent query. Keeping the index in the same managed scratch
 workspace as the transcript preserves per-agent isolation and existing GC.
@@ -10,7 +11,9 @@ workspace as the transcript preserves per-agent isolation and existing GC.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import sqlite3
 from contextlib import closing
@@ -44,6 +47,14 @@ def _open_index(path: Path) -> sqlite3.Connection:
             "CREATE TABLE IF NOT EXISTS transcript_index_state ("
             "id INTEGER PRIMARY KEY CHECK (id = 1), "
             "offset INTEGER NOT NULL, line_number INTEGER NOT NULL)"
+        )
+        # A separate table keeps older sidecars readable. Missing source
+        # metadata on a pre-upgrade index triggers a one-time rebuild.
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS transcript_index_source ("
+            "id INTEGER PRIMARY KEY CHECK (id = 1), "
+            "device TEXT NOT NULL, inode TEXT NOT NULL, "
+            "prefix_sha256 TEXT NOT NULL)"
         )
     except Exception:
         db.close()
@@ -84,6 +95,20 @@ def _searchable_text(item: object) -> tuple[str, str] | None:
     return str(item.get("role") or "unknown"), text
 
 
+def _prefix_digest(source, length: int) -> str:
+    """Hash the committed prefix in bounded chunks, never loading JSONL whole."""
+    source.seek(0)
+    digest = hashlib.sha256()
+    remaining = length
+    while remaining:
+        chunk = source.read(min(remaining, 64 * 1024))
+        if not chunk:
+            raise OSError("Transcript changed while updating its search index.")
+        digest.update(chunk)
+        remaining -= len(chunk)
+    return digest.hexdigest()
+
+
 def sync_index(transcript: Path) -> None:
     """Index complete JSONL records not yet committed to this sidecar.
 
@@ -103,10 +128,22 @@ def sync_index(transcript: Path) -> None:
                 "SELECT offset, line_number FROM transcript_index_state WHERE id = 1"
             ).fetchone()
             offset, line_number = (int(row[0]), int(row[1])) if row else (0, 0)
+            identity = db.execute(
+                "SELECT device, inode, prefix_sha256 "
+                "FROM transcript_index_source WHERE id = 1"
+            ).fetchone()
+            stats = os.fstat(source.fileno())
             source.seek(0, 2)
-            if offset > source.tell():
-                # The transcript was truncated/replaced. Its search index
-                # cannot keep referring to records that no longer exist.
+            size = source.tell()
+            if (offset > size or (
+                offset > 0 and (
+                    identity is None or
+                    (identity[0], identity[1]) != (str(stats.st_dev), str(stats.st_ino)) or
+                    identity[2] != _prefix_digest(source, offset)
+                )
+            )):
+                # The sidecar is disposable: never serve old FTS rows when
+                # the indexed bytes or source identity have changed.
                 db.execute("DELETE FROM transcript_fts")
                 offset, line_number = 0, 0
             source.seek(offset)
@@ -146,6 +183,13 @@ def sync_index(transcript: Path) -> None:
                 "VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET "
                 "offset=excluded.offset, line_number=excluded.line_number",
                 (offset, line_number),
+            )
+            db.execute(
+                "INSERT INTO transcript_index_source (id, device, inode, prefix_sha256) "
+                "VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+                "device=excluded.device, inode=excluded.inode, "
+                "prefix_sha256=excluded.prefix_sha256",
+                (str(stats.st_dev), str(stats.st_ino), _prefix_digest(source, offset)),
             )
 
 

@@ -81,7 +81,7 @@ export interface HarnessNodeData extends Record<string, unknown> {
   onAnswerQuestion: (answer: string) => void;
   onPickWorkspace: () => void;
   onUseScratch: () => void;
-  onListWorkspaceFiles: (path: string) => Promise<HarnessWorkspaceListing>;
+  onListWorkspaceFiles: (path: string, cursor?: string) => Promise<HarnessWorkspaceListing>;
   onOpenWorkspaceFile: (path: string) => Promise<void>;
   onRevealWorkspace: () => void;
   onSetShell: (shell: string) => void;

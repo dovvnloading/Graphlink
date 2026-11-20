@@ -194,6 +194,36 @@ def _sheet_rows(archive: zipfile.ZipFile, member: str, strings: list[str]):
             yield "\t".join(cells)
 
 
+def _worksheet_entries(archive: zipfile.ZipFile) -> list[tuple[str, str]]:
+    """Enumerate actual internal worksheets, not chartsheets or other sheets.
+
+    The same workbook relationship filter is used by fs.read and canvas
+    publishing, so default selection and 1-based ranges agree.
+    """
+    workbook = _xml(archive, "xl/workbook.xml")
+    relationships = _xml(archive, "xl/_rels/workbook.xml.rels")
+    rels = {
+        item.get("Id"): _sheet_target(item.get("Target") or "")
+        for item in relationships.findall(f"{{{_PACKAGE_REL_NS}}}Relationship")
+        if item.get("Type", "").endswith("/worksheet")
+        and item.get("TargetMode") != "External"
+    }
+    sheets = workbook.find(f"{{{_SPREADSHEET_NS}}}sheets")
+    if sheets is None:
+        raise DocumentReadError("XLSX has no worksheets.")
+    items = sheets.findall(f"{{{_SPREADSHEET_NS}}}sheet")
+    if len(items) > _XLSX_SHEET_CAP:
+        raise DocumentReadError(f"XLSX exceeds the {_XLSX_SHEET_CAP}-sheet limit.")
+    entries = [
+        (item.get("name") or "Unnamed", member)
+        for item in items
+        if (member := rels.get(item.get(f"{{{_OFFICE_REL_NS}}}id"))) is not None
+    ]
+    if not entries:
+        raise DocumentReadError("XLSX has no usable worksheets.")
+    return entries
+
+
 def _read_xlsx(
     data: bytes,
     start: int | None,
@@ -201,23 +231,7 @@ def _read_xlsx(
     sheet: str | None,
 ) -> str:
     with _preflight_office_zip(data, "XLSX") as archive:
-        workbook = _xml(archive, "xl/workbook.xml")
-        relationships = _xml(archive, "xl/_rels/workbook.xml.rels")
-        rels = {
-            item.get("Id"): _sheet_target(item.get("Target") or "")
-            for item in relationships.findall(f"{{{_PACKAGE_REL_NS}}}Relationship")
-            if item.get("Type", "").endswith("/worksheet")
-            and item.get("TargetMode") != "External"
-        }
-        sheets = workbook.find(f"{{{_SPREADSHEET_NS}}}sheets")
-        if sheets is None:
-            raise DocumentReadError("XLSX has no worksheets.")
-        entries = [
-            (entry.get("name") or "Unnamed", rels.get(entry.get(f"{{{_OFFICE_REL_NS}}}id")))
-            for entry in sheets.findall(f"{{{_SPREADSHEET_NS}}}sheet")
-        ]
-        if len(entries) > _XLSX_SHEET_CAP:
-            raise DocumentReadError(f"XLSX exceeds the {_XLSX_SHEET_CAP}-sheet limit.")
+        entries = _worksheet_entries(archive)
         if sheet is not None:
             if not isinstance(sheet, str) or not sheet.strip() or start is not None or end is not None:
                 raise DocumentReadError("Use either sheet (name) or sheet_start/sheet_end (indices).")
@@ -233,8 +247,6 @@ def _read_xlsx(
         length = 0
         for index in selected:
             name, member = entries[index - 1]
-            if member is None:
-                raise DocumentReadError(f"XLSX sheet {name!r} has no internal worksheet.")
             length = _append_bounded(parts, f"[Sheet {index}: {name}]", length)
             found = False
             for row in _sheet_rows(archive, member, strings):

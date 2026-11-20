@@ -69,14 +69,38 @@ describe("HarnessWorkspaceFiles", () => {
     expect(screen.getByRole("region", { name: "Workspace files" })).toBeInTheDocument();
   });
 
-  it("shows a capped-list notice and an empty-folder state", async () => {
+  it("navigates to later pages of a flat folder and back", async () => {
     const user = userEvent.setup();
-    const onList = vi.fn(async () => ({
-      ...listing(""), entries: [], truncated: true, isScratch: true,
+    const onList = vi.fn(async (path: string, cursor?: string): Promise<HarnessWorkspaceListing> => ({
+      ...listing(path),
+      entries: cursor ? [
+        { name: "file_300.txt", path: "file_300.txt", isDir: false, size: 1 },
+      ] : [
+        { name: "file_000.txt", path: "file_000.txt", isDir: false, size: 1 },
+      ],
+      truncated: !cursor,
+      nextCursor: cursor ? null : "page-one-end",
     }));
+    const onOpen = vi.fn(async (_path: string) => {});
+    render(<HarnessWorkspaceFiles onList={onList} onOpen={onOpen} onReveal={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Browse files" }));
+    expect(await screen.findByText(/Use Next page to see more files/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Next page" }));
+    const later = await screen.findByRole("button", { name: "Open file_300.txt in Document View" });
+    expect(onList).toHaveBeenCalledWith("", "page-one-end");
+    await user.click(later);
+    expect(onOpen).toHaveBeenCalledWith("file_300.txt");
+    await user.click(screen.getByRole("button", { name: "Previous page" }));
+    expect(await screen.findByRole("button", { name: "Open file_000.txt in Document View" }))
+      .toBeInTheDocument();
+  });
+
+  it("shows an empty-folder state", async () => {
+    const user = userEvent.setup();
+    const onList = vi.fn(async () => ({ ...listing(""), entries: [], truncated: false }));
     render(<HarnessWorkspaceFiles onList={onList} onOpen={vi.fn()} onReveal={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "Browse files" }));
     expect(await screen.findByText("No files in this folder.")).toBeInTheDocument();
-    expect(screen.getByText(/Showing the first 300 entries/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Next page" })).not.toBeInTheDocument();
   });
 });

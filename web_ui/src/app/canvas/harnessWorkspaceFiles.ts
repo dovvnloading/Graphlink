@@ -13,6 +13,7 @@ export interface HarnessWorkspaceListing {
   path: string;
   entries: HarnessWorkspaceEntry[];
   truncated: boolean;
+  nextCursor?: string | null;
 }
 
 export interface HarnessWorkspaceDocument {
@@ -28,7 +29,9 @@ function record(value: unknown): value is Record<string, unknown> {
 export function parseHarnessWorkspaceListing(value: unknown): HarnessWorkspaceListing {
   if (!record(value) || typeof value.root !== "string" ||
       typeof value.isScratch !== "boolean" || typeof value.path !== "string" ||
-      typeof value.truncated !== "boolean" || !Array.isArray(value.entries)) {
+      typeof value.truncated !== "boolean" || !Array.isArray(value.entries) ||
+      (value.nextCursor !== undefined && value.nextCursor !== null &&
+        (typeof value.nextCursor !== "string" || value.nextCursor.length === 0 || value.nextCursor.length > 1024))) {
     throw new Error("Invalid workspace folder response.");
   }
   const entries: HarnessWorkspaceEntry[] = value.entries.map((entry: unknown) => {
@@ -40,7 +43,11 @@ export function parseHarnessWorkspaceListing(value: unknown): HarnessWorkspaceLi
     }
     return { name: entry.name, path: entry.path, isDir: entry.isDir, size: entry.size };
   });
-  return { root: value.root, isScratch: value.isScratch, path: value.path, truncated: value.truncated, entries };
+  return {
+    root: value.root, isScratch: value.isScratch, path: value.path,
+    truncated: value.truncated, entries,
+    ...(value.nextCursor !== undefined ? { nextCursor: value.nextCursor as string | null } : {}),
+  };
 }
 
 export function parseHarnessWorkspaceDocument(value: unknown): HarnessWorkspaceDocument {

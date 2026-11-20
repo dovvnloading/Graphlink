@@ -9,7 +9,8 @@ confinement and VCS-metadata exclusions. Legacy binary `.doc` and
 It returns extracted **text**, not the original binary. PDF output is labeled
 by page number. Word paragraphs and table rows are kept in source order.
 Excel output is labeled by worksheet, with cell coordinates and values;
-formulas are shown as text when a cached value is unavailable. Excel macros,
+formulas are shown as text when a cached value is unavailable. Chartsheets are
+skipped when reading a workbook; worksheet indices count only data worksheets. Excel macros,
 formulas and external links are never executed or fetched. PDF image-only
 pages have no extractable text (OCR is not performed). Word documents have no
 stable intrinsic page boundaries, so page selection is PDF-only.

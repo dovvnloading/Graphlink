@@ -107,14 +107,40 @@ def test_previews_reject_binary_and_oversized_files_and_truncate_text(tmp_path):
         list_workspace_files(root, "x" * 4001)
 
 
-def test_many_files_are_capped_before_sorting(tmp_path):
+def test_many_files_have_deterministic_pages_without_hiding_flat_directory_entries(tmp_path):
     root = tmp_path / "project"
     root.mkdir()
-    for i in range(305):
+    # Reverse creation order must not change the sorted first page.
+    for i in reversed(range(305)):
         (root / f"{i:04}.txt").touch()
-    listing = list_workspace_files(root)
-    assert listing["truncated"] is True
-    assert len(listing["entries"]) == 300
+    first = list_workspace_files(root)
+    assert first["truncated"] is True
+    assert len(first["entries"]) == 300
+    assert [entry["name"] for entry in first["entries"]] == [
+        f"{i:04}.txt" for i in range(300)
+    ]
+    second = list_workspace_files(root, cursor=first["nextCursor"])
+    assert [entry["name"] for entry in second["entries"]] == [
+        f"{i:04}.txt" for i in range(300, 305)
+    ]
+    assert second["truncated"] is False
+    assert second["nextCursor"] is None
+    with pytest.raises(WorkspaceError, match="page cursor"):
+        list_workspace_files(root, cursor="not a valid cursor")
+
+
+def test_folder_listing_intent_accepts_next_page_cursor(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+    for i in range(302):
+        (root / f"file_{i:03}.txt").touch()
+    bus, node = harness_with_folder(root, trusted=[str(root.resolve())])
+    first = bus.call("listWorkspaceFiles", node.id, "")
+    second = bus.call("listWorkspaceFiles", node.id, "", first["nextCursor"])
+    assert len(first["entries"]) == 300
+    assert [entry["name"] for entry in second["entries"]] == [
+        "file_300.txt", "file_301.txt",
+    ]
 
 
 def test_intents_only_expose_currently_trusted_workspace(tmp_path, monkeypatch):
