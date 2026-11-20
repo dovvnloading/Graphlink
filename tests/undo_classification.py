@@ -353,6 +353,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
     # ADR-012 stage 12.6:
     Classified("app-settings", "setHasCompletedOnboarding", "B", "preference: first-run wizard's own completion flag, not document content"),
     Classified("app-settings", "setMcpServers", "B", "preference: MCP server list is settings-store configuration, not document content"),
+    Classified("app-settings", "revokeHarnessTrustedDir", "B", "preference: revokes a single workspace-agent folder consent in the settings store, not document content"),
 
     # -- backend/api/intents_settings_fal.py (app-settings) ------------------
     Classified("app-settings", "searchFalModels", "B", "read-only: fetch Fal live model catalog"),

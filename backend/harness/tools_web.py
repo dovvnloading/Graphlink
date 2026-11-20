@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import cast
 from urllib.parse import urlsplit
 
 from api_provider import RequestCancelledError
@@ -24,7 +25,10 @@ from graphlink_plugins.web_research.domain import (
     SearchResult,
 )
 from graphlink_plugins.web_research.fetch_policy import canonicalize_url
-from graphlink_plugins.web_research.providers import source_id_for_url
+from graphlink_plugins.web_research.providers import (
+    RequestsDocumentFetcher,
+    source_id_for_url,
+)
 
 # The search adapter is DuckDuckGoSearchProvider, not a new network client.
 _SEARCH_DOMAIN = "duckduckgo.com"
@@ -245,8 +249,11 @@ async def _fetch(call: ToolCall, ctx: RunContext) -> ToolResult:
         canonical_url=canonical,
     )
     try:
+        # This adapter requires the concrete fetcher's pre-request hook;
+        # the generic DocumentFetcher protocol does not expose it.
+        consent_fetcher = cast(RequestsDocumentFetcher, service.fetcher)
         payload = await asyncio.to_thread(
-            service.fetcher.fetch, result, limits=limits, token=token,
+            consent_fetcher.fetch, result, limits=limits, token=token,
             on_request=approve_request,
         )
         document = await asyncio.to_thread(

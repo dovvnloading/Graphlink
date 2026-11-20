@@ -142,6 +142,8 @@ Open **Builder** to give the graph a goal. Choose **Plan the build**, edit the c
 
 Open **Agent** for tasks that need files. It starts in a private scratch folder, or you can choose an existing project with **Choose folder…**. The agent can read files, propose edits, and request approval to run shell commands or Python. Its activity appears on the canvas. Models without native tool calling can use the agent if their runtime supports constrained JSON output. [JSON tool protocol](docs/WORKSPACE_JSON_TOOLS.md).
 
+Put reusable skills in `.graphlink/skills/<package>/SKILL.md` within your selected workspace, or in `~/.graphlink/skills/<package>/SKILL.md` to make them available to all your workspace agents. Each file needs YAML frontmatter with `name` and `description`. The agent sees only these summaries in its prompt and reads the full instructions with `skills.load` when relevant; skills cannot override tool approvals.
+
 ## Local data and privacy
 
 Graphs and workspaces live in `~/.graphlink/chats.db`. The knowledge base has its own database at `~/.graphlink/knowledge/knowledge.db`, and stored images live under `~/.graphlink/assets/`. Local models can answer offline once installed. Hosted inference sends conversation context to the selected provider. Web research, GitHub integrations, and Fal media jobs also contact their respective services.

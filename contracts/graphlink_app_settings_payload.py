@@ -184,5 +184,8 @@ class AppSettingsStatePayload:
     # backend/mcp_client.py module docstring's own deferred-to-ADR-012
     # gap: an McpServerConfig dataclass and SettingsManager.get_mcp_servers/
     # set_mcp_servers persistence already existed with zero UI surface.
+    # Explicit workspace-agent folder grants (absolute paths), recorded by
+    # native folder selection and individually revocable from Settings.
+    harnessTrustedDirs: list[str]
     mcpServers: list[McpServerConfigPayload]
     minCompatibleSchemaVersion: int | None = None

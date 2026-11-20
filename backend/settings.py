@@ -377,6 +377,7 @@ def _build_settings_payload(
     # explicitly deferred to ADR-012: an McpServerConfig dataclass and
     # SettingsManager.get_mcp_servers/set_mcp_servers persistence already
     # existed with zero UI surface to view or edit the configured list.
+    payload["harnessTrustedDirs"] = manager.get_harness_trusted_dirs()
     payload["mcpServers"] = _mcp_servers_for_wire(manager)
     return payload
 
