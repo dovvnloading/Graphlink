@@ -337,6 +337,52 @@ def test_path_confinement_still_applies_to_documents(fs):
     assert read("../outside.pdf").is_error
 
 
+@pytest.mark.parametrize("extension", [".txt", ".pdf", ".docx", ".xlsx"])
+def test_fs_read_rejects_symlink_swapped_after_path_validation(fs, monkeypatch, extension):
+    from backend.harness import tools_fs
+
+    root, read = fs
+    target = root / f"report{extension}"
+    outside = root.parent / f"{root.name}-private{extension}"
+    for path in (target, outside):
+        if extension == ".pdf":
+            _pdf(path)
+        elif extension == ".docx":
+            _docx(path)
+        elif extension == ".xlsx":
+            _xlsx(path)
+        else:
+            path.write_text("private evidence", encoding="utf-8")
+
+    entered, release = threading.Event(), threading.Event()
+    original_read = tools_fs._read_bounded_bytes
+
+    def gated_read(path, **kwargs):
+        entered.set()
+        assert release.wait(timeout=5)
+        return original_read(path, **kwargs)
+
+    monkeypatch.setattr(tools_fs, "_read_bounded_bytes", gated_read)
+    outcomes = []
+    worker = threading.Thread(target=lambda: outcomes.append(read(target.name)))
+    worker.start()
+    try:
+        assert entered.wait(timeout=5), "read did not reach the validation/open gap"
+        target.unlink()
+        try:
+            target.symlink_to(outside)
+        except (NotImplementedError, OSError):
+            pytest.skip("Symlinks unavailable on this platform")
+    finally:
+        release.set()
+        worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert len(outcomes) == 1
+    assert outcomes[0].is_error, outcomes[0].content
+    assert outside.is_file()
+
+
 @pytest.mark.parametrize("extension", [".doc", ".xls"])
 def test_legacy_binary_office_formats_are_not_misdecoded(fs, extension):
     root, read = fs

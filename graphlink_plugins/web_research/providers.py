@@ -524,26 +524,46 @@ class BeautifulSoupContentExtractor:
                     element.decompose()
                 main = soup.find("main") or soup.find("article") or soup.body or soup
                 readable: list[str] = []
-                # Include table rows in DOM order alongside prose. A single
-                # paragraph must not suppress all tabular values, and cell
-                # paragraphs must not appear twice as independent sections.
-                for element in main.find_all(["h1", "h2", "h3", "p", "li", "blockquote", "pre", "table"]):
+                prose_tags = ("h1", "h2", "h3", "p", "li", "blockquote", "pre")
+
+                def append_table(table) -> None:
+                    for row in table.find_all("tr"):
+                        if row.find_parent("table") is not table:
+                            continue  # nested tables are rendered by their parent cell
+                        cells = [
+                            re.sub(r"\s+", " ", cell.get_text(" ", strip=True))
+                            for cell in row.find_all(["th", "td"], recursive=False)
+                        ]
+                        if any(cells):
+                            readable.append(" | ".join(cells))
+
+                def append_prose(parts: list[str]) -> None:
+                    content = re.sub(r"\s+", " ", " ".join(parts)).strip()
+                    if content:
+                        readable.append(content)
+
+                # Split prose around nested tables so the same cell contents
+                # are not emitted once by the enclosing li/blockquote/p and
+                # again as a formatted table row. Keep DOM order, including
+                # any prose *after* a nested table.
+                for element in main.find_all([*prose_tags, "table"]):
                     if element.find_parent("table") is not None:
                         continue
                     if element.name == "table":
-                        for row in element.find_all("tr"):
-                            if row.find_parent("table") is not element:
-                                continue  # nested tables are rendered by their parent cell
-                            cells = [
-                                re.sub(r"\s+", " ", cell.get_text(" ", strip=True))
-                                for cell in row.find_all(["th", "td"], recursive=False)
-                            ]
-                            if any(cells):
-                                readable.append(" | ".join(cells))
-                    else:
-                        content = re.sub(r"\s+", " ", element.get_text(" ", strip=True))
-                        if content:
-                            readable.append(content)
+                        if element.find_parent(prose_tags) is None:
+                            append_table(element)
+                        continue
+                    if element.find_parent(prose_tags) is not None:
+                        continue  # outer prose element will visit this text
+                    parts: list[str] = []
+                    for descendant in element.descendants:
+                        if descendant.name == "table" and descendant.find_parent("table") is None:
+                            append_prose(parts)
+                            parts.clear()
+                            append_table(descendant)
+                        elif isinstance(descendant, str) and descendant.find_parent("table") is None:
+                            parts.append(str(descendant))
+                    append_prose(parts)
                 sections = tuple(readable)
                 text = "\n".join(sections) or re.sub(r"\s+", " ", main.get_text(" ", strip=True))
             text = "\n".join(line.strip() for line in text.splitlines() if line.strip())
