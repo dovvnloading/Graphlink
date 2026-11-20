@@ -34,7 +34,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import threading
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from api_provider import RequestCancelledError
 from backend.harness.python_env import PythonEnvironmentError, ensure_python_environment
@@ -98,7 +98,7 @@ class PythonReplRegistry:
 
     def get(
         self, workspace_id: str, cwd: Path, *, manage_cwd: bool,
-        python_executable: Path | None = None,
+        python_executable: Path | PurePosixPath | None = None,
         cancel_event: threading.Event | None = None,
         profile: str = "host", command_builder=None,
     ) -> PythonREPL:
