@@ -356,6 +356,7 @@ def _sync_index_once(transcript: Path, *, append_origin: os.stat_result | None =
                 "SELECT offset, line_number FROM transcript_index_state WHERE id = 1"
             ).fetchone()
             offset, line_number = (int(row[0]), int(row[1])) if row else (0, 0)
+            previous_offset = offset
             identity = db.execute(
                 "SELECT device, inode, prefix_sha256 "
                 "FROM transcript_index_source WHERE id = 1"
@@ -436,25 +437,34 @@ def _sync_index_once(transcript: Path, *, append_origin: os.stat_result | None =
                     )
 
             digest = hasher.hexdigest()
-            db.execute(
+            # A read-only search of an unchanged transcript should not
+            # rewrite the entire serialized sidecar on every invocation.
+            save_required = (
+                row is None or identity is None or rebuild
+                or offset != previous_offset
+                or tuple(identity) != (device, inode, digest)
+            )
+            if save_required:
+                db.execute(
                 "INSERT INTO transcript_index_state (id, offset, line_number) "
                 "VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET "
                 "offset=excluded.offset, line_number=excluded.line_number",
                 (offset, line_number),
-            )
-            db.execute(
+                )
+                db.execute(
                 "INSERT INTO transcript_index_source (id, device, inode, prefix_sha256) "
                 "VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
                 "device=excluded.device, inode=excluded.inode, "
                 "prefix_sha256=excluded.prefix_sha256",
                 (device, inode, digest),
-            )
+                )
             # Do not trust this checkpoint if the source was concurrently
             # modified during indexing; the next sync will revalidate it.
             stable = _source_stamp(os.fstat(source.fileno())) == stamp
         # Commit in memory before publishing a complete SQLite image. SQLite
         # itself never opens the scratch pathname or creates WAL/SHM siblings.
-        _save_index(sidecar, db)
+        if save_required:
+            _save_index(sidecar, db)
         if stable:
             _remember_checkpoint(sidecar, _HashCheckpoint(
                 offset, device, inode, digest, stamp, hasher,
