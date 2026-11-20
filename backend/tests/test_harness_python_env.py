@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import io
-import subprocess
 import sys
 import threading
 import venv
