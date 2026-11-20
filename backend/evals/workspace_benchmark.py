@@ -343,7 +343,7 @@ async def run_suite(provider: str, model: str, *, base_url: str | None = None,
             "completion_tokens": sum(r.completion_tokens for r in results),
             "provider_reported_turns": sum(r.provider_reported_turns for r in results),
             "metered_turns": sum(r.metered_turns for r in results),
-            "cost_usd": round(sum(costs), 6) if all(c is not None for c in costs) else None,
+            "cost_usd": round(sum(c for c in costs if c is not None), 6) if all(c is not None for c in costs) else None,
             "pricing_usd_per_million_tokens": (
                 {"input": rates[0], "output": rates[1]} if rates is not None else None
             ),
