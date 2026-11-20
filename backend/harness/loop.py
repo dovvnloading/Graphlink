@@ -59,7 +59,7 @@ from backend.harness.transcript import (
     load_messages,
 )
 from backend.harness.workspace import WorkspaceError, bound_root, ensure_workspace
-from backend.providers.base import CancelToken, ToolCall
+from backend.providers.base import CancelToken, ToolCall, ToolSpec
 from backend.tools import (
     CODE_EXECUTE,
     FS_READ,
@@ -106,6 +106,35 @@ _HARNESS_TOOL_NAME_EXCLUSIONS = ("builder.",)
 # Only Web Research adapters perform per-task domain consent. Do not expose
 # unrelated net.fetch tools merely because the harness grants that scope.
 _HARNESS_WEB_TOOLS = frozenset({"web.search", "web.fetch"})
+
+# Isolated containers confine shell tools, not the host REPL or installer.
+# Omit these from the model's schemas and the registry's invoke-time catalog.
+_ISOLATED_HOST_EXECUTION_TOOLS = frozenset({"python.exec", "python.install"})
+
+
+def _offered_harness_specs(registry: ToolRegistry, execution_profile: str) -> tuple[ToolSpec, ...]:
+    """Profile-aware catalog, enforced both at model offer and registry invoke."""
+    return tuple(
+        spec for spec in registry.specs()
+        if (registry.scopes_for(spec.name) or frozenset()) <= HARNESS_GRANTED_SCOPES
+        and not spec.name.startswith(_HARNESS_TOOL_NAME_EXCLUSIONS)
+        and (
+            NET_FETCH not in (registry.scopes_for(spec.name) or frozenset())
+            or spec.name in _HARNESS_WEB_TOOLS
+        )
+        and (
+            execution_profile != "isolated"
+            or spec.name not in _ISOLATED_HOST_EXECUTION_TOOLS
+        )
+    )
+
+
+def _retire_host_repl_for_isolated(dispatcher, workspace_id: str) -> None:
+    """Retire a Host task's persistent interpreter when switching profiles."""
+    repls = getattr(dispatcher, "_harness_python_repls", None)
+    if repls is not None:
+        repls.stop_workspace(workspace_id)
+
 
 # The approval prompt's cap applies ONLY to the generic JSON-arguments
 # fallback. A disclosed command or file body is NEVER truncated - the
@@ -438,6 +467,7 @@ async def run_harness(
     model_ref=None,
     settings_manager=None,
     runtime=None,
+    allow_session_grants: bool = True,
 ) -> None:
     """One harness task, claimed as kind="harness" by
     AgentDispatcher.start_harness_run (which create_tasks this)."""
@@ -550,7 +580,10 @@ async def run_harness(
         # Executable commands and interactive stdin always ask fresh, even
         # when a previous call was approved for the session. The panel must
         # not suggest session consent that the registry will reject.
-        node.state.harness_approval_session_offered = preview_available and not bind_approval and not _is_dangerous_call(call)
+        node.state.harness_approval_session_offered = (
+            preview_available and ctx.session_grants is not None
+            and not bind_approval and not _is_dangerous_call(call)
+        )
         await bus.publish("scene")
         try:
             approved = await future
@@ -602,7 +635,10 @@ async def run_harness(
         # design - a dispatcher that does not offer session grants yields
         # None, which RunContext reads as "no session-scoped option exists",
         # leaving every prompt once-or-deny.
-        session_grants=_session_grants_of(dispatcher, node.state.harness_workspace_id),
+        session_grants=(
+            _session_grants_of(dispatcher, node.state.harness_workspace_id)
+            if allow_session_grants else None
+        ),
         set_plan=set_plan,
         ask_user=ask_user,
         cancel=CancelToken(cancel_event),
@@ -647,6 +683,12 @@ async def run_harness(
                 sessions.bind_root, node.state.harness_workspace_id, root,
                 ctx.harness_execution_profile,
             )
+        if ctx.harness_execution_profile == "isolated":
+            # A persistent Host REPL may survive an earlier Host task even
+            # when this task never calls python.exec. Stop it on transition.
+            await asyncio.to_thread(
+                _retire_host_repl_for_isolated, dispatcher, node.state.harness_workspace_id,
+            )
         # The root this run ACTUALLY bound, scratch included: a "" here
         # means "no run yet", which is what lets the card distinguish a
         # refused grant from a binding that has simply not run.
@@ -664,15 +706,7 @@ async def run_harness(
         # ADR-021 stage 21.1 posture: offer only tools this run could
         # actually pass the scope gate with - anything else spends context
         # per turn to buy a guaranteed denial.
-        specs = tuple(
-            spec for spec in registry.specs()
-            if (registry.scopes_for(spec.name) or frozenset()) <= HARNESS_GRANTED_SCOPES
-            and not spec.name.startswith(_HARNESS_TOOL_NAME_EXCLUSIONS)
-            and (
-                NET_FETCH not in (registry.scopes_for(spec.name) or frozenset())
-                or spec.name in _HARNESS_WEB_TOOLS
-            )
-        )
+        specs = _offered_harness_specs(registry, ctx.harness_execution_profile)
         # Enforce this same catalog on calls returned by the model, even when
         # a model fabricates a tool name that was never in its schemas.
         ctx.offered_tool_names = frozenset(spec.name for spec in specs)

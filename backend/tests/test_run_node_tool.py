@@ -382,6 +382,27 @@ class TestRunResearch:
         assert result.is_error
         assert "No sources" in result.content
 
+    def test_workspace_research_cannot_bypass_per_domain_network_approval(self, monkeypatch):
+        from graphlink_plugins.web_research import service as wr_service
+
+        document, dispatcher, registry = make_setup()
+        node = self._seed_research(document)
+        outgoing = []
+        monkeypatch.setattr(
+            wr_service.WebResearchService, "run",
+            lambda self, request, **kw: outgoing.append(request),
+        )
+        ctx = make_ctx(scopes=ALL_SCOPES | frozenset({"net.fetch"}))
+        ctx.harness_workspace_id = "workspace-1"  # type: ignore[attr-defined]
+
+        # Also covers omitting "action": web_research defaults to research.
+        result = run_node(registry, ctx, node.id)
+
+        assert result.is_error
+        assert "web.search/web.fetch" in result.content
+        assert outgoing == []
+        assert node.pending_request_id is None
+
     def test_research_requires_the_net_fetch_scope(self):
         document, dispatcher, registry = make_setup()
         node = self._seed_research(document)

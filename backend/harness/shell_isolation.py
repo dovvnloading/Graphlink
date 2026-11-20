@@ -65,6 +65,15 @@ def container_invocation(
     executable = shutil.which(engine, path=_path(environment))
     if not executable:
         raise IsolationUnavailableError(f"{engine} is no longer available; Host execution was NOT attempted.")
+    mount_source = str(workspace.resolve())
+    # --mount parses comma-separated fields *inside* this argv element.
+    # A comma in a directory name can inject extra mount options even
+    # though we never interpolate commands through the host shell.
+    if any(char in mount_source for char in (",", "\r", "\n")):
+        raise IsolationUnavailableError(
+            "Isolated execution cannot mount workspace paths containing "
+            "commas or newlines. Host execution was NOT attempted."
+        )
     name = f"graphlink-agent-{uuid.uuid4().hex}"
     args = [
         executable, "run", "--rm", "--interactive", "--pull=never",
@@ -74,7 +83,7 @@ def container_invocation(
         "--pids-limit=128", "--read-only",
         "--cap-drop=ALL", "--security-opt=no-new-privileges",
         "--tmpfs", "/tmp:rw,nosuid,nodev,size=64m",
-        "--mount", f"type=bind,source={workspace.resolve()},target={CONTAINER_WORKSPACE}",
+        "--mount", f"type=bind,source={mount_source},target={CONTAINER_WORKSPACE}",
         "--workdir", CONTAINER_WORKSPACE,
         "--env", "HOME=/tmp", "--env", "PYTHONDONTWRITEBYTECODE=1",
     ]

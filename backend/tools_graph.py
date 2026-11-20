@@ -816,7 +816,8 @@ RUN_NODE_SPEC = ToolSpec(
         "chart_type, default bar), research (a web_research node's default "
         "- runs a web search/fetch on its content as the query and returns "
         "cited findings; requires net.fetch - always prompts for approval, "
-        "even in autopilot). Omit `action` to run the node's own default."
+        "even in autopilot; workspace agents must use web.search / "
+        "web.fetch instead). Omit `action` to run the node's own default."
     ),
     input_schema={
         "type": "object",
@@ -897,6 +898,14 @@ def make_run_node_handler(document: SceneDocument, dispatcher):
             return _error(
                 f"Tool 'run_node' action {action!r} requires scope(s) "
                 f"['{required_scope}'] that this run was not granted."
+            )
+        # Unlike the Builder, workspace-agent network grants require
+        # individual domain approval, including every fetch redirect.
+        # run_node's research pipeline cannot enforce those approvals.
+        if action == "research" and hasattr(ctx, "harness_workspace_id"):
+            return _error(
+                "Workspace agents cannot invoke research via run_node; "
+                "use web.search/web.fetch for per-task domain approval."
             )
         if node.pending_request_id:
             return _error(f"Node {node_id!r} already has a run in flight.")

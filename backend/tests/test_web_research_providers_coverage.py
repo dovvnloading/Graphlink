@@ -709,7 +709,17 @@ class TestDuckDuckGoSearchProvider:
         with patch.object(providers_module, "DDGS", return_value=fake_ddgs):
             results = provider.search("query", limits=limits, token=token)
 
+        # A provider-family grant must not silently select ddgs's auto
+        # meta-search mode (which may contact unrelated search providers).
+        fake_ddgs.text.assert_called_once_with(
+            "query", backend="duckduckgo", max_results=limits.max_search_results,
+        )
         assert [r.canonical_url for r in results] == ["https://example.com/a", "https://example.com/b"]
+        # The workspace prompts ONLY for duckduckgo.com. Never silently
+        # let ddgs choose Bing/Brave/Google via its auto backend.
+        fake_ddgs.text.assert_called_once_with(
+            "query", backend="duckduckgo", max_results=limits.max_search_results,
+        )
         assert results[0].rank == 1
         # Rank reflects the ORIGINAL raw-result index (enumerate() runs
         # before the dedup check), not a sequential post-dedup count - the
