@@ -129,6 +129,24 @@ def text_tool_history(messages: list[dict], tools: tuple[ToolSpec, ...]) -> list
                 content += "\n\n" + instructions
                 instructed = True
             converted.append({"role": "system", "content": content})
+        elif role == "user" and message.get("_harness_image_observation") is True:
+            # Only workspace fs.read's bounded, temporary previews may carry
+            # images through the JSON tool fallback. Arbitrary multimodal
+            # history still fails closed (including audio and non-user turns).
+            parts = message.get("content")
+            if (not isinstance(parts, list) or not parts or any(
+                not isinstance(part, dict) or part.get("type") not in {"text", "image_bytes"}
+                for part in parts
+            )):
+                raise JSONToolProtocolError("Invalid workspace image observation.")
+            if converted and converted[-1]["role"] == "user":
+                previous = converted[-1]["content"]
+                converted[-1]["content"] = (
+                    ([{"type": "text", "text": previous}] if isinstance(previous, str) else previous)
+                    + parts
+                )
+            else:
+                converted.append({"role": "user", "content": parts})
         elif role in ("user", "assistant"):
             converted.append({"role": role, "content": _text_content(message)})
         else:
