@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+from contextlib import closing
 
 import pytest
 
@@ -28,7 +29,10 @@ def test_writer_indexes_messages_calls_and_compaction_without_rewriting_history(
         "tool_calls": [{"id": "c1", "name": "fs.read", "arguments": {"path": "stellar-notes.md"}}],
     })
     append_compaction(tmp_path, "Historical summary: chrysanthemum was selected.")
-    assert flush(tmp_path)
+    # Windows CI can be CPU- and filesystem-busy under parallel coverage;
+    # allow the writer time to finish FTS without weakening its default
+    # production flush timeout.
+    assert flush(tmp_path, timeout=20.0)
 
     transcript = transcript_path(tmp_path)
     assert index_path(transcript).is_file()  # indexed on write, not just on search
@@ -59,7 +63,9 @@ def test_legacy_backfill_and_crash_gap_sync_are_idempotent(tmp_path):
         fh.write('{"t":"msg","role":"assistant","content":"new marigold answer"}\n')
     assert len(search_index(transcript, "marigold")) == 1
     assert len(search_index(transcript, "marigold")) == 1
-    with sqlite3.connect(index_path(transcript)) as db:
+    # sqlite3.Connection.__exit__ commits but does NOT close the handle.
+    # Windows refuses to unlink the index while that handle is still open.
+    with closing(sqlite3.connect(index_path(transcript))) as db:
         assert db.execute("SELECT count(*) FROM transcript_fts").fetchone()[0] == 2
 
     # The FTS database is derived data: deleting it must not lose history.
