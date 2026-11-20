@@ -41,6 +41,7 @@ from backend.providers.base import (
     ChatRequest,
     ProviderCapabilities,
     ProviderEvent,
+    require_successful_stop,
     ToolCall,
     normalize_usage,
     tool_arguments,
@@ -263,6 +264,7 @@ class AnthropicProvider:
         # as OpenAI's per-index buffering, then parsed once complete.
         tool_call_buffers: dict = {}
         saw_message_stop = False
+        stop_reason = None
         # ADR-006 stage 6.8: input tokens arrive on message_start
         # (message.usage.input_tokens), output tokens on message_delta
         # (usage.output_tokens, cumulative - last one wins). Read through
@@ -325,6 +327,10 @@ class AnthropicProvider:
                     if start_usage is not None:
                         prompt_tokens = _sum_anthropic_prompt_tokens(start_usage)
                 elif event_type == "message_delta":
+                    delta = _extract_response_field(event, "delta", {})
+                    reason = _extract_response_field(delta, "stop_reason", None)
+                    if reason is not None:
+                        stop_reason = reason
                     delta_usage = _extract_response_field(event, "usage", None)
                     if delta_usage is not None:
                         completion_tokens = _extract_response_field(delta_usage, "output_tokens", None)
@@ -343,6 +349,7 @@ class AnthropicProvider:
             raise RuntimeError(
                 "Anthropic stream ended unexpectedly before completion. Please try again."
             )
+        require_successful_stop("Anthropic", stop_reason, {"end_turn", "tool_use", "stop_sequence"})
 
         if tool_call_buffers:
             # ADR-007 stage 7.1: a pure tool-call turn is a legitimate,
