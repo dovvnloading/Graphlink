@@ -945,7 +945,7 @@ class TestApprovalFlow:
         node = document.add_harness_node(0, 0, "update settings")
         root = ensure_workspace(node.state.harness_workspace_id)
         target = root / "settings.txt"
-        target.write_text("mode=old\n", encoding="utf-8")
+        target.write_bytes(b"mode=old\n")
         registry = ToolRegistry()
         register_harness_fs_tools(registry)
         dispatcher = LoopDispatcher()
