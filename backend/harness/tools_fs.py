@@ -19,11 +19,15 @@ never a crash.
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import difflib
+import errno
 import hashlib
 import os
 import secrets
+import shutil
 import stat
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -199,6 +203,121 @@ def _read_bounded_text(path: Path, *, errors: str = "strict", max_bytes: int | N
     return _read_bounded_bytes(path, max_bytes=max_bytes).decode("utf-8", errors=errors)
 
 
+def _create_exclusively_without_links(staged_path: Path, target: Path) -> None:
+    """Create only if absent when the workspace cannot hard-link.
+
+    O_EXCL (Path.open("xb")) is the race-proof absence precondition here.
+    Unlike a hard link the fallback cannot publish all bytes in one step;
+    remove our own partial file on an I/O failure, but never delete a file
+    another process has since replaced.
+    """
+    created = None
+    try:
+        with target.open("xb") as destination:
+            created = os.fstat(destination.fileno())
+            with staged_path.open("rb") as source:
+                shutil.copyfileobj(source, destination)
+            destination.flush()
+            os.fsync(destination.fileno())
+    except BaseException:
+        if created is not None:
+            try:
+                current = target.lstat()
+                if (current.st_dev, current.st_ino) == (created.st_dev, created.st_ino):
+                    target.unlink()
+            except OSError:
+                pass
+        raise
+
+
+def _exchange_approved_file(target: Path, staged_path: Path) -> Path:
+    """Publish while retaining the *actual* displaced file for validation.
+
+    A pre-replace hash alone is a TOCTOU check. On POSIX, rename exchange
+    atomically swaps the two inodes; on Windows, ReplaceFileW keeps the
+    displaced target as a backup. Never fall back to an unconditional
+    os.replace for an approved overwrite on an unsupported filesystem.
+    Returns the path holding the displaced original.
+    """
+    if os.name == "nt":
+        backup = staged_path.with_name(staged_path.name + ".before")
+        replace_file = ctypes.WinDLL("kernel32", use_last_error=True).ReplaceFileW
+        replace_file.argtypes = [
+            ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_wchar_p,
+            ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p,
+        ]
+        replace_file.restype = ctypes.c_int
+        if not replace_file(str(target), str(staged_path), str(backup), 0, None, None):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return backup
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == "darwin":
+        rename = getattr(libc, "renameatx_np", None)
+        cwd_fd = getattr(os, "AT_FDCWD", -2)
+    elif sys.platform.startswith("linux"):
+        rename = getattr(libc, "renameat2", None)
+        cwd_fd = getattr(os, "AT_FDCWD", -100)
+    else:
+        rename = None
+        cwd_fd = -1
+    if rename is None:
+        raise WorkspaceError("This filesystem cannot safely commit a version-guarded overwrite.")
+    rename.argtypes = [
+        ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint,
+    ]
+    rename.restype = ctypes.c_int
+    # Linux RENAME_EXCHANGE and macOS RENAME_SWAP are both flag 0x2.
+    if rename(cwd_fd, os.fsencode(target), cwd_fd, os.fsencode(staged_path), 0x2) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+    return staged_path
+
+
+def _displaced_file_matches_approval(displaced: Path, approved: FileApprovalState) -> bool:
+    """Check the file actually displaced by the atomic commit, not its path.
+
+    A rename updates the displaced inode's ctime even without an external
+    edit, so compare its identity and mtime plus exact bytes, not ctime.
+    """
+    if approved.digest is None or approved.version is None:
+        return False
+    try:
+        if not displaced.is_file():
+            return False
+        info = displaced.stat()
+        expected = approved.version[:3]  # device, inode, mtime_ns
+        actual = (info.st_dev, info.st_ino, info.st_mtime_ns)
+        if actual != expected:
+            return False
+        digest = hashlib.sha256(_read_bounded_bytes(displaced)).hexdigest()
+        info = displaced.stat()
+        return digest == approved.digest and (info.st_dev, info.st_ino, info.st_mtime_ns) == expected
+    except (OSError, WorkspaceError):
+        return False
+
+
+def _replace_approved_existing(target: Path, staged_path: Path, approved: FileApprovalState) -> None:
+    displaced = _exchange_approved_file(target, staged_path)
+    if not _displaced_file_matches_approval(displaced, approved):
+        # An editor may have written or atomically renamed a newer file
+        # AFTER our pre-commit check. Put precisely that displaced version
+        # back, not the version from the earlier approval preview.
+        try:
+            if displaced == staged_path:
+                _exchange_approved_file(target, staged_path)
+            else:
+                os.replace(displaced, target)
+        except OSError as exc:
+            raise WorkspaceError(
+                f"{_STALE_FILE_APPROVAL} Could not restore the external version; "
+                f"the displaced file is at {displaced}: {exc}"
+            ) from exc
+        raise WorkspaceError(_STALE_FILE_APPROVAL)
+    if displaced != staged_path:
+        displaced.unlink(missing_ok=True)
+
+
 def _write_atomic_text(
     target: Path, content: str, *, approval_state: FileApprovalState | None = None,
 ) -> None:
@@ -252,7 +371,20 @@ def _write_atomic_text(
                     os.link(staged_path, target)
                 except FileExistsError as exc:
                     raise WorkspaceError(_STALE_FILE_APPROVAL) from exc
+                except (OSError, NotImplementedError) as exc:
+                    # Writable FAT/exFAT and some shared mounts reject hard
+                    # links; an exclusive create still protects absence.
+                    unsupported = {errno.EPERM, errno.EACCES, errno.ENOSYS,
+                                   errno.EOPNOTSUPP, errno.EXDEV, errno.EINVAL}
+                    if isinstance(exc, OSError) and exc.errno not in unsupported:
+                        raise
+                    try:
+                        _create_exclusively_without_links(staged_path, target)
+                    except FileExistsError as conflict:
+                        raise WorkspaceError(_STALE_FILE_APPROVAL) from conflict
                 return
+            _replace_approved_existing(target, staged_path, approval_state)
+            return
         os.replace(staged_path, target)
     finally:
         if staged_path is not None:
