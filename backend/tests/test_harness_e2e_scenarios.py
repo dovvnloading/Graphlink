@@ -257,7 +257,14 @@ def test_fix_failing_sample_project_test_and_re_run_it(scenario, monkeypatch):
     project = scenario.workspace / "sample_project"
     project.mkdir()
     source = project / "calculator.py"
-    source.write_bytes(b"def double(value):\n    return value + 1\n")
+    # CPython's timestamp-based .pyc cache checks whole-second mtime and size.
+    # These two unittest subprocesses can run within the same second, so an
+    # equal-length edit (+ 1 -> * 2) could rerun the buggy cached bytecode.
+    # Change the file size as part of the repair to force recompilation.
+    broken_source = b"def double(value):\n    return value + 1  # bug\n"
+    fixed_source = b"def double(value):\n    return value * 2\n"
+    assert len(broken_source) != len(fixed_source)
+    source.write_bytes(broken_source)
     (project / "test_calculator.py").write_bytes(
         b"import unittest\nfrom calculator import double\n\n"
         b"class CalculatorTests(unittest.TestCase):\n"
@@ -284,7 +291,7 @@ def test_fix_failing_sample_project_test_and_re_run_it(scenario, monkeypatch):
         observed["failed"] = _result(request, "failing_test")
         return {"calls": [_call(
             "fix", "fs.edit", path="sample_project/calculator.py",
-            old_string="return value + 1", new_string="return value * 2",
+            old_string="return value + 1  # bug", new_string="return value * 2",
         )]}
 
     def verify(request):
@@ -309,7 +316,7 @@ def test_fix_failing_sample_project_test_and_re_run_it(scenario, monkeypatch):
     assert observed["failed"].startswith("exit code 1"), observed["failed"]
     assert "edit" in observed["fix"].lower() or "replac" in observed["fix"].lower(), observed["fix"]
     assert observed["passed"].startswith("exit code 0"), observed["passed"]
-    assert source.read_bytes() == b"def double(value):\n    return value * 2\n"
+    assert source.read_bytes() == fixed_source
     assert [tool for tool, _summary in run.approvals] == ["shell.exec", "fs.edit", "shell.exec"]
     assert _activity(scenario) == [
         ("fs.read", "ok"), ("fs.read", "ok"),
