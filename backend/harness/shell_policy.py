@@ -167,6 +167,19 @@ def _is_dangerous(segment: str) -> bool:
         return False
     if tokens[0] in _DANGEROUS_PROGRAMS:
         return True
+    # Flag destructive subcommands even when a program option precedes the
+    # verb (e.g. git -C other-repo push). A previously allowed bare "git"
+    # prefix must never authorize a force push via option reordering.
+    subcommands = {
+        "git": {"push", "reset", "clean"},
+        "npm": {"publish"},
+        "pip": {"uninstall"},
+        "docker": {"rm", "rmi", "system"},
+    }
+    if any(word in subcommands.get(tokens[0], ()) for word in tokens[1:]):
+        return True
+    if tokens[0] == "git" and "checkout" in tokens and "--" in tokens:
+        return True
     for phrase in _DANGEROUS_PHRASES:
         if tokens[: len(phrase)] == list(phrase):
             return True
@@ -387,8 +400,12 @@ def shell_allow_rule_candidates(command: str, *, shell: str = "auto") -> list[st
         return []
     rules = []
     for segment in plan.segments:
-        if (len(segment) > 256 or any(char in segment for char in "\r\n\t<>")
-                or "${" in segment):
+        # analyze() is a disclosure-oriented splitter, not a complete shell
+        # grammar. Its permissive quote/escape handling is NOT sufficient to
+        # authorize persistence: quoted executables, variables, grouping,
+        # redirections and encoded escapes can conceal a dangerous command.
+        # For remembered rules accept only the unambiguous plain-token subset.
+        if len(segment) > 256 or not re.fullmatch(r"[a-zA-Z0-9_./:@=+,-]+(?: [a-zA-Z0-9_./:@=+,-]+)*", segment):
             return []
         tokens = _tokens(segment)
         # An inline program (possibly constructing a different shell command)

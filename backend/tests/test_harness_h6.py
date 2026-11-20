@@ -170,7 +170,10 @@ class TestShellAllowRules:
         assert not shell_command_allowed("git status && npm build", rules, shell="bash")
         assert not shell_command_allowed("git statuses && npm test", rules, shell="bash")
         assert not shell_command_allowed("git status && npm test && echo bonus", rules, shell="bash")
-        assert not shell_command_allowed("git status && npm test", rules, shell="powershell")
+        assert not shell_command_allowed(
+            "git status && npm test", ["powershell\tgit status", "powershell\tnpm test"],
+            shell="bash",
+        )
 
     def test_dangerous_and_ambiguous_commands_always_require_a_prompt(self):
         from backend.harness.shell_policy import shell_allow_rule_candidates, shell_command_allowed
@@ -178,6 +181,10 @@ class TestShellAllowRules:
         assert shell_allow_rule_candidates("git status && rm -rf out", shell="bash") == []
         assert shell_allow_rule_candidates("echo $(rm -rf out)", shell="bash") == []
         assert shell_allow_rule_candidates("python -c 'print(1)'", shell="bash") == []
+        assert shell_allow_rule_candidates('"rm" -rf build', shell="bash") == []
+        assert shell_allow_rule_candidates("(rm -rf build)", shell="bash") == []
+        assert shell_allow_rule_candidates("echo ${PATH}", shell="bash") == []
+        assert not shell_command_allowed("git -C other push", ["bash\tgit"], shell="bash")
         assert not shell_command_allowed(
             "git status && rm -rf out", ["bash\tgit status", "bash\trm -rf out"], shell="bash",
         )
