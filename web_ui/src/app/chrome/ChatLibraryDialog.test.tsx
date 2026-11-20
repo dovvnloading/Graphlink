@@ -179,7 +179,9 @@ function OpenLibraryButton() {
 function setup(withActiveScene = false) {
   const user = userEvent.setup();
   const fake = makeTransport();
+  const cancelWorkspacePreview = vi.fn();
   const store = {
+    cancelWorkspacePreview,
     getScene: () => ({
       ...initialSceneState,
       nodes: withActiveScene ? [{ id: "dirty" }] : [],
@@ -192,7 +194,7 @@ function setup(withActiveScene = false) {
     </OverlayProvider>,
   );
   act(() => fake.push(snapshot));
-  return { user, ...fake };
+  return { user, ...fake, cancelWorkspacePreview };
 }
 
 // "Now" is pinned so date-bucketing is deterministic; only Date is faked so
@@ -217,33 +219,36 @@ describe("ChatLibraryDialog", () => {
   });
 
   it("clicking a row's body loads THAT chat and closes the dialog - no separate select-then-Load step", async () => {
-    const { user, intents } = setup();
+    const { user, intents, cancelWorkspacePreview } = setup();
     await user.click(screen.getByText("open library"));
 
     await user.click(screen.getByRole("button", { name: /Open chat "Second Chat"/ }));
 
     expect(intents).toContainEqual(["app-chat-library", "loadChat", [2]]);
+    expect(cancelWorkspacePreview).toHaveBeenCalledOnce();
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("keeps the library open and does not navigate when a dirty-scene switch is declined", async () => {
-    const { user, intents } = setup(true);
+    const { user, intents, cancelWorkspacePreview } = setup(true);
     const confirmation = vi.spyOn(window, "confirm").mockReturnValue(false);
     await user.click(screen.getByText("open library"));
     await user.click(screen.getByRole("button", { name: /Open chat "Second Chat"/ }));
     expect(confirmation).toHaveBeenCalledOnce();
     expect(intents.some((entry) => entry[1] === "loadChat")).toBe(false);
+    expect(cancelWorkspacePreview).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     confirmation.mockRestore();
   });
 
   it("asks before starting a new chat from a populated canvas", async () => {
-    const { user, intents } = setup(true);
+    const { user, intents, cancelWorkspacePreview } = setup(true);
     const confirmation = vi.spyOn(window, "confirm").mockReturnValue(true);
     await user.click(screen.getByText("open library"));
     await user.click(screen.getByRole("button", { name: "New Chat" }));
     expect(confirmation).toHaveBeenCalledOnce();
     expect(intents).toContainEqual(["app-chat-library", "newChat", []]);
+    expect(cancelWorkspacePreview).toHaveBeenCalledOnce();
     confirmation.mockRestore();
   });
 

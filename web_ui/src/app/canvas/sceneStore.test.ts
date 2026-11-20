@@ -1932,7 +1932,8 @@ describe("SceneStore", () => {
     const { transport, listeners } = makeFakeTransport();
     const store = new SceneStore(transport);
     store.connect();
-    expect(listeners.size).toBe(4);
+    expect(listeners.size).toBe(5);
+    expect(listeners.has("app-settings")).toBe(true);
     store.dispose();
     expect(listeners.size).toBe(0);
   });
