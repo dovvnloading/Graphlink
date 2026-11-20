@@ -324,8 +324,6 @@ def test_stream_live_shell_output_before_the_tool_finishes(scenario, monkeypatch
 
 
 def test_agent_files_are_browsable_in_the_confined_files_view(scenario, monkeypatch):
-    (scenario.workspace / ".git").mkdir()
-    (scenario.workspace / ".git" / "config").write_text("private metadata", encoding="utf-8")
     content = "# Inspection\nCompleted by the workspace agent.\n"
 
     def list_files(request):
@@ -341,6 +339,9 @@ def test_agent_files_are_browsable_in_the_confined_files_view(scenario, monkeypa
         list_files, finish,
     ], approvals=[("fs.write", True)])
 
+    # Metadata filtering belongs to Files; do not confuse the agent\'s git probe.
+    (scenario.workspace / ".git").mkdir()
+    (scenario.workspace / ".git" / "config").write_text("private metadata", encoding="utf-8")
     root_listing = list_workspace_files(scenario.workspace)
     # The managed scratch root also contains the agent transcript/index.
     assert any(entry["name"] == "reports" and entry["isDir"] for entry in root_listing["entries"])
