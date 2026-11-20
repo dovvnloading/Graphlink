@@ -240,6 +240,14 @@ def register_settings_general_intents(
             agent_dispatcher.invalidate_builder_registry()
         await bus.publish("app-settings")
 
+    async def revoke_harness_trusted_dir(path: object):
+        # A revocation removes one previously picked grant. No bulk-replace
+        # intent is exposed: a malformed argument must never clear the list.
+        if not isinstance(path, str) or not path.strip():
+            return
+        await asyncio.to_thread(run_locked, manager.revoke_harness_trusted_dir, path)
+        await bus.publish("app-settings")
+
     bus.register_intent("app-settings", "setActiveSection", set_active_section)
     bus.register_intent("app-settings", "setShowTokenCounter", set_show_token_counter)
     bus.register_intent("app-settings", "setEnableSystemPrompt", set_enable_system_prompt)
@@ -252,3 +260,4 @@ def register_settings_general_intents(
     bus.register_intent("app-settings", "clearGithubToken", clear_github_token)
     bus.register_intent("app-settings", "setProviderMode", set_provider_mode)
     bus.register_intent("app-settings", "setMcpServers", set_mcp_servers)
+    bus.register_intent("app-settings", "revokeHarnessTrustedDir", revoke_harness_trusted_dir)
