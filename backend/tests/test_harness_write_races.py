@@ -207,3 +207,29 @@ def test_parent_symlink_swap_before_staging_does_not_touch_outside(tmp_path, mon
     assert result.is_error
     assert not (outside / "new.txt").exists()
     assert not (workspace / "sub-old" / "new.txt").exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Requires POSIX no-follow directory handles")
+def test_direct_preapproved_nested_write_cannot_follow_swapped_parent(tmp_path):
+    workspace = tmp_path / "workspace"
+    parent = workspace / "sub"
+    outside = tmp_path / "outside"
+    parent.mkdir(parents=True)
+    outside.mkdir()
+    call = ToolCall(
+        id="preapproved", name="fs.write",
+        arguments={"path": "sub/new.txt", "content": "approved content"},
+    )
+    preview = fs.preview_harness_file_change(call, workspace)
+    assert preview.available and preview.state is not None
+    assert preview.state.root == workspace.resolve()
+
+    parent.rename(workspace / "sub-old")
+    parent.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(WorkspaceError):
+        fs._write_atomic_text(
+            preview.state.target, "approved content", approval_state=preview.state,
+        )
+
+    assert not (outside / "new.txt").exists()
+    assert not (workspace / "sub-old" / "new.txt").exists()
