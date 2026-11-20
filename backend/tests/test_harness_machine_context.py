@@ -56,7 +56,10 @@ def test_isolated_machine_tier_describes_container_not_host_shell(tmp_path, monk
 
 
 def test_command_shell_is_the_execution_shell_not_the_login_shell(monkeypatch):
-    monkeypatch.setattr(context_module.shutil, "which", lambda _name, *, path: None)
+    monkeypatch.setattr(
+        context_module.shutil, "which",
+        lambda name, *, path: "/bin/bash" if name == "bash" else None,
+    )
     assert context_module._command_shell(
         {"SHELL": "/bin/zsh"}, os_name="posix",
     ) == "/bin/bash --noprofile --norc -c"
@@ -69,6 +72,13 @@ def test_command_shell_is_the_execution_shell_not_the_login_shell(monkeypatch):
     powershell_command = context_module._command_shell({}, os_name="nt")
     assert "pwsh.exe" in powershell_command.lower() or "powershell.exe" in powershell_command.lower()
     assert "-NoLogo -NoProfile -NonInteractive -Command" in powershell_command
+
+
+def test_command_shell_reports_bash_missing_from_execution_path(monkeypatch):
+    monkeypatch.setattr(context_module.shutil, "which", lambda _name, *, path: None)
+    assert context_module._command_shell(
+        {"SHELL": "/bin/zsh", "PATH": "/restricted/bin"}, os_name="posix",
+    ) == "Bash (not found on this machine)"
 
 
 def test_machine_tier_is_cacheable_and_precedes_untrusted_workspace_instructions(tmp_path):

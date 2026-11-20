@@ -538,7 +538,7 @@ def test_powershell_shell_exec_reports_native_exit_code(scenario, monkeypatch):
         finish,
     ], approvals=[("shell.exec", True)])
 
-    assert observed["output"].startswith("exit code 42\n")
+    assert observed["output"] == "exit code 42 (no output)"
     assert _activity(scenario) == [("shell.exec", "error")]
     assert [tool for tool, _ in run.approvals] == ["shell.exec"]
 
