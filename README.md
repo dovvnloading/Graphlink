@@ -2,7 +2,7 @@
 
 **A local-first desktop workspace for branching AI conversations.** Ask a question, fork a reply into two lines of inquiry, then bring their answers together. Each branch keeps its own conversation history. Notes, sources, code, charts, and model replies sit next to the question they came from.
 
-[Install Graphlink](#getting-started) · [Connect a model](#connect-a-model) · [Build your first graph](#build-your-first-graph) · [API providers](#api-providers) · [Developer guide](#development)
+[Install Graphlink](#getting-started) · [Connect a model](#connect-a-model) · [Build your first graph](#build-your-first-graph) · [Workspace agent guide](docs/WORKSPACE_AGENT.md) · [API providers](#api-providers) · [Developer guide](#development)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/node-detail.png">
@@ -140,7 +140,7 @@ If **Load available models** is unavailable or your deployment is missing from t
 
 Open **Builder** to give the graph a goal. Choose **Plan the build**, edit the checklist on its plan card, then choose **Start build**. **Co-pilot** asks before edits to the canvas. **Autopilot** can make ordinary canvas edits on its own within your step, token, and time budgets. Python execution and web fetches still require approval. A paused or interrupted build can resume from its plan card. **Stop** ends the run. [View the Builder and a recipe](assets/screenshots/builder-launcher.png).
 
-Open **Agent** for tasks that need files. It starts in a private scratch folder, or you can choose an existing project with **Choose folder…**. The agent can read files, propose edits, and request approval to run shell commands or Python. Its activity appears on the canvas. Models without native tool calling can use the agent if their runtime supports constrained JSON output. [JSON tool protocol](docs/WORKSPACE_JSON_TOOLS.md).
+Open **Agent** for tasks that need files. It starts in a private scratch folder, or you can choose an existing project with **Choose folder…**. The agent can read files, propose edits, and request approval to run shell commands or Python. Its activity appears on the canvas. Models without native tool calling can use the agent if their runtime supports constrained JSON output. [Workspace agent user guide](docs/WORKSPACE_AGENT.md) · [JSON tool protocol](docs/WORKSPACE_JSON_TOOLS.md).
 
 Put reusable skills in `.graphlink/skills/<package>/SKILL.md` within your selected workspace, or in `~/.graphlink/skills/<package>/SKILL.md` to make them available to all your workspace agents. Each file needs YAML frontmatter with `name` and `description`. The agent sees only these summaries in its prompt and reads the full instructions with `skills.load` when relevant; skills cannot override tool approvals.
 
