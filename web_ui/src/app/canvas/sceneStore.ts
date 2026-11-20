@@ -1163,7 +1163,10 @@ export class SceneStore {
   async sendHarnessMessage(nodeId: string, text: string): Promise<boolean> {
     const previous = this.uncertainHarnessSends.get(nodeId);
     const send = previous?.text === text ? previous : {
-      text, operationId: `send-${globalThis.crypto.randomUUID()}`,
+      text, operationId: `send-${Array.from(
+        globalThis.crypto.getRandomValues(new Uint8Array(16)),
+        (byte) => byte.toString(16).padStart(2, "0"),
+      ).join("")}`,
     };
     this.uncertainHarnessSends.set(nodeId, send);
     try {
