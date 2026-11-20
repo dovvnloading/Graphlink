@@ -205,7 +205,7 @@ def test_invalid_or_absent_uncertainties_never_create_nodes(setup, extra, error)
         "science.run", pack_id="core", operation_id="convert_unit",
         inputs={"value": 5, "from_unit": "m", "to_unit": "cm"}, **extra,
     )
-    assert response.is_error and error in response.content
+    assert response.is_error and error in json.loads(response.content)["error"]
     assert set(document.nodes) == {agent.id}
     assert not document.command_log
 
