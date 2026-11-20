@@ -171,7 +171,8 @@ def _command_shell(env: dict[str, str], *, os_name: str, shell: str = "auto") ->
     try:
         argv, use_shell = shell_invocation("<command>", shell, env=env, os_name=os_name)
     except ShellUnavailableError:
-        return "Git Bash (not found on this machine)"
+        name = "Git Bash" if os_name == "nt" else "Bash"
+        return f"{name} (not found on this machine)"
     if use_shell:
         return f"{_env_value(env, 'COMSPEC') or 'cmd.exe'} /c"
     return " ".join(argv[:-1])

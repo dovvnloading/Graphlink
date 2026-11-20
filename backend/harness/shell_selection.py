@@ -42,7 +42,14 @@ def _git_bash_executable(env: dict[str, str]) -> str:
     git = shutil.which("git.exe", path=path)
     candidates: list[Path] = []
     if git:
-        root = Path(git).parent.parent
+        git_dir = Path(git).parent
+        root = git_dir.parent
+        # PATH can expose the real git.exe under ucrt64/bin (or mingw64/bin),
+        # not just the wrapper under cmd/. Go up another level in that case.
+        if git_dir.name.casefold() == "bin" and root.name.casefold() in {
+            "ucrt64", "mingw64", "mingw32", "clang64", "clangarm64", "usr",
+        }:
+            root = root.parent
         candidates.extend((root / "bin" / "bash.exe", root / "usr" / "bin" / "bash.exe"))
     for key in ("PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432"):
         base = _env_value(env, key) or os.environ.get(key)
@@ -86,6 +93,37 @@ def _powershell_executable(env: dict[str, str]) -> str:
     return shutil.which("powershell.exe", path=path) or "powershell.exe"
 
 
+def _powershell_command(command: str) -> str:
+    """Preserve a final native command's code while respecting cmdlet success.
+
+    PowerShell -Command normally maps *any* native nonzero exit status to 1.
+    Check $? immediately after the command: a successful final cmdlet must
+    still return 0 even if an earlier native program failed. On failure,
+    propagate a nonzero $LASTEXITCODE if set, or 1 for cmdlet failures.
+    """
+    return (
+        f"& {{\n{command}\n"
+        "if ($?) { exit 0 }\n"
+        "if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n"
+        "exit 1\n}"
+    )
+
+
+def _posix_bash_executable(env: dict[str, str]) -> str:
+    """Look up Bash on the same allowed PATH passed to the subprocess."""
+    path = _env_value(env, "PATH")
+    if path is None:
+        path = os.defpath
+    # Do not search the working directory when the allowed PATH is empty.
+    bash = shutil.which("bash", path=path) if path else None
+    if bash:
+        return bash
+    raise ShellUnavailableError(
+        "Bash is not available on the workspace execution PATH. "
+        "Install Bash or add it to PATH before starting the Agent."
+    )
+
+
 def shell_invocation(
     command: str,
     shell: str = "auto",
@@ -104,7 +142,7 @@ def shell_invocation(
         return command, True
     if selected == "powershell":
         executable = _powershell_executable(environment)
-        return [executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], False
+        return [executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", _powershell_command(command)], False
     if selected == "git-bash":
         return [_git_bash_executable(environment), "--noprofile", "--norc", "-c", command], False
-    return ["/bin/bash", "--noprofile", "--norc", "-c", command], False
+    return [_posix_bash_executable(environment), "--noprofile", "--norc", "-c", command], False
