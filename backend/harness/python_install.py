@@ -265,12 +265,17 @@ def _install_in_worker(
             prepare_isolated_python_environment(isolated_plan)
             # The image provides Python and ensurepip. Only the container
             # may create/repair its own Linux virtualenv.
-            _checked_isolated_command(
+            setup_code, setup_output = _checked_isolated_command(
                 [CONTAINER_PYTHON, "-u", "-c", VENV_BOOTSTRAP_SCRIPT,
                  str(isolated_plan.container_venv),
                  "1" if isolated_plan.managed else "0"],
                 cwd, cancel_event, isolated_plan, cache_root,
             )
+            if setup_code:
+                return ToolResult(
+                    content=f"Could not prepare isolated Python environment:\n{setup_output}",
+                    is_error=True,
+                )
             pip_wheels = f"{CONTAINER_WHEEL_CACHE}/wheels"
             pip_http = f"{CONTAINER_WHEEL_CACHE}/pip-http"
 
@@ -394,10 +399,14 @@ async def install_packages(
                 )
             plan = None
         cancel_event = ctx.cancel.event if ctx.cancel is not None else None
+        wheel_cache = cache_root if cache_root is not None else PYTHON_WHEEL_CACHE_ROOT
+        if plan is not None:
+            return await asyncio.to_thread(
+                _install_in_worker, interpreter, root, packages, cancel_event,
+                wheel_cache, isolated_plan=plan,
+            )
         return await asyncio.to_thread(
-            _install_in_worker, interpreter, root, packages, cancel_event,
-            cache_root if cache_root is not None else PYTHON_WHEEL_CACHE_ROOT,
-            isolated_plan=plan,
+            _install_in_worker, interpreter, root, packages, cancel_event, wheel_cache,
         )
     except (OSError, WorkspaceError, TimeoutError, IsolationUnavailableError) as exc:
         return ToolResult(content=f"Could not install Python packages: {exc}", is_error=True)
