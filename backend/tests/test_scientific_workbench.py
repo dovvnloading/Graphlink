@@ -1272,7 +1272,8 @@ def test_science_discussion_source_key_survives_id_renumbering_and_migrates_old_
                                plugin_registry=registry, settings_manager=settings)
     source = next(n for n in document.nodes.values() if n.kind == "science_statistics.workbench")
     chat = next(n for n in document.nodes.values() if n.kind == "chat")
-    assert source.id != source_id and chat.id == source_id
+    assert source.id != source_id  # Restored IDs can advance without reusing the old one.
+    assert envelope(document, source.id)["nodeKey"] == key
     assert chat.content == original and chat.state.science_reference is not None
     assert [(e.source, e.target, e.role) for e in document.edges.values()] == [
         (source.id, chat.id, "reference"),
