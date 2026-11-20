@@ -6,6 +6,8 @@ import { NodeMenu } from "./NodeMenu";
 import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
+import { HarnessWorkspaceFiles } from "./HarnessWorkspaceFiles";
+import type { HarnessWorkspaceListing } from "./harnessWorkspaceFiles";
 
 /**
  * PLAN-2026-08-24 H1: the workspace agent node. Everything rendered here
@@ -69,6 +71,9 @@ export interface HarnessNodeData extends Record<string, unknown> {
   onAnswerQuestion: (answer: string) => void;
   onPickWorkspace: () => void;
   onUseScratch: () => void;
+  onListWorkspaceFiles: (path: string) => Promise<HarnessWorkspaceListing>;
+  onOpenWorkspaceFile: (path: string) => Promise<void>;
+  onRevealWorkspace: () => void;
 }
 
 export type HarnessFlowNode = Node<HarnessNodeData, "harness">;
@@ -360,6 +365,12 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
           </>
         )}
       </div>
+      <HarnessWorkspaceFiles
+        key={data.harnessWorkspacePath}
+        onList={data.onListWorkspaceFiles}
+        onOpen={data.onOpenWorkspaceFile}
+        onReveal={data.onRevealWorkspace}
+      />
 
       {data.harnessReply && (
         <div className="harness-node-reply nowheel nodrag">{data.harnessReply}</div>
