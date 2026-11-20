@@ -210,11 +210,11 @@ def _log_activity(node, *, tool: str, summary: str, outcome: str, elapsed_ms: in
 
 
 class _BoundedToolOutput:
-    """Thread-safe, first-N-character live preview (no per-chunk task queue).
+    """Thread-safe rolling output tail (no per-chunk task queue).
 
-    The worker continues draining the whole child pipe after the cap. The
-    asyncio pump only snapshots this buffer at a fixed cadence, regardless
-    of how quickly the subprocess writes or how slowly the WS publishes.
+    The worker continues draining after the tool-result capture cap; the
+    canvas sees the latest output in bounded memory. The asyncio pump only
+    snapshots at a fixed cadence, independent of producer speed.
     """
 
     def __init__(self) -> None:
@@ -226,20 +226,22 @@ class _BoundedToolOutput:
     def append(self, fragment: str) -> None:
         with self._lock:
             self._started = True  # an empty fragment means execution started
-            remaining = max(0, _LIVE_OUTPUT_CAP_CHARS - len(self._text))
-            self._text += fragment[:remaining]
-            if len(fragment) > remaining:
+            combined = self._text + fragment
+            if len(combined) > _LIVE_OUTPUT_CAP_CHARS:
                 self._truncated = True
+                self._text = combined[-_LIVE_OUTPUT_CAP_CHARS:]
+            else:
+                self._text = combined
 
     def snapshot(self) -> str | None:
         with self._lock:
             if not self._started:
                 return None
-            suffix = (
-                f"\n…[live output truncated at {_LIVE_OUTPUT_CAP_CHARS} characters]"
+            prefix = (
+                f"…[showing last {_LIVE_OUTPUT_CAP_CHARS} characters]\n"
                 if self._truncated else ""
             )
-            return self._text + suffix
+            return prefix + self._text
 
 
 def _session_grants_of(dispatcher, workspace_id: str) -> "set | None":
