@@ -14,20 +14,28 @@ class URLPolicyError(ValueError):
 
 
 def canonicalize_url(url: str) -> str:
-    parsed = urlsplit(str(url or "").strip())
-    if not parsed.scheme or not parsed.hostname:
+    raw = str(url or "")
+    # urlsplit silently strips CR/LF/TAB and leading C0 controls. Never let
+    # an approval disclosure describe a different URL than the one fetched.
+    if any(ord(char) < 32 or ord(char) == 127 for char in raw):
         return ""
-    scheme = parsed.scheme.lower()
-    hostname = parsed.hostname.lower().rstrip(".")
     try:
+        parsed = urlsplit(raw.strip())
+        if not parsed.scheme or not parsed.hostname or "\\" in parsed.netloc:
+            return ""
+        scheme = parsed.scheme.lower()
+        hostname = parsed.hostname.lower().rstrip(".")
         port = parsed.port
+        # Even an empty userinfo component is forbidden (https://@host/).
+        if parsed.username is not None or parsed.password is not None:
+            return ""
     except ValueError:
+        # Invalid IPv6 brackets, NFKC-ambiguous hosts and invalid ports all
+        # become a policy rejection, not an uncaught URL parser exception.
         return ""
     # urlsplit().hostname strips brackets from IPv6 literals; urlunsplit()
     # does not put them back, so a valid literal becomes an invalid netloc.
     netloc = f"[{hostname}]" if ":" in hostname else hostname
-    if parsed.username or parsed.password:
-        return ""
     if port and not ((scheme == "https" and port == 443) or (scheme == "http" and port == 80)):
         netloc = f"{netloc}:{port}"
     path = parsed.path or "/"
@@ -100,21 +108,35 @@ class FetchPolicy:
             raise URLPolicyError(f"Source host did not resolve: {parsed.hostname}")
         return addresses
 
-    def validate(self, url: str) -> ValidatedTarget:
+    def validate_url(self, url: str) -> str:
+        """DNS-free syntax/literal-IP validation to run BEFORE user consent.
+
+        An unapproved host can encode data in DNS labels. Calling validate()
+        before an approval leaks that host to DNS even when the user denies
+        the request, including after an HTTP redirect. Do not resolve here.
+        """
         canonical = canonicalize_url(url)
         if not canonical:
             raise URLPolicyError("Source URL is malformed or contains credentials.")
         parsed = urlsplit(canonical)
         if parsed.scheme not in self.allowed_schemes:
             raise URLPolicyError(f"Source scheme '{parsed.scheme}' is blocked by policy.")
-        if parsed.username or parsed.password:
-            raise URLPolicyError("Authenticated source URLs are blocked by policy.")
         if not parsed.hostname:
             raise URLPolicyError("Source URL has no hostname.")
+        if parsed.hostname in {"localhost", "localhost.localdomain"}:
+            raise URLPolicyError("Local source hosts are blocked by policy.")
         try:
-            parsed.port
-        except ValueError as exc:
-            raise URLPolicyError("Source URL has an invalid port.") from exc
+            literal = ipaddress.ip_address(parsed.hostname)
+        except ValueError:
+            pass
+        else:
+            if not _is_public_address(str(literal)):
+                raise URLPolicyError("Source resolves to a non-public network address.")
+        return canonical
+
+    def validate(self, url: str) -> ValidatedTarget:
+        canonical = self.validate_url(url)
+        parsed = urlsplit(canonical)
         addresses = self._resolve_addresses(parsed)
         for address in addresses:
             if not _is_public_address(address):

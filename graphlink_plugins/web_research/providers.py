@@ -92,7 +92,7 @@ class DuckDuckGoSearchProvider:
         token.raise_if_cancelled()
         try:
             with DDGS() as ddgs:
-                raw_results = list(ddgs.text(query, max_results=limits.max_search_results))
+                raw_results = list(ddgs.text(query, backend="duckduckgo", max_results=limits.max_search_results))
         except Exception as exc:
             raise ResearchFailure("The search provider could not be reached.", code="search_provider_unavailable") from exc
 
@@ -257,11 +257,13 @@ class RequestsDocumentFetcher:
                     token.raise_if_cancelled()
                     if time.monotonic() - started > self.policy.total_timeout_seconds:
                         raise ResearchFailure("Source fetch exceeded the total time limit.", code="fetch_timeout", source_id=result.source_id)
+                    # Consent must happen BEFORE DNS resolution: otherwise
+                    # a denied host (including a redirect target) can still
+                    # exfiltrate data encoded in its DNS labels.
                     try:
-                        validated = self.policy.validate(current_url)
+                        current_url = self.policy.validate_url(current_url)
                     except URLPolicyError as exc:
                         raise ResearchFailure(str(exc), code="url_blocked_by_policy", retryable=False, source_id=result.source_id) from exc
-                    current_url = validated.canonical_url
 
                     if on_request is not None:
                         consent_started = time.monotonic()
@@ -270,6 +272,12 @@ class RequestsDocumentFetcher:
                         finally:
                             started += time.monotonic() - consent_started
                         token.raise_if_cancelled()
+
+                    try:
+                        validated = self.policy.validate(current_url)
+                    except URLPolicyError as exc:
+                        raise ResearchFailure(str(exc), code="url_blocked_by_policy", retryable=False, source_id=result.source_id) from exc
+                    current_url = validated.canonical_url
 
                     try:
                         owed = self.etiquette.gate(

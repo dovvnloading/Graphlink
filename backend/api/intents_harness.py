@@ -92,7 +92,7 @@ def register_harness_intents(
             command.run_id = request_id
         return node.id
 
-    async def send(node_id, text):
+    async def send(node_id, text, allow_session_grants=True):
         message = str(text or "").strip()[:_MESSAGE_CAP]
         node = document.nodes.get(node_id)
         if node is None or not isinstance(node.state, HarnessState):
@@ -110,6 +110,9 @@ def register_harness_intents(
         return await agent_dispatcher.start_harness_run(
             bus=bus, notifications_state=notifications, document=document,
             harness_node_id=node_id, user_text=message,
+            # Internal control route passes False; public UI sends retain
+            # their normal session-grant semantics.
+            allow_session_grants=allow_session_grants is True,
         )
 
     async def cancel(request_id):
