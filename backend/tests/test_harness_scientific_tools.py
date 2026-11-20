@@ -10,11 +10,11 @@ import pytest
 
 from api_provider import RequestCancelledError
 from backend.domain.graph import SceneDocument
-from backend.harness.loop import HarnessRunContext
+from backend.harness.loop import HarnessRunContext, _approval_summary
 from backend.harness.tools_scientific import register_workspace_tools
 from backend.plugin_sdk import HostContext
 from backend.providers.base import CancelToken, ToolCall
-from backend.tools import CODE_EXECUTE, GRAPH_MUTATE, GRAPH_READ, ToolRegistry
+from backend.tools import CODE_EXECUTE, FS_READ, GRAPH_MUTATE, GRAPH_READ, ToolRegistry
 from graphlink_plugins.scientific.catalog import operations
 from graphlink_plugins.scientific.core import calculate_result, readable_result
 from graphlink_plugins.scientific.execution import ExecutionFailure
@@ -46,7 +46,7 @@ def setup():
         return True
 
     ctx = HarnessRunContext(
-        granted_scopes=frozenset({GRAPH_READ, GRAPH_MUTATE, CODE_EXECUTE}),
+        granted_scopes=frozenset({GRAPH_READ, GRAPH_MUTATE, CODE_EXECUTE, FS_READ}),
         request_approval=approve,
         settings_manager=settings,
         harness_node_id=agent.id,
@@ -72,9 +72,9 @@ def setup():
 
 def test_catalog_is_file_discovered_and_approval_scoped(setup):
     document, agent, settings, registry, ctx, approvals, activate, invoke = setup
-    assert registry.scopes_for("science.search") == frozenset({GRAPH_READ})
+    assert registry.scopes_for("science.search") == frozenset({FS_READ, GRAPH_READ})
     assert registry.approval_for("science.search") == "auto"
-    assert registry.scopes_for("science.run") == frozenset({CODE_EXECUTE, GRAPH_MUTATE})
+    assert registry.scopes_for("science.run") == frozenset({FS_READ, CODE_EXECUTE, GRAPH_MUTATE})
     assert registry.approval_for("science.run") == "once"
 
     assert json.loads(invoke("science.search").content)["packs"] == []
@@ -253,3 +253,28 @@ def test_stop_interrupts_worker_without_creating_node(setup, monkeypatch):
     asyncio.run(drive())
     assert set(document.nodes) == {agent.id}
     assert not document.command_log
+
+
+def test_workspace_science_tools_do_not_leak_into_builder_and_approvals_are_complete(setup):
+    document, agent, settings, registry, ctx, approvals, activate, invoke = setup
+    from backend.builder import BUILDER_GRANTED_SCOPES
+
+    assert not registry.scopes_for("science.search") <= BUILDER_GRANTED_SCOPES
+    assert not registry.scopes_for("science.run") <= BUILDER_GRANTED_SCOPES
+    assert registry.scopes_for("science.search") <= ctx.granted_scopes
+    assert registry.scopes_for("science.run") <= ctx.granted_scopes
+
+    # Scientific inputs can be much larger than the default 400-character
+    # approval-summary cap. The person approving must see all of them.
+    last = "end-of-approved-input-array"
+    call = ToolCall(
+        id="full-preview", name="science.run",
+        arguments={"pack_id": "core", "operation_id": "plot_xy",
+                   "inputs": {"x": list(range(200)), "y": list(range(200)),
+                              "x_label": "time", "y_label": last}},
+    )
+    preview = _approval_summary(call)
+    assert preview.startswith("science.run ")
+    assert last in preview and '"199"' not in preview
+    assert preview.endswith("}}")
+    assert len(preview) > 400
