@@ -53,6 +53,7 @@ def register_harness_python_install_tool(registry: ToolRegistry) -> None:
                 workspace_id, root, is_scratch=is_scratch, profile="isolated",
             )
             ctx.python_install_approved_interpreter = target
+            ctx.python_install_approved_identity = None
             ctx.python_install_approved_binding = (
                 workspace_id, root.resolve(), is_scratch, "isolated", target,
             )

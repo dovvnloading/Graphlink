@@ -20,7 +20,7 @@ from pathlib import Path, PurePosixPath
 
 from api_provider import RequestCancelledError
 from backend.harness.python_env import (
-    _usable_venv,
+    PythonEnvironmentError, _usable_venv,
     ensure_python_environment,
     managed_venv_dir,
     venv_python,
@@ -119,6 +119,35 @@ def planned_install_interpreter(
         if _usable_venv(candidate):
             return venv_python(candidate)
     return venv_python(managed_venv_dir(workspace_id, root, is_scratch=is_scratch))
+
+
+
+def install_interpreter_identity(interpreter: Path) -> tuple:
+    """Fingerprint the backing venv, not merely its disclosed pathname.
+
+    Project .venv and the interpreter inside it may be symlinks. Pin the
+    real backing directory, pyvenv.cfg and executable identities at
+    disclosure time so a rename or symlink swap during consent cannot
+    quietly redirect package installation. Missing components are recorded
+    explicitly for an as-yet-uncreated managed environment.
+    """
+    venv_dir = interpreter.parent.parent
+
+    def identity(path: Path):
+        try:
+            stat = path.stat()
+        except (FileNotFoundError, NotADirectoryError):
+            return None
+        return (
+            path.resolve(strict=True), stat.st_dev, stat.st_ino, stat.st_mode,
+            stat.st_size, stat.st_mtime_ns,
+        )
+
+    return (
+        identity(venv_dir),
+        identity(venv_dir / "pyvenv.cfg"),
+        identity(interpreter),
+    )
 
 
 def install_approval_summary(
@@ -264,6 +293,7 @@ def _install_in_worker(
     interpreter: Path | PurePosixPath, cwd: Path, packages: list[str], cancel_event,
     cache_root: Path, *, isolated_plan: IsolatedPythonPlan | None = None,
     offline_only: bool = False,
+    approved_identity: tuple | None = None,
 ) -> ToolResult:
     # Concurrent tools cannot download into the same wheel filename at once.
     while not _CACHE_LOCK.acquire(timeout=_POLL_SECONDS):
@@ -293,21 +323,32 @@ def _install_in_worker(
             pip_wheels, pip_http = str(wheels), str(http)
 
         def run_pip(argv: list[str], *, network: bool = False) -> tuple[int, str]:
+            if isolated_plan is None and approved_identity is not None and (
+                install_interpreter_identity(Path(interpreter)) != approved_identity
+            ):
+                raise PythonEnvironmentError(
+                    "Python environment changed after approval; ask again."
+                )
             if isolated_plan is not None:
                 return _checked_isolated_command(
                     argv, cwd, cancel_event, isolated_plan, cache_root, network=network,
                 )
             return _checked_pip(argv, cwd, cancel_event)
 
-        # -I excludes the workspace from Python's module search path, even
-        # when Docker starts the offline pip process in /workspace. The
-        # networked download uses the immutable image's pip, not a project
-        # interpreter whose site-packages may have been modified by user code.
+        # Invoke the backing venv directly, not a mutable .venv symlink.
+        # The displayed path remains the user's approved selection.
+        executable = (
+            venv_python(approved_identity[0][0])
+            if approved_identity is not None else interpreter
+        )
+        # -I isolates pip from workspace-controlled modules. The networked
+        # download must use the image Python, not a mutable project venv.
+        # Keep the approved, pinned executable for host-profile installs.
         pip_args = [
             "-I", "-m", "pip", "--no-input",
             "--disable-pip-version-check", f"--cache-dir={pip_http}",
         ]
-        common = [str(interpreter), *pip_args]
+        common = [str(executable), *pip_args]
         offline = [
             *common, "install", "--only-binary=:all:", "--no-index",
             f"--find-links={pip_wheels}", *packages,
@@ -318,7 +359,7 @@ def _install_in_worker(
             # Some externally created project virtualenvs omit pip. This
             # bootstraps only bundled ensurepip wheels, after authorization.
             setup_code, setup_output = run_pip(
-                [str(interpreter), "-I", "-m", "ensurepip", "--default-pip"],
+                [str(executable), "-I", "-m", "ensurepip", "--default-pip"],
             )
             if setup_code:
                 return ToolResult(
@@ -339,7 +380,7 @@ def _install_in_worker(
             # that same wheelhouse. A failed download leaves prior wheels
             # reusable in a future offline call.
             download = [
-                CONTAINER_PYTHON if isolated_plan is not None else str(interpreter),
+                CONTAINER_PYTHON if isolated_plan is not None else str(executable),
                 *pip_args, "download", "--only-binary=:all:",
                 f"--index-url={DEFAULT_PYPI_INDEX}",
                 f"--dest={pip_wheels}", "--retries=0", "--timeout=8",
@@ -392,6 +433,9 @@ async def install_packages(
             workspace_id, root, is_scratch=is_scratch, profile=profile,
         )
         approved = getattr(ctx, "python_install_approved_interpreter", None)
+        cancel_event = ctx.cancel.event if ctx.cancel is not None else None
+        if cancel_event is not None and cancel_event.is_set():
+            raise RequestCancelledError("stopped")
         if not isinstance(approved, (Path, PurePosixPath)) or approved != planned:
             return ToolResult(
                 content="Python environment changed or was not bound to this install approval; ask again.",
@@ -405,6 +449,24 @@ async def install_packages(
                 content="Isolated Python workspace changed since approval; ask again.",
                 is_error=True,
             )
+        approved_identity = None
+        managed_needs_creation = False
+        if profile == "host":
+            approved_identity = getattr(ctx, "python_install_approved_identity", None)
+            if (
+                not isinstance(approved_identity, tuple)
+                or approved_identity != install_interpreter_identity(Path(planned))
+            ):
+                return ToolResult(
+                    content="Python environment changed since approval; ask again.",
+                    is_error=True,
+                )
+            managed = venv_python(
+                managed_venv_dir(workspace_id, root, is_scratch=is_scratch)
+            )
+            managed_needs_creation = (
+                planned == managed and not _usable_venv(managed.parent.parent)
+            )
         interpreter: Path | PurePosixPath
         if profile == "isolated":
             plan = planned_isolated_python_environment(
@@ -415,6 +477,7 @@ async def install_packages(
             interpreter = await asyncio.to_thread(
                 lambda: ensure_python_environment(
                     workspace_id, root, is_scratch=is_scratch,
+                    cancel_event=cancel_event,
                 ),
             )
             if interpreter != approved:
@@ -422,8 +485,19 @@ async def install_packages(
                     content="Python environment changed after approval; ask again.",
                     is_error=True,
                 )
+            # A missing/broken managed venv is created on first use;
+            # a previously usable venv must still have the exact identity
+            # that was disclosed. Pin the new managed identity for pip.
+            prepared_identity = install_interpreter_identity(Path(interpreter))
+            if not managed_needs_creation and prepared_identity != approved_identity:
+                return ToolResult(
+                    content="Python environment changed after approval; ask again.",
+                    is_error=True,
+                )
+            if prepared_identity[0] is None or prepared_identity[2] is None:
+                return ToolResult(content="Python environment is unavailable.", is_error=True)
+            approved_identity = prepared_identity
             plan = None
-        cancel_event = ctx.cancel.event if ctx.cancel is not None else None
         wheel_cache = cache_root if cache_root is not None else PYTHON_WHEEL_CACHE_ROOT
         if plan is not None:
             return await asyncio.to_thread(
@@ -432,10 +506,13 @@ async def install_packages(
             )
         return await asyncio.to_thread(
             _install_in_worker, interpreter, root, packages, cancel_event, wheel_cache,
+            approved_identity=approved_identity,
         )
-    except (OSError, WorkspaceError, TimeoutError, IsolationUnavailableError) as exc:
+    except (OSError, WorkspaceError, TimeoutError, IsolationUnavailableError,
+            PythonEnvironmentError) as exc:
         return ToolResult(content=f"Could not install Python packages: {exc}", is_error=True)
     finally:
         # A future install can never borrow a previously approved target.
         setattr(ctx, "python_install_approved_interpreter", None)
         setattr(ctx, "python_install_approved_binding", None)
+        setattr(ctx, "python_install_approved_identity", None)

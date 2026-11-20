@@ -349,9 +349,14 @@ class HarnessDispatchOps(DispatcherParts):
             if node.state.harness_status == "running":
                 node.state.harness_status = "stopped"
                 node.state.harness_status_detail = "Stopped by user."
-                # A tool may still be unwinding in its worker thread.
-                # Preserve its last bounded output, but do not leave the
-                # activity row advertising "running" after Stop.
+                # Take the pending sink snapshot BEFORE marking the run
+                # stopped. The live pump and result callbacks refuse writes
+                # once cancellation is set, so without this a fast Stop can
+                # drop the final fragment (or the whole activity row).
+                snapshot = getattr(handle, "harness_stop_output", None)
+                if snapshot is not None:
+                    snapshot()
+                    handle.harness_stop_output = None
                 if node.state.harness_activity:
                     last = node.state.harness_activity[-1]
                     if last.get("outcome") == "running":

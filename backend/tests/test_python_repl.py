@@ -199,3 +199,32 @@ def test_repl_emits_unbuffered_output_before_execution_finishes():
     finally:
         repl.stop()
         worker.join(timeout=5)
+
+
+def test_flushed_unterminated_python_output_is_live_before_completion():
+    """A flushed short fragment must not wait for the REPL's nonce newline."""
+    repl = PythonREPL(repl_id="core-flushed-fragment-test")
+    ready = Event()
+    pieces: list[str] = []
+
+    def on_output(fragment: str) -> None:
+        pieces.append(fragment)
+        if "READY" in "".join(pieces):
+            ready.set()
+
+    worker = Thread(
+        target=lambda: repl.execute(
+            "import sys, time; sys.stdout.write('READY'); "
+            "sys.stdout.flush(); time.sleep(30)",
+            on_output=on_output,
+        ),
+        daemon=True,
+    )
+    try:
+        worker.start()
+        assert ready.wait(7), "flushed text must stream without a newline"
+        assert worker.is_alive(), "the child must still be running"
+    finally:
+        repl.stop()
+        worker.join(timeout=8)
+    assert not worker.is_alive()

@@ -78,16 +78,13 @@ def test_unknown_arguments_cannot_hide_unapproved_pip_options(tmp_path):
 
 
 def test_fresh_approval_ignores_session_grants_and_discloses_package_list(tmp_path, monkeypatch):
-    # No real venv or network is necessary to exercise the consent boundary.
-    monkeypatch.setattr(
-        install, "ensure_python_environment",
-        lambda wid, root, *, is_scratch: install.planned_install_interpreter(
-            wid, root, is_scratch=is_scratch,
-        ),
-    )
+    # Only pip is faked: the target itself must have a real identity.
+    venv.EnvBuilder(with_pip=False).create(tmp_path / ".venv")
     observed = []
 
-    def fake_worker(interpreter, cwd, packages, cancel_event, cache_root):
+    def fake_worker(interpreter, cwd, packages, cancel_event, cache_root, *,
+                    approved_identity=None):
+        assert approved_identity == install.install_interpreter_identity(interpreter)
         observed.append((interpreter, cwd, packages))
         from backend.tools import ToolResult
         return ToolResult("installed")
@@ -99,6 +96,9 @@ def test_fresh_approval_ignores_session_grants_and_discloses_package_list(tmp_pa
         seen.append((call.name, list(call.arguments["packages"])))
         ctx.python_install_approved_interpreter = install.planned_install_interpreter(
             "test-agent", tmp_path, is_scratch=False,
+        )
+        ctx.python_install_approved_identity = install.install_interpreter_identity(
+            ctx.python_install_approved_interpreter,
         )
         return "session"
 
@@ -150,6 +150,73 @@ def test_rebound_environment_cannot_use_previous_approval(tmp_path, monkeypatch)
     ctx = _ctx(project, approve)
     result = asyncio.run(_registry().invoke(_call(["requests"]), ctx))
     assert result.is_error and "changed" in result.content.lower()
+
+
+
+def test_install_rejects_symlinked_venv_retargeted_during_approval(tmp_path, monkeypatch):
+    """A matching .venv/bin/python string is not a matching interpreter."""
+    project = tmp_path / "project"
+    project.mkdir()
+    for name in (".venv-a", ".venv-b"):
+        venv.EnvBuilder(with_pip=False).create(project / name)
+    link = project / ".venv"
+    try:
+        link.symlink_to(".venv-a", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("directory symlinks are unavailable on this platform")
+
+    async def approve(_call):
+        selected = install.planned_install_interpreter(
+            "test-agent", project, is_scratch=False,
+        )
+        ctx.python_install_approved_interpreter = selected
+        ctx.python_install_approved_identity = install.install_interpreter_identity(selected)
+        # Same approved pathname, different venv backing directory.
+        replacement = project / ".venv-replacement"
+        replacement.symlink_to(".venv-b", target_is_directory=True)
+        # Windows cannot replace an existing directory symlink with os.replace.
+        # Move the old link aside before reusing the same approved pathname.
+        link.rename(project / ".venv-original")
+        replacement.rename(link)
+        assert install.planned_install_interpreter(
+            "test-agent", project, is_scratch=False,
+        ) == selected
+        return True
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("pip may not start after the approved venv was replaced")
+
+    monkeypatch.setattr(install, "_install_in_worker", unexpected)
+    ctx = _ctx(project, approve)
+    result = asyncio.run(_registry().invoke(_call(["idna==3.10"]), ctx))
+    assert result.is_error and "changed" in result.content.lower()
+
+
+def test_install_rechecks_venv_identity_before_each_pip_phase(tmp_path, monkeypatch):
+    """A change after preparation must not reach ensurepip/download/install."""
+    project = tmp_path / "project"
+    project.mkdir()
+    venv.EnvBuilder(with_pip=False).create(project / ".venv")
+    original = install.planned_install_interpreter("test-agent", project, is_scratch=False)
+    identity = install.install_interpreter_identity(original)
+    # Intercept the first subprocess boundary and swap the interpreter
+    # before its second phase. The worker must detect the new identity.
+    calls = []
+
+    def fake_run_pip(argv, cwd, cancel_event):
+        calls.append(argv)
+        if len(calls) == 1:
+            (project / ".venv" / "pyvenv.cfg").write_text("changed", encoding="utf-8")
+            return 1, "No module named pip", "ok"
+        pytest.fail("a modified environment must not start another pip phase")
+
+    monkeypatch.setattr(install, "_run_pip", fake_run_pip)
+    with pytest.raises(install.PythonEnvironmentError, match="changed"):
+        install._install_in_worker(
+            original, project, ["example"], None, tmp_path / "cache",
+            approved_identity=identity,
+        )
+    assert len(calls) == 1
 
 
 def test_pip_subprocess_uses_safe_env_and_never_a_shell(tmp_path, monkeypatch):
@@ -239,6 +306,9 @@ def test_downloaded_wheel_is_reused_offline_across_environments(tmp_path, monkey
         async def approve(call, root=project):
             ctx.python_install_approved_interpreter = install.planned_install_interpreter(
                 "test-agent", root, is_scratch=False,
+            )
+            ctx.python_install_approved_identity = install.install_interpreter_identity(
+                ctx.python_install_approved_interpreter,
             )
             return True
 

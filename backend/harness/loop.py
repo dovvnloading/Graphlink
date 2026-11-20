@@ -219,6 +219,7 @@ class HarnessRunContext(RunContext):
     # The interpreter disclosed for a fresh python.install authorization.
     python_install_approved_interpreter: object = None
     python_install_approved_binding: object = None
+    python_install_approved_identity: object = None
     # Per-call source-file versions disclosed for a human-approved write.
     # Never persisted; the file handlers consume them just before replacing.
     harness_file_approval_states: dict[str, FileApprovalState] = field(default_factory=dict)
@@ -389,6 +390,9 @@ async def _execute_tool_calls(
     ctx: RunContext,
     record_result: Callable[[ToolCall, ToolResult, int], Awaitable[None]],
     record_progress: Callable[[ToolCall, str, int], Awaitable[None]] | None = None,
+    *,
+    stop_handle=None,
+    record_stopped_output: Callable[[ToolCall, str | None, int], None] | None = None,
 ) -> None:
     """Run consecutive parallel-safe reads together, preserving model order.
 
@@ -410,6 +414,17 @@ async def _execute_tool_calls(
         else:
             sink = _BoundedToolOutput()
             ctx.on_tool_output = sink.append
+            # Stop frees the run slot before the next 150-ms pump tick.
+            # Keep a run-bound snapshot callback until the result is
+            # published; the dispatch finalizer can capture the latest
+            # thread-safe tail even after cancellation disables progress.
+            if stop_handle is not None and record_stopped_output is not None:
+                def snapshot_for_stop() -> None:
+                    record_stopped_output(
+                        call, sink.snapshot(),
+                        max(0, round((time.monotonic() - started) * 1000)),
+                    )
+                stop_handle.harness_stop_output = snapshot_for_stop
             finished = False
 
             async def publish_live() -> None:
@@ -451,6 +466,10 @@ async def _execute_tool_calls(
             call = calls[index]
             result, elapsed_ms = await invoke_timed(call)
             await record_result(call, result, elapsed_ms)
+            if stop_handle is not None and (
+                ctx.cancel is None or not ctx.cancel.event.is_set()
+            ):
+                stop_handle.harness_stop_output = None
             index += 1
             continue
 
@@ -576,11 +595,14 @@ async def run_harness(
         # virtualenv before consent. Pin the choice against a late rebind.
         install_target = None
         install_binding = None
+        install_identity = None
         ctx.python_install_approved_interpreter = None
         ctx.python_install_approved_binding = None
+        ctx.python_install_approved_identity = None
         if call.name == "python.install":
             from backend.harness.python_install import (
-                planned_install_interpreter, workspace_install_binding,
+                install_interpreter_identity, planned_install_interpreter,
+                workspace_install_binding,
             )
 
             try:
@@ -593,6 +615,8 @@ async def run_harness(
                     workspace_id, root.resolve(), is_scratch,
                     ctx.harness_execution_profile, install_target,
                 )
+                if ctx.harness_execution_profile == "host":
+                    install_identity = install_interpreter_identity(Path(install_target))
             except (WorkspaceError, OSError):
                 return False
         network_offered = (
@@ -720,6 +744,7 @@ async def run_harness(
         if call.name == "python.install" and approved and preview_available:
             ctx.python_install_approved_interpreter = install_target
             ctx.python_install_approved_binding = install_binding
+            ctx.python_install_approved_identity = install_identity
         if preview is not None and approved and preview_available:
             if preview.state is None:
                 return False
@@ -1072,6 +1097,26 @@ async def run_harness(
             live_rows: dict[str, dict] = {}
             live_text: dict[str, str] = {}
 
+            def record_stopped_output(
+                call: ToolCall, output: str | None, elapsed_ms: int,
+            ) -> None:
+                # Called only by this run's Stop finalizer, on the event
+                # loop, after RunRegistry has released the slot. No normal
+                # progress path may write after Stop, but this final sink
+                # snapshot belongs to the OLD invocation and must survive.
+                if output is None or node.state.harness_run_id != request_id:
+                    return  # not launched (e.g. denied approval), or a newer run
+                row = live_rows.get(call.id)
+                if row is None:
+                    row = _log_activity(
+                        node, tool=call.name, summary="Stopped before output.",
+                        outcome="stopped", elapsed_ms=elapsed_ms,
+                    )
+                    live_rows[call.id] = row
+                row["summary"] = f"Output:\n{output}" if output else "Stopped before output."
+                row["elapsedMs"] = elapsed_ms
+                row["outcome"] = "stopped"
+
             async def record_progress(call: ToolCall, output: str, elapsed_ms: int) -> None:
                 # Stop frees the slot immediately; a late worker/pump must
                 # never mutate the next run's activity or resurrect a row.
@@ -1121,6 +1166,7 @@ async def run_harness(
 
             await _execute_tool_calls(
                 tool_calls, registry, ctx, record_result, record_progress=record_progress,
+                stop_handle=handle, record_stopped_output=record_stopped_output,
             )
     except api_provider.RequestCancelledError:
         await _land("stopped", "Stopped by user.")
