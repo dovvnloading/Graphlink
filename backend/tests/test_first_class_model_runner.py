@@ -536,7 +536,9 @@ def test_restart_with_two_external_steps_in_flight_preserves_both_fences(tmp_pat
             doc.add_model_node(source.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
         token = (await send("previewGraphRun", []))["previewToken"]
         lock = threading.Lock()
-        entered, release = threading.Event(), threading.Event()
+        loop = asyncio.get_running_loop()
+        both_active = asyncio.Event()
+        release = threading.Event()
         calls = 0
 
         def answer(**_kwargs):
@@ -544,16 +546,22 @@ def test_restart_with_two_external_steps_in_flight_preserves_both_fences(tmp_pat
             with lock:
                 calls += 1
                 if calls == 2:
-                    entered.set()
-            assert release.wait(10)
+                    loop.call_soon_threadsafe(both_active.set)
+            # Keep both calls in flight until the SQLite snapshot is taken.
+            # A worker timeout would race slow Windows scheduling/backup.
+            release.wait()
             return {"message": {"content": "received"}}
 
         monkeypatch.setattr(local_model, "local_ollama_complete", answer)
         pending = asyncio.create_task(send("executeGraphRun", [], token, "crash-two-models", 2))
         snapshot = tmp_path / "restart.db"
         try:
-            assert await asyncio.to_thread(entered.wait, 6)
+            await asyncio.wait_for(both_active.wait(), timeout=_MODEL_SYNC_WATCHDOG_S)
+            with lock:
+                assert calls == 2
             before = load_chat_row(path, doc.current_chat_id)["data"]["graph_runs"][-1]
+            assert [s["status"] for s in before["steps"]] == ["running", "running", "pending"]
+            assert all(s["externalAttempt"]["phase"] == "dispatched" for s in before["steps"][:2])
             requests = [s["externalAttempt"]["requestId"] for s in before["steps"] if "externalAttempt" in s]
             assert len(requests) == 2 and len(set(requests)) == 2
             # Copy the committed SQLite state *before* cancelling the live
@@ -562,7 +570,7 @@ def test_restart_with_two_external_steps_in_flight_preserves_both_fences(tmp_pat
                 original.backup(copy)
             pending.cancel()
             with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(pending, timeout=10)
+                await asyncio.wait_for(pending, timeout=_MODEL_SYNC_WATCHDOG_S)
         finally:
             release.set()
 
