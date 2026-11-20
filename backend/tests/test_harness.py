@@ -940,6 +940,56 @@ class TestApprovalFlow:
         assert node.state.harness_awaiting_approval is False
         assert node.state.harness_approval_summary == ""
 
+    def test_fs_write_approval_discloses_current_file_diff_before_consent(self, workspace_root, monkeypatch):
+        document = SceneDocument()
+        node = document.add_harness_node(0, 0, "update settings")
+        root = ensure_workspace(node.state.harness_workspace_id)
+        target = root / "settings.txt"
+        target.write_text("mode=old\n", encoding="utf-8")
+        registry = ToolRegistry()
+        register_harness_fs_tools(registry)
+        dispatcher = LoopDispatcher()
+        bus = FakeBus()
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("t1", "fs.write", path="settings.txt", content="mode=new\n")]},
+            {"content": "Done."},
+        ])
+        cancel_event = threading.Event()
+        handle = dispatcher._runs.claim("harness", node_id=node.id, cancel_event=cancel_event)
+        summaries = []
+
+        async def main():
+            async def run():
+                try:
+                    await run_harness(
+                        document=document, dispatcher=dispatcher, registry=registry,
+                        bus=bus, notifications=None, harness_node_id=node.id,
+                        user_text="update settings", request_id=handle.request_id,
+                        handle=handle, cancel_event=cancel_event,
+                    )
+                finally:
+                    dispatcher._runs.release(handle.request_id)
+
+            task = asyncio.create_task(run())
+            while not task.done():
+                pending = handle.approval_future
+                if node.state.harness_awaiting_approval and pending is not None and not pending.done():
+                    summaries.append(node.state.harness_approval_summary)
+                    # The review is read-only, and denying it leaves the disk untouched.
+                    assert target.read_text(encoding="utf-8") == "mode=old\n"
+                    pending.set_result(False)
+                await asyncio.sleep(0)
+            await task
+
+        asyncio.run(main())
+        assert len(summaries) == 1
+        assert "--- a/settings.txt\n+++ b/settings.txt\n@@" in summaries[0]
+        assert "-mode=old\n" in summaries[0]
+        assert "+mode=new\n" in summaries[0]
+        assert target.read_text(encoding="utf-8") == "mode=old\n"
+        assert node.state.harness_status == "done"
+        assert node.state.harness_approval_summary == ""
+
 
 class TestContextPrompt:
     def test_prompt_is_byte_stable_and_starts_with_the_pinned_core(self, workspace_root):
