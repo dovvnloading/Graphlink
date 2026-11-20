@@ -261,9 +261,23 @@ def test_mcp_writes_are_hidden_unless_adapter_explicitly_receives_a_write_token(
         "graphlink_get_graph", "graphlink_list_nodes", "graphlink_read_subgraph",
         "graphlink_get_agent_task",
     }
-    assert next(item for item in listed if item["name"] == "graphlink_cancel_agent_task")[
+    # The only non-destructive write-capability tool is a status read.
+    # Agent start may auto-edit files; content replacement and Save can
+    # overwrite existing work, even if the HTTP authorization is sound.
+    assert {item["name"] for item in listed if item["annotations"]["destructiveHint"]} == {
+        "graphlink_create_node", "graphlink_connect_nodes",
+        "graphlink_set_node_content", "graphlink_save_graph",
+        "graphlink_start_agent_task", "graphlink_cancel_agent_task",
+    }
+    assert next(item for item in listed if item["name"] == "graphlink_get_agent_task")[
         "annotations"
-    ]["destructiveHint"] is True
+    ]["destructiveHint"] is False
+    modern_list = enabled.handle(request(22, "tools/list", modern_params()))["result"]["tools"]
+    assert {item["name"] for item in modern_list if item["annotations"]["destructiveHint"]} == {
+        "graphlink_create_node", "graphlink_connect_nodes",
+        "graphlink_set_node_content", "graphlink_save_graph",
+        "graphlink_start_agent_task", "graphlink_cancel_agent_task",
+    }
 
     revision = "a" * 64
     call = enabled.handle(request(3, "tools/call", {
@@ -478,6 +492,34 @@ def test_headless_write_mode_is_opt_in_and_cleans_both_token_files(tmp_path, mon
     assert seen["write_file"] == "write-only-credential"
     assert seen["closed"] is True
     assert not token_file.exists() and not write_file.exists()
+
+
+def test_headless_operator_ui_refuses_missing_spa(tmp_path, monkeypatch, capsys):
+    import backend.headless as headless
+    import backend.app as app_module
+
+    monkeypatch.setattr(app_module, "SPA_DIST_DIR", tmp_path / "unbuilt")
+    monkeypatch.setattr(
+        headless, "_bind_listener",
+        lambda _port: pytest.fail("missing operator SPA must be caught before binding"),
+    )
+    token_file = tmp_path / "read.token"
+    write_file = tmp_path / "write.token"
+    result = headless.main([
+        "--port", "0", "--chat-db", str(tmp_path / "chats.db"),
+        "--token-file", str(token_file), "--write-token-file", str(write_file),
+        "--allow-mcp-writes", "--open-ui",
+    ])
+    assert result == 1
+    assert "SPA build missing" in capsys.readouterr().err
+    assert not token_file.exists() and not write_file.exists()
+
+
+def test_headless_operator_ui_requires_mcp_write_opt_in(tmp_path):
+    import backend.headless as headless
+
+    with pytest.raises(SystemExit):
+        headless.main(["--open-ui", "--chat-db", str(tmp_path / "chats.db")])
 
 
 def test_headless_rejects_identical_read_write_token_file_paths(tmp_path):

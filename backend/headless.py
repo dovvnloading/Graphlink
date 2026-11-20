@@ -2,8 +2,9 @@
 
 Run python -m backend.headless (see docs/HEADLESS_MCP.md). It binds
 127.0.0.1 exclusively, mints distinct full-access and read-only tokens on
-every launch, and writes ONLY the read-only token to a restrictive local
-file for authorized MCP clients,
+every launch, and writes ONLY scoped MCP tokens to restrictive local
+files. With --allow-mcp-writes --open-ui, an explicitly requested local
+browser receives the separate full app capability via a URL fragment,
 and runs the SAME create_app() as the desktop shell. There is no alternate
 SceneDocument, SQLite writer, or agent implementation here.
 """
@@ -15,6 +16,9 @@ import os
 import socket
 import sys
 import tempfile
+import threading
+import time
+import webbrowser
 from pathlib import Path
 
 from backend.auth import mint_token
@@ -76,17 +80,49 @@ def _bind_listener(port: int) -> socket.socket:
     return listener
 
 
+def _open_operator_ui_when_ready(server, port: int, token: str) -> None:
+    """Give the LOCAL operator a real app UI, not an MCP approval capability.
+
+    A browser started explicitly by the person receives the ephemeral admin
+    token in its URL fragment (the same flow as the desktop launcher). The
+    fragment is never sent in HTTP requests, logged, or written to either
+    restricted MCP token file. Wait for uvicorn readiness before opening it.
+    """
+    def open_browser() -> None:
+        for _ in range(150):
+            if server.started:
+                try:
+                    opened = webbrowser.open(f"http://127.0.0.1:{port}/#token={token}", new=1)
+                except Exception:
+                    opened = False
+                if not opened:
+                    sys.stderr.write(
+                        "Graphlink headless could not open a local operator browser; "
+                        "MCP-started agent approvals need an authenticated app UI.\n"
+                    )
+                return
+            if server.should_exit:
+                return
+            time.sleep(0.1)
+        sys.stderr.write("Graphlink headless operator UI was not opened: server did not become ready.\n")
+
+    threading.Thread(target=open_browser, name="graphlink-operator-ui", daemon=True).start()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run Graphlink without opening a desktop window")
     parser.add_argument("--port", type=int, default=DEFAULT_CONTROL_PORT, help="127.0.0.1 TCP port (default 8765)")
     parser.add_argument("--token-file", type=Path, default=DEFAULT_TOKEN_FILE, help="local per-launch read token file")
     parser.add_argument("--allow-mcp-writes", action="store_true", help="opt in to scoped MCP canvas writes and workspace-agent tasks")
+    parser.add_argument("--open-ui", action="store_true", help="open an authenticated local operator browser for Agent nodes and human approvals (requires --allow-mcp-writes)")
     parser.add_argument("--write-token-file", type=Path, default=DEFAULT_WRITE_TOKEN_FILE, help="separate write token path (requires --allow-mcp-writes)")
     parser.add_argument("--chat-db", type=Path, default=None, help="optional chats.db location")
     parser.add_argument("--settings-file", type=Path, default=None, help="optional settings file")
     args = parser.parse_args(argv)
     if not 0 <= args.port <= 65535:
         parser.error("--port must be between 0 and 65535")
+    if args.open_ui and not args.allow_mcp_writes:
+        parser.error("--open-ui requires --allow-mcp-writes")
     if args.allow_mcp_writes and (
         args.token_file.expanduser().resolve() == args.write_token_file.expanduser().resolve()
     ):
@@ -113,7 +149,16 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run_headless_owned(args: argparse.Namespace) -> int:
     import uvicorn
-    from backend.app import create_app
+    from backend.app import SPA_DIST_DIR, create_app
+
+    # An explicit operator browser must have the real app to display Agent
+    # nodes and consent prompts. Fail at launch rather than opening a 404.
+    if args.open_ui and not (SPA_DIST_DIR / "index.html").is_file():
+        sys.stderr.write(
+            "Graphlink headless cannot open the operator UI: SPA build missing. "
+            "Run `cd web_ui && npm run build` first.\n"
+        )
+        return 1
 
     # Preserve the final path component: resolving it here would follow a
     # pre-existing symlink BEFORE _write_token_file can refuse it.
@@ -153,6 +198,8 @@ def _run_headless_owned(args: argparse.Namespace) -> int:
         server = uvicorn.Server(uvicorn.Config(
             app, host="127.0.0.1", port=port, log_level="warning",
         ))
+        if args.open_ui:
+            _open_operator_ui_when_ready(server, port, backend_token)
         server.run(sockets=[listener])
     finally:
         listener.close()
