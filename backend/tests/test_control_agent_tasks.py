@@ -193,6 +193,68 @@ def test_just_accepted_task_is_visible_before_background_worker_runs(app, client
     assert claimed[0].cancel_event.is_set()
 
 
+
+@pytest.mark.parametrize("terminal_status", ["failed", "stopped"])
+def test_followup_task_does_not_return_previous_reply_or_checklist(
+    app, client, monkeypatch, terminal_status,
+):
+    node = _agent(app)
+    dispatcher = get_session_context(app.state.bus.session()).agent_dispatcher
+
+    async def claim_without_worker(*, harness_node_id, **unused):
+        handle = dispatcher._runs.claim(
+            "harness", node_id=harness_node_id, cancel_event=threading.Event(),
+        )
+        # Match the real dispatcher: claim now, schedule the worker later.
+        return handle.request_id
+
+    monkeypatch.setattr(dispatcher, "start_harness_run", claim_without_worker)
+    first = _start(client, app, node.id, operation_id="followup-task-A", text="Task A")
+    assert first.status_code == 200, first.text
+    first_run = first.json()["run_id"]
+
+    # The first run completed with a real answer and a plan on this node.
+    node.state.harness_status = "done"
+    node.state.harness_reply = "ANSWER_FROM_A"
+    node.state.harness_plan = [{"text": "Task A checklist", "status": "done"}]
+    node.pending_request_id = None
+    dispatcher._runs.release(first_run)
+    first_status = client.get("/api/control/agent/task", headers=_auth(WRITE),
+                              params={"node_id": node.id, "run_id": first_run})
+    assert first_status.status_code == 200
+    assert first_status.json()["reply"] == "ANSWER_FROM_A"
+    assert first_status.json()["checklist"] == [
+        {"text": "Task A checklist", "status": "done"},
+    ]
+
+    second = _start(client, app, node.id, operation_id="followup-task-B", text="Task B")
+    assert second.status_code == 200, second.text
+    second_run = second.json()["run_id"]
+    assert second_run != first_run
+
+    # Poll before B's worker runs, when no new reply or plan exists yet.
+    immediate = client.get("/api/control/agent/task", headers=_auth(WRITE),
+                           params={"node_id": node.id, "run_id": second_run})
+    assert immediate.status_code == 200, immediate.text
+    assert immediate.json()["run_id"] == second_run
+    assert immediate.json()["status"] == "running"
+    assert immediate.json()["reply"] == ""
+    assert immediate.json()["reply_truncated"] is False
+    assert immediate.json()["checklist"] == []
+
+    # Failure or Stop before B produces an answer must not resurrect A's.
+    node.state.harness_status = terminal_status
+    node.state.harness_status_detail = "Task B ended without an answer."
+    node.pending_request_id = None
+    dispatcher._runs.release(second_run)
+    terminal = client.get("/api/control/agent/task", headers=_auth(WRITE),
+                          params={"node_id": node.id, "run_id": second_run})
+    assert terminal.status_code == 200, terminal.text
+    assert terminal.json()["status"] == terminal_status
+    assert terminal.json()["reply"] == ""
+    assert terminal.json()["checklist"] == []
+
+
 def test_agent_node_and_payload_validation_prevents_approval_or_workspace_grants(app, client):
     node = _agent(app)
     document = get_session_context(app.state.bus.session()).canvas_document
