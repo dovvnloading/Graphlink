@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import TypedDict
 from uuid import uuid4
 
 from api_provider import _raise_if_cancelled
@@ -21,6 +22,13 @@ from graphlink_plugins.scientific.catalog import PACKS, operations
 from graphlink_plugins.scientific.core import readable_result, validated_inputs_with_units
 from graphlink_plugins.scientific.data_table import TableState
 from graphlink_plugins.scientific.execution import ExecutionFailure, execute_in_process, execution_timeout
+
+class EnabledPack(TypedDict):
+    pack_id: str
+    title: str
+    description: str
+    ready: bool
+
 
 USAGE_HINT = (
     "science.search discovers operations and input examples in the user's enabled Scientific "
@@ -153,7 +161,7 @@ def register_workspace_tools(registry: ToolRegistry, dispatcher, document) -> No
         if type(limit) is not int or not 1 <= limit <= 25:
             return _error("limit must be an integer between 1 and 25.")
 
-        packs = [
+        packs: list[EnabledPack] = [
             {"pack_id": key, "title": title, "description": description, "ready": _ready(document, key)}
             for key, (title, description) in sorted(PACKS.items())
             if _enabled(ctx, key)
