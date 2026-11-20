@@ -118,6 +118,85 @@ def test_scratch_resolve_helper_still_confines(workspace_root):
         resolve_under_root(workspace_module.workspace_dir("ws1"), "../elsewhere")
 
 
+
+def test_bound_task_refuses_root_symlink_swap_for_file_tools_and_container(
+    workspace_root, tmp_path, monkeypatch,
+):
+    """#863: an existing run cannot inherit a different folder's grant."""
+    from backend.harness.shell_isolation import container_invocation
+
+    project, private = tmp_path / "project", tmp_path / "private"
+    project.mkdir()
+    private.mkdir()
+    (private / "secret.md").write_text("unapproved")
+    root, user_dir = bound_root(
+        "ws1", str(project), settings_manager=FakeSettings([str(project.resolve())]),
+    )
+    assert user_dir and root == project.resolve()
+
+    project.rename(tmp_path / "project-old")
+    try:
+        project.symlink_to(private, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("Creating directory symlinks is unavailable")
+
+    with pytest.raises(workspace_module.WorkspaceError, match="root changed"):
+        resolve_under_root(root, "secret.md")
+
+    registry = ToolRegistry()
+    register_harness_fs_tools(registry)
+
+    async def approve(_call):
+        return True
+
+    ctx = RunContext(granted_scopes=frozenset({FS_READ}), request_approval=approve)
+    ctx.harness_workspace_dir = root
+    result = asyncio.run(registry.invoke(
+        ToolCall(id="read", name="fs.read", arguments={"path": "secret.md"}), ctx,
+    ))
+    assert result.is_error and "root changed" in result.content
+    assert "unapproved" not in result.content
+
+    monkeypatch.setattr(
+        "backend.harness.shell_isolation.shutil.which",
+        lambda name, *, path: "/usr/bin/docker" if name == "docker" else None,
+    )
+    with pytest.raises(workspace_module.WorkspaceError, match="root changed"):
+        container_invocation("cat secret.md", root, env={"PATH": "/usr/bin"})
+
+
+def test_root_swap_during_approval_cannot_redirect_a_write(workspace_root, tmp_path):
+    """The binding must be checked after an awaited human approval, too."""
+    project, private = tmp_path / "project", tmp_path / "private"
+    project.mkdir()
+    private.mkdir()
+    root, user_dir = bound_root(
+        "ws1", str(project), settings_manager=FakeSettings([str(project.resolve())]),
+    )
+    assert user_dir
+
+    async def approve(_call):
+        project.rename(tmp_path / "project-old")
+        try:
+            project.symlink_to(private, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("Creating directory symlinks is unavailable")
+        return True
+
+    registry = ToolRegistry()
+    register_harness_fs_tools(registry)
+    ctx = RunContext(granted_scopes=frozenset({FS_WRITE}), request_approval=approve)
+    ctx.harness_workspace_dir = root
+    result = asyncio.run(registry.invoke(
+        ToolCall(id="write", name="fs.write", arguments={"path": "pwned.txt", "content": "leak"}),
+        ctx,
+    ))
+    assert result.is_error and "root changed" in result.content
+    assert not (private / "pwned.txt").exists()
+
+
+
+
 # -- the launcher's own workspace choice ------------------------------------
 #
 # Binding a folder only AFTER the node existed meant the first run of every

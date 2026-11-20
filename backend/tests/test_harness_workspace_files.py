@@ -55,6 +55,47 @@ def harness_with_folder(folder="", trusted=()):
     return bus, node
 
 
+
+def test_inflight_listing_does_not_disclose_names_after_revocation(tmp_path, monkeypatch):
+    """#865: an async worker result cannot outlive its folder grant."""
+    import threading
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "private-name.md").write_text("secret")
+    bus, node = harness_with_folder(project, trusted=[str(project.resolve())])
+    entered, release = threading.Event(), threading.Event()
+    original = intents_harness_workspace.list_workspace_files
+
+    def paused_listing(*args):
+        listing = original(*args)
+        entered.set()
+        assert release.wait(5), "listing worker never released"
+        return listing
+
+    monkeypatch.setattr(intents_harness_workspace, "list_workspace_files", paused_listing)
+
+    async def scenario():
+        handler = bus.handlers[("harness", "listWorkspaceFiles")]
+        pending = asyncio.create_task(handler(node.id, "", None))
+        assert await asyncio.to_thread(entered.wait, 5), "listing never reached the worker"
+        bus.settings.trusted.clear()
+        release.set()
+        with pytest.raises(WorkspaceError, match="Workspace folder changed"):
+            await pending
+        # New requests may use scratch, but never expose the revoked names.
+        fallback = await handler(node.id, "", None)
+        assert fallback["isScratch"] is True
+        assert all(entry["name"] != "private-name.md" for entry in fallback["entries"])
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        release.set()
+
+
+
+
 def test_browse_nested_directories_and_filter_metadata(tmp_path):
     root = tmp_path / "project"
     (root / "docs").mkdir(parents=True)

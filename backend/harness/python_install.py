@@ -265,20 +265,37 @@ def _checked_isolated_command(
     explicitly --network=none. Remove daemon-side containers even when a
     cancellation or timeout kills their local Docker/Podman CLI.
     """
+    # The project (or a managed-env bind) might itself contain the cache:
+    # then /workspace/... could still write to it despite a separate RO
+    # /graphlink-wheel-cache mount. Never expose the cache through any
+    # writable offline mount, including a parent or child of that directory.
+    if not network:
+        cache_path = cache_root.resolve()
+        for source in (cwd, *(host for host, _target in plan.mounts)):
+            writable_path = source.resolve()
+            if (
+                writable_path == cache_path
+                or writable_path in cache_path.parents
+                or cache_path in writable_path.parents
+            ):
+                raise PythonEnvironmentError(
+                    "Isolated workspace overlaps the shared Python wheel cache; "
+                    "offline install refused."
+                )
     env = safe_subprocess_env()
-    # The bridge-networked pip must not see the untrusted project, including
-    # its writable venv or any workspace-controlled import hooks. It only
-    # needs the app-owned wheel cache; offline steps still mount the project.
+    # Networked pip runs from the trusted image without the project. Only
+    # that download stage may write to the shared wheel cache. Offline pip
+    # can import code from a writable project venv, even with Python -I.
     container_workspace = cache_root if network else cwd
-    mounts = ((cache_root, CONTAINER_WHEEL_CACHE),) if network else (
-        *plan.mounts, (cache_root, CONTAINER_WHEEL_CACHE),
-    )
+    mounts = ((cache_root, CONTAINER_WHEEL_CACHE),) if network else plan.mounts
+    read_only_mounts = () if network else ((cache_root, CONTAINER_WHEEL_CACHE),)
     container_env = {"PIP_CONFIG_FILE": "/dev/null"}
     if not network:
         container_env.update(isolated_python_container_env(plan))
     argv, engine, name = container_invocation(
         command, container_workspace, env=env, network=network,
-        extra_mounts=mounts, container_env=container_env,
+        extra_mounts=mounts, read_only_mounts=read_only_mounts,
+        container_env=container_env,
     )
     try:
         return _checked_pip(argv, container_workspace, cancel_event)
@@ -346,11 +363,11 @@ def _install_in_worker(
         # Keep the approved, pinned executable for host-profile installs.
         pip_args = [
             "-I", "-m", "pip", "--no-input",
-            "--disable-pip-version-check", f"--cache-dir={pip_http}",
+            "--disable-pip-version-check",
         ]
         common = [str(executable), *pip_args]
         offline = [
-            *common, "install", "--only-binary=:all:", "--no-index",
+            *common, "install", "--no-cache-dir", "--only-binary=:all:", "--no-index",
             f"--find-links={pip_wheels}", *packages,
         ]
 
@@ -381,7 +398,7 @@ def _install_in_worker(
             # reusable in a future offline call.
             download = [
                 CONTAINER_PYTHON if isolated_plan is not None else str(executable),
-                *pip_args, "download", "--only-binary=:all:",
+                *pip_args, f"--cache-dir={pip_http}", "download", "--only-binary=:all:",
                 f"--index-url={DEFAULT_PYPI_INDEX}",
                 f"--dest={pip_wheels}", "--retries=0", "--timeout=8",
                 *packages,

@@ -461,7 +461,20 @@ class ToolRegistry:
                     ctx._approved_fingerprints.add(fingerprint)
 
         try:
-            return await registration.handler(call, ctx)
+            # The run's workspace is an identity-bound capability, not a
+            # mutable pathname. Check after approval (which can take minutes)
+            # and before host shell/Python execution, then again before
+            # returning data from a worker that may have run during a swap.
+            bound = getattr(ctx, "harness_workspace_dir", None)
+            verify = getattr(bound, "verify_bound_identity", None)
+            if callable(verify):
+                verify()
+            result = await registration.handler(call, ctx)
+            if callable(verify):
+                verify()
+                if getattr(ctx, "harness_workspace_dir", None) is not bound:
+                    raise ValueError("Workspace binding changed during this tool call.")
+            return result
         except RequestCancelledError:
             # ADR-008 stage 8.2: a long-running handler (run_node parks in
             # code execution / model calls for minutes) observing the SAME

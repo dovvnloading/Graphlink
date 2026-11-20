@@ -83,8 +83,15 @@ In Isolated mode, virtualenv bootstrap, cached wheel installation and the
 final offline install all use `--network=none`; **only the approved
 `pip download` container invocation** uses bridge networking. Every
 invocation uses the same fixed image and bounded container resources. The
-cache is mounted read/write only for install operations; `python.exec`
-never gets network access or the shared cache mount.
+shared wheelhouse is mounted **read-only** during offline project-venv
+bootstrap and installation, because project-controlled pip code can execute
+even with `python -I`. Only the trusted image's separate networked download
+step receives a writable cache mount; `python.exec` never gets the shared
+cache mount or network access.
+
+If a workspace or another writable mount overlaps that shared cache, the
+isolated offline install fails closed rather than exposing the cache through
+a second writable path.
 
 The cache is an optimization, not an offline package repository guarantee:
 uncached requirements need network access, and availability of new platform

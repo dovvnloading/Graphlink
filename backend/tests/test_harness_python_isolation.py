@@ -65,6 +65,79 @@ def test_container_argv_and_mounts_respect_network_exception(tmp_path, monkeypat
         assert flag in offline and flag in online
 
 
+
+def test_isolated_offline_project_pip_cannot_write_shared_wheel_cache(
+    tmp_path, monkeypatch,
+):
+    """#864: untrusted project pip gets RO cache; only image download gets RW."""
+    from backend.harness.python_isolation import IsolatedPythonPlan, CONTAINER_WHEEL_CACHE
+
+    project, cache = tmp_path / "project", tmp_path / "wheel-cache"
+    project.mkdir()
+    cache.mkdir()
+    # Deliberately select a project-controlled interpreter, whose -m pip
+    # can import arbitrary modules from its writable site-packages.
+    plan = IsolatedPythonPlan(
+        PurePosixPath("/workspace/.venv/bin/python"), project / ".venv", False,
+    )
+    monkeypatch.setattr(
+        "backend.harness.shell_isolation.shutil.which",
+        lambda name, *, path: "/usr/bin/docker" if name == "docker" else None,
+    )
+    commands = []
+    monkeypatch.setattr(
+        python_install, "_checked_pip",
+        lambda argv, cwd, cancel_event: (commands.append((argv, cwd)) or 0, ""),
+    )
+    monkeypatch.setattr(python_install, "cleanup_container", lambda *args, **kwargs: None)
+
+    command = [str(plan.interpreter), "-I", "-m", "pip", "install", "demo"]
+    python_install._checked_isolated_command(command, project, None, plan, cache)
+    offline_argv, offline_cwd = commands.pop()
+    offline_mounts = [
+        offline_argv[i + 1] for i, arg in enumerate(offline_argv[:-1]) if arg == "--mount"
+    ]
+    assert "--network=none" in offline_argv and offline_cwd == project
+    assert f"type=bind,source={project.resolve()},target=/workspace" in offline_mounts
+    assert (
+        f"type=bind,source={cache.resolve()},target={CONTAINER_WHEEL_CACHE},readonly"
+        in offline_mounts
+    )
+    assert not any(
+        mount.endswith(f"target={CONTAINER_WHEEL_CACHE}") for mount in offline_mounts
+    ), "Project pip must never receive a writable cache mount"
+
+    python_install._checked_isolated_command(command, project, None, plan, cache, network=True)
+    download_argv, download_cwd = commands.pop()
+    download_mounts = [
+        download_argv[i + 1] for i, arg in enumerate(download_argv[:-1]) if arg == "--mount"
+    ]
+    assert "--network=bridge" in download_argv and download_cwd == cache
+    assert f"type=bind,source={cache.resolve()},target={CONTAINER_WHEEL_CACHE}" in download_mounts
+    assert not any("readonly" in mount for mount in download_mounts)
+    assert str(project) not in " ".join(download_argv)
+
+
+
+
+def test_isolated_install_rejects_a_writable_workspace_covering_shared_cache(tmp_path):
+    """A RO mount alone cannot protect cache reachable via /workspace."""
+    from backend.harness.python_isolation import IsolatedPythonPlan
+
+    cache = tmp_path / "wheel-cache"
+    cache.mkdir()
+    plan = IsolatedPythonPlan(
+        PurePosixPath("/workspace/.venv/bin/python"), tmp_path / ".venv", False,
+    )
+    with pytest.raises(python_install.PythonEnvironmentError, match="overlaps"):
+        python_install._checked_isolated_command(
+            [str(plan.interpreter), "-I", "-m", "pip", "install", "demo"],
+            tmp_path, None, plan, cache,
+        )
+
+
+
+
 def test_isolated_env_uses_scoped_managed_venv_for_unverified_project_venv(tmp_path, monkeypatch):
     monkeypatch.setattr(python_env, "HARNESS_PYTHON_ENV_ROOT", tmp_path / "env-root")
     project, other = tmp_path / "project", tmp_path / "other"

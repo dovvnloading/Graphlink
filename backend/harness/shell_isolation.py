@@ -50,6 +50,7 @@ def container_invocation(
     env: dict[str, str] | None = None,
     network: bool = False,
     extra_mounts: tuple[tuple[Path, str], ...] = (),
+    read_only_mounts: tuple[tuple[Path, str], ...] = (),
     container_env: dict[str, str] | None = None,
 ) -> tuple[list[str], str, str]:
     """Return (argv, engine, unique name) for a restricted Linux container.
@@ -93,16 +94,20 @@ def container_invocation(
         "--workdir", CONTAINER_WORKSPACE,
         "--env", "HOME=/tmp", "--env", "PYTHONDONTWRITEBYTECODE=1",
     ]
-    for source, target in extra_mounts:
-        mount_source_extra = str(source.resolve())
-        if any(c in mount_source_extra or c in target for c in (",", "\r", "\n")):
-            raise IsolationUnavailableError(
-                "Isolated execution cannot mount paths containing commas or newlines. "
-                "Host execution was NOT attempted."
-            )
-        args.extend([
-            "--mount", f"type=bind,source={mount_source_extra},target={target}",
-        ])
+    # Writable mounts are for workspaces/managed environments and the trusted
+    # download stage. Untrusted offline pip receives a read-only wheelhouse.
+    for read_only, mounts in ((False, extra_mounts), (True, read_only_mounts)):
+        for source, target in mounts:
+            mount_source_extra = str(source.resolve())
+            if any(c in mount_source_extra or c in target for c in (",", "\r", "\n")):
+                raise IsolationUnavailableError(
+                    "Isolated execution cannot mount paths containing commas or newlines. "
+                    "Host execution was NOT attempted."
+                )
+            args.extend([
+                "--mount", f"type=bind,source={mount_source_extra},target={target}"
+                + (",readonly" if read_only else ""),
+            ])
     for key, value in (container_env or {}).items():
         args.extend(["--env", f"{key}={value}"])
     getuid = getattr(os, "getuid", None)
