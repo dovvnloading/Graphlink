@@ -321,7 +321,7 @@ def test_chat_blocking_call_also_honors_model_ref(monkeypatch, ollama_chat):
     monkeypatch.setattr(api_provider, "LOCAL_PROVIDER_TYPE", config.LOCAL_PROVIDER_OLLAMA)
     monkeypatch.setitem(config.OLLAMA_MODELS, config.TASK_TITLE, "")
 
-    ollama_chat.responses = [{"message": {"content": "A Title"}}]
+    ollama_chat.responses = [{"message": {"content": "A Title"}, "done": True}]
 
     response = api_provider.chat(
         config.TASK_TITLE, [{"role": "user", "content": "name this"}],
@@ -369,7 +369,7 @@ def test_auto_fallback_fires_for_the_blocking_ollama_call_too(monkeypatch, ollam
     monkeypatch.setitem(config.OLLAMA_MODELS, config.TASK_TITLE, "")
 
     settings = _FakeSettingsManager(ollama=["auto-title-model"])
-    ollama_chat.responses = [{"message": {"content": "Auto Title"}}]
+    ollama_chat.responses = [{"message": {"content": "Auto Title"}, "done": True}]
 
     response = api_provider.chat(
         config.TASK_TITLE, [{"role": "user", "content": "name this"}],
@@ -416,7 +416,7 @@ def test_auto_fallback_fires_for_the_api_mode_branch_and_honors_the_persisted_po
     def create(**kwargs):
         captured.update(kwargs)
         return types.SimpleNamespace(
-            choices=[types.SimpleNamespace(message=types.SimpleNamespace(content="ok"))]
+            choices=[types.SimpleNamespace(message=types.SimpleNamespace(content="ok"), finish_reason="stop")]
         )
 
     client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create)))
@@ -457,7 +457,7 @@ def test_auto_fallback_never_dispatches_a_capability_incapable_model_live(monkey
     def create(**kwargs):
         captured.update(kwargs)
         return types.SimpleNamespace(
-            choices=[types.SimpleNamespace(message=types.SimpleNamespace(content="ok"))]
+            choices=[types.SimpleNamespace(message=types.SimpleNamespace(content="ok"), finish_reason="stop")]
         )
 
     client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create)))
@@ -495,7 +495,7 @@ def test_auto_fallback_never_crosses_to_a_cheaper_model_from_a_different_cloud_p
     def create(**kwargs):
         captured.update(kwargs)
         return types.SimpleNamespace(
-            choices=[types.SimpleNamespace(message=types.SimpleNamespace(content="ok"))]
+            choices=[types.SimpleNamespace(message=types.SimpleNamespace(content="ok"), finish_reason="stop")]
         )
 
     client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create)))
@@ -553,7 +553,7 @@ def test_fallback_fires_for_a_fallback_enabled_task_when_the_configured_provider
     )
 
     settings = _FakeSettingsManager(ollama=["fallback-model:8b"])
-    ollama_chat.responses = [{"message": {"content": "A Title"}}]
+    ollama_chat.responses = [{"message": {"content": "A Title"}, "done": True}]
 
     fallback_calls = []
     response = api_provider.chat(
@@ -741,7 +741,7 @@ def test_auto_fallback_can_actually_dispatch_to_a_scanned_llama_cpp_model(monkey
 
     class FakeLlamaClient:
         def create_chat_completion(self, messages=None, **kwargs):
-            return {"choices": [{"message": {"content": "llama answer"}}]}
+            return {"choices": [{"message": {"content": "llama answer"}, "finish_reason": "stop"}]}
 
     monkeypatch.setattr(lp, "_get_llama_cpp_client", lambda task, s: FakeLlamaClient())
 
@@ -777,7 +777,7 @@ def test_auto_pick_recursion_preserves_settings_manager_for_a_further_fallback(m
 
     class FakeLlamaClient:
         def create_chat_completion(self, messages=None, **kwargs):
-            return {"choices": [{"message": {"content": "llama fallback answered"}}]}
+            return {"choices": [{"message": {"content": "llama fallback answered"}, "finish_reason": "stop"}]}
 
     monkeypatch.setattr(lp, "_get_llama_cpp_client", lambda task, s: FakeLlamaClient())
 

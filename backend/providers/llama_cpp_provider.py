@@ -99,11 +99,11 @@ class LlamaCppProvider:
             response = client.create_chat_completion(messages=llama_messages, **llama_kwargs)
         _raise_if_cancelled(cancel.event)
         choices = _extract_response_field(response, "choices", []) or []
-        if choices:
-            require_successful_stop(
-                "llama.cpp", _extract_response_field(choices[0], "finish_reason", None),
-                {"stop", "tool_calls"},
-            )
+        require_successful_stop(
+            "llama.cpp",
+            _extract_response_field(choices[0], "finish_reason", None) if choices else None,
+            {"stop", "tool_calls"}, required=True,
+        )
         # ADR-006 stage 6.8: llama.cpp's blocking response carries an
         # OpenAI-shaped usage dict; captured on a side attribute for
         # api_provider.chat()'s llama.cpp branch to surface.

@@ -1,4 +1,4 @@
-"""Blocking completions must reject the same explicit incomplete stops as streams."""
+"""Blocking completions require terminal markers and reject incomplete stops."""
 from __future__ import annotations
 
 import json
@@ -37,7 +37,7 @@ def _openai_provider(reason):
     return OpenAIProvider(client=client, model="gpt-4o")
 
 
-@pytest.mark.parametrize("reason", ["length", "content_filter", "other_stop"])
+@pytest.mark.parametrize("reason", [None, "length", "content_filter", "other_stop"])
 def test_openai_blocking_rejects_incomplete_finish(reason):
     with pytest.raises(RuntimeError, match="OpenAI-compatible generation incomplete"):
         _openai_provider(reason).complete(_request(), CancelToken())
@@ -48,13 +48,20 @@ def test_openai_blocking_accepts_successful_finish(reason):
     assert _openai_provider(reason).complete(_request(), CancelToken()) == "partial but valid JSON"
 
 
-def _llama_provider(monkeypatch, reason):
+def test_openai_blocking_rejects_empty_choices():
+    provider = _openai_provider("stop")
+    provider.client.chat.completions.create = lambda **_kwargs: SimpleNamespace(choices=[], usage=None)
+    with pytest.raises(RuntimeError, match="OpenAI-compatible generation incomplete"):
+        provider.complete(_request(), CancelToken())
+
+
+def _llama_provider(monkeypatch, reason, *, has_choices=True):
     class FakeLlama:
         def create_chat_completion(self, **_kwargs):
             return {"choices": [{
                 "finish_reason": reason,
                 "message": {"content": "llama answer"},
-            }]}
+            }] if has_choices else []}
 
     monkeypatch.setattr(llama_cpp_provider, "_get_llama_cpp_client", lambda _task, _settings: FakeLlama())
     monkeypatch.setattr(llama_cpp_provider, "_prepare_llama_cpp_messages", lambda messages, _task, _settings: messages)
@@ -64,7 +71,7 @@ def _llama_provider(monkeypatch, reason):
     return LlamaCppProvider(settings={"chat_model_path": "stub.gguf"})
 
 
-@pytest.mark.parametrize("reason", ["length", "content_filter", "other_stop"])
+@pytest.mark.parametrize("reason", [None, "length", "content_filter", "other_stop"])
 def test_llama_cpp_blocking_rejects_incomplete_finish(monkeypatch, reason):
     with pytest.raises(RuntimeError, match="llama.cpp generation incomplete"):
         _llama_provider(monkeypatch, reason).complete(_request(), CancelToken())
@@ -72,6 +79,11 @@ def test_llama_cpp_blocking_rejects_incomplete_finish(monkeypatch, reason):
 
 def test_llama_cpp_blocking_accepts_stop(monkeypatch):
     assert _llama_provider(monkeypatch, "stop").complete(_request(), CancelToken()) == "llama answer"
+
+
+def test_llama_cpp_blocking_rejects_empty_choices(monkeypatch):
+    with pytest.raises(RuntimeError, match="llama.cpp generation incomplete"):
+        _llama_provider(monkeypatch, "stop", has_choices=False).complete(_request(), CancelToken())
 
 
 def _anthropic_provider(monkeypatch, response, transport):
@@ -99,6 +111,14 @@ def test_anthropic_blocking_accepts_text_stops(monkeypatch, reason, transport):
 
 
 @pytest.mark.parametrize("transport", ["sdk", "rest"])
+def test_anthropic_blocking_allows_optional_missing_reason(monkeypatch, transport):
+    response = {"content": [{"type": "text", "text": "complete"}]}
+    assert _anthropic_provider(monkeypatch, response, transport).complete(
+        _request(), CancelToken(),
+    ) == "complete"
+
+
+@pytest.mark.parametrize("transport", ["sdk", "rest"])
 def test_anthropic_blocking_validates_stop_before_returning_forced_tool_json(monkeypatch, transport):
     response = {
         "stop_reason": "max_tokens",
@@ -112,7 +132,7 @@ def test_anthropic_blocking_validates_stop_before_returning_forced_tool_json(mon
     assert json.loads(provider.complete(_request(tool_choice=True), CancelToken())) == {"looks_complete": True}
 
 
-@pytest.mark.parametrize("reason", ["MAX_TOKENS", "SAFETY", "RECITATION", "STOP"])
+@pytest.mark.parametrize("reason", ["MAX_TOKENS", "SAFETY", "RECITATION", "STOP", None, "missing"])
 def test_gemini_blocking_validates_candidate_reason_and_cleans_uploads(monkeypatch, reason):
     deleted = []
     monkeypatch.setattr(
@@ -123,7 +143,10 @@ def test_gemini_blocking_validates_candidate_reason_and_cleans_uploads(monkeypat
     monkeypatch.setattr(
         gemini_provider, "_gemini_post_json",
         lambda *_args, **_kwargs: {
-            "candidates": [{"finishReason": reason, "content": {"parts": [{"text": "partial"}]}}],
+            "candidates": [{
+                **({} if reason == "missing" else {"finishReason": reason}),
+                "content": {"parts": [{"text": "partial"}]},
+            }],
         },
     )
     provider = GeminiProvider(api_key="k", model="gemini-2.5-pro")
@@ -132,6 +155,19 @@ def test_gemini_blocking_validates_candidate_reason_and_cleans_uploads(monkeypat
     else:
         with pytest.raises(RuntimeError, match="Gemini generation incomplete"):
             provider.complete(_request(), CancelToken())
+    assert deleted == ["files/temp"]
+
+
+def test_gemini_blocking_rejects_missing_candidates_and_cleans_uploads(monkeypatch):
+    deleted = []
+    monkeypatch.setattr(
+        gemini_provider, "_prepare_gemini_contents",
+        lambda *_args, **_kwargs: (None, [], ["files/temp"]),
+    )
+    monkeypatch.setattr(gemini_provider, "_gemini_delete_file", lambda name, **_kwargs: deleted.append(name))
+    monkeypatch.setattr(gemini_provider, "_gemini_post_json", lambda *_args, **_kwargs: {"candidates": []})
+    with pytest.raises(RuntimeError, match="Gemini generation incomplete"):
+        GeminiProvider(api_key="k", model="gemini-2.5-pro").complete(_request(), CancelToken())
     assert deleted == ["files/temp"]
 
 
@@ -151,12 +187,13 @@ def test_ollama_blocking_validates_done_reason(monkeypatch, reason):
             provider.complete(_request(), CancelToken())
 
 
-def test_ollama_blocking_rejects_explicit_not_done(monkeypatch):
+@pytest.mark.parametrize("done", [False, None, "missing"])
+def test_ollama_blocking_rejects_missing_or_false_done(monkeypatch, done):
     monkeypatch.setattr(ollama_provider, "ollama_supports_tools", lambda _model: False)
     monkeypatch.setattr(ollama_provider, "ollama_supports_embedding", lambda _model: False)
-    monkeypatch.setattr(
-        ollama_provider.ollama, "chat",
-        lambda **_kwargs: {"message": {"content": "partial"}, "done": False, "done_reason": "stop"},
-    )
+    payload = {"message": {"content": "partial"}, "done_reason": "stop"}
+    if done != "missing":
+        payload["done"] = done
+    monkeypatch.setattr(ollama_provider.ollama, "chat", lambda **_kwargs: payload)
     with pytest.raises(RuntimeError, match="Ollama generation incomplete"):
         OllamaProvider(model="llava:13b").complete(_request(), CancelToken())

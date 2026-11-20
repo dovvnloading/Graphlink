@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -194,6 +195,41 @@ def test_just_accepted_task_is_visible_before_background_worker_runs(app, client
 
 
 
+
+def test_pre_worker_registry_failure_lands_failed_and_unblocks_new_start(app, monkeypatch):
+    node = _agent(app)
+    ctx = get_session_context(app.state.bus.session())
+    dispatcher = ctx.agent_dispatcher
+    invoked = threading.Event()
+
+    def broken_registry(_document):
+        invoked.set()
+        raise RuntimeError("registry failed")
+
+    monkeypatch.setattr(dispatcher, "harness_tool_registry", broken_registry)
+    with TestClient(app, base_url="http://127.0.0.1",
+                    headers={"host": "127.0.0.1"}) as active_client:
+        first = _start(active_client, app, node.id, operation_id="registry-failure-A")
+        assert first.status_code == 200, first.text
+        first_id = first.json()["run_id"]
+        assert invoked.wait(timeout=2.0)
+
+        deadline = time.monotonic() + 2.0
+        while (node.state.harness_status != "failed" or dispatcher._runs.is_busy("harness")):
+            assert time.monotonic() < deadline, "pre-worker failure left a claimed run stuck"
+            time.sleep(0.01)
+
+        status = active_client.get("/api/control/agent/task", headers=_auth(WRITE),
+                                   params={"node_id": node.id, "run_id": first_id})
+        assert status.status_code == 200, status.text
+        assert status.json()["status"] == "failed"
+        assert "registry failed" in status.json()["status_detail"]
+        assert node.pending_request_id is None
+        second = _start(active_client, app, node.id, operation_id="registry-failure-B")
+        assert second.status_code == 200, second.text
+        assert second.json()["run_id"] != first_id
+
+
 @pytest.mark.parametrize("terminal_status", ["failed", "stopped"])
 def test_followup_task_does_not_return_previous_reply_or_checklist(
     app, client, monkeypatch, terminal_status,
@@ -217,6 +253,15 @@ def test_followup_task_does_not_return_previous_reply_or_checklist(
     node.state.harness_status = "done"
     node.state.harness_reply = "ANSWER_FROM_A"
     node.state.harness_plan = [{"text": "Task A checklist", "status": "done"}]
+    # Simulate prompt surfaces left by A while its cancelled worker unwinds.
+    node.state.harness_awaiting_question = True
+    node.state.harness_question = "Question from A"
+    node.state.harness_awaiting_approval = True
+    node.state.harness_approval_id = "approval-from-A"
+    node.state.harness_approval_tool_name = "fs.write"
+    node.state.harness_approval_summary = "Write from A"
+    node.state.harness_approval_session_offered = True
+    node.state.harness_approval_network_offered = True
     node.pending_request_id = None
     dispatcher._runs.release(first_run)
     first_status = client.get("/api/control/agent/task", headers=_auth(WRITE),
@@ -241,6 +286,14 @@ def test_followup_task_does_not_return_previous_reply_or_checklist(
     assert immediate.json()["reply"] == ""
     assert immediate.json()["reply_truncated"] is False
     assert immediate.json()["checklist"] == []
+    assert immediate.json()["awaiting_app_approval"] is False
+    assert immediate.json()["awaiting_app_answer"] is False
+    assert not node.state.harness_question
+    assert not node.state.harness_approval_id
+    assert not node.state.harness_approval_tool_name
+    assert not node.state.harness_approval_summary
+    assert not node.state.harness_approval_session_offered
+    assert not node.state.harness_approval_network_offered
 
     # Failure or Stop before B produces an answer must not resurrect A's.
     node.state.harness_status = terminal_status
@@ -340,3 +393,86 @@ def test_mcp_control_run_cannot_inherit_ui_approved_session_grants(app, monkeypa
     assert "fs.write" in context.agent_dispatcher.harness_session_grants(
         node.state.harness_workspace_id
     )
+
+
+def test_cancelled_run_finalizer_cannot_clear_newer_run_approval(app, monkeypatch):
+    """Cancel releases A before its finalizer runs; B owns the prompt fields."""
+    from backend.harness import loop as harness_loop
+
+    ctx = get_session_context(app.state.bus.session())
+    dispatcher = ctx.agent_dispatcher
+    node = _agent(app)
+    bus = app.state.bus.session()
+    monkeypatch.setattr(dispatcher, "harness_tool_registry", lambda _document: None)
+
+    async def scenario():
+        old_started, new_prompt = asyncio.Event(), asyncio.Event()
+        release_old, release_new = asyncio.Event(), asyncio.Event()
+        release_finalizer, finalizer_finished = asyncio.Event(), asyncio.Event()
+        original_claim = dispatcher._runs.claim
+        held = [False]
+
+        def claim_with_delayed_finalizer(*args, **kwargs):
+            if kwargs.get("finalize") is not None and not held[0]:
+                held[0] = True
+                original_finalize = kwargs["finalize"]
+
+                async def delayed():
+                    await release_finalizer.wait()
+                    await original_finalize()
+                    finalizer_finished.set()
+
+                kwargs["finalize"] = delayed
+            return original_claim(*args, **kwargs)
+
+        monkeypatch.setattr(dispatcher._runs, "claim", claim_with_delayed_finalizer)
+
+        async def fake_worker(*, user_text, **_kwargs):
+            if user_text == "A":
+                old_started.set()
+                await release_old.wait()
+            else:
+                node.state.harness_awaiting_approval = True
+                node.state.harness_approval_id = "B-approval-token"
+                node.state.harness_approval_tool_name = "fs.write"
+                node.state.harness_approval_summary = "B's file change"
+                node.state.harness_approval_session_offered = True
+                new_prompt.set()
+                await release_new.wait()
+
+        monkeypatch.setattr(harness_loop, "run_harness", fake_worker)
+        first, second = None, None
+        try:
+            first_id = await dispatcher.start_harness_run(
+                bus=bus, notifications_state=None, document=ctx.canvas_document,
+                harness_node_id=node.id, user_text="A",
+            )
+            first = dispatcher._runs.get(first_id)
+            await asyncio.wait_for(old_started.wait(), timeout=2.0)
+            dispatcher.cancel_harness(first_id)
+            second_id = await dispatcher.start_harness_run(
+                bus=bus, notifications_state=None, document=ctx.canvas_document,
+                harness_node_id=node.id, user_text="B",
+            )
+            second = dispatcher._runs.get(second_id)
+            await asyncio.wait_for(new_prompt.wait(), timeout=2.0)
+            release_finalizer.set()
+            await asyncio.wait_for(finalizer_finished.wait(), timeout=2.0)
+            assert node.state.harness_run_id == second_id
+            assert node.state.harness_status == "running"
+            assert node.pending_request_id == second_id
+            assert node.state.harness_awaiting_approval is True
+            assert node.state.harness_approval_id == "B-approval-token"
+            assert node.state.harness_approval_tool_name == "fs.write"
+            assert node.state.harness_approval_summary == "B's file change"
+            assert node.state.harness_approval_session_offered is True
+        finally:
+            release_finalizer.set()
+            release_old.set()
+            release_new.set()
+            await asyncio.gather(
+                *(h.task for h in (first, second) if h is not None and h.task is not None),
+                return_exceptions=True,
+            )
+
+    asyncio.run(scenario())

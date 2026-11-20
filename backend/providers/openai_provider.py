@@ -250,10 +250,13 @@ class OpenAIProvider:
             **kwargs,
         )
         _raise_if_cancelled(cancel.event)
-        # Blocking completions must honor the same terminal reasons as streams.
+        # The finish_reason is mandatory for a completed blocking response.
+        # Do not accept text from an empty/malformed choices list either.
+        choices = getattr(response, "choices", None) or []
         require_successful_stop(
-            "OpenAI-compatible", getattr(response.choices[0], "finish_reason", None),
-            {"stop", "tool_calls", "function_call"},
+            "OpenAI-compatible",
+            getattr(choices[0], "finish_reason", None) if choices else None,
+            {"stop", "tool_calls", "function_call"}, required=True,
         )
         # ADR-006 stage 6.8: response.usage is in hand here - captured on a
         # side attribute (complete() returns a bare str by protocol). Note
@@ -264,7 +267,7 @@ class OpenAIProvider:
             getattr(response_usage, "prompt_tokens", None),
             getattr(response_usage, "completion_tokens", None),
         )
-        return _answer_text(response.choices[0].message.content)
+        return _answer_text(choices[0].message.content)
 
     def stream(self, request: ChatRequest, cancel: CancelToken) -> Iterator[ProviderEvent]:
         # ADR-006 stage 6.5b: real SSE streaming, same request prep as

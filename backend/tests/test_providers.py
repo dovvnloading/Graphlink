@@ -291,7 +291,7 @@ def test_extra_kwargs_pass_through_and_cancellation_event_is_stripped(ollama_cha
     """Review finding: the passthrough surface (e.g. the chart agent's format
     kwarg) and the cancellation_event strip were untested in BOTH paths."""
     ollama_chat.streams = [FakeOllamaStream([_part(content="a", done=True)])]
-    ollama_chat.responses = [{"message": {"content": "b"}}]
+    ollama_chat.responses = [{"message": {"content": "b"}, "done": True}]
     provider = OllamaProvider(model="llava:13b")
     sentinel_event = threading.Event()
     request = ChatRequest(
@@ -361,7 +361,7 @@ def test_think_kwarg_and_hint_apply_only_for_the_chat_task(ollama_chat):
 
 def test_complete_returns_the_same_composed_content_as_the_streamed_path(ollama_chat):
     ollama_chat.responses = [
-        {"message": {"content": "Answer.", "thinking": "pondering..."}}
+        {"message": {"content": "Answer.", "thinking": "pondering..."}, "done": True}
     ]
     provider = OllamaProvider(model="qwen3:8b")
     content = provider.complete(
@@ -449,7 +449,7 @@ def test_the_real_chat_stream_forwards_the_retry_reset_to_on_chunk(
 
 
 def test_the_real_chat_via_the_seam_matches_the_legacy_return_shape(ollama_mode, ollama_chat):
-    ollama_chat.responses = [{"message": {"content": "Plain answer."}}]
+    ollama_chat.responses = [{"message": {"content": "Plain answer."}, "done": True}]
     response = _REAL_CHAT(config.TASK_CHAT, [{"role": "user", "content": "hi"}])
     assert response == {"message": {"content": "Plain answer.", "role": "assistant"}, "usage": None}
 
@@ -479,7 +479,7 @@ def test_chat_and_chat_stream_actually_route_through_the_provider_seam(
     monkeypatch.setattr(api_provider, "chat_stream", _REAL_CHAT_STREAM)
 
     ollama_chat.streams = [FakeOllamaStream([_part(content="s", done=True)])]
-    ollama_chat.responses = [{"message": {"content": "c"}}]
+    ollama_chat.responses = [{"message": {"content": "c"}, "done": True}]
 
     api_provider.chat_stream(config.TASK_CHAT, [{"role": "user", "content": "x"}], lambda d, r: None)
     _REAL_CHAT(config.TASK_CHAT, [{"role": "user", "content": "x"}])
@@ -585,7 +585,7 @@ def _fake_openai_client(response_text="ok"):
     def create(**kwargs):
         captured.update(kwargs)
         return types.SimpleNamespace(
-            choices=[types.SimpleNamespace(message=types.SimpleNamespace(content=response_text))]
+            choices=[types.SimpleNamespace(message=types.SimpleNamespace(content=response_text), finish_reason="stop")]
         )
 
     client = types.SimpleNamespace(
@@ -1040,7 +1040,7 @@ def test_llama_cpp_complete_happy_path_wires_prep_client_kwargs_and_extraction(m
         def create_chat_completion(self, messages=None, **kwargs):
             captured["messages"] = messages
             captured["kwargs"] = kwargs
-            return {"choices": [{"message": {"content": "llama answer"}}]}
+            return {"choices": [{"message": {"content": "llama answer"}, "finish_reason": "stop"}]}
 
     fake_client = FakeLlamaClient()
     settings = {"chat_model_path": "m.gguf"}
@@ -1801,7 +1801,7 @@ def test_llama_cpp_stream_true_survives_the_kwargs_filter_and_beats_a_passthroug
     def create_chat_completion(messages=None, temperature=None, **kwargs):
         captured.update(messages=messages, temperature=temperature, **kwargs)
         if not kwargs.get("stream"):
-            return {"choices": [{"message": {"content": "BLOCKING RESPONSE"}}]}
+            return {"choices": [{"message": {"content": "BLOCKING RESPONSE"}, "finish_reason": "stop"}]}
         return live
 
     create_chat_completion.__signature__ = inspect.Signature([
@@ -2145,7 +2145,7 @@ def test_gemini_thinking_config_gates_on_the_chat_task_at_the_provider(monkeypat
 
     def fake_post(url, body, **kwargs):
         bodies.append(body)
-        return {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}
+        return {"candidates": [{"content": {"parts": [{"text": "ok"}]}, "finishReason": "STOP"}]}
 
     monkeypatch.setattr("backend.providers.gemini_provider._gemini_post_json", fake_post)
 
@@ -2361,6 +2361,7 @@ def test_ollama_stream_done_event_carries_normalized_usage(ollama_chat):
 def test_ollama_blocking_chat_surfaces_usage_in_the_return_dict(ollama_mode, ollama_chat):
     ollama_chat.responses = [{
         "message": {"content": "Plain answer."},
+        "done": True,
         "prompt_eval_count": 7,
         "eval_count": 9,
     }]

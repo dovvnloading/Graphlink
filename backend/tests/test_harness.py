@@ -23,6 +23,7 @@ from backend.harness import transcript as transcript_module
 from backend.harness import workspace as workspace_module
 from backend.harness.loop import HarnessRunContext, _BoundedToolOutput, run_harness
 from backend.harness.tools_fs import register_harness_fs_tools
+from backend.harness.tools_interaction import register_harness_interaction_tools
 from backend.harness.transcript import append_message, load_messages, transcript_path
 from backend.harness.workspace import WorkspaceError, ensure_workspace, resolve_in_workspace
 from backend.providers.base import CancelToken, ToolCall, ToolSpec
@@ -1538,3 +1539,101 @@ class TestInterruptedToolCallsAreClosedOnReload:
         append_message(tmp_path, {"role": "assistant", "content": "just an answer"})
 
         assert [m["role"] for m in load_messages(tmp_path)] == ["user", "assistant"]
+
+
+def test_cancelled_user_ask_cleanup_does_not_clear_successor_question(workspace_root, monkeypatch):
+    """A's postponed ask_user finally must not hide B's pending MCP question."""
+    document = SceneDocument()
+    node = document.add_harness_node(0, 0, "Task A")
+    dispatcher = LoopDispatcher()
+    registry = ToolRegistry()
+    register_harness_interaction_tools(registry)
+    monkeypatch.setattr(context_module, "describe_machine", lambda *_a, **_k: "test machine")
+    turns = {"A": 0, "B": 0}
+
+    def fake_turn(_task, messages, _tools=(), **_kwargs):
+        # B's transcript also includes A; the latest user request is B.
+        key = "B" if any(
+            m.get("role") == "user" and m.get("content") == "Task B"
+            for m in messages
+        ) else "A"
+        turns[key] += 1
+        return {
+            "message": {"content": "complete" if turns[key] > 1 else "", "role": "assistant"},
+            "tool_calls": [
+                call(key, "user.ask", question=f"Question {key}")
+            ] if turns[key] == 1 else [],
+            "usage": None,
+        }
+
+    monkeypatch.setattr(api_provider, "chat_turn_with_tools", fake_turn)
+
+    async def scenario():
+        hold_a = asyncio.Event()
+        release_a = asyncio.Event()
+        prompt_b = asyncio.Event()
+        first_id = None
+
+        class QuestionBarrierBus(FakeBus):
+            async def publish(self, topic):
+                if topic == "scene" and node.state.harness_awaiting_question:
+                    if node.state.harness_run_id == first_id and not hold_a.is_set():
+                        hold_a.set()
+                        await release_a.wait()
+                    elif node.state.harness_question == "Question B":
+                        prompt_b.set()
+                await super().publish(topic)
+
+        bus = QuestionBarrierBus()
+        event_a, event_b = threading.Event(), threading.Event()
+        first = dispatcher._runs.claim("harness", node_id=node.id, cancel_event=event_a)
+        first_id = first.request_id
+
+        async def run(handle, event, text):
+            await run_harness(
+                document=document, dispatcher=dispatcher, registry=registry,
+                bus=bus, notifications=None, harness_node_id=node.id,
+                user_text=text, request_id=handle.request_id, handle=handle,
+                cancel_event=event,
+            )
+
+        a_task = asyncio.create_task(run(first, event_a, "Task A"))
+        b_task = None
+        second = None
+        try:
+            await asyncio.wait_for(hold_a.wait(), timeout=5.0)
+            assert node.state.harness_question == "Question A"
+            assert dispatcher._runs.cancel(first_id, kind="harness")
+            assert first.approval_future.done()  # Cancel denies A's question.
+
+            second = dispatcher._runs.claim("harness", node_id=node.id, cancel_event=event_b)
+            b_task = asyncio.create_task(run(second, event_b, "Task B"))
+            await asyncio.wait_for(prompt_b.wait(), timeout=5.0)
+            assert node.state.harness_awaiting_question
+            assert node.state.harness_question == "Question B"
+
+            # A is still suspended in the publish before its finally.
+            release_a.set()
+            await asyncio.wait_for(a_task, timeout=5.0)
+            assert node.state.harness_run_id == second.request_id
+            assert node.state.harness_awaiting_question
+            assert node.state.harness_question == "Question B"
+            assert second.approval_future is not None
+            assert not second.approval_future.done()
+            second.approval_future.set_result("B's answer")
+            await asyncio.wait_for(b_task, timeout=5.0)
+            assert node.state.harness_status == "done"
+            assert node.state.harness_reply == "complete"
+        finally:
+            release_a.set()
+            # A failed assertion must not leave either question parked.
+            if dispatcher._runs.get(first_id) is not None:
+                dispatcher._runs.cancel(first_id, kind="harness")
+            if second is not None and dispatcher._runs.get(second.request_id) is not None:
+                dispatcher._runs.cancel(second.request_id, kind="harness")
+            await asyncio.wait_for(asyncio.gather(
+                *(task for task in (a_task, b_task) if task is not None),
+                return_exceptions=True,
+            ), timeout=5.0)
+
+    asyncio.run(scenario())

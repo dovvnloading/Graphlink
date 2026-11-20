@@ -65,7 +65,7 @@ def llama_env(monkeypatch, tmp_path):
                     {"choices": [{"delta": {"content": f"from {name}"}, "finish_reason": None}]},
                     {"choices": [{"delta": {}, "finish_reason": "stop"}]},
                 ])
-            return {"choices": [{"message": {"content": f"from {name}"}}]}
+            return {"choices": [{"message": {"content": f"from {name}"}, "finish_reason": "stop"}]}
 
     monkeypatch.setattr(api_provider, "_load_llama_cpp_class", lambda: FakeLlama)
     monkeypatch.setattr(api_provider, "_LLAMA_CPP_CLIENT_CACHE", {})

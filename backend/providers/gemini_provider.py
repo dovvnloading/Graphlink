@@ -128,11 +128,16 @@ class GeminiProvider:
             for file_name in uploaded_files:
                 _gemini_delete_file(file_name, api_key=self.api_key)
 
-        # Reject explicit candidate truncation and safety/filter stops before
-        # extracting text; cleanup above still runs on every outcome.
-        for candidate in payload.get("candidates", []) or []:
+        # A completed candidate must have a terminal finish reason. Reject
+        # missing candidates as well as truncation/filter stops before text
+        # extraction; uploaded-file cleanup above still runs on every outcome.
+        candidates = payload.get("candidates") or []
+        if not candidates:
+            require_successful_stop("Gemini", None, {"stop"}, required=True)
+        for candidate in candidates:
             require_successful_stop(
-                "Gemini", candidate.get("finishReason") or candidate.get("finish_reason"), {"stop"},
+                "Gemini", candidate.get("finishReason") or candidate.get("finish_reason"),
+                {"stop"}, required=True,
             )
 
         # ADR-006 stage 6.8: blocking usage captured on a side attribute
