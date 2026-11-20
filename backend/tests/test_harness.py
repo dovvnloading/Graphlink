@@ -21,15 +21,15 @@ from backend.harness import context as context_module
 from backend.harness import retry as retry_module
 from backend.harness import transcript as transcript_module
 from backend.harness import workspace as workspace_module
-from backend.harness.loop import HarnessRunContext, run_harness
+from backend.harness.loop import HarnessRunContext, _BoundedToolOutput, run_harness
 from backend.harness.tools_fs import register_harness_fs_tools
 from backend.harness.transcript import append_message, load_messages, transcript_path
 from backend.harness.workspace import WorkspaceError, ensure_workspace, resolve_in_workspace
-from backend.providers.base import ToolCall
+from backend.providers.base import CancelToken, ToolCall, ToolSpec
 from backend.run_lifecycle import RunRegistry
 from backend.session_load import _restore_harness_payload
 from backend.session_save import _serialize_harness_node
-from backend.tools import FS_READ, KNOWLEDGE_READ, ToolRegistry
+from backend.tools import CODE_EXECUTE, FS_READ, KNOWLEDGE_READ, ToolRegistry, ToolResult
 
 
 @pytest.fixture
@@ -430,6 +430,58 @@ class TestLoop:
         assert node.pending_request_id is None
         roles = [m["role"] for m in load_messages(ws)]
         assert roles == ["user", "assistant", "tool", "assistant"]
+
+    def test_live_output_updates_one_row_before_tool_result(self, workspace_root, monkeypatch):
+        document, dispatcher, _registry, _bus, node = self._make(workspace_root)
+        registry = ToolRegistry()
+        snapshots: list[list[dict]] = []
+
+        class RecordingBus(FakeBus):
+            async def publish(self, topic):
+                if topic == "scene":
+                    snapshots.append([row.copy() for row in node.state.harness_activity])
+                await super().publish(topic)
+
+        async def streaming_handler(_call, ctx):
+            assert ctx.on_tool_output is not None
+            ctx.on_tool_output("")
+            await asyncio.sleep(0.24)
+            ctx.on_tool_output("first\\n")
+            await asyncio.sleep(0.3)
+            ctx.on_tool_output("second\\n")
+            return ToolResult(content="first\\nsecond")
+
+        registry.register(
+            ToolSpec(name="shell.exec", description="stream test", input_schema={
+                "type": "object", "properties": {"command": {"type": "string"}},
+            }),
+            streaming_handler, scopes={CODE_EXECUTE}, approval="auto",
+        )
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("t1", "shell.exec", command="echo test")]},
+            {"content": "finished"},
+        ])
+        asyncio.run(drive(document, dispatcher, registry, RecordingBus(), node, "stream"))
+        assert any(
+            rows and rows[-1]["outcome"] == "running"
+            and "first" in rows[-1]["summary"]
+            for rows in snapshots
+        ), "stdout must publish to the scene before the tool finishes"
+        assert len(node.state.harness_activity) == 1, "progress and result share one row"
+        row = node.state.harness_activity[0]
+        assert row["outcome"] == "ok"
+        assert "first" in row["summary"] and "second" in row["summary"]
+        assert node.state.harness_status == "done"
+
+    def test_live_preview_is_bounded_even_for_a_no_newline_producer(self):
+        output = _BoundedToolOutput()
+        output.append("")
+        output.append("x" * 500_000)
+        preview = output.snapshot()
+        assert preview is not None and "truncated at 2000" in preview
+        assert preview.startswith("x" * 2_000)
+        output.append("y" * 500_000)
+        assert output.snapshot() == preview, "later output must not grow the activity payload"
 
     def test_follow_up_reloads_history_from_the_transcript(self, workspace_root, monkeypatch):
         document, dispatcher, registry, bus, node = self._make(workspace_root)
@@ -877,6 +929,34 @@ class TestShellTool:
         _drain_bounded_output(stream, chunks)
         assert "".join(chunks) == "x" * (_OUTPUT_CAP_CHARS + 1)
         assert stream.reads > 1, "reader must drain the entire pipe"
+
+    def test_output_streams_while_running_and_stop_kills_the_command(self, workspace_root):
+        ws = ensure_workspace("ws1")
+        registry, ctx = self._setup()
+        cancel = threading.Event()
+        ctx.cancel = CancelToken(cancel)
+        pieces: list[str] = []
+        ctx.on_tool_output = pieces.append
+
+        async def go():
+            task = asyncio.create_task(registry.invoke(
+                call("live", "shell.exec", command=(
+                    'python -u -c "import time; print(\'started\', flush=True); '
+                    'time.sleep(30); open(\'too_late.txt\', \'w\').write(\'bad\')"'
+                )), ctx,
+            ))
+            for _ in range(250):
+                if "started" in "".join(pieces):
+                    break
+                await asyncio.sleep(0.02)
+            assert "started" in "".join(pieces), "output must arrive before completion"
+            assert not task.done()
+            cancel.set()
+            with pytest.raises(api_provider.RequestCancelledError):
+                await asyncio.wait_for(task, timeout=5)
+
+        asyncio.run(go())
+        assert not (ws / "too_late.txt").exists(), "Stop must kill the subprocess"
 
     def test_denied_command_never_spawns(self, workspace_root):
         ws = ensure_workspace("ws1")
