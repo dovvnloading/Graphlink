@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import io
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from unittest.mock import Mock
 
 from backend.harness import python_env, python_install, python_isolation, tools_python
@@ -76,7 +76,7 @@ def test_isolated_env_picks_project_venv_and_scopes_managed_fallback(tmp_path, m
         "workspace-a", project, is_scratch=False,
     ).parent, "Retain the existing node-delete cleanup bucket"
     assert scratch.host_venv == project / ".graphlink-isolated-python-venv"
-    assert scratch.interpreter == Path("/workspace/.graphlink-isolated-python-venv/bin/python")
+    assert scratch.interpreter == PurePosixPath("/workspace/.graphlink-isolated-python-venv/bin/python")
     assert not (tmp_path / "env-root").exists(), "Approval planning cannot create a venv"
 
     supplied = project / ".venv"
@@ -84,7 +84,7 @@ def test_isolated_env_picks_project_venv_and_scopes_managed_fallback(tmp_path, m
     (supplied / "pyvenv.cfg").write_text("home = /usr/local/bin\n")
     (supplied / "bin/python").write_text("test sentinel")
     chosen = planned_isolated_python_environment("workspace-a", project, is_scratch=False)
-    assert chosen.interpreter == Path("/workspace/.venv/bin/python")
+    assert chosen.interpreter == PurePosixPath("/workspace/.venv/bin/python")
     assert not chosen.managed and chosen.mounts == ()
 
 
@@ -158,7 +158,7 @@ def test_python_exec_uses_container_not_host_interpreter(tmp_path, monkeypatch):
 
     class FakeREPL:
         def __init__(self, *, python_executable, command_builder, **kwargs):
-            self.python_executable = Path(python_executable)
+            self.python_executable = python_executable
             self.last_run_failed = False
             argv, cleanup = command_builder("print('stub')")
             assert "--network=none" in argv
