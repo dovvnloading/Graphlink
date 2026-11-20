@@ -72,7 +72,8 @@ def _science_reference(pack: str, result: dict) -> dict[str, str]:
     keeps its id as the title and simply shows no headline."""
     receipt = result["provenance"]
     operation = next((op for op in operations(pack) if op.id == result["operationId"]), None)
-    value = result["values"].get(operation.headline) if operation and operation.headline else None
+    key = operation.headline if operation else ""
+    value = result["values"].get(key) if key else None
     scalar = isinstance(value, (int, float, str)) and not isinstance(value, bool)
     return {
         "packId": pack,
@@ -80,7 +81,7 @@ def _science_reference(pack: str, result: dict) -> dict[str, str]:
         "operationId": result["operationId"],
         "operationTitle": operation.title if operation else result["operationId"],
         "summary": result["summary"],
-        "headlineKey": operation.headline if scalar else "",
+        "headlineKey": key if scalar else "",
         "headlineValueJson": json.dumps(value, ensure_ascii=False) if scalar else "",
         "resultHash": receipt["resultHash"],
         "receiptHash": receipt.get("receiptHash", receipt["resultHash"]),
