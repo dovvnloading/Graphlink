@@ -142,11 +142,11 @@ def test_native_guard_close_kills_running_grandchild_tree(tmp_path):
 
 
 def test_native_guarded_shell_command_keeps_existing_quoting_semantics(tmp_path):
-    """shell.exec must still pass a raw command string through Windows cmd.exe."""
+    """Explicit cmd selection keeps raw quoting on Windows."""
     from backend.harness.tools_shell import _run_command
 
     command = f'"{sys.executable}" -c "print(13579)"'
-    output, code, ended = _run_command(command, tmp_path, threading.Event())
+    output, code, ended = _run_command(command, tmp_path, threading.Event(), shell="cmd")
     assert ended == "ok"
     assert code == 0
     assert "13579" in output

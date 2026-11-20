@@ -41,6 +41,7 @@ import graphlink_task_config as config
 from backend.domain.node_states import HarnessState
 from backend.harness import context as context_module
 from backend.harness import shell_policy
+from backend.harness.shell_selection import normalize_shell
 from backend.harness.tools_fs import preview_harness_file_change
 from backend.harness.retry import (
     ACTION_COMPACT_AND_RETRY,
@@ -167,6 +168,7 @@ class HarnessRunContext(RunContext):
     # a trusted user dir or the scratch dir. The tools confine against this.
     harness_workspace_dir: object = None
     harness_workspace_is_user_dir: bool | None = None
+    harness_shell: str = "auto"
     model_ref: object = None
     settings_manager: object = None
     runtime: object = None
@@ -600,6 +602,7 @@ async def run_harness(
         run_id=request_id,
         harness_node_id=harness_node_id,
         harness_workspace_id=node.state.harness_workspace_id,
+        harness_shell=normalize_shell(node.state.harness_shell),
         model_ref=model_ref,
         settings_manager=settings_manager,
         runtime=runtime,
@@ -656,10 +659,10 @@ async def run_harness(
         snapshot = getattr(dispatcher, "harness_machine_snapshot", None)
         if callable(snapshot):
             machine_context = await asyncio.to_thread(
-                snapshot, node.state.harness_workspace_id, root,
+                snapshot, node.state.harness_workspace_id, root, ctx.harness_shell,
             )
         else:
-            machine_context = await asyncio.to_thread(context_module.describe_machine, root)
+            machine_context = await asyncio.to_thread(context_module.describe_machine, root, shell=ctx.harness_shell)
         # H3: all three stable tiers - core, tool guide, machine snapshot -
         # remain in the cacheable system message, outside compactable history.
         system_prompt = context_module.build_system_prompt(
