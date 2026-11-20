@@ -172,6 +172,13 @@ def register_harness_python_tool(
     repl_registry = repls if repls is not None else PythonReplRegistry()
 
     async def python_exec(call: ToolCall, ctx: RunContext) -> ToolResult:
+        # Defense in depth if a stale/forged tool call bypasses the profile catalog.
+        if getattr(ctx, "harness_execution_profile", "host") == "isolated":
+            return ToolResult(
+                content="python.exec is unavailable in Isolated: its persistent REPL "
+                        "runs on the host. Use shell.exec for container Python.",
+                is_error=True,
+            )
         error = source_error(call.arguments)
         if error is not None:
             return ToolResult(content=error, is_error=True)
@@ -276,7 +283,8 @@ def register_harness_python_tool(
 USAGE_HINT = (
     "python.exec runs in the workspace's .venv/venv when available, or a persistent "
     "managed virtual environment created on first use. State survives between "
-    "calls; every execution requires fresh approval."
+    "calls; every execution requires fresh approval. Host profile only: "
+    "Isolated uses shell.exec for Python instead."
 )
 
 

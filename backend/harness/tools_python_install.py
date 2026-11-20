@@ -36,6 +36,13 @@ PYTHON_INSTALL_SPEC = ToolSpec(
 
 def register_harness_python_install_tool(registry: ToolRegistry) -> None:
     async def python_install(call: ToolCall, ctx: RunContext) -> ToolResult:
+        # Installing and downloading packages occurs in the host venv.
+        if getattr(ctx, "harness_execution_profile", "host") == "isolated":
+            return ToolResult(
+                content="python.install is unavailable in Isolated: it installs "
+                        "into a host Python environment and may download from PyPI.",
+                is_error=True,
+            )
         error = install_requirements_error(call.arguments)
         if error is not None:
             return ToolResult(content=error, is_error=True)
@@ -55,7 +62,8 @@ def register_harness_python_install_tool(registry: ToolRegistry) -> None:
 USAGE_HINT = (
     "python.install adds named packages to the same workspace virtualenv "
     "as python.exec, using PyPI binary wheels and a shared offline wheel cache; "
-    "each install needs fresh approval for the environment and packages."
+    "each install needs fresh approval for the environment and packages. "
+    "Host profile only; unavailable in Isolated."
 )
 
 

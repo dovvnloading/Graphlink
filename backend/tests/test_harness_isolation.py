@@ -1,17 +1,24 @@
 """Isolated shell profile: no host fallback, restricted CLI, session binding."""
 from __future__ import annotations
 
+import asyncio
 import io
 import os
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
 
+from backend.harness.loop import HarnessRunContext, _offered_harness_specs, _retire_host_repl_for_isolated
 from backend.harness.shell_isolation import (
     CONTAINER_IMAGE, IsolationUnavailableError, available_engine,
     container_invocation, normalize_execution_profile,
 )
 from backend.harness.shell_sessions import ShellSessionRegistry
+from backend.harness.tools_python import register_harness_python_tool
+from backend.harness.tools_python_install import register_harness_python_install_tool
+from backend.providers.base import ToolCall, ToolSpec
+from backend.tools import CODE_EXECUTE, GRAPH_READ, NET_FETCH, ToolRegistry, ToolResult
 
 
 def test_profile_validation_defaults_old_or_tampered_graphs_to_host():
@@ -144,3 +151,89 @@ def test_rebinding_same_directory_to_isolated_retires_host_sessions(tmp_path):
     assert session.stopped
     assert registry.names("ws") == []
     assert registry._profiles["ws"] == "isolated"
+
+
+def test_ambiguous_mount_path_fails_closed_before_container_launch(tmp_path):
+    # Docker/Podman --mount parses commas inside a single argv element.
+    for folder in ("workspace,with-comma", "workspace,source=/other"):
+        with patch("backend.harness.shell_isolation.shutil.which", return_value="/usr/bin/docker"):
+            with pytest.raises(IsolationUnavailableError, match="commas or newlines"):
+                container_invocation("echo safe", tmp_path / folder, env={"PATH": "/usr/bin"})
+
+
+def test_isolated_tool_catalog_excludes_host_python_but_keeps_scoped_web_access():
+    registry = ToolRegistry()
+
+    async def harmless(_call, _ctx):
+        return ToolResult(content="ok")
+
+    for name, scope in (
+        ("shell.exec", CODE_EXECUTE),
+        ("shell.session", CODE_EXECUTE),
+        ("python.exec", CODE_EXECUTE),
+        ("python.install", CODE_EXECUTE),
+        ("web.search", NET_FETCH),
+        ("web.fetch", NET_FETCH),
+        ("other.network", NET_FETCH),
+        ("run_node", GRAPH_READ),
+        ("builder.complete_step", GRAPH_READ),
+    ):
+        registry.register(
+            ToolSpec(name=name, description=name, input_schema={"type": "object"}),
+            harmless, scopes={scope}, approval="auto",
+        )
+
+    host = {spec.name for spec in _offered_harness_specs(registry, "host")}
+    isolated = {spec.name for spec in _offered_harness_specs(registry, "isolated")}
+    assert host == {
+        "shell.exec", "shell.session", "python.exec", "python.install",
+        "web.search", "web.fetch", "run_node",
+    }
+    assert isolated == {"shell.exec", "shell.session", "web.search", "web.fetch", "run_node"}
+
+
+def test_forged_isolated_python_calls_fail_closed_without_host_effects(tmp_path):
+    registry = ToolRegistry()
+    register_harness_python_tool(registry)
+    register_harness_python_install_tool(registry)
+    decisions = []
+
+    async def approve(call):
+        decisions.append(call.name)
+        return True
+
+    # A forged caller can supply a catalog: neither host interpreter nor
+    # host package/network code should ever run in the isolated profile.
+    ctx = HarnessRunContext(
+        granted_scopes=frozenset({CODE_EXECUTE}),
+        request_approval=approve,
+        harness_workspace_id="ws",
+        harness_workspace_dir=tmp_path,
+        harness_execution_profile="isolated",
+    )
+
+    async def invoke_both():
+        return (
+            await registry.invoke(ToolCall(id="a", name="python.exec",
+                                           arguments={"code": "print('hi')"}), ctx),
+            await registry.invoke(ToolCall(id="b", name="python.install",
+                                           arguments={"packages": ["requests"]}), ctx),
+        )
+
+    with (
+        patch("backend.harness.tools_python.ensure_python_environment") as launch,
+        patch("backend.harness.tools_python_install.install_packages") as install,
+    ):
+        results = asyncio.run(invoke_both())
+    assert all(result.is_error and "unavailable in Isolated" in result.content for result in results)
+    launch.assert_not_called()
+    install.assert_not_called()
+    assert decisions == ["python.exec", "python.install"]
+
+
+def test_isolated_transition_retires_existing_host_repl():
+    repl = Mock()
+    _retire_host_repl_for_isolated(SimpleNamespace(_harness_python_repls=repl), "workspace-1")
+    repl.stop_workspace.assert_called_once_with("workspace-1")
+    _retire_host_repl_for_isolated(SimpleNamespace(), "workspace-2")
+
