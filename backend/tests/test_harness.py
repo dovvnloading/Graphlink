@@ -567,7 +567,7 @@ class TestLoop:
             assert len(node.state.harness_activity) == 1
             row = node.state.harness_activity[-1]
             assert row["outcome"] == "stopped"
-            assert row["summary"] == "Output:\\nhead tail"
+            assert row["summary"] == "Output:\nhead tail"
             # A late old-run callback may not overwrite the next run's
             # activity if Stop released the kind slot already.
             callback = dispatcher._runs.get(request_id)
