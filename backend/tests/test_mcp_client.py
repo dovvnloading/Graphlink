@@ -322,6 +322,45 @@ def test_a_configured_filesystem_mcp_servers_tool_is_callable_namespaced_and_app
         client.close()
 
 
+def test_always_mcp_tool_refuses_session_bypass_for_different_arguments(fake_fs_server, tmp_path):
+    from backend.harness.loop import _session_grant_eligible
+
+    first_file, second_file = tmp_path / "draft.txt", tmp_path / "production.txt"
+    first_file.write_text("draft", encoding="utf-8")
+    second_file.write_text("production", encoding="utf-8")
+    client = McpStdioClient(command=sys.executable, args=(fake_fs_server,))
+    registry = ToolRegistry()
+    try:
+        client.connect()
+        config = McpServerConfig(
+            name="fs", command=sys.executable, args=(fake_fs_server,),
+            scopes=frozenset({"fs.read"}), approval="always",
+        )
+        assert "mcp:fs:read_file" in register_mcp_server_tools(registry, client, config)
+        name = "mcp:fs:read_file"
+        first = ToolCall(id="1", name=name, arguments={"path": str(first_file)})
+        second = ToolCall(id="2", name=name, arguments={"path": str(second_file)})
+        assert not _session_grant_eligible(first, registry)
+
+        prompts = []
+
+        async def approve(call):
+            prompts.append(call.arguments["path"])
+            return "session"  # must not become name-wide permission
+
+        grants = {name}  # even a pre-existing stale bypass is not accepted
+        ctx = RunContext(
+            granted_scopes=frozenset({"fs.read"}),
+            request_approval=approve, session_grants=grants,
+        )
+        assert _run(registry.invoke(first, ctx)).content == "draft"
+        assert _run(registry.invoke(second, ctx)).content == "production"
+        assert prompts == [str(first_file), str(second_file)]
+        assert grants == {name}
+    finally:
+        client.close()
+
+
 def test_an_out_of_scope_mcp_call_is_denied_pre_handler(fake_fs_server, tmp_path):
     client = McpStdioClient(command=sys.executable, args=(fake_fs_server,))
     registry = ToolRegistry()

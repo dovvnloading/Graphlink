@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from backend.agent_dispatch.harness import HarnessDispatchOps
 
 
@@ -181,3 +183,71 @@ def test_inflight_stop_cannot_retire_newly_registered_sessions_after_regrant(
     assert not repl.stopped
     assert shells.get("new-shell", "dev", expected_root=root) is shell
     assert repls.get("new-python", root, manage_cwd=False) is repl
+
+@pytest.mark.parametrize("invalidator", ["revoke", "graph_reset"])
+def test_late_session_approval_cannot_rearm_revoked_active_run(tmp_path, invalidator):
+    """A parked approval resolving after revocation cannot revive its old set."""
+    from backend.providers.base import ToolCall, ToolSpec
+    from backend.tools import FS_WRITE, RunContext, ToolRegistry, ToolResult
+
+    root = (tmp_path / "trusted").resolve()
+    root.mkdir()
+    dispatcher = HarnessDispatchOps()
+    grants = dispatcher.bind_harness_session_grants("agent", root)
+    # This simulates an in-flight harness task with a frozen root.
+    dispatcher._harness_active_workspaces = {"run": "agent"}
+    registry = ToolRegistry()
+    executed = []
+
+    async def handler(call, _ctx):
+        executed.append(call.arguments["path"])
+        return ToolResult(content="wrote")
+
+    registry.register(
+        ToolSpec(name="fs.write", description="test", input_schema={"type": "object"}),
+        handler, scopes={FS_WRITE}, approval="once",
+    )
+
+    async def run():
+        pending = asyncio.get_running_loop().create_future()
+        first_prompted = asyncio.Event()
+        prompts = []
+
+        async def request_approval(call):
+            prompts.append(call.arguments["path"])
+            if len(prompts) == 1:
+                first_prompted.set()
+                return await pending
+            return True
+
+        ctx = RunContext(
+            granted_scopes=frozenset({FS_WRITE}),
+            request_approval=request_approval, session_grants=grants,
+        )
+        ctx.harness_workspace_dir = root
+        ctx.harness_node_id = "agent"
+
+        first = asyncio.create_task(registry.invoke(
+            ToolCall(id="one", name="fs.write", arguments={"path": "one.txt"}), ctx,
+        ))
+        await first_prompted.wait()
+        if invalidator == "revoke":
+            await dispatcher.retire_revoked_harness_root(str(root))
+        else:
+            dispatcher.clear_harness_session_grants()
+        assert not grants
+        assert dispatcher.harness_session_grants("agent") is not grants
+
+        pending.set_result("session")  # stale approval for the already-running task
+        assert not (await first).is_error
+        assert "fs.write" not in grants
+
+        second = await registry.invoke(
+            ToolCall(id="two", name="fs.write", arguments={"path": "two.txt"}), ctx,
+        )
+        assert not second.is_error
+        assert prompts == ["one.txt", "two.txt"], "the revoked run must ask again"
+        assert executed == ["one.txt", "two.txt"]
+        assert "fs.write" not in grants
+
+    asyncio.run(run())

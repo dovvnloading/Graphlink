@@ -11,20 +11,30 @@ workspace as the transcript preserves per-agent isolation and existing GC.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
 import re
+import secrets
 import sqlite3
+import stat
 import threading
 from weakref import WeakValueDictionary
 from collections import OrderedDict
-from contextlib import closing
+from contextlib import ExitStack, closing, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 INDEX_FILENAME = "transcript-search.sqlite3"
+# Only indexes written by this application have trustworthy FTS semantics.
+# Checking PRAGMA table_info alone misses content UNINDEXED and contentless
+# FTS5 tables, both of which expose the expected three columns.
+_FTS_DEFINITION = (
+    "CREATE VIRTUAL TABLE transcript_fts USING "
+    "fts5(content, role UNINDEXED, line_number UNINDEXED, tokenize='unicode61')"
+)
 MAX_QUERY_CHARS = 256
 MAX_QUERY_TERMS = 16
 MAX_MATCHES = 10
@@ -40,14 +50,115 @@ class _IncompatibleIndex(sqlite3.DatabaseError):
     """An existing disposable sidecar has an incompatible FTS schema."""
 
 
-def _open_index(path: Path) -> sqlite3.Connection:
-    # The workspace is writable by the agent. Never follow a planted index
-    # symlink into another file: this is derived application state, not a
-    # caller-selected SQLite database.
+@contextmanager
+def _index_directory(path: Path):
+    """Pin the sidecar directory for POSIX atomic writes and cleanup.
+
+    A final-component O_NOFOLLOW is insufficient if an agent can also swap a
+    parent directory. On Windows, descriptor-relative operations are not
+    supported; reads use the opened-handle path verification used by fs.read.
+    """
+    if os.name == "nt":
+        yield None
+        return
+    if (not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY")
+            or os.open not in os.supports_dir_fd):
+        raise OSError("Safe transcript search index I/O is unavailable.")
+    directory = path.absolute().parent
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    with ExitStack() as stack:
+        directory_fd = os.open(directory.anchor, flags)
+        stack.callback(os.close, directory_fd)
+        for component in directory.parts[1:]:
+            directory_fd = os.open(component, flags, dir_fd=directory_fd)
+            stack.callback(os.close, directory_fd)
+        yield directory_fd
+
+
+def _read_index_bytes(path: Path) -> bytes | None:
+    """Read an existing SQLite image through a verified no-follow descriptor.
+
+    SQLite's Unix VFS resolves even /proc/self/fd paths back to names before
+    opening them, so passing a validated descriptor path to sqlite3.connect
+    would still race. Deserialize only bytes read from the pinned inode.
+    """
     if path.is_symlink():
         raise OSError("Transcript search index must not be a symlink.")
-    db = sqlite3.connect(str(path), timeout=5.0)
+    from backend.harness.tools_fs import _open_bounded_file_fd
+    from backend.harness.workspace import WorkspaceError
+
     try:
+        fd = _open_bounded_file_fd(path)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+            raise OSError("Transcript search index must not be a symlink.") from exc
+        raise
+    except WorkspaceError as exc:
+        raise OSError("Transcript search index path changed during open.") from exc
+    with os.fdopen(fd, "rb") as source:
+        if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+            raise OSError("Transcript search index must be a regular file.")
+        return source.read()
+
+
+def _save_index(path: Path, db: sqlite3.Connection) -> None:
+    """Atomically publish an in-memory FTS5 image without SQLite side files.
+
+    The sidecar is disposable: a crash during a save leaves the old complete
+    image, while a crash inside SQLite cannot create a WAL/SHM/journal at an
+    attacker-chosen path. The authoritative JSONL repairs any stale image.
+    """
+    payload = db.serialize()
+    with _index_directory(path) as directory_fd:
+        temporary_name = f".{INDEX_FILENAME}.{secrets.token_hex(12)}.tmp"
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+        if directory_fd is None:
+            temporary = path.with_name(temporary_name)
+            fd = os.open(temporary, flags, 0o600)
+        else:
+            fd = os.open(temporary_name, flags | os.O_NOFOLLOW, 0o600, dir_fd=directory_fd)
+        try:
+            with os.fdopen(fd, "wb") as target:
+                target.write(payload)
+                target.flush()
+                os.fsync(target.fileno())
+            if directory_fd is None:
+                # Replacing a symlink never writes through it, but a planted
+                # link is also an explicit reason not to publish the index.
+                if path.is_symlink():
+                    raise OSError("Transcript search index must not be a symlink.")
+                os.replace(temporary, path)
+            else:
+                os.replace(
+                    temporary_name, path.name,
+                    src_dir_fd=directory_fd, dst_dir_fd=directory_fd,
+                )
+                os.fsync(directory_fd)
+        finally:
+            try:
+                if directory_fd is None:
+                    temporary.unlink()
+                else:
+                    os.unlink(temporary_name, dir_fd=directory_fd)
+            except FileNotFoundError:
+                pass
+
+
+def _open_index(path: Path) -> sqlite3.Connection:
+    # Never let SQLite resolve a pathname inside the agent-writable scratch
+    # directory. Use an in-memory connection for all FTS and state writes.
+    image = _read_index_bytes(path)
+    db = sqlite3.connect(":memory:", timeout=5.0)
+    try:
+        if image is not None:
+            # WAL-mode main images need separate companion files, which must
+            # never be opened by name here. Rebuild from JSONL instead.
+            if (not image.startswith(b"SQLite format 3\x00") or len(image) < 20
+                    or image[18:20] != b"\x01\x01"):
+                raise _IncompatibleIndex("Unexpected transcript search database image.")
+            db.deserialize(image)
         db.execute(
             "CREATE VIRTUAL TABLE IF NOT EXISTS transcript_fts USING "
             "fts5(content, role UNINDEXED, line_number UNINDEXED, tokenize='unicode61')"
@@ -55,23 +166,18 @@ def _open_index(path: Path) -> sqlite3.Connection:
         definition = db.execute(
             "SELECT sql FROM sqlite_master WHERE name = 'transcript_fts'"
         ).fetchone()
-        # SQLite accepts an existing FTS5 table with any column layout.
-        # Check the real exposed columns (including their order, because
-        # snippet(..., 0) assumes content is first) before trusting a sidecar.
+        # Match the application's actual FTS5 definition, not just exposed
+        # column names: UNINDEXED content and content='' silently lose hits
+        # or result metadata even when PRAGMA table_info looks identical.
         columns = [column[1] for column in db.execute("PRAGMA table_info(transcript_fts)")]
-        if (
-            not definition
-            or "using fts5(" not in str(definition[0]).lower()
-            or columns != ["content", "role", "line_number"]
-        ):
+        if (not definition or definition[0] != _FTS_DEFINITION
+                or columns != ["content", "role", "line_number"]):
             raise _IncompatibleIndex("Unexpected transcript search FTS schema.")
         db.execute(
             "CREATE TABLE IF NOT EXISTS transcript_index_state ("
             "id INTEGER PRIMARY KEY CHECK (id = 1), "
             "offset INTEGER NOT NULL, line_number INTEGER NOT NULL)"
         )
-        # A separate table keeps older sidecars readable. Missing source
-        # metadata on a pre-upgrade index triggers a one-time rebuild.
         db.execute(
             "CREATE TABLE IF NOT EXISTS transcript_index_source ("
             "id INTEGER PRIMARY KEY CHECK (id = 1), "
@@ -168,15 +274,27 @@ def _is_damaged_index(exc: sqlite3.DatabaseError) -> bool:
 
 
 def _discard_damaged_index(path: Path) -> None:
-    # Only the derived sidecar and SQLite companions can be deleted.
-    # Refuse links and non-files; never touch transcript.jsonl.
-    for candidate in (path, *(Path(str(path) + suffix) for suffix in ("-wal", "-shm", "-journal"))):
-        if candidate.is_symlink():
-            raise OSError("Transcript search index must not be a symlink.")
-        if candidate.exists():
-            if not candidate.is_file():
+    # Delete only derived files. Pin the directory on POSIX so even a raced
+    # parent-directory symlink cannot redirect the cleanup elsewhere.
+    with _index_directory(path) as directory_fd:
+        for candidate in (path, *(Path(str(path) + suffix) for suffix in ("-wal", "-shm", "-journal"))):
+            if directory_fd is None:
+                if candidate.is_symlink():
+                    raise OSError("Transcript search index must not be a symlink.")
+                if candidate.exists():
+                    if not candidate.is_file():
+                        raise OSError("Transcript search index must be a regular file.")
+                    candidate.unlink()
+                continue
+            try:
+                info = os.stat(candidate.name, dir_fd=directory_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if stat.S_ISLNK(info.st_mode):
+                raise OSError("Transcript search index must not be a symlink.")
+            if not stat.S_ISREG(info.st_mode):
                 raise OSError("Transcript search index must be a regular file.")
-            candidate.unlink()
+            os.unlink(candidate.name, dir_fd=directory_fd)
 
 
 def _source_stamp(stats: os.stat_result) -> tuple[int, int, int, int, int]:
@@ -238,6 +356,7 @@ def _sync_index_once(transcript: Path, *, append_origin: os.stat_result | None =
                 "SELECT offset, line_number FROM transcript_index_state WHERE id = 1"
             ).fetchone()
             offset, line_number = (int(row[0]), int(row[1])) if row else (0, 0)
+            previous_offset = offset
             identity = db.execute(
                 "SELECT device, inode, prefix_sha256 "
                 "FROM transcript_index_source WHERE id = 1"
@@ -318,22 +437,34 @@ def _sync_index_once(transcript: Path, *, append_origin: os.stat_result | None =
                     )
 
             digest = hasher.hexdigest()
-            db.execute(
-                "INSERT INTO transcript_index_state (id, offset, line_number) "
-                "VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET "
-                "offset=excluded.offset, line_number=excluded.line_number",
-                (offset, line_number),
+            # A read-only search of an unchanged transcript should not
+            # rewrite the entire serialized sidecar on every invocation.
+            save_required = (
+                row is None or identity is None or rebuild
+                or offset != previous_offset
+                or tuple(identity) != (device, inode, digest)
             )
-            db.execute(
-                "INSERT INTO transcript_index_source (id, device, inode, prefix_sha256) "
-                "VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
-                "device=excluded.device, inode=excluded.inode, "
-                "prefix_sha256=excluded.prefix_sha256",
-                (device, inode, digest),
-            )
+            if save_required:
+                db.execute(
+                    "INSERT INTO transcript_index_state (id, offset, line_number) "
+                    "VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+                    "offset=excluded.offset, line_number=excluded.line_number",
+                    (offset, line_number),
+                )
+                db.execute(
+                    "INSERT INTO transcript_index_source (id, device, inode, prefix_sha256) "
+                    "VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+                    "device=excluded.device, inode=excluded.inode, "
+                    "prefix_sha256=excluded.prefix_sha256",
+                    (device, inode, digest),
+                )
             # Do not trust this checkpoint if the source was concurrently
             # modified during indexing; the next sync will revalidate it.
             stable = _source_stamp(os.fstat(source.fileno())) == stamp
+        # Commit in memory before publishing a complete SQLite image. SQLite
+        # itself never opens the scratch pathname or creates WAL/SHM siblings.
+        if save_required:
+            _save_index(sidecar, db)
         if stable:
             _remember_checkpoint(sidecar, _HashCheckpoint(
                 offset, device, inode, digest, stamp, hasher,

@@ -6,6 +6,7 @@ import asyncio
 import json
 import sqlite3
 from contextlib import closing
+from pathlib import Path
 
 import pytest
 
@@ -37,6 +38,10 @@ def test_writer_indexes_messages_calls_and_compaction_without_rewriting_history(
 
     transcript = transcript_path(tmp_path)
     assert index_path(transcript).is_file()  # indexed on write, not just on search
+    # The indexer never passes the scratch pathname to SQLite, so no WAL,
+    # shared-memory or rollback-journal companion is created there.
+    for suffix in ("-wal", "-shm", "-journal"):
+        assert not Path(str(index_path(transcript)) + suffix).exists()
     assert {hit["role"] for hit in search_index(transcript, "chrysanthemum")} == {
         "user", "summary",
     }
@@ -130,6 +135,36 @@ def test_incompatible_fts5_columns_rebuild_from_unchanged_jsonl(tmp_path, fts_co
     assert transcript.read_bytes() == original
 
 
+@pytest.mark.parametrize("fts_definition", [
+    "content UNINDEXED, role UNINDEXED, line_number UNINDEXED",
+    "content, role UNINDEXED, line_number UNINDEXED, content=''",
+    "content, role UNINDEXED, line_number UNINDEXED, tokenize='porter'",
+])
+def test_incompatible_fts5_options_rebuild_even_with_matching_columns(tmp_path, fts_definition):
+    transcript = transcript_path(tmp_path)
+    transcript.write_text(
+        '{"t":"msg","role":"user","content":"violet ledger"}\n', encoding="utf-8",
+    )
+    original = transcript.read_bytes()
+    with closing(sqlite3.connect(index_path(transcript))) as db:
+        db.execute(f"CREATE VIRTUAL TABLE transcript_fts USING fts5({fts_definition})")
+        assert [row[1] for row in db.execute("PRAGMA table_info(transcript_fts)")] == [
+            "content", "role", "line_number",
+        ]
+        db.commit()
+
+    hits = search_index(transcript, "violet")
+    assert len(hits) == 1
+    assert hits[0]["role"] == "user" and hits[0]["line"] == 1
+    assert len(search_index(transcript, "ledger")) == 1
+    with closing(sqlite3.connect(index_path(transcript))) as db:
+        definition = db.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'transcript_fts'"
+        ).fetchone()[0]
+    assert definition == index_module._FTS_DEFINITION
+    assert transcript.read_bytes() == original
+
+
 def test_corrupt_index_recovery_never_follows_symlink(tmp_path):
     transcript = transcript_path(tmp_path)
     transcript.write_text('{"t":"msg","role":"user","content":"poppy"}\n', encoding="utf-8")
@@ -143,6 +178,59 @@ def test_corrupt_index_recovery_never_follows_symlink(tmp_path):
     with pytest.raises(OSError, match="symlink"):
         search_index(transcript, "poppy")
     assert outside.read_bytes() == b"private file"
+
+
+def test_sidecar_open_race_never_follows_replaced_symlink(tmp_path, monkeypatch):
+    """The link is planted after the fast path check, before the actual read.
+
+    SQLite must never open the sidecar pathname, even if an attacker swaps it
+    to a writable database outside the managed search index location.
+    """
+    from backend.harness import tools_fs
+
+    scratch = tmp_path / "managed-workspace"
+    scratch.mkdir()
+    transcript = transcript_path(scratch)
+    transcript.write_text(
+        '{"t":"msg","role":"user","content":"violet ledger"}\n', encoding="utf-8",
+    )
+    sidecar = index_path(transcript)
+    outside = tmp_path / "outside.sqlite3"
+    with closing(sqlite3.connect(outside)) as db:
+        db.execute("CREATE TABLE sentinel (value TEXT)")
+        db.execute("INSERT INTO sentinel VALUES ('unchanged')")
+        db.commit()
+    probe = tmp_path / "symlink-probe"
+    try:
+        probe.symlink_to(outside)
+        probe.unlink()
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+
+    actual_connect = sqlite3.connect
+
+    def reject_pathname_connect(database, *args, **kwargs):
+        assert str(database) != str(sidecar), "SQLite must never open the untrusted sidecar path"
+        return actual_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(index_module.sqlite3, "connect", reject_pathname_connect)
+    original_open = tools_fs._open_bounded_file_fd
+
+    def race_after_link_check(path: Path):
+        if path == sidecar:
+            sidecar.symlink_to(outside)
+        return original_open(path)
+
+    monkeypatch.setattr(tools_fs, "_open_bounded_file_fd", race_after_link_check)
+    with pytest.raises(OSError, match="symlink|path changed"):
+        index_module.sync_index(transcript)
+
+    with closing(actual_connect(outside)) as db:
+        assert db.execute("SELECT value FROM sentinel").fetchone() == ("unchanged",)
+        assert db.execute(
+            "SELECT name FROM sqlite_master WHERE name LIKE 'transcript_%'"
+        ).fetchall() == []
+    assert sidecar.is_symlink()
 
 
 def test_replacing_transcript_without_shrinking_invalidates_old_fts_rows(tmp_path):

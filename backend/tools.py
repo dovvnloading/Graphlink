@@ -80,6 +80,12 @@ KNOWN_SCOPES = frozenset({
 
 ApprovalPolicy = Literal["auto", "once", "always"]
 _KNOWN_APPROVAL_POLICIES = frozenset({"auto", "once", "always"})
+# These registrations must never inherit name-wide consent, even if an
+# approval callback returns a forged or stale "session" decision.
+_NON_SESSION_GRANT_TOOLS = frozenset({
+    "graph.delete_node", "python.exec", "python.install", "shell.exec",
+    "shell.session", "web.fetch", "web.search",
+})
 
 
 @dataclass(frozen=True)
@@ -255,6 +261,19 @@ class ToolRegistry:
         registration = self._registrations.get(name)
         return registration.approval if registration is not None else None
 
+    def allows_session_grant(self, name: str) -> bool:
+        """Only 'once' registrations may use tool-name-wide session consent.
+
+        'always' is intentionally per-effect (including plugin/MCP tools).
+        The registry enforces this independently of what the UI offers.
+        """
+        registration = self._registrations.get(name)
+        return bool(
+            registration is not None and registration.approval == "once"
+            and name not in _NON_SESSION_GRANT_TOOLS
+            and not name.startswith("fal.")
+        )
+
     def parallel_safe_for(self, name: str) -> bool:
         """Only explicitly registered independent read tools run concurrently.
 
@@ -364,18 +383,12 @@ class ToolRegistry:
                     reprompt_failed = True
             if forced:
                 fingerprint = None
-            # PLAN-2026-08-24 §2.4's graded consent: a SESSION-scoped grant
-            # covers this tool for the rest of the agent session, not just
-            # this run - checked before the per-run fingerprint memo because
-            # it is the broader of the two. `forced` (the dangerous list)
-            # defeats it exactly as it defeats the fingerprint: "deny always
-            # wins", and a remembered grant is not consent for `rm -rf`.
+            # A session grant is a tool-name-wide convenience for eligible
+            # 'once' registrations only. 'always' retains only its exact-call
+            # fingerprint memo; forced approval defeats both kinds of memo.
             session_granted = (
                 not forced
-                # Ordinary 'always' tools still support graded session consent.
-                # A graph deletion is different: its target must be reviewed
-                # independently, even if a stale name-wide grant exists.
-                and call.name != "graph.delete_node"
+                and self.allows_session_grant(call.name)
                 and ctx.session_grants is not None
                 and call.name in ctx.session_grants
             )
@@ -453,8 +466,7 @@ class ToolRegistry:
                         content="Execution request changed while approval was pending; submit it for fresh approval.",
                         is_error=True,
                     )
-                if (decision == "session"
-                        and call.name not in ("shell.exec", "graph.delete_node")
+                if (decision == "session" and self.allows_session_grant(call.name)
                         and ctx.session_grants is not None and not forced):
                     ctx.session_grants.add(call.name)
                 elif fingerprint is not None:
