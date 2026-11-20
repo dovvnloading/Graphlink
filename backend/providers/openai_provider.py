@@ -45,6 +45,7 @@ from backend.providers.base import (
     ChatRequest,
     ProviderCapabilities,
     ProviderEvent,
+    require_successful_stop,
     ToolCall,
     normalize_usage,
     tool_arguments,
@@ -323,6 +324,7 @@ class OpenAIProvider:
         # it, so this records the marker rather than stopping on it. Same
         # sentinel posture as AnthropicProvider.stream()'s message_stop.
         saw_finish_reason = False
+        finish_reason = None
         try:
             for chunk in stream:
                 if cancel.is_set():
@@ -345,8 +347,11 @@ class OpenAIProvider:
                     continue
                 # Read before the delta-is-None skip below: the finishing
                 # chunk's delta is often empty.
-                if any(getattr(choice, "finish_reason", None) for choice in choices):
-                    saw_finish_reason = True
+                for choice in choices:
+                    reason = getattr(choice, "finish_reason", None)
+                    if reason is not None:
+                        saw_finish_reason = True
+                        finish_reason = reason
                 delta = choices[0].delta
                 if delta is None:
                     continue
@@ -392,6 +397,9 @@ class OpenAIProvider:
             raise RuntimeError(
                 "OpenAI-compatible stream ended unexpectedly before completion. Please try again."
             )
+        require_successful_stop(
+            "OpenAI-compatible", finish_reason, {"stop", "tool_calls", "function_call"},
+        )
 
         if tool_call_buffers:
             # ADR-007 stage 7.1: mirrors OllamaProvider.stream()'s own
