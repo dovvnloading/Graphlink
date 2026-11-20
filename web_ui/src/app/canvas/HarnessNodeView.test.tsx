@@ -28,7 +28,7 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     harnessShellAllowRules: [],
     harnessExecutionProfile: "host",
     harnessPermissionMode: "ask",
-    harnessTaskPermissionMode: "ask"
+    harnessTaskPermissionMode: "ask",
     harnessNetworkAlways: false,
     harnessAwaitingApproval: false,
     harnessApprovalToolName: "",
