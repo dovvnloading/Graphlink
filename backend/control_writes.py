@@ -42,8 +42,13 @@ from backend.tools_graph import (
 
 DEFAULT_WRITE_TOKEN_FILE = Path.home() / ".graphlink" / "headless.write.token"
 _WRITE_ROUTES = frozenset({
-    "/api/control/scene/mutate",
-    "/api/control/scene/save",
+    ("POST", "/api/control/scene/mutate"),
+    ("POST", "/api/control/scene/save"),
+    # Workspace-agent task controls are enabled by the SAME separate
+    # write-token opt-in. Status needs that token too (not the read token).
+    ("GET", "/api/control/agent/task"),
+    ("POST", "/api/control/agent/task/start"),
+    ("POST", "/api/control/agent/task/cancel"),
 })
 _MAX_RECEIPTS = 256
 _ALLOWED_NODE_KINDS = frozenset({"chat", "note", "code", "document"})
@@ -56,7 +61,7 @@ _ALLOWED_FIELDS = {
 
 def is_write_control_request(method: str, path: str) -> bool:
     """Fail closed for any future route not expressly approved here."""
-    return method == "POST" and path in _WRITE_ROUTES
+    return (method, path) in _WRITE_ROUTES
 
 
 def scene_revision(document) -> str:

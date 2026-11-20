@@ -1,8 +1,9 @@
-"""Read-only Graphlink MCP stdio server backed by ONE running Graphlink API.
+"""Read-only-by-default Graphlink MCP stdio server for ONE running backend.
 
 This is a protocol adapter, never another Graphlink backend. It uses only
-the existing authenticated /api/control routes on 127.0.0.1, and exposes
-no mutation, shell, filesystem, settings or approval-bypass tools.
+the authenticated, explicitly scoped /api/control routes on 127.0.0.1.
+Opt-in canvas/task controls never expose shell, filesystem, settings,
+arbitrary intents, or tool-approval bypasses.
 
 Supports MCP's 2026-07-28 stateless server/discover era and older
 initialize-based stdio clients (including Graphlink's own MCP client).
@@ -147,11 +148,52 @@ _WRITE_SPECS: tuple[dict[str, Any], ...] = (
         },
     },
 )
+_AGENT_SPECS: tuple[dict[str, Any], ...] = (
+    {
+        "name": "graphlink_start_agent_task",
+        "description": "Start a workspace-agent task on an EXISTING harness node on the live canvas. Requires a scene revision and retry-safe operation ID. Folder grants and tool approvals remain in the Graphlink app.",
+        "inputSchema": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                **_WRITE_FIELDS,
+                "node_id": {"type": "string", "minLength": 1, "maxLength": 200},
+                "text": {"type": "string", "minLength": 1, "maxLength": 20000},
+            },
+            "required": ["operation_id", "expected_revision", "node_id", "text"],
+        },
+    },
+    {
+        "name": "graphlink_get_agent_task",
+        "description": "Read the latest live workspace-agent run status, checklist, reply and whether attention is needed IN THE APP. Requires the explicit MCP write-token opt-in.",
+        "inputSchema": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "node_id": {"type": "string", "minLength": 1, "maxLength": 200},
+                "run_id": {"type": "string", "minLength": 1, "maxLength": 100},
+            },
+            "required": ["node_id"],
+        },
+    },
+    {
+        "name": "graphlink_cancel_agent_task",
+        "description": "Cancel a specific running workspace-agent task. Never approves a tool or answers a question; those decisions stay in the app.",
+        "inputSchema": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "node_id": {"type": "string", "minLength": 1, "maxLength": 200},
+                "run_id": {"type": "string", "minLength": 1, "maxLength": 100},
+            },
+            "required": ["node_id", "run_id"],
+        },
+    },
+)
 WRITE_TOOLS = tuple({
     **spec, "annotations": {
-        "readOnlyHint": False, "destructiveHint": False, "idempotentHint": True,
+        "readOnlyHint": spec["name"] == "graphlink_get_agent_task",
+        "destructiveHint": spec["name"] == "graphlink_cancel_agent_task",
+        "idempotentHint": True,
     },
-} for spec in _WRITE_SPECS)
+} for spec in (*_WRITE_SPECS, *_AGENT_SPECS))
 _WRITE_BY_NAME = {item["name"]: item for item in WRITE_TOOLS}
 _BY_NAME.update(_WRITE_BY_NAME)
 
@@ -188,12 +230,19 @@ class ControlHttpClient:
         # environment must not send this capability token to a proxy.
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
 
-    def read(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
+    def read(
+        self, path: str, params: dict[str, Any], *, write_capability: bool = False,
+    ) -> dict[str, Any]:
+        # Only the task-status GET may use the write credential. Normal read
+        # tools ALWAYS use the separate read credential.
+        if write_capability and (not self._write_token or path != "/api/control/agent/task"):
+            raise ControlError("MCP write-token read target is not allowlisted")
+        credential = self._write_token if write_capability else self._token
         url = self.base_url + path
         if params:
             url += "?" + urllib.parse.urlencode(params)
         request = urllib.request.Request(
-            url, headers={"Authorization": f"Bearer {self._token}"}, method="GET",
+            url, headers={"Authorization": f"Bearer {credential}"}, method="GET",
         )
         try:
             with self._opener.open(request, timeout=10) as response:
@@ -206,7 +255,7 @@ class ControlHttpClient:
             # short actionable detail instead of reducing every error to
             # "HTTP 400". Never reflect 5xx bodies or credentials.
             detail = ""
-            if status in (400, 404, 422):
+            if status in (400, 404, 409, 422):
                 try:
                     body = json.loads(exc.read(2048))
                     message = body.get("detail") if isinstance(body, dict) else None
@@ -232,7 +281,10 @@ class ControlHttpClient:
     def write(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         if not self._write_token:
             raise ControlError("MCP write token was not configured")
-        if path not in ("/api/control/scene/mutate", "/api/control/scene/save"):
+        if path not in (
+            "/api/control/scene/mutate", "/api/control/scene/save",
+            "/api/control/agent/task/start", "/api/control/agent/task/cancel",
+        ):
             raise ControlError("MCP write target is not allowlisted")
         request = urllib.request.Request(
             self.base_url + path,
@@ -249,7 +301,7 @@ class ControlHttpClient:
         except urllib.error.HTTPError as exc:
             status = exc.getcode()
             detail = ""
-            if status in (400, 409, 422):
+            if status in (400, 404, 409, 422):
                 try:
                     body = json.loads(exc.read(2048))
                     message = body.get("detail") if isinstance(body, dict) else None
@@ -386,7 +438,11 @@ class StdioMcpServer:
             result: dict[str, Any] = {
                 "resultType": "complete", "supportedVersions": [MODERN_VERSION],
                 "capabilities": {"tools": {}},
-                "instructions": "Read-only Graphlink workspace, saved graph and live canvas inspection.",
+                "instructions": (
+                    "Graphlink graph inspection. With an explicit write-token opt-in, "
+                    "scoped canvas writes and workspace-agent start/status/cancel are also available. "
+                    "Agent tool approvals and answers are only handled in the Graphlink app."
+                ),
             }
         elif method == "ping":
             result = {}
@@ -401,7 +457,15 @@ class StdioMcpServer:
             except ValueError as exc:
                 return _rpc_error(request_id, -32602, str(exc))
             try:
-                if name in _WRITE_BY_NAME:
+                if name == "graphlink_get_agent_task":
+                    payload = self._client.read(
+                        "/api/control/agent/task", arguments, write_capability=True,
+                    )
+                elif name == "graphlink_start_agent_task":
+                    payload = self._client.write("/api/control/agent/task/start", arguments)
+                elif name == "graphlink_cancel_agent_task":
+                    payload = self._client.write("/api/control/agent/task/cancel", arguments)
+                elif name in _WRITE_BY_NAME:
                     shared = {k: arguments[k] for k in ("operation_id", "expected_revision")}
                     if name == "graphlink_save_graph":
                         payload = self._client.write("/api/control/scene/save", shared)
@@ -470,10 +534,10 @@ def serve(client: ControlHttpClient, source: TextIO | BinaryIO, sink: TextIO) ->
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Graphlink read-only MCP stdio adapter")
+    parser = argparse.ArgumentParser(description="Graphlink read-only-by-default MCP stdio adapter")
     parser.add_argument("--url", default=f"http://127.0.0.1:{DEFAULT_CONTROL_PORT}")
     parser.add_argument("--token-file", type=Path, default=DEFAULT_TOKEN_FILE)
-    parser.add_argument("--write-token-file", type=Path, default=None, help="explicit opt-in to MCP graph-write tools")
+    parser.add_argument("--write-token-file", type=Path, default=None, help="explicit opt-in to MCP canvas writes and workspace-agent tasks")
     options = parser.parse_args(argv)
     try:
         if (options.write_token_file is not None and

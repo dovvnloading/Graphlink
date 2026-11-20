@@ -98,6 +98,31 @@ async def drive(document, dispatcher, registry, bus, node, user_text):
     return handle.request_id
 
 
+def test_pre_start_cancel_never_resurrects_a_harness_run(workspace_root):
+    document = SceneDocument()
+    node = document.add_harness_node(0, 0, "stop immediately")
+    dispatcher = LoopDispatcher()
+    bus = FakeBus()
+
+    async def run():
+        event = threading.Event()
+        handle = dispatcher._runs.claim("harness", node_id=node.id, cancel_event=event)
+        assert dispatcher._runs.cancel(handle.request_id, kind="harness")
+        assert event.is_set()
+        await run_harness(
+            document=document, dispatcher=dispatcher, registry=ToolRegistry(),
+            bus=bus, notifications=None, harness_node_id=node.id,
+            user_text="never execute", request_id=handle.request_id,
+            handle=handle, cancel_event=event,
+        )
+
+    asyncio.run(run())
+    assert node.state.harness_status == "idle"
+    assert node.state.harness_run_id == ""
+    assert not bus.published
+    assert not workspace_root.exists(), "a cancelled-before-start task must not create a workspace"
+
+
 class TestWorkspace:
     def test_traversal_is_refused(self, workspace_root):
         ensure_workspace("ws1")

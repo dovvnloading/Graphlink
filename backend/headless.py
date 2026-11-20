@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run Graphlink without opening a desktop window")
     parser.add_argument("--port", type=int, default=DEFAULT_CONTROL_PORT, help="127.0.0.1 TCP port (default 8765)")
     parser.add_argument("--token-file", type=Path, default=DEFAULT_TOKEN_FILE, help="local per-launch read token file")
-    parser.add_argument("--allow-mcp-writes", action="store_true", help="opt in to non-destructive MCP graph writes")
+    parser.add_argument("--allow-mcp-writes", action="store_true", help="opt in to scoped MCP canvas writes and workspace-agent tasks")
     parser.add_argument("--write-token-file", type=Path, default=DEFAULT_WRITE_TOKEN_FILE, help="separate write token path (requires --allow-mcp-writes)")
     parser.add_argument("--chat-db", type=Path, default=None, help="optional chats.db location")
     parser.add_argument("--settings-file", type=Path, default=None, help="optional settings file")
