@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 import type { SceneStore } from "../canvas/sceneStore";
 
-// Keep in sync with backend/api/intents_harness.py's untrusted wire-input bound.
-export const MAX_HARNESS_TASK_LENGTH = 20_000;
+export { MAX_HARNESS_TASK_LENGTH } from "../../lib/harnessTaskLimit";
 export type HarnessExecutionProfile = "host" | "isolated";
 
 /** A first-run choice, checked against the backend host (not the browser).
