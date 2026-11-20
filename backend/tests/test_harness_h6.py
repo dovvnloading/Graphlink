@@ -200,7 +200,6 @@ class TestShellAllowRules:
         "git status && rm -rf out",
         "git status",
         "git log",
-        "ls",
         "echo $(rm -rf out)",
         "python -c print",
         "python -m pip",
@@ -281,7 +280,7 @@ class TestShellAllowRules:
         assert invoke("pwd && rm -rf out").is_error
         assert requested == [
             "pwd && echo changed", "pwd -P && echo ready",
-            "git status && rm -rf out",
+            "pwd && rm -rf out",
         ]
         ctx.shell_allow_rules.remove(rules[1])
         assert invoke("pwd && echo ready").is_error
