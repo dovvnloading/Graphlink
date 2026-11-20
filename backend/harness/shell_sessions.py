@@ -44,6 +44,9 @@ from pathlib import Path
 from graphlink_execution_guard import spawn_guarded_subprocess, assign_guarded_subprocess, ExecutionResourceGuard, create_execution_guard
 from graphlink_process_env import safe_subprocess_env
 from backend.harness.shell_selection import shell_invocation
+from backend.harness.shell_isolation import (
+    cleanup_container, container_invocation, normalize_execution_profile,
+)
 
 # Per-session output ring. Lines, not bytes: a line is the unit anyone
 # reading build output thinks in, and a cap on lines bounds memory just as
@@ -137,6 +140,62 @@ class LocalSubprocessBackend(ShellBackend):
             # that spawned its own children dies with it, which plain
             # process.kill() would leave orphaned (the ADR-005 finding).
             guard.close()
+
+
+class ContainerSubprocessBackend(LocalSubprocessBackend):
+    """Guard the local CLI and track its daemon-side container for teardown."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._containers: dict[int, tuple[str, str, dict[str, str]]] = {}
+
+    def spawn(self, command: str, cwd: Path, shell: str = "auto"):
+        env = safe_subprocess_env()
+        argv, engine, name = container_invocation(command, cwd, env=env)
+        kwargs: dict = {"env": env}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        guard = create_execution_guard()
+        try:
+            process = spawn_guarded_subprocess(
+                guard, argv, shell=False,
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1, cwd=str(cwd),
+                **guard.popen_kwargs(), **kwargs,
+            )
+            try:
+                assign_guarded_subprocess(guard, process)
+            except BaseException:
+                try:
+                    process.kill()
+                    process.wait(timeout=3)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    if stream is not None:
+                        try:
+                            stream.close()
+                        except (OSError, ValueError):
+                            pass
+                raise
+        except BaseException:
+            try:
+                guard.close()
+            finally:
+                cleanup_container(engine, name, env=env)
+            raise
+        self._guards[id(process)] = guard
+        self._containers[id(process)] = (engine, name, env)
+        return process
+
+    def teardown(self, handle) -> None:
+        try:
+            super().teardown(handle)
+        finally:
+            container = self._containers.pop(id(handle), None)
+            if container is not None:
+                engine, name, env = container
+                cleanup_container(engine, name, env=env)
 
 
 class ShellSession:
@@ -247,13 +306,15 @@ class ShellSession:
 class ShellSessionRegistry:
     """Per-dispatcher store of live sessions, keyed by workspace id."""
 
-    def __init__(self, backend: "ShellBackend | None" = None) -> None:
+    def __init__(self, backend: "ShellBackend | None" = None, isolated_backend: "ShellBackend | None" = None) -> None:
         self._backend = backend or LocalSubprocessBackend()
+        self._isolated_backend = isolated_backend or ContainerSubprocessBackend()
         self._by_workspace: dict[str, dict[str, ShellSession]] = {}
         self._roots: dict[str, Path] = {}
+        self._profiles: dict[str, str] = {}
         self._lock = threading.RLock()
 
-    def bind_root(self, workspace_id: str, cwd: Path) -> None:
+    def bind_root(self, workspace_id: str, cwd: Path, profile: str = "host") -> None:
         """Retire processes when the same node binds to a different root.
 
         A harness can switch from a previously trusted project folder back
@@ -262,18 +323,25 @@ class ShellSessionRegistry:
         write stdin to a process STILL running in the old trusted folder.
         """
         resolved = cwd.resolve()
+        profile = normalize_execution_profile(profile)
         with self._lock:
-            if self._roots.get(workspace_id) == resolved:
+            if (self._roots.get(workspace_id) == resolved
+                    and self._profiles.get(workspace_id) == profile):
                 return
             retired = self._by_workspace.pop(workspace_id, {})
             self._roots[workspace_id] = resolved
+            self._profiles[workspace_id] = profile
         for session in retired.values():
             session.stop()
 
-    def start(self, workspace_id: str, name: str, command: str, cwd: Path, shell: str = "auto") -> ShellSession:
+    def start(self, workspace_id: str, name: str, command: str, cwd: Path, shell: str = "auto", profile: str = "host") -> ShellSession:
         with self._lock:
             resolved = cwd.resolve()
             bound = self._roots.setdefault(workspace_id, resolved)
+            profile = normalize_execution_profile(profile)
+            bound_profile = self._profiles.setdefault(workspace_id, profile)
+            if bound_profile != profile:
+                raise ShellSessionError("Execution profile changed; retry in the active profile.")
             if bound != resolved:
                 raise ShellSessionError(
                     "Harness workspace root changed; retry in the currently bound workspace."
@@ -296,7 +364,8 @@ class ShellSessionRegistry:
                     f"this workspace already has {live} running sessions "
                     f"(limit {MAX_SESSIONS_PER_WORKSPACE}) - stop one first"
                 )
-            session = ShellSession(name, command, cwd, self._backend, shell)
+            backend = self._isolated_backend if profile == "isolated" else self._backend
+            session = ShellSession(name, command, cwd, backend, shell)
             sessions[name] = session
             return session
 
@@ -327,6 +396,7 @@ class ShellSessionRegistry:
         with self._lock:
             sessions = self._by_workspace.pop(workspace_id, {})
             self._roots.pop(workspace_id, None)
+            self._profiles.pop(workspace_id, None)
         for session in sessions.values():
             session.stop()
 
@@ -336,6 +406,7 @@ class ShellSessionRegistry:
             everything = list(self._by_workspace.values())
             self._by_workspace.clear()
             self._roots.clear()
+            self._profiles.clear()
         for sessions in everything:
             for session in sessions.values():
                 session.stop()

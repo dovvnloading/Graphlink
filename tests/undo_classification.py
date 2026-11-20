@@ -326,6 +326,8 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("harness", "readWorkspaceFile", "B", "read-only: previews a file in the currently authorized workspace without modifying the document"),
     Classified("harness", "revealWorkspace", "B", "read-only: opens the authorized workspace in the native file manager without modifying the document"),
     Classified("harness", "setShell", "B", "run-config: persists the node shell choice for subsequent tasks, not an in-flight execution"),
+    Classified("harness", "setExecutionProfile", "B", "run-config: persists the node execution profile for subsequent tasks and retires idle sessions; not wrapped in an undo command"),
+    Classified("harness", "getIsolationEngine", "B", "read-only: probes Docker/Podman CLI availability on the backend host"),
 
     # -- backend/api/intents_fal_media.py (scene) ----------------------------
     Classified("scene", "saveFalMediaDraft", "A", "content: undoable Fal Studio draft edit"),
