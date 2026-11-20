@@ -1176,6 +1176,7 @@ def test_editing_discussion_message_invalidates_verified_card_through_tool_and_r
     from backend.providers.base import ToolCall
     from backend.tools import GRAPH_MUTATE, GRAPH_READ, RunContext, ToolRegistry
     from backend.tools_graph import register_graph_tools
+    from backend.tests.conftest import client_row
 
     document, bus, plugin_registry, settings = session
     register_node_intents(bus, document, None)
@@ -1212,7 +1213,9 @@ def test_editing_discussion_message_invalidates_verified_card_through_tool_and_r
     edited = document.nodes[chat_id]
     assert edited.content == replacement and edited.state.science_reference is None
     row = next(node for node in document.scene_payload()["nodes"] if node["id"] == chat_id)
-    assert row["scienceReference"] is None
+    # Default-valued fields are omitted from the sparse wire, then hydrated by the client.
+    assert "scienceReference" not in row
+    assert client_row(row)["scienceReference"] is None
 
     document.undo()
     restored = document.nodes[chat_id]
