@@ -10,7 +10,7 @@ from __future__ import annotations
 import base64
 import os
 import shutil
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from graphlink_process_env import safe_subprocess_env
 
@@ -136,8 +136,12 @@ def _posix_bash_executable(env: dict[str, str]) -> str:
     # Do not search the working directory when the allowed PATH is empty.
     bash = shutil.which("bash", path=path) if path else None
     if bash:
-        # A relative PATH entry makes which() return a relative name, but
-        # Popen changes cwd to the workspace. Bind to the discovered file.
+        # which() can return a POSIX-absolute path even when the caller
+        # simulates POSIX on Windows. Windows abspath() would rewrite
+        # /bin/bash as a drive-prefixed path; keep absolute results intact.
+        if os.path.isabs(bash) or PurePosixPath(bash).is_absolute():
+            return bash
+        # Relative PATH entries must be bound before Popen changes cwd.
         return os.path.abspath(bash)
     raise ShellUnavailableError(
         "Bash is not available on the workspace execution PATH. "
