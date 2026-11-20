@@ -2243,7 +2243,7 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
             )
         if use_json_protocol:
             from backend.providers.json_tool_protocol import constrained_request
-            json_messages, json_kwargs = constrained_request(messages, tuple(tools), provider_name)
+            json_messages, json_kwargs = constrained_request(messages, tuple(tools), str(provider_name or ""))
         # DeepSeek/Kimi/GLM can require the previous assistant reasoning on
         # tool turns. Keep it scoped to its originating profile and model,
         # and never pass Graphlink's private history metadata to another API.
@@ -2332,7 +2332,7 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                             ) from retry_exc
                         from backend.providers.json_tool_protocol import constrained_request
                         json_messages, json_kwargs = constrained_request(
-                            messages, tuple(tools), provider_name,
+                            messages, tuple(tools), str(provider_name or ""),
                         )
                         use_json_protocol = True
                         replay = False
