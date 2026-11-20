@@ -46,3 +46,20 @@ class HarnessSettingsOps(SettingsManagerParts):
             return
         self.state["harness_trusted_dirs"] = current + [clean]
         self._save_state()
+
+    def revoke_harness_trusted_dir(self, path: str) -> None:
+        """Revoke exactly one stored grant, without touching other folders.
+
+        Match the stored string exactly: revocation should not accept a
+        guessed parent or prefix, nor turn a malformed wire value into a
+        bulk list replacement. The run-time bound_root trust gate checks
+        this list again for every NEW run.
+        """
+        if not isinstance(path, str) or not path.strip():
+            return
+        current = self.get_harness_trusted_dirs()
+        remaining = [entry for entry in current if entry != path]
+        if len(remaining) == len(current):
+            return
+        self.state["harness_trusted_dirs"] = remaining
+        self._save_state()
