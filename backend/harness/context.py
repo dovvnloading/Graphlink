@@ -7,10 +7,10 @@ turn loop starts, and never rebuilt mid-run - that is what lets a
 provider's prompt caching hit on every turn after the first, which
 dominates cost in a multi-turn loop (ADR-016). Nothing volatile is
 interpolated into it: no timestamps, no per-turn counters, no live
-context meter. Its only inputs are the pinned "harness-core" prompt and
-the workspace's own instruction file, so two runs of an unchanged
-workspace produce byte-identical prompts and keep the cache warm across
-follow-ups too.
+context meter. Its inputs are the pinned "harness-core" prompt, the session's
+machine snapshot, and the workspace's own instruction file. The snapshot
+is collected once per workspace binding and reused across follow-up
+tasks, so prompts remain byte-identical within that session.
 
 Compaction reuses this codebase's existing summarizer rather than
 minting a parallel one: the same CONTEXT_SUMMARY_SYSTEM_PROMPT (pinned
@@ -27,9 +27,13 @@ from __future__ import annotations
 
 import json
 import os
+import platform
+import shutil
+import sys
 from pathlib import Path
 
 import graphlink_task_config as config
+from graphlink_process_env import safe_subprocess_env
 
 # The workspace file whose contents join the system prompt's contextual
 # tier. One name, at the workspace root: the harness binds exactly one
@@ -140,18 +144,60 @@ def read_instructions(workspace: Path) -> str:
     return text
 
 
-def build_system_prompt(workspace: Path) -> str:
-    """The tiered prompt, joined with blank lines: the pinned stable tier
-    first (identity and tool rules - the cacheable prefix), then the
-    workspace's own instructions when it has any. Built once per run;
-    see this module's docstring for why nothing volatile joins it."""
+# Keep this small: the system prompt is resent on every model turn.
+# These names are probed on the SAME PATH used by shell.exec/shell.session.
+_COMMON_COMMANDS = ("git", "node", "npm", "uv", "docker", "podman", "rg")
+
+
+def _command_shell(env: dict[str, str], *, os_name: str) -> str:
+    """The actual subprocess(shell=True) command shell, not the user's
+    login shell ($SHELL is NOT used by shell=True on POSIX)."""
+    if os_name == "nt":
+        return f"{env.get('COMSPEC') or 'cmd.exe'} /c"
+    return "/bin/sh -c"
+
+
+def describe_machine(workspace: Path) -> str:
+    """Capture machine facts for a workspace agent, without executing tools.
+
+    which() reports executable presence on the allowlisted subprocess PATH.
+    A missing command is *not on PATH* (not proof that it is uninstalled);
+    an available CLI is not proof that its daemon/service is running.
+    The Python REPL starts with sys.executable, so its version is the
+    backend interpreter's version. Nothing here authorizes tool use.
+    """
+    env = safe_subprocess_env()
+    path = env.get("PATH", os.defpath)
+    lines = [
+        "## Workspace execution environment (session snapshot)",
+        f"OS: {platform.platform()} ({platform.machine()})",
+        f"Command shell (shell.exec / shell.session): {_command_shell(env, os_name=os.name)}",
+        f"Python (python.exec): {platform.python_version()} ({sys.executable})",
+        f"Workspace root: {workspace.resolve()}",
+        "Commands on the execution PATH (presence only; running them still needs approval):",
+    ]
+    for name in _COMMON_COMMANDS:
+        executable = shutil.which(name, path=path)
+        lines.append(f"- {name}: {executable}" if executable else f"- {name}: not on PATH")
+    return "\n".join(lines)
+
+
+def build_system_prompt(workspace: Path, *, machine_context: str | None = None) -> str:
+    """The tiered prompt: pinned core + tool guide + session machine facts,
+    then the workspace's own instructions, all in the cacheable system
+    message. The run loop supplies a dispatcher-cached machine_context;
+    standalone callers collect it on demand."""
+
     from graphlink_prompts import resolve_prompt_text
 
     from backend.harness.tool_catalog import tool_guide
 
     # File-discovered hints are a separate, deterministic prompt tier.
     # Keep the registered core hash stable when another tools_*.py lands.
-    tiers = [resolve_prompt_text("harness-core"), tool_guide()]
+    tiers = [
+        resolve_prompt_text("harness-core"), tool_guide(),
+        machine_context if machine_context is not None else describe_machine(workspace),
+    ]
     instructions = read_instructions(workspace)
     if instructions:
         tiers.append(
