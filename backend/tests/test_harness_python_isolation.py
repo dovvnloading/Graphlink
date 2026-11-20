@@ -7,6 +7,7 @@ from pathlib import Path, PurePosixPath
 from unittest.mock import Mock
 
 from backend.harness import python_env, python_install, python_isolation, tools_python
+from backend.harness.loop import HarnessRunContext
 from backend.harness.python_isolation import (
     CONTAINER_PYTHON, isolated_repl_command, planned_isolated_python_environment,
 )
@@ -14,19 +15,19 @@ from backend.harness.shell_isolation import CONTAINER_IMAGE, container_invocatio
 from backend.harness.tools_python import PythonReplRegistry, register_harness_python_tool
 from backend.harness.tools_python_install import register_harness_python_install_tool
 from backend.providers.base import ToolCall
-from backend.tools import CODE_EXECUTE, RunContext, ToolRegistry, ToolResult
+from backend.tools import CODE_EXECUTE, ToolRegistry, ToolResult
 from graphlink_plugins.common import python_repl
 
 
 def _isolated_context(project: Path, approve, workspace_id="isolated-test"):
-    ctx = RunContext(
-        granted_scopes=frozenset({CODE_EXECUTE}), request_approval=approve,
+    return HarnessRunContext(
+        granted_scopes=frozenset({CODE_EXECUTE}),
+        request_approval=approve,
+        harness_workspace_id=workspace_id,
+        harness_workspace_dir=project,
+        harness_workspace_is_user_dir=True,
+        harness_execution_profile="isolated",
     )
-    ctx.harness_workspace_id = workspace_id
-    ctx.harness_workspace_dir = project
-    ctx.harness_workspace_is_user_dir = True
-    ctx.harness_execution_profile = "isolated"
-    return ctx
 
 
 def test_container_argv_and_mounts_respect_network_exception(tmp_path, monkeypatch):

@@ -390,7 +390,9 @@ async def install_packages(
             interpreter = plan.interpreter
         else:
             interpreter = await asyncio.to_thread(
-                ensure_python_environment, workspace_id, root, is_scratch=is_scratch,
+                lambda: ensure_python_environment(
+                    workspace_id, root, is_scratch=is_scratch,
+                ),
             )
             if interpreter != approved:
                 return ToolResult(

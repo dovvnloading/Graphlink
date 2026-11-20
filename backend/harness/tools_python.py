@@ -237,20 +237,23 @@ def register_harness_python_tool(
                 interpreter = plan.interpreter
             else:
                 interpreter = await asyncio.to_thread(
-                    ensure_python_environment, workspace_id, cwd, is_scratch=is_scratch,
+                    lambda: ensure_python_environment(
+                        workspace_id, cwd, is_scratch=is_scratch,
+                    ),
                 )
             if cancel_event is not None and cancel_event.is_set():
                 raise RequestCancelledError("stopped")
-            kwargs = {}
             if profile == "isolated":
-                kwargs = {
-                    "profile": profile,
-                    "command_builder": lambda script: isolated_repl_command(plan, cwd, script),
-                }
-            repl = repl_registry.get(
-                workspace_id, cwd, manage_cwd=manage, python_executable=interpreter,
-                cancel_event=cancel_event, **kwargs,
-            )
+                repl = repl_registry.get(
+                    workspace_id, cwd, manage_cwd=manage, python_executable=interpreter,
+                    cancel_event=cancel_event, profile=profile,
+                    command_builder=lambda script: isolated_repl_command(plan, cwd, script),
+                )
+            else:
+                repl = repl_registry.get(
+                    workspace_id, cwd, manage_cwd=manage, python_executable=interpreter,
+                    cancel_event=cancel_event,
+                )
         except (PythonEnvironmentError, OSError) as exc:
             return ToolResult(content=f"Could not prepare Python environment: {exc}", is_error=True)
 
