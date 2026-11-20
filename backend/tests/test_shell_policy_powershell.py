@@ -74,6 +74,7 @@ def test_powershell_ampersand_is_an_invocation_operator_or_background_boundary()
     invoked = analyze("& 'script.ps1'; Get-Item .", shell="powershell")
     assert invoked.segments == ["& 'script.ps1'", "Get-Item ."]
     assert invoked.dangerous == ["& 'script.ps1'"], "script execution must be reviewed"
+    assert is_dangerous_command("&'script.ps1'", shell="powershell")
     background = analyze("Get-Process & Stop-Process -Id 42", shell="powershell")
     assert background.segments == ["Get-Process", "Stop-Process -Id 42"]
     assert background.dangerous == ["Stop-Process -Id 42"]
@@ -137,6 +138,7 @@ def test_nested_or_ambiguous_powershell_syntax_fails_closed(command):
     assert plan.is_dangerous
     assert plan.segments == [command]
     assert "reviewed as one unit" in plan.disclosure()
+    assert "PowerShell" in plan.disclosure()
 
 
 def test_legacy_cmd_posix_and_default_behavior_are_unchanged():
