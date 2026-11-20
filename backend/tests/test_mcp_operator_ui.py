@@ -69,7 +69,15 @@ def _operator_intent(ws, request_id: int, intent: str, args: list):
 def test_real_headless_mcp_start_and_operator_approval_round_trip(tmp_path, monkeypatch):
     """A UI-created Agent stays on the live canvas and human consent stays on /ws."""
     import uvicorn
+    import backend.app as app_module
     from backend.harness import loop as harness_loop
+
+    # The actual headless launch refuses to advertise a broken operator UI.
+    # Supply a minimal bundled SPA fixture, not a fake backend or route.
+    spa = tmp_path / "app-spa"
+    (spa / "assets").mkdir(parents=True)
+    (spa / "index.html").write_text("<html>operator smoke test</html>", encoding="utf-8")
+    monkeypatch.setattr(app_module, "SPA_DIST_DIR", spa)
 
     browser_urls: queue.Queue[str] = queue.Queue()
     servers: queue.Queue[uvicorn.Server] = queue.Queue()
@@ -149,6 +157,12 @@ def test_real_headless_mcp_start_and_operator_approval_round_trip(tmp_path, monk
         assert operator_url.hostname == "127.0.0.1"
         assert operator_url.path == "/"
         assert port and admin_token
+        # The token-bearing browser URL must resolve to a real SPA page.
+        import urllib.request
+
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as page:
+            assert page.status == 200
+            assert b"operator smoke test" in page.read()
         assert read_file.read_text(encoding="utf-8").strip() != admin_token
         assert write_file.read_text(encoding="utf-8").strip() != admin_token
         assert read_file.read_text(encoding="utf-8") != write_file.read_text(encoding="utf-8")
