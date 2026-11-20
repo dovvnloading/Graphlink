@@ -307,13 +307,20 @@ class ShellSession:
 class ShellSessionRegistry:
     """Per-dispatcher store of live sessions, keyed by workspace id."""
 
-    def __init__(self, backend: "ShellBackend | None" = None, isolated_backend: "ShellBackend | None" = None) -> None:
+    def __init__(
+        self, backend: "ShellBackend | None" = None,
+        isolated_backend: "ShellBackend | None" = None,
+        *, lock: "threading.RLock | None" = None,
+    ) -> None:
         self._backend = backend or LocalSubprocessBackend()
         self._isolated_backend = isolated_backend or ContainerSubprocessBackend()
         self._by_workspace: dict[str, dict[str, ShellSession]] = {}
         self._roots: dict[str, Path] = {}
         self._profiles: dict[str, str] = {}
-        self._lock = threading.RLock()
+        # In a dispatcher, share the revocation guard with shell/REPL
+        # registration, rather than letting a stale stop_root enumerate
+        # processes launched after Settings was re-granted.
+        self._lock = lock if lock is not None else threading.RLock()
 
     def bind_root(self, workspace_id: str, cwd: Path, profile: str = "host") -> None:
         """Retire processes when the same node binds to a different root.

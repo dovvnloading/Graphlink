@@ -85,7 +85,7 @@ class PythonReplRegistry:
     that owns it.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, lock: "threading.RLock | None" = None) -> None:
         # Value is (repl, cwd): the cwd is kept so a rebound workspace can
         # be detected - see get().
         self._repls: dict[str, tuple[PythonREPL, Path]] = {}
@@ -94,7 +94,9 @@ class PythonReplRegistry:
         # so a new task can never reuse a still-stopping interpreter.
         self._owner_events: dict[str, threading.Event] = {}
         self._profiles: dict[str, str] = {}
-        self._lock = threading.RLock()
+        # Shared with dispatcher revocation and shell registration when
+        # owned by a real dispatcher; standalone registries use their own.
+        self._lock = lock if lock is not None else threading.RLock()
 
     def get(
         self, workspace_id: str, cwd: Path, *, manage_cwd: bool,

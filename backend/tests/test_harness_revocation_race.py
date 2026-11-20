@@ -84,3 +84,99 @@ def test_picker_regrant_cancels_old_pending_cleanup(tmp_path):
     dispatcher.harness_root_granted(str(root))
 
     assert dispatcher._harness_revoked_roots == set()
+
+def test_inflight_stop_cannot_retire_newly_registered_sessions_after_regrant(
+    tmp_path, monkeypatch,
+):
+    """A settings-side regrant can appear before the picker callback runs.
+
+    New shell sessions and Python REPLs must not enter a registry while a
+    revocation is blocked inside stop_root with a stale trust snapshot.
+    """
+    import concurrent.futures
+    import threading
+
+    from backend.harness import shell_sessions, tools_python
+
+    root = (tmp_path / "project").resolve()
+    root.mkdir()
+    settings = _Settings()
+    dispatcher = HarnessDispatchOps()
+    dispatcher._settings_manager = settings
+    dispatcher._harness_active_workspaces = {}
+    dispatcher._harness_revoked_roots = {root}
+    shells = dispatcher.harness_shell_sessions()
+    repls = dispatcher.harness_python_repls()
+
+    entered = threading.Event()
+    release = threading.Event()
+    shell_started = threading.Event()
+    python_started = threading.Event()
+    errors = []
+
+    class FakeShellSession:
+        def __init__(self, *_args, **_kwargs):
+            self.stopped = False
+            shell_started.set()
+
+        @property
+        def running(self):
+            return not self.stopped
+
+        def stop(self):
+            self.stopped = True
+
+    class FakePythonREPL:
+        def __init__(self, *, python_executable=None, **_kwargs):
+            from pathlib import Path
+            import sys
+            self.python_executable = python_executable or Path(sys.executable)
+            self.stopped = False
+            python_started.set()
+
+        def stop(self):
+            self.stopped = True
+
+    monkeypatch.setattr(shell_sessions, "ShellSession", FakeShellSession)
+    monkeypatch.setattr(tools_python, "PythonREPL", FakePythonREPL)
+    original_stop = shells.stop_root
+
+    def stop_after_pause(root_path, *, excluding=None):
+        entered.set()
+        assert release.wait(5), "test did not release blocked revocation"
+        return original_stop(root_path, excluding=excluding)
+
+    monkeypatch.setattr(shells, "stop_root", stop_after_pause)
+
+    def retire():
+        try:
+            asyncio.run(dispatcher._retire_revoked_harness_roots())
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=retire)
+    worker.start()
+    try:
+        assert entered.wait(5), "revocation did not reach stop_root"
+        # Simulates another settings writer publishing the grant before
+        # harness_root_granted can acquire the revocation lock.
+        settings.trusted.append(str(root))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            shell_future = pool.submit(shells.start, "new-shell", "dev", "echo ok", root)
+            python_future = pool.submit(repls.get, "new-python", root, manage_cwd=False)
+            assert not shell_started.wait(0.1)
+            assert not python_started.wait(0.1)
+            release.set()
+            shell = shell_future.result(timeout=5)
+            repl = python_future.result(timeout=5)
+    finally:
+        release.set()
+        worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert not errors, errors
+    assert shell_started.is_set() and python_started.is_set()
+    assert not shell.stopped
+    assert not repl.stopped
+    assert shells.get("new-shell", "dev", expected_root=root) is shell
+    assert repls.get("new-python", root, manage_cwd=False) is repl
