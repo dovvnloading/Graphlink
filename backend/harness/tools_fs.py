@@ -685,7 +685,8 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
             if suffix in (".pdf", ".docx", ".xlsx", ".xlsm"):
                 from backend.harness.document_read import extract_document_text
 
-                data = _read_bounded_bytes(target)
+                # Keep source I/O off the event loop, just like extraction.
+                data = await asyncio.to_thread(_read_bounded_bytes, target)
                 text = await asyncio.to_thread(
                     extract_document_text,
                     data,

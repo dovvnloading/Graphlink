@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 
 import api_provider
@@ -11,6 +12,7 @@ import pytest
 from backend.domain.graph import SceneDocument
 from backend.harness import workspace as workspace_module
 from backend.harness.loop import _MAX_CONCURRENT_READS, _execute_tool_calls, run_harness
+from backend.harness.tools_scientific import register_workspace_tools as register_science_tools
 from backend.harness.transcript import load_messages
 from backend.harness.workspace import ensure_workspace
 from backend.providers.base import ToolCall, ToolSpec
@@ -81,6 +83,36 @@ def test_read_only_calls_overlap_but_never_exceed_the_limit():
     assert max_in_flight == _MAX_CONCURRENT_READS
     assert completed != ids
     assert results == [(identifier, identifier, False) for identifier in ids]
+
+
+
+def test_science_search_does_not_split_parallel_fs_read_batch():
+    registry = ToolRegistry()
+    register_science_tools(registry, None, SceneDocument())
+    assert registry.parallel_safe_for("science.search")
+    active = 0
+    peak = 0
+
+    async def slow_read(call, ctx):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        try:
+            await asyncio.sleep(0.02)
+            return ToolResult(content=call.id)
+        finally:
+            active -= 1
+
+    _register(registry, "fs.read", slow_read, parallel_safe=True)
+    calls = [
+        _call("a", "fs.read"), _call("catalog", "science.search"),
+        _call("b", "fs.read"),
+    ]
+    results = asyncio.run(_run_calls(registry, calls, _ctx()))
+    assert [result[0] for result in results] == ["a", "catalog", "b"]
+    assert not any(result[2] for result in results)
+    assert json.loads(results[1][1])["operations"] == []
+    assert peak == 2
 
 
 def test_writes_are_barriers_and_each_gets_its_own_approval():

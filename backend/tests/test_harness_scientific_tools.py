@@ -75,6 +75,10 @@ def test_catalog_is_file_discovered_and_approval_scoped(setup):
     document, agent, settings, registry, ctx, approvals, activate, invoke = setup
     assert registry.scopes_for("science.search") == frozenset({FS_READ, GRAPH_READ})
     assert registry.approval_for("science.search") == "auto"
+    assert registry.parallel_safe_for("science.search")
+    assert "uncertainty_inputs" in next(
+        spec for spec in registry.specs() if spec.name == "science.run"
+    ).input_schema["properties"]
     assert registry.scopes_for("science.run") == frozenset({FS_READ, CODE_EXECUTE, GRAPH_MUTATE})
     assert registry.approval_for("science.run") == "once"
 
@@ -161,6 +165,75 @@ def test_real_worker_creates_linked_verified_workbench_and_returns_receipt(setup
     document.redo()
     assert body["node_id"] in document.nodes
     assert readable_result(document.nodes[body["node_id"]].state.data, "mathematics")
+
+
+
+def test_supplied_uncertainty_runs_gum_and_returns_verified_sidecar(setup):
+    document, agent, settings, registry, ctx, approvals, activate, invoke = setup
+    activate("core")
+    response = invoke(
+        "science.run", pack_id="core", operation_id="convert_unit",
+        inputs={"value": 5, "from_unit": "m", "to_unit": "cm"},
+        uncertainty_inputs={"value": 0.2}, uncertainty_method="gum",
+    )
+    assert not response.is_error, response.content
+    body = json.loads(response.content)
+    assert body["verified"] and body["uncertainty"]["method"] == "gum"
+    inputs = body["uncertainty"]["inputs"]
+    assert inputs["value"]["standardUncertainty"] == pytest.approx(0.2)
+    assert inputs["value"]["unit"] == "m"
+    measured = body["uncertainty"]["outputs"]["value (cm)"]
+    assert measured["standardUncertainty"] == pytest.approx(20, rel=1e-6)
+    assert measured["value"] == pytest.approx(500)
+    node = document.nodes[body["node_id"]]
+    assert node.state.data["latest"]["uncertainty"] == body["uncertainty"]
+    assert readable_result(node.state.data, "core")
+
+
+@pytest.mark.parametrize("extra, error", [
+    ({"uncertainty_method": "gum"}, "requires uncertainty_inputs"),
+    ({"uncertainty_method": "monte_carlo"}, "requires uncertainty_inputs"),
+    ({"uncertainty_inputs": {}}, "1–16"),
+    ({"uncertainty_inputs": {"value": -0.1}}, "nonnegative"),
+    ({"uncertainty_inputs": {"from_unit": 0.1}}, "continuous numeric"),
+    ({"uncertainty_inputs": {"value": True}}, "finite number"),
+])
+def test_invalid_or_absent_uncertainties_never_create_nodes(setup, extra, error):
+    document, agent, _settings, _registry, _ctx, _approvals, activate, invoke = setup
+    activate("core")
+    response = invoke(
+        "science.run", pack_id="core", operation_id="convert_unit",
+        inputs={"value": 5, "from_unit": "m", "to_unit": "cm"}, **extra,
+    )
+    assert response.is_error and error in response.content
+    assert set(document.nodes) == {agent.id}
+    assert not document.command_log
+
+
+def test_worker_cannot_silently_ignore_requested_propagation_method(setup, monkeypatch):
+    document, agent, _settings, _registry, _ctx, _approvals, activate, invoke = setup
+    activate("core")
+    import backend.harness.tools_scientific as tools
+
+    async def ignoring_method(pack, operation, inputs, sources, **kwargs):
+        assert kwargs["uncertainty_method"] == "monte_carlo"
+        assert kwargs["uncertainty_inputs"]["value"]["standardUncertainty"] == 0.2
+        return calculate_result(
+            pack, operation, inputs, sources,
+            input_units=kwargs["input_units"],
+            uncertainty_inputs=kwargs["uncertainty_inputs"],
+            uncertainty_method="gum",
+        )
+
+    monkeypatch.setattr(tools, "execute_in_process", ignoring_method)
+    response = invoke(
+        "science.run", pack_id="core", operation_id="convert_unit",
+        inputs={"value": 5, "from_unit": "m", "to_unit": "cm"},
+        uncertainty_inputs={"value": 0.2}, uncertainty_method="monte_carlo",
+    )
+    assert response.is_error and "unverified receipt" in response.content
+    assert set(document.nodes) == {agent.id}
+    assert not document.command_log
 
 
 def test_invalid_inputs_and_worker_errors_leave_no_artifacts(setup, monkeypatch):

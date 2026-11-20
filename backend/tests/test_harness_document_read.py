@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import zipfile
 
 import pytest
@@ -71,7 +72,7 @@ def _docx(path):
     doc.save(path)
 
 
-def _xlsx(path, *, chartsheet_first=False):
+def _xlsx(path, *, chartsheet_first=False, shared_index=0):
     """Minimal OOXML package with shared, inline, formula, and boolean cells."""
     main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
     rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -108,7 +109,7 @@ def _xlsx(path, *, chartsheet_first=False):
         zf.writestr(
             "xl/worksheets/sheet1.xml",
             f'<worksheet xmlns="{main}"><sheetData>'
-            '<row r="1"><c r="A1" t="s"><v>0</v></c>'
+            f'<row r="1"><c r="A1" t="s"><v>{shared_index}</v></c>'
             '<c r="B1"><v>17</v></c></row>'
             '</sheetData></worksheet>',
         )
@@ -184,6 +185,61 @@ def test_xlsx_sheet_ranges_and_sheet_names(fs, extension):
     assert "[Sheet 2:" not in one.content
     all_sheets = read(f"book{extension}")
     assert not all_sheets.is_error and "[Sheet 3: Empty]" in all_sheets.content
+
+
+
+@pytest.mark.parametrize("index", [-1, 1])
+def test_xlsx_shared_string_references_must_be_in_range(fs, index):
+    root, read = fs
+    _xlsx(root / "bad.xlsx", shared_index=index)
+    result = read("bad.xlsx")
+    assert result.is_error
+    assert "invalid shared-string index" in result.content
+
+
+@pytest.mark.parametrize("extension, fixture", [
+    (".pdf", _pdf), (".docx", _docx),
+    (".xlsx", _xlsx), (".xlsm", _xlsx),
+])
+def test_document_source_reads_overlap_without_blocking_the_event_loop(
+    tmp_path, monkeypatch, extension, fixture,
+):
+    from backend.harness import tools_fs
+
+    for number in range(4):
+        fixture(tmp_path / f"source-{number}{extension}")
+
+    barrier = threading.Barrier(4, timeout=2)
+    original_read = tools_fs._read_bounded_bytes
+
+    def gated_read(path):
+        # If the read runs on the event loop, the first invocation blocks
+        # here and prevents the other three reads from reaching this barrier.
+        barrier.wait()
+        return original_read(path)
+
+    monkeypatch.setattr(tools_fs, "_read_bounded_bytes", gated_read)
+    registry = ToolRegistry()
+    register_harness_fs_tools(registry)
+
+    async def deny(_call):
+        return False
+
+    ctx = HarnessRunContext(
+        granted_scopes=frozenset({FS_READ}),
+        request_approval=deny,
+        harness_workspace_dir=tmp_path,
+    )
+
+    async def drive():
+        return await asyncio.gather(*(registry.invoke(
+            ToolCall(id=str(number), name="fs.read",
+                     arguments={"path": f"source-{number}{extension}"}),
+            ctx,
+        ) for number in range(4)))
+
+    results = asyncio.run(drive())
+    assert all(not result.is_error for result in results), [result.content for result in results]
 
 
 def test_xlsx_default_read_and_ranges_skip_chartsheet(fs):

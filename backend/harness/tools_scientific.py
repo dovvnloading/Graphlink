@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from statistics import NormalDist
 from typing import TypedDict
 from uuid import uuid4
 
@@ -19,7 +20,9 @@ from backend.domain.node_states import PluginStateSnapshot
 from backend.providers.base import ToolCall, ToolSpec
 from backend.tools import CODE_EXECUTE, FS_READ, GRAPH_MUTATE, GRAPH_READ, RunContext, ToolRegistry, ToolResult
 from graphlink_plugins.scientific.catalog import PACKS, operations
-from graphlink_plugins.scientific.core import readable_result, validated_inputs_with_units
+from graphlink_plugins.scientific.core import (
+    _effective_unit, finite, fingerprint, readable_result, validated_inputs_with_units,
+)
 from graphlink_plugins.scientific.data_table import TableState
 from graphlink_plugins.scientific.execution import ExecutionFailure, execute_in_process, execution_timeout
 
@@ -63,7 +66,8 @@ RUN_SPEC = ToolSpec(
         "isolated, timed scientific worker and verified receipt. On success creates an "
         "undoable, linked Workbench node immediately right of the running workspace agent; "
         "returns the node ID, computed values, summary and full provenance receipt. "
-        "Invalid inputs or failed calculations do not create nodes. Does not implicitly "
+        "Invalid inputs or failed calculations do not create nodes. Optionally propagates "
+        "independent standard uncertainties for scalar numeric inputs. Does not implicitly "
         "run connected nodes or accept source bindings."
     ),
     input_schema={
@@ -72,9 +76,19 @@ RUN_SPEC = ToolSpec(
             "pack_id": {"type": "string", "description": "Enabled pack ID returned by science.search."},
             "operation_id": {"type": "string", "description": "Operation ID returned by science.search."},
             "inputs": {"type": "object", "description": "Operation fields and values; see the search example."},
+            "uncertainty_inputs": {
+                "type": "object",
+                "additionalProperties": {"type": "number", "minimum": 0},
+                "description": (
+                    "Optional independent 1-sigma standard uncertainties keyed by continuous "
+                    "numeric input field, e.g. value: 0.1. Supply values in each field's "
+                    "normalized/selected input unit; assumes Gaussian inputs and 95% coverage. "
+                    "Does not accept connected source references or covariance metadata."
+                ),
+            },
             "uncertainty_method": {
                 "type": "string", "enum": ["auto", "gum", "monte_carlo"],
-                "description": "Optional Workbench propagation method (default auto).",
+                "description": "Propagation method (default auto); gum and monte_carlo require uncertainty_inputs.",
             },
         },
         "required": ["pack_id", "operation_id", "inputs"],
@@ -124,7 +138,37 @@ def _identity(document) -> tuple:
     return document.current_chat_id, document.current_workspace_id
 
 
-async def _run_worker(pack_id, op, inputs, input_units, uncertainty_method, ctx):
+
+_COVERAGE_95 = NormalDist().inv_cdf(0.975)
+
+
+def _independent_uncertainties(op, inputs: dict, raw: dict, supplied: dict) -> dict:
+    """Convert independent user-supplied 1-sigma values to verified worker inputs.
+
+    Callers cannot assert source lineage or covariance. Each invocation gets
+    fresh roots so unrelated measurements are never treated as correlated.
+    """
+    if type(supplied) is not dict or not 1 <= len(supplied) <= 16:
+        raise ValueError("uncertainty_inputs must contain 1–16 numeric field uncertainties.")
+    numeric_fields = {field.key: field for field in op.fields if field.kind == "number"}
+    if any(name not in numeric_fields for name in supplied):
+        raise ValueError("uncertainty_inputs keys must name continuous numeric operation fields.")
+    nonce = uuid4().hex
+    attached = {}
+    for name, amount in supplied.items():
+        sigma = finite(amount, f"Standard uncertainty for {name}")
+        if sigma < 0:
+            raise ValueError(f"Standard uncertainty for {name} must be nonnegative.")
+        attached[name] = {
+            "value": inputs[name], "standardUncertainty": sigma,
+            "coverageFactor": _COVERAGE_95, "coverageProbability": 0.95,
+            "unit": _effective_unit(numeric_fields[name], raw),
+            "components": {fingerprint(["science.run", nonce, name]): sigma},
+        }
+    return attached
+
+
+async def _run_worker(pack_id, op, inputs, input_units, uncertainty_inputs, uncertainty_method, ctx):
     """Bridge the harness's threading.Event to the Workbench asyncio.Event."""
     stop = ctx.cancel.event if ctx.cancel is not None else None
     _raise_if_cancelled(stop)
@@ -140,7 +184,7 @@ async def _run_worker(pack_id, op, inputs, input_units, uncertainty_method, ctx)
         return await execute_in_process(
             pack_id, op, inputs, {}, timeout_s=execution_timeout(op),
             cancel_event=worker_cancel, input_units=input_units,
-            uncertainty_method=uncertainty_method,
+            uncertainty_inputs=uncertainty_inputs, uncertainty_method=uncertainty_method,
         )
     finally:
         if observer is not None:
@@ -203,8 +247,8 @@ def register_workspace_tools(registry: ToolRegistry, dispatcher, document) -> No
 
     async def run(call: ToolCall, ctx: RunContext) -> ToolResult:
         args = call.arguments
-        if set(args) - {"pack_id", "operation_id", "inputs", "uncertainty_method"}:
-            return _error("Unsupported arguments. Use pack_id, operation_id, inputs and optional uncertainty_method.")
+        if set(args) - {"pack_id", "operation_id", "inputs", "uncertainty_inputs", "uncertainty_method"}:
+            return _error("Unsupported arguments. Use pack_id, operation_id, inputs and optional uncertainty_inputs/uncertainty_method.")
         pack_id, op_id, raw = args.get("pack_id"), args.get("operation_id"), args.get("inputs")
         if not isinstance(pack_id, str) or not _enabled(ctx, pack_id):
             return _error("That scientific pack is unavailable or not enabled in Settings > Plugins.")
@@ -215,6 +259,8 @@ def register_workspace_tools(registry: ToolRegistry, dispatcher, document) -> No
         method = args.get("uncertainty_method", "auto")
         if method not in ("auto", "gum", "monte_carlo"):
             return _error("uncertainty_method must be auto, gum or monte_carlo.")
+        if method != "auto" and "uncertainty_inputs" not in args:
+            return _error("uncertainty_method requires uncertainty_inputs to run propagation.")
         agent = _agent(document, ctx)
         if agent is None:
             return _error("A currently running workspace agent is required.")
@@ -229,7 +275,9 @@ def register_workspace_tools(registry: ToolRegistry, dispatcher, document) -> No
             return _error("Choose an operation registered for this enabled pack.")
         try:
             inputs, input_units = validated_inputs_with_units(op, raw)
-            result = await _run_worker(pack_id, op, inputs, input_units, method, ctx)
+            uncertain = (_independent_uncertainties(op, inputs, raw, args["uncertainty_inputs"])
+                         if "uncertainty_inputs" in args else None)
+            result = await _run_worker(pack_id, op, inputs, input_units, uncertain, method, ctx)
         except ValueError as exc:
             return _error(str(exc))
         except ExecutionFailure as exc:
@@ -245,6 +293,11 @@ def register_workspace_tools(registry: ToolRegistry, dispatcher, document) -> No
                 or result.get("operationId") != op.id
                 or result.get("inputs") != inputs
                 or receipt.get("sources") != {}
+                or (uncertain is None and "uncertainty" in result)
+                or (uncertain is not None and (
+                    not isinstance(result.get("uncertainty"), dict)
+                    or result["uncertainty"].get("inputs") != uncertain
+                    or (method != "auto" and result["uncertainty"].get("method") != method)))
                 or not readable_result({"version": 1, "latest": result}, pack_id)):
             return _error("The scientific worker returned an invalid or unverified receipt.")
 
@@ -275,10 +328,13 @@ def register_workspace_tools(registry: ToolRegistry, dispatcher, document) -> No
             "pack_id": pack_id, "operation_id": op.id,
             "values": result["values"], "summary": result["summary"],
             "receipt": result["provenance"],
+            **({"uncertainty": result["uncertainty"]} if uncertain is not None else {}),
         }, allow_nan=False))
 
     # FS_READ is a harness-only capability ceiling. The shared Builder registry
     # uses the same registration object, but must not offer these workspace-agent
     # tools to a Builder context that cannot supply the live harness node.
-    registry.register(SEARCH_SPEC, search, scopes={FS_READ, GRAPH_READ}, approval="auto")
+    registry.register(
+        SEARCH_SPEC, search, scopes={FS_READ, GRAPH_READ}, approval="auto", parallel_safe=True,
+    )
     registry.register(RUN_SPEC, run, scopes={FS_READ, CODE_EXECUTE, GRAPH_MUTATE}, approval="once")
