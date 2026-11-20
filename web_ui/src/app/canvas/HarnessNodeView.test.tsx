@@ -36,6 +36,7 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     onDelete: vi.fn(),
     onSend: vi.fn(),
     onCancel: vi.fn(),
+    onUndoRun: vi.fn(),
     onApproveTool: vi.fn(),
     onApproveToolForSession: vi.fn(),
     onDenyTool: vi.fn(),
@@ -69,6 +70,19 @@ function renderHarness(data: HarnessNodeData) {
 }
 
 describe("HarnessNodeView", () => {
+  it("offers Undo run only for a completed run", async () => {
+    const user = userEvent.setup();
+    const data = makeData({ harnessStatus: "done", pendingRequestId: null });
+    renderHarness(data);
+    await user.click(screen.getByRole("button", { name: "Undo run" }));
+    expect(data.onUndoRun).toHaveBeenCalledOnce();
+  });
+
+  it("does not offer Undo run while running or before a first run", () => {
+    renderHarness(makeData());
+    expect(screen.queryByRole("button", { name: "Undo run" })).not.toBeInTheDocument();
+  });
+
   it("renders the task, status, and spend counters", () => {
     renderHarness(makeData());
     expect(screen.getByText("Summarize the workspace files")).toBeInTheDocument();

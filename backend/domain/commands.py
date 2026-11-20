@@ -368,6 +368,7 @@ def _restore(live: dict, snapshot: dict) -> None:
 # ("Delete", "Move") rather than the intent name ("removeNodes"), since this
 # text lands directly in "Undo Delete" on a button and in its tooltip.
 _COMMAND_LABELS = {
+    "harnessPublishFile": "Publish Workspace File",
     "addNode": "Add Node",
     "addChatNode": "Add Chat Node",
     "discussScientificResult": "Discuss Scientific Result",
@@ -893,6 +894,14 @@ class CommandOps(SceneDocumentParts):
                     raise UndoRefusedError(
                         f"Can't {verb} a step from a build that is still running - "
                         "stop it first."
+                    )
+                if (
+                    getattr(node.state, "harness_run_id", None) == command.run_id
+                    and node.pending_request_id
+                ):
+                    raise UndoRefusedError(
+                        f"Can't {verb} a file from a workspace-agent run that is still "
+                        "running - stop it first."
                     )
 
     def undo(self) -> "Command":

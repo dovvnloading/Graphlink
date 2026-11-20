@@ -62,6 +62,7 @@ export interface HarnessNodeData extends Record<string, unknown> {
   onDelete: () => void;
   onSend: (text: string) => void;
   onCancel: () => void;
+  onUndoRun: () => void;
   onApproveTool: (approvalId?: string) => void;
   onApproveToolForSession: () => void;
   onDenyTool: (approvalId?: string) => void;
@@ -115,6 +116,8 @@ function HarnessNodeMenu({
     </NodeMenu>
   );
 }
+
+const UNDOABLE_RUN_STATUSES = new Set(["done", "failed", "stopped", "interrupted"]);
 
 const STATUS_LABELS: Record<string, string> = {
   idle: "Ready",
@@ -559,6 +562,17 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
             onClick={data.onCancel}
           >
             Stop
+          </button>
+        </div>
+      )}
+      {!running && data.harnessRunId && UNDOABLE_RUN_STATUSES.has(data.harnessStatus) && (
+        <div className="plan-node-actions">
+          <button
+            type="button"
+            className="plan-node-button plan-node-button-danger nodrag"
+            onClick={data.onUndoRun}
+          >
+            Undo run
           </button>
         </div>
       )}

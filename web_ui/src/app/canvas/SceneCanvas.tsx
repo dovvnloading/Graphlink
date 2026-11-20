@@ -907,6 +907,11 @@ function makeHarnessFns(id: string, liveRef: { current: DispatcherLive }) {
       const { n, store } = liveRef.current;
       if (n.pendingRequestId) store.cancelHarnessRun(n.pendingRequestId);
     },
+    onUndoRun: () => {
+      // Use the finished run's durable id, never its (now cleared) busy id.
+      const { n, store } = liveRef.current;
+      if (n.harnessRunId && !n.pendingRequestId) store.undoRun(n.harnessRunId);
+    },
     // Python approval identifies the disclosure actually rendered by the
     // view. Never substitute the newest token into an older click.
     onApproveTool: (approvalId?: string) => {
