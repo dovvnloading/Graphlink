@@ -60,11 +60,11 @@ class HarnessDispatchOps(DispatcherParts):
         return True
 
     def approve_harness_tool_for_session(self, request_id: str, approval_id: str = "") -> bool:
-        """§2.4's graded consent: approve this call AND remember the tool for
-        the rest of the agent session. Resolves the parked future with the
-        sentinel string "session" rather than True - ToolRegistry.invoke
-        reads that as "approve and add to ctx.session_grants". Kind-checked
-        for the same reason answer_harness_question is."""
+        """Resolve session grants or token-bound shell prefix authorization.
+
+        The shell callback checks each candidate and saves prefixes only for
+        safe commands; other eligible tools retain their session grant.
+        Kind-checked for the same reason answer_harness_question is."""
         handle = self._runs.get(request_id)
         if handle is None or handle.kind != "harness":
             return False

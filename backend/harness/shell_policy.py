@@ -1,7 +1,7 @@
 """Shell command policy (PLAN-2026-08-24 §2.4).
 
-Two independent jobs, both purely analytical - this module never runs
-anything, so it is exhaustively testable against strings alone:
+Three independent jobs, all purely analytical - this module never runs
+anything, so it is testable against strings alone:
 
 1. **Segmentation.** A chained command is split on shell separators so the
    approval prompt can DISCLOSE each thing that will actually run, rather
