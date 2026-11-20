@@ -303,12 +303,14 @@ while True:
                 kept = line[:_REPL_CAPTURE_CHARS - captured_chars]
                 captured.append(kept)
                 captured_chars += len(kept)
-                if kept and on_output is not None:
-                    on_output(kept)
                 if len(kept) != len(line):
                     truncated = True
             else:
                 truncated = True
+            # Capture is first-N for the model, but activity shows the
+            # latest bounded tail, including lines after that limit.
+            if on_output is not None:
+                on_output(line)
 
         result = "".join(captured).strip()
         return result + _REPL_TRUNCATION_NOTICE if truncated else result
