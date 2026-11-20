@@ -173,14 +173,14 @@
     "githubTokenConfigured": {
       "type": "boolean"
     },
-    "hasCompletedOnboarding": {
-      "type": "boolean"
-    },
     "harnessTrustedDirs": {
       "items": {
         "type": "string"
       },
       "type": "array"
+    },
+    "hasCompletedOnboarding": {
+      "type": "boolean"
     },
     "llamaCppChatFormat": {
       "type": "string"
