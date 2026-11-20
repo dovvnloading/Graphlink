@@ -107,19 +107,17 @@ def ensure_python_environment(
                     )
                 shutil.rmtree(target)
             target.parent.mkdir(parents=True, exist_ok=True)
-            kwargs = {
-                "env": safe_subprocess_env(),
-                "stdout": subprocess.PIPE,
-                "stderr": subprocess.STDOUT,
-                "text": True,
-                "timeout": _VENV_CREATE_TIMEOUT_SECONDS,
-            }
-            if sys.platform == "win32":
-                kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
             try:
                 result = subprocess.run(
                     [sys.executable, "-m", "venv", str(target)],
-                    **kwargs,
+                    env=safe_subprocess_env(),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    timeout=_VENV_CREATE_TIMEOUT_SECONDS,
+                    creationflags=(
+                        subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                    ),
                 )
             except (OSError, subprocess.TimeoutExpired) as exc:
                 shutil.rmtree(target, ignore_errors=True)
