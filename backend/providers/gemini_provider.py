@@ -37,6 +37,7 @@ from backend.providers.base import (
     ProviderEvent,
     ToolCall,
     normalize_usage,
+    tool_arguments,
 )
 
 
@@ -220,7 +221,10 @@ class GeminiProvider:
                                 tool_calls.append(ToolCall(
                                     id=native_id or f"call_{len(tool_calls)}",
                                     name=function_call.get("name", ""),
-                                    arguments=dict(function_call.get("args") or {}),
+                                    arguments=tool_arguments(
+                                        function_call.get("args") if function_call.get("args") is not None else {},
+                                        "Gemini",
+                                    ),
                                     gemini_call_id=native_id,
                                     gemini_signature=part.get("thoughtSignature") or "",
                                 ))

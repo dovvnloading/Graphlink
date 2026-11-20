@@ -1,5 +1,7 @@
 # Independent audit: workspace-agent Isolated profile and network grants
 
+> **Historical review, not the current execution contract.** This report examines an earlier baseline that predates container-native Isolated `python.exec` / `python.install` (#710), separately consented Isolated `shell.exec` bridge networking (#712), and task-scoped permission modes (#721). Keep the findings below in their original historical context; for the implementation on `main`, see [execution profiles](WORKSPACE_ISOLATION.md), [permission modes](WORKSPACE_PERMISSION_MODES.md) and the [user guide](WORKSPACE_AGENT.md).
+
 **Date:** 2026-11-20  
 **Repository / baseline:** `dovvnloading/Graphlink`, `main` at `06ecf193e20eac8d04d9a5b866cfa94965373edd`  
 **Scope:** Workspace-agent task catalog, executable tool handlers, container CLI construction, task-scoped Web Research consent, and the shared `run_node` action. This report is a source-code security review and regression-test plan, not a penetration test of a running Docker daemon.

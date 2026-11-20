@@ -43,6 +43,7 @@ from backend.providers.base import (
     ProviderEvent,
     ToolCall,
     normalize_usage,
+    tool_arguments,
 )
 
 _ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
@@ -358,7 +359,9 @@ class AnthropicProvider:
                     tool_call=ToolCall(
                         id=buf["id"],
                         name=buf["name"],
-                        arguments=json.loads(buf["json"]) if buf["json"] else {},
+                        arguments=tool_arguments(
+                            json.loads(buf["json"]) if buf["json"] else {}, "Anthropic"
+                        ),
                     ),
                 )
             # review-fix: prompt_tokens/completion_tokens were already

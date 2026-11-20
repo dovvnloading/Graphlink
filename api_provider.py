@@ -989,7 +989,10 @@ def _prepare_ollama_messages(messages: list) -> list:
         # Ollama's own request/response cycle has no use for it.
         role = msg.get("role")
         if role == "tool":
-            processed_messages.append({"role": "tool", "content": str(msg.get("content") or "")})
+            processed_messages.append({
+                "role": "tool", "tool_name": str(msg.get("name") or ""),
+                "content": str(msg.get("content") or ""),
+            })
             continue
         tool_calls = msg.get("tool_calls")
         if tool_calls:
@@ -2315,6 +2318,7 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
             reasoning_parts: list[str] = []
             usage = None
             tool_calls = []
+            saw_terminal_done = False
             try:
                 for event in provider.stream(
                     ChatRequest(
@@ -2326,6 +2330,8 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                     ),
                     CancelToken(cancel_event),
                 ):
+                    if saw_terminal_done:
+                        raise RuntimeError("Provider emitted events after its terminal done event.")
                     if event.type == "tool_call" and event.tool_call is not None:
                         call = event.tool_call
                         if call.name in canonical_names:
@@ -2340,8 +2346,11 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                         # exactly like the streaming path's partial text.
                         tool_calls = []
                     elif event.type == "done":
+                        saw_terminal_done = True
                         full_response_content = event.text
                         usage = getattr(event, "usage", None)
+                if not saw_terminal_done:
+                    raise RuntimeError("Provider stream ended without a terminal done event.")
                 break
             except Exception as retry_exc:
                 if use_json_protocol:
@@ -2391,6 +2400,10 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
             full_response_content, tool_calls = parse_tool_turn(
                 full_response_content or "", tuple(tools),
             )
+        elif json_tool_fallback and len(tool_calls) > 8:
+            # Match the structured JSON path: a single native turn must not
+            # schedule an unbounded batch of workspace tool executions.
+            raise RuntimeError("Workspace model requested more than 8 tool calls in one turn.")
         assistant_message: dict[str, Any] = {"content": full_response_content or "", "role": "assistant"}
         if reasoning_parts:
             assistant_message["provider_reasoning"] = {

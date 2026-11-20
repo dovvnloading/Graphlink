@@ -274,6 +274,18 @@ def normalize_usage(prompt_tokens, completion_tokens) -> dict | None:
     return {"prompt_tokens": prompt, "completion_tokens": completion}
 
 
+def tool_arguments(value, provider_name: str) -> dict:
+    """Validate native function arguments before they reach the tool executor.
+
+    A native function call must contain a JSON object. Do not coerce arrays
+    (including arrays of key/value pairs) into dictionaries or let malformed
+    responses reach approval and preview handling.
+    """
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{provider_name} returned tool arguments that are not a JSON object.")
+    return value
+
+
 class CancelToken:
     """Cooperative cancellation handle passed into every provider call.
 

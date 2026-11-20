@@ -47,6 +47,7 @@ from backend.providers.base import (
     ProviderEvent,
     ToolCall,
     normalize_usage,
+    tool_arguments,
 )
 
 # OpenAI's input_audio accepts exactly these container formats today. mpga is
@@ -404,7 +405,9 @@ class OpenAIProvider:
                     tool_call=ToolCall(
                         id=buf["id"] or f"call_{index}",
                         name=buf["name"],
-                        arguments=json.loads(buf["arguments"]) if buf["arguments"] else {},
+                        arguments=tool_arguments(
+                            json.loads(buf["arguments"]) if buf["arguments"] else {}, "OpenAI-compatible"
+                        ),
                     ),
                 )
             yield ProviderEvent("done", "".join(content_parts), usage=usage)

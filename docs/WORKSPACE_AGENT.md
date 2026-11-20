@@ -87,46 +87,26 @@ for large documents. [Document-reading details](WORKSPACE_DOCUMENT_READS.md) .
 
 ## Permission modes
 
-On the Agent card, open **Agent settings → Permission mode** to choose when the Agent
-asks for tool approval. The mode applies only to this Agent's already-granted tools and
-bound workspace; it never grants access to another folder or a new tool scope.
+Open **Agent settings → Permission mode** on the Agent card. This is a preference for the *next* task; it does not grant access to another folder or tool. The backend snapshots the effective mode and execution profile when each task starts.
 
-| Mode | Available with | What stops asking |
+| Mode | Available with | What changes |
 | --- | --- | --- |
-| **Ask** (default) | Host or Isolated | Nothing additional: tools use their usual approval prompts and any explicitly saved, eligible shell-command prefixes. |
-| **Auto-edit** | Host or Isolated | Workspace-confined `fs.write` and `fs.edit` no longer prompt. Shell, Python and other tools keep Ask's approval behavior. |
-| **Autonomous** | **Isolated only** | Includes Auto-edit, plus conservatively screened offline `shell.exec` commands, safe `python.exec` code, eligible `shell.session` starts and read/list/stop actions, and `python.install` from already-cached offline wheels. |
+| **Ask** (default) | Host or Isolated | Ordinary tool-approval rules. Workspace writes, Python and shell execution prompt, subject to the approval-grant rules below. |
+| **Auto-edit** | Host or Isolated | Workspace-confined `fs.write` and `fs.edit` skip prompts. Shell, Python and other tools retain Ask behavior. |
+| **Autonomous** | **Isolated only** | Includes Auto-edit, only a small set of literal, workspace-confined offline shell commands and safe session starts, compatible offline cached-wheel `python.install`, and `shell.session` read/list/stop. Every `python.exec` still prompts. |
 
-**What still asks:** Dangerous, destructive or ambiguous shell commands; commands
-that may access the network; outside-workspace paths (including symlink escapes);
-and Python code the safety checks cannot confidently screen. Saved shell-prefix or
-session grants cannot suppress these sensitive prompts. File operations outside
-the workspace may also be blocked after approval. **Writing stdin to a shell
-session always requires fresh approval.** Graph mutations and scientific runs
-retain their ordinary approvals; Web Research keeps its per-service and
-per-hostname consent rules.
+**What still asks:** Every `python.exec` call, graph mutations and scientific runs; scripts, Git commands and other non-allowlisted shell commands; destructive or ambiguous shell commands; shell-session stdin writes; and network requests. Saved grants cannot override sensitive checks. Paths that leave the workspace (including through symlinks) do not gain access through a mode and may be blocked even after approval. Web Research retains per-service and per-hostname consent.
 
-In Autonomous, an Isolated shell network command needs a fresh, **per-command**
-network decision; task-wide network approval is unavailable. For `python.install`,
-a missing cached wheel stops the install **before contacting PyPI** and asks for
-fresh approval tied to the exact packages and interpreter. No mode auto-approves
-network access.
+In Autonomous, each explicit Isolated `shell.exec` network request requires a fresh **Allow network once** decision. Task-wide and persistent shell-network grants are unavailable; entering Autonomous clears the existing broad network preference. For `python.install`, compatible cached wheels can install without prompting, but a cache miss stops **before contacting PyPI** and requires fresh, interpreter- and package-bound approval for the download. No mode implicitly grants network access.
 
-The backend captures the effective permission mode and execution profile when
-each task starts. **Choosing a looser mode while a task runs takes effect only
-on the next task**; the current task keeps its original permissions. The Agent
-card shows the last task's mode, and the workspace transcript records the mode
-for each task. Autonomous cannot be selected with Host; switching from Isolated
-to Host resets an Autonomous preference to Ask.
+Autonomous cannot be chosen under Host. Switching Isolated → Host resets an Autonomous preference to Ask. Changing mode during a running task affects only subsequent tasks. **Opening a saved or imported graph resets the live preference to Ask and clears shell approval rules and broad network grants;** the previous task mode remains audit-only. The card shows the last task's effective mode; the append-only workspace transcript audits the mode and execution profile for each task. [Permission-mode details](WORKSPACE_PERMISSION_MODES.md).
 
 ## Python: execution, environments and installs
 
 Ask the Agent to use **`python.exec`** for analysis, scripts or data transformations. It is a
 **persistent Python interpreter** : imports and variables survive between calls in the same
 Agent/workspace/profile until the interpreter is retired. Use `print()` to display results; a bare
-expression is not echoed. In **Ask** and **Auto-edit**, every execution needs fresh approval, even if the same code was
-approved before. **Autonomous** can skip the prompt only for conservatively screened Isolated code;
-other code still asks. Host Python has your user account’s permissions and is **not a sandbox** .
+expression is not echoed. In **every mode**, including Isolated Autonomous, every execution needs fresh approval, even if the same code was approved before. Persistent interpreter state makes source-only screening insufficient. Host Python has your user account’s permissions and is **not a sandbox** .
 
 The interpreter is selected automatically; the model cannot choose an arbitrary environment:
 
@@ -155,33 +135,18 @@ build. In Isolated mode, only the freshly approved PyPI **download phase** gets 
 networking; environment setup, code execution and the install phase remain network-disabled. For
 full restrictions and consent details, see [Python package installation](PYTHON_INSTALL.md) .
 
-## Shells, sessions and remembered allow rules
+## Shells, sessions and remembered exact-command rules
 
-In an Agent card, open **Agent settings** (gear icon) and select a **Shell** . On Windows the
-choices are **PowerShell** (default), **Command Prompt (cmd)** and **Git Bash** (requires Git for
-Windows); on macOS/Linux it uses **Bash** . The setting applies to the **next task** , not a
-command already running. In the Isolated profile, shell commands instead execute in the Linux
-container using `/bin/sh` .
+In an Agent card, open **Agent settings** and choose a **Shell**. Windows offers **PowerShell** (default), **Command Prompt (cmd)** and **Git Bash** (Git for Windows required); macOS/Linux use **Bash**. The setting affects the next task. In Isolated, shell tools always use the container's `/bin/sh`, regardless of the Host preference.
 
--  **`shell.exec`** runs a one-shot command in the bound workspace. **Ask** and **Auto-edit**
-  request permission unless an eligible saved prefix applies; **Autonomous** may skip approval for
-  screened offline commands. It has a 120-second hard timeout.
--  **`shell.session`** manages a long-running named process, such as a development server: start,
-  read output, write stdin, list and stop. Starting a session normally requires approval, except
-  for screened Autonomous starts. Sending input always requires fresh consent; saved `shell.exec`
-  rules do not authorize interactive stdin.
--  The approval panel discloses proposed shell commands, including command segments in a chain. For
-  safe, unambiguous `shell.exec` commands, **Always allow** stores a
-  **shell-specific command prefix on that Agent** ; later commands can skip the prompt only if
-  **every segment** matches an approved prefix at an argument boundary. This is **not** a blanket
-  “approve all shell” grant.
--  Dangerous or ambiguous commands, redirections and inline interpreter programs cannot create
-  remembered prefixes. They still need explicit per-call approval. Remove a saved prefix any time
-  under **Agent settings → Allowed command prefixes → Remove** .
+- **`shell.exec`** runs a one-shot workspace command with a 120-second hard timeout. In Isolated Autonomous, only conservatively parsed literal `echo`, `pwd`, `ls`, `cat`, `head`, `tail`, `wc`, `touch` and `mkdir` forms with confined operands can skip approval. Scripts, interpreters, Git, wrappers and arbitrary project commands still prompt.
+- **`shell.session`** starts, reads, writes stdin to, lists and stops named long-running processes. In Isolated Autonomous, a start can skip approval only for the same narrowly vetted safe-command grammar. Writing stdin **always** needs fresh consent; Autonomous can skip prompts for read/list/stop. Saved `shell.exec` rules never cover interactive stdin.
+- The approval panel discloses command segments, flagging dangerous or unreviewable syntax. For safe, literally parsed `shell.exec` commands, **Always allow** stores one **exact whole-command rule** on that Agent, **not a prefix**. The rule binds the actual shell, Host/Isolated profile and resolved workspace-root hash. Changing an argument, a chain operator, shell, profile or workspace requires separate approval; separately approved commands cannot be recombined into a chain.
+- Dangerous, destructive or ambiguous commands, redirections, substitutions, inline interpreter programs, environment wrappers, PowerShell comments, outside paths and unsafe symlinks are ineligible for saved rules. Literal paths and symlinks are rechecked at use time. Older shell-prefix records are **inactive**. Rules can be removed under **Agent settings → Allowed exact commands → Remove**.
 
-Prefer **Approve once** when a command might modify important data or its effect is unclear. Shell
-rules are not security sandboxes; Host execution still runs under your account. The rule system and
-guard cannot make arbitrary shell commands harmless.
+**Current sensitive-call boundary (after #725):** the safe-shell gate no longer depends on missing exact-rule candidates. Its narrow allowlist is enforced independently of the v2 exact matcher. A stored rule can skip a later prompt only if the command also passes the current safe-shell check; commands such as `git status` and script launchers still prompt even if a v2 rule can be stored for them. Rules are active only while the graph remains open: reopening clears them. The earlier #723 integration caveat is historical. [Shell approval audit](WORKSPACE_SHELL_APPROVAL_AUDIT_2026-11-20.md).
+
+Shell approval is **not a sandbox**: in Host, the approved process runs with your user account's privileges and may access files outside the chosen workspace.
 
 ## Canvas and scientific tools
 
@@ -211,15 +176,11 @@ graph wiring. For connected pipelines use the Workbench UI and Graph Runner.
 
 ## Isolated execution profile
 
-**Host** is the default execution profile. To move shell and Python execution into a restricted
-environment, open the Agent’s **Agent settings → Execution profile → Isolated (Docker / Podman)** .
+**Host** is the default. To move shell and Python execution into containers, select **Agent settings → Execution profile → Isolated (Docker / Podman)**.
 
-**First-task caveat:** The launcher starts a new Agent’s first task immediately and does not yet
-offer a profile selector. That initial task uses **Host** . If you need Isolated for your real
-work, start with a harmless read-only setup task, deny any Host shell/Python requests, and switch
-profiles before sending the next task.
+**First-task caveat:** The Agent launcher starts the first task immediately under Host; it has no profile selector. If you need Isolated, start with a harmless read-only setup task, deny Host shell/Python requests, and select Isolated before the next task.
 
-1. Install and start **Docker** or **Podman** on the backend machine. Pull the fixed image in advance:
+1. Install/start **Docker** or **Podman** on the backend machine and pre-pull the fixed image:
 
    ```sh
    docker pull python:3.12-slim
@@ -227,24 +188,14 @@ profiles before sending the next task.
    podman pull python:3.12-slim
    ```
 
-2.  Select **Isolated** in the Agent settings. The preference is saved with the graph and applies
-   to **subsequent tasks** . If a container engine is not detected, the UI disables that choice.
-3.  Run the task and review approvals as usual. If the engine, daemon or image becomes unavailable,
-   execution **fails closed** instead of falling back to Host.
+2. Select **Isolated** in Agent settings. A detected CLI enables the choice, but does not prove its daemon/image is ready. The saved profile applies from the next task.
+3. Continue the task with the usual approvals. If the engine, daemon or image is unavailable, shell and Python tools **fail closed**, without falling back to Host.
 
-The container mounts the **bound scratch/project workspace** at `/workspace` and uses a read-only
-image filesystem, a small temporary filesystem, 1 CPU, 512 MiB RAM/swap, a 128-process limit,
-dropped capabilities and no-new-privileges. Container shell and Python operations have
-**no network** by default. Container-native virtualenvs and the installer’s cache are mounted only
-where those Python operations require them. Host executables and backend secrets are not passed
-through.
+The container mounts the selected project/scratch workspace at `/workspace` and has a read-only image filesystem, 64 MiB temporary filesystem, 1 CPU, 512 MiB RAM/swap, 128-process limit, dropped capabilities and no-new-privileges. Shell and Python are offline by default. Container-native virtualenvs and the wheel cache are mounted only where needed. Host executables and backend secrets are not passed into the container.
 
-**Isolated limits command execution, not the whole Graphlink application.** File browsing/edits and
-graph tools still run through the backend under their own workspace and approval rules. Cloud model
-calls, approved Web Research and separately approved integrations (such as Fal) can still use the
-backend’s host network. An approved `python.install` PyPI download is the sole container-command
-exception to the network-disabled default. Isolation is not a guarantee against a malicious
-container engine/image. [Execution profiles and network boundaries](WORKSPACE_ISOLATION.md) .
+In Isolated Ask/Auto-edit, a `shell.exec` command can request bridge networking with `network: true` and a reason. You can consent for that command or the current task, or separately enable **Allow network for every task** in Agent settings. Autonomous disables broad grants and permits only a fresh per-command network decision. `shell.session` and `python.exec` stay offline; a separately approved `python.install` PyPI wheel-download phase may use temporary container networking.
+
+**This profile confines command execution, not the entire Graphlink backend.** Graph file tools, cloud inference, approved Web Research and separately approved integrations (such as Fal) follow their own permissions and may use the host network. Isolation does not protect against a compromised container daemon/image. [Execution profiles and network boundaries](WORKSPACE_ISOLATION.md).
 
 ## Web research and network approval
 
@@ -302,7 +253,7 @@ tool approval, or override safety rules. Treat skills copied from strangers as u
 | Agent reads scratch instead of a selected project | Re-select the folder with **Choose folder…**; check **Settings → Workspace Agent → Trusted Folders**. Imported paths do not grant access automatically. |
 | Python cannot import a package | Confirm the intended workspace/profile; use approved `python.install` so it targets `python.exec`'s interpreter. An incompatible wheel may not be available. |
 | Isolated commands cannot start | Start Docker/Podman and pre-pull `python:3.12-slim`; the Agent will not silently use Host. |
-| The Agent keeps asking to approve a command | Dangerous/ambiguous commands, out-of-workspace paths, network access and interactive stdin keep prompting. **Autonomous** only skips screened Isolated commands/code and offline cached-wheel installs; **Always allow** applies only to eligible `shell.exec` prefixes. |
+| The Agent keeps asking to approve a command | Only narrow literal shell calls qualify for Autonomous auto-approval or reusing a saved exact rule. Scripts, Git commands, network requests, every Python execution, and session stdin need approval. Reopening a graph also clears previous rules. |
 | A web page needs another approval | A new task or a redirected-to hostname gets a new domain consent prompt. |
 | A document read is empty or truncated | Try a narrower page/sheet/text range; scanned PDFs require OCR outside `fs.read`. |
 
