@@ -176,6 +176,9 @@ function renderApprovalSummary(summary: string, toolName: string) {
     return summary;
   }
   const lines = summary.split("\n");
+  // A large replacement can have tens of thousands of lines. Keep the
+  // complete disclosure visible without mounting a span for every line.
+  if (lines.length > 2_000) return summary;
   return lines.map((line, index) => {
     let className = "";
     if (line.startsWith("--- ") || line.startsWith("+++ ")) {
@@ -208,6 +211,12 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   const activityErrorCount = data.harnessActivity.filter((row) => row.outcome !== "ok").length;
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
   const boundApproval = data.harnessApprovalToolName === "python.exec" || data.harnessApprovalToolName.startsWith("fal.");
+  const fileApproval = data.harnessApprovalToolName === "fs.write" || data.harnessApprovalToolName === "fs.edit";
+  // Never ask someone to approve an unseen mutation. The backend explains
+  // when it cannot safely read the existing file to build the preview.
+  const previewUnavailable = fileApproval &&
+    data.harnessApprovalSummary.slice(data.harnessApprovalSummary.indexOf("\n") + 1)
+      .startsWith("Preview unavailable:");
   const decisionPending = boundApproval && (
     !data.harnessApprovalId || submittedApprovalId === data.harnessApprovalId
   );
@@ -432,16 +441,21 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
             role="region"
             aria-label="Proposed tool call"
           >{renderApprovalSummary(data.harnessApprovalSummary, data.harnessApprovalToolName)}</pre>
+          {previewUnavailable && (
+            <p role="alert" className="harness-approval-preview-warning">
+              This file change could not be previewed. Deny the request and ask the agent to retry.
+            </p>
+          )}
           <div className="plan-node-approval-actions">
             <button
               type="button"
               className="plan-node-button nodrag"
               onClick={() => decideTool(true)}
-              disabled={decisionPending}
+              disabled={decisionPending || previewUnavailable}
             >
               Approve once
             </button>
-            {data.harnessApprovalSessionOffered && !boundApproval && (
+            {data.harnessApprovalSessionOffered && !boundApproval && !previewUnavailable && (
               <button
                 type="button"
                 className="plan-node-button nodrag"
