@@ -32,7 +32,7 @@ Scope: `backend/harness/tools_web.py`, `graphlink_plugins/web_research/{provider
 Added/extended **offline** tests in:
 
 * `test_web_research_fetch_policy.py`: DNS-free pre-consent syntax checks; private literals; ambiguous URLs; post-consent private DNS answers still rejected.
-* `test_web_research_providers_fetcher.py`: denied initial and redirect domains provoke no DNS resolution or HTTP traffic to the rejected host; private literals never reach consent.
+* `test_web_research_providers_fetcher.py`: denied initial and redirect domains provoke no DNS resolution or HTTP traffic to the rejected host; private literals never reach consent; an explicit `False` callback decision also denies.
 * `test_web_research_providers_coverage.py`: `ddgs` must be called with the explicitly approved backend.
 * `test_harness_web_tools.py`: ambiguous/credentialed URLs cannot elicit approval or fetches.
 * `test_control_agent_tasks.py`: MCP start passes `allow_session_grants=False`; requests cannot set the flag; earlier UI grants remain intact for app use.

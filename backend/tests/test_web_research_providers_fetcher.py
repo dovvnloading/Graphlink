@@ -796,3 +796,20 @@ class TestConsentPrecedesDnsAndTransport:
 
         assert exc.value.code == "url_blocked_by_policy"
         assert disclosed == [] and session.get_calls == []
+
+    def test_false_from_pre_request_hook_is_an_explicit_denial(self, limits, token):
+        lookups = []
+        session = _FakeSession([])
+        policy = FetchPolicy(resolver=lambda *args, **kwargs: lookups.append(args))
+        fetcher = RequestsDocumentFetcher(policy=policy, etiquette=CrawlEtiquette())
+
+        with patch.object(providers_module, "requests") as fake_requests:
+            fake_requests.Session.return_value = session
+            fake_requests.RequestException = Exception
+            with pytest.raises(ResearchFailure) as exc:
+                fetcher.fetch(
+                    _search_result(), limits=limits, token=token,
+                    on_request=lambda url: False,
+                )
+        assert exc.value.code == "domain_approval_denied"
+        assert lookups == [] and session.get_calls == []

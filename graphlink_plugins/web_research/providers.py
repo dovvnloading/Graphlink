@@ -230,7 +230,7 @@ class RequestsDocumentFetcher:
 
     def fetch(
         self, result: SearchResult, *, limits: ResearchLimits, token: CancellationToken,
-        on_request: Callable[[str], None] | None = None,
+        on_request: Callable[[str], bool | None] | None = None,
     ) -> FetchedPayload:
         """Optional pre-request hook for callers requiring domain consent.
 
@@ -268,7 +268,11 @@ class RequestsDocumentFetcher:
                     if on_request is not None:
                         consent_started = time.monotonic()
                         try:
-                            on_request(current_url)
+                            if on_request(current_url) is False:
+                                raise ResearchFailure(
+                                    "Domain approval denied.", code="domain_approval_denied",
+                                    retryable=False, source_id=result.source_id,
+                                )
                         finally:
                             started += time.monotonic() - consent_started
                         token.raise_if_cancelled()

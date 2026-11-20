@@ -251,7 +251,7 @@ def test_task_reply_is_bounded_and_canvas_reload_invalidates_receipt(app, client
     assert retry.status_code in (404, 409)
 
 
-def test_mcp_control_run_cannot_inherit_ui_approved_session_grants(app, client, monkeypatch):
+def test_mcp_control_run_cannot_inherit_ui_approved_session_grants(app, monkeypatch):
     """End-to-end: the real dispatcher passes the restrictive flag to the run."""
     from backend.harness import loop as harness_loop
 
@@ -259,16 +259,20 @@ def test_mcp_control_run_cannot_inherit_ui_approved_session_grants(app, client, 
     context = get_session_context(app.state.bus.session())
     context.agent_dispatcher.harness_session_grants(node.state.harness_workspace_id).add("fs.write")
     observed = []
+    ran = threading.Event()
 
     async def capture_run(**kwargs):
         observed.append(kwargs["allow_session_grants"])
+        ran.set()
 
     monkeypatch.setattr(harness_loop, "run_harness", capture_run)
-    accepted = _start(client, app, node.id, operation_id="no-inherited-grants-0001")
-    assert accepted.status_code == 200, accepted.text
-    # The async dispatcher schedules the agent worker after claiming the run.
-    # TestClient normally drains the loop on the next request.
-    client.get("/api/control/agent/task", headers=_auth(WRITE), params={"node_id": node.id})
+    # Keep TestClient's async portal alive until the scheduled worker executes;
+    # don't rely on a later unrelated request to flush background tasks.
+    with TestClient(app, base_url="http://127.0.0.1",
+                    headers={"host": "127.0.0.1"}) as active_client:
+        accepted = _start(active_client, app, node.id, operation_id="no-inherited-grants-0001")
+        assert accepted.status_code == 200, accepted.text
+        assert ran.wait(timeout=2.0), "scheduled workspace run never entered"
     assert observed == [False]
     # Do not clear an app-approved grant: only this MCP-origin run is isolated.
     assert "fs.write" in context.agent_dispatcher.harness_session_grants(
