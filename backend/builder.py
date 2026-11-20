@@ -424,6 +424,12 @@ def _approval_summary(call: ToolCall, document) -> str:
     # source if it is encountered through that shared registry.
     if call.name == "python.exec":
         return f"python.exec\n--- source\n{call.arguments['code']}"
+    if call.name == "python.install":
+        from backend.harness.python_install import install_approval_summary
+
+        # Builder has no workspace binding; installation refuses to execute
+        # there, but still discloses all package requirements without a cap.
+        return install_approval_summary(call.arguments.get("packages", []), None)
     disclosure = run_node_pending_disclosure(document, call)
     if disclosure is not None:
         # SECURITY-FIX: NOT truncated. The cap below exists to keep an
