@@ -62,6 +62,30 @@ def _git_bash_executable(env: dict[str, str]) -> str:
     )
 
 
+def _powershell_executable(env: dict[str, str]) -> str:
+    """Prefer installed PowerShell 7, including the default MSI location.
+
+    The desktop process can have a restricted PATH, so pwsh may be installed
+    even when which() cannot find it. Windows PowerShell is the fallback.
+    """
+    path = _env_value(env, "PATH") or os.defpath
+    for name in ("pwsh.exe", "pwsh"):
+        found = shutil.which(name, path=path)
+        if found:
+            return found
+    for key in ("PROGRAMFILES", "PROGRAMW6432", "PROGRAMFILES(X86)"):
+        base = _env_value(env, key) or os.environ.get(key)
+        if base:
+            candidate = Path(base) / "PowerShell" / "7" / "pwsh.exe"
+            if candidate.is_file():
+                return str(candidate)
+    for root in ("C:/Program Files", "C:/Program Files (x86)"):
+        candidate = Path(root) / "PowerShell" / "7" / "pwsh.exe"
+        if candidate.is_file():
+            return str(candidate)
+    return shutil.which("powershell.exe", path=path) or "powershell.exe"
+
+
 def shell_invocation(
     command: str,
     shell: str = "auto",
@@ -80,10 +104,7 @@ def shell_invocation(
     if selected == "cmd":
         return command, True
     if selected == "powershell":
-        executable = (shutil.which("pwsh.exe", path=path)
-                      or shutil.which("pwsh", path=path)
-                      or shutil.which("powershell.exe", path=path)
-                      or "powershell.exe")
+        executable = _powershell_executable(environment)
         return [executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], False
     if selected == "git-bash":
         return [_git_bash_executable(environment), "--noprofile", "--norc", "-c", command], False

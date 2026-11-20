@@ -42,6 +42,20 @@ def test_windows_prefers_powershell_7_then_windows_powershell():
     assert not use_shell
 
 
+def test_powershell_7_found_in_program_files_without_path(tmp_path, monkeypatch):
+    root = tmp_path / "Program Files"
+    binary = root / "PowerShell" / "7" / "pwsh.exe"
+    binary.parent.mkdir(parents=True)
+    binary.touch()
+    monkeypatch.setattr("backend.harness.shell_selection.shutil.which", lambda *a, **kw: None)
+    args, use_shell = shell_invocation(
+        "Get-Date", "auto",
+        env={"PATH": "", "PROGRAMFILES": str(root)}, os_name="nt",
+    )
+    assert not use_shell
+    assert args[0] == str(binary)
+
+
 def test_windows_cmd_keeps_raw_command_and_shell_true():
     raw = '"C:\\Program Files\\Python\\python.exe" -c "print(42)"'
     args, use_shell = shell_invocation(raw, "cmd", env={"PATH": "tools"}, os_name="nt")
