@@ -60,6 +60,31 @@ describe("Composer workspace-agent dispatch", () => {
   });
 });
 
+describe("Agent-card follow-up admission", () => {
+  it("requests the backend run claim and reports rejection rather than firing and forgetting", async () => {
+    const { transport, requests, intents, requestResults } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    requestResults.push("run-accepted", null, 0);
+
+    await expect(store.sendHarnessMessage("agent-a", "first follow-up")).resolves.toBe(true);
+    await expect(store.sendHarnessMessage("agent-a", "busy with agent b")).resolves.toBe(false);
+    await expect(store.sendHarnessMessage("agent-a", "invalid reply")).resolves.toBe(false);
+    expect(requests).toEqual([
+      { topic: "harness", intent: "send", args: ["agent-a", "first follow-up"] },
+      { topic: "harness", intent: "send", args: ["agent-a", "busy with agent b"] },
+      { topic: "harness", intent: "send", args: ["agent-a", "invalid reply"] },
+    ]);
+    expect(intents).toEqual([]);
+  });
+
+  it("propagates transport failure so the Agent card can preserve the draft", async () => {
+    const { transport, requestImpl } = makeFakeTransport();
+    requestImpl.mockRejectedValueOnce(new Error("socket closed"));
+    const store = new SceneStore(transport);
+    await expect(store.sendHarnessMessage("agent-a", "retry later")).rejects.toThrow("socket closed");
+  });
+});
+
 describe("Python approval identity forwarding", () => {
   it("forwards the displayed identity while preserving unrelated approval shapes", () => {
     const { transport, intents } = makeFakeTransport();

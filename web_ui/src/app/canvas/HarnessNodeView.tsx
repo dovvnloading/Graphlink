@@ -71,7 +71,7 @@ export interface HarnessNodeData extends Record<string, unknown> {
   pendingRequestId: string | null;
   onToggleCollapse: () => void;
   onDelete: () => void;
-  onSend: (text: string) => void;
+  onSend: (text: string) => Promise<boolean>;
   onCancel: () => void;
   onUndoRun: () => void;
   onApproveTool: (approvalId?: string) => void;
@@ -420,6 +420,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   const running = data.harnessStatus === "running";
   const [draft, setDraft] = useState("");
   const [draftError, setDraftError] = useState("");
+  const [sending, setSending] = useState(false);
   const [answerDraft, setAnswerDraft] = useState("");
   const [submittedApprovalId, setSubmittedApprovalId] = useState("");
   const submittedApprovalRef = useRef("");
@@ -495,16 +496,28 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
     }
   }, [data.harnessActivity, running]);
 
-  function sendDraft(): void {
+  async function sendDraft(): Promise<void> {
     const text = draft.trim();
-    if (!text || !acceptsInput(data.harnessStatus)) return;
+    if (!text || sending || data.pendingRequestId || !acceptsInput(data.harnessStatus)) return;
     if (exceedsHarnessTaskLimit(text)) {
       setDraftError(`Agent tasks cannot exceed ${MAX_HARNESS_TASK_LENGTH.toLocaleString()} characters. Shorten the task; your draft is preserved.`);
       return;
     }
+    setSending(true);
     setDraftError("");
-    data.onSend(text);
-    setDraft("");
+    try {
+      const admitted = await data.onSend(text);
+      if (admitted) {
+        // The user may keep editing while the admission reply is in flight.
+        setDraft((current) => current === draft ? "" : current);
+      } else {
+        setDraftError("This agent task was not started. Another agent may be running; your draft is preserved.");
+      }
+    } catch {
+      setDraftError("The agent task could not be sent. Your draft is preserved; check the connection and retry.");
+    } finally {
+      setSending(false);
+    }
   }
 
   function sendAnswer(): void {
@@ -866,7 +879,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
           <button
             type="button"
             className="plan-node-button plan-node-button-start nodrag"
-            disabled={!draft.trim()}
+            disabled={!draft.trim() || sending || Boolean(data.pendingRequestId)}
             onClick={sendDraft}
           >
             Send
