@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import base64
 import binascii
-import heapq
 import json
 import os
 import subprocess
 import sys
+import time
+from bisect import bisect_right
+from functools import lru_cache
 from pathlib import Path
 
 from backend.harness.tools_fs import _is_metadata_path, _read_bounded_bytes
@@ -20,6 +22,9 @@ from backend.harness.workspace import WorkspaceError, resolve_under_root
 
 _MAX_PATH_CHARS = 4_000
 _MAX_ENTRIES = 300
+# A 255-character UTF-8 filename can require 1,372 base64 cursor characters.
+_MAX_CURSOR_CHARS = 2048
+_SNAPSHOT_SECONDS = 30
 _MAX_PREVIEW_CHARS = 40_000
 _DOCUMENT_SUFFIXES = frozenset({".pdf", ".docx", ".xlsx", ".xlsm"})
 
@@ -43,7 +48,7 @@ def _entry_key(entry: dict) -> tuple[bool, str, str]:
 def _page_key(cursor: str | None) -> tuple[bool, str, str] | None:
     if cursor is None:
         return None
-    if not isinstance(cursor, str) or not 0 < len(cursor) <= 1024:
+    if not isinstance(cursor, str) or not 0 < len(cursor) <= _MAX_CURSOR_CHARS:
         raise WorkspaceError("Invalid workspace page cursor.")
     try:
         is_dir, name = json.loads(base64.b64decode(cursor, altchars=b"-_", validate=True))
@@ -59,57 +64,82 @@ def _next_cursor(entry: dict) -> str:
     return base64.urlsafe_b64encode(payload).decode("ascii")
 
 
-def list_workspace_files(root: Path, relative_path: str = "", cursor: str | None = None) -> dict:
-    """List a deterministic, cursor-paginated page of one directory.
+@lru_cache(maxsize=4)
+def _directory_keys(
+    directory: Path, _signature: tuple[int, int, int, int], _window: int,
+) -> tuple[tuple[bool, str, str], ...]:
+    """Sort one directory snapshot without resolving/stating every child.
 
-    Each page scans the directory but holds at most _MAX_ENTRIES + 1
-    candidates in memory. Entries beyond the first page remain reachable,
-    including in flat directories. Every result still passes the workspace
-    boundary and VCS-metadata checks before it can be returned.
+    DirEntry.is_dir usually uses the readdir type hint. The relatively
+    expensive confinement, type and size checks are deferred to the entries
+    actually visited by a page. Directory metadata and a short expiry key
+    invalidate the cache; only four snapshots are retained at once.
+    """
+    keys = []
+    try:
+        with os.scandir(directory) as iterator:
+            for child in iterator:
+                if child.name.casefold() in {".git", ".hg", ".svn"}:
+                    continue
+                try:
+                    is_dir = child.is_dir()
+                except OSError:
+                    continue
+                keys.append((not is_dir, child.name.casefold(), child.name))
+    except OSError as exc:
+        raise WorkspaceError(f"Could not list workspace folder: {exc}") from exc
+    return tuple(sorted(keys))
+
+
+def list_workspace_files(root: Path, relative_path: str = "", cursor: str | None = None) -> dict:
+    """List stable, reachable directory pages from a short-lived snapshot.
+
+    The first request enumerates/sorts names once. Further pages use bisect
+    to start at the cursor, then resolve/stat only enough entries to fill the
+    page. Cached names are never trusted for access: every returned entry is
+    rechecked against the current workspace boundary and VCS metadata gate.
     """
     root = root.resolve()
     directory = _inside(root, relative_path)
     if not directory.is_dir():
         raise WorkspaceError("Not a workspace directory.")
     after = _page_key(cursor)
+    try:
+        stats = directory.stat()
+    except OSError as exc:
+        raise WorkspaceError(f"Could not list workspace folder: {exc}") from exc
+    signature = (stats.st_dev, stats.st_ino, stats.st_mtime_ns, stats.st_ctime_ns)
+    keys = _directory_keys(directory, signature, int(time.monotonic() // _SNAPSHOT_SECONDS))
+    start = bisect_right(keys, after) if after is not None else 0
 
-    def candidates():
+    entries = []
+    more = False
+    for index in range(start, len(keys)):
+        name = keys[index][2]
         try:
-            with os.scandir(directory) as iterator:
-                for child in iterator:
-                    if child.name.casefold() in {".git", ".hg", ".svn"}:
-                        continue
-                    try:
-                        target = _inside(root, str(Path(directory) / child.name))
-                        is_dir = target.is_dir()
-                        if not is_dir and not target.is_file():
-                            continue
-                        size = None if is_dir else target.stat().st_size
-                    except (OSError, WorkspaceError):
-                        # Broken, unreadable, or out-of-root symlinks never
-                        # appear on any page.
-                        continue
-                    entry = {
-                        "name": child.name,
-                        "path": target.relative_to(root).as_posix(),
-                        "isDir": is_dir,
-                        "size": size,
-                    }
-                    if after is None or _entry_key(entry) > after:
-                        yield entry
-        except OSError as exc:
-            raise WorkspaceError(f"Could not list workspace folder: {exc}") from exc
-
-    page = heapq.nsmallest(_MAX_ENTRIES + 1, candidates(), key=_entry_key)
-    more = len(page) > _MAX_ENTRIES
-    entries = page[:_MAX_ENTRIES]
+            target = _inside(root, str(directory / name))
+            is_dir = target.is_dir()
+            if not is_dir and not target.is_file():
+                continue
+            size = None if is_dir else target.stat().st_size
+        except (OSError, WorkspaceError):
+            # Broken, unreadable, or out-of-root symlinks never appear.
+            continue
+        if len(entries) == _MAX_ENTRIES:
+            more = True
+            break
+        entries.append({
+            "name": name,
+            "path": target.relative_to(root).as_posix(),
+            "isDir": is_dir,
+            "size": size,
+        })
     return {
         "path": directory.relative_to(root).as_posix() if directory != root else "",
         "entries": entries,
         "truncated": more,
         "nextCursor": _next_cursor(entries[-1]) if more else None,
     }
-
 
 def read_workspace_file(root: Path, relative_path: str) -> dict:
     """Provide a bounded text preview for Document View, never raw binary."""

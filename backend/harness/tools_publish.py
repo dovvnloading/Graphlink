@@ -154,9 +154,12 @@ def _excel_to_csv(data: bytes, sheet: str | None) -> str:
             # columns stable placeholder names rather than rejecting an
             # otherwise valid worksheet whose later rows use those columns.
             headers = rows[0].copy()
-            used = {value.strip() for value in headers.values()}
+            used = {value.strip() for value in headers.values() if value.strip()}
             for column in range(first_col, last_col + 1):
-                if column not in headers:
+                # Excel preserves whitespace-only cell text. Canvas strips it
+                # and rejects the resulting empty header, so repair those
+                # cells just like wholly missing first-row cells.
+                if not headers.get(column, "").strip():
                     base = f"Column {column}"
                     label = base
                     suffix = 2

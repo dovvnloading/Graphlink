@@ -1,11 +1,11 @@
 """Incremental SQLite FTS5 index for one workspace agent's append-only JSONL.
 
 The transcript remains authoritative. This database is a disposable sidecar:
-each sync validates a hash of the already indexed prefix, then parses only
-new records. This catches replacements/rewrites as well as crash gaps between
-the JSONL append and the index commit. An existing
-transcript is indexed on first search, without a migration or a full scan on
-every subsequent query. Keeping the index in the same managed scratch
+untrusted changes are checked against the already indexed prefix, while
+known writer appends continue an in-memory hash checkpoint without rereading
+old records. This catches rewrites as well as crash gaps between the JSONL
+append and the index commit. An existing transcript is indexed on first search
+without a migration. Keeping the index in the same managed scratch
 workspace as the transcript preserves per-agent isolation and existing GC.
 """
 
@@ -16,8 +16,12 @@ import json
 import os
 import re
 import sqlite3
+import threading
+from collections import OrderedDict
 from contextlib import closing
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 INDEX_FILENAME = "transcript-search.sqlite3"
 MAX_QUERY_CHARS = 256
@@ -95,8 +99,48 @@ def _searchable_text(item: object) -> tuple[str, str] | None:
     return str(item.get("role") or "unknown"), text
 
 
-def _prefix_digest(source, length: int) -> str:
-    """Hash the committed prefix in bounded chunks, never loading JSONL whole."""
+@dataclass(frozen=True)
+class _HashCheckpoint:
+    offset: int
+    device: str
+    inode: str
+    prefix_sha256: str
+    stamp: tuple[int, int, int, int, int]
+    hasher: Any
+
+
+# hashlib SHA-256 state cannot be serialized to SQLite. Keep a small,
+# per-process cache so app-owned append/flush cycles hash only new bytes.
+# A cold process or an untrusted external change re-hashes the old prefix.
+_HASH_CHECKPOINTS: OrderedDict[str, _HashCheckpoint] = OrderedDict()
+_HASH_CHECKPOINT_LOCK = threading.Lock()
+_MAX_HASH_CHECKPOINTS = 16
+
+
+def _source_stamp(stats: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (stats.st_dev, stats.st_ino, stats.st_size, stats.st_mtime_ns, stats.st_ctime_ns)
+
+
+def _cached_checkpoint(path: Path) -> _HashCheckpoint | None:
+    key = str(path)
+    with _HASH_CHECKPOINT_LOCK:
+        checkpoint = _HASH_CHECKPOINTS.get(key)
+        if checkpoint is not None:
+            _HASH_CHECKPOINTS.move_to_end(key)
+        return checkpoint
+
+
+def _remember_checkpoint(path: Path, checkpoint: _HashCheckpoint) -> None:
+    key = str(path)
+    with _HASH_CHECKPOINT_LOCK:
+        _HASH_CHECKPOINTS[key] = checkpoint
+        _HASH_CHECKPOINTS.move_to_end(key)
+        if len(_HASH_CHECKPOINTS) > _MAX_HASH_CHECKPOINTS:
+            _HASH_CHECKPOINTS.popitem(last=False)
+
+
+def _prefix_hasher(source, length: int):
+    """Return SHA-256 state for committed bytes, reading in bounded chunks."""
     source.seek(0)
     digest = hashlib.sha256()
     remaining = length
@@ -106,23 +150,25 @@ def _prefix_digest(source, length: int) -> str:
             raise OSError("Transcript changed while updating its search index.")
         digest.update(chunk)
         remaining -= len(chunk)
-    return digest.hexdigest()
+    return digest
 
 
-def sync_index(transcript: Path) -> None:
+def sync_index(transcript: Path, *, append_origin: os.stat_result | None = None) -> None:
     """Index complete JSONL records not yet committed to this sidecar.
 
-    Called by the transcript's background writer after each append, and by
-    search after a flush. Offsets and FTS rows commit in one transaction;
-    an interrupted index update is replayed rather than lost or duplicated.
-    Invalid JSONL records are skipped with the same tolerant posture as
-    load_messages. An incomplete final line is retried after completion.
+    append_origin is the transcript stat taken immediately before this process's
+    writer appended a batch. If it matches our last indexed snapshot, the old
+    bytes could not have been changed *before* that append: resume the cached
+    SHA-256 state and hash only newly read complete lines. External writes,
+    replacements, restarts and mismatched metadata still validate the prefix.
+    Offsets, FTS rows and the SHA-256 digest commit in one transaction.
     """
     if transcript.is_symlink():
         raise OSError("Transcript must not be a symlink for indexing.")
     if not transcript.is_file():
         return
-    with closing(_open_index(index_path(transcript))) as db:
+    sidecar = index_path(transcript)
+    with closing(_open_index(sidecar)) as db:
         with transcript.open("rb") as source, db:
             row = db.execute(
                 "SELECT offset, line_number FROM transcript_index_state WHERE id = 1"
@@ -133,35 +179,63 @@ def sync_index(transcript: Path) -> None:
                 "FROM transcript_index_source WHERE id = 1"
             ).fetchone()
             stats = os.fstat(source.fileno())
+            stamp = _source_stamp(stats)
             source.seek(0, 2)
             size = source.tell()
-            if (offset > size or (
+            device, inode = str(stats.st_dev), str(stats.st_ino)
+
+            rebuild = offset > size or (
                 offset > 0 and (
                     identity is None or
-                    (identity[0], identity[1]) != (str(stats.st_dev), str(stats.st_ino)) or
-                    identity[2] != _prefix_digest(source, offset)
+                    (identity[0], identity[1]) != (device, inode)
                 )
-            )):
-                # The sidecar is disposable: never serve old FTS rows when
-                # the indexed bytes or source identity have changed.
+            )
+            hasher = hashlib.sha256()
+            if offset and not rebuild:
+                checkpoint = _cached_checkpoint(sidecar)
+                reusable = (
+                    checkpoint is not None and
+                    checkpoint.offset == offset and
+                    (checkpoint.device, checkpoint.inode, checkpoint.prefix_sha256)
+                    == (device, inode, identity[2]) and
+                    (checkpoint.stamp == stamp or (
+                        append_origin is not None and
+                        checkpoint.stamp == _source_stamp(append_origin)
+                    ))
+                )
+                hasher = (
+                    checkpoint.hasher.copy() if reusable
+                    else _prefix_hasher(source, offset)
+                )
+                if hasher.hexdigest() != identity[2]:
+                    rebuild = True
+
+            if rebuild:
+                # The transcript, not the disposable sidecar, is authoritative.
                 db.execute("DELETE FROM transcript_fts")
                 offset, line_number = 0, 0
+                hasher = hashlib.sha256()
             source.seek(offset)
 
             while True:
                 raw = source.readline(_MAX_INDEX_LINE_BYTES + 1)
                 if not raw:
                     break
+                # A digest copy ensures an incomplete/oversized trailing line
+                # never enters the stored prefix hash or committed offset.
+                line_hasher = hasher.copy()
+                line_hasher.update(raw)
                 if not raw.endswith(b"\n"):
                     if len(raw) <= _MAX_INDEX_LINE_BYTES:
                         break  # incomplete trailing record; retry next sync
-                    # Skip an oversized line in bounded chunks; do not
-                    # materialize an untrusted multi-gigabyte JSON value.
                     while raw and not raw.endswith(b"\n"):
                         raw = source.readline(_MAX_INDEX_LINE_BYTES + 1)
+                        if raw:
+                            line_hasher.update(raw)
                     if not raw:
                         break
                     raw = b""  # consumed but intentionally not indexed
+                hasher = line_hasher
                 offset = source.tell()
                 line_number += 1
                 if not raw:
@@ -178,6 +252,8 @@ def sync_index(transcript: Path) -> None:
                         "VALUES (?, ?, ?)",
                         (content, role, line_number),
                     )
+
+            digest = hasher.hexdigest()
             db.execute(
                 "INSERT INTO transcript_index_state (id, offset, line_number) "
                 "VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET "
@@ -189,8 +265,15 @@ def sync_index(transcript: Path) -> None:
                 "VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
                 "device=excluded.device, inode=excluded.inode, "
                 "prefix_sha256=excluded.prefix_sha256",
-                (str(stats.st_dev), str(stats.st_ino), _prefix_digest(source, offset)),
+                (device, inode, digest),
             )
+            # Do not trust this checkpoint if the source was concurrently
+            # modified during indexing; the next sync will revalidate it.
+            stable = _source_stamp(os.fstat(source.fileno())) == stamp
+        if stable:
+            _remember_checkpoint(sidecar, _HashCheckpoint(
+                offset, device, inode, digest, stamp, hasher,
+            ))
 
 
 def _match_expression(query: str) -> str:

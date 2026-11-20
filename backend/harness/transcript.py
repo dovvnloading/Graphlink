@@ -97,6 +97,7 @@ class _Writer:
 
     def _run(self) -> None:
         needs_index = False
+        append_origin = None
         while True:
             item = self._queue.get()
             try:
@@ -105,6 +106,14 @@ class _Writer:
                 line, done = item
                 if line:
                     try:
+                        if not needs_index:
+                            # Snapshot the indexed source *before* our first
+                            # append. The index may reuse its SHA checkpoint
+                            # only if nobody else changed the file meanwhile.
+                            try:
+                                append_origin = self.path.stat()
+                            except OSError:
+                                append_origin = None
                         with self.path.open("a", encoding="utf-8") as fh:
                             fh.write(line)
                             fh.flush()
@@ -123,10 +132,11 @@ class _Writer:
                         # instead of opening and syncing FTS for every line.
                         # Flush indexes all preceding writes before releasing
                         # its barrier; search can also backfill after a crash.
-                        sync_index(self.path)
+                        sync_index(self.path, append_origin=append_origin)
                     except (OSError, sqlite3.Error):
                         pass  # search backfills from JSONL on next read
                     needs_index = False
+                    append_origin = None
                 if done is not None:
                     done.set()
             finally:

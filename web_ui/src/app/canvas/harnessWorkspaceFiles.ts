@@ -31,7 +31,7 @@ export function parseHarnessWorkspaceListing(value: unknown): HarnessWorkspaceLi
       typeof value.isScratch !== "boolean" || typeof value.path !== "string" ||
       typeof value.truncated !== "boolean" || !Array.isArray(value.entries) ||
       (value.nextCursor !== undefined && value.nextCursor !== null &&
-        (typeof value.nextCursor !== "string" || value.nextCursor.length === 0 || value.nextCursor.length > 1024))) {
+        (typeof value.nextCursor !== "string" || value.nextCursor.length === 0 || value.nextCursor.length > 2048))) {
     throw new Error("Invalid workspace folder response.");
   }
   const entries: HarnessWorkspaceEntry[] = value.entries.map((entry: unknown) => {
