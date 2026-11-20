@@ -199,3 +199,34 @@ class TestFetchPolicyValidate:
         second = FetchPolicy(resolver=_fake_resolver("127.0.0.1"))
         with pytest.raises(URLPolicyError, match="non-public"):
             second.validate("https://rebinding.example/path")
+
+
+class TestConsentPreflight:
+    def test_validate_url_is_dns_free_but_preserves_public_ip_policy(self):
+        def no_dns(*args, **kwargs):
+            raise AssertionError("pre-consent URL validation must never resolve DNS")
+
+        policy = FetchPolicy(resolver=no_dns)
+        assert policy.validate_url("https://example.com/a") == "https://example.com/a"
+        assert policy.validate_url("https://8.8.8.8/") == "https://8.8.8.8/"
+        for url in (
+            "http://example.com/a", "https://localhost/path",
+            "https://127.0.0.1/path", "https://[::1]/path",
+            "https://user:pass@example.com/path",
+        ):
+            with pytest.raises(URLPolicyError):
+                policy.validate_url(url)
+
+    @pytest.mark.parametrize("url", (
+        "https://example.com/\\n", "https://exa\\tmple.com/",
+        "https://@example.com/", "https://a.example\\\\@b.example/",
+        "https://exa／mple.com/", "https://[unclosed.example/",
+    ))
+    def test_ambiguous_or_control_character_urls_are_rejected(self, url):
+        assert canonicalize_url(url) == ""
+
+    def test_dns_validation_still_rejects_private_answers_after_preflight(self):
+        policy = FetchPolicy(resolver=_fake_resolver("10.10.10.10"))
+        assert policy.validate_url("https://rebind.example/") == "https://rebind.example/"
+        with pytest.raises(URLPolicyError, match="non-public"):
+            policy.validate("https://rebind.example/")

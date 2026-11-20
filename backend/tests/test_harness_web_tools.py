@@ -259,8 +259,12 @@ def test_invalid_fetch_url_never_prompts_or_fetches(monkeypatch):
         ctx = _ctx(approve)
         return [
             await registry.invoke(_call("web.fetch", url=url), ctx)
-            for url in ("http://pages.example/", "https://user:pass@pages.example/",
-                        "not-a-url")
+            for url in (
+                "http://pages.example/", "https://user:pass@pages.example/",
+                "https://@pages.example/", "https://a.example\\\\@pages.example/",
+                "https://pages.example/\\n", "https://exa／mple.example/",
+                "not-a-url",
+            )
         ]
 
     assert all(item.is_error for item in asyncio.run(run()))

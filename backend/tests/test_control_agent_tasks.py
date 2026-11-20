@@ -88,7 +88,7 @@ def test_live_agent_task_start_status_retry_and_cancel(app, client, monkeypatch)
     claimed = []
 
     async def fake_start(*, harness_node_id, user_text, **unused):
-        started.append((harness_node_id, user_text))
+        started.append((harness_node_id, user_text, unused.get("allow_session_grants")))
         handle = dispatcher._runs.claim(
             "harness", node_id=harness_node_id, cancel_event=threading.Event(),
         )
@@ -118,7 +118,7 @@ def test_live_agent_task_start_status_retry_and_cancel(app, client, monkeypatch)
     assert first.status_code == 200, first.text
     run_id = first.json()["run_id"]
     assert first.json()["accepted"] and first.json()["replayed"] is False
-    assert started == [(node.id, "Inspect the project")]
+    assert started == [(node.id, "Inspect the project", False)]
 
     # Status is a bounded, live snapshot. It deliberately omits tool
     # approval IDs, approval decisions, workspace paths and transcript data.
@@ -210,6 +210,7 @@ def test_agent_node_and_payload_validation_prevents_approval_or_workspace_grants
     for injection in (
         {"approve_tool": True}, {"workspace_path": "/etc"},
         {"model_ref": "unreviewed"}, {"approval_id": "forged"},
+        {"allow_session_grants": True},
     ):
         assert client.post("/api/control/agent/task/start", headers=_auth(WRITE),
                            json={**base, **injection}).status_code == 422
@@ -248,3 +249,28 @@ def test_task_reply_is_bounded_and_canvas_reload_invalidates_receipt(app, client
     retry = client.post("/api/control/agent/task/start",
                         headers=_auth(WRITE), json=body)
     assert retry.status_code in (404, 409)
+
+
+def test_mcp_control_run_cannot_inherit_ui_approved_session_grants(app, client, monkeypatch):
+    """End-to-end: the real dispatcher passes the restrictive flag to the run."""
+    from backend.harness import loop as harness_loop
+
+    node = _agent(app)
+    context = get_session_context(app.state.bus.session())
+    context.agent_dispatcher.harness_session_grants(node.state.harness_workspace_id).add("fs.write")
+    observed = []
+
+    async def capture_run(**kwargs):
+        observed.append(kwargs["allow_session_grants"])
+
+    monkeypatch.setattr(harness_loop, "run_harness", capture_run)
+    accepted = _start(client, app, node.id, operation_id="no-inherited-grants-0001")
+    assert accepted.status_code == 200, accepted.text
+    # The async dispatcher schedules the agent worker after claiming the run.
+    # TestClient normally drains the loop on the next request.
+    client.get("/api/control/agent/task", headers=_auth(WRITE), params={"node_id": node.id})
+    assert observed == [False]
+    # Do not clear an app-approved grant: only this MCP-origin run is isolated.
+    assert "fs.write" in context.agent_dispatcher.harness_session_grants(
+        node.state.harness_workspace_id
+    )
