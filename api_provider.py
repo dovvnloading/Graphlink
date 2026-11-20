@@ -2063,6 +2063,7 @@ def _chat_stream_dispatch(task: str, messages: list, on_chunk: Callable[[str, bo
                 or state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA
             )
         attempt = 0
+        json_object_mode = False
         while True:
             full_response_content = None
             usage = None
@@ -2087,6 +2088,15 @@ def _chat_stream_dispatch(task: str, messages: list, on_chunk: Callable[[str, bo
                 if use_json_protocol:
                     from backend.providers.json_tool_protocol import structured_output_rejected
                     if structured_output_rejected(retry_exc):
+                        # Some OpenAI-compatible runtimes only implement
+                        # JSON-object mode, not the richer JSON-schema mode.
+                        # This still constrains syntax at generation time;
+                        # parse_tool_turn validates names and arguments.
+                        if profile and profile.protocol == "openai" and not json_object_mode:
+                            json_kwargs = {"response_format": {"type": "json_object"}}
+                            json_object_mode = True
+                            attempt = 0
+                            continue
                         raise RuntimeError(
                             f"The selected model ({model_label}) cannot run the workspace agent: "
                             "this endpoint rejected grammar/schema-constrained JSON output. "
