@@ -174,6 +174,9 @@ class RunHandle:
     harness_session_approval_kind: str = ""
     # True only for a pending, explicitly scoped workspace network request.
     harness_network_approval: bool = False
+    # The workspace live-output sink's final snapshot, owned by this run.
+    # Stop calls it before marking activity stopped; never reused by a new run.
+    harness_stop_output: Callable[[], None] | None = None
     approval_snapshot_fn: Callable[[], Any] | None = None
     approval_snapshot: Any = None
     task: asyncio.Task | None = None

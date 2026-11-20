@@ -496,6 +496,87 @@ class TestLoop:
         assert "first" in row["summary"] and "second" in row["summary"]
         assert node.state.harness_status == "done"
 
+    @pytest.mark.parametrize("publish_first", [False, True])
+    def test_stop_preserves_unpublished_output_and_the_activity_row(
+        self, workspace_root, monkeypatch, publish_first,
+    ):
+        # Exercise the real dispatch Stop finalizer, not just the live
+        # pump. In the first case Stop wins before its first tick; in the
+        # second a trailing fragment arrives after the already-live row.
+        from backend.agents import AgentDispatcher
+        from backend.harness import loop as harness_loop
+
+        document = SceneDocument()
+        node = document.add_harness_node(0, 0, "capture running output")
+        registry = ToolRegistry()
+        dispatcher = AgentDispatcher(None)
+        bus = FakeBus()
+        emitted = asyncio.Event()
+        release = asyncio.Event()
+
+        async def streaming_handler(_call, ctx):
+            ctx.on_tool_output("")
+            ctx.on_tool_output("head")
+            emitted.set()
+            await release.wait()
+            ctx.on_tool_output(" tail")
+            dispatcher.cancel_harness(request_id)
+            raise api_provider.RequestCancelledError("stopped")
+
+        registry.register(
+            ToolSpec(name="shell.exec", description="stop snapshot test", input_schema={
+                "type": "object", "properties": {"command": {"type": "string"}},
+            }),
+            streaming_handler, scopes={CODE_EXECUTE}, approval="auto",
+        )
+        monkeypatch.setattr(dispatcher, "harness_tool_registry", lambda _doc: registry)
+        monkeypatch.setattr(dispatcher, "harness_machine_snapshot", lambda *a, **kw: "")
+        monkeypatch.setattr(harness_loop, "_LIVE_PUBLISH_INTERVAL", 0.02 if publish_first else 1)
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("snapshot", "shell.exec", command="emit")]},
+        ])
+
+        class Notifications:
+            def show(self, *args):
+                pass
+
+        async def go():
+            nonlocal request_id
+            request_id = await dispatcher.start_harness_run(
+                bus=bus, notifications_state=Notifications(), document=document,
+                harness_node_id=node.id, user_text="test",
+            )
+            assert request_id
+            await asyncio.wait_for(emitted.wait(), timeout=10)
+            if publish_first:
+                async def published():
+                    while not (
+                        node.state.harness_activity
+                        and node.state.harness_activity[-1]["outcome"] == "running"
+                        and "head" in node.state.harness_activity[-1]["summary"]
+                    ):
+                        await asyncio.sleep(0.01)
+                await asyncio.wait_for(published(), timeout=5)
+            else:
+                assert not node.state.harness_activity
+            release.set()
+
+            async def stopped():
+                while node.state.harness_status != "stopped":
+                    await asyncio.sleep(0.01)
+            await asyncio.wait_for(stopped(), timeout=5)
+            assert len(node.state.harness_activity) == 1
+            row = node.state.harness_activity[-1]
+            assert row["outcome"] == "stopped"
+            assert row["summary"] == "Output:\nhead tail"
+            # A late old-run callback may not overwrite the next run's
+            # activity if Stop released the kind slot already.
+            callback = dispatcher._runs.get(request_id)
+            assert callback is None
+
+        request_id = None
+        asyncio.run(go())
+
     def test_live_preview_is_bounded_even_for_a_no_newline_producer(self):
         output = _BoundedToolOutput()
         output.append("")
@@ -1088,6 +1169,38 @@ class TestShellTool:
 
         asyncio.run(go())
         assert not (ws / "too_late.txt").exists(), "Stop must kill the subprocess"
+
+    def test_flushed_shell_fragment_without_newline_streams_before_exit(self, workspace_root):
+        from backend.harness import tools_shell
+
+        ws = ensure_workspace("ws1")
+        ready = threading.Event()
+        cancel = threading.Event()
+        chunks: list[str] = []
+        outcomes = []
+
+        def on_output(text):
+            chunks.append(text)
+            if "READY" in "".join(chunks):
+                ready.set()
+
+        def run():
+            outcomes.append(tools_shell._run_command(
+                'python -u -c "import sys, time; sys.stdout.write(\'READY\'); '
+                'sys.stdout.flush(); time.sleep(30)"',
+                ws, cancel, on_output=on_output,
+            ))
+
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        try:
+            assert ready.wait(7), "the flushed fragment must not wait for EOF"
+            assert worker.is_alive(), "the command must still be running"
+        finally:
+            cancel.set()
+            worker.join(timeout=8)
+        assert not worker.is_alive()
+        assert outcomes and outcomes[0][2] == "cancelled"
 
     def test_denied_command_never_spawns(self, workspace_root):
         ws = ensure_workspace("ws1")
