@@ -14,7 +14,7 @@ Isolated `shell.exec` commands remain offline by default. When the agent needs n
 - **Allow network for this task** — enable the bridge network for that command and subsequent `shell.exec` commands in the *current* task. This grant disappears when the task ends; it is not a session-wide permission.
 - **Deny** — do not run the proposed command.
 
-The agent node's **Agent settings → Allow network for every task** checkbox is an explicit, **off-by-default** persistent opt-in. It is available only in the Isolated profile and applies to future tasks; ordinary shell approval and saved safe-prefix rules remain separate from network consent. Changes to the setting during a running task cannot silently expand that task's permissions. `shell.session` remains network-disabled in Isolated mode. Network-enabled containers use bridge networking, **not** host networking; all other container resource, filesystem and privilege restrictions remain in force.
+The agent node's **Agent settings → Allow network for every task** checkbox is an explicit, **off-by-default** persistent opt-in. It is available only in the Isolated profile and applies to future tasks; ordinary shell approval and session-only exact-command grants remain separate from network consent. Changes to the setting during a running task cannot silently expand that task's permissions. `shell.session` remains network-disabled in Isolated mode. Network-enabled containers use bridge networking, **not** host networking; all other container resource, filesystem and privilege restrictions remain in force.
 
 ## Network grants are separate from container networking
 
@@ -46,3 +46,36 @@ Shell and Python tools retain per-call approval and timeout/cancellation behavio
 `python.install` requires a fresh approval bound to the workspace, profile, interpreter and packages, explicitly disclosing possible network access. It first uses cached binary wheels; if needed, only `pip download` contacts the canonical PyPI index. The following `pip install --no-index` runs offline.
 
 This is a **workspace execution isolation profile**, not whole-application confinement, a guarantee against malicious Docker/Podman daemons or images, or a claim that approved backend network tools cannot exfiltrate data. See [the independent security audit](WORKSPACE_ISOLATION_NETWORK_AUDIT_2026-11-20.md) for the earlier shell-only threat model and residual risks; container Python support was added subsequently.
+
+
+## Remembered shell commands: exact, context-bound, session-only
+
+"Always allow" is deliberately narrower than approving a one-off command.
+Only a small set of plainly read-only, fixed-shape commands can be remembered.
+Every chained segment must match its exact previously reviewed text. Adding
+arguments, changing a segment, or introducing another command needs fresh
+approval. Arbitrary file operands, paths outside the root, interpreter
+wrappers, script execution, directory-changing commands, redirects, expansion,
+quoting and other ambiguous shell syntax are ineligible for remembering.
+Those calls remain available with ordinary one-time approval.
+
+Each remembered command is scoped to the **resolved workspace root**, the
+**Host/Isolated execution profile**, and the **actual shell**. In the Isolated
+profile, the effective shell is always the container's \`/bin/sh\`, not the
+node's Host preference. Rebinding the node to another directory or changing
+profile/shell cannot reuse previous command consent.
+
+**Remembered rules do not survive a save/reload.** Graph files can be imported,
+edited, or moved between machines; they cannot attest that the operator
+approved a command. Both older shell-prefix rules and forged new-format
+rules are discarded on load. "Always allow" therefore only skips prompts
+within the live application session, and can always be revoked in the node
+settings.
+
+**Host execution is not a filesystem sandbox.** The workspace is the initial
+working directory of Host shell commands, not a process-wide path boundary.
+An explicitly approved once-only Host command can change directories,
+follow symlinks, invoke other programs or access files outside the workspace.
+Dedicated \`fs.*\` tools use path confinement, while arbitrary shell code does
+not. Use Isolated execution for a container-mounted workspace boundary;
+inspect the command and any executables or repository hooks it may invoke.

@@ -676,9 +676,10 @@ async def run_harness(
             else:
                 return False
             approved = True
-        # A shell prefix grant is made *only* from the backend's snapshotted
-        # command, never a client-supplied rule. A forged "always allow" on
-        # Python, a dangerous command, or a cancelled run is denied.
+        # Exact, context-bound shell grants derive only from the backend's
+        # snapshotted command, never a client-supplied rule. A forged
+        # "always allow" on Python, ambiguous commands or cancelled runs
+        # cannot create a reusable shell permission.
         if approved == "shell_rule":
             if (call.name != "shell.exec" or not can_save_shell_rules
                     or cancel_event.is_set() or not _alive()):

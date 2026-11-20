@@ -1140,8 +1140,9 @@ class HarnessState(NodeState):
     harness_workspace_active: str = ""
     # Durable node preference; each task snapshots it before executing tools.
     harness_shell: str = "auto"
-    # Durable, node-local grants: entries are "effective-shell<TAB>prefix".
-    # They are created only by explicit shell approval and may be revoked.
+    # Live session-only grants for exact, approved shell segments, bound to
+    # workspace root, execution profile and shell. Serialized graphs cannot
+    # supply operator consent; this list is discarded during save/load.
     harness_shell_allow_rules: list[str] = field(default_factory=list)
     harness_execution_profile: str = "host"
     # Explicit node preference; Isolated remains offline by default.
