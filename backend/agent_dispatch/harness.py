@@ -141,11 +141,16 @@ class HarnessDispatchOps(DispatcherParts):
         # The builder registry can be invalidated (e.g. after an MCP
         # configuration change). Register once per registry INSTANCE, not
         # once per dispatcher, so a rebuilt registry never loses harness tools.
-        if getattr(self, "_harness_tools_registered_on", None) is not registry:
+        # A weak reference avoids retaining a stale Builder registry (and
+        # its tool handlers) after settings invalidate the shared cache.
+        from weakref import ref
+
+        registered_ref = getattr(self, "_harness_tools_registry_ref", None)
+        if registered_ref is None or registered_ref() is not registry:
             from backend.harness.tool_catalog import register_tool_modules
 
             register_tool_modules(registry, self, document)
-            self._harness_tools_registered_on = registry
+            self._harness_tools_registry_ref = ref(registry)
         return registry
 
     async def start_harness_run(
