@@ -100,6 +100,16 @@ describe("Agent-card follow-up admission", () => {
     expect(intents).toEqual([]);
   });
 
+  it("releases an operation key after an explicit backend refusal", async () => {
+    const { transport, requestResults, requests } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    requestResults.push(null, "accepted-on-retry");
+    await expect(store.sendHarnessMessage("agent-a", "follow up")).resolves.toBe(false);
+    await expect(store.sendHarnessMessage("agent-a", "follow up")).resolves.toBe(true);
+    expect(requests).toHaveLength(2);
+    expect(requests[0].args[3]).not.toBe(requests[1].args[3]);
+  });
+
   it("retries a lost acknowledgment with the same key after the accepted run finishes", async () => {
     const { transport, requestImpl } = makeFakeTransport();
     const store = new SceneStore(transport);
