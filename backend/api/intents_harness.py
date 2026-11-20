@@ -229,6 +229,10 @@ def register_harness_intents(
             await bus.publish("notification")
             return
         node.state.harness_permission_mode = mode
+        if mode == AUTONOMOUS:
+            # The old broad network preference must not silently revive on
+            # a later task or be mistaken for per-request network consent.
+            node.state.harness_network_always = False
         await publish_scene()
 
     async def set_network_always(node_id, enabled):
