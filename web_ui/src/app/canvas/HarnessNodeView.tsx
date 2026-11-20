@@ -161,6 +161,40 @@ function acceptsInput(status: string): boolean {
   return status !== "running";
 }
 
+/**
+ * Unified diffs get line-level color while new-file previews stay literal:
+ * their full content may itself begin with "+" or "-", which is NOT a diff.
+ * The output is text-only React children (never interpreted as HTML).
+ */
+function renderApprovalSummary(summary: string, toolName: string) {
+  const firstLineEnd = summary.indexOf("\n");
+  if (
+    (toolName !== "fs.write" && toolName !== "fs.edit") ||
+    firstLineEnd === -1 ||
+    !summary.slice(firstLineEnd + 1).startsWith("--- a/")
+  ) {
+    return summary;
+  }
+  const lines = summary.split("\n");
+  return lines.map((line, index) => {
+    let className = "";
+    if (line.startsWith("--- ") || line.startsWith("+++ ")) {
+      className = "harness-approval-diff-header";
+    } else if (line.startsWith("+")) {
+      className = "harness-approval-diff-added";
+    } else if (line.startsWith("-")) {
+      className = "harness-approval-diff-removed";
+    } else if (line.startsWith("@@")) {
+      className = "harness-approval-diff-hunk";
+    }
+    return (
+      <span key={index} className={className}>
+        {line}{index < lines.length - 1 ? "\n" : ""}
+      </span>
+    );
+  });
+}
+
 function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   const collapsed = useLodVisibility() || data.isCollapsed;
   const running = data.harnessStatus === "running";
@@ -397,7 +431,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
             tabIndex={0}
             role="region"
             aria-label="Proposed tool call"
-          >{data.harnessApprovalSummary}</pre>
+          >{renderApprovalSummary(data.harnessApprovalSummary, data.harnessApprovalToolName)}</pre>
           <div className="plan-node-approval-actions">
             <button
               type="button"
