@@ -46,13 +46,19 @@ def available_engine(env: dict[str, str] | None = None) -> str | None:
 
 
 def container_invocation(
-    command: str, workspace: Path, *, env: dict[str, str] | None = None,
+    command: str | list[str], workspace: Path, *,
+    env: dict[str, str] | None = None,
+    network: bool = False,
+    extra_mounts: tuple[tuple[Path, str], ...] = (),
+    container_env: dict[str, str] | None = None,
 ) -> tuple[list[str], str, str]:
     """Return (argv, engine, unique name) for a restricted Linux container.
 
-    A fixed image, offline container, no privileged caps, read-only image
-    filesystem and explicitly bounded resources are non-optional. Only the
-    trusted/bound workspace is writable; /tmp is a small scratch tmpfs.
+    A fixed image, no privileged caps, read-only image filesystem and
+    explicitly bounded resources are non-optional. The default is offline.
+    Only an approved python.install PyPI download may request network=True;
+    extra mounts are app-chosen environment/cache directories, never
+    paths supplied by an agent. /tmp is a small scratch tmpfs.
     """
     environment = safe_subprocess_env() if env is None else env
     engine = available_engine(environment)
@@ -69,7 +75,7 @@ def container_invocation(
     args = [
         executable, "run", "--rm", "--interactive", "--pull=never",
         "--name", name,
-        "--network=none", "--cpus=" + CONTAINER_CPUS,
+        "--network=" + ("bridge" if network else "none"), "--cpus=" + CONTAINER_CPUS,
         "--memory=" + CONTAINER_MEMORY, "--memory-swap=" + CONTAINER_MEMORY,
         "--pids-limit=128", "--read-only",
         "--cap-drop=ALL", "--security-opt=no-new-privileges",
@@ -78,6 +84,12 @@ def container_invocation(
         "--workdir", CONTAINER_WORKSPACE,
         "--env", "HOME=/tmp", "--env", "PYTHONDONTWRITEBYTECODE=1",
     ]
+    for source, target in extra_mounts:
+        args.extend([
+            "--mount", f"type=bind,source={source.resolve()},target={target}",
+        ])
+    for key, value in (container_env or {}).items():
+        args.extend(["--env", f"{key}={value}"])
     getuid = getattr(os, "getuid", None)
     getgid = getattr(os, "getgid", None)
     if os.name == "posix" and callable(getuid) and callable(getgid):
@@ -85,7 +97,10 @@ def container_invocation(
             args.append("--userns=keep-id")
         else:
             args.extend(["--user", f"{getuid()}:{getgid()}"])
-    args.extend([CONTAINER_IMAGE, "/bin/sh", "-c", command])
+    if isinstance(command, str):
+        args.extend([CONTAINER_IMAGE, "/bin/sh", "-c", command])
+    else:
+        args.extend([CONTAINER_IMAGE, *command])
     return args, engine, name
 
 
