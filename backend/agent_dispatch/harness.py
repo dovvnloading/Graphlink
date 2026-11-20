@@ -131,8 +131,8 @@ class HarnessDispatchOps(DispatcherParts):
         """Live, non-serializable grants for one Agent incarnation.
 
         Acquiring and retiring sets shares the revocation lock with trusted
-        root cleanup. Old RunContexts can retain an abandoned set, but a
-        later task must never receive it after a revocation or graph switch.
+        root cleanup. Old RunContexts may retain a revoked generation,
+        but they cannot save or reuse its grants after revocation.
         """
         with self._harness_revocation_guard():
             store = getattr(self, "_harness_session_grants", None)
