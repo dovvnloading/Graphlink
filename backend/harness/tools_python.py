@@ -200,9 +200,14 @@ def register_harness_python_tool(
         # terminate user code in the child. Poll the same Stop event as the
         # shell tool and kill/retire this exact interpreter on cancellation
         # or timeout. The child guard kills spawned descendants as well.
-        worker = asyncio.create_task(
-            asyncio.to_thread(repl.execute, code, on_output, cancel_event),
-        )
+        # Keep the old single-argument REPL contract for standalone
+        # callers without a live/cancellable run (including instrumented
+        # wrappers around execute). The harness passes the extra hooks.
+        if on_output is None and cancel_event is None:
+            invocation = asyncio.to_thread(repl.execute, code)
+        else:
+            invocation = asyncio.to_thread(repl.execute, code, on_output, cancel_event)
+        worker = asyncio.create_task(invocation)
         deadline = asyncio.get_running_loop().time() + PYTHON_EXEC_TIMEOUT_SECONDS
         try:
             while not worker.done():
