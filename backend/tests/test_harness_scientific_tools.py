@@ -1,0 +1,255 @@
+"""Workspace-agent Scientific Workbench tools: grants, discovery and verified output."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import threading
+
+import pytest
+
+from api_provider import RequestCancelledError
+from backend.domain.graph import SceneDocument
+from backend.harness.loop import HarnessRunContext
+from backend.harness.tools_scientific import register_workspace_tools
+from backend.plugin_sdk import HostContext
+from backend.providers.base import CancelToken, ToolCall
+from backend.tools import CODE_EXECUTE, GRAPH_MUTATE, GRAPH_READ, ToolRegistry
+from graphlink_plugins.scientific.catalog import operations
+from graphlink_plugins.scientific.core import calculate_result, readable_result
+from graphlink_plugins.scientific.execution import ExecutionFailure
+from graphlink_plugins.scientific.workbench import register_pack
+
+
+class Settings:
+    def __init__(self):
+        self.grants: dict[str, bool] = {}
+
+    def get_plugin_grants(self):
+        return dict(self.grants)
+
+
+@pytest.fixture
+def setup():
+    document = SceneDocument()
+    agent = document.add_harness_node(50, 70, "Run a scientific calculation")
+    agent.state.harness_run_id = "harness-42"
+    agent.pending_request_id = "harness-42"
+    settings = Settings()
+    registry = ToolRegistry()
+    register_workspace_tools(registry, None, document)
+
+    approvals: list[str] = []
+
+    async def approve(call):
+        approvals.append(call.name)
+        return True
+
+    ctx = HarnessRunContext(
+        granted_scopes=frozenset({GRAPH_READ, GRAPH_MUTATE, CODE_EXECUTE}),
+        request_approval=approve,
+        settings_manager=settings,
+        harness_node_id=agent.id,
+        run_id="harness-42",
+        cancel=CancelToken(threading.Event()),
+    )
+
+    def invoke(name, **kwargs):
+        return asyncio.run(registry.invoke(
+            ToolCall(id="call-1", name=name, arguments=kwargs), ctx,
+        ))
+
+    def activate(pack):
+        # Use the REAL Workbench serializer, not a hand-built UI envelope.
+        host = HostContext(f"science_{pack}")
+        register_pack(host, pack)
+        kind = f"science_{pack}.workbench"
+        document.plugin_node_serializers[kind] = host._node_kinds[kind].serialize
+        settings.grants[f"science_{pack}"] = True
+
+    return document, agent, settings, registry, ctx, approvals, activate, invoke
+
+
+def test_catalog_is_file_discovered_and_approval_scoped(setup):
+    document, agent, settings, registry, ctx, approvals, activate, invoke = setup
+    assert registry.scopes_for("science.search") == frozenset({GRAPH_READ})
+    assert registry.approval_for("science.search") == "auto"
+    assert registry.scopes_for("science.run") == frozenset({CODE_EXECUTE, GRAPH_MUTATE})
+    assert registry.approval_for("science.run") == "once"
+
+    assert json.loads(invoke("science.search").content)["packs"] == []
+    activate("mathematics")
+    activate("core")
+    catalog = json.loads(invoke("science.search").content)
+    assert {p["pack_id"] for p in catalog["packs"]} == {"core", "mathematics"}
+    assert not catalog["operations"]
+    assert all(p["ready"] for p in catalog["packs"])
+    assert not approvals  # Discovery is read-only and never prompts.
+
+    result = json.loads(invoke("science.search", query="trapezoid").content)
+    assert result["total"] == 1
+    assert result["operations"][0]["id"] == "trapezoid"
+    assert result["operations"][0]["example"] == operations("mathematics")[1].example
+    assert result["operations"][0]["fields"][0]["key"] == "x"
+
+    page = json.loads(invoke("science.search", pack_id="mathematics", limit=1).content)
+    assert page["total"] == len(operations("mathematics"))
+    assert len(page["operations"]) == 1
+    assert page["next_offset"] == 1
+    second = json.loads(invoke("science.search", pack_id="mathematics", limit=1, offset=1).content)
+    assert second["operations"][0]["id"] != page["operations"][0]["id"]
+
+
+def test_disabled_packs_are_never_imported_or_run(setup, monkeypatch):
+    document, agent, settings, registry, ctx, approvals, activate, invoke = setup
+    import backend.harness.tools_scientific as tools
+
+    def unexpected(_pack):
+        raise AssertionError("ungranted operation module was imported")
+
+    monkeypatch.setattr(tools, "operations", unexpected)
+    assert json.loads(invoke("science.search", query="statistics").content)["operations"] == []
+    result = invoke("science.run", pack_id="mathematics", operation_id="trapezoid", inputs={})
+    assert result.is_error
+    assert "not enabled" in result.content
+    assert set(document.nodes) == {agent.id}
+
+    # Granted but not activated: do not create an opaque generic plugin node.
+    settings.grants["science_mathematics"] = True
+    result = invoke("science.run", pack_id="mathematics", operation_id="trapezoid", inputs={})
+    assert result.is_error and "not activated" in result.content
+    assert set(document.nodes) == {agent.id}
+
+
+def test_real_worker_creates_linked_verified_workbench_and_returns_receipt(setup):
+    document, agent, settings, registry, ctx, approvals, activate, invoke = setup
+    activate("mathematics")
+    op = next(o for o in operations("mathematics") if o.id == "trapezoid")
+    response = invoke("science.run", pack_id="mathematics", operation_id=op.id, inputs=op.example)
+
+    assert not response.is_error, response.content
+    body = json.loads(response.content)
+    assert body["ok"] and body["verified"]
+    assert body["values"]["integral"] == 6.0
+    assert body["summary"]
+    assert body["receipt"]["operationId"] == op.id
+    assert len(body["receipt"]["resultHash"]) == 64
+    assert len(body["receipt"]["receiptHash"]) == 64
+
+    node = document.nodes[body["node_id"]]
+    assert node.kind == "science_mathematics.workbench"
+    assert node.content == body["summary"]
+    assert node.x > agent.x
+    assert any(edge.source == agent.id and edge.target == node.id
+               for edge in document.edges.values())
+    assert readable_result(node.state.data, "mathematics")
+    assert node.state.data["latest"]["values"] == body["values"]
+    assert node.state.data["latest"]["provenance"] == body["receipt"]
+    state_wire = json.loads(document._plugin_state_wire(node)["science"])
+    assert state_wire["latest"]["operationId"] == op.id
+    assert state_wire["latest"]["provenance"]["receiptHash"] == body["receipt"]["receiptHash"]
+    assert approvals == ["science.run"]
+    assert document.command_log[-1].run_id == "harness-42"
+    assert document.command_log[-1].provenance == "agent"
+
+    agent.pending_request_id = None
+    assert document.undo_run("harness-42") == 1
+    assert set(document.nodes) == {agent.id}
+    assert not document.edges
+    document.redo()
+    assert body["node_id"] in document.nodes
+    assert readable_result(document.nodes[body["node_id"]].state.data, "mathematics")
+
+
+def test_invalid_inputs_and_worker_errors_leave_no_artifacts(setup, monkeypatch):
+    document, agent, settings, registry, ctx, approvals, activate, invoke = setup
+    activate("mathematics")
+    missing = invoke("science.run", pack_id="mathematics", operation_id="trapezoid", inputs={})
+    assert missing.is_error
+    assert set(document.nodes) == {agent.id}
+    assert not document.command_log
+
+    import backend.harness.tools_scientific as tools
+
+    async def timeout(*_args, **_kwargs):
+        raise ExecutionFailure("timeout", "Scientific calculation timed out", 501)
+
+    monkeypatch.setattr(tools, "execute_in_process", timeout)
+    op = operations("mathematics")[1]
+    failed = invoke("science.run", pack_id="mathematics", operation_id=op.id, inputs=op.example)
+    assert failed.is_error and json.loads(failed.content)["errorType"] == "timeout"
+    assert set(document.nodes) == {agent.id}
+    assert not document.command_log
+
+
+def test_forged_result_is_rejected_and_grant_revoke_discards_result(setup, monkeypatch):
+    document, agent, settings, registry, ctx, approvals, activate, invoke = setup
+    activate("core")
+    op = operations("core")[1]
+    import backend.harness.tools_scientific as tools
+
+    async def forged(*_args, **_kwargs):
+        return {"operationId": op.id, "inputs": {}, "values": {"answer": 999},
+                "summary": "This is not receipt-verified.", "provenance": {"sources": {}}}
+
+    monkeypatch.setattr(tools, "execute_in_process", forged)
+    rejected = invoke("science.run", pack_id="core", operation_id=op.id, inputs=op.example)
+    assert rejected.is_error and "unverified receipt" in rejected.content
+    assert set(document.nodes) == {agent.id}
+
+    async def revoke(pack, operation, inputs, sources, **kwargs):
+        answer = calculate_result(pack, operation, inputs, sources, input_units=kwargs["input_units"])
+        settings.grants["science_core"] = False
+        return answer
+
+    monkeypatch.setattr(tools, "execute_in_process", revoke)
+    rejected = invoke("science.run", pack_id="core", operation_id=op.id, inputs=op.example)
+    assert rejected.is_error and "grant changed" in rejected.content
+    assert set(document.nodes) == {agent.id}
+    assert not document.command_log
+
+
+def test_agent_or_workspace_change_during_worker_discard_result(setup, monkeypatch):
+    document, agent, settings, registry, ctx, approvals, activate, invoke = setup
+    activate("core")
+    op = operations("core")[1]
+    import backend.harness.tools_scientific as tools
+
+    async def switch_workspace(pack, operation, inputs, sources, **kwargs):
+        result = calculate_result(pack, operation, inputs, sources, input_units=kwargs["input_units"])
+        document.current_workspace_id = "different-workspace"
+        return result
+
+    monkeypatch.setattr(tools, "execute_in_process", switch_workspace)
+    rejected = invoke("science.run", pack_id="core", operation_id=op.id, inputs=op.example)
+    assert rejected.is_error and "workspace" in rejected.content
+    assert set(document.nodes) == {agent.id}
+    assert not document.command_log
+
+
+def test_stop_interrupts_worker_without_creating_node(setup, monkeypatch):
+    document, agent, settings, registry, ctx, approvals, activate, invoke = setup
+    activate("mathematics")
+    import backend.harness.tools_scientific as tools
+
+    async def block_until_cancel(*_args, cancel_event, **_kwargs):
+        await asyncio.wait_for(cancel_event.wait(), 1)
+        raise ExecutionFailure("cancelled", "Scientific calculation cancelled", 10)
+
+    monkeypatch.setattr(tools, "execute_in_process", block_until_cancel)
+    op = operations("mathematics")[1]
+
+    async def drive():
+        task = asyncio.create_task(registry.invoke(
+            ToolCall(id="run", name="science.run",
+                     arguments={"pack_id": "mathematics", "operation_id": op.id,
+                                "inputs": op.example}), ctx,
+        ))
+        await asyncio.sleep(0.1)
+        ctx.cancel.event.set()
+        with pytest.raises(RequestCancelledError):
+            await task
+
+    asyncio.run(drive())
+    assert set(document.nodes) == {agent.id}
+    assert not document.command_log
