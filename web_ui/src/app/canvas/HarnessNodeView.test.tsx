@@ -129,6 +129,35 @@ describe("HarnessNodeView", () => {
     }
   });
 
+  it("offers Ask and Auto-edit on Host, but reserves Autonomous for Isolated", async () => {
+    const user = userEvent.setup();
+    const data = makeData({ harnessPermissionMode: "ask" });
+    renderHarness(data);
+    await user.click(screen.getByRole("button", { name: "Agent settings" }));
+    const select = screen.getByRole("combobox", { name: "Permission mode" });
+    expect(select).toHaveValue("ask");
+    expect(screen.getByRole("option", { name: /Autonomous/ })).toBeDisabled();
+    await user.selectOptions(select, "auto_edit");
+    expect(data.onSetPermissionMode).toHaveBeenCalledExactlyOnceWith("auto_edit");
+  });
+
+  it("permits Autonomous under Isolated while preserving the task's old mode", async () => {
+    const user = userEvent.setup();
+    const data = makeData({
+      harnessExecutionProfile: "isolated",
+      harnessPermissionMode: "auto_edit",
+      harnessTaskPermissionMode: "ask",
+    });
+    renderHarness(data);
+    expect(screen.getByText("Task permission: Ask")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Agent settings" }));
+    const select = screen.getByRole("combobox", { name: "Permission mode" });
+    expect(screen.getByRole("option", { name: /Autonomous/ })).not.toBeDisabled();
+    await user.selectOptions(select, "autonomous");
+    expect(data.onSetPermissionMode).toHaveBeenCalledExactlyOnceWith("autonomous");
+    expect(screen.getByText("Task permission: Ask")).toBeInTheDocument();
+  });
+
   it("lists per-node rules by shell and allows removal", async () => {
     const user = userEvent.setup();
     const agent = makeData({
