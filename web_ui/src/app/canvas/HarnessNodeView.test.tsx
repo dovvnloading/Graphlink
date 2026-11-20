@@ -197,6 +197,22 @@ describe("HarnessNodeView", () => {
     expect(container.querySelector(".harness-approval-diff-removed")).toBeNull();
   });
 
+  it("does not allow approval when the current file could not be previewed", async () => {
+    const user = userEvent.setup();
+    const data = makeData({
+      harnessAwaitingApproval: true,
+      harnessApprovalToolName: "fs.write",
+      harnessApprovalSummary: "fs.write hidden.txt\nPreview unavailable: File exceeds the read limit.",
+      harnessApprovalSessionOffered: true,
+    });
+    renderHarness(data);
+    expect(screen.getByRole("alert")).toHaveTextContent("could not be previewed");
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Always allow this tool" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Deny" }));
+    expect(data.onDenyTool).toHaveBeenCalledOnce();
+  });
+
   it("offers the session-scoped grant only when the backend says it may", async () => {
     // PLAN §2.4: the backend decides (shell_policy), because it is the side
     // that knows the command is dangerous - the panel must not infer it.
