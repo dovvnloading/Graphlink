@@ -515,6 +515,23 @@ def _write_atomic_text(
     same filesystem. newline="" preserves caller-supplied LF/CRLF exactly.
     Existing POSIX mode bits (including executable) survive an edit.
     """
+    # The lower-level writer is also used directly by safety harnesses.
+    # A preview knows its granted root; never let a direct nested write
+    # publish through an unpinned, previously approved parent pathname.
+    # The first/only child of the trusted root has no mutable child parent.
+    if (approval_state is not None and approval_state.root is not None
+            and before_publish is None and target.parent != approval_state.root):
+        if target != approval_state.target:
+            raise WorkspaceError(_STALE_FILE_APPROVAL)
+        with _pinned_write_target(approval_state.root, target) as (pinned, verify_parent):
+            pinned_approval = replace(approval_state, target=pinned)
+            if not _file_approval_state_matches(pinned, pinned_approval):
+                raise WorkspaceError(_STALE_FILE_APPROVAL)
+            _write_atomic_text(
+                pinned, content, approval_state=pinned_approval, before_publish=verify_parent,
+            )
+        return
+
     target.parent.mkdir(parents=True, exist_ok=True)
     staged_path: Path | None = None
     try:
@@ -614,6 +631,8 @@ class FileApprovalState:
     target: Path
     digest: str | None
     version: tuple[int, int, int, int, int, int, int] | None
+    # Captured from the approved preview, not re-resolved at publication.
+    root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -670,14 +689,14 @@ def preview_harness_file_change(call: ToolCall, root: Path | None) -> FileApprov
             if call.name == "fs.edit":
                 raise WorkspaceError(f"Not a file: {path!r}.")
             current = ""
-            state = FileApprovalState(target, None, None)
+            state = FileApprovalState(target, None, None, root.resolve())
         else:
             if not target.is_file():
                 raise WorkspaceError(f"Not a file: {path!r}.")
             source = _read_bounded_bytes(target)
             current = source.decode("utf-8")
             state = FileApprovalState(
-                target, hashlib.sha256(source).hexdigest(), _file_version(target),
+                target, hashlib.sha256(source).hexdigest(), _file_version(target), root.resolve(),
             )
 
         if call.name == "fs.write":
