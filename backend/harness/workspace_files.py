@@ -6,6 +6,10 @@ resolve_under_root confinement and VCS-metadata gate as the agent's fs tools.
 """
 from __future__ import annotations
 
+import base64
+import binascii
+import heapq
+import json
 import os
 import subprocess
 import sys
@@ -29,52 +33,81 @@ def _inside(root: Path, relative_path: str) -> Path:
     return target
 
 
-def list_workspace_files(root: Path, relative_path: str = "") -> dict:
-    """List one directory at a time; never recursively walk a project tree.
+def _entry_key(entry: dict) -> tuple[bool, str, str]:
+    # Directories first, then case-insensitive names with an exact-name
+    # tie-breaker for filesystems which permit case-only name differences.
+    name = entry["name"]
+    return not entry["isDir"], name.casefold(), name
 
-    Bound discovery before sorting: a huge directory cannot produce an
-    unbounded server response or block the UI by enumerating every entry.
-    Escaping symlinks and VCS metadata do not appear in the listing.
+
+def _page_key(cursor: str | None) -> tuple[bool, str, str] | None:
+    if cursor is None:
+        return None
+    if not isinstance(cursor, str) or not 0 < len(cursor) <= 1024:
+        raise WorkspaceError("Invalid workspace page cursor.")
+    try:
+        is_dir, name = json.loads(base64.b64decode(cursor, altchars=b"-_", validate=True))
+        if type(is_dir) is not bool or not isinstance(name, str) or not 0 < len(name) <= 255:
+            raise ValueError("Malformed cursor")
+    except (ValueError, TypeError, UnicodeError, binascii.Error) as exc:
+        raise WorkspaceError("Invalid workspace page cursor.") from exc
+    return not is_dir, name.casefold(), name
+
+
+def _next_cursor(entry: dict) -> str:
+    payload = json.dumps([entry["isDir"], entry["name"]], ensure_ascii=False).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii")
+
+
+def list_workspace_files(root: Path, relative_path: str = "", cursor: str | None = None) -> dict:
+    """List a deterministic, cursor-paginated page of one directory.
+
+    Each page scans the directory but holds at most _MAX_ENTRIES + 1
+    candidates in memory. Entries beyond the first page remain reachable,
+    including in flat directories. Every result still passes the workspace
+    boundary and VCS-metadata checks before it can be returned.
     """
     root = root.resolve()
     directory = _inside(root, relative_path)
     if not directory.is_dir():
         raise WorkspaceError("Not a workspace directory.")
+    after = _page_key(cursor)
 
-    entries: list[dict] = []
-    truncated = False
-    try:
-        with os.scandir(directory) as iterator:
-            for child in iterator:
-                if child.name.casefold() in {".git", ".hg", ".svn"}:
-                    continue
-                try:
-                    target = _inside(root, str(Path(directory) / child.name))
-                    is_dir = target.is_dir()
-                    if not is_dir and not target.is_file():
+    def candidates():
+        try:
+            with os.scandir(directory) as iterator:
+                for child in iterator:
+                    if child.name.casefold() in {".git", ".hg", ".svn"}:
                         continue
-                    size = None if is_dir else target.stat().st_size
-                except (OSError, WorkspaceError):
-                    # Broken, unreadable, or out-of-root symlinks are not
-                    # navigable and must not leak outside the grant.
-                    continue
-                if len(entries) == _MAX_ENTRIES:
-                    truncated = True
-                    break
-                entries.append({
-                    "name": child.name,
-                    "path": target.relative_to(root).as_posix(),
-                    "isDir": is_dir,
-                    "size": size,
-                })
-    except OSError as exc:
-        raise WorkspaceError(f"Could not list workspace folder: {exc}") from exc
+                    try:
+                        target = _inside(root, str(Path(directory) / child.name))
+                        is_dir = target.is_dir()
+                        if not is_dir and not target.is_file():
+                            continue
+                        size = None if is_dir else target.stat().st_size
+                    except (OSError, WorkspaceError):
+                        # Broken, unreadable, or out-of-root symlinks never
+                        # appear on any page.
+                        continue
+                    entry = {
+                        "name": child.name,
+                        "path": target.relative_to(root).as_posix(),
+                        "isDir": is_dir,
+                        "size": size,
+                    }
+                    if after is None or _entry_key(entry) > after:
+                        yield entry
+        except OSError as exc:
+            raise WorkspaceError(f"Could not list workspace folder: {exc}") from exc
 
-    entries.sort(key=lambda entry: (not entry["isDir"], entry["name"].casefold()))
+    page = heapq.nsmallest(_MAX_ENTRIES + 1, candidates(), key=_entry_key)
+    more = len(page) > _MAX_ENTRIES
+    entries = page[:_MAX_ENTRIES]
     return {
         "path": directory.relative_to(root).as_posix() if directory != root else "",
         "entries": entries,
-        "truncated": truncated,
+        "truncated": more,
+        "nextCursor": _next_cursor(entries[-1]) if more else None,
     }
 
 

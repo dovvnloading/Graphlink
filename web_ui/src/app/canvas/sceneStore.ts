@@ -1175,8 +1175,9 @@ export class SceneStore {
 
   // Read-only workspace browsing is request/response: a file list or preview
   // belongs to the Files panel, not to the persisted canvas scene snapshot.
-  async listHarnessWorkspaceFiles(nodeId: string, path = ""): Promise<HarnessWorkspaceListing> {
-    const result: unknown = await this.transport.request("harness", "listWorkspaceFiles", [nodeId, path]);
+  async listHarnessWorkspaceFiles(nodeId: string, path = "", cursor?: string): Promise<HarnessWorkspaceListing> {
+    const args = cursor === undefined ? [nodeId, path] : [nodeId, path, cursor];
+    const result: unknown = await this.transport.request("harness", "listWorkspaceFiles", args);
     return parseHarnessWorkspaceListing(result);
   }
 

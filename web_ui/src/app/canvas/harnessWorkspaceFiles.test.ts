@@ -15,6 +15,9 @@ describe("workspace file response validation", () => {
     expect(() => parseHarnessWorkspaceListing({ ...value, entries: [{ name: "file", path: 42 }] }))
       .toThrow("Invalid workspace file entry");
     expect(() => parseHarnessWorkspaceListing(null)).toThrow("Invalid workspace folder response");
+    expect(parseHarnessWorkspaceListing({ ...value, nextCursor: "page-two" }).nextCursor).toBe("page-two");
+    expect(() => parseHarnessWorkspaceListing({ ...value, nextCursor: 7 }))
+      .toThrow("Invalid workspace folder response");
   });
 
   it("validates document preview payloads", () => {

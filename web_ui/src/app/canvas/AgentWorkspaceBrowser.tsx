@@ -8,12 +8,14 @@ export function HarnessWorkspaceFiles({
   onOpen,
   onReveal,
 }: {
-  onList: (path: string) => Promise<HarnessWorkspaceListing>;
+  onList: (path: string, cursor?: string) => Promise<HarnessWorkspaceListing>;
   onOpen: (path: string) => Promise<void>;
   onReveal: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [path, setPath] = useState("");
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [previousCursors, setPreviousCursors] = useState<(string | null)[]>([]);
   const requestRef = useRef(0);
   const [listing, setListing] = useState<HarnessWorkspaceListing | null>(null);
   const [loading, setLoading] = useState(false);
@@ -23,13 +25,15 @@ export function HarnessWorkspaceFiles({
   // Fetch on user actions, not in an effect: this avoids an extra mount
   // request and keeps one pending directory navigation from replacing a
   // newer result if its response happens to arrive last.
-  function loadFolder(nextPath: string) {
+  function loadFolder(nextPath: string, nextCursor: string | null = null, previous: (string | null)[] = []) {
     const request = ++requestRef.current;
     setPath(nextPath);
+    setCursor(nextCursor);
+    setPreviousCursors(previous);
     setLoading(true);
     setError("");
     setListing(null);
-    void onList(nextPath)
+    void (nextCursor === null ? onList(nextPath) : onList(nextPath, nextCursor))
       .then((result) => {
         if (request === requestRef.current) setListing(result);
       })
@@ -130,8 +134,24 @@ export function HarnessWorkspaceFiles({
               ))}
             </ul>
           )}
-          {listing?.truncated && (
-            <p className="harness-files-note">Showing the first 300 entries. Open a subfolder to narrow the list.</p>
+          {listing && (previousCursors.length > 0 || listing.nextCursor) && (
+            <div className="harness-files-pagination">
+              <button type="button" className="plan-node-button nodrag"
+                disabled={loading || previousCursors.length === 0}
+                onClick={() => loadFolder(path, previousCursors[previousCursors.length - 1] ?? null,
+                  previousCursors.slice(0, -1))}>
+                Previous page
+              </button>
+              <span>Page {previousCursors.length + 1}</span>
+              <button type="button" className="plan-node-button nodrag"
+                disabled={loading || !listing.nextCursor}
+                onClick={() => loadFolder(path, listing.nextCursor ?? null, [...previousCursors, cursor])}>
+                Next page
+              </button>
+            </div>
+          )}
+          {listing?.nextCursor && (
+            <p className="harness-files-note">Showing up to 300 entries per page. Use Next page to see more files.</p>
           )}
         </section>
       )}

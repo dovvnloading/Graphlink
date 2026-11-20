@@ -69,9 +69,10 @@ reach outside it. Git, Mercurial and Subversion metadata directories are exclude
 filesystem browser/tools. Changing workspace while the Agent is running is disabled; stop the task
 first.
 
-The Agent card has **Browse files** and **Reveal folder** . Browse opens folders one at a time and
-opens supported files in Document View (a **preview** , not an editor); Reveal folder opens the
-actual root in your file manager. For work done by the model:
+The Agent card has **Browse files** and **Reveal folder** . Browse opens folders one at a time,
+with alphabetically ordered pages of up to 300 entries (use **Next page** / **Previous page** even
+for a flat folder), and opens supported files in Document View (a **preview** , not an editor).
+Reveal folder opens the actual root in your file manager. For work done by the model:
 
 | Tool | Use |
 | --- | --- |
