@@ -271,7 +271,7 @@ function AgentSettingsPopover({
           </option>
         </select>
       </label>
-      <p>Dangerous commands, outside-workspace paths and network requests still ask. A looser mode takes effect on the next task.</p>
+      <p>Scripts, Python execution, dangerous commands, outside-workspace paths and network requests still ask. A looser mode takes effect on the next task. Reopening a graph resets permissions to Ask.</p>
       <label className="harness-node-settings-field">
         <span>
           <input
@@ -292,7 +292,7 @@ function AgentSettingsPopover({
       ) : (
         <p role="status">{engine === "docker" ? "Docker" : "Podman"} detected. Isolated runs shell and Python in a container (1 CPU, 512 MiB RAM; workspace at /workspace). Shell networking is {permissionMode === "autonomous" ? "approval-only for each network command" : allowNetwork ? "allowed for every task by the node setting" : "off by default and requestable with per-command approval"}. shell.session and python.exec stay offline; python.install may separately download approved PyPI wheels. Approved Web Research and provider calls still use the backend network. Pull python:3.12-slim with {engine} before your first run.</p>
       )}
-      <p>Network access only applies to Isolated shell.exec commands. Each command still needs approval. Settings are saved with this graph. Changes apply from the next task.</p>
+      <p>Network settings apply only to Isolated shell.exec. Permissions must be selected and grants approved again after reopening a saved or imported graph. Live changes apply from the next task.</p>
       <div className="harness-node-allow-rules">
         <strong>Allowed exact commands</strong>
         {rules.length === 0 ? (
