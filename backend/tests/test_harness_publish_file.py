@@ -77,7 +77,8 @@ def test_text_and_markdown_publish_as_document_nodes(publisher, filename, mime):
     node = _created(publisher, filename)
     assert node.kind == "document"
     assert node.title == filename
-    assert node.content == "# Hello\nsome content\n"
+    # Path.write_text uses CRLF on Windows; publication preserves actual bytes.
+    assert node.content == (root / filename).read_bytes().decode("utf-8")
     assert node.state.mime_type == mime
     assert node.state.byte_size == len(node.content.encode())
     assert not node.state.file_path  # Snapshot, never an unsafe live disk path.
