@@ -60,7 +60,7 @@ def _protocol_instructions(tools: tuple[ToolSpec, ...]) -> str:
         "fields: tool_calls (an array) and final_answer (a string).\n"
         "To use tools, put one or more objects with name and arguments_json "
         "in tool_calls; arguments_json MUST be a JSON-encoded object string "
-        'such as "{\"path\":\".\"}". Set final_answer to the empty string. '
+        'such as the encoded object {"path":"."}. Set final_answer to the empty string. '
         "To finish, use an empty tool_calls array and put your plain-language "
         "answer in final_answer. Never claim to have run a tool before its "
         "result is returned. Do not mix tool calls with a final answer.\n"
