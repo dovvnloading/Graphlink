@@ -67,6 +67,7 @@ from backend.tools import (
     GRAPH_MUTATE,
     GRAPH_READ,
     KNOWLEDGE_READ,
+    NET_FETCH,
     PROVIDER_CALL,
     RunContext,
     ToolRegistry,
@@ -74,14 +75,14 @@ from backend.tools import (
 )
 
 # The capability ceiling: read + write the workspace, run shell commands
-# in it, read the knowledge store, and (H4) spawn read-only subagents
+# in it, read the knowledge store, fetch approved web sources, and (H4) spawn read-only subagents
 # (provider.call - a spawn runs model turns). The grant is the CAPABILITY
 # ceiling; consent rides each tool's own approval policy (writes "once",
 # shell "always", subagent/read "auto") through the real approval panel
 # run_harness wires up - the scope-model split ADR-007 names and the
 # builder already follows.
 HARNESS_GRANTED_SCOPES = frozenset({
-    FS_READ, FS_WRITE, CODE_EXECUTE, KNOWLEDGE_READ, PROVIDER_CALL,
+    FS_READ, FS_WRITE, CODE_EXECUTE, KNOWLEDGE_READ, NET_FETCH, PROVIDER_CALL,
     # §3.2.6: "existing graph.* ... tools compose in unchanged", and §3.3's
     # invariant that run_id is stamped on all canvas mutations so undo-by-run
     # works across harness runs (HarnessRunContext carries run_id, which
@@ -101,6 +102,10 @@ HARNESS_GRANTED_SCOPES = frozenset({
 # scope genuinely is the right one for them; this is the §2.3 "narrow
 # waist" rule applied at the point of exposure rather than registration.
 _HARNESS_TOOL_NAME_EXCLUSIONS = ("builder.",)
+
+# Only Web Research adapters perform per-task domain consent. Do not expose
+# unrelated net.fetch tools merely because the harness grants that scope.
+_HARNESS_WEB_TOOLS = frozenset({"web.search", "web.fetch"})
 
 # The approval prompt's cap applies ONLY to the generic JSON-arguments
 # fallback. A disclosed command or file body is NEVER truncated - the
@@ -298,6 +303,11 @@ def _approval_summary(call: ToolCall, *, workspace_root: Path | None = None) -> 
         return f"shell.session {action} {name}".rstrip()
     if call.name in ("fs.write", "fs.edit"):
         return preview_harness_file_change(call, workspace_root).summary
+    if call.name == "web.fetch":
+        # Disclose the entire redirect target URL, not a truncated JSON blob.
+        return f"web.fetch domain {call.arguments['domain']}\nURL: {call.arguments['url']}"
+    if call.name == "web.search":
+        return f"web.search domain {call.arguments['domain']}\nQuery: {call.arguments['query']}"
     args = json.dumps(call.arguments, sort_keys=True, ensure_ascii=False)
     if call.name.startswith("fal.") or call.name == "science.run":
         # Disclose every Fal billing/binding field and every Scientific Workbench
@@ -518,7 +528,9 @@ async def run_harness(
         # A run can pause many times. Its request_id alone is not consent
         # for the next Python call: a delayed/replayed click must still name
         # the exact disclosure that was on screen when the user decided.
-        bind_approval = call.name in ("python.exec", "python.install") or call.name.startswith("fal.")
+        # Web domains are once-per-task, never session-wide. A unique token
+        # also prevents a stale click from approving a later redirect host.
+        bind_approval = call.name in ("python.exec", "python.install", "web.fetch", "web.search") or call.name.startswith("fal.")
         approval_token = uuid.uuid4().hex if bind_approval else ""
         handle.approval_token = approval_token
         node.state.harness_approval_id = handle.approval_token
@@ -656,7 +668,14 @@ async def run_harness(
             spec for spec in registry.specs()
             if (registry.scopes_for(spec.name) or frozenset()) <= HARNESS_GRANTED_SCOPES
             and not spec.name.startswith(_HARNESS_TOOL_NAME_EXCLUSIONS)
+            and (
+                NET_FETCH not in (registry.scopes_for(spec.name) or frozenset())
+                or spec.name in _HARNESS_WEB_TOOLS
+            )
         )
+        # Enforce this same catalog on calls returned by the model, even when
+        # a model fabricates a tool name that was never in its schemas.
+        ctx.offered_tool_names = frozenset(spec.name for spec in specs)
         # Probe the actual execution machine once per dispatcher session
         # and bound root, not on every model turn (or every follow-up task).
         # The fallback supports lightweight stand-alone dispatchers in tests.

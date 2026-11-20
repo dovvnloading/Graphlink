@@ -351,7 +351,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
   const [settingsPosition, setSettingsPosition] = useState<MenuPosition | null>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
-  const boundApproval = ["python.exec", "python.install"].includes(data.harnessApprovalToolName) || data.harnessApprovalToolName.startsWith("fal.");
+  const boundApproval = ["python.exec", "python.install", "web.fetch", "web.search"].includes(data.harnessApprovalToolName) || data.harnessApprovalToolName.startsWith("fal.");
   const fileApproval = data.harnessApprovalToolName === "fs.write" || data.harnessApprovalToolName === "fs.edit";
   // Never ask someone to approve an unseen mutation. The backend explains
   // when it cannot safely read the existing file to build the preview.

@@ -691,6 +691,8 @@ async def run_build(
         specs = tuple(
             spec for spec in registry.specs()
             if (registry.scopes_for(spec.name) or frozenset()) <= BUILDER_GRANTED_SCOPES
+            # web.* is a workspace-agent-only adapter in the shared registry.
+            and spec.name not in ("web.search", "web.fetch")
         )
         system_prompt = resolve_prompt_text("builder-executor")
         messages: list = [

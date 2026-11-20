@@ -203,6 +203,9 @@ _KNOWN_NON_NODE_FIELD_ACCESS_SHAPES = {
         # exercises exactly these two classes directly.
         {"root": "RequestCancelled", "file": "test_web_research_domain.py"},
         {"root": "exc", "file": "test_web_research_domain.py"},
+        # In tools_web.py, both `exc` bindings are ResearchFailure catches;
+        # .code is an error code, not the migrated SceneNode code field.
+        {"root": "exc", "file": "tools_web.py"},
     ),
     "language": (),
     # PR6's "document" kind reuses byte_size/mime_type/duration_seconds,
