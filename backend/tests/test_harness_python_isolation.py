@@ -305,6 +305,9 @@ def test_missing_container_engine_fails_closed_without_host_python(tmp_path, mon
         assert result.is_error
         assert "Docker or Podman" in result.content
         assert not (project / ".venv").exists()
-        assert not (tmp_path / "managed").joinpath("isolated-test").exists()
+        plan = planned_isolated_python_environment(
+            "isolated-test", project, is_scratch=False,
+        )
+        assert not plan.host_venv.exists(), "No virtualenv is created on the host"
     finally:
         repls.stop_all()
