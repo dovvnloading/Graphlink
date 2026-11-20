@@ -130,6 +130,8 @@ class PythonREPL:
         self.process = None
         self.last_run_failed = False
         self._boundary_prefix = ""
+        # A pipe read can coalesce the boundary line with output from another thread.
+        self._stdout_pending = ""
         # ADR-005 stage 5.2: the resource guard for whichever process
         # `start()` currently owns - see stop()'s own comment for why
         # closing this, not just process.kill(), is what makes "Stop"
@@ -170,6 +172,8 @@ class PythonREPL:
 
     def start(self):
         with self._lock:
+            # Never replay output belonging to a retired interpreter.
+            self._stdout_pending = ""
             # Adversarial-review fix: execute() calls start() again to
             # restart a dead REPL process (poll() is not None) WITHOUT
             # going through stop() first - stop() is what normally closes
@@ -330,7 +334,9 @@ while True:
         captured: list[str] = []
         captured_chars = 0
         truncated = False
-        pending = ""
+        # Bytes already read after the previous marker belong to this read,
+        # ahead of anything still in the child pipe.
+        pending, self._stdout_pending = self._stdout_pending, ""
         at_line_start = True
         status = None
         markers = {
@@ -391,6 +397,9 @@ while True:
             self.last_run_failed = True
             self.stop()
         else:
+            # os.read() may consume output past the exact completion line.
+            # Keep that suffix for the next execute() instead of losing it.
+            self._stdout_pending = pending
             self.last_run_failed = status == "ERROR"
 
         result = "".join(captured).strip()
@@ -404,6 +413,7 @@ while True:
         # 'kill'" from two threads both inside this method at once, one
         # nulling self.process out from under the other's later use of it).
         with self._lock:
+            self._stdout_pending = ""
             if self.process:
                 process = self.process
                 # ADR-005 stage 5.2: close the resource guard FIRST - on

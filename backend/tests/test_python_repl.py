@@ -15,8 +15,13 @@ test_execution_guard.py).
 
 from __future__ import annotations
 
+from io import StringIO
 from threading import Event, Thread
+from types import SimpleNamespace
 
+import pytest
+
+from graphlink_plugins.common import python_repl as python_repl_module
 from graphlink_plugins.common.python_repl import PythonREPL
 
 
@@ -228,3 +233,40 @@ def test_flushed_unterminated_python_output_is_live_before_completion():
         repl.stop()
         worker.join(timeout=8)
     assert not worker.is_alive()
+
+
+@pytest.mark.parametrize("tail, next_prefix", [
+    ("background-thread-output\n", ""),
+    ("background-", "thread-output\n"),
+])
+def test_completion_marker_chunk_preserves_stdout_for_next_execution(
+    monkeypatch, tmp_path, tail, next_prefix,
+):
+    """A read coalescing the nonce and later stdout must not eat its suffix."""
+    repl = PythonREPL(cwd=tmp_path, manage_cwd=False)
+    repl._boundary_prefix = "---GRAPHLINK_EXEC_BOUNDARY:fixture:"
+    # The byte-reader fixture is deterministic; no child timing or pipe
+    # scheduling can determine whether the marker and its suffix coalesce.
+    repl.process = SimpleNamespace(
+        stdin=StringIO(), stdout=StringIO(), stderr=None,
+        poll=lambda: None, kill=lambda: None, wait=lambda: None,
+    )
+    fragments = iter((
+        f"first\n{repl._boundary_prefix}OK---\n{tail}",
+        f"{next_prefix}second\n{repl._boundary_prefix}OK---\n",
+    ))
+    monkeypatch.setattr(
+        python_repl_module, "_stdout_fragments",
+        lambda _stream: iter((next(fragments),)),
+    )
+    live: list[str] = []
+    try:
+        assert repl.execute("pass") == "first"
+        assert repl.execute("pass", on_output=live.append) == "background-thread-output\nsecond"
+        assert "".join(live) == "background-thread-output\nsecond\n"
+        assert repl._stdout_pending == ""
+        # Stopping/restarting must not replay another interpreter's tail.
+        repl._stdout_pending = "stale\n"
+    finally:
+        repl.stop()
+    assert repl._stdout_pending == ""
