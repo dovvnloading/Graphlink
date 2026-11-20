@@ -269,7 +269,8 @@ def _is_dangerous_call(call: ToolCall) -> bool:
     return call.name in ("python.exec", "python.install") or shell_policy.requires_fresh_shell_approval(call.name, call.arguments)
 
 
-def _approval_summary(call: ToolCall, *, workspace_root: Path | None = None) -> str:
+def _approval_summary(call: ToolCall, *, workspace_root: Path | None = None,
+                      shell: str = "auto") -> str:
     """What the approval panel shows for one parked call. The mutating
     tools disclose their EFFECT verbatim (the command that will run, the
     content that will land on disk) rather than a JSON blob - and
@@ -284,7 +285,12 @@ def _approval_summary(call: ToolCall, *, workspace_root: Path | None = None) -> 
     if call.name == "shell.exec":
         # §2.4: disclose one line per thing that will actually run, so a
         # dangerous tail cannot hide behind a benign head in a chain.
-        return f"shell.exec\n{shell_policy.analyze(str(call.arguments.get('command') or '')).disclosure()}"
+        selected = shell_policy.effective_shell_for_rules(shell)
+        plan = shell_policy.analyze(
+            str(call.arguments.get("command") or ""),
+            shell="bash" if selected == "git-bash" else selected,
+        )
+        return f"shell.exec\n{plan.disclosure()}"
     if call.name == "shell.session":
         action = str(call.arguments.get("action") or "")
         name = str(call.arguments.get("name") or "")
@@ -539,17 +545,11 @@ async def run_harness(
             )
         else:
             node.state.harness_approval_summary = (
-                preview.summary if preview is not None else (
-                    f"shell.exec\n{shell_policy.analyze(str(call.arguments.get('command') or ''), shell=(
-                        'bash' if shell_policy.effective_shell_for_rules(ctx.harness_shell) == 'git-bash'
-                        else shell_policy.effective_shell_for_rules(ctx.harness_shell)
-                    )).disclosure()}" if call.name == "shell.exec"
-                    else _approval_summary(call)
-                )
+                preview.summary if preview is not None
+                else _approval_summary(call, shell=ctx.harness_shell)
             )
-        # Executable commands and interactive stdin always ask fresh, even
-        # when a previous call was approved for the session. The panel must
-        # not suggest session consent that the registry will reject.
+        # Shell commands can save only safe command prefixes, never tool-wide
+        # session consent. Python and interactive stdin still ask every time.
         node.state.harness_approval_session_offered = preview_available and (
             can_save_shell_rules if call.name == "shell.exec"
             else not bind_approval and not _is_dangerous_call(call)

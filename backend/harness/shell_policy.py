@@ -381,9 +381,7 @@ def shell_allow_rule_candidates(command: str, *, shell: str = "auto") -> list[st
     create persistent bypasses. This is intentionally narrower than what a
     human may approve *once*.
     """
-    from backend.harness.shell_selection import effective_shell
-
-    selected = effective_shell(shell)
+    selected = effective_shell_for_rules(shell)
     plan = analyze(command, shell="bash" if selected == "git-bash" else selected)
     if plan.is_dangerous or not plan.segments:
         return []
@@ -413,6 +411,7 @@ def shell_command_allowed(command: str, rules: list[str], *, shell: str = "auto"
         return False
     for candidate in candidates:
         shell_name, _, segment = candidate.partition(_SHELL_RULE_SEPARATOR)
+
         def matches(rule: str) -> bool:
             if not isinstance(rule, str):
                 return False
