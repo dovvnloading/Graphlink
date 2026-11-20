@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import json
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -346,22 +347,27 @@ async def run_suite(provider: str, model: str, *, base_url: str | None = None,
     }
 
 
+def _write_line(message: str) -> None:
+    """Write one CLI output line to stdout."""
+    sys.stdout.write(f"{message}\n")
+
+
 def _print_report(report: dict) -> None:
-    print(f"Workspace-agent benchmark: {report['provider']} / {report['model']}")
-    print("Case                         Pass  Seconds  Input tok  Output tok  Cost USD")
+    _write_line(f"Workspace-agent benchmark: {report['provider']} / {report['model']}")
+    _write_line("Case                         Pass  Seconds  Input tok  Output tok  Cost USD")
     for row in report["cases"]:
         cost = "n/a" if row["cost_usd"] is None else f"USD {row['cost_usd']:.6f}"
-        print(f"{row['name']:<28} {'yes' if row['passed'] else 'no':<5} "
+        _write_line(f"{row['name']:<28} {'yes' if row['passed'] else 'no':<5} "
               f"{row['seconds']:>7.2f} {row['prompt_tokens']:>10} "
               f"{row['completion_tokens']:>11} {cost:>9}")
         if not row["passed"]:
-            print(f"  FAIL: {row['detail']}")
+            _write_line(f"  FAIL: {row['detail']}")
     total = report["summary"]
     cost = "n/a (unknown price)" if total["cost_usd"] is None else f"USD {total['cost_usd']:.6f}"
-    print(f"Pass rate: {total['passed']}/{total['total']} ({total['pass_rate']:.1%})")
-    print(f"Elapsed: {total['seconds']:.2f}s; tokens: {total['prompt_tokens']} input + "
+    _write_line(f"Pass rate: {total['passed']}/{total['total']} ({total['pass_rate']:.1%})")
+    _write_line(f"Elapsed: {total['seconds']:.2f}s; tokens: {total['prompt_tokens']} input + "
           f"{total['completion_tokens']} output; estimated cost: {cost}")
-    print(f"Provider-reported usage: {total['provider_reported_turns']}/{total['metered_turns']} "
+    _write_line(f"Provider-reported usage: {total['provider_reported_turns']}/{total['metered_turns']} "
           "turns (remaining token counts are estimates)")
 
 
@@ -404,7 +410,7 @@ def main(argv: list[str] | None = None) -> int:
     _print_report(report)
     if args.json_out is not None:
         args.json_out.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-        print(f"JSON report: {args.json_out}")
+        _write_line(f"JSON report: {args.json_out}")
     return 0 if report["summary"]["passed"] == report["summary"]["total"] else 1
 
 

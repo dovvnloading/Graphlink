@@ -48,10 +48,13 @@ from __future__ import annotations
 
 import json
 import queue
+import sqlite3
 import subprocess
 import threading
 import time
 from pathlib import Path
+
+from backend.harness.transcript_index import sync_index
 
 TRANSCRIPT_FILENAME = "transcript.jsonl"
 
@@ -91,22 +94,34 @@ class _Writer:
         self._thread.start()
 
     def _run(self) -> None:
+        needs_index = False
         while True:
             item = self._queue.get()
             try:
                 if item is None:
                     return
                 line, done = item
-                try:
-                    with self.path.open("a", encoding="utf-8") as fh:
-                        fh.write(line)
-                        fh.flush()
-                except OSError:
-                    # Swallowed deliberately: a transcript we cannot write is
-                    # bad, but killing a live agent run over it is worse, and
-                    # the flush barrier below reports staleness by timing out
-                    # rather than by exception from a background thread.
-                    pass
+                if line:
+                    try:
+                        with self.path.open("a", encoding="utf-8") as fh:
+                            fh.write(line)
+                            fh.flush()
+                        needs_index = True
+                    except OSError:
+                        # Swallowed deliberately: a transcript we cannot write
+                        # must not kill a live agent run. The search sidecar
+                        # is derived data and can always catch up later.
+                        pass
+                if needs_index and (done is not None or self._queue.empty()):
+                    try:
+                        # Batch queued appends into one SQLite transaction
+                        # instead of opening and syncing FTS for every line.
+                        # A flush marker still indexes all preceding writes
+                        # before releasing its barrier.
+                        sync_index(self.path)
+                    except (OSError, sqlite3.Error):
+                        pass  # search backfills from JSONL on next read
+                    needs_index = False
                 if done is not None:
                     done.set()
             finally:
@@ -155,6 +170,10 @@ def _emit(path: Path, payload: dict) -> None:
     if writer is None:
         with path.open("a", encoding="utf-8") as fh:
             fh.write(line)
+        try:
+            sync_index(path)
+        except (OSError, sqlite3.Error):
+            pass
         return
     writer.write(line)
 
