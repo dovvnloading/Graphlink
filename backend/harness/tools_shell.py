@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import codecs
+import io
 import os
 import subprocess
 import sys
@@ -94,9 +95,12 @@ def _drain_bounded_output(stream, chunks: list[str], on_output=None) -> None:
                     return
                 yield piece
         else:
-            decoder = codecs.getincrementaldecoder(
-                getattr(stream, "encoding", None) or "utf-8"
-            )(errors="replace")
+            decoder = io.IncrementalNewlineDecoder(
+                codecs.getincrementaldecoder(
+                    getattr(stream, "encoding", None) or "utf-8"
+                )(errors="replace"),
+                translate=True,
+            )
             while True:
                 raw = os.read(fd, _OUTPUT_READ_CHUNK_CHARS)
                 piece = decoder.decode(raw, final=not raw)
