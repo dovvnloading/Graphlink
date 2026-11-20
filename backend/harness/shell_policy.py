@@ -358,13 +358,84 @@ def is_dangerous_command(command: str, *, shell: str | None = None) -> bool:
     return analyze(command, shell=shell).is_dangerous
 
 
+# Rules are deliberately exact shell+text prefixes, not regexes or tool-name
+# grants. A rule only covers a segment that equals its prefix or has an argument
+# boundary immediately after it; "git status" must not match "git statuses".
+# Store the effective shell because the syntax/meaning of a command can change
+# when the node switches between PowerShell, cmd and Bash.
+MAX_SHELL_ALLOW_RULES = 100
+_SHELL_RULE_SEPARATOR = "\t"
+
+
+def effective_shell_for_rules(shell: str) -> str:
+    from backend.harness.shell_selection import effective_shell
+
+    return effective_shell(shell)
+
+
+def shell_allow_rule_candidates(command: str, *, shell: str = "auto") -> list[str]:
+    """Return safe, shell-scoped prefixes for an explicitly approved command.
+
+    A chained command produces one prefix per segment. Unknown syntax,
+    dangerous commands, redirects, and inline interpreter programs cannot
+    create persistent bypasses. This is intentionally narrower than what a
+    human may approve *once*.
+    """
+    from backend.harness.shell_selection import effective_shell
+
+    selected = effective_shell(shell)
+    plan = analyze(command, shell="bash" if selected == "git-bash" else selected)
+    if plan.is_dangerous or not plan.segments:
+        return []
+    rules = []
+    for segment in plan.segments:
+        if (len(segment) > 256 or any(char in segment for char in "\r\n\t<>")
+                or "${" in segment):
+            return []
+        tokens = _tokens(segment)
+        # An inline program (possibly constructing a different shell command)
+        # is not a safe prefix to grant for future use.
+        if tokens and tokens[0] in {"sh", "bash", "zsh", "python", "python3",
+                                    "node", "ruby", "perl", "php", "cmd",
+                                    "powershell", "pwsh"} and any(
+            flag in tokens[1:] for flag in {"-c", "-command", "-encodedcommand",
+                                            "/c", "-e", "-r"}
+        ):
+            return []
+        rules.append(f"{selected}{_SHELL_RULE_SEPARATOR}{segment}")
+    return list(dict.fromkeys(rules))
+
+
+def shell_command_allowed(command: str, rules: list[str], *, shell: str = "auto") -> bool:
+    """Only bypass a prompt if *every* safe segment matches a stored prefix."""
+    candidates = shell_allow_rule_candidates(command, shell=shell)
+    if not candidates or not isinstance(rules, list):
+        return False
+    for candidate in candidates:
+        shell_name, _, segment = candidate.partition(_SHELL_RULE_SEPARATOR)
+        def matches(rule: str) -> bool:
+            if not isinstance(rule, str):
+                return False
+            recorded_shell, sep, prefix = rule.partition(_SHELL_RULE_SEPARATOR)
+            return bool(
+                sep and recorded_shell == shell_name and prefix
+                and (segment == prefix or (
+                    segment.startswith(prefix)
+                    and segment[len(prefix):len(prefix) + 1].isspace()
+                ))
+            )
+        if not any(matches(rule) for rule in rules):
+            return False
+    return True
+
+
 def requires_fresh_shell_approval(tool_name: str, arguments: dict) -> bool:
     """Fail closed for commands with effects a shell classifier cannot prove.
 
-    Shell and interpreter wrappers can carry arbitrary code regardless of the
-    first token. The blacklist/analyze() remains useful for disclosure, but
-    must NOT be the authority that lets a session grant bypass consent.
-    Every shell.exec and shell.session start/write requires fresh approval.
+    A tool-name session grant alone never bypasses execution approval.
+    shell.exec may instead use an explicit node-scoped, shell-specific prefix
+    rule, after validating every segment with shell_command_allowed().
+    shell.session start/write always require fresh approval.
     Read/list/stop retain the less intrusive existing grant behavior.
     """
     if tool_name == "shell.exec":

@@ -516,8 +516,16 @@ async def run_harness(
         # A run can pause many times. Its request_id alone is not consent
         # for the next Python call: a delayed/replayed click must still name
         # the exact disclosure that was on screen when the user decided.
-        bind_approval = call.name in ("python.exec", "python.install") or call.name.startswith("fal.")
+        bind_approval = call.name in ("python.exec", "python.install", "shell.exec") or call.name.startswith("fal.")
         approval_token = uuid.uuid4().hex if bind_approval else ""
+        shell_rules = (
+            shell_policy.shell_allow_rule_candidates(
+                str(call.arguments.get("command") or ""), shell=ctx.harness_shell,
+            ) if call.name == "shell.exec" else []
+        )
+        can_save_shell_rules = bool(shell_rules) and len(set(
+            node.state.harness_shell_allow_rules + shell_rules
+        )) <= shell_policy.MAX_SHELL_ALLOW_RULES
         handle.approval_token = approval_token
         node.state.harness_approval_id = handle.approval_token
         node.state.harness_awaiting_approval = True
@@ -531,12 +539,21 @@ async def run_harness(
             )
         else:
             node.state.harness_approval_summary = (
-                preview.summary if preview is not None else _approval_summary(call)
+                preview.summary if preview is not None else (
+                    f"shell.exec\n{shell_policy.analyze(str(call.arguments.get('command') or ''), shell=(
+                        'bash' if shell_policy.effective_shell_for_rules(ctx.harness_shell) == 'git-bash'
+                        else shell_policy.effective_shell_for_rules(ctx.harness_shell)
+                    )).disclosure()}" if call.name == "shell.exec"
+                    else _approval_summary(call)
+                )
             )
         # Executable commands and interactive stdin always ask fresh, even
         # when a previous call was approved for the session. The panel must
         # not suggest session consent that the registry will reject.
-        node.state.harness_approval_session_offered = preview_available and not bind_approval and not _is_dangerous_call(call)
+        node.state.harness_approval_session_offered = preview_available and (
+            can_save_shell_rules if call.name == "shell.exec"
+            else not bind_approval and not _is_dangerous_call(call)
+        )
         await bus.publish("scene")
         try:
             approved = await future
@@ -551,6 +568,18 @@ async def run_harness(
                 node.state.harness_approval_id = ""
             handle.approval_token = ""
         await bus.publish("scene")
+        # A shell prefix grant is made *only* from the backend's snapshotted
+        # command, never a client-supplied rule. A forged "always allow" on
+        # Python, a dangerous command, or a cancelled run is denied.
+        if approved == "shell_rule":
+            if (call.name != "shell.exec" or not can_save_shell_rules
+                    or cancel_event.is_set() or not _alive()):
+                return False
+            node.state.harness_shell_allow_rules[:] = list(dict.fromkeys(
+                node.state.harness_shell_allow_rules + shell_rules
+            ))
+            await bus.publish("scene")
+            return True
         # UI controls are not an authorization boundary. A forged or stale
         # client approval cannot permit a write whose preview was unavailable.
         if call.name == "python.install" and approved and preview_available:
@@ -589,6 +618,7 @@ async def run_harness(
         # None, which RunContext reads as "no session-scoped option exists",
         # leaving every prompt once-or-deny.
         session_grants=_session_grants_of(dispatcher, node.state.harness_workspace_id),
+        shell_allow_rules=node.state.harness_shell_allow_rules,
         set_plan=set_plan,
         ask_user=ask_user,
         cancel=CancelToken(cancel_event),

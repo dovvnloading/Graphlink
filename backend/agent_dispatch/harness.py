@@ -59,19 +59,22 @@ class HarnessDispatchOps(DispatcherParts):
         future.set_result(str(answer) if answer is not None else "")
         return True
 
-    def approve_harness_tool_for_session(self, request_id: str) -> bool:
+    def approve_harness_tool_for_session(self, request_id: str, approval_id: str = "") -> bool:
         """§2.4's graded consent: approve this call AND remember the tool for
         the rest of the agent session. Resolves the parked future with the
         sentinel string "session" rather than True - ToolRegistry.invoke
         reads that as "approve and add to ctx.session_grants". Kind-checked
         for the same reason answer_harness_question is."""
         handle = self._runs.get(request_id)
-        if handle is None or handle.kind != "harness" or handle.approval_token:
+        if handle is None or handle.kind != "harness":
             return False
         future = handle.approval_future
-        if future is None or future.done():
+        if future is None or future.done() or approval_id != handle.approval_token:
             return False
-        future.set_result("session")
+        # Non-tokenized tools retain their existing session grant. A shell
+        # approval is token-bound, and the harness callback separately
+        # verifies its command is safe before persisting any prefixes.
+        future.set_result("shell_rule" if handle.approval_token else "session")
         return True
 
     def harness_session_grants(self, workspace_id: str) -> set:
