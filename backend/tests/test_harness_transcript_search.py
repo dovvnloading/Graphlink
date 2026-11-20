@@ -102,6 +102,34 @@ def test_incompatible_fts_schema_is_recreated_from_jsonl(tmp_path):
     assert len(search_index(transcript, "ledger")) == 1
 
 
+@pytest.mark.parametrize("fts_columns", [
+    "content",
+    "content, role UNINDEXED",
+    "content, line_number UNINDEXED",
+    "content, role UNINDEXED, other UNINDEXED",
+    "role UNINDEXED, content, line_number UNINDEXED",
+])
+def test_incompatible_fts5_columns_rebuild_from_unchanged_jsonl(tmp_path, fts_columns):
+    transcript = transcript_path(tmp_path)
+    transcript.write_text(
+        '{"t":"msg","role":"user","content":"violet ledger"}\n', encoding="utf-8",
+    )
+    original = transcript.read_bytes()
+    with closing(sqlite3.connect(index_path(transcript))) as db:
+        db.execute(f"CREATE VIRTUAL TABLE transcript_fts USING fts5({fts_columns})")
+        db.commit()
+
+    hits = search_index(transcript, "violet")
+    assert len(hits) == 1 and hits[0]["role"] == "user"
+    assert hits[0]["line"] == 1
+    assert len(search_index(transcript, "ledger")) == 1
+    with closing(sqlite3.connect(index_path(transcript))) as db:
+        assert [column[1] for column in db.execute("PRAGMA table_info(transcript_fts)")] == [
+            "content", "role", "line_number",
+        ]
+    assert transcript.read_bytes() == original
+
+
 def test_corrupt_index_recovery_never_follows_symlink(tmp_path):
     transcript = transcript_path(tmp_path)
     transcript.write_text('{"t":"msg","role":"user","content":"poppy"}\n', encoding="utf-8")

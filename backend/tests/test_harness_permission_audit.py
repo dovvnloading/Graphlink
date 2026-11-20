@@ -111,7 +111,8 @@ def test_saved_autonomous_mode_and_grants_do_not_rearm():
 
 def test_archive_import_sanitizes_harness_grants_without_editing_other_nodes():
     data = {"nodes": [
-        {"node_type": "harness", "permission_mode": "autonomous",
+        {"node_type": "harness", "workspace_id": "source-agent",
+         "permission_mode": "autonomous",
          "task_permission_mode": "autonomous", "shell_allow_rules": ["bash\techo"],
          "network_always": True},
         {"node_type": "chat", "content": "preserved"},
@@ -122,7 +123,15 @@ def test_archive_import_sanitizes_harness_grants_without_editing_other_nodes():
     assert harness["shell_allow_rules"] == []
     assert harness["network_always"] is False
     assert harness["task_permission_mode"] == "autonomous"
+    assert harness["workspace_id"] != "source-agent"
+    assert len(harness["workspace_id"]) == 12
     assert chat == {"node_type": "chat", "content": "preserved"}
+
+    # Reimporting an archive is a new Agent incarnation with its own
+    # scratch/transcript identity, even while the source graph is open.
+    copy = {"nodes": [{"node_type": "harness", "workspace_id": "source-agent"}]}
+    _disarm_imported_harness_permissions(copy)
+    assert copy["nodes"][0]["workspace_id"] not in ("source-agent", harness["workspace_id"])
 
 
 def test_pending_file_approval_rejects_changed_path_and_content(tmp_path):

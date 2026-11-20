@@ -190,7 +190,10 @@ _AGENT_SPECS: tuple[dict[str, Any], ...] = (
 WRITE_TOOLS = tuple({
     **spec, "annotations": {
         "readOnlyHint": spec["name"] == "graphlink_get_agent_task",
-        "destructiveHint": spec["name"] == "graphlink_cancel_agent_task",
+        # Anything that mutates the scene or starts/stops an agent can
+        # overwrite persisted work or trigger side effects under Auto-edit.
+        # Only task status is safely non-destructive.
+        "destructiveHint": spec["name"] != "graphlink_get_agent_task",
         "idempotentHint": True,
     },
 } for spec in (*_WRITE_SPECS, *_AGENT_SPECS))

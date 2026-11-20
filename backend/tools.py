@@ -372,6 +372,10 @@ class ToolRegistry:
             # wins", and a remembered grant is not consent for `rm -rf`.
             session_granted = (
                 not forced
+                # Ordinary 'always' tools still support graded session consent.
+                # A graph deletion is different: its target must be reviewed
+                # independently, even if a stale name-wide grant exists.
+                and call.name != "graph.delete_node"
                 and ctx.session_grants is not None
                 and call.name in ctx.session_grants
             )
@@ -449,7 +453,9 @@ class ToolRegistry:
                         content="Execution request changed while approval was pending; submit it for fresh approval.",
                         is_error=True,
                     )
-                if decision == "session" and ctx.session_grants is not None and not forced and call.name != "shell.exec":
+                if (decision == "session"
+                        and call.name not in ("shell.exec", "graph.delete_node")
+                        and ctx.session_grants is not None and not forced):
                     ctx.session_grants.add(call.name)
                 elif fingerprint is not None:
                     ctx._approved_fingerprints.add(fingerprint)

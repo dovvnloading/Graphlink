@@ -28,6 +28,10 @@ def canonicalize_url(url: str) -> str:
         scheme = parsed.scheme.lower()
         hostname = parsed.hostname.lower().rstrip(".")
         port = parsed.port
+        # urlsplit accepts :0 and an empty : suffix; neither is a valid
+        # destination port. Never silently retarget consent to port 443.
+        if port == 0 or parsed.netloc.endswith(":"):
+            return ""
         # Even an empty userinfo component is forbidden (https://@host/).
         if parsed.username is not None or parsed.password is not None:
             return ""
@@ -38,7 +42,7 @@ def canonicalize_url(url: str) -> str:
     # urlsplit().hostname strips brackets from IPv6 literals; urlunsplit()
     # does not put them back, so a valid literal becomes an invalid netloc.
     netloc = f"[{hostname}]" if ":" in hostname else hostname
-    if port and not ((scheme == "https" and port == 443) or (scheme == "http" and port == 80)):
+    if port is not None and not ((scheme == "https" and port == 443) or (scheme == "http" and port == 80)):
         netloc = f"{netloc}:{port}"
     path = parsed.path or "/"
     return urlunsplit((scheme, netloc, path, parsed.query, ""))

@@ -535,6 +535,30 @@ class TestBeautifulSoupContentExtractorHtml:
         assert all(section in tight.text for section in tight.sections)
 
 
+    @pytest.mark.parametrize("container", ["li", "blockquote"])
+    def test_nested_tables_are_not_duplicated_or_crowd_out_following_text(
+        self, limits, token, container,
+    ):
+        prefix = "<ul>" if container == "li" else ""
+        suffix = "</ul>" if container == "li" else ""
+        html = (
+            f"<main><p>Report</p>{prefix}<{container}>Revenue"
+            "<table><tr><td>42</td><td>million</td></tr></table>"
+            f" After revenue</{container}>{suffix}<p>Notes follow.</p></main>"
+        )
+        expected = ["Report", "Revenue", "42 | million", "After revenue", "Notes follow."]
+        # Exact budget accommodates each datum once, but not the old
+        # duplicate cell text emitted by the enclosing prose element.
+        bounded = ResearchLimits(max_chars_per_source=len("\n".join(expected)))
+        doc = BeautifulSoupContentExtractor().extract(
+            _payload(body=html.encode("utf-8")), limits=bounded, token=token,
+        )
+
+        assert doc.text.splitlines() == expected
+        assert doc.sections == tuple(expected)
+        assert doc.truncated is False
+
+
     def test_falls_back_to_the_hostname_when_there_is_no_title_tag(self, limits, token):
         html = b"<html><body><p>No title here.</p></body></html>"
         extractor = BeautifulSoupContentExtractor()

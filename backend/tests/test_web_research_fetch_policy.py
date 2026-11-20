@@ -78,6 +78,22 @@ class TestCanonicalizeUrl:
     def test_rejects_an_invalid_port(self):
         assert canonicalize_url("https://example.com:not-a-port/") == ""
 
+    @pytest.mark.parametrize("url", (
+        "https://example.com:0/sensitive-path",
+        "https://example.com:000/",
+        "https://[2606:4700:4700::1111]:0/path",
+        "http://example.com:0/path",
+        "https://example.com:/path",
+        "https://[2606:4700:4700::1111]:/path",
+    ))
+    def test_rejects_zero_or_empty_explicit_port_instead_of_retargeting(self, url):
+        assert canonicalize_url(url) == ""
+        # Consent preflight must reject BEFORE DNS or disclosure; :0 must
+        # never be turned into a request for the HTTPS default port 443.
+        policy = FetchPolicy(resolver=_raising_resolver(AssertionError("DNS before consent")))
+        with pytest.raises(URLPolicyError, match="malformed"):
+            policy.validate_url(url)
+
 
 class TestIsPublicAddress:
     @pytest.mark.parametrize(
