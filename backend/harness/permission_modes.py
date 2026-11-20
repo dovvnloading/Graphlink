@@ -154,17 +154,43 @@ def _safe_python(source: object, root: Path) -> bool:
             value = node.value
             if _NETWORK_WORDS.search(value):
                 return False
-            if value.startswith(("/", "../", "./", "~", "\\")) or (
+            if value == ".." or value.startswith(("/", "../", "./", "~", "\\")) or (
                 "/" in value and not value.startswith(("http:", "https:"))
             ):
                 if not _within(root, value):
                     return False
+        # Path arithmetic / interpolated paths are not statically bound.
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div) and (
+            isinstance(node.left, (ast.Call, ast.Constant, ast.Name))
+            and isinstance(node.right, (ast.Constant, ast.Name))
+        ):
+            # Numeric division remains safe; path composition must ask.
+            if any(
+                isinstance(part, ast.Constant) and isinstance(part.value, str)
+                for part in (node.left, node.right)
+            ) or isinstance(node.left, ast.Call):
+                return False
         if isinstance(node, ast.Call):
             target = node.func.id if isinstance(node.func, ast.Name) else (
                 node.func.attr if isinstance(node.func, ast.Attribute) else ""
             )
             if not target or target in _PYTHON_UNSAFE_CALLS:
                 return False
+            if target in {"read_csv", "read_json", "read_excel", "to_csv", "to_json", "to_excel", "load", "save", "savefig"}:
+                if not node.args or not isinstance(node.args[0], ast.Constant):
+                    return False
+                first = node.args[0].value
+                if not isinstance(first, str) or not _within(root, first):
+                    return False
+            if target in {"write_text", "write_bytes", "read_text", "read_bytes", "mkdir"}:
+                # A Path acquired in a previous REPL turn might point outside
+                # the workspace. Only inspectable inline Path(...) is exempt.
+                owner = node.func.value if isinstance(node.func, ast.Attribute) else None
+                if not isinstance(owner, ast.Call):
+                    return False
+                constructor = owner.func.id if isinstance(owner.func, ast.Name) else ""
+                if constructor not in _PATH_CALLS:
+                    return False
             if target in _PATH_CALLS:
                 if not node.args or not isinstance(node.args[0], ast.Constant):
                     return False
@@ -175,6 +201,34 @@ def _safe_python(source: object, root: Path) -> bool:
         if isinstance(node, (ast.Lambda, ast.Yield, ast.YieldFrom, ast.Await)):
             return False
     return True
+
+
+def requires_explicit_workspace_approval(call, ctx) -> bool:
+    """Override even pre-existing session grants / shell prefix rules.
+
+    A previous 'always allow' must not authorize an out-of-root argument,
+    dangerous command or network request. This protection also applies
+    while using Ask or Auto-edit, not only Autonomous.
+    """
+    root = getattr(ctx, "harness_workspace_dir", None)
+    if not isinstance(root, Path) or not getattr(ctx, "harness_node_id", None):
+        return False
+    if call.name in {"fs.write", "fs.edit"}:
+        raw = call.arguments.get("path")
+        return not isinstance(raw, str) or not _within(root, raw)
+    if call.name == "shell.exec":
+        return call.arguments.get("network") is True or not _safe_shell(
+            call.arguments.get("command"), root, getattr(ctx, "harness_shell", "auto"),
+        )
+    if call.name == "shell.session":
+        action = call.arguments.get("action")
+        if action == "write":
+            return True
+        if action == "start":
+            return not _safe_shell(
+                call.arguments.get("command"), root, getattr(ctx, "harness_shell", "auto"),
+            )
+    return False
 
 
 def may_skip_workspace_approval(call, ctx) -> bool:
