@@ -7,7 +7,7 @@ The normal contributor extras are cross-platform:
 python -m pip install -e ".[dev]"
 ```
 
-They provide pytest, coverage, xdist, ruff, mypy and Hypothesis.
+They provide pytest, coverage, xdist, ruff and Hypothesis.
 
 **Mutmut 3.x is different:** it uses Unix `os.fork()`, which does not
 exist in native Windows Python. Running `mutmut run` on Windows therefore

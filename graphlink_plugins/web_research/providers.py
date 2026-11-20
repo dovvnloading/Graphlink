@@ -35,7 +35,7 @@ except ImportError:  # pragma: no cover - exercised through diagnostics
     # imported name is either the real thing or None, with the *_AVAILABLE
     # flag beside it saying which - callers check the flag before touching
     # the name (see dependency_status() and the guards in the providers
-    # below). mypy has no way to express a name whose type depends on what
+    # below). Static checkers cannot express a name whose type depends on what
     # happens to be installed, so it reads the fallback as clobbering the
     # imported class. That is what the ignore here and on the requests and
     # bs4 fallbacks below covers, and nothing more.

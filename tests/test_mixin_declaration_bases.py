@@ -7,8 +7,8 @@ Three of them now exist, one per mixin family:
     backend/agent_dispatch/_composed.py  DispatcherParts
 
 Each declares what a mixin's composing class provides, so a checker can read
-one mixin in isolation. Together they took `mypy backend` from 1,059 errors
-to 844 and eliminated the "*Ops has no attribute" class entirely.
+one mixin in isolation. They make cross-mixin attributes visible to static
+checkers without adding runtime behavior.
 
 Each also sits LAST in its composed class's MRO, immediately before object,
 which makes it the perfect place for an accident: anything defined outside

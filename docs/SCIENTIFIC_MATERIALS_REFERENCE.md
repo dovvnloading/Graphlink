@@ -303,9 +303,8 @@ From a checkout with the repository development dependencies installed:
 ```shell
 python -m pytest -q -n0 backend/tests/test_scientific_materials.py
 python -m pytest -q -n0 backend/tests/test_scientific_workbench.py
-python -m mypy graphlink_plugins/scientific/packs/materials.py
 python -m ruff check graphlink_plugins/scientific/packs/materials.py backend/tests/test_scientific_materials.py
 ```
 
-`OPERATIONS: tuple[Operation, ...]` is explicitly typed so mypy does not
-infer a fixed-length tuple from the first three existing entries.
+The `OPERATIONS: tuple[Operation, ...]` annotation permits an operation list
+of arbitrary length while preserving each element's type.

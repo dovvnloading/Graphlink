@@ -7,10 +7,9 @@ backend/domain/graph.py. They freely use `self.nodes`, `self.edges`,
 `self.command_log` and a handful of SceneDocument's own methods - correct at
 runtime, and invisible to a type checker looking at one mixin in isolation.
 
-That invisibility is most of why `[tool.mypy].files` could not be widened to
-backend/domain/. Nothing declared the contract between a mixin and the class
-composing it, so the tree could not be checked at all - not because it was
-badly typed, but because it was untypeable.
+Without a declared contract between a mixin and its composing class, type
+checkers cannot verify shared attributes in isolation. This declaration
+makes the contract explicit without affecting runtime behaviour.
 
 Same shape, and same fix, as settings_store/_composed.py's
 SettingsManagerParts. See that module's docstring for the full reasoning.

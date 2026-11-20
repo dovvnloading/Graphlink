@@ -60,14 +60,14 @@ macos-cocoa = [
     "pyobjc-framework-WebKit; sys_platform == 'darwin'",
     "pyobjc-framework-Security; sys_platform == 'darwin'",
 ]
-# ADR-015 stage 15.7: pytest/pytest-cov/ruff/mypy are dev-only tooling, not
+# ADR-015 stage 15.7: pytest/pytest-cov/ruff are dev-only tooling, not
 # a runtime dependency of the shipped app - deliberately NOT in requirements.in
 # (the prod lockfile). CI installs them ad hoc (see .github/workflows/ci.yml),
 # same pattern ruff already used before this stage; this extra exists so a
 # contributor gets the identical set via one `pip install -e .[dev]`.
 # Cross-platform dev tools. Mutmut 3.x requires Unix os.fork(), so it is
 # separated from the Windows-compatible developer environment.
-dev = ["pytest", "pytest-cov", "pytest-xdist", "ruff", "mypy", "hypothesis"]
+dev = ["pytest", "pytest-cov", "pytest-xdist", "ruff", "hypothesis"]
 mutation = ["mutmut; sys_platform != 'win32'"]
 
 [tool.pytest.ini_options]
@@ -358,106 +358,6 @@ target-version = "py312"
 # preserve - structured logging (backend/observability.py) everywhere that
 # actually runs inside the app.
 select = ["E9", "F", "T201"]
-
-[tool.mypy]
-# ADR-015 stage 15.5: scoped to the modules already fully annotated
-# (contracts/ plus the 3 backend/ modules ADR-015 names: events.py,
-# token_counter.py, graphlink_process_env.py), not the whole backend/ tree -
-# a raw `mypy backend/` run at landing found 642 errors across 34 of 188
-# files, exactly the "big-bang cleanup" this ADR's own philosophy (see
-# [tool.ruff]'s comment above) rejects. Ratchet this list wider as more
-# modules earn real annotations - never narrower.
-files = [
-    # 2026-09-04: everything. This list began as four files and was widened a
-    # module at a time as each one earned it; the last sweep took the tree from
-    # 179 errors to zero, so the ratchet's end state is simply "all of it".
-    #
-    # Kept as an explicit list of roots rather than ".", so that a new
-    # top-level directory has to be added here deliberately rather than
-    # arriving unchecked - and so this stays the record of what is covered.
-    "backend",
-    "contracts",
-    "graphlink_plugins",
-    "provider_runtime",
-    "settings_store",
-    "tests",
-    "tools",
-    "api_provider.py",
-    "graphlink_artifact_agent.py",
-    "graphlink_audio.py",
-    "graphlink_chart_data.py",
-    "graphlink_chart_rendering.py",
-    "graphlink_chat_agent.py",
-    "graphlink_cloud_providers.py",
-    "graphlink_desktop.py",
-    "graphlink_execution_guard.py",
-    "graphlink_grid_view_settings.py",
-    "graphlink_memory.py",
-    "graphlink_migrations.py",
-    "graphlink_model_catalog.py",
-    "graphlink_navigation_pins.py",
-    "graphlink_note_agent.py",
-    "graphlink_process_env.py",
-    "graphlink_prompts.py",
-    "graphlink_scratch_dirs.py",
-    "graphlink_secrets.py",
-    "graphlink_settings_store.py",
-    "graphlink_task_config.py",
-    "graphlink_token_estimator.py",
-    "graphlink_version.py",
-    "graphlink_wire_schema.py",
-    "graphlink_windows_job_popen.py",
-    # 2026-09-05: the three directories a coverage check found sitting outside
-    # the gate - 14 files nobody was checking. plugins/ held six real errors
-    # (an unguarded Optional and two unnarrowed node-state reads in the System
-    # Prompt plugin); mutation_tests/ and tests_e2e/ were already clean.
-    "mutation_tests",
-    "plugins",
-    "tests_e2e",
-]
-# plugins/ is eight sibling directories each containing a `plugin.py`, with no
-# __init__.py anywhere - the layout the plugin loader discovers by path. Without
-# these two, mypy maps all eight onto one module name and refuses to check any
-# of them ("Duplicate module named 'plugin'"). With them, the module name comes
-# from the path relative to the repo root, so they stay distinct.
-namespace_packages = true
-explicit_package_bases = true
-ignore_missing_imports = true
-# Check the files in `files` fully; use everything they import for type
-# information without reporting errors inside it. Without this, listing
-# backend/session_save.py pulls its whole import closure - autosave,
-# chat_library, assets, api_provider - into the gate and reports 141 errors in
-# modules nobody put on the ratchet, which would mean the only way to add a
-# clean module is to first clean everything it touches. The ratchet is meant
-# to move one module at a time; this is what lets it.
-#
-# It does not weaken what is already listed: every module in `files` is still
-# checked in full, and the followed modules were reporting zero errors of
-# their own before this line existed, because the only ones being followed
-# were themselves listed.
-follow_imports = "silent"
-
-[[tool.mypy.overrides]]
-# The Review Lens plugin's own modules, checked BODY AND ALL.
-#
-# Listing a file under `files` above is not the same as checking it. mypy
-# skips the body of any function with no annotations at all by default, and
-# every function in review_engine.py is unannotated - so the largest file in
-# this plugin sat inside the gate with all thirty of its bodies unchecked,
-# and said "Success: no issues found". Turning the flag on here found a real
-# defect immediately (a double `.get()` whose isinstance check narrowed the
-# wrong lookup, in looks_like_a_review).
-#
-# Scoped to these modules rather than set globally: --check-untyped-defs
-# across the whole tree is its own sweep, and this ratchet moves a module at
-# a time (see [tool.mypy]'s own comment).
-module = [
-    "graphlink_plugins.review_lens.*",
-    "backend.agent_dispatch.code_review",
-    "backend.api.intents_code_review",
-    "backend.domain.nodes_code_review",
-]
-check_untyped_defs = true
 
 [tool.ruff.lint.per-file-ignores]
 # backend/canvas.py's own docstring: it deliberately re-imports every

@@ -7,9 +7,8 @@ in the two extracted per-kind mixins alone.
 
 The repetition is the smaller half. The larger half is that
 `SceneNode.state` is typed `NodeState | None` against a marker class with no
-fields, so EVERY one of those field accesses is unverifiable - 327 of the
-845 remaining `mypy backend` errors are exactly this, and it is why
-[tool.mypy].files could not widen to backend/domain/.
+fields, so its per-kind field accesses are not verifiable without
+narrowing the node's state type.
 
 WHY THIS WORKS, when a `state = node.state` alias does not:
 tests/test_node_state_migration.py requires every migrated field to be read
