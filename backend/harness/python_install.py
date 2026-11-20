@@ -16,7 +16,7 @@ import subprocess
 import sys
 import threading
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from api_provider import RequestCancelledError
 from backend.harness.python_env import (
@@ -108,7 +108,7 @@ def workspace_install_binding(ctx: RunContext) -> tuple[str, Path, bool]:
 
 def planned_install_interpreter(
     workspace_id: str, root: Path, *, is_scratch: bool, profile: str = "host",
-) -> Path:
+) -> Path | PurePosixPath:
     """Select without creating a venv, for the exact approval disclosure."""
     if normalize_execution_profile(profile) == "isolated":
         return planned_isolated_python_environment(
@@ -122,7 +122,7 @@ def planned_install_interpreter(
 
 
 def install_approval_summary(
-    packages: list[str], interpreter: Path | None, *, isolated: bool = False,
+    packages: list[str], interpreter: Path | PurePosixPath | None, *, isolated: bool = False,
 ) -> str:
     target = str(interpreter) if interpreter is not None else "(no workspace bound)"
     summary = "python.install\n--- environment\n" + target + "\n--- packages\n" + "\n".join(packages)
@@ -252,7 +252,7 @@ def _checked_isolated_command(
 
 
 def _install_in_worker(
-    interpreter: Path, cwd: Path, packages: list[str], cancel_event,
+    interpreter: Path | PurePosixPath, cwd: Path, packages: list[str], cancel_event,
     cache_root: Path, *, isolated_plan: IsolatedPythonPlan | None = None,
 ) -> ToolResult:
     # Concurrent tools cannot download into the same wheel filename at once.
@@ -370,7 +370,7 @@ async def install_packages(
             workspace_id, root, is_scratch=is_scratch, profile=profile,
         )
         approved = getattr(ctx, "python_install_approved_interpreter", None)
-        if not isinstance(approved, Path) or approved != planned:
+        if not isinstance(approved, (Path, PurePosixPath)) or approved != planned:
             return ToolResult(
                 content="Python environment changed or was not bound to this install approval; ask again.",
                 is_error=True,
