@@ -9378,6 +9378,21 @@ mark.document-view-search-match-current {
   user-select: text;
 }
 
+/* Reviewable fs.write/fs.edit diffs inside the agent's approval panel. */
+.harness-node .harness-approval-diff-header {
+  color: var(--gl-surface-text-secondary);
+  font-weight: 600;
+}
+.harness-node .harness-approval-diff-hunk {
+  color: var(--gl-semantic-status-warning, var(--gl-surface-text-secondary));
+}
+.harness-node .harness-approval-diff-added {
+  color: var(--gl-semantic-status-success, var(--gl-surface-text-primary));
+}
+.harness-node .harness-approval-diff-removed {
+  color: var(--gl-semantic-status-error, var(--gl-surface-text-primary));
+}
+
 /* -- Card buttons ---------------------------------------------------------
 
    Every button on this card was the same neutral chip, so "Start build"
