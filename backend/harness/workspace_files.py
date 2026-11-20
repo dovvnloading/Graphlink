@@ -191,7 +191,18 @@ def reveal_workspace(root: Path) -> None:
     folder = str(root.resolve())
     if sys.platform == "win32":
         os.startfile(folder)  # type: ignore[attr-defined]  # Windows only
-    elif sys.platform == "darwin":
-        subprocess.Popen(["open", folder], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    else:
-        subprocess.Popen(["xdg-open", folder], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return
+
+    # Running the opener in an async intent's worker thread is safe to
+    # wait for. A successful Popen only confirms it launched, not that the
+    # native file manager actually accepted the folder.
+    opener = "open" if sys.platform == "darwin" else "xdg-open"
+    process = subprocess.Popen([opener, folder], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        exit_code = process.wait(timeout=15)
+    except subprocess.TimeoutExpired as exc:
+        process.kill()
+        process.wait()
+        raise WorkspaceError("The file manager did not respond.") from exc
+    if exit_code != 0:
+        raise WorkspaceError(f"File manager exited with status {exit_code}.")

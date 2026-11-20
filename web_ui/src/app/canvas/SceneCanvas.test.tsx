@@ -429,20 +429,62 @@ describe("toFlowNodes (R8a Open Document View wiring)", () => {
     expect(node).toBeDefined();
     const actions = node!.data as {
       onListWorkspaceFiles: (path: string, cursor?: string) => Promise<unknown>;
-      onOpenWorkspaceFile: (path: string) => Promise<void>;
+      onOpenWorkspaceFile: (path: string, expectedRoot: string) => Promise<void>;
       onRevealWorkspace: () => void;
     };
     await actions.onListWorkspaceFiles("docs");
     await actions.onListWorkspaceFiles("docs", "page-two");
-    await actions.onOpenWorkspaceFile("docs/readme.md");
+    await actions.onOpenWorkspaceFile("docs/readme.md", "/project");
     actions.onRevealWorkspace();
     expect(list).toHaveBeenNthCalledWith(1, "agent-1", "docs", undefined);
     expect(list).toHaveBeenNthCalledWith(2, "agent-1", "docs", "page-two");
-    expect(read).toHaveBeenCalledWith("agent-1", "docs/readme.md");
+    expect(read).toHaveBeenCalledWith("agent-1", "docs/readme.md", "/project");
     expect(onOpenDocumentView).toHaveBeenCalledWith("# Hello", "Workspace: docs/readme.md");
     expect(reveal).toHaveBeenCalledWith("agent-1");
   });
 
+
+  it("only the newest cross-node workspace preview can open Document View", async () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "agent-a", kind: "harness" }), baseNode({ id: "agent-b", kind: "harness" })],
+      edges: [],
+    });
+    const store = makeStore();
+    let finishA!: (value: { path: string; content: string; truncated: boolean }) => void;
+    const read = vi.spyOn(store, "readHarnessWorkspaceFile").mockImplementation((id) => {
+      if (id === "agent-a") {
+        return new Promise((resolve) => { finishA = resolve; });
+      }
+      return Promise.resolve({ path: "b.md", content: "Newer preview", truncated: false });
+    });
+    const opened = vi.fn();
+    const nodes = toFlowNodes(scene, store, opened);
+    const a = nodes.find((node) => node.id === "agent-a")!.data as {
+      onOpenWorkspaceFile: (path: string, expectedRoot: string) => Promise<void>;
+    };
+    const b = nodes.find((node) => node.id === "agent-b")!.data as typeof a;
+
+    const older = a.onOpenWorkspaceFile("a.md", "/project-a");
+    await b.onOpenWorkspaceFile("b.md", "/project-b");
+    expect(opened).toHaveBeenCalledExactlyOnceWith("Newer preview", "Workspace: b.md");
+    finishA({ path: "a.md", content: "Older preview", truncated: false });
+    await older;
+    expect(opened).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenNthCalledWith(1, "agent-a", "a.md", "/project-a");
+    expect(read).toHaveBeenNthCalledWith(2, "agent-b", "b.md", "/project-b");
+
+    const pendingClose = a.onOpenWorkspaceFile("a.md", "/project-a");
+    store.cancelWorkspacePreview(); // Document View closed while the read is pending.
+    finishA({ path: "a.md", content: "After close", truncated: false });
+    await pendingClose;
+    expect(opened).toHaveBeenCalledTimes(1);
+
+    const pendingNavigation = a.onOpenWorkspaceFile("a.md", "/project-a");
+    store.newChat(); // A canvas navigation invalidates the pending preview.
+    finishA({ path: "a.md", content: "After navigation", truncated: false });
+    await pendingNavigation;
+    expect(opened).toHaveBeenCalledTimes(1);
+  });
 
   it("a chat node's onOpenDocumentView invokes the third-argument callback with its own content", () => {
     const scene = baseScene({

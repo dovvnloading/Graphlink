@@ -46,8 +46,12 @@ def harness_with_folder(folder="", trusted=()):
     document, bus = SceneDocument(), FakeBus()
     node = document.add_harness_node(0, 0, "Read files")
     node.state.harness_workspace_path = str(folder)
-    dispatcher = type("Dispatcher", (), {"_settings_manager": FakeSettings(trusted)})()
-    intents_harness.register_harness_intents(bus, document, NotificationState(), dispatcher)
+    settings = FakeSettings(trusted)
+    notifications = NotificationState()
+    dispatcher = type("Dispatcher", (), {"_settings_manager": settings})()
+    intents_harness.register_harness_intents(bus, document, notifications, dispatcher)
+    bus.settings = settings
+    bus.notifications = notifications
     return bus, node
 
 
@@ -247,3 +251,50 @@ def test_reveal_never_accepts_a_client_supplied_path(tmp_path, monkeypatch):
     monkeypatch.setattr(intents_harness_workspace, "reveal_workspace", lambda root: revealed.append(root))
     bus.call("revealWorkspace", node.id)
     assert revealed == [project.resolve()]
+
+
+def test_revocation_rejects_a_file_from_an_outdated_listing(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "notes.md").write_text("project version")
+    bus, node = harness_with_folder(project, trusted=[str(project.resolve())])
+    scratch = workspace_dir(node.state.harness_workspace_id)
+    scratch.mkdir(parents=True, exist_ok=True)
+    (scratch / "notes.md").write_text("scratch version")
+
+    listing = bus.call("listWorkspaceFiles", node.id)
+    assert listing["root"] == str(project.resolve())
+    bus.settings.trusted.clear()
+    assert bus.call("listWorkspaceFiles", node.id)["isScratch"] is True
+    with pytest.raises(WorkspaceError, match="Workspace folder changed"):
+        bus.call("readWorkspaceFile", node.id, "notes.md", listing["root"])
+    # An unchanged, still-trusted listing can be read normally.
+    bus.settings.trusted.append(str(project.resolve()))
+    assert bus.call("readWorkspaceFile", node.id, "notes.md", listing["root"])["content"] == "project version"
+
+
+def test_reveal_reports_a_nonzero_native_opener_exit(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setattr(files_module.sys, "platform", "linux")
+    commands = []
+
+    class FailedOpener:
+        def wait(self, timeout):
+            assert timeout > 0
+            return 3
+
+    def fake_popen(command, **kwargs):
+        commands.append((command, kwargs))
+        return FailedOpener()
+
+    monkeypatch.setattr(files_module.subprocess, "Popen", fake_popen)
+    with pytest.raises(WorkspaceError, match="status 3"):
+        files_module.reveal_workspace(project)
+
+    bus, node = harness_with_folder(project, trusted=[str(project.resolve())])
+    bus.call("revealWorkspace", node.id)
+    assert commands[0][0] == ["xdg-open", str(project.resolve())]
+    assert bus.notifications.msg_type == "error"
+    assert "status 3" in bus.notifications.message
+    assert "notification" in bus.published

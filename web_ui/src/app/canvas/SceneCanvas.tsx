@@ -941,11 +941,20 @@ function makeHarnessFns(id: string, liveRef: { current: DispatcherLive }) {
     onPickWorkspace: () => liveRef.current.store.pickHarnessWorkspace(id),
     onUseScratch: () => liveRef.current.store.useHarnessScratch(id),
     onListWorkspaceFiles: (path: string, cursor?: string) => liveRef.current.store.listHarnessWorkspaceFiles(id, path, cursor),
-    onOpenWorkspaceFile: async (path: string) => {
-      const { store, onOpenDocumentView } = liveRef.current;
-      const file = await store.readHarnessWorkspaceFile(id, path);
-      onOpenDocumentView(harnessFileDocumentMarkdown(file), `Workspace: ${file.path}`);
+    onOpenWorkspaceFile: async (path: string, expectedRoot: string) => {
+      const { store, onOpenDocumentView, n } = liveRef.current;
+      const workspacePath = n.harnessWorkspacePath;
+      const request = store.beginWorkspacePreview();
+      const file = await store.readHarnessWorkspaceFile(id, path, expectedRoot);
+      // Newer clicks, a Document View close, a trust change, a canvas
+      // navigation, or a rebind all make this result stale.
+      if (store.isCurrentWorkspacePreview(request) &&
+          liveRef.current.n.harnessWorkspacePath === workspacePath) {
+        onOpenDocumentView(harnessFileDocumentMarkdown(file), `Workspace: ${file.path}`);
+      }
     },
+    onWorkspaceTrustChanged: (listener: () => void) =>
+      liveRef.current.store.subscribeWorkspaceTrust(listener),
     onRevealWorkspace: () => liveRef.current.store.revealHarnessWorkspace(id),
     onSetShell: (shell: string) => liveRef.current.store.setHarnessShell(id, shell),
     onRemoveShellAllowRule: (rule: string) => liveRef.current.store.removeHarnessShellAllowRule(id, rule),

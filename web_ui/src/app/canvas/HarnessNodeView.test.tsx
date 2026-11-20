@@ -55,6 +55,7 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
       root: "/scratch/ws1", isScratch: true, path: "", entries: [], truncated: false,
     }),
     onOpenWorkspaceFile: vi.fn().mockResolvedValue(undefined),
+    onWorkspaceTrustChanged: vi.fn(() => () => {}),
     onRevealWorkspace: vi.fn(),
     onSetShell: vi.fn(),
     onRemoveShellAllowRule: vi.fn(),
@@ -767,7 +768,7 @@ describe("HarnessNodeView", () => {
     const file = await screen.findByRole("button", { name: "Open notes.md in Document View" });
     await user.click(file);
     expect(data.onListWorkspaceFiles).toHaveBeenCalledWith("");
-    expect(data.onOpenWorkspaceFile).toHaveBeenCalledWith("notes.md");
+    expect(data.onOpenWorkspaceFile).toHaveBeenCalledWith("notes.md", "/project");
     await user.click(screen.getByRole("button", { name: "Reveal in file manager" }));
     expect(data.onRevealWorkspace).toHaveBeenCalledOnce();
   });
