@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import threading
 
 import pytest
 
+from api_provider import RequestCancelledError
 from backend.harness import retry as retry_module
 from backend.harness import transcript as transcript_module
 from backend.harness.retry import (
@@ -33,7 +35,7 @@ from backend.harness.retry import (
     classify_fault,
 )
 from backend.harness.shell_policy import analyze, is_dangerous_command
-from backend.providers.base import ToolCall, ToolSpec
+from backend.providers.base import CancelToken, ToolCall, ToolSpec
 from backend.tools import (
     CODE_EXECUTE,
     GRAPH_READ,
@@ -437,6 +439,56 @@ class TestPythonExec:
                 _tool_ctx(second),
             )
             assert result.content.strip() == "other-ws"
+        finally:
+            repls.stop_all()
+
+    def test_python_streams_before_return_and_stop_retires_the_interpreter(self, tmp_path, monkeypatch):
+        registry, repls, workspace = self._setup(tmp_path, monkeypatch)
+        cancel = threading.Event()
+        ctx = _tool_ctx(workspace, cancel=CancelToken(cancel))
+        chunks: list[str] = []
+        ctx.on_tool_output = chunks.append
+        code = (
+            "marker = 42; import time; print('started'); "
+            "time.sleep(30); open('too_late.txt', 'w').write('bad')"
+        )
+
+        async def go():
+            task = asyncio.create_task(registry.invoke(
+                ToolCall(id="stream", name="python.exec", arguments={"code": code}), ctx,
+            ))
+            for _ in range(1500):
+                if "started" in "".join(chunks):
+                    break
+                await asyncio.sleep(0.02)
+            assert "started" in "".join(chunks), "Python stdout must arrive before return"
+            assert not task.done()
+            cancel.set()
+            with pytest.raises(RequestCancelledError):
+                await asyncio.wait_for(task, timeout=7)
+
+        try:
+            asyncio.run(go())
+            assert not (workspace / "too_late.txt").exists()
+            # Stop kills the persistent interpreter: a later call must use a
+            # fresh one, rather than the half-executed old process.
+            fresh = _invoke(
+                registry, "python.exec", {"code": "print('marker' in globals())"},
+                _tool_ctx(workspace),
+            )
+            assert fresh.content.strip() == "False"
+        finally:
+            repls.stop_all()
+
+    def test_stop_for_old_interpreter_cannot_retire_new_workspace_binding(self, tmp_path, monkeypatch):
+        _registry, repls, workspace = self._setup(tmp_path, monkeypatch)
+        other = tmp_path / "new-root"
+        other.mkdir()
+        try:
+            old = repls.get("ws-h6", workspace, manage_cwd=False)
+            newer = repls.get("ws-h6", other, manage_cwd=False)
+            repls.stop_workspace("ws-h6", expected_repl=old)
+            assert repls.get("ws-h6", other, manage_cwd=False) is newer
         finally:
             repls.stop_all()
 
