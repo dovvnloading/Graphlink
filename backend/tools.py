@@ -84,15 +84,18 @@ _KNOWN_APPROVAL_POLICIES = frozenset({"auto", "once", "always"})
 
 @dataclass(frozen=True)
 class ToolResult:
-    """What invoke() always returns - `content` is exactly the string a tool-
-    use loop feeds back as the next turn's {"role": "tool", ..., "content":
-    content} message (ChatRequest's own docstring, ADR-007 stage 7.1).
-    `is_error` is informational for the loop/UI (e.g. to style a failed call
-    differently on the canvas in stage 7.4) - it does not change the wire
-    shape a denied/failed call still needs to hand back to the model."""
+    """A text tool result, optionally carrying an ephemeral image preview.
+
+    content is always the text returned to the model in its tool-result
+    message (including a useful description for text-only models).
+    image_bytes is a resized JPEG preview used only by the workspace harness:
+    it is sent as a separate multimodal observation when the model supports
+    vision and is NEVER written to the JSONL transcript.
+    """
 
     content: str
     is_error: bool = False
+    image_bytes: bytes | None = None
 
 
 # A handler is the registrant's own async implementation - it receives the
