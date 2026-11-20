@@ -15,7 +15,7 @@ from backend.harness.tools_python import PythonReplRegistry
 from backend.providers.base import ToolCall
 from backend.tools import (
     CODE_EXECUTE, FS_READ, FS_WRITE, GRAPH_MUTATE, GRAPH_READ,
-    KNOWLEDGE_READ, PROVIDER_CALL, ToolRegistry,
+    KNOWLEDGE_READ, NET_FETCH, PROVIDER_CALL, ToolRegistry,
 )
 
 
@@ -55,6 +55,8 @@ def test_builtin_modules_keep_their_scopes_approvals_and_hints(tmp_path):
             "user.ask": (PROVIDER_CALL, "auto"),
             "subagent.spawn": (PROVIDER_CALL, "auto"),
             "knowledge.search": (KNOWLEDGE_READ, "auto"),
+            "web.search": (NET_FETCH, "auto"),
+            "web.fetch": (NET_FETCH, "auto"),
             "graph.list_nodes": (GRAPH_READ, "auto"),
             "graph.delete_node": (GRAPH_MUTATE, "always"),
         }
@@ -77,7 +79,7 @@ def test_builtin_modules_keep_their_scopes_approvals_and_hints(tmp_path):
         for name in (
             "fs.write", "fs.edit", "shell.exec", "python.exec", "python.install",
             "plan.update", "user.ask", "graph.delete_node", "graph.run_node",
-            "graph.publish_file", "missing.tool",
+            "graph.publish_file", "web.search", "web.fetch", "missing.tool",
         ):
             assert not registry.parallel_safe_for(name), name
 
@@ -88,6 +90,7 @@ def test_builtin_modules_keep_their_scopes_approvals_and_hints(tmp_path):
         assert "fs.list" in guide and "shell.session" in guide
         assert "subagent.spawn" in guide and "knowledge.search" in guide
         assert "graph.publish_file" in guide
+        assert "web.search" in guide and "web.fetch" in guide
         prompt = build_system_prompt(tmp_path)
         assert guide in prompt
         assert prompt == build_system_prompt(tmp_path)
@@ -99,6 +102,7 @@ def test_builtin_modules_keep_their_scopes_approvals_and_hints(tmp_path):
         assert rebuilt is not registry
         assert rebuilt.scopes_for("python.exec") == frozenset({CODE_EXECUTE})
         assert rebuilt.approval_for("fs.write") == "once"
+        assert rebuilt.scopes_for("web.fetch") == frozenset({NET_FETCH})
     finally:
         dispatcher.shell.stop_all()
         dispatcher.python.stop_all()
