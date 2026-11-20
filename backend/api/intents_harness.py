@@ -336,13 +336,25 @@ def register_harness_intents(
         else:
             agent_dispatcher.deny_code_execution(request_id)
 
-    async def approve_tool_for_session(request_id):
+    async def approve_tool_for_session(request_id, approval_id=""):
         """§2.4's graded consent - approve and stop asking for this tool for
         the rest of this agent's session. Deliberately a SEPARATE intent
         rather than a flag on approveTool: the two are different decisions
         with different blast radii, and a UI that can accidentally send the
         broader one in place of the narrower one is a UI that will."""
-        agent_dispatcher.approve_harness_tool_for_session(request_id)
+        agent_dispatcher.approve_harness_tool_for_session(request_id, approval_id)
+
+    async def remove_shell_allow_rule(node_id, rule):
+        """Revoke one persisted prefix from this node, effective immediately."""
+        node = document.nodes.get(node_id)
+        if node is None or not isinstance(node.state, HarnessState):
+            return
+        if not isinstance(rule, str):
+            return
+        # In-place mutation preserves the live run's rule-list reference.
+        if rule in node.state.harness_shell_allow_rules:
+            node.state.harness_shell_allow_rules.remove(rule)
+            await publish_scene()
 
     async def answer_question(request_id, answer):
         """Resolve a run parked on user.ask (§2.3). Distinct from
@@ -369,5 +381,6 @@ def register_harness_intents(
     bus.register_intent("harness", "readWorkspaceFile", read_file)
     bus.register_intent("harness", "revealWorkspace", reveal_folder)
     bus.register_intent("harness", "setShell", set_shell)
+    bus.register_intent("harness", "removeShellAllowRule", remove_shell_allow_rule)
     bus.register_intent("harness", "setExecutionProfile", set_execution_profile)
     bus.register_intent("harness", "getIsolationEngine", get_isolation_engine)

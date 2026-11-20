@@ -140,6 +140,9 @@ class RunContext:
     # None means this run offers no session-scoped option at all, which is
     # the case for every non-harness surface today.
     session_grants: set[str] | None = None
+    # None outside the workspace agent. The live node list is shared with the
+    # harness so adding/removing a rule takes effect during the same run.
+    shell_allow_rules: list[str] | None = None
     # Optional per-run catalog, narrower than the scope grant when needed.
     offered_tool_names: frozenset[str] | None = None
     _approved_fingerprints: set[str] = field(default_factory=set)
@@ -284,6 +287,7 @@ class ToolRegistry:
         # from both the caller's object and the object sent to the approval
         # callback. Refuse a changed pending request, without caching consent.
         original_python_call = call if call.name in ("python.exec", "python.install") else None
+        original_shell_call = call if call.name == "shell.exec" else None
         if original_python_call is not None:
             if call.name == "python.exec":
                 from backend.harness.python_policy import source_error
@@ -296,6 +300,9 @@ class ToolRegistry:
             if error is not None:
                 return ToolResult(content=error, is_error=True)
             call = ToolCall(id=call.id, name=call.name, arguments=deepcopy(call.arguments))
+        if original_shell_call is not None:
+            # Approval and execution must refer to the same immutable command.
+            call = ToolCall(id=call.id, name=call.name, arguments=deepcopy(call.arguments))
 
         if registration.approval != "auto":
             fingerprint = _tool_call_fingerprint(call) if registration.approval == "always" else None
@@ -303,6 +310,7 @@ class ToolRegistry:
             # ask" wins over the memo AND declines to write a new memo entry
             # below, so a second identical dangerous call asks again too.
             forced = False
+            reprompt_failed = False
             if registration.always_reprompt is not None:
                 try:
                     forced = bool(registration.always_reprompt(call))
@@ -310,6 +318,7 @@ class ToolRegistry:
                     # A predicate that blows up must fail CLOSED (ask), never
                     # silently reuse a grant it was supposed to veto.
                     forced = True
+                    reprompt_failed = True
             if forced:
                 fingerprint = None
             # PLAN-2026-08-24 §2.4's graded consent: a SESSION-scoped grant
@@ -326,13 +335,27 @@ class ToolRegistry:
             already_approved = session_granted or (
                 fingerprint is not None and fingerprint in ctx._approved_fingerprints
             )
+            if call.name == "shell.exec" and ctx.shell_allow_rules is not None:
+                # The real harness never accepts a whole-tool grant or a
+                # fingerprint for shell commands. Only explicit prefixes for
+                # *every* segment, with no dangerous or ambiguous segment,
+                # can bypass this command's fresh consent requirement.
+                from backend.harness.shell_policy import shell_command_allowed
+
+                try:
+                    already_approved = not reprompt_failed and shell_command_allowed(
+                        str(call.arguments.get("command") or ""),
+                        ctx.shell_allow_rules, shell=getattr(ctx, "harness_shell", "auto"),
+                    )
+                except Exception:
+                    already_approved = False
             if not already_approved:
                 # §2.4: the decision is now GRADED, not binary. False/None
                 # denies; the string "session" approves AND remembers for the
                 # session; anything else truthy approves this call only. Every
                 # pre-existing caller returns a plain bool, which lands on the
                 # once-only branch exactly as it always did.
-                disclosure_call = deepcopy(call) if original_python_call is not None else call
+                disclosure_call = deepcopy(call) if (original_python_call is not None or original_shell_call is not None) else call
                 decision = await ctx.request_approval(disclosure_call)
                 approved = bool(decision)
                 # The approval prompt is the one place this function can be
@@ -345,15 +368,18 @@ class ToolRegistry:
                 _raise_if_cancelled(ctx.cancel.event if ctx.cancel is not None else None)
                 if not approved:
                     return ToolResult(content=f"Tool call {call.name!r} was denied approval.", is_error=True)
-                if original_python_call is not None and (
-                    original_python_call.arguments != call.arguments
+                original_approved_call = (
+                    original_python_call if original_python_call is not None else original_shell_call
+                )
+                if original_approved_call is not None and (
+                    original_approved_call.arguments != call.arguments
                     or disclosure_call.arguments != call.arguments
                 ):
                     return ToolResult(
-                        content="Python request changed while approval was pending; submit it for fresh approval.",
+                        content="Execution request changed while approval was pending; submit it for fresh approval.",
                         is_error=True,
                     )
-                if decision == "session" and ctx.session_grants is not None and not forced:
+                if decision == "session" and ctx.session_grants is not None and not forced and call.name != "shell.exec":
                     ctx.session_grants.add(call.name)
                 elif fingerprint is not None:
                     ctx._approved_fingerprints.add(fingerprint)

@@ -57,6 +57,7 @@ export interface HarnessNodeData extends Record<string, unknown> {
   harnessWorkspacePath: string;
   harnessWorkspaceActive: string;
   harnessShell: string;
+  harnessShellAllowRules: string[];
   harnessExecutionProfile: string;
   harnessMaxTurns: number;
   harnessSpentTurns: number;
@@ -69,7 +70,7 @@ export interface HarnessNodeData extends Record<string, unknown> {
   onCancel: () => void;
   onUndoRun: () => void;
   onApproveTool: (approvalId?: string) => void;
-  onApproveToolForSession: () => void;
+  onApproveToolForSession: (approvalId?: string) => void;
   onDenyTool: (approvalId?: string) => void;
   onAnswerQuestion: (answer: string) => void;
   onPickWorkspace: () => void;
@@ -78,6 +79,7 @@ export interface HarnessNodeData extends Record<string, unknown> {
   onOpenWorkspaceFile: (path: string) => Promise<void>;
   onRevealWorkspace: () => void;
   onSetShell: (shell: string) => void;
+  onRemoveShellAllowRule: (rule: string) => void;
   onSetExecutionProfile: (profile: string) => void;
   onGetIsolationEngine: () => Promise<string | null>;
 }
@@ -131,11 +133,13 @@ function HarnessNodeMenu({
 /** Node settings are portaled to the document, not rendered inside the
  * transformed React Flow node. Otherwise fixed coordinates drift with zoom. */
 function AgentSettingsPopover({
-  position, shell, onSetShell, profile, onSetExecutionProfile, onGetIsolationEngine, onClose, triggerRef,
+  position, shell, rules, onSetShell, onRemoveRule, profile, onSetExecutionProfile, onGetIsolationEngine, onClose, triggerRef,
 }: {
   position: MenuPosition;
   shell: string;
+  rules: string[];
   onSetShell: (shell: string) => void;
+  onRemoveRule: (rule: string) => void;
   profile: string;
   onSetExecutionProfile: (profile: string) => void;
   onGetIsolationEngine: () => Promise<string | null>;
@@ -247,7 +251,37 @@ function AgentSettingsPopover({
       ) : (
         <p role="status">{engine === "docker" ? "Docker" : "Podman"} detected. Isolated uses a network-disabled container with 1 CPU, 512 MiB RAM and your workspace mounted at /workspace. Pull python:3.12-slim with {engine} before your first run.</p>
       )}
-      <p>Saved with this graph. Changes apply from the next task.</p>
+      <p>Shell changes apply from the next task.</p>
+      <div className="harness-node-allow-rules">
+        <strong>Allowed command prefixes</strong>
+        {rules.length === 0 ? (
+          <p>No saved rules for this agent.</p>
+        ) : (
+          <ul aria-label="Allowed command prefixes">
+            {rules.map((rule) => {
+              const boundary = rule.indexOf("\t");
+              const ruleShell = boundary >= 0 ? rule.slice(0, boundary) : "";
+              const prefix = boundary >= 0 ? rule.slice(boundary + 1) : rule;
+              return (
+                <li key={rule}>
+                  <span className="harness-node-allow-rule-text">
+                    <code title={prefix}>{prefix}</code>
+                    <small>{ruleShell}</small>
+                  </span>
+                  <button
+                    type="button"
+                    className="nodrag"
+                    aria-label={`Remove rule: ${prefix} (${ruleShell})`}
+                    onClick={() => onRemoveRule(rule)}
+                  >
+                    Remove
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
     </div>,
     document.body,
   );
@@ -351,7 +385,8 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
   const [settingsPosition, setSettingsPosition] = useState<MenuPosition | null>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
-  const boundApproval = ["python.exec", "python.install", "web.fetch", "web.search"].includes(data.harnessApprovalToolName) || data.harnessApprovalToolName.startsWith("fal.");
+  const shellApproval = data.harnessApprovalToolName === "shell.exec";
+  const boundApproval = shellApproval || ["python.exec", "python.install", "web.fetch", "web.search"].includes(data.harnessApprovalToolName) || data.harnessApprovalToolName.startsWith("fal.");
   const fileApproval = data.harnessApprovalToolName === "fs.write" || data.harnessApprovalToolName === "fs.edit";
   // Never ask someone to approve an unseen mutation. The backend explains
   // when it cannot safely read the existing file to build the preview.
@@ -362,8 +397,8 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
     !data.harnessApprovalId || submittedApprovalId === data.harnessApprovalId
   );
 
-  function decideTool(approved: boolean): void {
-    const decide = approved ? data.onApproveTool : data.onDenyTool;
+  function decideTool(approved: boolean, alwaysAllow = false): void {
+    const decide = alwaysAllow ? data.onApproveToolForSession : approved ? data.onApproveTool : data.onDenyTool;
     if (!boundApproval) {
       decide();
       return;
@@ -474,7 +509,9 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
           <AgentSettingsPopover
             position={settingsPosition}
             shell={data.harnessShell}
+            rules={data.harnessShellAllowRules}
             onSetShell={data.onSetShell}
+            onRemoveRule={data.onRemoveShellAllowRule}
             profile={data.harnessExecutionProfile}
             onSetExecutionProfile={data.onSetExecutionProfile}
             onGetIsolationEngine={data.onGetIsolationEngine}
@@ -634,6 +671,11 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
               This file change could not be previewed. Deny the request and ask the agent to retry.
             </p>
           )}
+          {shellApproval && data.harnessApprovalSessionOffered && (
+            <p className="harness-approval-allow-explanation">
+              Always allow saves each displayed safe command as a prefix on this agent, for the selected shell.
+            </p>
+          )}
           <div className="plan-node-approval-actions">
             <button
               type="button"
@@ -643,14 +685,17 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
             >
               Approve once
             </button>
-            {data.harnessApprovalSessionOffered && !boundApproval && !previewUnavailable && (
+            {data.harnessApprovalSessionOffered && (!boundApproval || shellApproval) && !previewUnavailable && (
               <button
                 type="button"
                 className="plan-node-button nodrag"
-                onClick={data.onApproveToolForSession}
-                title="Stop asking for this tool for the rest of this agent's session"
+                disabled={decisionPending}
+                onClick={() => decideTool(true, true)}
+                title={shellApproval
+                  ? "Save a shell-scoped prefix for each safe command segment on this agent"
+                  : "Stop asking for this tool for the rest of this agent's session"}
               >
-                Always allow this tool
+                {shellApproval ? "Always allow" : "Always allow this tool"}
               </button>
             )}
             <button
