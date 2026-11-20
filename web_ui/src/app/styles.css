@@ -5482,6 +5482,14 @@ mark.document-view-search-match-current {
   flex-shrink: 0;
 }
 
+/* Show each granted path in full, including long/nested paths, rather
+   than clipping off the part a user may need to distinguish before revoke. */
+.settings-trusted-folder-path {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 /* SECURITY-FIX (mcp-approval-auto-invisible-in-settings-ui): the one
    approval policy that skips confirmation entirely (backend/tools.py's
    ApprovalPolicy "auto") reads as visually distinct from "once"/"always",

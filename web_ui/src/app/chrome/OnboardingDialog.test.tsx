@@ -68,6 +68,7 @@ const settingsSnapshot: AppSettingsState = {
   llamaCppScanSummary: "",
   llamaCppScanStatus: "idle",
   llamaCppNotice: "",
+  harnessTrustedDirs: [],
   mcpServers: [],
 };
 

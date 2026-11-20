@@ -308,9 +308,10 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # 245 -> 246: scene/discussScientificResult creates an undoable chat from a verified result.
     # 246 -> 247: scene/exportScientificWorkspaceMethods reads verified receipts without mutating the graph.
     # 247 -> 248: harness/setShell saves a per-node shell preference.
-    # 248 -> 251: harness workspace listing, preview and native reveal do not mutate the canvas document.
-    assert len(real) == 251, (
-        f"expected exactly 251 real registered intents, found {len(real)} - "
+    # 248 -> 249: Settings workspace-agent trusted-folder revocation.
+    # 249 -> 252: harness workspace listing, preview and native reveal do not mutate the canvas document.
+    assert len(real) == 252, (
+        f"expected exactly 252 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"
