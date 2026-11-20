@@ -663,7 +663,7 @@ def _render_sankey_chart(figure, ax, chart_data: dict[str, Any], theme: dict[str
     outgoing = defaultdict(list)
     # The `incoming`/`outgoing` defaultdicts above take their element type
     # from the .append() calls below; this one is only ever read through
-    # augmented assignment, which gives mypy nothing to infer from.
+    # augmented assignment, leaving the element type unclear.
     indegree: defaultdict[str, int] = defaultdict(int)
     nodes = set()
 

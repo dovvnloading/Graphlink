@@ -520,7 +520,7 @@ def mann_kendall_sen(data):
     }
 
 
-# Explicit annotation prevents mypy inferring a fixed-length tuple of only the
+# Explicit annotation avoids inferring a fixed-length tuple containing only the
 # three original operations; these IDs and their result payloads are preserved.
 OPERATIONS: tuple[Operation, ...] = (
     Operation(

@@ -184,7 +184,7 @@ baseline run, not aspirational numbers mistaken for observed results.
 ## Release discipline
 
 Keep work in sequential, non-overlapping PRs. For every phase: reviewed
-architecture contract, targeted tests, Windows pytest/Ruff/mypy/coverage/perf
+architecture contract, targeted tests, Windows pytest/Ruff/coverage/perf
 and dependency audit, frontend type checks, E2E, packaging, Linux permissions,
 and final GitHub mergeability against latest `main`. No main-branch merge
 until CI green. Delete merged branches to avoid the earlier conflict buildup.

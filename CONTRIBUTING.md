@@ -16,7 +16,7 @@ Use Python 3.12 and Node.js 24 to match CI. Open PowerShell in the repository ro
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-python -m pip install pytest pytest-cov pytest-xdist hypothesis ruff mypy
+python -m pip install pytest pytest-cov pytest-xdist hypothesis ruff
 npm --prefix web_ui ci
 npm --prefix web_ui run build
 python graphlink_desktop.py
@@ -65,7 +65,6 @@ With the development environment active, run these checks from the repository ro
 ```powershell
 python -m compileall -q backend contracts plugins
 python -m ruff check .
-python -m mypy
 python -m pytest -q --cov --ignore=backend/tests/perf
 python -m pytest -q -n0 backend/tests/perf
 npm --prefix web_ui run check

@@ -1,5 +1,5 @@
 import { ReactFlowProvider, useStoreApi, type NodeProps } from "@xyflow/react";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -267,6 +267,56 @@ describe("ConversationNodeView", () => {
 
       await user.click(within(assistantBubble).getByRole("button", { name: "Delete message 2 from history" }));
       expect(onDeleteMessage).toHaveBeenCalledWith(1);
+    });
+
+    it("clears the copied checkmark timer when its bubble unmounts", async () => {
+      vi.useFakeTimers();
+      const schedule = vi.spyOn(globalThis, "setTimeout");
+      const cancel = vi.spyOn(globalThis, "clearTimeout");
+      try {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+        renderConversationNode();
+
+        fireEvent.click(screen.getByRole("button", { name: "Copy message 1" }));
+        await act(async () => {});
+        const index = schedule.mock.calls.findIndex(([, delay]) => delay === 1500);
+        expect(index).toBeGreaterThanOrEqual(0);
+        const timer = schedule.mock.results[index].value;
+
+        cleanup();
+        expect(cancel).toHaveBeenCalledWith(timer);
+      } finally {
+        cleanup();
+        schedule.mockRestore();
+        cancel.mockRestore();
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not schedule a copy timer if the clipboard write resolves after unmount", async () => {
+      vi.useFakeTimers();
+      const schedule = vi.spyOn(globalThis, "setTimeout");
+      try {
+        let resolveWrite!: () => void;
+        const writeText = vi.fn(() => new Promise<void>((resolve) => {
+          resolveWrite = () => resolve();
+        }));
+        Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+        renderConversationNode();
+
+        fireEvent.click(screen.getByRole("button", { name: "Copy message 1" }));
+        expect(writeText).toHaveBeenCalledOnce();
+        cleanup();
+        await act(async () => { resolveWrite(); });
+        expect(schedule.mock.calls.filter(([, delay]) => delay === 1500)).toHaveLength(0);
+      } finally {
+        cleanup();
+        schedule.mockRestore();
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
     });
 
     it("both quick-action buttons on every bubble carry the nodrag class", () => {

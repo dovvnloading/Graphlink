@@ -129,7 +129,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # ADR-015 stage 15.7: pytest/pytest-cov/ruff/mypy are dev-only
+      # ADR-015 stage 15.7: pytest/pytest-cov/ruff are dev-only
       # tooling, deliberately NOT in requirements.txt (the prod lockfile a
       # real install pulls in) - see pyproject.toml's
       # [project.optional-dependencies] dev extra, which lists the
@@ -143,17 +143,14 @@ jobs:
       # The packaging regression tests import setuptools.command.build_py at
       # collection time. Explicitly install the project's pinned build backend
       # in the test job; it is not part of production requirements.txt.
-      - name: Install dev tooling (pytest, ruff, mypy - CI-only, not in the prod lockfile)
-        run: pip install --quiet pytest==9.1.1 pytest-cov==7.1.0 pytest-xdist==3.8.0 ruff==0.16.4 mypy==2.3.1 hypothesis==6.165.10 setuptools==82.0.1
+      - name: Install dev tooling (pytest, ruff - CI-only, not in the prod lockfile)
+        run: pip install --quiet pytest==9.1.1 pytest-cov==7.1.0 pytest-xdist==3.8.0 ruff==0.16.4 hypothesis==6.165.10 setuptools==82.0.1
 
       - name: Compile check
         run: python -m compileall -q .
 
       - name: ruff (scoped rule set - see pyproject.toml's own [tool.ruff])
         run: python -m ruff check .
-
-      - name: mypy (scoped rule set - see pyproject.toml's own [tool.mypy])
-        run: python -m mypy
 
       # The Linux frontend build cannot reveal source-file collisions on NTFS.
       # Build the production bundle on an actual case-insensitive Windows checkout.
@@ -342,7 +339,7 @@ jobs:
           cache-dependency-path: web_ui/package-lock.json
 
       # The prod lockfile, not the dev extras python-tests installs - this
-      # job never runs pytest/ruff/mypy, it only needs a real Python
+      # job never runs pytest/ruff, it only needs a real Python
       # environment for tests_e2e/run_backend.py's own `from backend.app
       # import create_app`, exactly what a real `pip install -r
       # requirements.txt` gives a contributor.

@@ -41,8 +41,8 @@ if TYPE_CHECKING:
     # ADR-015 stage 15.3: _start_backend/_shutdown_backend's own annotations
     # reference uvicorn, but both import it LOCALLY (deferred, function-scope)
     # to keep this module importable without uvicorn eagerly loaded - this
-    # TYPE_CHECKING-only import satisfies static analysis (ruff's F821,
-    # mypy) without changing that runtime behavior at all.
+    # TYPE_CHECKING-only import satisfies static analysis (including ruff's
+    # F821) without changing that runtime behavior at all.
     import uvicorn
 
 REPO_ROOT = Path(__file__).resolve().parent
