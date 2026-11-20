@@ -446,17 +446,17 @@ def _sync_index_once(transcript: Path, *, append_origin: os.stat_result | None =
             )
             if save_required:
                 db.execute(
-                "INSERT INTO transcript_index_state (id, offset, line_number) "
-                "VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET "
-                "offset=excluded.offset, line_number=excluded.line_number",
-                (offset, line_number),
+                    "INSERT INTO transcript_index_state (id, offset, line_number) "
+                    "VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+                    "offset=excluded.offset, line_number=excluded.line_number",
+                    (offset, line_number),
                 )
                 db.execute(
-                "INSERT INTO transcript_index_source (id, device, inode, prefix_sha256) "
-                "VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
-                "device=excluded.device, inode=excluded.inode, "
-                "prefix_sha256=excluded.prefix_sha256",
-                (device, inode, digest),
+                    "INSERT INTO transcript_index_source (id, device, inode, prefix_sha256) "
+                    "VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+                    "device=excluded.device, inode=excluded.inode, "
+                    "prefix_sha256=excluded.prefix_sha256",
+                    (device, inode, digest),
                 )
             # Do not trust this checkpoint if the source was concurrently
             # modified during indexing; the next sync will revalidate it.
