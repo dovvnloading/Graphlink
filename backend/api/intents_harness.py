@@ -134,6 +134,11 @@ def register_harness_intents(
             # other settings mutation uses (save_recipe's precedent), so it
             # cannot land mid-write against a concurrent settings save.
             await asyncio.to_thread(run_locked, lambda: settings.add_harness_trusted_dir(resolved))
+        # A Settings dialog may already be subscribed. Publish the newly
+        # recorded grant so its trusted-folder list cannot stay stale until
+        # some unrelated settings change.
+        if bus.has_topic("app-settings"):
+            await bus.publish("app-settings")
         return resolved
 
     async def pick_launch_workspace():
