@@ -227,6 +227,7 @@ while True:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
+                    errors="replace",
                     bufsize=1,
                     cwd=str(self.cwd),
                     **self.guard.popen_kwargs(),
