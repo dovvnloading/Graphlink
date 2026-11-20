@@ -90,7 +90,7 @@ def test_isolated_env_picks_project_venv_and_scopes_managed_fallback(tmp_path, m
 
 
 def test_repl_command_is_offline_and_cleanup_reaps_daemon_container(tmp_path, monkeypatch):
-    monkeypatch.setattr("backend.harness.shell_isolation.shutil.which", return_value="/usr/bin/docker")
+    monkeypatch.setattr("backend.harness.shell_isolation.shutil.which", Mock(return_value="/usr/bin/docker"))
     cleaned = []
     monkeypatch.setattr(
         python_isolation, "cleanup_container",
@@ -150,7 +150,7 @@ def test_python_exec_uses_container_not_host_interpreter(tmp_path, monkeypatch):
     project = tmp_path / "project"
     project.mkdir()
     monkeypatch.setattr(python_env, "HARNESS_PYTHON_ENV_ROOT", tmp_path / "managed")
-    monkeypatch.setattr("backend.harness.shell_isolation.shutil.which", return_value="/usr/bin/docker")
+    monkeypatch.setattr("backend.harness.shell_isolation.shutil.which", Mock(return_value="/usr/bin/docker"))
 
     def forbid_host_python(*args, **kwargs):
         raise AssertionError("Isolated python.exec must never prepare host Python")
@@ -192,7 +192,7 @@ def test_isolated_install_only_download_has_network_and_all_steps_use_container(
     project = tmp_path / "project"
     project.mkdir()
     monkeypatch.setattr(python_env, "HARNESS_PYTHON_ENV_ROOT", tmp_path / "envs")
-    monkeypatch.setattr("backend.harness.shell_isolation.shutil.which", return_value="/usr/bin/docker")
+    monkeypatch.setattr("backend.harness.shell_isolation.shutil.which", Mock(return_value="/usr/bin/docker"))
     monkeypatch.setattr(python_install, "cleanup_container", lambda *a, **k: None)
     plan = planned_isolated_python_environment("ws", project, is_scratch=False)
     calls = []
@@ -287,7 +287,7 @@ def test_missing_container_engine_fails_closed_without_host_python(tmp_path, mon
     project = tmp_path / "project"
     project.mkdir()
     monkeypatch.setattr(python_env, "HARNESS_PYTHON_ENV_ROOT", tmp_path / "managed")
-    monkeypatch.setattr("backend.harness.shell_isolation.shutil.which", return_value=None)
+    monkeypatch.setattr("backend.harness.shell_isolation.shutil.which", Mock(return_value=None))
 
     def forbid_host_python(*args, **kwargs):
         raise AssertionError("Missing Docker/Podman must not fall back to host Python")
