@@ -34,6 +34,7 @@ confinement choke point - against whichever root the run bound.
 from __future__ import annotations
 
 from pathlib import Path
+import stat
 
 from graphlink_scratch_dirs import (
     HARNESS_WORKSPACE_ROOT,
@@ -47,6 +48,53 @@ class WorkspaceError(ValueError):
     """A path that names something outside the bound workspace. Raised (not
     silently clamped) so tool handlers can feed the refusal back to the
     model as an ordinary error ToolResult it can reason about."""
+
+
+_ROOT_CHANGED = "Workspace root changed after this task was bound; start a new task."
+
+
+class PinnedWorkspaceRoot(type(Path())):
+    """A concrete Path pinned to the directory identity granted at binding.
+
+    A running task must not follow the saved pathname into a new tree after
+    a rename or symlink substitution. Keeping a concrete Path subclass allows
+    existing filesystem, shell and isolated-container callers to re-resolve
+    their root while enforcing the original grant.
+    """
+
+    __slots__ = ("_bound_identity",)
+
+    def verify_bound_identity(self) -> None:
+        expected = getattr(self, "_bound_identity", None)
+        if expected is None:
+            return  # Derived Paths are not new capabilities.
+        try:
+            info = self.lstat()  # A replaced symlink cannot pass.
+        except OSError as exc:
+            raise WorkspaceError(_ROOT_CHANGED) from exc
+        if not stat.S_ISDIR(info.st_mode) or (info.st_dev, info.st_ino) != expected:
+            raise WorkspaceError(_ROOT_CHANGED)
+
+    def resolve(self, strict: bool = False) -> Path:
+        self.verify_bound_identity()
+        resolved = super().resolve(strict=strict)
+        self.verify_bound_identity()
+        if getattr(self, "_bound_identity", None) is not None and resolved != self:
+            raise WorkspaceError(_ROOT_CHANGED)
+        return Path(resolved)
+
+
+def _pin_root(path: Path) -> PinnedWorkspaceRoot:
+    root = PinnedWorkspaceRoot(path)
+    try:
+        info = root.lstat()
+    except OSError as exc:
+        raise WorkspaceError(_ROOT_CHANGED) from exc
+    if not stat.S_ISDIR(info.st_mode):
+        raise WorkspaceError(_ROOT_CHANGED)
+    root._bound_identity = (info.st_dev, info.st_ino)
+    root.resolve()  # Detect a swap during identity capture.
+    return root
 
 
 def workspace_dir(workspace_id: str) -> Path:
@@ -103,8 +151,16 @@ def bound_root(
             # replaced with a symlink, resolving it would transfer trust to
             # an entirely different, never-approved directory.
             if str(candidate) in trusted:
-                return candidate, True
-    return ensure_workspace(workspace_id), False
+                try:
+                    pinned = _pin_root(candidate)
+                    # A swap of the requested alias while binding must not
+                    # silently authorize a different directory.
+                    if Path(workspace_path).resolve() == candidate:
+                        pinned.verify_bound_identity()
+                        return pinned, True
+                except (OSError, RuntimeError, WorkspaceError):
+                    pass
+    return _pin_root(ensure_workspace(workspace_id)), False
 
 
 def resolve_under_root(root: Path, raw_path: str) -> Path:
@@ -118,7 +174,7 @@ def resolve_under_root(root: Path, raw_path: str) -> Path:
     input the scratch-root ownership check already treats as in-scope. The
     root itself resolves first for the comparison, so a symlinked temp dir
     (macOS /tmp -> /private/tmp) never produces false refusals."""
-    root = root.resolve()
+    root = root.resolve()  # Pinned roots fail closed if replaced after binding.
     candidate = Path(raw_path) if raw_path else Path(".")
     if not candidate.is_absolute():
         candidate = root / candidate

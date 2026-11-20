@@ -138,6 +138,12 @@ def register_harness_workspace_intents(
     async def list_files(node_id: str, relative_path: str = "", cursor: str | None = None):
         root, user_dir = _workspace_for_node(node_id)
         listing = await asyncio.to_thread(list_workspace_files, root, relative_path, cursor)
+        # A grant can be revoked while a slow worker enumerates filenames.
+        # Backend authorization, not UI-side invalidation, must gate the reply.
+        current_root, current_user_dir = _workspace_for_node(node_id)
+        if current_root != root or current_user_dir != user_dir:
+            raise WorkspaceError("Workspace folder changed. Refresh the Files list and choose a file again.")
+        root.resolve()  # Reject replacement at the same pathname, too.
         return {"root": str(root), "isScratch": not user_dir, **listing}
 
     async def read_file(node_id: str, relative_path: str, expected_root: str | None = None):
