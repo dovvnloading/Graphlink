@@ -78,11 +78,13 @@ def container_invocation(
         "--workdir", CONTAINER_WORKSPACE,
         "--env", "HOME=/tmp", "--env", "PYTHONDONTWRITEBYTECODE=1",
     ]
-    if os.name == "posix" and hasattr(os, "getuid"):
+    getuid = getattr(os, "getuid", None)
+    getgid = getattr(os, "getgid", None)
+    if os.name == "posix" and callable(getuid) and callable(getgid):
         if engine == "podman":
             args.append("--userns=keep-id")
         else:
-            args.extend(["--user", f"{os.getuid()}:{os.getgid()}"])
+            args.extend(["--user", f"{getuid()}:{getgid()}"])
     args.extend([CONTAINER_IMAGE, "/bin/sh", "-c", command])
     return args, engine, name
 

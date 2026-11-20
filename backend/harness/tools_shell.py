@@ -133,6 +133,7 @@ def _run_command(command: str, cwd, cancel_event, on_output=None, shell: str = "
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
     container = None
+    argv: str | list[str]
     if normalize_execution_profile(profile) == "isolated":
         argv, engine, name = container_invocation(command, cwd, env=kwargs["env"])
         via_shell = False
