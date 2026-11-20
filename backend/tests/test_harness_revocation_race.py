@@ -85,6 +85,7 @@ def test_picker_regrant_cancels_old_pending_cleanup(tmp_path):
 
     assert dispatcher._harness_revoked_roots == set()
 
+
 def test_inflight_stop_cannot_retire_newly_registered_sessions_after_regrant(
     tmp_path, monkeypatch,
 ):

@@ -343,6 +343,7 @@ def _is_our_published_file(
         after = path.lstat()
         return (
             actual == digest
+            and after.st_ctime_ns == before.st_ctime_ns
             and (ctime_ns is None or after.st_ctime_ns == ctime_ns)
             and _staged_output_identity(path) == identity
         )
@@ -351,56 +352,84 @@ def _is_our_published_file(
 
 
 def _replace_approved_existing(target: Path, staged_path: Path, approved: FileApprovalState) -> None:
-    # Fingerprint our own staged inode before it is exchanged. If a later
-    # writer updates the published pathname, recovery must not erase it.
+    # Fingerprint our staged inode before publishing. If someone writes to
+    # the published pathname afterwards, rollback cannot treat it as ours.
     staged_identity = _staged_output_identity(staged_path)
     staged_digest = hashlib.sha256(_read_bounded_bytes(staged_path)).hexdigest()
-    displaced = _exchange_approved_file(target, staged_path)
     try:
-        published_ctime = target.lstat().st_ctime_ns
-    except OSError:
-        published_ctime = None
-
-    if not _displaced_file_matches_approval(displaced, approved):
-        # The exchange displaced a newer/unapproved version. Do not use an
-        # unconditional second exchange / os.replace: another writer may have
-        # replaced the published target since the first exchange.
-        if published_ctime is None or not _is_our_published_file(
-            target, staged_identity, staged_digest, ctime_ns=published_ctime,
-        ):
+        displaced = _exchange_approved_file(target, staged_path)
+    except BaseException as exc:
+        # Native exchange errors normally leave both paths untouched, but
+        # defensively retain staging if a partial OS failure or wrapper has
+        # already moved the displaced external version there.
+        backup = staged_path.with_name(staged_path.name + ".before")
+        external_may_be_staged = (
+            staged_path.exists()
+            and not _is_our_published_file(staged_path, staged_identity, staged_digest)
+        )
+        if external_may_be_staged or (os.name == "nt" and backup.exists()):
             raise _ApprovedWriteRecoveryError(
-                f"{_STALE_FILE_APPROVAL} A newer destination was left untouched. "
-                f"The displaced external version is preserved at {displaced}; "
-                f"inspect both paths before retrying."
-            )
-        try:
-            if displaced == staged_path:
-                _exchange_approved_file(target, staged_path)
-            else:
-                # ReplaceFileW keeps the external version in a backup. On
-                # Windows rename (unlike replace) refuses an occupied path.
-                # Preserve the published file before restoring the backup,
-                # and never overwrite a new destination created meanwhile.
-                os.rename(target, staged_path)
-                os.rename(displaced, target)
-        except (OSError, WorkspaceError) as exc:
-            raise _ApprovedWriteRecoveryError(
-                f"{_STALE_FILE_APPROVAL} Automatic restoration failed; "
-                f"recovery data is preserved at {displaced} and possibly {staged_path}. "
-                f"The destination may contain the unapproved agent version: {exc}"
+                f"{_STALE_FILE_APPROVAL} Publication failed after moving filesystem "
+                f"data; inspect {target}, {staged_path} and {backup}: {exc}"
             ) from exc
-        # If a second writer raced the recovery itself, the staging path
-        # may now hold THEIR edit. Never mistake that inode for our output
-        # and destroy it in the caller's finally block.
-        if not _is_our_published_file(staged_path, staged_identity, staged_digest):
-            raise _ApprovedWriteRecoveryError(
-                f"{_STALE_FILE_APPROVAL} A concurrent write was displaced during "
-                f"recovery and is preserved at {staged_path}; inspect both paths."
-            )
-        raise WorkspaceError(_STALE_FILE_APPROVAL)
-    if displaced != staged_path:
-        displaced.unlink(missing_ok=True)
+        raise
 
+    restored = False
+    try:
+        try:
+            published_ctime = target.lstat().st_ctime_ns
+        except OSError:
+            published_ctime = None
+
+        if not _displaced_file_matches_approval(displaced, approved):
+            # If target has changed since our exchange, a rollback would
+            # overwrite a newer writer's result. Preserve BOTH paths.
+            if published_ctime is None or not _is_our_published_file(
+                target, staged_identity, staged_digest, ctime_ns=published_ctime,
+            ):
+                raise _ApprovedWriteRecoveryError(
+                    f"{_STALE_FILE_APPROVAL} A newer destination was left untouched. "
+                    f"The displaced external version is preserved at {displaced}; "
+                    f"inspect both paths before retrying."
+                )
+            try:
+                if displaced == staged_path:
+                    _exchange_approved_file(target, staged_path)
+                else:
+                    # Windows ReplaceFileW keeps the displaced version in a
+                    # backup. Rename moves the current target out of the way;
+                    # unlike replace, the second rename won't overwrite a
+                    # new file that appeared at the destination.
+                    os.rename(target, staged_path)
+                    os.rename(displaced, target)
+            except (OSError, WorkspaceError) as exc:
+                raise _ApprovedWriteRecoveryError(
+                    f"{_STALE_FILE_APPROVAL} Automatic restoration failed; "
+                    f"recovery data is preserved at {displaced} and possibly {staged_path}. "
+                    f"The destination may contain the unapproved agent version: {exc}"
+                ) from exc
+            # A writer can race even this conditional restore. Check what
+            # landed at staging and never unlink it unless it is still ours.
+            if not _is_our_published_file(staged_path, staged_identity, staged_digest):
+                raise _ApprovedWriteRecoveryError(
+                    f"{_STALE_FILE_APPROVAL} A concurrent write was displaced during "
+                    f"recovery and is preserved at {staged_path}; inspect both paths."
+                )
+            restored = True
+            raise WorkspaceError(_STALE_FILE_APPROVAL)
+
+        if displaced != staged_path:
+            displaced.unlink(missing_ok=True)
+    except BaseException as exc:
+        if restored or isinstance(exc, _ApprovedWriteRecoveryError):
+            raise
+        # Any unexpected exception AFTER the first exchange can leave the
+        # external version at staging. Do not let caller cleanup destroy it.
+        raise _ApprovedWriteRecoveryError(
+            f"{_STALE_FILE_APPROVAL} Validation or cleanup failed after publication; "
+            f"data was retained at {displaced} (and possibly {staged_path}). "
+            f"Inspect the destination and recovery paths: {exc}"
+        ) from exc
 
 def _write_atomic_text(
     target: Path, content: str, *, approval_state: FileApprovalState | None = None,
@@ -516,7 +545,7 @@ class FileApprovalPreview:
     state: FileApprovalState | None = None
 
 
-def _file_version(target: Path) -> tuple[int, int, int, int]:
+def _file_version(target: Path) -> tuple[int, int, int, int, int, int, int]:
     info = target.stat()
     return (
         info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns,

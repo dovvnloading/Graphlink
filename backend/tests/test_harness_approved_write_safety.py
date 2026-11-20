@@ -158,3 +158,58 @@ def test_no_atomic_no_replace_fails_closed_without_publishing(tmp_path, monkeypa
             target, "unpublished", approval_state=fs.FileApprovalState(target, None, None),
         )
     assert not list(tmp_path.iterdir())
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX rename exchange")
+def test_unexpected_validation_exception_also_preserves_external_bytes(tmp_path, monkeypatch):
+    target = tmp_path / "reviewed.txt"
+    target.write_text("original")
+    approval = _approved(tmp_path)
+    exchange = fs._exchange_approved_file
+
+    def race_before_exchange(destination, staged):
+        destination.write_text("external")
+        return exchange(destination, staged)
+
+    def fail_validation(_displaced, _approved):
+        raise RuntimeError("unexpected validation failure")
+
+    monkeypatch.setattr(fs, "_exchange_approved_file", race_before_exchange)
+    monkeypatch.setattr(fs, "_displaced_file_matches_approval", fail_validation)
+    with pytest.raises(WorkspaceError, match="Validation or cleanup failed") as exc:
+        fs._write_atomic_text(target, "agent", approval_state=approval)
+
+    retained = list(tmp_path.glob(".reviewed.txt.*.tmp"))
+    assert len(retained) == 1
+    assert retained[0].read_text() == "external"
+    assert str(retained[0]) in str(exc.value)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX rename exchange")
+def test_writer_during_second_exchange_is_not_deleted_by_cleanup(tmp_path, monkeypatch):
+    target = tmp_path / "reviewed.txt"
+    target.write_text("original")
+    approval = _approved(tmp_path)
+    exchange = fs._exchange_approved_file
+    calls = 0
+
+    def late_race(destination, staged):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            destination.write_text("external-B")
+        else:
+            newest = tmp_path / "newest.txt"
+            newest.write_text("newest-C")
+            os.replace(newest, destination)
+        return exchange(destination, staged)
+
+    monkeypatch.setattr(fs, "_exchange_approved_file", late_race)
+    with pytest.raises(WorkspaceError, match="concurrent write was displaced"):
+        fs._write_atomic_text(target, "agent", approval_state=approval)
+
+    assert calls == 2
+    retained = list(tmp_path.glob(".reviewed.txt.*.tmp"))
+    assert len(retained) == 1
+    assert retained[0].read_text() == "newest-C"
+    assert target.read_text() == "external-B"
+
