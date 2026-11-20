@@ -242,9 +242,17 @@ while True:
                     guard.close()
                 raise
 
-    def execute(self, code, on_output=None):
+    def execute(self, code, on_output=None, cancel_event=None):
+        # An already-cancelled worker must never spawn a process AFTER the
+        # cancellation path has retired its interpreter. Check on both
+        # sides of start(), which may take the process lock while Stop runs.
+        if cancel_event is not None and cancel_event.is_set():
+            return ""
         if not self.process or self.process.poll() is not None:
             self.start()
+        if cancel_event is not None and cancel_event.is_set():
+            self.stop()
+            return ""
 
         # ADR-005 stage 5.3 (review-fix): mark this cwd as actively used -
         # see touch_scratch_dir_usage's own docstring for why the age
