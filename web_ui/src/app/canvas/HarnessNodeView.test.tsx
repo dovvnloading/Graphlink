@@ -44,6 +44,11 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     onAnswerQuestion: vi.fn(),
     onPickWorkspace: vi.fn(),
     onUseScratch: vi.fn(),
+    onListWorkspaceFiles: vi.fn().mockResolvedValue({
+      root: "/scratch/ws1", isScratch: true, path: "", entries: [], truncated: false,
+    }),
+    onOpenWorkspaceFile: vi.fn().mockResolvedValue(undefined),
+    onRevealWorkspace: vi.fn(),
     onSetShell: vi.fn(),
     ...overrides,
   };
@@ -462,6 +467,26 @@ describe("HarnessNodeView", () => {
     );
     expect(screen.getByText(/C:\/proj/)).toBeInTheDocument();
     expect(screen.queryByText(/not trusted/)).not.toBeInTheDocument();
+  });
+
+  it("lets the agent browse and reveal its bound workspace", async () => {
+    const user = userEvent.setup();
+    const data = makeData({
+      harnessStatus: "done", pendingRequestId: null,
+      onListWorkspaceFiles: vi.fn().mockResolvedValue({
+        root: "/project", isScratch: false, path: "",
+        entries: [{ name: "notes.md", path: "notes.md", isDir: false, size: 14 }],
+        truncated: false,
+      }),
+    });
+    renderHarness(data);
+    await user.click(screen.getByRole("button", { name: "Browse files" }));
+    const file = await screen.findByRole("button", { name: "Open notes.md in Document View" });
+    await user.click(file);
+    expect(data.onListWorkspaceFiles).toHaveBeenCalledWith("");
+    expect(data.onOpenWorkspaceFile).toHaveBeenCalledWith("notes.md");
+    await user.click(screen.getByRole("button", { name: "Reveal in file manager" }));
+    expect(data.onRevealWorkspace).toHaveBeenCalledOnce();
   });
 
   it("shows in-flight and stopped output without counting either as an error", () => {

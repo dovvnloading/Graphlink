@@ -33,6 +33,27 @@ describe("Python approval identity forwarding", () => {
   });
 });
 
+describe("Workspace Files transport", () => {
+  it("uses request/response for listings and previews, and a mutation intent for reveal", async () => {
+    const { transport, requests, requestResults, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    const listing = {
+      root: "/project", isScratch: false, path: "", truncated: false,
+      entries: [{ name: "readme.md", path: "readme.md", isDir: false, size: 8 }],
+    };
+    const document = { path: "readme.md", content: "# Hello", truncated: false };
+    requestResults.push(listing, document);
+    expect(await store.listHarnessWorkspaceFiles("h1")).toEqual(listing);
+    expect(await store.readHarnessWorkspaceFile("h1", "readme.md")).toEqual(document);
+    store.revealHarnessWorkspace("h1");
+    expect(requests).toEqual([
+      { topic: "harness", intent: "listWorkspaceFiles", args: ["h1", ""] },
+      { topic: "harness", intent: "readWorkspaceFile", args: ["h1", "readme.md"] },
+    ]);
+    expect(intents).toEqual([{ topic: "harness", intent: "revealWorkspace", args: ["h1"] }]);
+  });
+});
+
 // REVIEW-FIX: fireIntent's optional 7th arg (onSettled) is now read by
 // sendMessage (see sceneStore.ts's own comment on that call site) to defer
 // clearing the staged reply/synthesize target until the request has

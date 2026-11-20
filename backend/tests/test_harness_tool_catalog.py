@@ -45,6 +45,7 @@ def test_builtin_modules_keep_their_scopes_approvals_and_hints(tmp_path):
             "fs.list": (FS_READ, "auto"),
             "fs.read": (FS_READ, "auto"),
             "fs.grep": (FS_READ, "auto"),
+            "session.search": (FS_READ, "auto"),
             "skills.load": (FS_READ, "auto"),
             "fs.write": (FS_WRITE, "once"),
             "fs.edit": (FS_WRITE, "once"),
@@ -72,7 +73,7 @@ def test_builtin_modules_keep_their_scopes_approvals_and_hints(tmp_path):
         assert registry.approval_for("graph.publish_file") == "once"
 
         parallel_reads = {
-            "fs.list", "fs.read", "fs.grep", "skills.load", "knowledge.search",
+            "fs.list", "fs.read", "fs.grep", "session.search", "skills.load", "knowledge.search",
             "graph.list_nodes", "graph.read_subgraph", "subagent.spawn",
         }
         for name in parallel_reads:
@@ -90,9 +91,10 @@ def test_builtin_modules_keep_their_scopes_approvals_and_hints(tmp_path):
         guide = tool_catalog.tool_guide()
         assert "fs.list" in guide and "shell.session" in guide
         assert "subagent.spawn" in guide and "knowledge.search" in guide
+        assert "session.search" in guide
+        assert "skills.load" in guide
         assert "graph.publish_file" in guide
         assert "web.search" in guide and "web.fetch" in guide
-        assert "skills.load" in guide
         prompt = build_system_prompt(tmp_path)
         assert guide in prompt
         assert prompt == build_system_prompt(tmp_path)

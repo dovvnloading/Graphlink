@@ -676,6 +676,33 @@ class TestLoop:
         assert offered and "net.fetch_page" not in offered[0]
         assert "fs.read" in offered[0]
 
+    def test_unoffered_network_tool_cannot_execute(self, workspace_root, monkeypatch):
+        """An unadvertised call cannot bypass the narrow web-tool catalog."""
+        from backend.providers.base import ToolSpec
+        from backend.tools import NET_FETCH, ToolResult
+
+        document, dispatcher, registry, bus, node = self._make(workspace_root)
+        invoked = []
+
+        async def fetch(call_, ctx):
+            invoked.append(call_)
+            return ToolResult(content="not allowed")
+
+        registry.register(
+            ToolSpec(name="net.fetch_page", description="x", input_schema={"type": "object", "properties": {}}),
+            fetch, scopes={NET_FETCH}, approval="auto",
+        )
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("blocked", "net.fetch_page")]},
+            {"content": "done"},
+        ])
+        asyncio.run(drive(document, dispatcher, registry, bus, node, "hi"))
+        assert not invoked
+        assert node.state.harness_status == "done"
+        results = [m for m in load_messages(ensure_workspace(node.state.harness_workspace_id)) if m["role"] == "tool"]
+        assert len(results) == 1
+        assert "not offered" in results[0]["content"]
+
 
 class TestWriteTools:
     def _registry(self):

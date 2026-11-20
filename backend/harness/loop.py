@@ -102,6 +102,10 @@ HARNESS_GRANTED_SCOPES = frozenset({
 # waist" rule applied at the point of exposure rather than registration.
 _HARNESS_TOOL_NAME_EXCLUSIONS = ("builder.",)
 
+# Only Web Research adapters perform per-task domain consent. Do not expose
+# unrelated net.fetch tools merely because the harness grants that scope.
+_HARNESS_WEB_TOOLS = frozenset({"web.search", "web.fetch"})
+
 # The approval prompt's cap applies ONLY to the generic JSON-arguments
 # fallback. A disclosed command or file body is NEVER truncated - the
 # builder's own SECURITY-FIX precedent: a cap on disclosed content means
@@ -653,7 +657,14 @@ async def run_harness(
             spec for spec in registry.specs()
             if (registry.scopes_for(spec.name) or frozenset()) <= HARNESS_GRANTED_SCOPES
             and not spec.name.startswith(_HARNESS_TOOL_NAME_EXCLUSIONS)
+            and (
+                NET_FETCH not in (registry.scopes_for(spec.name) or frozenset())
+                or spec.name in _HARNESS_WEB_TOOLS
+            )
         )
+        # Enforce this same catalog on calls returned by the model, even when
+        # a model fabricates a tool name that was never in its schemas.
+        ctx.offered_tool_names = frozenset(spec.name for spec in specs)
         # Probe the actual execution machine once per dispatcher session
         # and bound root, not on every model turn (or every follow-up task).
         # The fallback supports lightweight stand-alone dispatchers in tests.
