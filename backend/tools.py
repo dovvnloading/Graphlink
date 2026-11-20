@@ -182,12 +182,24 @@ def _tool_call_fingerprint(call: ToolCall) -> str:
 
 
 class ToolRegistry:
-    """One registry per process/session (not per-run - RunContext is what's
-    per-run); registrations are typically made once at startup by whatever
-    wires up the agent runtime (ADR-008), not per tool call."""
+    """One catalog per agent consumer/session, not per run (RunContext is
+    per-run). A consumer may fork the registered Builder catalog before adding
+    its own tools, so scope overlap never publishes workspace tools to Builder."""
 
     def __init__(self) -> None:
         self._registrations: dict[str, _Registration] = {}
+
+    def fork(self) -> "ToolRegistry":
+        """Copy immutable registrations into an independent tool catalog.
+
+        Handlers and their approval/scope metadata remain the same, but
+        subsequent register() calls cannot publish tools to the source
+        registry. This lets the workspace Agent reuse Builder graph/MCP
+        handlers without leaking Agent-only tools into Builder turns.
+        """
+        registry = ToolRegistry()
+        registry._registrations = self._registrations.copy()
+        return registry
 
     def register(
         self,
@@ -360,6 +372,9 @@ class ToolRegistry:
             # wins", and a remembered grant is not consent for `rm -rf`.
             session_granted = (
                 not forced
+                # 'always' tools require target-specific consent; a stale or
+                # injected tool-name grant cannot authorize another deletion.
+                and registration.approval == "once"
                 and ctx.session_grants is not None
                 and call.name in ctx.session_grants
             )
@@ -437,7 +452,8 @@ class ToolRegistry:
                         content="Execution request changed while approval was pending; submit it for fresh approval.",
                         is_error=True,
                     )
-                if decision == "session" and ctx.session_grants is not None and not forced and call.name != "shell.exec":
+                if (decision == "session" and registration.approval == "once"
+                        and ctx.session_grants is not None and not forced and call.name != "shell.exec"):
                     ctx.session_grants.add(call.name)
                 elif fingerprint is not None:
                     ctx._approved_fingerprints.add(fingerprint)

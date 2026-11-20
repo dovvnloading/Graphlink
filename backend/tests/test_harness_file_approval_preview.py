@@ -99,3 +99,28 @@ def test_paths_outside_workspace_cannot_be_read_for_preview(tmp_path):
     assert "outside this run's workspace" in summary
     assert "do not disclose" not in summary
     assert "--- a/" not in summary
+
+def test_shell_session_normalized_start_and_write_disclose_executed_input():
+    for action in ("START", " start "):
+        summary = _approval_summary(
+            ToolCall(
+                id="start", name="shell.session",
+                arguments={"action": action, "name": "case-probe",
+                           "command": "touch proof.txt"},
+            ),
+            shell="bash",
+        )
+        assert summary.startswith("shell.session start case-probe\n")
+        assert "touch proof.txt" in summary
+
+    for action in ("WRITE", " write "):
+        summary = _approval_summary(
+            ToolCall(
+                id="write", name="shell.session",
+                arguments={"action": action, "name": "case-probe",
+                           "input": "echo secret-stdin\\n"},
+            ),
+            shell="bash",
+        )
+        assert summary.startswith("shell.session write case-probe\n--- stdin\n")
+        assert "echo secret-stdin\\n" in summary

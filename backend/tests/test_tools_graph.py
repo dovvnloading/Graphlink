@@ -400,6 +400,41 @@ class TestDeleteNode:
             "have read yet"
         )
 
+    def test_each_distinct_delete_requires_review_even_with_a_session_grant(self):
+        from backend.harness.loop import _session_grant_eligible
+
+        document = SceneDocument()
+        parent = seed_parent(document)
+        first = document.add_chat_node(0, 200, "first leaf", False, parent.id)
+        second = document.add_chat_node(100, 200, "second leaf", False, parent.id)
+        registry, _ = make_registry_with_delete(document)
+        prompted = []
+
+        async def approve(call):
+            prompted.append(call.arguments["node_id"])
+            # Simulate a caller returning this value despite the backend not
+            # offering session approval for an 'always' registration.
+            return "session"
+
+        ctx = RunContext(
+            granted_scopes=frozenset({GRAPH_READ, GRAPH_MUTATE}),
+            request_approval=approve, session_grants=set(),
+        )
+        assert not _session_grant_eligible(
+            ToolCall(id="preview", name="graph.delete_node", arguments={"node_id": first.id}),
+            registry,
+        ), "the approval panel must hide Approve for session"
+
+        assert not invoke(registry, ctx, "graph.delete_node", {"node_id": first.id}).is_error
+        assert ctx.session_grants == set(), "a forged session decision must not be stored"
+
+        # Even an existing name-only grant from an old implementation must
+        # not short-circuit the ToolRegistry approval gate.
+        ctx.session_grants.add("graph.delete_node")
+        assert not invoke(registry, ctx, "graph.delete_node", {"node_id": second.id}).is_error
+        assert prompted == [first.id, second.id]
+        assert first.id not in document.nodes and second.id not in document.nodes
+
     def test_a_node_with_children_is_refused(self):
         document = SceneDocument()
         parent = seed_parent(document)
