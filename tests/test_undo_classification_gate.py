@@ -311,8 +311,9 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # 248 -> 249: Settings workspace-agent trusted-folder revocation.
     # 249 -> 252: harness workspace listing, preview and native reveal do not mutate the canvas document.
     # 252 -> 255: composerSend adds one intent; execution isolation adds two.
-    assert len(real) == 255, (
-        f"expected exactly 252 real registered intents, found {len(real)} - "
+    # 255 -> 258: isolated networking adds two scoped approval intents and one node setting.
+    assert len(real) == 258, (
+        f"expected exactly 258 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"

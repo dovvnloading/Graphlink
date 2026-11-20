@@ -394,15 +394,16 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     # PLAN-2026-08-24 H1: the harness node's render surface (history stays
     # in the workspace transcript, never on the wire).
     "harnessGoal", "harnessReply", "harnessStatus", "harnessStatusDetail",
-    "harnessRunId", "harnessActivity", "harnessShell", "harnessExecutionProfile", "harnessMaxTurns", "harnessSpentTurns",
+    "harnessRunId", "harnessActivity", "harnessShell", "harnessExecutionProfile", "harnessNetworkAlways", "harnessMaxTurns", "harnessSpentTurns",
     "harnessSpentTokens", "harnessAwaitingApproval", "harnessApprovalToolName",
     "harnessApprovalSummary", "harnessContextTokens", "harnessMaxContextTokens",
     # Per-call Python approval identity, added with the approval hardening.
     "harnessApprovalId",
+    # Isolated network consent: per-command approval UI and durable opt-in.
     "harnessCompactions", "harnessWorkspacePath", "harnessWorkspaceActive",
     # PLAN-2026-08-24 H6: graded consent (§2.4) plus the plan.update /
     # user.ask interaction surfaces (§2.3).
-    "harnessApprovalSessionOffered", "harnessPlan",
+    "harnessApprovalNetworkOffered", "harnessApprovalSessionOffered", "harnessPlan",
     "harnessAwaitingQuestion", "harnessQuestion",
     # Review Lens: the code_review node's 31 wire fields (codeReviewDiffText
     # deliberately excluded - served on demand via fetchCodeReviewDiffText,
