@@ -117,38 +117,18 @@ def _excel_to_csv(data: bytes, sheet: str | None) -> str:
     No formula, macro, or external workbook relationship is evaluated.
     """
     ns = f"{{{document_read._SPREADSHEET_NS}}}"
-    rel_ns = f"{{{document_read._OFFICE_REL_NS}}}"
-    pkg_ns = f"{{{document_read._PACKAGE_REL_NS}}}"
     with document_read._preflight_office_zip(data, "XLSX") as archive:
-        workbook = document_read._xml(archive, "xl/workbook.xml")
-        relationships = document_read._xml(archive, "xl/_rels/workbook.xml.rels")
-        targets = {
-            item.get("Id"): document_read._sheet_target(item.get("Target") or "")
-            for item in relationships.findall(f"{pkg_ns}Relationship")
-            if item.get("Type", "").endswith("/worksheet")
-            and item.get("TargetMode") != "External"
-        }
-        sheets = workbook.find(f"{ns}sheets")
-        if sheets is None:
-            raise WorkspaceError("Excel workbook has no worksheets.")
-        entries = [
-            (item.get("name") or "Unnamed", targets.get(item.get(f"{rel_ns}id")))
-            for item in sheets.findall(f"{ns}sheet")
-        ]
-        if not entries or len(entries) > document_read._XLSX_SHEET_CAP:
-            raise WorkspaceError("Excel workbook has no usable worksheets or too many worksheets.")
+        entries = document_read._worksheet_entries(archive)
         selected = entries[0] if sheet is None else next(
             (entry for entry in entries if entry[0].casefold() == sheet.casefold()), None
         )
         if selected is None:
             raise WorkspaceError(f"Excel worksheet {sheet!r} was not found.")
-        name, member = selected
-        if member is None:
-            raise WorkspaceError(f"Excel worksheet {name!r} has no internal data.")
+        _name, member = selected
 
         strings = document_read._shared_strings(archive)
         xml = document_read._xml(archive, member)
-        table: list[list[str]] = []
+        rows: list[dict[int, str]] = []
         first_col: int | None = None
         last_col = 0
         for row in xml.iter(f"{ns}row"):
@@ -160,15 +140,36 @@ def _excel_to_csv(data: bytes, sheet: str | None) -> str:
                     cells[index] = value
             if not cells:  # Blank styling/spacing rows aren't table data.
                 continue
-            if first_col is None:
-                first_col, last_col = min(cells), max(cells)
-                if last_col - first_col + 1 > MAX_TABLE_COLUMNS:
-                    raise WorkspaceError("Excel table has too many columns.")
-            if any(column < first_col or column > last_col for column in cells):
-                raise WorkspaceError("Excel row contains data outside its header columns.")
-            table.append([cells.get(column, "") for column in range(first_col, last_col + 1)])
-            if len(table) > MAX_TABLE_ROWS + 1:
+            first_col = min(min(cells), first_col) if first_col is not None else min(cells)
+            last_col = max(last_col, max(cells))
+            if last_col - first_col + 1 > MAX_TABLE_COLUMNS:
+                raise WorkspaceError("Excel table has too many columns.")
+            rows.append(cells)
+            if len(rows) > MAX_TABLE_ROWS + 1:
                 raise WorkspaceError("Excel table has too many rows.")
+
+        table: list[list[str]] = []
+        if first_col is not None:
+            # Canvas CSV tables require nonempty headers. Give sparse header
+            # columns stable placeholder names rather than rejecting an
+            # otherwise valid worksheet whose later rows use those columns.
+            headers = rows[0].copy()
+            used = {value.strip() for value in headers.values()}
+            for column in range(first_col, last_col + 1):
+                if column not in headers:
+                    base = f"Column {column}"
+                    label = base
+                    suffix = 2
+                    while label in used:
+                        label = f"{base} ({suffix})"
+                        suffix += 1
+                    headers[column] = label
+                    used.add(label)
+            rows[0] = headers
+            table = [
+                [cells.get(column, "") for column in range(first_col, last_col + 1)]
+                for cells in rows
+            ]
 
     output = io.StringIO(newline="")
     writer = csv.writer(output, lineterminator="\n")

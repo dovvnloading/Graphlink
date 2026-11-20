@@ -71,7 +71,7 @@ def _docx(path):
     doc.save(path)
 
 
-def _xlsx(path):
+def _xlsx(path, *, chartsheet_first=False):
     """Minimal OOXML package with shared, inline, formula, and boolean cells."""
     main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
     rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -89,7 +89,16 @@ def _xlsx(path):
         '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/>'
         '</Relationships>'
     )
+    if chartsheet_first:
+        workbook = workbook.replace("<sheets>", '<sheets><sheet name="Charts" sheetId="4" r:id="rId4"/>')
+        relationships = relationships.replace(
+            "</Relationships>",
+            f'<Relationship Id="rId4" Type="{rel}/chartsheet" '
+            'Target="chartsheets/sheet1.xml"/></Relationships>',
+        )
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        if chartsheet_first:
+            zf.writestr("xl/chartsheets/sheet1.xml", f'<chartsheet xmlns="{main}"/>')
         zf.writestr("xl/workbook.xml", workbook)
         zf.writestr("xl/_rels/workbook.xml.rels", relationships)
         zf.writestr(
@@ -175,6 +184,23 @@ def test_xlsx_sheet_ranges_and_sheet_names(fs, extension):
     assert "[Sheet 2:" not in one.content
     all_sheets = read(f"book{extension}")
     assert not all_sheets.is_error and "[Sheet 3: Empty]" in all_sheets.content
+
+
+def test_xlsx_default_read_and_ranges_skip_chartsheet(fs):
+    root, read = fs
+    _xlsx(root / "with-charts.xlsx", chartsheet_first=True)
+    default = read("with-charts.xlsx")
+    assert not default.is_error, default.content
+    assert default.content.startswith("[Sheet 1: Overview]")
+    assert "[Sheet 2: Details]" in default.content
+    assert "[Sheet 3: Empty]" in default.content
+    assert "Charts" not in default.content
+
+    selected = read("with-charts.xlsx", sheet_start=2, sheet_end=2)
+    assert not selected.is_error, selected.content
+    assert selected.content.startswith("[Sheet 2: Details]")
+    assert "Overview" not in selected.content
+    assert read("with-charts.xlsx", sheet="Charts").is_error
 
 
 def test_sheet_selectors_and_cross_format_args_are_validated(fs):
