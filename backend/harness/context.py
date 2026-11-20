@@ -189,7 +189,7 @@ def describe_machine(workspace: Path, *, shell: str = "auto", profile: str = "ho
             "Container workspace: /workspace (read/write bind mount)",
             f"Host workspace root: {workspace.resolve()}",
             "Host executables are NOT automatically available inside the container.",
-            "python.exec and python.install: unavailable in Isolated (host-only runtimes).",
+            "python.exec: persistent container REPL; python.install: container binary wheels (approved PyPI download may use network).",
             "web.search / web.fetch: backend-host HTTPS; per-task domain approval (outside container).",
             "Model/provider and other service calls: backend network, outside container.",
         ])

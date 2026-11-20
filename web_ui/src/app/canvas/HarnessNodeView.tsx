@@ -269,7 +269,7 @@ function AgentSettingsPopover({
       ) : engine === null ? (
         <p role="status">No container engine found. Install Docker Desktop (Windows/macOS), Docker Engine (Linux), or Podman to use Isolated execution. Isolated commands never fall back to Host.</p>
       ) : (
-        <p role="status">{engine === "docker" ? "Docker" : "Podman"} detected. Isolated confines shell.exec and shell.session to a container (1 CPU, 512 MiB RAM, workspace at /workspace). Network is {allowNetwork ? "enabled for all tasks by this node setting" : "off by default; the agent can request it per command"}. python.exec and python.install are unavailable; approved Web Research and provider calls still use the backend network. Pull python:3.12-slim with {engine} before your first run.</p>
+        <p role="status">{engine === "docker" ? "Docker" : "Podman"} detected. Isolated runs shell and Python in a container (1 CPU, 512 MiB RAM; workspace at /workspace). Shell networking is {allowNetwork ? "allowed for every task by the node setting" : "off by default and requestable with per-command approval"}. shell.session and python.exec stay offline; python.install may separately download approved PyPI wheels. Approved Web Research and provider calls still use the backend network. Pull python:3.12-slim with {engine} before your first run.</p>
       )}
       <p>Network access only applies to Isolated shell.exec commands. Each command still needs approval. Settings are saved with this graph. Changes apply from the next task.</p>
       <div className="harness-node-allow-rules">

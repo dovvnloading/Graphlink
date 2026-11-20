@@ -34,11 +34,16 @@ from __future__ import annotations
 import asyncio
 import sys
 import threading
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from api_provider import RequestCancelledError
 from backend.harness.python_env import PythonEnvironmentError, ensure_python_environment
+from backend.harness.python_isolation import (
+    isolated_repl_command, planned_isolated_python_environment,
+    prepare_isolated_python_environment,
+)
 from backend.harness.python_policy import source_error
+from backend.harness.shell_isolation import IsolationUnavailableError, normalize_execution_profile
 from backend.harness.workspace import WorkspaceError, ensure_workspace, workspace_dir
 from backend.providers.base import ToolCall, ToolSpec
 from backend.tools import CODE_EXECUTE, RunContext, ToolRegistry, ToolResult
@@ -55,6 +60,8 @@ PYTHON_EXEC_SPEC = ToolSpec(
     description=(
         "Run Python in a persistent interpreter whose working directory is "
         "the workspace, using its .venv/venv or a managed virtual environment. "
+        "In the Isolated profile the interpreter runs in a network-disabled "
+        "container, with a separate workspace-scoped environment. "
         "Variables, imports, and loaded data survive between calls. "
         "Returns stdout/stderr plus whether the code raised. Use print() - "
         "expression values are not echoed. Every call needs the user's "
@@ -86,12 +93,14 @@ class PythonReplRegistry:
         # Track the cancel event of the last run that borrowed each REPL,
         # so a new task can never reuse a still-stopping interpreter.
         self._owner_events: dict[str, threading.Event] = {}
+        self._profiles: dict[str, str] = {}
         self._lock = threading.RLock()
 
     def get(
         self, workspace_id: str, cwd: Path, *, manage_cwd: bool,
-        python_executable: Path | None = None,
+        python_executable: Path | PurePosixPath | None = None,
         cancel_event: threading.Event | None = None,
+        profile: str = "host", command_builder=None,
     ) -> PythonREPL:
         """The workspace's interpreter, started on first use.
 
@@ -111,6 +120,7 @@ class PythonReplRegistry:
                 stale is not None
                 and stale[1] == cwd
                 and stale[0].python_executable == selected
+                and self._profiles.get(workspace_id, "host") == profile
                 and (previous_event is None or not previous_event.is_set())
             ):
                 if cancel_event is not None:
@@ -122,11 +132,13 @@ class PythonReplRegistry:
             # race two interpreters into one workspace; the retired one is
             # stopped outside it, since killing a process is slow and no
             # other workspace should wait on it.
+            kwargs = {"command_builder": command_builder} if command_builder is not None else {}
             repl = PythonREPL(
                 repl_id=workspace_id, cwd=cwd, manage_cwd=manage_cwd,
-                python_executable=python_executable,
+                python_executable=python_executable, **kwargs,
             )
             self._repls[workspace_id] = (repl, cwd)
+            self._profiles[workspace_id] = profile
             if cancel_event is not None:
                 self._owner_events[workspace_id] = cancel_event
             else:
@@ -134,6 +146,21 @@ class PythonReplRegistry:
         if stale is not None:
             stale[0].stop()
         return repl
+
+    def bind_root(self, workspace_id: str, cwd: Path, profile: str) -> None:
+        """Retire live interpreters on workspace rebind or profile change.
+
+        This runs at task start, even if the next task does not call Python:
+        an old Host interpreter must not linger after Isolated is selected.
+        """
+        with self._lock:
+            stale = self._repls.get(workspace_id)
+            retire = stale is not None and (
+                stale[1] != cwd
+                or self._profiles.get(workspace_id, "host") != profile
+            )
+        if retire and stale is not None:
+            self.stop_workspace(workspace_id, expected_repl=stale[0])
 
     def stop_workspace(
         self, workspace_id: str, *, expected_repl: PythonREPL | None = None,
@@ -148,6 +175,7 @@ class PythonReplRegistry:
             ):
                 entry = self._repls.pop(workspace_id)
                 self._owner_events.pop(workspace_id, None)
+                self._profiles.pop(workspace_id, None)
             else:
                 entry = None
         if expected_repl is not None:
@@ -160,6 +188,7 @@ class PythonReplRegistry:
             entries = list(self._repls.values())
             self._repls.clear()
             self._owner_events.clear()
+            self._profiles.clear()
         for repl, _cwd in entries:
             repl.stop()
 
@@ -172,13 +201,6 @@ def register_harness_python_tool(
     repl_registry = repls if repls is not None else PythonReplRegistry()
 
     async def python_exec(call: ToolCall, ctx: RunContext) -> ToolResult:
-        # Defense in depth if a stale/forged tool call bypasses the profile catalog.
-        if getattr(ctx, "harness_execution_profile", "host") == "isolated":
-            return ToolResult(
-                content="python.exec is unavailable in Isolated: its persistent REPL "
-                        "runs on the host. Use shell.exec for container Python.",
-                is_error=True,
-            )
         error = source_error(call.arguments)
         if error is not None:
             return ToolResult(content=error, is_error=True)
@@ -205,16 +227,34 @@ def register_harness_python_tool(
         cancel_event = ctx.cancel.event if ctx.cancel is not None else None
         if cancel_event is not None and cancel_event.is_set():
             raise RequestCancelledError("stopped")
+        profile = normalize_execution_profile(getattr(ctx, "harness_execution_profile", "host"))
         try:
-            interpreter = await asyncio.to_thread(
-                ensure_python_environment, workspace_id, cwd, is_scratch=is_scratch,
-            )
+            interpreter: Path | PurePosixPath
+            if profile == "isolated":
+                plan = planned_isolated_python_environment(
+                    workspace_id, cwd, is_scratch=is_scratch,
+                )
+                await asyncio.to_thread(prepare_isolated_python_environment, plan)
+                interpreter = plan.interpreter
+            else:
+                interpreter = await asyncio.to_thread(
+                    lambda: ensure_python_environment(
+                        workspace_id, cwd, is_scratch=is_scratch,
+                    ),
+                )
             if cancel_event is not None and cancel_event.is_set():
                 raise RequestCancelledError("stopped")
-            repl = repl_registry.get(
-                workspace_id, cwd, manage_cwd=manage, python_executable=interpreter,
-                cancel_event=cancel_event,
-            )
+            if profile == "isolated":
+                repl = repl_registry.get(
+                    workspace_id, cwd, manage_cwd=manage, python_executable=interpreter,
+                    cancel_event=cancel_event, profile=profile,
+                    command_builder=lambda script: isolated_repl_command(plan, cwd, script),
+                )
+            else:
+                repl = repl_registry.get(
+                    workspace_id, cwd, manage_cwd=manage, python_executable=interpreter,
+                    cancel_event=cancel_event,
+                )
         except (PythonEnvironmentError, OSError) as exc:
             return ToolResult(content=f"Could not prepare Python environment: {exc}", is_error=True)
 
@@ -245,6 +285,12 @@ def register_harness_python_tool(
             if cancel_event is not None and cancel_event.is_set():
                 raise RequestCancelledError("stopped")
             output = await worker
+        except (IsolationUnavailableError, OSError) as exc:
+            await asyncio.to_thread(
+                repl_registry.stop_workspace, workspace_id, expected_repl=repl,
+            )
+            await asyncio.gather(worker, return_exceptions=True)
+            return ToolResult(content=f"Isolated Python execution failed: {exc}", is_error=True)
         except (RequestCancelledError, asyncio.TimeoutError, asyncio.CancelledError) as exc:
             await asyncio.to_thread(
                 repl_registry.stop_workspace, workspace_id, expected_repl=repl,
@@ -282,9 +328,9 @@ def register_harness_python_tool(
 
 USAGE_HINT = (
     "python.exec runs in the workspace's .venv/venv when available, or a persistent "
-    "managed virtual environment created on first use. State survives between "
-    "calls; every execution requires fresh approval. Host profile only: "
-    "Isolated uses shell.exec for Python instead."
+    "managed virtual environment created on first use. In Isolated mode it "
+    "uses a network-disabled container with an independent workspace environment. "
+    "State survives between calls; every execution requires fresh approval."
 )
 
 

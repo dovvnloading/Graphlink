@@ -141,7 +141,7 @@ def _run_command(command: str, cwd, cancel_event, on_output=None, shell: str = "
     argv: str | list[str]
     if normalize_execution_profile(profile) == "isolated":
         argv, engine, name = container_invocation(
-            command, cwd, env=kwargs["env"], allow_network=allow_network is True,
+            command, cwd, env=kwargs["env"], network=allow_network is True,
         )
         via_shell = False
         container = (engine, name)
