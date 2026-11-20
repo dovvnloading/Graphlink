@@ -56,7 +56,7 @@ export function parseHarnessWorkspaceDocument(value: unknown): HarnessWorkspaceD
  * A fence longer than the longest run of backticks in the content prevents
  * source code from accidentally closing the preview. */
 export function harnessFileDocumentMarkdown(document: HarnessWorkspaceDocument): string {
-  const markdown = /\\.(md|markdown|mdx)$/i.test(document.path);
+  const markdown = /\.(md|markdown|mdx)$/i.test(document.path);
   const text = document.content || "(Empty file)";
   const longestFence = [...text.matchAll(/`+/g)].reduce((longest, match) => Math.max(longest, match[0].length), 0);
   const fence = "`".repeat(Math.max(3, longestFence + 1));
