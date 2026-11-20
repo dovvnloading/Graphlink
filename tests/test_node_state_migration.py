@@ -203,6 +203,9 @@ _KNOWN_NON_NODE_FIELD_ACCESS_SHAPES = {
         # exercises exactly these two classes directly.
         {"root": "RequestCancelled", "file": "test_web_research_domain.py"},
         {"root": "exc", "file": "test_web_research_domain.py"},
+        # In tools_web.py, both `exc` bindings are ResearchFailure catches;
+        # .code is an error code, not the migrated SceneNode code field.
+        {"root": "exc", "file": "tools_web.py"},
     ),
     "language": (),
     # PR6's "document" kind reuses byte_size/mime_type/duration_seconds,
@@ -391,7 +394,7 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     # PLAN-2026-08-24 H1: the harness node's render surface (history stays
     # in the workspace transcript, never on the wire).
     "harnessGoal", "harnessReply", "harnessStatus", "harnessStatusDetail",
-    "harnessRunId", "harnessActivity", "harnessShell", "harnessMaxTurns", "harnessSpentTurns",
+    "harnessRunId", "harnessActivity", "harnessShell", "harnessExecutionProfile", "harnessMaxTurns", "harnessSpentTurns",
     "harnessSpentTokens", "harnessAwaitingApproval", "harnessApprovalToolName",
     "harnessApprovalSummary", "harnessContextTokens", "harnessMaxContextTokens",
     # Per-call Python approval identity, added with the approval hardening.

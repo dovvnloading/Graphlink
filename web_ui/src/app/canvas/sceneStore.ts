@@ -1176,6 +1176,15 @@ export class SceneStore {
     this.transport.fireIntent("harness", "removeShellAllowRule", [nodeId, rule]);
   }
 
+  setHarnessExecutionProfile(nodeId: string, profile: string): void {
+    this.transport.fireIntent("harness", "setExecutionProfile", [nodeId, profile]);
+  }
+
+  async getHarnessIsolationEngine(): Promise<string | null> {
+    const found: unknown = await this.transport.request("harness", "getIsolationEngine", []);
+    return found === "docker" || found === "podman" ? found : null;
+  }
+
   // R5.2: real Artifact/Drafter plugin - sendArtifactMessage appends a real
   // user instruction AND triggers ArtifactAgent.get_response(current_artifact,
   // history) for an existing artifact node; cancelArtifactRequest targets it

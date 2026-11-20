@@ -886,6 +886,7 @@ class SceneNodeRow:
     harnessWorkspaceActive: str = ""
     harnessShell: str = "auto"
     harnessShellAllowRules: list[str] = field(default_factory=list)
+    harnessExecutionProfile: str = "host"
     harnessMaxTurns: int = 0
     harnessSpentTurns: int = 0
     harnessSpentTokens: int = 0

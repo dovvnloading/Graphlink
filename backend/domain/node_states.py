@@ -1143,6 +1143,7 @@ class HarnessState(NodeState):
     # Durable, node-local grants: entries are "effective-shell<TAB>prefix".
     # They are created only by explicit shell approval and may be revoked.
     harness_shell_allow_rules: list[str] = field(default_factory=list)
+    harness_execution_profile: str = "host"
     harness_activity: list[dict[str, Any]] = field(default_factory=list)
     harness_max_turns: int = 16
     harness_spent_turns: int = 0

@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timezone
 import re
 import time
-from typing import Sequence
+from typing import Callable, Sequence
 from urllib.parse import urljoin, urlsplit
 
 import api_provider
@@ -228,7 +228,17 @@ class RequestsDocumentFetcher:
                 return
             time.sleep(max(0.0, min(self.POLITE_WAIT_STEP_SECONDS, remaining_wait, remaining_budget)))
 
-    def fetch(self, result: SearchResult, *, limits: ResearchLimits, token: CancellationToken) -> FetchedPayload:
+    def fetch(
+        self, result: SearchResult, *, limits: ResearchLimits, token: CancellationToken,
+        on_request: Callable[[str], None] | None = None,
+    ) -> FetchedPayload:
+        """Optional pre-request hook for callers requiring domain consent.
+
+        Called AFTER each hop's public-IP validation but BEFORE robots.txt or
+        page traffic, including cross-host redirects. The normal Web Research
+        node leaves it unset. Time spent waiting for a human must not count
+        against the network fetch deadline.
+        """
         if not REQUESTS_AVAILABLE:
             raise ResearchFailure(
                 "Web fetching is unavailable because the requests package is not installed.",
@@ -252,6 +262,14 @@ class RequestsDocumentFetcher:
                     except URLPolicyError as exc:
                         raise ResearchFailure(str(exc), code="url_blocked_by_policy", retryable=False, source_id=result.source_id) from exc
                     current_url = validated.canonical_url
+
+                    if on_request is not None:
+                        consent_started = time.monotonic()
+                        try:
+                            on_request(current_url)
+                        finally:
+                            started += time.monotonic() - consent_started
+                        token.raise_if_cancelled()
 
                     try:
                         owed = self.etiquette.gate(

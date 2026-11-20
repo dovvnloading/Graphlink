@@ -945,6 +945,8 @@ function makeHarnessFns(id: string, liveRef: { current: DispatcherLive }) {
     onRevealWorkspace: () => liveRef.current.store.revealHarnessWorkspace(id),
     onSetShell: (shell: string) => liveRef.current.store.setHarnessShell(id, shell),
     onRemoveShellAllowRule: (rule: string) => liveRef.current.store.removeHarnessShellAllowRule(id, rule),
+    onSetExecutionProfile: (profile: string) => liveRef.current.store.setHarnessExecutionProfile(id, profile),
+    onGetIsolationEngine: () => liveRef.current.store.getHarnessIsolationEngine(),
   };
 }
 
@@ -1659,6 +1661,7 @@ export function toFlowNodes(
           harnessWorkspaceActive: n.harnessWorkspaceActive,
           harnessShell: n.harnessShell,
           harnessShellAllowRules: n.harnessShellAllowRules,
+          harnessExecutionProfile: n.harnessExecutionProfile,
           harnessAwaitingApproval: n.harnessAwaitingApproval,
           harnessApprovalToolName: n.harnessApprovalToolName,
           harnessApprovalSummary: n.harnessApprovalSummary,

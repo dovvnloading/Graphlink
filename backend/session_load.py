@@ -212,6 +212,7 @@ from backend.canvas import (
 from backend.domain.model import EDGE_ROLES, EdgeRole, SceneError
 from backend.domain.node_access import with_state
 from backend.harness.shell_selection import normalize_shell
+from backend.harness.shell_isolation import normalize_execution_profile
 # Not re-exported by backend.canvas, unlike the kinds above - imported
 # from the domain package directly, as session_save.py does.
 from backend.domain.table_workflows import restore_table_data
@@ -1079,6 +1080,7 @@ def _restore_harness_payload(payload: dict[str, Any]) -> SceneNode:
             harness_workspace_path=str(payload.get("workspace_path", "")),
             harness_shell=normalize_shell(payload.get("shell", "auto")),
             harness_shell_allow_rules=_restore_harness_shell_allow_rules(payload.get("shell_allow_rules")),
+            harness_execution_profile=normalize_execution_profile(payload.get("execution_profile", "host")),
             harness_activity=activity,
             harness_max_turns=_positive_int(payload.get("max_turns"), 16),
             harness_spent_turns=_non_negative_int(payload.get("spent_turns")),

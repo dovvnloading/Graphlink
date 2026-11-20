@@ -58,6 +58,7 @@ export interface HarnessNodeData extends Record<string, unknown> {
   harnessWorkspaceActive: string;
   harnessShell: string;
   harnessShellAllowRules: string[];
+  harnessExecutionProfile: string;
   harnessMaxTurns: number;
   harnessSpentTurns: number;
   harnessSpentTokens: number;
@@ -79,6 +80,8 @@ export interface HarnessNodeData extends Record<string, unknown> {
   onRevealWorkspace: () => void;
   onSetShell: (shell: string) => void;
   onRemoveShellAllowRule: (rule: string) => void;
+  onSetExecutionProfile: (profile: string) => void;
+  onGetIsolationEngine: () => Promise<string | null>;
 }
 
 export type HarnessFlowNode = Node<HarnessNodeData, "harness">;
@@ -130,18 +133,30 @@ function HarnessNodeMenu({
 /** Node settings are portaled to the document, not rendered inside the
  * transformed React Flow node. Otherwise fixed coordinates drift with zoom. */
 function AgentSettingsPopover({
-  position, shell, rules, onSetShell, onRemoveRule, onClose, triggerRef,
+  position, shell, rules, onSetShell, onRemoveRule, profile, onSetExecutionProfile, onGetIsolationEngine, onClose, triggerRef,
 }: {
   position: MenuPosition;
   shell: string;
   rules: string[];
   onSetShell: (shell: string) => void;
   onRemoveRule: (rule: string) => void;
+  profile: string;
+  onSetExecutionProfile: (profile: string) => void;
+  onGetIsolationEngine: () => Promise<string | null>;
   onClose: () => void;
   triggerRef: RefObject<HTMLButtonElement | null>;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const [placement, setPlacement] = useState(position);
+  // undefined = checking, null = neither Docker nor Podman on the backend PATH.
+  const [engine, setEngine] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    let mounted = true;
+    void onGetIsolationEngine()
+      .then((found) => { if (mounted) setEngine(found); })
+      .catch(() => { if (mounted) setEngine(null); });
+    return () => { mounted = false; };
+  }, [onGetIsolationEngine]);
   const windows = /Windows|Win32|Win64/i.test(
     typeof navigator === "undefined" ? "" : navigator.userAgent + " " + navigator.platform,
   );
@@ -160,7 +175,7 @@ function AgentSettingsPopover({
       ? Math.max(8, position.y - rect.height - 28)
       : position.y;
     setPlacement({ x, y });
-  }, [position.x, position.y]);
+  }, [position.x, position.y, engine]);
 
   useEffect(() => {
     panelRef.current?.querySelector("select")?.focus();
@@ -217,6 +232,25 @@ function AgentSettingsPopover({
           )}
         </select>
       </label>
+      <label className="harness-node-settings-field">
+        <span>Execution profile</span>
+        <select
+          className="nodrag nowheel"
+          aria-label="Execution profile"
+          value={profile === "isolated" ? "isolated" : "host"}
+          onChange={(event) => onSetExecutionProfile(event.target.value)}
+        >
+          <option value="host">Host (default)</option>
+          <option value="isolated" disabled={engine === null}>Isolated (Docker / Podman)</option>
+        </select>
+      </label>
+      {engine === undefined ? (
+        <p role="status">Checking Docker / Podman availability…</p>
+      ) : engine === null ? (
+        <p role="status">No container engine found. Install Docker Desktop (Windows/macOS), Docker Engine (Linux), or Podman to use Isolated execution. Isolated commands never fall back to Host.</p>
+      ) : (
+        <p role="status">{engine === "docker" ? "Docker" : "Podman"} detected. Isolated uses a network-disabled container with 1 CPU, 512 MiB RAM and your workspace mounted at /workspace. Pull python:3.12-slim with {engine} before your first run.</p>
+      )}
       <p>Shell changes apply from the next task.</p>
       <div className="harness-node-allow-rules">
         <strong>Allowed command prefixes</strong>
@@ -352,7 +386,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   const [settingsPosition, setSettingsPosition] = useState<MenuPosition | null>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
   const shellApproval = data.harnessApprovalToolName === "shell.exec";
-  const boundApproval = shellApproval || ["python.exec", "python.install"].includes(data.harnessApprovalToolName) || data.harnessApprovalToolName.startsWith("fal.");
+  const boundApproval = shellApproval || ["python.exec", "python.install", "web.fetch", "web.search"].includes(data.harnessApprovalToolName) || data.harnessApprovalToolName.startsWith("fal.");
   const fileApproval = data.harnessApprovalToolName === "fs.write" || data.harnessApprovalToolName === "fs.edit";
   // Never ask someone to approve an unseen mutation. The backend explains
   // when it cannot safely read the existing file to build the preview.
@@ -478,6 +512,9 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
             rules={data.harnessShellAllowRules}
             onSetShell={data.onSetShell}
             onRemoveRule={data.onRemoveShellAllowRule}
+            profile={data.harnessExecutionProfile}
+            onSetExecutionProfile={data.onSetExecutionProfile}
+            onGetIsolationEngine={data.onGetIsolationEngine}
             onClose={() => setSettingsPosition(null)}
             triggerRef={settingsTriggerRef}
           />

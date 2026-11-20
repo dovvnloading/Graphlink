@@ -143,7 +143,12 @@ class RunContext:
     # None outside the workspace agent. The live node list is shared with the
     # harness so adding/removing a rule takes effect during the same run.
     shell_allow_rules: list[str] | None = None
+    # Optional per-run catalog, narrower than the scope grant when needed.
+    offered_tool_names: frozenset[str] | None = None
     _approved_fingerprints: set[str] = field(default_factory=set)
+    # Per-task network consent: domain grants never outlive this RunContext.
+    # Web handlers manage their own domain-level prompts, not tool fingerprints.
+    _approved_web_domains: set[str] = field(default_factory=set)
 
 
 @dataclass(frozen=True)
@@ -253,6 +258,12 @@ class ToolRegistry:
 
     async def invoke(self, call: ToolCall, ctx: RunContext) -> ToolResult:
         _raise_if_cancelled(ctx.cancel.event if ctx.cancel is not None else None)
+
+        if ctx.offered_tool_names is not None and call.name not in ctx.offered_tool_names:
+            return ToolResult(
+                content=f"Tool {call.name!r} was not offered to this run.",
+                is_error=True,
+            )
 
         registration = self._registrations.get(call.name)
         if registration is None:
