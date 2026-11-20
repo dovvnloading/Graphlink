@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { Composer } from "./Composer";
@@ -62,9 +62,11 @@ function makeSceneStore(
     replyTargetNodeId?: string | null;
     synthesizeTargetNodeIds?: string[] | null;
     scene?: object;
+    selectedNodeId?: string | null;
   } = {},
 ) {
   const sendMessage = vi.fn();
+  const sendComposerAgentMessage = vi.fn().mockResolvedValue(true);
   const setReplyTargetNodeId = vi.fn();
   const setSynthesizeTargetNodeIds = vi.fn();
   const scene = { ...initialSceneState, ...overrides.scene };
@@ -72,17 +74,127 @@ function makeSceneStore(
   const synthesizeTargetNodeIds = overrides.synthesizeTargetNodeIds ?? null;
   const sceneStore = {
     sendMessage,
+    sendComposerAgentMessage,
     setReplyTargetNodeId,
     setSynthesizeTargetNodeIds,
     subscribe: () => () => {},
     getScene: () => scene,
+    getSelectedNodeId: () => overrides.selectedNodeId ?? null,
     getReplyTargetNodeId: () => replyTargetNodeId,
     getSynthesizeTargetNodeIds: () => synthesizeTargetNodeIds,
   };
-  return { sceneStore, sendMessage, setReplyTargetNodeId, setSynthesizeTargetNodeIds };
+  return { sceneStore, sendMessage, sendComposerAgentMessage, setReplyTargetNodeId, setSynthesizeTargetNodeIds };
 }
 
 describe("Composer", () => {
+
+  it("agent toggle routes to the selected agent with the composer model instead of ordinary chat", async () => {
+    const user = userEvent.setup();
+    const { store, updateDraft } = makeStore({
+      composer: {
+        draft: { ...initialComposerState.draft, text: "Review these changes" },
+        route: { ...initialComposerState.route, modelId: "qwen3:8b", available: true },
+        request: { ...initialComposerState.request, canSend: true },
+      },
+    });
+    const { sceneStore, sendMessage, sendComposerAgentMessage } = makeSceneStore({
+      selectedNodeId: "agent-1",
+      scene: { nodes: [{ id: "agent-1", kind: "harness", title: "Code agent" }] },
+    });
+    let finishSend: (started: boolean) => void = () => {};
+    sendComposerAgentMessage.mockReturnValue(new Promise<boolean>((resolve) => {
+      finishSend = resolve;
+    }));
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - minimal test store */}
+        <Composer store={store} sceneStore={sceneStore} />
+      </OverlayProvider>,
+    );
+    expect(screen.getByRole("button", { name: "Send to workspace agent" })).toHaveAttribute("aria-pressed", "false");
+    await user.click(screen.getByRole("button", { name: "Send to workspace agent" }));
+    expect(screen.getByRole("button", { name: "Send to workspace agent" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("Agent destination")).toHaveTextContent("Selected: Code agent");
+    expect(screen.getByPlaceholderText("Give the workspace agent a task…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Compare models" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(sendComposerAgentMessage).toHaveBeenCalledWith("Review these changes");
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(updateDraft).not.toHaveBeenCalledWith("");
+    finishSend(true);
+    await waitFor(() => expect(updateDraft).toHaveBeenCalledWith(""));
+  });
+
+  it("agent mode creates a new agent when the selected node is not an agent", async () => {
+    const user = userEvent.setup();
+    const { store } = makeStore({
+      composer: {
+        draft: { ...initialComposerState.draft, text: "Inventory the workspace" },
+        route: { ...initialComposerState.route, modelId: "local-chat", available: true },
+        request: { ...initialComposerState.request, canSend: true },
+      },
+    });
+    const { sceneStore, sendComposerAgentMessage } = makeSceneStore({
+      selectedNodeId: "note-1",
+      scene: { nodes: [{ id: "note-1", kind: "note", title: "Note" }] },
+    });
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - minimal test store */}
+        <Composer store={store} sceneStore={sceneStore} />
+      </OverlayProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Send to workspace agent" }));
+    expect(screen.getByLabelText("Agent destination")).toHaveTextContent("New agent · scratch workspace");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(sendComposerAgentMessage).toHaveBeenCalledWith("Inventory the workspace");
+  });
+
+  it("keeps the composer text after a rejected agent dispatch and allows retry", async () => {
+    const user = userEvent.setup();
+    const { store, updateDraft } = makeStore({
+      composer: {
+        draft: { ...initialComposerState.draft, text: "Don't lose this" },
+        route: { ...initialComposerState.route, modelId: "local-chat", available: true },
+        request: { ...initialComposerState.request, canSend: true },
+      },
+    });
+    const { sceneStore, sendComposerAgentMessage } = makeSceneStore();
+    sendComposerAgentMessage.mockResolvedValue(false);
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - minimal test store */}
+        <Composer store={store} sceneStore={sceneStore} />
+      </OverlayProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Send to workspace agent" }));
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("could not start");
+    expect(updateDraft).not.toHaveBeenCalledWith("");
+    expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+  });
+
+  it("does not send an agent task without an available composer model", async () => {
+    const user = userEvent.setup();
+    const { store } = makeStore({
+      composer: {
+        draft: { ...initialComposerState.draft, text: "Task" },
+        route: { ...initialComposerState.route, modelId: "", available: false },
+        request: { ...initialComposerState.request, canSend: true },
+      },
+    });
+    const { sceneStore, sendComposerAgentMessage } = makeSceneStore();
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - minimal test store */}
+        <Composer store={store} sceneStore={sceneStore} />
+      </OverlayProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Send to workspace agent" }));
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    expect(sendComposerAgentMessage).not.toHaveBeenCalled();
+  });
+
 
   it("comparison mode requires two models and sends provider-qualified siblings instead of a normal send", async () => {
     const user = userEvent.setup();

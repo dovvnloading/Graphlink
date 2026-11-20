@@ -313,6 +313,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
     # content (an ordinary Ctrl+Z-undoable command, run_id-stamped after the
     # claim); the run itself and its transcript live outside the undo domain.
     Classified("harness", "start", "A", "content: creates the harness node (the run it then starts is separate lifecycle; history lives in the workspace transcript, not the document)"),
+    Classified("harness", "composerSend", "A", "content: creates an undoable harness node if none is selected; dispatch to an existing agent is run-lifecycle only"),
     Classified("harness", "send", "B", "run-lifecycle: start a follow-up task against the existing node's transcript"),
     Classified("harness", "cancel", "B", "run-lifecycle: cancel"),
     Classified("harness", "approveTool", "B", "security: harness tool-call approval gate"),

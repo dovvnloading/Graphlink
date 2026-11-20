@@ -17,7 +17,9 @@ def canonicalize_url(url: str) -> str:
     raw = str(url or "")
     # urlsplit silently strips CR/LF/TAB and leading C0 controls. Never let
     # an approval disclosure describe a different URL than the one fetched.
-    if any(ord(char) < 32 or ord(char) == 127 for char in raw):
+    # Reject raw backslashes everywhere, including paths: clients can
+    # interpret them differently, and literal escape text is ambiguous.
+    if "\\" in raw or any(ord(char) < 32 or ord(char) == 127 for char in raw):
         return ""
     try:
         parsed = urlsplit(raw.strip())

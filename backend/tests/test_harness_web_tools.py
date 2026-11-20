@@ -262,7 +262,8 @@ def test_invalid_fetch_url_never_prompts_or_fetches(monkeypatch):
             for url in (
                 "http://pages.example/", "https://user:pass@pages.example/",
                 "https://@pages.example/", "https://a.example\\\\@pages.example/",
-                "https://pages.example/\\n", "https://exa／mple.example/",
+                "https://pages.example/\\n", "https://pages.example/\n",
+                "https://exa／mple.example/",
                 "not-a-url",
             )
         ]

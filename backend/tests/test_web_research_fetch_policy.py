@@ -219,6 +219,7 @@ class TestConsentPreflight:
 
     @pytest.mark.parametrize("url", (
         "https://example.com/\\n", "https://exa\\tmple.com/",
+        "https://example.com/\n", "https://exa\tmple.com/",
         "https://@example.com/", "https://a.example\\\\@b.example/",
         "https://exa／mple.com/", "https://[unclosed.example/",
     ))
