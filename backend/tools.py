@@ -141,6 +141,9 @@ class RunContext:
     # the case for every non-harness surface today.
     session_grants: set[str] | None = None
     _approved_fingerprints: set[str] = field(default_factory=set)
+    # Per-task network consent: domain grants never outlive this RunContext.
+    # Web handlers manage their own domain-level prompts, not tool fingerprints.
+    _approved_web_domains: set[str] = field(default_factory=set)
 
 
 @dataclass(frozen=True)
