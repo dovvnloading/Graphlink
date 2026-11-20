@@ -652,6 +652,52 @@ class TestShellSessions:
         workspace.mkdir()
         return registry, sessions, workspace
 
+    @pytest.mark.parametrize(
+        ("action", "field", "original", "changed"),
+        [
+            ("start", "command", "echo reviewed", "echo changed"),
+            ("write", "input", "reviewed stdin", "changed stdin"),
+        ],
+    )
+    @pytest.mark.parametrize("mutated_object", ["caller", "disclosure"])
+    def test_issue_731_session_executes_only_the_reviewed_command_or_stdin(
+        self, tmp_path, action, field, original, changed, mutated_object,
+    ):
+        from backend.harness.loop import _approval_summary
+        from backend.harness.tools_shell import register_harness_shell_tool
+
+        # If the registry runs the handler, even the first bind_root is a
+        # failure: consent was for the original command/input, not the edit.
+        invoked = []
+
+        class Sessions:
+            def bind_root(self, *args, **kwargs):
+                invoked.append("handler")
+
+        registry = ToolRegistry()
+        register_harness_shell_tool(registry, Sessions())
+        pending = ToolCall(
+            id="session-mutable", name="shell.session",
+            arguments={"action": action, "name": "demo", field: original},
+        )
+
+        async def approval(disclosed):
+            summary = _approval_summary(disclosed, shell="bash")
+            assert original in summary
+            if mutated_object == "caller":
+                pending.arguments[field] = changed
+            else:
+                disclosed.arguments[field] = changed
+            return True
+
+        ctx = RunContext(
+            granted_scopes=frozenset({CODE_EXECUTE}), request_approval=approval,
+        )
+        result = asyncio.run(registry.invoke(pending, ctx))
+        assert result.is_error
+        assert "changed while approval was pending" in result.content
+        assert invoked == []
+
     def test_a_session_holds_a_process_open_and_takes_stdin(self, tmp_path):
         registry, sessions, workspace = self._setup(tmp_path)
         ctx = _tool_ctx(workspace)

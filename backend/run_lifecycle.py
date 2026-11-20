@@ -165,9 +165,13 @@ class RunHandle:
     cancel_event: threading.Event | None = None
     on_cancel: Callable[[], None] | None = None
     approval_future: asyncio.Future | None = None
-    # Per-disclosure identity for Python approvals; empty for existing
-    # approval surfaces. Never persisted and never a proof of human consent.
+    # Per-disclosure identity for every workspace consent prompt (and other
+    # token-bound prompts); never persisted or itself proof of consent.
     approval_token: str = ""
+    # Whether a persistent grant is actually offered for this exact prompt.
+    # Empty blocks forged "Always allow" intents; the kind determines whether
+    # a grant is an exact shell rule or a tool-scoped session grant.
+    harness_session_approval_kind: str = ""
     # True only for a pending, explicitly scoped workspace network request.
     harness_network_approval: bool = False
     approval_snapshot_fn: Callable[[], Any] | None = None
