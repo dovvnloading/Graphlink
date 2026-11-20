@@ -50,6 +50,7 @@ def test_builtin_modules_keep_their_scopes_approvals_and_hints(tmp_path):
             "shell.exec": (CODE_EXECUTE, "always"),
             "shell.session": (CODE_EXECUTE, "always"),
             "python.exec": (CODE_EXECUTE, "always"),
+            "python.install": (CODE_EXECUTE, "always"),
             "plan.update": (GRAPH_READ, "auto"),
             "user.ask": (PROVIDER_CALL, "auto"),
             "subagent.spawn": (PROVIDER_CALL, "auto"),
@@ -74,8 +75,8 @@ def test_builtin_modules_keep_their_scopes_approvals_and_hints(tmp_path):
         for name in parallel_reads:
             assert registry.parallel_safe_for(name), name
         for name in (
-            "fs.write", "fs.edit", "shell.exec", "python.exec", "plan.update",
-            "user.ask", "graph.delete_node", "graph.run_node",
+            "fs.write", "fs.edit", "shell.exec", "python.exec", "python.install",
+            "plan.update", "user.ask", "graph.delete_node", "graph.run_node",
             "graph.publish_file", "missing.tool",
         ):
             assert not registry.parallel_safe_for(name), name

@@ -269,11 +269,16 @@ class ToolRegistry:
         # dict is still mutable. Keep private execution arguments distinct
         # from both the caller's object and the object sent to the approval
         # callback. Refuse a changed pending request, without caching consent.
-        original_python_call = call if call.name == "python.exec" else None
+        original_python_call = call if call.name in ("python.exec", "python.install") else None
         if original_python_call is not None:
-            from backend.harness.python_policy import source_error
+            if call.name == "python.exec":
+                from backend.harness.python_policy import source_error
 
-            error = source_error(call.arguments)
+                error = source_error(call.arguments)
+            else:
+                from backend.harness.python_install import install_requirements_error
+
+                error = install_requirements_error(call.arguments)
             if error is not None:
                 return ToolResult(content=error, is_error=True)
             call = ToolCall(id=call.id, name=call.name, arguments=deepcopy(call.arguments))

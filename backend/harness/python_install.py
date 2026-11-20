@@ -1,0 +1,312 @@
+"""Wheel-only, approval-bound package installation for harness Python environments.
+
+The wheelhouse is shared by all workspaces and deliberately not part of any
+workspace's node-delete or age-sweep lifecycle. Pip's normal HTTP cache alone
+cannot satisfy an offline install: the wheelhouse is the local package index
+used for *every* installation. Only a download from the canonical PyPI index
+may add wheels to it; source archives, direct references and pip options are
+not accepted as model arguments.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+from api_provider import RequestCancelledError
+from backend.harness.python_env import (
+    _usable_venv,
+    ensure_python_environment,
+    managed_venv_dir,
+    venv_python,
+)
+from backend.harness.workspace import WorkspaceError, workspace_dir
+from backend.tools import RunContext, ToolResult
+from graphlink_execution_guard import (
+    assign_guarded_subprocess,
+    create_execution_guard,
+    spawn_guarded_subprocess,
+)
+from graphlink_process_env import safe_subprocess_env
+from graphlink_scratch_dirs import prepare_scratch_dir
+
+DEFAULT_PYPI_INDEX = "https://pypi.org/simple/"
+# Stable across application restarts and workspace deletion, even when the
+# operating system clears temporary directories. Never age-swept.
+PYTHON_WHEEL_CACHE_ROOT = Path.home() / ".graphlink" / "python-wheel-cache"
+MAX_INSTALL_PACKAGES = 32
+MAX_PACKAGE_CHARS = 180
+_PIP_TIMEOUT_SECONDS = 300
+_POLL_SECONDS = 0.2
+_OUTPUT_CAP = 12_000
+_CACHE_LOCK = threading.Lock()
+
+# Deliberately narrower than PEP 508: index names, optional extras, and
+# version constraints only. No URL/path/VCS reference, requirement file,
+# environment marker, editable flag, or pip option can escape the PyPI-only
+# and wheel-only subprocess policy. Pip itself validates the version grammar.
+_VERSION = r"(?:===|==|!=|~=|<=|>=|<|>)\s*[A-Za-z0-9][A-Za-z0-9*.+!_-]*"
+_REQUIREMENT = re.compile(
+    rf"[A-Za-z0-9][A-Za-z0-9._-]*"
+    rf"(?:\[[A-Za-z0-9][A-Za-z0-9.,_-]*\])?"
+    rf"(?:\s*{_VERSION}(?:\s*,\s*{_VERSION})*)?\Z",
+    re.ASCII,
+)
+
+
+def install_requirements_error(arguments: dict) -> str | None:
+    """Check before approval, so the human is not asked to bless a non-install."""
+    packages = arguments.get("packages")
+    if not isinstance(packages, list) or not 1 <= len(packages) <= MAX_INSTALL_PACKAGES:
+        return f"python.install needs 1 to {MAX_INSTALL_PACKAGES} packages in a list."
+    for package in packages:
+        if (
+            not isinstance(package, str)
+            or not package
+            or len(package) > MAX_PACKAGE_CHARS
+            or _REQUIREMENT.fullmatch(package) is None
+        ):
+            return (
+                "python.install accepts only package names with optional extras and "
+                "version specifiers (no paths, URLs, markers or pip options)."
+            )
+    # Unknown keys are not installation options. Reject them rather than
+    # accepting a misleading approval that silently ignores their effects.
+    if set(arguments) != {"packages"}:
+        return "python.install accepts only the packages argument."
+    return None
+
+
+def workspace_install_binding(ctx: RunContext) -> tuple[str, Path, bool]:
+    """Use the run-bound root; never trust an agent-supplied environment path."""
+    workspace_id = getattr(ctx, "harness_workspace_id", None)
+    if not isinstance(workspace_id, str) or not workspace_id:
+        raise WorkspaceError("No harness workspace is bound to this run.")
+    bound = getattr(ctx, "harness_workspace_dir", None)
+    if isinstance(bound, Path):
+        is_scratch = (
+            getattr(ctx, "harness_workspace_is_user_dir", None) is False
+            or bound.resolve() == workspace_dir(workspace_id).resolve()
+        )
+        return workspace_id, bound, is_scratch
+    return workspace_id, workspace_dir(workspace_id), True
+
+
+def planned_install_interpreter(workspace_id: str, root: Path, *, is_scratch: bool) -> Path:
+    """Select without creating a venv, for the exact approval disclosure."""
+    for name in (".venv", "venv"):
+        candidate = root / name
+        if _usable_venv(candidate):
+            return venv_python(candidate)
+    return venv_python(managed_venv_dir(workspace_id, root, is_scratch=is_scratch))
+
+
+def install_approval_summary(packages: list[str], interpreter: Path | None) -> str:
+    target = str(interpreter) if interpreter is not None else "(no workspace bound)"
+    return "python.install\n--- environment\n" + target + "\n--- packages\n" + "\n".join(packages)
+
+
+def _run_pip(argv: list[str], cwd: Path, cancel_event) -> tuple[int | None, str, str]:
+    """Run argv without a shell, a secret-bearing environment, or an orphaned tree."""
+    if cancel_event is not None and cancel_event.is_set():
+        return None, "", "cancelled"
+    env = safe_subprocess_env()
+    # Disables all pip configuration files, including global extra-index-url
+    # and find-links settings. The allowlisted parent env has no PIP_* vars.
+    env["PIP_CONFIG_FILE"] = os.devnull
+    kwargs: dict = {"env": env}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+    guard = create_execution_guard()
+    try:
+        process = spawn_guarded_subprocess(
+            guard, argv,
+            cwd=str(cwd),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            **guard.popen_kwargs(),
+            **kwargs,
+        )
+        try:
+            assign_guarded_subprocess(guard, process)
+        except BaseException:
+            process.kill()
+            process.wait(timeout=3)
+            raise
+
+        fragments: list[str] = []
+        retained = [0]
+
+        def drain() -> None:
+            stream = process.stdout
+            if stream is None:
+                return
+            try:
+                while True:
+                    chunk = stream.readline(4096)
+                    if not chunk:
+                        break
+                    if retained[0] < _OUTPUT_CAP:
+                        part = chunk[: _OUTPUT_CAP - retained[0]]
+                        fragments.append(part)
+                        retained[0] += len(part)
+            except (OSError, ValueError):
+                pass
+
+        reader = threading.Thread(target=drain, name="python-install-output", daemon=True)
+        reader.start()
+        deadline = time.monotonic() + _PIP_TIMEOUT_SECONDS
+        while process.poll() is None:
+            if cancel_event is not None and cancel_event.is_set():
+                return None, "".join(fragments), "cancelled"
+            if time.monotonic() >= deadline:
+                return None, "".join(fragments), "timeout"
+            time.sleep(_POLL_SECONDS)
+        reader.join(timeout=2)
+        output = "".join(fragments)
+        if retained[0] >= _OUTPUT_CAP:
+            output += "\n[output truncated]"
+        return process.returncode, output, "ok"
+    finally:
+        guard.close()
+
+
+def _checked_pip(argv: list[str], cwd: Path, cancel_event) -> tuple[int, str]:
+    code, output, ended = _run_pip(argv, cwd, cancel_event)
+    if ended == "cancelled":
+        raise RequestCancelledError("stopped")
+    if ended == "timeout":
+        raise TimeoutError(f"Package operation timed out after {_PIP_TIMEOUT_SECONDS}s.\n{output}")
+    if code is None:
+        raise RuntimeError("Package subprocess returned no exit code.")
+    return code, output
+
+
+def _prepare_cache(cache_root: Path) -> tuple[Path, Path]:
+    wheels, http = cache_root / "wheels", cache_root / "pip-http"
+    if any(path.is_symlink() for path in (cache_root, wheels, http)):
+        raise OSError("Refusing to use a symlinked Python wheel cache.")
+    # prepare_scratch_dir secures the shared parent before creating leaves.
+    prepare_scratch_dir(wheels)
+    prepare_scratch_dir(http)
+    return wheels, http
+
+
+def _install_in_worker(
+    interpreter: Path, cwd: Path, packages: list[str], cancel_event,
+    cache_root: Path,
+) -> ToolResult:
+    # Concurrent tools cannot download into the same wheel filename at once.
+    while not _CACHE_LOCK.acquire(timeout=_POLL_SECONDS):
+        if cancel_event is not None and cancel_event.is_set():
+            raise RequestCancelledError("stopped")
+    try:
+        wheels, http = _prepare_cache(cache_root)
+        common = [
+            str(interpreter), "-m", "pip", "--no-input",
+            "--disable-pip-version-check", f"--cache-dir={http}",
+        ]
+        offline = [
+            *common, "install", "--only-binary=:all:", "--no-index",
+            f"--find-links={wheels}", *packages,
+        ]
+
+        code, output = _checked_pip(offline, cwd, cancel_event)
+        if code and "No module named pip" in output:
+            # Some externally created project virtualenvs omit pip. This
+            # bootstraps only bundled ensurepip wheels, after authorization.
+            setup_code, setup_output = _checked_pip(
+                [str(interpreter), "-m", "ensurepip", "--default-pip"],
+                cwd, cancel_event,
+            )
+            if setup_code:
+                return ToolResult(
+                    content=f"Could not prepare pip in {interpreter}:\n{setup_output}",
+                    is_error=True,
+                )
+            code, output = _checked_pip(offline, cwd, cancel_event)
+
+        downloaded = False
+        if code:
+            # Cache was missing at least one wheel. Add only binary wheels
+            # from the canonical default index, then install OFFLINE from
+            # that same wheelhouse. A failed download leaves prior wheels
+            # reusable in a future offline call.
+            download = [
+                *common, "download", "--only-binary=:all:",
+                f"--index-url={DEFAULT_PYPI_INDEX}",
+                f"--dest={wheels}", "--retries=0", "--timeout=8",
+                *packages,
+            ]
+            dl_code, dl_output = _checked_pip(download, cwd, cancel_event)
+            if dl_code:
+                return ToolResult(
+                    content=(
+                        f"No compatible cached wheels for {', '.join(packages)}. "
+                        f"Download from the default PyPI index also failed.\n"
+                        f"Cached install: {output}\nDownload: {dl_output}"
+                    )[:_OUTPUT_CAP],
+                    is_error=True,
+                )
+            downloaded = True
+            code, output = _checked_pip(offline, cwd, cancel_event)
+
+        if code:
+            return ToolResult(
+                content=f"Wheel-only installation failed in {interpreter}:\n{output}",
+                is_error=True,
+            )
+        source = "newly downloaded PyPI wheels" if downloaded else "shared cached wheels"
+        return ToolResult(
+            content=(
+                f"Installed (or already satisfied) {', '.join(packages)} into "
+                f"{interpreter} using {source}.\n"
+                f"Shared wheel cache: {wheels}\n{output}"
+            )[:_OUTPUT_CAP],
+        )
+    finally:
+        _CACHE_LOCK.release()
+
+
+async def install_packages(
+    ctx: RunContext, packages: list[str], *,
+    cache_root: Path | None = None,
+) -> ToolResult:
+    """Install only into the environment whose path was freshly approved."""
+    import asyncio
+
+    try:
+        workspace_id, root, is_scratch = workspace_install_binding(ctx)
+        planned = planned_install_interpreter(workspace_id, root, is_scratch=is_scratch)
+        approved = getattr(ctx, "python_install_approved_interpreter", None)
+        if not isinstance(approved, Path) or approved != planned:
+            return ToolResult(
+                content="Python environment changed or was not bound to this install approval; ask again.",
+                is_error=True,
+            )
+        interpreter = await asyncio.to_thread(
+            ensure_python_environment, workspace_id, root, is_scratch=is_scratch,
+        )
+        if interpreter != approved:
+            return ToolResult(
+                content="Python environment changed after approval; ask again.",
+                is_error=True,
+            )
+        cancel_event = ctx.cancel.event if ctx.cancel is not None else None
+        return await asyncio.to_thread(
+            _install_in_worker, interpreter, root, packages, cancel_event,
+            cache_root if cache_root is not None else PYTHON_WHEEL_CACHE_ROOT,
+        )
+    except (OSError, WorkspaceError, TimeoutError) as exc:
+        return ToolResult(content=f"Could not install Python packages: {exc}", is_error=True)
+    finally:
+        # A future install can never borrow a previously approved target.
+        setattr(ctx, "python_install_approved_interpreter", None)
