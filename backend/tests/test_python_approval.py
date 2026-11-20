@@ -171,15 +171,19 @@ def test_invalid_or_oversized_source_is_rejected_without_prompt_or_execution(pyt
 def test_accepted_source_reaches_interpreter_without_stripping(python_tool, monkeypatch):
     registry, repls, workspace = python_tool
     source = "\n# " + "padding " * 70 + "\nprint('tail-visible')\n\n"
+    # python.exec now selects the workspace's venv before asking the registry
+    # for an interpreter. Spy on the REPL implementation rather than on a
+    # preselected system-Python instance that will be replaced on first use.
+    from graphlink_plugins.common.python_repl import PythonREPL
+
     observed = []
-    repl = repls.get("python-approval-fixture", workspace, manage_cwd=False)
-    execute = repl.execute
+    execute = PythonREPL.execute
 
-    def observe(code):
+    def observe(self, code):
         observed.append(code)
-        return execute(code)
+        return execute(self, code)
 
-    monkeypatch.setattr(repl, "execute", observe)
+    monkeypatch.setattr(PythonREPL, "execute", observe)
 
     async def approve(call):
         assert call.arguments["code"] == source
@@ -284,6 +288,7 @@ def test_harness_issues_distinct_python_disclosures_without_session_option(tmp_p
     from backend.domain.graph import SceneDocument
     from backend.events import SessionBus
     from backend.harness import workspace as workspace_module
+    from backend.harness import python_env as python_env_module
     from backend.harness.loop import run_harness
     from backend.notifications import NotificationState
     from backend.tests.test_harness import scripted_turns
@@ -310,6 +315,15 @@ def test_harness_issues_distinct_python_disclosures_without_session_option(tmp_p
         handle = dispatcher._runs.claim("harness", node_id=node.id, cancel_event=cancelled)
         observed = []
 
+        # This test measures two distinct approval tokens, not the duration
+        # of a first-time venv + pip bootstrap on a busy Windows CI runner.
+        # First-use creation is separately covered by test_harness_python_env.
+        scratch = workspace_module.ensure_workspace(node.state.harness_workspace_id)
+        await asyncio.to_thread(
+            python_env_module.ensure_python_environment,
+            node.state.harness_workspace_id, scratch, is_scratch=True,
+        )
+
         async def decide():
             while len(observed) < 2:
                 token = node.state.harness_approval_id
@@ -329,7 +343,7 @@ def test_harness_issues_distinct_python_disclosures_without_session_option(tmp_p
                     handle=handle, cancel_event=cancelled,
                 ),
                 decide(),
-            ), timeout=10)
+            ), timeout=30)
             assert len(observed) == 2 and observed[0] != observed[1]
             assert node.state.harness_status == "done"
             assert node.state.harness_approval_id == handle.approval_token == ""

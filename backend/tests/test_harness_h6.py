@@ -376,7 +376,10 @@ def _invoke(registry, name, args, ctx):
 
 
 class TestPythonExec:
-    def _setup(self, tmp_path):
+    def _setup(self, tmp_path, monkeypatch):
+        from backend.harness import python_env
+
+        monkeypatch.setattr(python_env, "HARNESS_PYTHON_ENV_ROOT", tmp_path / "python-envs")
         from backend.harness.tools_python import PythonReplRegistry, register_harness_python_tool
 
         registry = ToolRegistry()
@@ -386,8 +389,8 @@ class TestPythonExec:
         workspace.mkdir()
         return registry, repls, workspace
 
-    def test_state_persists_across_calls_and_cwd_is_the_workspace(self, tmp_path):
-        registry, repls, workspace = self._setup(tmp_path)
+    def test_state_persists_across_calls_and_cwd_is_the_workspace(self, tmp_path, monkeypatch):
+        registry, repls, workspace = self._setup(tmp_path, monkeypatch)
         ctx = _tool_ctx(workspace)
         try:
             assert not _invoke(registry, "python.exec", {"code": "x = 6 * 7"}, ctx).is_error
@@ -400,10 +403,10 @@ class TestPythonExec:
         finally:
             repls.stop_all()
 
-    def test_code_that_raises_is_reported_but_is_not_a_tool_error(self, tmp_path):
+    def test_code_that_raises_is_reported_but_is_not_a_tool_error(self, tmp_path, monkeypatch):
         """The tool worked; the CODE failed. Flagging is_error would tell the
         model its call was malformed when it needs to read the traceback."""
-        registry, repls, workspace = self._setup(tmp_path)
+        registry, repls, workspace = self._setup(tmp_path, monkeypatch)
         ctx = _tool_ctx(workspace)
         try:
             result = _invoke(registry, "python.exec", {"code": "1/0"}, ctx)
@@ -413,12 +416,12 @@ class TestPythonExec:
         finally:
             repls.stop_all()
 
-    def test_a_rebound_workspace_retires_the_old_interpreter(self, tmp_path):
+    def test_a_rebound_workspace_retires_the_old_interpreter(self, tmp_path, monkeypatch):
         """A REPL's cwd is fixed at spawn. Keeping one across a rebinding
         (scratch <-> a user's project folder) would leave python.exec
         executing in a different directory than fs.* and shell.exec, so
         open('x') and fs.read('x') would silently mean different files."""
-        registry, repls, workspace = self._setup(tmp_path)
+        registry, repls, workspace = self._setup(tmp_path, monkeypatch)
         second = tmp_path / "other-ws"
         second.mkdir()
         try:
@@ -437,8 +440,8 @@ class TestPythonExec:
         finally:
             repls.stop_all()
 
-    def test_blank_code_is_refused_before_touching_an_interpreter(self, tmp_path):
-        registry, repls, workspace = self._setup(tmp_path)
+    def test_blank_code_is_refused_before_touching_an_interpreter(self, tmp_path, monkeypatch):
+        registry, repls, workspace = self._setup(tmp_path, monkeypatch)
         try:
             result = _invoke(registry, "python.exec", {"code": "   "}, _tool_ctx(workspace))
             assert result.is_error and "non-empty" in result.content

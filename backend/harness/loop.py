@@ -154,6 +154,7 @@ class HarnessRunContext(RunContext):
     # The run's ONE resolved confinement root (a Path), set at run start -
     # a trusted user dir or the scratch dir. The tools confine against this.
     harness_workspace_dir: object = None
+    harness_workspace_is_user_dir: bool | None = None
     model_ref: object = None
     settings_manager: object = None
     runtime: object = None
@@ -436,6 +437,7 @@ async def run_harness(
             settings_manager=settings_manager,
         )
         ctx.harness_workspace_dir = root
+        ctx.harness_workspace_is_user_dir = is_user_dir
         # The root this run ACTUALLY bound, scratch included: a "" here
         # means "no run yet", which is what lets the card distinguish a
         # refused grant from a binding that has simply not run.

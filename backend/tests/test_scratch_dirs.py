@@ -347,22 +347,26 @@ class TestGcStaleByAge:
 
 
 class TestSweepStaleScratchDirsOnLaunch:
-    def test_sweeps_all_three_roots(self, tmp_path, monkeypatch):
+    def test_sweeps_all_four_roots(self, tmp_path, monkeypatch):
         repl_root = tmp_path / "repl"
         sandbox_root = tmp_path / "sandbox"
         harness_root = tmp_path / "harness"
+        python_env_root = tmp_path / "harness-python-env"
         old_repl_dir = _touch_dir_with_age(repl_root, "old-node", age_seconds=1000)
         old_sandbox_dir = _touch_dir_with_age(sandbox_root, "old-sandbox", age_seconds=1000)
         old_harness_dir = _touch_dir_with_age(harness_root, "old-workspace", age_seconds=1000)
+        old_python_env = _touch_dir_with_age(python_env_root, "old-agent", age_seconds=1000)
         monkeypatch.setattr(scratch_dirs, "PYTHON_REPL_ROOT", repl_root)
         monkeypatch.setattr(scratch_dirs, "EXECUTION_SANDBOX_ROOT", sandbox_root)
         monkeypatch.setattr(scratch_dirs, "HARNESS_WORKSPACE_ROOT", harness_root)
+        monkeypatch.setattr(scratch_dirs, "HARNESS_PYTHON_ENV_ROOT", python_env_root)
 
         scratch_dirs.sweep_stale_scratch_dirs_on_launch(max_age_seconds=100)
 
         assert not old_repl_dir.exists()
         assert not old_sandbox_dir.exists()
         assert not old_harness_dir.exists()
+        assert not old_python_env.exists()
 
     def test_a_failure_sweeping_one_root_does_not_stop_the_others(self, tmp_path, monkeypatch):
         repl_root = tmp_path / "repl"
@@ -373,6 +377,7 @@ class TestSweepStaleScratchDirsOnLaunch:
         monkeypatch.setattr(scratch_dirs, "PYTHON_REPL_ROOT", repl_root)
         monkeypatch.setattr(scratch_dirs, "EXECUTION_SANDBOX_ROOT", sandbox_root)
         monkeypatch.setattr(scratch_dirs, "HARNESS_WORKSPACE_ROOT", harness_root)
+        monkeypatch.setattr(scratch_dirs, "HARNESS_PYTHON_ENV_ROOT", tmp_path / "python-env")
 
         real_gc = scratch_dirs.gc_stale_by_age
 

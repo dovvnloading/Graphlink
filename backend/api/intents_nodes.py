@@ -22,7 +22,11 @@ from backend.domain.model import SceneError
 from backend.domain.node_access import optional_node
 from backend.domain.node_states import CodeSandboxState, HarnessState
 from backend.events import SessionBus
-from graphlink_scratch_dirs import HARNESS_WORKSPACE_ROOT, remove_scratch_dir_for_id
+from graphlink_scratch_dirs import (
+    HARNESS_PYTHON_ENV_ROOT,
+    HARNESS_WORKSPACE_ROOT,
+    remove_scratch_dir_for_id,
+)
 from graphlink_plugins.scientific.catalog import PACKS, operations
 from graphlink_plugins.scientific.core import readable_result
 from graphlink_plugins.scientific.methods import render_result_methods
@@ -467,6 +471,11 @@ def register_node_intents(
             # sandbox removal's own to_thread posture.
             await asyncio.to_thread(
                 remove_scratch_dir_for_id, HARNESS_WORKSPACE_ROOT, workspace_id,
+            )
+            # A trusted project's managed Python venv is outside its folder.
+            # Delete only our per-agent bucket, never the project's own venv.
+            await asyncio.to_thread(
+                remove_scratch_dir_for_id, HARNESS_PYTHON_ENV_ROOT, workspace_id,
             )
         await publish_scene()
 

@@ -18,6 +18,7 @@ changed, only their home and (for the analysis agent) their name.
 """
 
 import base64
+import os
 import subprocess
 import sys
 import threading
@@ -87,7 +88,7 @@ class PythonREPL:
     created it nor may we re-permission it. The caller that supplies a cwd
     is asserting it already exists and is already governed.
     """
-    def __init__(self, repl_id=None, cwd=None, manage_cwd=True):
+    def __init__(self, repl_id=None, cwd=None, manage_cwd=True, python_executable=None):
         self.process = None
         self.last_run_failed = False
         self._boundary_prefix = ""
@@ -113,6 +114,14 @@ class PythonREPL:
         self._lock = threading.RLock()
         self._manage_cwd = bool(manage_cwd) and cwd is None
         self.cwd = Path(cwd) if cwd is not None else PYTHON_REPL_ROOT / safe_scratch_id(repl_id)
+        self.python_executable = (
+            Path(python_executable) if python_executable is not None else Path(sys.executable)
+        )
+        # An explicit interpreter comes from a venv. Keep subprocesses
+        # launched by executed code (python, pip, etc.) in that same venv.
+        self._venv_dir = (
+            self.python_executable.parent.parent if python_executable is not None else None
+        )
 
     def start(self):
         with self._lock:
@@ -166,7 +175,15 @@ while True:
             # subprocess would inherit the backend's full os.environ,
             # including any provider API key configured as an environment
             # variable.
-            kwargs = {'env': safe_subprocess_env()}
+            child_env = safe_subprocess_env()
+            if self._venv_dir is not None:
+                child_env["VIRTUAL_ENV"] = str(self._venv_dir)
+                path_key = next((k for k in child_env if k.upper() == "PATH"), "PATH")
+                child_env[path_key] = (
+                    str(self.python_executable.parent) + os.pathsep
+                    + child_env.get(path_key, os.defpath)
+                )
+            kwargs = {'env': child_env}
             # Hide the console window on Windows
             if sys.platform == 'win32':
                 kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
@@ -188,7 +205,7 @@ while True:
 
             try:
                 self.process = spawn_guarded_subprocess(self.guard,
-                    [sys.executable, '-c', script],
+                    [str(self.python_executable), '-c', script],
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,

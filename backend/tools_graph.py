@@ -43,7 +43,11 @@ from typing import Any
 
 from backend.domain.graph import SceneDocument, SceneError
 from backend.domain.model import SceneNode
-from graphlink_scratch_dirs import HARNESS_WORKSPACE_ROOT, remove_scratch_dir_for_id
+from graphlink_scratch_dirs import (
+    HARNESS_PYTHON_ENV_ROOT,
+    HARNESS_WORKSPACE_ROOT,
+    remove_scratch_dir_for_id,
+)
 from backend.domain.node_states import (
     ArtifactState,
     ChatState,
@@ -792,6 +796,9 @@ def make_delete_node_handler(document: SceneDocument, dispatcher):
             # uses (blank ids are refused inside remove_scratch_dir_for_id).
             await asyncio.to_thread(
                 remove_scratch_dir_for_id, HARNESS_WORKSPACE_ROOT, workspace_id,
+            )
+            await asyncio.to_thread(
+                remove_scratch_dir_for_id, HARNESS_PYTHON_ENV_ROOT, workspace_id,
             )
         return ToolResult(content=json.dumps({"deleted": node_id, "kind": node.kind}))
 
