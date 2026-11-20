@@ -50,6 +50,7 @@ from pathlib import Path
 
 from api_provider import RequestCancelledError
 from backend.harness.shell_policy import requires_fresh_shell_approval
+from backend.harness.shell_selection import ShellUnavailableError, shell_invocation
 from backend.harness.shell_sessions import ShellSessionError, ShellSessionRegistry
 from backend.harness.workspace import WorkspaceError, ensure_workspace
 from backend.providers.base import ToolCall, ToolSpec
@@ -111,7 +112,7 @@ SHELL_EXEC_SPEC = ToolSpec(
 )
 
 
-def _run_command(command: str, cwd, cancel_event, on_output=None) -> tuple[str, "int | None", str]:
+def _run_command(command: str, cwd, cancel_event, on_output=None, shell: str = "auto") -> tuple[str, "int | None", str]:
     """Blocking worker (called via to_thread): returns (output, exit_code,
     ended) where ended is "ok" | "timeout" | "cancelled". Guarded spawn,
     then a poll loop so cancel/timeout kill the whole tree promptly.
@@ -127,17 +128,13 @@ def _run_command(command: str, cwd, cancel_event, on_output=None) -> tuple[str, 
     kwargs: dict = {"env": safe_subprocess_env()}
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    argv, via_shell = shell_invocation(command, shell, env=kwargs["env"])
     guard = create_execution_guard()
     try:
-        # shell=True hands the RAW string to cmd.exe /c (Windows) or
-        # /bin/sh -c (POSIX). A hand-built argv list here would round-trip
-        # through list2cmdline's backslash-quote escaping, which cmd.exe
-        # does not parse - quotes inside the command silently turn a
-        # program's argument into a no-op expression (found by test:
-        # `python -c "print(123)"` exited 0 printing nothing).
+        # Preserve raw cmd.exe quoting; PS/Bash receive one command argument.
         process = spawn_guarded_subprocess(guard,
-            command,
-            shell=True,
+            argv,
+            shell=via_shell,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -311,6 +308,7 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
                     )
                 session = await asyncio.to_thread(
                     session_registry.start, workspace_id, name, command, workspace,
+                    getattr(ctx, "harness_shell", "auto"),
                 )
                 # A process that dies instantly (bad command, missing binary)
                 # is the common failure, and reporting it as a successful
@@ -364,7 +362,7 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
                 content=f"Unknown action {action!r} - use start, write, read, stop, or list.",
                 is_error=True,
             )
-        except ShellSessionError as exc:
+        except (ShellSessionError, ShellUnavailableError) as exc:
             return ToolResult(content=str(exc), is_error=True)
         except (WorkspaceError, OSError) as exc:
             return ToolResult(content=f"Could not prepare the workspace: {exc}", is_error=True)
@@ -396,9 +394,13 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
         on_output = getattr(ctx, "on_tool_output", None)
         if on_output is not None:
             on_output("")  # the live row starts only after approval
-        output, exit_code, ended = await asyncio.to_thread(
-            _run_command, command, workspace, cancel_event, on_output,
-        )
+        try:
+            output, exit_code, ended = await asyncio.to_thread(
+                _run_command, command, workspace, cancel_event, on_output,
+                getattr(ctx, "harness_shell", "auto"),
+            )
+        except (ShellUnavailableError, OSError) as exc:
+            return ToolResult(content=f"Could not launch the selected shell: {exc}", is_error=True)
         if ended == "cancelled":
             # The one exception invoke() propagates - cancellation is the
             # loop's mechanism, never a tool "error" fed to the model.

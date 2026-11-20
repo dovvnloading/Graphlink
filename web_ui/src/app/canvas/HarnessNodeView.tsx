@@ -1,4 +1,5 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import type { Node, NodeProps } from "@xyflow/react";
 import { CollapseToggleButton } from "./CollapseToggleButton";
 import type { MenuPosition } from "./menuPosition";
@@ -53,6 +54,7 @@ export interface HarnessNodeData extends Record<string, unknown> {
   harnessCompactions: number;
   harnessWorkspacePath: string;
   harnessWorkspaceActive: string;
+  harnessShell: string;
   harnessMaxTurns: number;
   harnessSpentTurns: number;
   harnessSpentTokens: number;
@@ -69,6 +71,7 @@ export interface HarnessNodeData extends Record<string, unknown> {
   onAnswerQuestion: (answer: string) => void;
   onPickWorkspace: () => void;
   onUseScratch: () => void;
+  onSetShell: (shell: string) => void;
 }
 
 export type HarnessFlowNode = Node<HarnessNodeData, "harness">;
@@ -114,6 +117,100 @@ function HarnessNodeMenu({
         Delete Node
       </button>
     </NodeMenu>
+  );
+}
+
+/** Node settings are portaled to the document, not rendered inside the
+ * transformed React Flow node. Otherwise fixed coordinates drift with zoom. */
+function AgentSettingsPopover({
+  position, shell, onSetShell, onClose, triggerRef,
+}: {
+  position: MenuPosition;
+  shell: string;
+  onSetShell: (shell: string) => void;
+  onClose: () => void;
+  triggerRef: RefObject<HTMLButtonElement | null>;
+}) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [placement, setPlacement] = useState(position);
+  const windows = /Windows|Win32|Win64/i.test(
+    typeof navigator === "undefined" ? "" : navigator.userAgent + " " + navigator.platform,
+  );
+  // auto is a persisted, cross-platform choice, resolved at task launch.
+  const selected = windows
+    ? shell === "cmd" || shell === "git-bash" ? shell : "powershell"
+    : "bash";
+
+  useLayoutEffect(() => {
+    const rect = panelRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = Math.min(
+      Math.max(8, position.x), Math.max(8, window.innerWidth - rect.width - 8),
+    );
+    const y = position.y + rect.height + 8 > window.innerHeight
+      ? Math.max(8, position.y - rect.height - 28)
+      : position.y;
+    setPlacement({ x, y });
+  }, [position.x, position.y]);
+
+  useEffect(() => {
+    panelRef.current?.querySelector("select")?.focus();
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement;
+      if (panelRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
+      onClose();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        onClose();
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    const trigger = triggerRef.current;
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+      if (trigger?.isConnected) trigger.focus();
+    };
+  }, [onClose, triggerRef]);
+
+  return createPortal(
+    <div
+      ref={panelRef}
+      className="harness-node-settings-popover nodrag nowheel"
+      role="dialog"
+      aria-label="Agent settings"
+      style={{ position: "fixed", left: placement.x, top: placement.y }}
+    >
+      <div className="harness-node-settings-heading">
+        <strong>Agent settings</strong>
+        <button type="button" aria-label="Close agent settings" onClick={onClose}>×</button>
+      </div>
+      <label className="harness-node-settings-field">
+        <span>Shell</span>
+        <select
+          className="nodrag nowheel"
+          aria-label="Shell"
+          value={selected}
+          disabled={!windows}
+          onChange={(event) => onSetShell(event.target.value)}
+        >
+          {windows ? (
+            <>
+              <option value="powershell">PowerShell (default)</option>
+              <option value="cmd">Command Prompt (cmd)</option>
+              <option value="git-bash">Git Bash</option>
+            </>
+          ) : (
+            <option value="bash">Bash (default)</option>
+          )}
+        </select>
+      </label>
+      <p>Saved with this graph. Changes apply from the next task.</p>
+    </div>,
+    document.body,
   );
 }
 
@@ -213,6 +310,8 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   const activityListRef = useRef<HTMLDivElement>(null);
   const activityErrorCount = data.harnessActivity.filter((row) => row.outcome === "error").length;
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
+  const [settingsPosition, setSettingsPosition] = useState<MenuPosition | null>(null);
+  const settingsTriggerRef = useRef<HTMLButtonElement>(null);
   const boundApproval = ["python.exec", "python.install"].includes(data.harnessApprovalToolName) || data.harnessApprovalToolName.startsWith("fal.");
   const fileApproval = data.harnessApprovalToolName === "fs.write" || data.harnessApprovalToolName === "fs.edit";
   // Never ask someone to approve an unseen mutation. The backend explains
@@ -287,11 +386,35 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
       kindClassName="harness-node"
       selected={!!selected}
       collapsed={collapsed}
-      onMenuChange={setMenuPosition}
+      onMenuChange={(position) => {
+        setMenuPosition(position);
+        setSettingsPosition(null);
+      }}
       header={
         <NodeHeading className="plan-node-title">
           <span className="plan-node-badge">Agent</span>
           <span className="plan-node-goal">{data.harnessGoal || "Untitled task"}</span>
+          <button
+            ref={settingsTriggerRef}
+            type="button"
+            className="harness-node-settings-trigger nodrag"
+            aria-label="Agent settings"
+            title="Agent settings"
+            aria-haspopup="dialog"
+            aria-expanded={Boolean(settingsPosition)}
+            onClick={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              setMenuPosition(null);
+              setSettingsPosition((current) => current ? null : { x: rect.left, y: rect.bottom + 4 });
+            }}
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M10 2h4l.6 2.4 2.1.9 2.2-1.2 2.8 2.8-1.2 2.2.9 2.1L24 12l-2.6.8-.9 2.1 1.2 2.2-2.8 2.8-2.2-1.2-2.1.9L14 22h-4l-.6-2.4-2.1-.9-2.2 1.2-2.8-2.8 1.2-2.2-.9-2.1L0 12l2.6-.8.9-2.1-1.2-2.2 2.8-2.8 2.2 1.2 2.1-.9z"
+                transform="translate(2 2) scale(.83)" />
+            </svg>
+          </button>
           <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
         </NodeHeading>
       }
@@ -304,6 +427,17 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
             onToggleCollapse={data.onToggleCollapse}
             onDelete={data.onDelete}
             onClose={() => setMenuPosition(null)}
+          />
+        )
+      }
+      footer={
+        settingsPosition && (
+          <AgentSettingsPopover
+            position={settingsPosition}
+            shell={data.harnessShell}
+            onSetShell={data.onSetShell}
+            onClose={() => setSettingsPosition(null)}
+            triggerRef={settingsTriggerRef}
           />
         )
       }

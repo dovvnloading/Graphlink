@@ -568,8 +568,8 @@ class TestLoop:
         probes = []
         seen = []
 
-        def describe(root):
-            probes.append(str(root))
+        def describe(root, *, shell="auto"):
+            probes.append((str(root), shell))
             return f"## Workspace execution environment\nOS: test-machine\nWorkspace root: {root}"
 
         monkeypatch.setattr(context_module, "describe_machine", describe)
@@ -588,6 +588,7 @@ class TestLoop:
         asyncio.run(drive(document, dispatcher, registry, bus, node, "follow-up"))
 
         assert len(probes) == 1, "the dispatcher should reuse the probe across tasks"
+        assert probes[0][1] == "auto", "the snapshot uses the selected task shell"
         assert len(seen) == 3, "first task has two turns, second task one"
         system_messages = [messages[0] for messages in seen]
         assert all(message["role"] == "system" for message in system_messages)
@@ -1304,6 +1305,18 @@ class TestPersistence:
         restored = _restore_harness_payload(_serialize_harness_node(node))
         assert restored.state.harness_status == "interrupted"
         assert "Interrupted" in restored.state.harness_status_detail
+
+    def test_agent_shell_persists_and_invalid_values_migrate_safely(self):
+        node = SceneDocument().add_harness_node(0, 0, "goal")
+        node.state.harness_shell = "git-bash"
+        payload = _serialize_harness_node(node)
+        assert payload["shell"] == "git-bash"
+        assert _restore_harness_payload(payload).state.harness_shell == "git-bash"
+
+        payload["shell"] = "unsupported"
+        assert _restore_harness_payload(payload).state.harness_shell == "auto"
+        del payload["shell"]
+        assert _restore_harness_payload(payload).state.harness_shell == "auto"
 
     def test_blank_workspace_id_is_self_healed_on_load(self):
         document = SceneDocument()

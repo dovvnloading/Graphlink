@@ -545,7 +545,7 @@ class TestShellSessions:
         try:
             started = _invoke(registry, "shell.session", {
                 "action": "start", "name": "echo",
-                "command": f'"{sys.executable}" "{script}"',
+                "command": f'{"& " if sys.platform == "win32" else ""}"{sys.executable}" "{script}"',
             }, ctx)
             assert not started.is_error, started.content
 
@@ -577,7 +577,7 @@ class TestShellSessions:
         try:
             started = _invoke(registry, "shell.session", {
                 "action": "start", "name": "old-project",
-                "command": f'"{sys.executable}" -u "{script}"',
+                "command": f'{"& " if sys.platform == "win32" else ""}"{sys.executable}" -u "{script}"',
             }, first_ctx)
             assert not started.is_error, started.content
             old_process = sessions.get("ws-h6", "old-project")
@@ -604,7 +604,7 @@ class TestShellSessions:
         try:
             result = _invoke(registry, "shell.session", {
                 "action": "start", "name": "dead",
-                "command": f'"{sys.executable}" -c "import sys; sys.exit(3)"',
+                "command": f'{"& " if sys.platform == "win32" else ""}"{sys.executable}" -c "import sys; sys.exit(3)"',
             }, _tool_ctx(workspace))
             assert result.is_error and "exited immediately" in result.content
         finally:

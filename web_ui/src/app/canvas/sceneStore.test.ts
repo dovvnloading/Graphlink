@@ -7,6 +7,17 @@ type StateListener = (payload: Record<string, unknown>) => void;
 type PatchListener = (patch: ScenePatch) => void;
 type VersionRejectionListener = (rejection: BridgeRejection | null) => void;
 
+describe("Agent settings intent forwarding", () => {
+  it("sends the shell preference without starting or cancelling a task", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.setHarnessShell("agent-1", "git-bash");
+    expect(intents).toEqual([
+      { topic: "harness", intent: "setShell", args: ["agent-1", "git-bash"] },
+    ]);
+  });
+});
+
 describe("Python approval identity forwarding", () => {
   it("forwards the displayed identity while preserving unrelated approval shapes", () => {
     const { transport, intents } = makeFakeTransport();

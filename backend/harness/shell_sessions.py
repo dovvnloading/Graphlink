@@ -43,6 +43,7 @@ from pathlib import Path
 
 from graphlink_execution_guard import spawn_guarded_subprocess, assign_guarded_subprocess, ExecutionResourceGuard, create_execution_guard
 from graphlink_process_env import safe_subprocess_env
+from backend.harness.shell_selection import shell_invocation
 
 # Per-session output ring. Lines, not bytes: a line is the unit anyone
 # reading build output thinks in, and a cap on lines bounds memory just as
@@ -69,7 +70,7 @@ class ShellBackend(ABC):
     """The seam a container/VM execution backend implements later."""
 
     @abstractmethod
-    def spawn(self, command: str, cwd: Path):
+    def spawn(self, command: str, cwd: Path, shell: str = "auto"):
         """Return an object with the subprocess.Popen surface this module
         uses: stdin/stdout, poll(), wait(), kill(), pid."""
 
@@ -84,15 +85,16 @@ class LocalSubprocessBackend(ShellBackend):
     def __init__(self) -> None:
         self._guards: dict[int, ExecutionResourceGuard] = {}
 
-    def spawn(self, command: str, cwd: Path):
+    def spawn(self, command: str, cwd: Path, shell: str = "auto"):
         kwargs: dict = {"env": safe_subprocess_env()}
         if sys.platform == "win32":
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        argv, via_shell = shell_invocation(command, shell, env=kwargs["env"])
         guard = create_execution_guard()
         try:
             process = spawn_guarded_subprocess(guard,
-                command,
-                shell=True,
+                argv,
+                shell=via_shell,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -140,7 +142,7 @@ class LocalSubprocessBackend(ShellBackend):
 class ShellSession:
     """One named long-running process inside a workspace."""
 
-    def __init__(self, name: str, command: str, cwd: Path, backend: ShellBackend) -> None:
+    def __init__(self, name: str, command: str, cwd: Path, backend: ShellBackend, shell: str = "auto") -> None:
         self.name = name
         self.command = command
         self.cwd = cwd
@@ -148,7 +150,7 @@ class ShellSession:
         self._lines: deque[str] = deque(maxlen=MAX_BUFFERED_LINES)
         self._lock = threading.Lock()
         self._dropped = 0
-        self._process = backend.spawn(command, cwd)
+        self._process = backend.spawn(command, cwd) if shell == "auto" else backend.spawn(command, cwd, shell)
         self._reader = threading.Thread(target=self._drain, name=f"shell-session-{name}", daemon=True)
         self._reader.start()
 
@@ -268,7 +270,7 @@ class ShellSessionRegistry:
         for session in retired.values():
             session.stop()
 
-    def start(self, workspace_id: str, name: str, command: str, cwd: Path) -> ShellSession:
+    def start(self, workspace_id: str, name: str, command: str, cwd: Path, shell: str = "auto") -> ShellSession:
         with self._lock:
             resolved = cwd.resolve()
             bound = self._roots.setdefault(workspace_id, resolved)
@@ -294,7 +296,7 @@ class ShellSessionRegistry:
                     f"this workspace already has {live} running sessions "
                     f"(limit {MAX_SESSIONS_PER_WORKSPACE}) - stop one first"
                 )
-            session = ShellSession(name, command, cwd, self._backend)
+            session = ShellSession(name, command, cwd, self._backend, shell)
             sessions[name] = session
             return session
 

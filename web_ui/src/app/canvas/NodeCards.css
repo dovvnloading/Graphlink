@@ -1,3 +1,71 @@
+.harness-node-settings-trigger {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
+  padding: 3px;
+  border: none;
+  border-radius: 4px;
+  color: var(--gl-surface-text-secondary);
+  background: transparent;
+  cursor: pointer;
+}
+.harness-node-settings-trigger svg { width: 17px; height: 17px; }
+.harness-node-settings-trigger:hover,
+.harness-node-settings-trigger[aria-expanded="true"] {
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-neutral-button-hover);
+}
+.harness-node-settings-trigger:focus-visible,
+.harness-node-settings-popover :is(button, select):focus-visible {
+  outline: 2px solid var(--gl-graph-selection);
+  outline-offset: 2px;
+}
+.harness-node-settings-popover {
+  z-index: var(--gl-z-popover, 10000);
+  box-sizing: border-box;
+  width: 254px;
+  padding: 12px;
+  border: 1px solid var(--gl-graph-border);
+  border-radius: 8px;
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-graph-surface);
+  box-shadow: 0 8px 28px var(--gl-composer-shell-shadow-drop);
+  font: 12px/1.45 var(--gl-font-family);
+}
+.harness-node-settings-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.harness-node-settings-heading strong { font-size: 13px; }
+.harness-node-settings-heading button {
+  border: 0;
+  border-radius: 4px;
+  padding: 2px 6px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+.harness-node-settings-heading button:hover { background: var(--gl-neutral-button-hover); }
+.harness-node-settings-field { display: grid; gap: 6px; }
+.harness-node-settings-field select {
+  width: 100%;
+  border: 1px solid var(--gl-graph-border);
+  border-radius: 5px;
+  padding: 6px 8px;
+  color: inherit;
+  background: var(--gl-surface-inset, var(--gl-graph-surface));
+  font: inherit;
+}
+.harness-node-settings-popover p {
+  margin: 10px 0 0;
+  color: var(--gl-surface-text-secondary);
+}
+
 .model-node { width: 360px; min-height: 150px; }
 .model-node-body { padding: 12px 14px; display: grid; gap: 8px; }
 .model-node-port-summary, .model-node-output-label { font-size: 11px; color: var(--gl-surface-text-secondary); }
