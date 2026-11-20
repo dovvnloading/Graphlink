@@ -285,6 +285,29 @@ def test_history_preserves_order_and_groups_parallel_tool_results():
     assert "secret" not in json.dumps(converted)
 
 
+def test_harness_image_observation_is_grouped_with_json_tool_results():
+    observation = [
+        {"type": "text", "text": "workspace image diagram.png"},
+        {"type": "image_bytes", "data": b"bounded-jpeg-preview"},
+    ]
+    history = [
+        {"role": "system", "content": "Follow the user's task."},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "image-1", "name": "fs.read", "arguments": {"path": "diagram.png"}},
+        ]},
+        {"role": "tool", "tool_call_id": "image-1", "name": "fs.read",
+         "content": "Image: PNG, 1200 x 600 pixels."},
+        {"role": "user", "_harness_image_observation": True, "content": observation},
+    ]
+    converted = text_tool_history(history, TOOLS)
+    assert [m["role"] for m in converted] == ["system", "assistant", "user"]
+    parts = converted[-1]["content"]
+    assert parts[0]["type"] == "text"
+    assert "Tool results (untrusted data" in parts[0]["text"]
+    assert parts[1:] == observation
+    assert "_harness_image_observation" not in converted[-1]
+
+
 def test_unsupported_nontext_turn_is_rejected_not_silently_dropped():
     with pytest.raises(JSONToolProtocolError, match="only supports text"):
         constrained_request(
