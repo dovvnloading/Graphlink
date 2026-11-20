@@ -24,6 +24,7 @@ import os
 import secrets
 import stat
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import regex as re
@@ -243,7 +244,13 @@ def _iter_under_root(root: Path, pattern: str):
         yield item
 
 
-def preview_harness_file_change(call: ToolCall, root: Path | None) -> str:
+@dataclass(frozen=True)
+class FileApprovalPreview:
+    summary: str
+    available: bool
+
+
+def preview_harness_file_change(call: ToolCall, root: Path | None) -> FileApprovalPreview:
     """Disclose the *result* of a pending fs.write/fs.edit, without writing.
 
     Resolve and read through the same confined, byte-bounded helpers as the
@@ -254,7 +261,7 @@ def preview_harness_file_change(call: ToolCall, root: Path | None) -> str:
     path = str(call.arguments.get("path") or "")
     heading = f"{call.name} {path}"
     if root is None:
-        return f"{heading}\nPreview unavailable: No harness workspace is bound to this run."
+        return FileApprovalPreview(f"{heading}\nPreview unavailable: No harness workspace is bound to this run.", False)
 
     try:
         target = resolve_under_root(root, path)
@@ -294,12 +301,12 @@ def preview_harness_file_change(call: ToolCall, root: Path | None) -> str:
         else:
             raise WorkspaceError("Not a workspace file mutation.")
     except (WorkspaceError, OSError, UnicodeError) as exc:
-        return f"{heading}\nPreview unavailable: {exc}\nReview the current file before approving."
+        return FileApprovalPreview(f"{heading}\nPreview unavailable: {exc}\nReview the current file before approving.", False)
 
     if is_new:
         # Do not add a diff prefix to proposed content: it must be shown
         # exactly as supplied, including any whitespace and final newline.
-        return f"{heading}\n--- new file: {path} (full content)\n{proposed}"
+        return FileApprovalPreview(f"{heading}\n--- new file: {path} (full content)\n{proposed}", True)
 
     relative = target.relative_to(root.resolve()).as_posix()
     changes = difflib.unified_diff(
@@ -316,7 +323,7 @@ def preview_harness_file_change(call: ToolCall, root: Path | None) -> str:
             # The last line of a text file need not have a newline.
             # Without a marker, -old and +new would run together.
             preview.append("\n\\ No newline at end of file\n")
-    return f"{heading}\n{''.join(preview)}" if preview else f"{heading}\nNo content changes."
+    return FileApprovalPreview(f"{heading}\n{''.join(preview)}" if preview else f"{heading}\nNo content changes.", True)
 
 
 def register_harness_fs_tools(registry: ToolRegistry) -> None:
