@@ -2528,6 +2528,7 @@ def test_llama_cpp_stream_usage_stays_none_by_design(monkeypatch):
 
     chunks = FakeSDKStream([
         {"choices": [{"delta": {"content": "Answer."}}]},
+        {"choices": [{"delta": {}, "finish_reason": "stop"}]},
     ])
     import types
 

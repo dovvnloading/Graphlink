@@ -124,16 +124,14 @@ def test_ollama_round_trips_an_echo_tool_call(monkeypatch):
     def fake_chat(**kwargs):
         calls.append(kwargs)
         if len(calls) == 1:
-            # First turn: the model asks to call `echo`. Ollama delivers
-            # the whole call in one chunk (already-parsed arguments dict),
-            # then the stream ends without a separate done:true chunk for
-            # this attempt - the tool_calls chunk IS terminal.
+            # First turn: the model asks to call `echo` and the server
+            # marks the turn done. Tool-call chunks alone are not terminal.
             return FakeOllamaStream([{
                 "message": {
                     "content": "",
                     "tool_calls": [{"function": {"name": "echo", "arguments": {"message": "hello"}}}],
                 },
-                "done": False,
+                "done": True,
             }])
         # Second turn: the model has the tool result and answers.
         return FakeOllamaStream([{
@@ -181,7 +179,7 @@ def test_ollama_round_trips_an_echo_tool_call(monkeypatch):
         "role": "assistant", "content": "",
         "tool_calls": [{"function": {"name": "echo", "arguments": {"message": "hello"}}}],
     }
-    assert second_call_messages[2] == {"role": "tool", "content": "hello"}
+    assert second_call_messages[2] == {"role": "tool", "tool_name": "echo", "content": "hello"}
 
 
 def test_ollama_tool_call_turn_reports_usage_when_the_terminal_chunk_carries_it(monkeypatch):
@@ -225,7 +223,7 @@ def test_ollama_tool_call_turn_never_enters_the_reasoning_retry_loop(monkeypatch
     def fake_chat(**kwargs):
         return FakeOllamaStream([{
             "message": {"content": "", "tool_calls": [{"function": {"name": "echo", "arguments": {}}}]},
-            "done": False,
+            "done": True,
         }])
 
     monkeypatch.setattr(ollama, "chat", fake_chat)
