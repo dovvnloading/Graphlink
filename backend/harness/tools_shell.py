@@ -69,7 +69,7 @@ _READER_JOIN_SECONDS = 2.0
 _OUTPUT_READ_CHUNK_CHARS = 4096
 
 
-def _drain_bounded_output(stream, chunks: list[str]) -> None:
+def _drain_bounded_output(stream, chunks: list[str], on_output=None) -> None:
     """Drain all stdout without ever storing a whole unbounded line.
 
     The extra character lets the caller distinguish a truly 20K output
@@ -87,6 +87,11 @@ def _drain_bounded_output(stream, chunks: list[str]) -> None:
             retained = fragment[:budget - buffered]
             chunks.append(retained)
             buffered += len(retained)
+        # The tool result keeps its first 20K characters, but the activity
+        # preview is a separate bounded rolling tail. Keep forwarding even
+        # after capture fills so long-running commands continue to update.
+        if on_output is not None:
+            on_output(fragment)
 
 
 SHELL_EXEC_SPEC = ToolSpec(
@@ -107,7 +112,7 @@ SHELL_EXEC_SPEC = ToolSpec(
 )
 
 
-def _run_command(command: str, cwd, cancel_event, shell: str = "auto") -> tuple[str, "int | None", str]:
+def _run_command(command: str, cwd, cancel_event, on_output=None, shell: str = "auto") -> tuple[str, "int | None", str]:
     """Blocking worker (called via to_thread): returns (output, exit_code,
     ended) where ended is "ok" | "timeout" | "cancelled". Guarded spawn,
     then a poll loop so cancel/timeout kill the whole tree promptly.
@@ -126,7 +131,7 @@ def _run_command(command: str, cwd, cancel_event, shell: str = "auto") -> tuple[
     argv, via_shell = shell_invocation(command, shell, env=kwargs["env"])
     guard = create_execution_guard()
     try:
-        # cmd keeps raw shell=True quoting; PS/Bash take one command arg.
+        # Preserve raw cmd.exe quoting; PS/Bash receive one command argument.
         process = spawn_guarded_subprocess(guard,
             argv,
             shell=via_shell,
@@ -165,7 +170,7 @@ def _run_command(command: str, cwd, cancel_event, shell: str = "auto") -> tuple[
             if stream is None:
                 return
             try:
-                _drain_bounded_output(stream, chunks)
+                _drain_bounded_output(stream, chunks, on_output)
             except (ValueError, OSError):
                 return
 
@@ -386,9 +391,12 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
             return ToolResult(content=f"Could not prepare the workspace: {exc}", is_error=True)
 
         cancel_event = ctx.cancel.event if ctx.cancel is not None else None
+        on_output = getattr(ctx, "on_tool_output", None)
+        if on_output is not None:
+            on_output("")  # the live row starts only after approval
         try:
             output, exit_code, ended = await asyncio.to_thread(
-                _run_command, command, workspace, cancel_event,
+                _run_command, command, workspace, cancel_event, on_output,
                 getattr(ctx, "harness_shell", "auto"),
             )
         except (ShellUnavailableError, OSError) as exc:

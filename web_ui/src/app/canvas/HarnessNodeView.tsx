@@ -308,7 +308,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   const denyButtonRef = useRef<HTMLButtonElement>(null);
   const activityDetailsRef = useRef<HTMLDetailsElement>(null);
   const activityListRef = useRef<HTMLDivElement>(null);
-  const activityErrorCount = data.harnessActivity.filter((row) => row.outcome !== "ok").length;
+  const activityErrorCount = data.harnessActivity.filter((row) => row.outcome === "error").length;
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
   const [settingsPosition, setSettingsPosition] = useState<MenuPosition | null>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
@@ -553,11 +553,14 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
             {data.harnessActivity.map((row, index) => (
               <div
                 key={index}
-                className={`chat-node-tool-invocation${row.outcome !== "ok" ? " error" : ""}`}
+                className={`chat-node-tool-invocation${row.outcome === "error" ? " error" : ""}`}
               >
                 <div className="chat-node-tool-invocation-name">
                   {row.tool}
-                  <span className="plan-node-activity-elapsed">{row.elapsedMs}ms</span>
+                  <span className="plan-node-activity-elapsed">
+                    {row.outcome === "running" ? "Running · " : row.outcome === "stopped" ? "Stopped · " : ""}
+                    {row.elapsedMs}ms
+                  </span>
                 </div>
                 <pre className="chat-node-tool-invocation-arguments">{row.summary}</pre>
               </div>

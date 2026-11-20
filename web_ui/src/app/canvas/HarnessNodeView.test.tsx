@@ -447,6 +447,21 @@ describe("HarnessNodeView", () => {
     expect(screen.queryByText(/not trusted/)).not.toBeInTheDocument();
   });
 
+  it("shows in-flight and stopped output without counting either as an error", () => {
+    renderHarness(makeData({
+      harnessActivity: [
+        { tool: "shell.exec", summary: "Output:\\nfirst line", outcome: "running", elapsedMs: 150 },
+        { tool: "python.exec", summary: "Output:\\nprevious output", outcome: "stopped", elapsedMs: 220 },
+      ],
+    }));
+    expect(screen.getByText("2 activity entries")).toBeInTheDocument();
+    expect(screen.getByText("Running · 150ms")).toBeInTheDocument();
+    expect(screen.getByText("Stopped · 220ms")).toBeInTheDocument();
+    expect(screen.getByText(/first line/)).toBeInTheDocument();
+    expect(screen.getByText(/previous output/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Output:/).length).toBe(2);
+  });
+
   it("renders activity rows with error styling on failures", () => {
     renderHarness(
       makeData({

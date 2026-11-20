@@ -220,9 +220,16 @@ class HarnessDispatchOps(DispatcherParts):
         cancel_event = threading.Event()
 
         async def _finalize() -> None:
-            if node.state.harness_status == "running":
+            if node.state.harness_status == "running" and node.state.harness_run_id == request_id:
                 node.state.harness_status = "stopped"
                 node.state.harness_status_detail = "Stopped by user."
+                # A tool may still be unwinding in its worker thread.
+                # Preserve its last bounded output, but do not leave the
+                # activity row advertising "running" after Stop.
+                if node.state.harness_activity:
+                    last = node.state.harness_activity[-1]
+                    if last.get("outcome") == "running":
+                        last["outcome"] = "stopped"
             node.state.harness_awaiting_approval = False
             node.state.harness_approval_tool_name = ""
             node.state.harness_approval_summary = ""
