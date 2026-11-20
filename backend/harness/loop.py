@@ -477,7 +477,13 @@ async def run_harness(
         # says the task is over, or a reload could reopen a "done" run whose
         # last turns never landed. Runs in a thread - flush blocks.
         if workspace_for_flush is not None:
-            await asyncio.to_thread(flush_transcript, workspace_for_flush)
+            flushed = await asyncio.to_thread(flush_transcript, workspace_for_flush)
+            if not flushed:
+                # Do not report success while tool results are still queued:
+                # a reload could otherwise mistake them for interrupted calls.
+                status = "failed"
+                detail = "The agent transcript is still being written; retry when it finishes."
+                reply = None
         if not _alive():
             return
         if node.state.harness_activity and node.state.harness_activity[-1]["outcome"] == "running":

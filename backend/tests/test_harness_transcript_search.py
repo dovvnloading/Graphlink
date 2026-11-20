@@ -173,3 +173,30 @@ def test_auto_approved_search_only_reads_its_own_agent_sessions(tmp_path, monkey
 
     ctx.harness_workspace_id = None
     assert "No agent transcript" in invoke({"query": "juniper"}).content
+
+
+def test_writer_batches_search_indexing_until_flush(tmp_path, monkeypatch):
+    indexed = []
+    original_sync = transcript_module.sync_index
+
+    def count_sync(path):
+        indexed.append(path)
+        original_sync(path)
+
+    monkeypatch.setattr(transcript_module, "sync_index", count_sync)
+    append_message(tmp_path, {"role": "user", "content": "first observation"})
+    append_message(tmp_path, {"role": "assistant", "content": "second observation"})
+    assert flush(tmp_path)
+    assert indexed.count(transcript_path(tmp_path)) == 1
+    assert len(search_index(transcript_path(tmp_path), "observation")) == 2
+
+
+def test_loader_refuses_to_invent_interrupted_results_when_writer_is_behind(tmp_path, monkeypatch):
+    append_message(tmp_path, {
+        "role": "assistant", "content": "working",
+        "tool_calls": [{"id": "pending", "name": "fs.read", "arguments": {}}],
+    })
+    assert flush(tmp_path)
+    monkeypatch.setattr(transcript_module, "flush", lambda *_args, **_kw: False)
+    with pytest.raises(OSError, match="did not finish flushing"):
+        load_messages(tmp_path)
