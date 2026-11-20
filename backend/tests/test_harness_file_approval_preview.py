@@ -21,7 +21,7 @@ def test_new_file_shows_complete_unmodified_content(tmp_path):
 
 def test_overwrite_shows_unified_diff_against_file_on_disk(tmp_path):
     target = tmp_path / "config.txt"
-    target.write_text("enabled=false\nuntouched=yes\n", encoding="utf-8")
+    target.write_bytes(b"enabled=false\nuntouched=yes\n")
 
     summary = preview(
         "fs.write", tmp_path, path="config.txt",
@@ -37,7 +37,7 @@ def test_overwrite_shows_unified_diff_against_file_on_disk(tmp_path):
 
 def test_edit_shows_whole_resulting_line_not_just_replacement_arguments(tmp_path):
     target = tmp_path / "module.py"
-    target.write_text("prefix = 'before'  # context\nkeep = 1\n", encoding="utf-8")
+    target.write_bytes(b"prefix = 'before'  # context\nkeep = 1\n")
 
     summary = preview(
         "fs.edit", tmp_path, path="module.py",
