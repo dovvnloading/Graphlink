@@ -29,6 +29,7 @@ from pathlib import Path
 
 import regex as re
 
+from backend.harness.image_read import IMAGE_SUFFIXES, read_image_preview
 from backend.harness.workspace import WorkspaceError, resolve_under_root, workspace_dir
 from backend.providers.base import ToolCall, ToolSpec
 from backend.tools import FS_READ, FS_WRITE, RunContext, ToolRegistry, ToolResult
@@ -63,8 +64,10 @@ _GREP_TOTAL_BUDGET_SECONDS = 3.0
 FS_READ_SPEC = ToolSpec(
     name="fs.read",
     description=(
-        "Read workspace text, PDF (.pdf), Word (.docx), or Excel (.xlsx/.xlsm) "
-        "as text. path is workspace-relative. Optional offset (0-based line) "
+        "Read workspace text, images (PNG, JPEG, WebP, GIF), PDF (.pdf), "
+        "Word (.docx), or Excel (.xlsx/.xlsm). Images yield a bounded "
+        "visual preview on vision models or size/format text on other models. "
+        "path is workspace-relative. Optional offset (0-based line) "
         "and limit (line count) window the extracted lines. PDF page_start/"
         "page_end and Excel sheet_start/sheet_end are 1-based inclusive "
         "ranges; Excel sheet selects a sheet by name instead. The input "
@@ -362,7 +365,15 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
             call.arguments.get(name) is not None for name in selectors
         ):
             return ToolResult(content="Page and sheet selectors require a PDF or Excel file.", is_error=True)
+        if suffix in IMAGE_SUFFIXES and any(
+            call.arguments.get(name) is not None for name in ("offset", "limit")
+        ):
+            return ToolResult(content="Line offsets and limits require a text or document file.", is_error=True)
         try:
+            if suffix in IMAGE_SUFFIXES:
+                data = await asyncio.to_thread(_read_bounded_bytes, target)
+                preview = await asyncio.to_thread(read_image_preview, data)
+                return ToolResult(content=preview.description, image_bytes=preview.image_bytes)
             if suffix in (".pdf", ".docx", ".xlsx", ".xlsm"):
                 from backend.harness.document_read import extract_document_text
 
@@ -597,7 +608,7 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
     registry.register(FS_EDIT_SPEC, fs_edit, scopes={FS_WRITE}, approval="once")
 
 
-USAGE_HINT = "fs.list locates files; fs.read reads text/PDF/Word/Excel (page and sheet ranges supported); fs.grep searches text; fs.write and fs.edit change files (with approval)."
+USAGE_HINT = "fs.list locates files; fs.read reads text/images/PDF/Word/Excel (page and sheet ranges supported); fs.grep searches text; fs.write and fs.edit change files (with approval)."
 
 
 def register_workspace_tools(registry: ToolRegistry, dispatcher, document) -> None:

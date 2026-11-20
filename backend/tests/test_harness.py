@@ -486,6 +486,58 @@ class TestLoop:
         assert len(latest) < 2_100, "later output must replace, not grow, the preview"
         assert latest != preview, "chatty commands must continue to update activity"
 
+    def test_image_read_is_ephemeral_and_transcript_remains_text_only(
+        self, workspace_root, monkeypatch,
+    ):
+        import io
+
+        from PIL import Image
+
+        document, dispatcher, registry, bus, node = self._make(workspace_root)
+        ws = ensure_workspace(node.state.harness_workspace_id)
+        stream = io.BytesIO()
+        Image.new("RGB", (1200, 600), "green").save(stream, format="PNG")
+        (ws / "diagram.png").write_bytes(stream.getvalue())
+
+        seen: list[list] = []
+
+        def observe_turn(task, messages, tools=(), **kwargs):
+            seen.append(messages)
+            return {
+                "message": {"role": "assistant", "content": "Read the image."},
+                "tool_calls": (
+                    [call("image-1", "fs.read", path="diagram.png")]
+                    if len(seen) == 1 else []
+                ),
+                "usage": None,
+            }
+
+        monkeypatch.setattr(api_provider, "chat_turn_with_tools", observe_turn)
+        asyncio.run(drive(document, dispatcher, registry, bus, node, "inspect this diagram"))
+
+        assert len(seen) == 2
+        assert not any(m.get("_harness_image_observation") for m in seen[0])
+        observations = [m for m in seen[1] if m.get("_harness_image_observation")]
+        assert len(observations) == 1
+        parts = observations[0]["content"]
+        assert parts[0]["type"] == "text"
+        assert "diagram.png" in parts[1]["text"]
+        assert parts[2]["type"] == "image_bytes"
+        with Image.open(io.BytesIO(parts[2]["data"])) as preview:
+            assert preview.size == (1024, 512)
+
+        saved = load_messages(ws)
+        assert [message["role"] for message in saved] == [
+            "user", "assistant", "tool", "assistant",
+        ]
+        assert all(isinstance(message.get("content"), str) for message in saved)
+        assert "Image: PNG, 1200 x 600 pixels" in saved[2]["content"]
+        assert "_harness_image_observation" not in transcript_path(ws).read_text(encoding="utf-8")
+
+        scripted_turns(monkeypatch, [{"content": "follow-up"}])
+        asyncio.run(drive(document, dispatcher, registry, bus, node, "what did we see?"))
+        assert node.state.harness_status == "done"
+
     def test_follow_up_reloads_history_from_the_transcript(self, workspace_root, monkeypatch):
         document, dispatcher, registry, bus, node = self._make(workspace_root)
         scripted_turns(monkeypatch, [{"content": "first answer"}])
