@@ -425,3 +425,10 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
         SHELL_SESSION_SPEC, shell_session, scopes={CODE_EXECUTE}, approval="always",
         always_reprompt=_session_needs_fresh_prompt,
     )
+
+
+USAGE_HINT = "shell.exec runs commands in the workspace; shell.session starts, reads, writes to and stops a long-running process such as a dev server (execution needs approval)."
+
+
+def register_workspace_tools(registry: ToolRegistry, dispatcher, document) -> None:
+    register_harness_shell_tool(registry, dispatcher.harness_shell_sessions())

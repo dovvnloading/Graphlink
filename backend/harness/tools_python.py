@@ -180,3 +180,10 @@ def register_harness_python_tool(
         PYTHON_EXEC_SPEC, python_exec, scopes={CODE_EXECUTE}, approval="always",
         always_reprompt=lambda _call: True,
     )
+
+
+USAGE_HINT = "python.exec runs Python in a persistent workspace interpreter whose variables survive between calls; every execution requires fresh approval."
+
+
+def register_workspace_tools(registry: ToolRegistry, dispatcher, document) -> None:
+    register_harness_python_tool(registry, dispatcher.harness_python_repls())

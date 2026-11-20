@@ -147,7 +147,11 @@ def build_system_prompt(workspace: Path) -> str:
     see this module's docstring for why nothing volatile joins it."""
     from graphlink_prompts import resolve_prompt_text
 
-    tiers = [resolve_prompt_text("harness-core")]
+    from backend.harness.tool_catalog import tool_guide
+
+    # File-discovered hints are a separate, deterministic prompt tier.
+    # Keep the registered core hash stable when another tools_*.py lands.
+    tiers = [resolve_prompt_text("harness-core"), tool_guide()]
     instructions = read_instructions(workspace)
     if instructions:
         tiers.append(

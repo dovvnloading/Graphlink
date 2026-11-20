@@ -150,3 +150,10 @@ def register_harness_interaction_tools(registry: ToolRegistry) -> None:
     # to be blocked - and absent from any read-only subagent that is not
     # granted it.
     registry.register(USER_ASK_SPEC, user_ask, scopes={PROVIDER_CALL}, approval="auto")
+
+
+USAGE_HINT = "plan.update records and revises your multi-step checklist; user.ask pauses for a genuinely necessary human decision, not routine confirmation."
+
+
+def register_workspace_tools(registry: ToolRegistry, dispatcher, document) -> None:
+    register_harness_interaction_tools(registry)
