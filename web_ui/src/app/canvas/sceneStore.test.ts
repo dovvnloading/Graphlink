@@ -12,8 +12,10 @@ describe("Agent settings intent forwarding", () => {
     const { transport, intents } = makeFakeTransport();
     const store = new SceneStore(transport);
     store.setHarnessShell("agent-1", "git-bash");
+    store.removeHarnessShellAllowRule("agent-1", "bash\tgit status");
     expect(intents).toEqual([
       { topic: "harness", intent: "setShell", args: ["agent-1", "git-bash"] },
+      { topic: "harness", intent: "removeShellAllowRule", args: ["agent-1", "bash\tgit status"] },
     ]);
   });
 });
@@ -25,10 +27,12 @@ describe("Python approval identity forwarding", () => {
     store.approveHarnessTool("run", "python-first");
     store.denyHarnessTool("run", "python-second");
     store.approveHarnessTool("other-run");
+    store.approveHarnessToolForSession("shell-run", "shell-approval-1");
     expect(intents).toEqual([
       { topic: "harness", intent: "approveTool", args: ["run", "python-first"] },
       { topic: "harness", intent: "denyTool", args: ["run", "python-second"] },
       { topic: "harness", intent: "approveTool", args: ["other-run"] },
+      { topic: "harness", intent: "approveToolForSession", args: ["shell-run", "shell-approval-1"] },
     ]);
   });
 });

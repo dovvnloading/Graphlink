@@ -24,6 +24,7 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     harnessWorkspacePath: "",
     harnessWorkspaceActive: "",
     harnessShell: "auto",
+    harnessShellAllowRules: [],
     harnessAwaitingApproval: false,
     harnessApprovalToolName: "",
     harnessApprovalSummary: "",
@@ -50,6 +51,7 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     onOpenWorkspaceFile: vi.fn().mockResolvedValue(undefined),
     onRevealWorkspace: vi.fn(),
     onSetShell: vi.fn(),
+    onRemoveShellAllowRule: vi.fn(),
     ...overrides,
   };
 }
@@ -115,6 +117,20 @@ describe("HarnessNodeView", () => {
     } finally {
       platform.mockRestore();
     }
+  });
+
+  it("lists per-node rules by shell and allows removal", async () => {
+    const user = userEvent.setup();
+    const agent = makeData({
+      harnessShellAllowRules: ["bash\tgit status", "powershell\tGet-ChildItem"],
+    });
+    renderHarness(agent);
+    await user.click(screen.getByRole("button", { name: "Agent settings" }));
+    expect(screen.getByRole("list", { name: "Allowed command prefixes" })).toBeInTheDocument();
+    expect(screen.getByText("git status")).toBeInTheDocument();
+    expect(screen.getByText("Get-ChildItem")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Remove rule: git status (bash)" }));
+    expect(agent.onRemoveShellAllowRule).toHaveBeenCalledExactlyOnceWith("bash\tgit status");
   });
 
   it("offers PowerShell, cmd, and Git Bash on Windows even while an agent runs", async () => {
@@ -238,14 +254,44 @@ describe("HarnessNodeView", () => {
       harnessAwaitingApproval: true,
       harnessApprovalToolName: "shell.exec",
       harnessApprovalSummary: "shell.exec\npython build.py --all",
+      harnessApprovalId: "shell-disclosure-1",
     });
     renderHarness(data);
     expect(screen.getByText("shell.exec")).toBeInTheDocument();
     expect(screen.getByText(/python build\.py --all/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Approve once" }));
-    expect(data.onApproveTool).toHaveBeenCalledTimes(1);
-    await user.click(screen.getByRole("button", { name: "Deny" }));
-    expect(data.onDenyTool).toHaveBeenCalledTimes(1);
+    expect(data.onApproveTool).toHaveBeenCalledExactlyOnceWith("shell-disclosure-1");
+    expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
+  });
+
+  it("binds Always allow to the disclosed safe shell command and disables replay", async () => {
+    const user = userEvent.setup();
+    const data = makeData({
+      harnessAwaitingApproval: true,
+      harnessApprovalToolName: "shell.exec",
+      harnessApprovalSummary: "shell.exec\n  git status\n  npm test",
+      harnessApprovalId: "shell-safe-42",
+      harnessApprovalSessionOffered: true,
+    });
+    renderHarness(data);
+    const button = screen.getByRole("button", { name: "Always allow" });
+    await user.dblClick(button);
+    expect(data.onApproveToolForSession).toHaveBeenCalledExactlyOnceWith("shell-safe-42");
+    expect(button).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+  });
+
+  it("requires an approval identity and never offers Always allow for dangerous shell", () => {
+    const data = makeData({
+      harnessAwaitingApproval: true,
+      harnessApprovalToolName: "shell.exec",
+      harnessApprovalSummary: "shell.exec\n! rm -rf build",
+      harnessApprovalSessionOffered: false,
+    });
+    renderHarness(data);
+    expect(screen.queryByRole("button", { name: "Always allow" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
   });
 
   it("shows a highlighted file diff without changing or interpreting its text", () => {

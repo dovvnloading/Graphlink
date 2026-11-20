@@ -159,6 +159,69 @@ class TestShellPolicy:
         assert "not parsed" in plan.disclosure()
 
 
+class TestShellAllowRules:
+    def test_command_prefixes_are_scoped_to_shell_and_each_chain_segment(self):
+        from backend.harness.shell_policy import shell_allow_rule_candidates, shell_command_allowed
+
+        rules = shell_allow_rule_candidates("git status && npm test", shell="bash")
+        assert rules == ["bash\tgit status", "bash\tnpm test"]
+        assert shell_command_allowed("git status && npm test", rules, shell="bash")
+        assert shell_command_allowed("git status --short; npm test -- --runInBand", rules, shell="bash")
+        assert not shell_command_allowed("git status && npm build", rules, shell="bash")
+        assert not shell_command_allowed("git statuses && npm test", rules, shell="bash")
+        assert not shell_command_allowed("git status && npm test && echo bonus", rules, shell="bash")
+        assert not shell_command_allowed("git status && npm test", rules, shell="powershell")
+
+    def test_dangerous_and_ambiguous_commands_always_require_a_prompt(self):
+        from backend.harness.shell_policy import shell_allow_rule_candidates, shell_command_allowed
+
+        assert shell_allow_rule_candidates("git status && rm -rf out", shell="bash") == []
+        assert shell_allow_rule_candidates("echo $(rm -rf out)", shell="bash") == []
+        assert shell_allow_rule_candidates("python -c 'print(1)'", shell="bash") == []
+        assert not shell_command_allowed(
+            "git status && rm -rf out", ["bash\tgit status", "bash\trm -rf out"], shell="bash",
+        )
+        assert not shell_command_allowed("rm -rf out", ["bash\trm -rf out"], shell="bash")
+        assert not shell_command_allowed(
+            "Get-ChildItem; Remove-Item file", ["powershell\tGet-ChildItem", "powershell\tRemove-Item file"],
+            shell="powershell",
+        )
+
+    def test_live_registry_only_bypasses_approval_for_matching_node_rules(self):
+        from backend.harness.shell_policy import requires_fresh_shell_approval
+
+        registry = ToolRegistry()
+        async def handler(call, ctx):
+            return ToolResult("ran")
+
+        registry.register(
+            ToolSpec(name="shell.exec", description="test", input_schema={"type": "object"}),
+            handler, scopes={CODE_EXECUTE}, approval="always",
+            always_reprompt=lambda call: requires_fresh_shell_approval(call.name, call.arguments),
+        )
+        requests = []
+        async def deny(call):
+            requests.append(call.arguments["command"])
+            return False
+
+        ctx = RunContext(
+            granted_scopes=frozenset({CODE_EXECUTE}), request_approval=deny,
+            session_grants={"shell.exec"}, shell_allow_rules=["bash\tgit status", "bash\tnpm test"],
+        )
+        ctx.harness_shell = "bash"
+        def invoke(command):
+            return asyncio.run(registry.invoke(
+                ToolCall(id=command, name="shell.exec", arguments={"command": command}), ctx,
+            ))
+
+        assert not invoke("git status && npm test").is_error
+        assert invoke("git status && npm build").is_error
+        assert invoke("git status && rm -rf out").is_error
+        assert requests == ["git status && npm build", "git status && rm -rf out"]
+        ctx.shell_allow_rules.remove("bash\tnpm test")
+        assert invoke("git status && npm test").is_error
+
+
 def _ctx(record: list, *, decision, session_grants=None) -> RunContext:
     async def request_approval(call: ToolCall):
         record.append(call.name)
