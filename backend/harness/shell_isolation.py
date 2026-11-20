@@ -22,6 +22,32 @@ CONTAINER_IMAGE = "python:3.12-slim"
 CONTAINER_WORKSPACE = "/workspace"
 CONTAINER_MEMORY = "512m"
 CONTAINER_CPUS = "1"
+MAX_NETWORK_REASON_CHARS = 500
+
+
+def network_request_error(arguments: dict, profile: str) -> str | None:
+    """Validate an agent's request before offering any shell approval.
+
+    Host shells retain their normal networking; this request controls only
+    a NEW Isolated container. The agent must explain why it needs access.
+    """
+    requested = arguments.get("network", False)
+    reason = arguments.get("network_reason", "")
+    if type(requested) is not bool:
+        return "shell.exec network must be a boolean."
+    if not isinstance(reason, str):
+        return "shell.exec network_reason must be a string."
+    if requested:
+        if normalize_execution_profile(profile) != "isolated":
+            return "Network requests are only supported by shell.exec in the Isolated profile."
+        if not reason.strip():
+            return "Explain why network access is needed in network_reason."
+        if len(reason) > MAX_NETWORK_REASON_CHARS:
+            return f"network_reason must be at most {MAX_NETWORK_REASON_CHARS} characters."
+    elif reason:
+        return "network_reason requires network=true."
+    return None
+
 
 
 class IsolationUnavailableError(RuntimeError):
@@ -47,11 +73,13 @@ def available_engine(env: dict[str, str] | None = None) -> str | None:
 
 def container_invocation(
     command: str, workspace: Path, *, env: dict[str, str] | None = None,
+    network_enabled: bool = False,
 ) -> tuple[list[str], str, str]:
     """Return (argv, engine, unique name) for a restricted Linux container.
 
-    A fixed image, offline container, no privileged caps, read-only image
-    filesystem and explicitly bounded resources are non-optional. Only the
+    A fixed image, no privileged caps, read-only image filesystem and
+    explicitly bounded resources are non-optional. Networking is disabled
+    unless the caller supplies an approved grant. Only the
     trusted/bound workspace is writable; /tmp is a small scratch tmpfs.
     """
     environment = safe_subprocess_env() if env is None else env
@@ -69,7 +97,7 @@ def container_invocation(
     args = [
         executable, "run", "--rm", "--interactive", "--pull=never",
         "--name", name,
-        "--network=none", "--cpus=" + CONTAINER_CPUS,
+        *( [] if network_enabled else ["--network=none"] ), "--cpus=" + CONTAINER_CPUS,
         "--memory=" + CONTAINER_MEMORY, "--memory-swap=" + CONTAINER_MEMORY,
         "--pids-limit=128", "--read-only",
         "--cap-drop=ALL", "--security-opt=no-new-privileges",

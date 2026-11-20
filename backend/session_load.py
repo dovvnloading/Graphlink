@@ -1062,6 +1062,7 @@ def _restore_harness_payload(payload: dict[str, Any]) -> SceneNode:
             harness_workspace_path=str(payload.get("workspace_path", "")),
             harness_shell=normalize_shell(payload.get("shell", "auto")),
             harness_execution_profile=normalize_execution_profile(payload.get("execution_profile", "host")),
+            harness_network_always=payload.get("network_always") is True,
             harness_activity=activity,
             harness_max_turns=_positive_int(payload.get("max_turns"), 16),
             harness_spent_turns=_non_negative_int(payload.get("spent_turns")),

@@ -149,9 +149,9 @@ class ContainerSubprocessBackend(LocalSubprocessBackend):
         super().__init__()
         self._containers: dict[int, tuple[str, str, dict[str, str]]] = {}
 
-    def spawn(self, command: str, cwd: Path, shell: str = "auto"):
+    def spawn(self, command: str, cwd: Path, shell: str = "auto", *, network_enabled: bool = False):
         env = safe_subprocess_env()
-        argv, engine, name = container_invocation(command, cwd, env=env)
+        argv, engine, name = container_invocation(command, cwd, env=env, network_enabled=network_enabled)
         kwargs: dict = {"env": env}
         if sys.platform == "win32":
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
@@ -201,7 +201,7 @@ class ContainerSubprocessBackend(LocalSubprocessBackend):
 class ShellSession:
     """One named long-running process inside a workspace."""
 
-    def __init__(self, name: str, command: str, cwd: Path, backend: ShellBackend, shell: str = "auto") -> None:
+    def __init__(self, name: str, command: str, cwd: Path, backend: ShellBackend, shell: str = "auto", *, network_enabled: bool = False) -> None:
         self.name = name
         self.command = command
         self.cwd = cwd
@@ -209,7 +209,10 @@ class ShellSession:
         self._lines: deque[str] = deque(maxlen=MAX_BUFFERED_LINES)
         self._lock = threading.Lock()
         self._dropped = 0
-        self._process = backend.spawn(command, cwd) if shell == "auto" else backend.spawn(command, cwd, shell)
+        if network_enabled:
+            self._process = backend.spawn(command, cwd, shell, network_enabled=True)
+        else:
+            self._process = backend.spawn(command, cwd) if shell == "auto" else backend.spawn(command, cwd, shell)
         self._reader = threading.Thread(target=self._drain, name=f"shell-session-{name}", daemon=True)
         self._reader.start()
 
@@ -312,9 +315,10 @@ class ShellSessionRegistry:
         self._by_workspace: dict[str, dict[str, ShellSession]] = {}
         self._roots: dict[str, Path] = {}
         self._profiles: dict[str, str] = {}
+        self._networks: dict[str, bool] = {}
         self._lock = threading.RLock()
 
-    def bind_root(self, workspace_id: str, cwd: Path, profile: str = "host") -> None:
+    def bind_root(self, workspace_id: str, cwd: Path, profile: str = "host", network_enabled: bool = False) -> None:
         """Retire processes when the same node binds to a different root.
 
         A harness can switch from a previously trusted project folder back
@@ -324,22 +328,29 @@ class ShellSessionRegistry:
         """
         resolved = cwd.resolve()
         profile = normalize_execution_profile(profile)
+        network_enabled = profile == "isolated" and network_enabled is True
         with self._lock:
             if (self._roots.get(workspace_id) == resolved
-                    and self._profiles.get(workspace_id) == profile):
+                    and self._profiles.get(workspace_id) == profile
+                    and self._networks.get(workspace_id) == network_enabled):
                 return
             retired = self._by_workspace.pop(workspace_id, {})
             self._roots[workspace_id] = resolved
             self._profiles[workspace_id] = profile
+            self._networks[workspace_id] = network_enabled
         for session in retired.values():
             session.stop()
 
-    def start(self, workspace_id: str, name: str, command: str, cwd: Path, shell: str = "auto", profile: str = "host") -> ShellSession:
+    def start(self, workspace_id: str, name: str, command: str, cwd: Path, shell: str = "auto", profile: str = "host", network_enabled: bool = False) -> ShellSession:
         with self._lock:
             resolved = cwd.resolve()
             bound = self._roots.setdefault(workspace_id, resolved)
             profile = normalize_execution_profile(profile)
+            network_enabled = profile == "isolated" and network_enabled is True
             bound_profile = self._profiles.setdefault(workspace_id, profile)
+            bound_network = self._networks.setdefault(workspace_id, network_enabled)
+            if bound_network != network_enabled:
+                raise ShellSessionError("Network setting changed; retry in the active task.")
             if bound_profile != profile:
                 raise ShellSessionError("Execution profile changed; retry in the active profile.")
             if bound != resolved:
@@ -365,7 +376,7 @@ class ShellSessionRegistry:
                     f"(limit {MAX_SESSIONS_PER_WORKSPACE}) - stop one first"
                 )
             backend = self._isolated_backend if profile == "isolated" else self._backend
-            session = ShellSession(name, command, cwd, backend, shell)
+            session = ShellSession(name, command, cwd, backend, shell, network_enabled=network_enabled)
             sessions[name] = session
             return session
 
@@ -397,6 +408,7 @@ class ShellSessionRegistry:
             sessions = self._by_workspace.pop(workspace_id, {})
             self._roots.pop(workspace_id, None)
             self._profiles.pop(workspace_id, None)
+            self._networks.pop(workspace_id, None)
         for session in sessions.values():
             session.stop()
 
@@ -407,6 +419,7 @@ class ShellSessionRegistry:
             self._by_workspace.clear()
             self._roots.clear()
             self._profiles.clear()
+            self._networks.clear()
         for sessions in everything:
             for session in sessions.values():
                 session.stop()

@@ -135,7 +135,7 @@ class _RecordingSettings(FakeSettings):
         self._trusted.append(path)
 
 
-def _harness_bus(monkeypatch, settings, picked=None, composer_route=None, busy=False):
+def _harness_bus(monkeypatch, settings, picked=None):
     from backend import native_dialogs
     from backend.api.intents_harness import register_harness_intents
     from backend.domain.graph import SceneDocument
@@ -147,17 +147,13 @@ def _harness_bus(monkeypatch, settings, picked=None, composer_route=None, busy=F
     monkeypatch.setattr(native_dialogs, "pick_folder", fake_pick_folder)
     bus, document = _FakeBus(), SceneDocument()
     dispatcher = type("D", (), {"_settings_manager": settings, "start_harness_run": None})()
-    if busy:
-        dispatcher._runs = type("Runs", (), {"is_busy": lambda self, kind: kind == "harness"})()
 
     async def start_harness_run(**kwargs):
         dispatcher.started = kwargs
-        bus.started = kwargs
         return "run-1"
 
     dispatcher.start_harness_run = start_harness_run
-    composer = type("Composer", (), {"route": lambda self: composer_route})() if composer_route else None
-    register_harness_intents(bus, document, NotificationState(), dispatcher, composer)
+    register_harness_intents(bus, document, NotificationState(), dispatcher)
     return bus, document
 
 
@@ -232,69 +228,3 @@ def test_revoked_folder_falls_back_to_scratch_on_the_next_run(workspace_root, tm
     settings.revoke_harness_trusted_dir(str(project.resolve()))
     root, is_user_dir = bound_root("ws1", str(project), settings_manager=settings)
     assert not is_user_dir and root == ensure_workspace("ws1")
-
-# Composer agent mode: the backend, not the browser, resolves the model in
-# this session. A selected harness is resumed; a missing selection creates a
-# new scratch agent. Neither path changes the model used by normal launches.
-
-@pytest.mark.parametrize(
-    "mode,provider,model_id,expected_provider",
-    [
-        ("ollama", "Ollama (Local)", "qwen3:8b", "Ollama"),
-        ("llama_cpp", "Llama.cpp (Local)", "/models/code.gguf", "Llama.cpp"),
-        ("api", "Anthropic Claude", "claude-sonnet", "Anthropic Claude"),
-    ],
-)
-def test_composer_send_to_selected_agent_pins_composer_model(
-    monkeypatch, mode, provider, model_id, expected_provider,
-):
-    from graphlink_model_catalog import ModelRef
-
-    route = {"mode": mode, "provider": provider, "modelId": model_id, "available": True}
-    bus, document = _harness_bus(monkeypatch, FakeSettings([]), composer_route=route)
-    agent = document.add_harness_node(0, 0, "original task")
-
-    result = asyncio.run(bus.dispatch("harness", "composerSend", ["follow up", agent.id]))
-
-    assert result == agent.id
-    assert len(document.nodes) == 1
-    assert bus.started["harness_node_id"] == agent.id
-    assert bus.started["user_text"] == "follow up"
-    assert bus.started["model_ref"] == ModelRef(expected_provider, model_id)
-
-
-def test_composer_send_without_selected_agent_creates_scratch_node(monkeypatch):
-    from graphlink_model_catalog import ModelRef
-
-    route = {"mode": "ollama", "provider": "Ollama (Local)", "modelId": "local-chat", "available": True}
-    bus, document = _harness_bus(monkeypatch, FakeSettings([]), composer_route=route)
-
-    node_id = asyncio.run(bus.dispatch("harness", "composerSend", ["build a report", "deleted-node"]))
-
-    assert node_id in document.nodes
-    assert document.nodes[node_id].state.harness_goal == "build a report"
-    assert document.nodes[node_id].state.harness_workspace_path == ""
-    assert bus.started["harness_node_id"] == node_id
-    assert bus.started["model_ref"] == ModelRef("Ollama", "local-chat")
-
-
-@pytest.mark.parametrize("route", [
-    {"mode": "ollama", "provider": "Ollama (Local)", "modelId": "", "available": False},
-    {"mode": "api", "provider": "Unconfigured", "modelId": "model", "available": True},
-])
-def test_composer_send_rejects_unavailable_route_before_mutation(monkeypatch, route):
-    bus, document = _harness_bus(monkeypatch, FakeSettings([]), composer_route=route)
-
-    assert asyncio.run(bus.dispatch("harness", "composerSend", ["do work", None])) is None
-    assert not document.nodes
-    assert not hasattr(bus, "started")
-    assert "notification" in bus.published
-
-
-def test_composer_send_refuses_busy_run_without_creating_an_agent(monkeypatch):
-    route = {"mode": "ollama", "provider": "Ollama (Local)", "modelId": "local-chat", "available": True}
-    bus, document = _harness_bus(monkeypatch, FakeSettings([]), composer_route=route, busy=True)
-
-    assert asyncio.run(bus.dispatch("harness", "composerSend", ["do work", None])) is None
-    assert not document.nodes
-    assert not hasattr(bus, "started")

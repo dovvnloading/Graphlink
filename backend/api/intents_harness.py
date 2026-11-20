@@ -318,6 +318,23 @@ def register_harness_intents(
                 await asyncio.to_thread(sessions.stop_workspace, node.state.harness_workspace_id)
         await publish_scene()
 
+    async def set_network_always(node_id, enabled):
+        """Save for future tasks, not the currently running task."""
+        node = document.nodes.get(node_id)
+        if node is None or not isinstance(node.state, HarnessState):
+            return
+        if type(enabled) is not bool:
+            notifications.show("Network preference must be a boolean.", "warning")
+            await bus.publish("notification")
+            return
+        changed = node.state.harness_network_always != enabled
+        node.state.harness_network_always = enabled
+        if changed and node.state.harness_status != "running":
+            sessions = getattr(agent_dispatcher, "_harness_shell_sessions", None)
+            if sessions is not None:
+                await asyncio.to_thread(sessions.stop_workspace, node.state.harness_workspace_id)
+        await publish_scene()
+
     async def get_isolation_engine():
         """Probe the BACKEND host, not the browser or a saved graph."""
         return available_engine()
@@ -342,6 +359,9 @@ def register_harness_intents(
         broader one in place of the narrower one is a UI that will."""
         agent_dispatcher.approve_harness_tool_for_session(request_id)
 
+    async def approve_network_for_task(request_id, approval_id):
+        agent_dispatcher.approve_harness_network_for_task(request_id, approval_id)
+
     async def answer_question(request_id, answer):
         """Resolve a run parked on user.ask (§2.3). Distinct from
         approveTool because the payload is the user's TEXT, not a boolean -
@@ -359,6 +379,7 @@ def register_harness_intents(
     bus.register_intent("harness", "approveTool", approve_tool)
     bus.register_intent("harness", "denyTool", deny_tool)
     bus.register_intent("harness", "approveToolForSession", approve_tool_for_session)
+    bus.register_intent("harness", "approveNetworkForTask", approve_network_for_task)
     bus.register_intent("harness", "answer", answer_question)
     bus.register_intent("harness", "pickLaunchWorkspace", pick_launch_workspace)
     bus.register_intent("harness", "pickWorkspace", pick_workspace)
@@ -368,4 +389,5 @@ def register_harness_intents(
     bus.register_intent("harness", "revealWorkspace", reveal_folder)
     bus.register_intent("harness", "setShell", set_shell)
     bus.register_intent("harness", "setExecutionProfile", set_execution_profile)
+    bus.register_intent("harness", "setNetworkAlways", set_network_always)
     bus.register_intent("harness", "getIsolationEngine", get_isolation_engine)

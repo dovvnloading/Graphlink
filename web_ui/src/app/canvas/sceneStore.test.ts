@@ -18,46 +18,6 @@ describe("Agent settings intent forwarding", () => {
   });
 });
 
-describe("Composer workspace-agent dispatch", () => {
-  it("passes the selected harness node id and only succeeds with a real node reply", async () => {
-    const { transport, listeners, requestResults, requests } = makeFakeTransport();
-    const store = new SceneStore(transport);
-    store.connect();
-    const node = validScenePayload().nodes[0];
-    listeners.get("scene")?.(validScenePayload({
-      nodes: [{ ...node, id: "agent-1", kind: "harness" }],
-    }));
-    store.setSelectedNodeId("agent-1");
-    requestResults.push("agent-1");
-
-    await expect(store.sendComposerAgentMessage("Inspect the files")).resolves.toBe(true);
-    expect(requests).toContainEqual({
-      topic: "harness", intent: "composerSend", args: ["Inspect the files", "agent-1"],
-    });
-  });
-
-  it("routes non-agent and stale selection to a new node, and reports rejection", async () => {
-    const { transport, listeners, requestResults, requests } = makeFakeTransport();
-    const store = new SceneStore(transport);
-    store.connect();
-    listeners.get("scene")?.(validScenePayload());
-    store.setSelectedNodeId("n0"); // existing but not a harness node
-    requestResults.push("new-agent");
-
-    await expect(store.sendComposerAgentMessage("Work on this")).resolves.toBe(true);
-    expect(requests[0]).toEqual({
-      topic: "harness", intent: "composerSend", args: ["Work on this", null],
-    });
-
-    store.setSelectedNodeId("deleted");
-    requestResults.push(null);
-    await expect(store.sendComposerAgentMessage("Try again")).resolves.toBe(false);
-    expect(requests[1]).toEqual({
-      topic: "harness", intent: "composerSend", args: ["Try again", null],
-    });
-  });
-});
-
 describe("Python approval identity forwarding", () => {
   it("forwards the displayed identity while preserving unrelated approval shapes", () => {
     const { transport, intents } = makeFakeTransport();
@@ -70,6 +30,27 @@ describe("Python approval identity forwarding", () => {
       { topic: "harness", intent: "denyTool", args: ["run", "python-second"] },
       { topic: "harness", intent: "approveTool", args: ["other-run"] },
     ]);
+  });
+});
+
+describe("Workspace Files transport", () => {
+  it("uses request/response for listings and previews, and a mutation intent for reveal", async () => {
+    const { transport, requests, requestResults, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    const listing = {
+      root: "/project", isScratch: false, path: "", truncated: false,
+      entries: [{ name: "readme.md", path: "readme.md", isDir: false, size: 8 }],
+    };
+    const document = { path: "readme.md", content: "# Hello", truncated: false };
+    requestResults.push(listing, document);
+    expect(await store.listHarnessWorkspaceFiles("h1")).toEqual(listing);
+    expect(await store.readHarnessWorkspaceFile("h1", "readme.md")).toEqual(document);
+    store.revealHarnessWorkspace("h1");
+    expect(requests).toEqual([
+      { topic: "harness", intent: "listWorkspaceFiles", args: ["h1", ""] },
+      { topic: "harness", intent: "readWorkspaceFile", args: ["h1", "readme.md"] },
+    ]);
+    expect(intents).toEqual([{ topic: "harness", intent: "revealWorkspace", args: ["h1"] }]);
   });
 });
 

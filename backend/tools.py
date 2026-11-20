@@ -284,6 +284,14 @@ class ToolRegistry:
         # from both the caller's object and the object sent to the approval
         # callback. Refuse a changed pending request, without caching consent.
         original_python_call = call if call.name in ("python.exec", "python.install") else None
+        original_shell_call = call if call.name == "shell.exec" else None
+        if original_shell_call is not None:
+            from backend.harness.shell_isolation import network_request_error
+
+            error = network_request_error(call.arguments, getattr(ctx, "harness_execution_profile", "host"))
+            if error is not None:
+                return ToolResult(content=error, is_error=True)
+            call = ToolCall(id=call.id, name=call.name, arguments=deepcopy(call.arguments))
         if original_python_call is not None:
             if call.name == "python.exec":
                 from backend.harness.python_policy import source_error
@@ -332,7 +340,7 @@ class ToolRegistry:
                 # session; anything else truthy approves this call only. Every
                 # pre-existing caller returns a plain bool, which lands on the
                 # once-only branch exactly as it always did.
-                disclosure_call = deepcopy(call) if original_python_call is not None else call
+                disclosure_call = deepcopy(call) if (original_python_call is not None or original_shell_call is not None) else call
                 decision = await ctx.request_approval(disclosure_call)
                 approved = bool(decision)
                 # The approval prompt is the one place this function can be
@@ -345,12 +353,12 @@ class ToolRegistry:
                 _raise_if_cancelled(ctx.cancel.event if ctx.cancel is not None else None)
                 if not approved:
                     return ToolResult(content=f"Tool call {call.name!r} was denied approval.", is_error=True)
-                if original_python_call is not None and (
-                    original_python_call.arguments != call.arguments
+                if (original_python_call is not None or original_shell_call is not None) and (
+                    (original_python_call or original_shell_call).arguments != call.arguments
                     or disclosure_call.arguments != call.arguments
                 ):
                     return ToolResult(
-                        content="Python request changed while approval was pending; submit it for fresh approval.",
+                        content="Executable request changed while approval was pending; submit it for fresh approval.",
                         is_error=True,
                     )
                 if decision == "session" and ctx.session_grants is not None and not forced:

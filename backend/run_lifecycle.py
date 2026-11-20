@@ -168,6 +168,8 @@ class RunHandle:
     # Per-disclosure identity for Python approvals; empty for existing
     # approval surfaces. Never persisted and never a proof of human consent.
     approval_token: str = ""
+    # True only while this run's Isolated shell networking disclosure waits.
+    approval_network_requested: bool = False
     approval_snapshot_fn: Callable[[], Any] | None = None
     approval_snapshot: Any = None
     task: asyncio.Task | None = None

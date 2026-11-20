@@ -53,7 +53,7 @@ from backend.harness.shell_policy import requires_fresh_shell_approval
 from backend.harness.shell_selection import ShellUnavailableError, shell_invocation
 from backend.harness.shell_isolation import (
     IsolationUnavailableError, cleanup_container, container_invocation,
-    normalize_execution_profile,
+    network_request_error, normalize_execution_profile,
 )
 from backend.harness.shell_sessions import ShellSessionError, ShellSessionRegistry
 from backend.harness.workspace import WorkspaceError, ensure_workspace
@@ -103,20 +103,32 @@ SHELL_EXEC_SPEC = ToolSpec(
     description=(
         "Run one shell command inside the workspace (cwd is the workspace "
         "root) and return its merged stdout/stderr and exit code. Every "
-        "command needs the user's approval before it runs. Hard timeout "
+        "command needs the user's approval before it runs. In Isolated mode, "
+        "set network=true and network_reason to request network for this one "
+        "command; the user can allow it once or for this task. Hard timeout "
         f"{SHELL_EXEC_TIMEOUT_SECONDS}s; output truncated past "
         f"{_OUTPUT_CAP_CHARS} characters. One command per call - no "
         "interactive stdin."
     ),
     input_schema={
         "type": "object",
-        "properties": {"command": {"type": "string"}},
+        "properties": {
+            "command": {"type": "string"},
+            "network": {
+                "type": "boolean",
+                "description": "Isolated only: ask the user for networking for this command.",
+            },
+            "network_reason": {
+                "type": "string",
+                "description": "Required with network=true: why this command needs network access.",
+            },
+        },
         "required": ["command"],
     },
 )
 
 
-def _run_command(command: str, cwd, cancel_event, on_output=None, shell: str = "auto", profile: str = "host") -> tuple[str, "int | None", str]:
+def _run_command(command: str, cwd, cancel_event, on_output=None, shell: str = "auto", profile: str = "host", network_enabled: bool = False) -> tuple[str, "int | None", str]:
     """Blocking worker (called via to_thread): returns (output, exit_code,
     ended) where ended is "ok" | "timeout" | "cancelled". Guarded spawn,
     then a poll loop so cancel/timeout kill the whole tree promptly.
@@ -135,7 +147,7 @@ def _run_command(command: str, cwd, cancel_event, on_output=None, shell: str = "
     container = None
     argv: str | list[str]
     if normalize_execution_profile(profile) == "isolated":
-        argv, engine, name = container_invocation(command, cwd, env=kwargs["env"])
+        argv, engine, name = container_invocation(command, cwd, env=kwargs["env"], network_enabled=network_enabled)
         via_shell = False
         container = (engine, name)
     else:
@@ -303,7 +315,10 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
             # Do this for EVERY action, not only start: an immediate 'write'
             # after a rebind used to skip root validation entirely.
             profile = normalize_execution_profile(getattr(ctx, "harness_execution_profile", "host"))
-            await asyncio.to_thread(session_registry.bind_root, workspace_id, workspace, profile)
+            # Sessions can outlive a task. Only the durable node preference
+            # can grant their networking, never a one-command/task grant.
+            session_network = profile == "isolated" and getattr(ctx, "harness_network_always", False) is True
+            await asyncio.to_thread(session_registry.bind_root, workspace_id, workspace, profile, session_network)
             if action == "list":
                 rows = session_registry.names(workspace_id)
                 if not rows:
@@ -324,7 +339,7 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
                     )
                 session = await asyncio.to_thread(
                     session_registry.start, workspace_id, name, command, workspace,
-                    getattr(ctx, "harness_shell", "auto"), profile,
+                    getattr(ctx, "harness_shell", "auto"), profile, session_network,
                 )
                 # A process that dies instantly (bad command, missing binary)
                 # is the common failure, and reporting it as a successful
@@ -406,6 +421,20 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
         except (WorkspaceError, OSError) as exc:
             return ToolResult(content=f"Could not prepare the workspace: {exc}", is_error=True)
 
+        profile = normalize_execution_profile(getattr(ctx, "harness_execution_profile", "host"))
+        error = network_request_error(call.arguments, profile)
+        if error is not None:
+            return ToolResult(content=error, is_error=True)
+        requested = call.arguments.get("network") is True
+        task_grant = getattr(ctx, "harness_network_for_task", False) is True
+        always_grant = getattr(ctx, "harness_network_always", False) is True
+        once_grant = requested and getattr(ctx, "harness_network_once_call_id", None) == call.id
+        # A once grant is consumed by one shell command, never the next.
+        if getattr(ctx, "harness_network_once_call_id", None) == call.id:
+            ctx.harness_network_once_call_id = None
+        if requested and not (task_grant or always_grant or once_grant):
+            return ToolResult(content="Network access was not approved for this command.", is_error=True)
+        network_enabled = profile == "isolated" and (task_grant or always_grant or once_grant)
         cancel_event = ctx.cancel.event if ctx.cancel is not None else None
         on_output = getattr(ctx, "on_tool_output", None)
         if on_output is not None:
@@ -414,7 +443,7 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
             output, exit_code, ended = await asyncio.to_thread(
                 _run_command, command, workspace, cancel_event, on_output,
                 getattr(ctx, "harness_shell", "auto"),
-                getattr(ctx, "harness_execution_profile", "host"),
+                profile, network_enabled,
             )
         except (ShellUnavailableError, IsolationUnavailableError, OSError) as exc:
             return ToolResult(content=f"Could not launch the selected shell: {exc}", is_error=True)
@@ -439,7 +468,8 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
         )
 
     def _exec_needs_fresh_prompt(call: ToolCall) -> bool:
-        return requires_fresh_shell_approval(call.name, call.arguments)
+        # Once-only network consent may not become a fingerprint grant.
+        return call.arguments.get("network") is True or requires_fresh_shell_approval(call.name, call.arguments)
 
     def _session_needs_fresh_prompt(call: ToolCall) -> bool:
         return requires_fresh_shell_approval(call.name, call.arguments)
@@ -454,7 +484,7 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
     )
 
 
-USAGE_HINT = "shell.exec runs commands in the workspace; shell.session starts, reads, writes to and stops a long-running process such as a dev server (execution needs approval)."
+USAGE_HINT = "shell.exec runs workspace commands; in Isolated mode use network=true with network_reason to ask for networking (once or task). shell.session manages long-running processes; only the node setting can give sessions network access. All commands need approval."
 
 
 def register_workspace_tools(registry: ToolRegistry, dispatcher, document) -> None:

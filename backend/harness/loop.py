@@ -176,6 +176,11 @@ class HarnessRunContext(RunContext):
     harness_workspace_is_user_dir: bool | None = None
     harness_shell: str = "auto"
     harness_execution_profile: str = "host"
+    # Durable preference is snapshotted once; transient grants live only
+    # for this run, never in the graph or the session-grant store.
+    harness_network_always: bool = False
+    harness_network_for_task: bool = False
+    harness_network_once_call_id: str | None = None
     model_ref: object = None
     settings_manager: object = None
     runtime: object = None
@@ -530,12 +535,21 @@ async def run_harness(
         # the exact disclosure that was on screen when the user decided.
         # Web domains are once-per-task, never session-wide. A unique token
         # also prevents a stale click from approving a later redirect host.
-        bind_approval = call.name in ("python.exec", "python.install", "web.fetch", "web.search") or call.name.startswith("fal.")
+        network_request = (
+            call.name == "shell.exec"
+            and ctx.harness_execution_profile == "isolated"
+            and call.arguments.get("network") is True
+            and not ctx.harness_network_always
+            and not ctx.harness_network_for_task
+        )
+        bind_approval = network_request or call.name in ("python.exec", "python.install", "web.fetch", "web.search") or call.name.startswith("fal.")
         approval_token = uuid.uuid4().hex if bind_approval else ""
         handle.approval_token = approval_token
+        handle.approval_network_requested = network_request
         node.state.harness_approval_id = handle.approval_token
         node.state.harness_awaiting_approval = True
         node.state.harness_approval_tool_name = call.name
+        node.state.harness_approval_network_requested = network_request
         preview_available = preview.available if preview is not None else True
         if call.name == "python.install":
             from backend.harness.python_install import install_approval_summary
@@ -547,6 +561,20 @@ async def run_harness(
             node.state.harness_approval_summary = (
                 preview.summary if preview is not None else _approval_summary(call)
             )
+        if call.name in ("shell.exec", "shell.session") and ctx.harness_execution_profile == "isolated":
+            if network_request:
+                node.state.harness_approval_summary += (
+                    "\n--- Isolated network access request"
+                    f"\nWhy network is needed: {call.arguments['network_reason'].strip()}"
+                    "\nAllow once enables networking for this command only; "
+                    "allow for task enables it for later shell.exec commands in this task."
+                )
+            elif ctx.harness_network_always:
+                node.state.harness_approval_summary += "\nNetwork: enabled by this node's saved setting."
+            elif ctx.harness_network_for_task and call.name == "shell.exec":
+                node.state.harness_approval_summary += "\nNetwork: enabled for this task."
+            else:
+                node.state.harness_approval_summary += "\nNetwork: disabled."
         # Executable commands and interactive stdin always ask fresh, even
         # when a previous call was approved for the session. The panel must
         # not suggest session consent that the registry will reject.
@@ -562,11 +590,20 @@ async def run_harness(
                 node.state.harness_approval_tool_name = ""
                 node.state.harness_approval_summary = ""
                 node.state.harness_approval_session_offered = False
+                node.state.harness_approval_network_requested = False
                 node.state.harness_approval_id = ""
             handle.approval_token = ""
+            handle.approval_network_requested = False
         await bus.publish("scene")
         # UI controls are not an authorization boundary. A forged or stale
         # client approval cannot permit a write whose preview was unavailable.
+        if network_request and preview_available:
+            if approved == "network_task":
+                ctx.harness_network_for_task = True
+            elif approved is True:
+                ctx.harness_network_once_call_id = call.id
+            else:
+                approved = False
         if call.name == "python.install" and approved and preview_available:
             ctx.python_install_approved_interpreter = install_target
         return approved if preview_available else False
@@ -611,6 +648,7 @@ async def run_harness(
         harness_workspace_id=node.state.harness_workspace_id,
         harness_shell=normalize_shell(node.state.harness_shell),
         harness_execution_profile=normalize_execution_profile(node.state.harness_execution_profile),
+        harness_network_always=node.state.harness_network_always is True,
         model_ref=model_ref,
         settings_manager=settings_manager,
         runtime=runtime,
@@ -645,7 +683,7 @@ async def run_harness(
         if sessions is not None:
             await asyncio.to_thread(
                 sessions.bind_root, node.state.harness_workspace_id, root,
-                ctx.harness_execution_profile,
+                ctx.harness_execution_profile, ctx.harness_network_always,
             )
         # The root this run ACTUALLY bound, scratch included: a "" here
         # means "no run yet", which is what lets the card distinguish a
