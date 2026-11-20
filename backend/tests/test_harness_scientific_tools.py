@@ -275,6 +275,5 @@ def test_workspace_science_tools_do_not_leak_into_builder_and_approvals_are_comp
     )
     preview = _approval_summary(call)
     assert preview.startswith("science.run ")
-    assert last in preview and '"199"' not in preview
-    assert preview.endswith("}}")
-    assert len(preview) > 400
+    assert last in preview and len(preview) > 400
+    assert json.loads(preview.removeprefix("science.run "))["inputs"]["x"][-1] == 199
