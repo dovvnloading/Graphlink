@@ -19,6 +19,7 @@ changed, only their home and (for the analysis agent) their name.
 
 import base64
 import codecs
+import io
 import os
 import subprocess
 import sys
@@ -65,9 +66,12 @@ def _stdout_fragments(stream):
                 return
             yield piece
     else:
-        decoder = codecs.getincrementaldecoder(
-            getattr(stream, "encoding", None) or "utf-8"
-        )(errors="replace")
+        decoder = io.IncrementalNewlineDecoder(
+            codecs.getincrementaldecoder(
+                getattr(stream, "encoding", None) or "utf-8"
+            )(errors="replace"),
+            translate=True,
+        )
         while True:
             raw = os.read(fd, _REPL_READ_CHARS)
             piece = decoder.decode(raw, final=not raw)
