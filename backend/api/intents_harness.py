@@ -203,7 +203,14 @@ def register_harness_intents(
             notifications.show("Unsupported agent execution profile.", "warning")
             await bus.publish("notification")
             return
+        changed = node.state.harness_execution_profile != profile
         node.state.harness_execution_profile = profile
+        if changed and node.state.harness_status != "running":
+            # A stopped task has no reason to retain interactive processes
+            # from its previous execution profile.
+            sessions = getattr(agent_dispatcher, "_harness_shell_sessions", None)
+            if sessions is not None:
+                await asyncio.to_thread(sessions.stop_workspace, node.state.harness_workspace_id)
         await publish_scene()
 
     async def get_isolation_engine():

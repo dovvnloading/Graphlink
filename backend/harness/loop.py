@@ -626,6 +626,14 @@ async def run_harness(
         )
         ctx.harness_workspace_dir = root
         ctx.harness_workspace_is_user_dir = is_user_dir
+        # Retire prior-profile interactive sessions at the task boundary,
+        # even if this task only uses shell.exec and never calls shell.session.
+        sessions = getattr(dispatcher, "_harness_shell_sessions", None)
+        if sessions is not None:
+            await asyncio.to_thread(
+                sessions.bind_root, node.state.harness_workspace_id, root,
+                ctx.harness_execution_profile,
+            )
         # The root this run ACTUALLY bound, scratch included: a "" here
         # means "no run yet", which is what lets the card distinguish a
         # refused grant from a binding that has simply not run.
@@ -663,10 +671,15 @@ async def run_harness(
                     snapshot, node.state.harness_workspace_id, root, ctx.harness_shell,
                 )
         else:
-            machine_context = await asyncio.to_thread(
-                context_module.describe_machine, root, shell=ctx.harness_shell,
-                profile=ctx.harness_execution_profile,
-            )
+            if ctx.harness_execution_profile == "isolated":
+                machine_context = await asyncio.to_thread(
+                    context_module.describe_machine, root, shell=ctx.harness_shell,
+                    profile=ctx.harness_execution_profile,
+                )
+            else:
+                machine_context = await asyncio.to_thread(
+                    context_module.describe_machine, root, shell=ctx.harness_shell,
+                )
         # H3: all three stable tiers - core, tool guide, machine snapshot -
         # remain in the cacheable system message, outside compactable history.
         system_prompt = context_module.build_system_prompt(
