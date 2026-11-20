@@ -25,6 +25,15 @@ from backend.harness.python_env import (
     managed_venv_dir,
     venv_python,
 )
+from backend.harness.python_isolation import (
+    CONTAINER_PYTHON, CONTAINER_WHEEL_CACHE, VENV_BOOTSTRAP_SCRIPT,
+    IsolatedPythonPlan, isolated_python_container_env,
+    planned_isolated_python_environment, prepare_isolated_python_environment,
+)
+from backend.harness.shell_isolation import (
+    IsolationUnavailableError, cleanup_container, container_invocation,
+    normalize_execution_profile,
+)
 from backend.harness.workspace import WorkspaceError, workspace_dir
 from backend.tools import RunContext, ToolResult
 from graphlink_execution_guard import (
@@ -97,8 +106,14 @@ def workspace_install_binding(ctx: RunContext) -> tuple[str, Path, bool]:
     return workspace_id, workspace_dir(workspace_id), True
 
 
-def planned_install_interpreter(workspace_id: str, root: Path, *, is_scratch: bool) -> Path:
+def planned_install_interpreter(
+    workspace_id: str, root: Path, *, is_scratch: bool, profile: str = "host",
+) -> Path:
     """Select without creating a venv, for the exact approval disclosure."""
+    if normalize_execution_profile(profile) == "isolated":
+        return planned_isolated_python_environment(
+            workspace_id, root, is_scratch=is_scratch,
+        ).interpreter
     for name in (".venv", "venv"):
         candidate = root / name
         if _usable_venv(candidate):
@@ -106,9 +121,19 @@ def planned_install_interpreter(workspace_id: str, root: Path, *, is_scratch: bo
     return venv_python(managed_venv_dir(workspace_id, root, is_scratch=is_scratch))
 
 
-def install_approval_summary(packages: list[str], interpreter: Path | None) -> str:
+def install_approval_summary(
+    packages: list[str], interpreter: Path | None, *, isolated: bool = False,
+) -> str:
     target = str(interpreter) if interpreter is not None else "(no workspace bound)"
-    return "python.install\n--- environment\n" + target + "\n--- packages\n" + "\n".join(packages)
+    summary = "python.install\n--- environment\n" + target + "\n--- packages\n" + "\n".join(packages)
+    if isolated:
+        summary += (
+            "\n--- network permission\n"
+            "This install may access the network to download binary wheels from PyPI "
+            "inside the container. Only its pip download step has network access; "
+            "python.exec remains offline."
+        )
+    return summary
 
 
 def _run_pip(argv: list[str], cwd: Path, cancel_event) -> tuple[int | None, str, str]:
@@ -200,9 +225,35 @@ def _prepare_cache(cache_root: Path) -> tuple[Path, Path]:
     return wheels, http
 
 
+def _checked_isolated_command(
+    command: list[str], cwd: Path, cancel_event, plan: IsolatedPythonPlan,
+    cache_root: Path, *, network: bool = False,
+) -> tuple[int, str]:
+    """Run an approved pip/bootstrap command in the container, never on host.
+
+    The only caller enabling network is the PyPI *download* phase. Every
+    other command, including venv creation and wheel installation, is
+    explicitly --network=none. Remove daemon-side containers even when a
+    cancellation or timeout kills their local Docker/Podman CLI.
+    """
+    env = safe_subprocess_env()
+    argv, engine, name = container_invocation(
+        command, cwd, env=env, network=network,
+        extra_mounts=(*plan.mounts, (cache_root, CONTAINER_WHEEL_CACHE)),
+        container_env={
+            **isolated_python_container_env(plan),
+            "PIP_CONFIG_FILE": "/dev/null",
+        },
+    )
+    try:
+        return _checked_pip(argv, cwd, cancel_event)
+    finally:
+        cleanup_container(engine, name, env=env)
+
+
 def _install_in_worker(
     interpreter: Path, cwd: Path, packages: list[str], cancel_event,
-    cache_root: Path,
+    cache_root: Path, *, isolated_plan: IsolatedPythonPlan | None = None,
 ) -> ToolResult:
     # Concurrent tools cannot download into the same wheel filename at once.
     while not _CACHE_LOCK.acquire(timeout=_POLL_SECONDS):
@@ -210,29 +261,51 @@ def _install_in_worker(
             raise RequestCancelledError("stopped")
     try:
         wheels, http = _prepare_cache(cache_root)
+        if isolated_plan is not None:
+            prepare_isolated_python_environment(isolated_plan)
+            # The image provides Python and ensurepip. Only the container
+            # may create/repair its own Linux virtualenv.
+            _checked_isolated_command(
+                [CONTAINER_PYTHON, "-u", "-c", VENV_BOOTSTRAP_SCRIPT,
+                 str(isolated_plan.container_venv),
+                 "1" if isolated_plan.managed else "0"],
+                cwd, cancel_event, isolated_plan, cache_root,
+            )
+            pip_wheels = f"{CONTAINER_WHEEL_CACHE}/wheels"
+            pip_http = f"{CONTAINER_WHEEL_CACHE}/pip-http"
+
+            def run_pip(argv: list[str], *, network: bool = False) -> tuple[int, str]:
+                return _checked_isolated_command(
+                    argv, cwd, cancel_event, isolated_plan, cache_root, network=network,
+                )
+        else:
+            pip_wheels, pip_http = str(wheels), str(http)
+
+            def run_pip(argv: list[str], *, network: bool = False) -> tuple[int, str]:
+                return _checked_pip(argv, cwd, cancel_event)
+
         common = [
             str(interpreter), "-m", "pip", "--no-input",
-            "--disable-pip-version-check", f"--cache-dir={http}",
+            "--disable-pip-version-check", f"--cache-dir={pip_http}",
         ]
         offline = [
             *common, "install", "--only-binary=:all:", "--no-index",
-            f"--find-links={wheels}", *packages,
+            f"--find-links={pip_wheels}", *packages,
         ]
 
-        code, output = _checked_pip(offline, cwd, cancel_event)
+        code, output = run_pip(offline)
         if code and "No module named pip" in output:
             # Some externally created project virtualenvs omit pip. This
             # bootstraps only bundled ensurepip wheels, after authorization.
-            setup_code, setup_output = _checked_pip(
+            setup_code, setup_output = run_pip(
                 [str(interpreter), "-m", "ensurepip", "--default-pip"],
-                cwd, cancel_event,
             )
             if setup_code:
                 return ToolResult(
                     content=f"Could not prepare pip in {interpreter}:\n{setup_output}",
                     is_error=True,
                 )
-            code, output = _checked_pip(offline, cwd, cancel_event)
+            code, output = run_pip(offline)
 
         downloaded = False
         if code:
@@ -243,10 +316,10 @@ def _install_in_worker(
             download = [
                 *common, "download", "--only-binary=:all:",
                 f"--index-url={DEFAULT_PYPI_INDEX}",
-                f"--dest={wheels}", "--retries=0", "--timeout=8",
+                f"--dest={pip_wheels}", "--retries=0", "--timeout=8",
                 *packages,
             ]
-            dl_code, dl_output = _checked_pip(download, cwd, cancel_event)
+            dl_code, dl_output = run_pip(download, network=isolated_plan is not None)
             if dl_code:
                 return ToolResult(
                     content=(
@@ -257,7 +330,7 @@ def _install_in_worker(
                     is_error=True,
                 )
             downloaded = True
-            code, output = _checked_pip(offline, cwd, cancel_event)
+            code, output = run_pip(offline)
 
         if code:
             return ToolResult(
@@ -285,28 +358,50 @@ async def install_packages(
 
     try:
         workspace_id, root, is_scratch = workspace_install_binding(ctx)
-        planned = planned_install_interpreter(workspace_id, root, is_scratch=is_scratch)
+        profile = normalize_execution_profile(
+            getattr(ctx, "harness_execution_profile", "host")
+        )
+        planned = planned_install_interpreter(
+            workspace_id, root, is_scratch=is_scratch, profile=profile,
+        )
         approved = getattr(ctx, "python_install_approved_interpreter", None)
         if not isinstance(approved, Path) or approved != planned:
             return ToolResult(
                 content="Python environment changed or was not bound to this install approval; ask again.",
                 is_error=True,
             )
-        interpreter = await asyncio.to_thread(
-            ensure_python_environment, workspace_id, root, is_scratch=is_scratch,
-        )
-        if interpreter != approved:
+        binding = (workspace_id, root.resolve(), is_scratch, profile, planned)
+        if profile == "isolated" and getattr(
+            ctx, "python_install_approved_binding", None
+        ) != binding:
             return ToolResult(
-                content="Python environment changed after approval; ask again.",
+                content="Isolated Python workspace changed since approval; ask again.",
                 is_error=True,
             )
+        if profile == "isolated":
+            plan = planned_isolated_python_environment(
+                workspace_id, root, is_scratch=is_scratch,
+            )
+            interpreter = plan.interpreter
+        else:
+            interpreter = await asyncio.to_thread(
+                ensure_python_environment, workspace_id, root, is_scratch=is_scratch,
+            )
+            if interpreter != approved:
+                return ToolResult(
+                    content="Python environment changed after approval; ask again.",
+                    is_error=True,
+                )
+            plan = None
         cancel_event = ctx.cancel.event if ctx.cancel is not None else None
         return await asyncio.to_thread(
             _install_in_worker, interpreter, root, packages, cancel_event,
             cache_root if cache_root is not None else PYTHON_WHEEL_CACHE_ROOT,
+            isolated_plan=plan,
         )
-    except (OSError, WorkspaceError, TimeoutError) as exc:
+    except (OSError, WorkspaceError, TimeoutError, IsolationUnavailableError) as exc:
         return ToolResult(content=f"Could not install Python packages: {exc}", is_error=True)
     finally:
         # A future install can never borrow a previously approved target.
         setattr(ctx, "python_install_approved_interpreter", None)
+        setattr(ctx, "python_install_approved_binding", None)
