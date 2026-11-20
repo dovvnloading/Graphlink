@@ -17,6 +17,7 @@ import os
 import re
 import sqlite3
 import threading
+from weakref import WeakValueDictionary
 from collections import OrderedDict
 from contextlib import closing
 from dataclasses import dataclass
@@ -35,6 +36,10 @@ def index_path(transcript: Path) -> Path:
     return transcript.with_name(INDEX_FILENAME)
 
 
+class _IncompatibleIndex(sqlite3.DatabaseError):
+    """An existing disposable sidecar has an incompatible FTS schema."""
+
+
 def _open_index(path: Path) -> sqlite3.Connection:
     # The workspace is writable by the agent. Never follow a planted index
     # symlink into another file: this is derived application state, not a
@@ -47,6 +52,11 @@ def _open_index(path: Path) -> sqlite3.Connection:
             "CREATE VIRTUAL TABLE IF NOT EXISTS transcript_fts USING "
             "fts5(content, role UNINDEXED, line_number UNINDEXED, tokenize='unicode61')"
         )
+        definition = db.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'transcript_fts'"
+        ).fetchone()
+        if not definition or "using fts5(" not in str(definition[0]).lower():
+            raise _IncompatibleIndex("Unexpected transcript search FTS schema.")
         db.execute(
             "CREATE TABLE IF NOT EXISTS transcript_index_state ("
             "id INTEGER PRIMARY KEY CHECK (id = 1), "
@@ -116,6 +126,50 @@ _HASH_CHECKPOINTS: OrderedDict[str, _HashCheckpoint] = OrderedDict()
 _HASH_CHECKPOINT_LOCK = threading.Lock()
 _MAX_HASH_CHECKPOINTS = 16
 
+# Search and writer flushes may run in parallel for the same transcript.
+# Sidecar replacement must not race with another in-process reader/writer;
+# locks are per-sidecar and weakly held so inactive agents do not accumulate.
+_INDEX_LOCKS: WeakValueDictionary[str, threading.RLock] = WeakValueDictionary()
+_INDEX_LOCKS_GUARD = threading.Lock()
+
+
+def _index_lock(path: Path) -> threading.RLock:
+    with _INDEX_LOCKS_GUARD:
+        key = str(path)
+        lock = _INDEX_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _INDEX_LOCKS[key] = lock
+        return lock
+
+
+def _is_damaged_index(exc: sqlite3.DatabaseError) -> bool:
+    if isinstance(exc, _IncompatibleIndex):
+        return True
+    code = getattr(exc, "sqlite_errorcode", None)
+    if isinstance(code, int) and (code & 0xFF) in (
+        getattr(sqlite3, "SQLITE_CORRUPT", 11),
+        getattr(sqlite3, "SQLITE_NOTADB", 26),
+    ):
+        return True
+    message = str(exc).lower()
+    return any(fragment in message for fragment in (
+        "file is not a database", "database disk image is malformed",
+        "malformed database schema",
+    ))
+
+
+def _discard_damaged_index(path: Path) -> None:
+    # Only the derived sidecar and SQLite companions can be deleted.
+    # Refuse links and non-files; never touch transcript.jsonl.
+    for candidate in (path, *(Path(str(path) + suffix) for suffix in ("-wal", "-shm", "-journal"))):
+        if candidate.is_symlink():
+            raise OSError("Transcript search index must not be a symlink.")
+        if candidate.exists():
+            if not candidate.is_file():
+                raise OSError("Transcript search index must be a regular file.")
+            candidate.unlink()
+
 
 def _source_stamp(stats: os.stat_result) -> tuple[int, int, int, int, int]:
     # Compare fstat snapshots only: Windows path.stat can report birth time
@@ -155,7 +209,7 @@ def _prefix_hasher(source, length: int):
     return digest
 
 
-def sync_index(transcript: Path, *, append_origin: os.stat_result | None = None) -> None:
+def _sync_index_once(transcript: Path, *, append_origin: os.stat_result | None = None) -> None:
     """Index complete JSONL records not yet committed to this sidecar.
 
     append_origin is the transcript stat taken immediately before this process's
@@ -278,6 +332,19 @@ def sync_index(transcript: Path, *, append_origin: os.stat_result | None = None)
             ))
 
 
+def sync_index(transcript: Path, *, append_origin: os.stat_result | None = None) -> None:
+    """Rebuild an unreadable disposable index once from authoritative JSONL."""
+    sidecar = index_path(transcript)
+    with _index_lock(sidecar):
+        try:
+            _sync_index_once(transcript, append_origin=append_origin)
+        except sqlite3.DatabaseError as exc:
+            if not _is_damaged_index(exc):
+                raise
+            _discard_damaged_index(sidecar)
+            _sync_index_once(transcript)
+
+
 def _match_expression(query: str) -> str:
     if not query.strip() or len(query) > MAX_QUERY_CHARS:
         raise ValueError(f"Search query must be 1-{MAX_QUERY_CHARS} characters.")
@@ -300,15 +367,26 @@ def search_index(transcript: Path, query: str, *, limit: int = 5) -> list[dict]:
         raise ValueError(f"Search limit must be between 1 and {MAX_MATCHES}.")
     if not transcript.is_file():
         return []
-    sync_index(transcript)
-    with closing(_open_index(index_path(transcript))) as db:
-        rows = db.execute(
-            "SELECT role, line_number, "
-            "snippet(transcript_fts, 0, '[', ']', '…', 24) "
-            "FROM transcript_fts WHERE transcript_fts MATCH ? "
-            "ORDER BY bm25(transcript_fts), rowid DESC LIMIT ?",
-            (match, limit),
-        ).fetchall()
+    sidecar = index_path(transcript)
+    with _index_lock(sidecar):
+        # Also recover corruption detected only while querying FTS pages.
+        for attempt in range(2):
+            if attempt:
+                _discard_damaged_index(sidecar)
+            sync_index(transcript)
+            try:
+                with closing(_open_index(sidecar)) as db:
+                    rows = db.execute(
+                        "SELECT role, line_number, "
+                        "snippet(transcript_fts, 0, '[', ']', '…', 24) "
+                        "FROM transcript_fts WHERE transcript_fts MATCH ? "
+                        "ORDER BY bm25(transcript_fts), rowid DESC LIMIT ?",
+                        (match, limit),
+                    ).fetchall()
+                break
+            except sqlite3.DatabaseError as exc:
+                if attempt or not _is_damaged_index(exc):
+                    raise
     return [
         {
             "role": role,

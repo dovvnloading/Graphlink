@@ -76,6 +76,47 @@ def test_legacy_backfill_and_crash_gap_sync_are_idempotent(tmp_path):
 
 
 
+def test_corrupted_sidecar_is_rebuilt_from_unchanged_transcript(tmp_path):
+    transcript = transcript_path(tmp_path)
+    transcript.write_text('{"t":"msg","role":"user","content":"durable saffron"}\n', encoding="utf-8")
+    assert len(search_index(transcript, "saffron")) == 1
+    original = transcript.read_bytes()
+    sidecar = index_path(transcript)
+    sidecar.write_bytes(b"not a sqlite database")
+
+    hits = search_index(transcript, "saffron")
+    assert len(hits) == 1 and hits[0]["role"] == "user"
+    assert len(search_index(transcript, "saffron")) == 1
+    assert sidecar.read_bytes().startswith(b"SQLite format 3\x00")
+    assert transcript.read_bytes() == original
+
+
+def test_incompatible_fts_schema_is_recreated_from_jsonl(tmp_path):
+    transcript = transcript_path(tmp_path)
+    transcript.write_text('{"t":"msg","role":"assistant","content":"violet ledger"}\n', encoding="utf-8")
+    with closing(sqlite3.connect(index_path(transcript))) as db:
+        db.execute("CREATE TABLE transcript_fts (content TEXT)")
+        db.commit()
+
+    assert len(search_index(transcript, "violet")) == 1
+    assert len(search_index(transcript, "ledger")) == 1
+
+
+def test_corrupt_index_recovery_never_follows_symlink(tmp_path):
+    transcript = transcript_path(tmp_path)
+    transcript.write_text('{"t":"msg","role":"user","content":"poppy"}\n', encoding="utf-8")
+    outside = tmp_path / "outside.db"
+    outside.write_bytes(b"private file")
+    try:
+        index_path(transcript).symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+
+    with pytest.raises(OSError, match="symlink"):
+        search_index(transcript, "poppy")
+    assert outside.read_bytes() == b"private file"
+
+
 def test_replacing_transcript_without_shrinking_invalidates_old_fts_rows(tmp_path):
     transcript = transcript_path(tmp_path)
     old = b'{"t":"msg","role":"user","content":"alpha"}\n'

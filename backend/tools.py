@@ -149,6 +149,9 @@ class RunContext:
     # Per-task network consent: domain grants never outlive this RunContext.
     # Web handlers manage their own domain-level prompts, not tool fingerprints.
     _approved_web_domains: set[str] = field(default_factory=set)
+    # Reuse Web Research's per-origin crawl state within one workspace task,
+    # without sharing fetchers or domain consent across RunContexts.
+    _workspace_web_fetch_service: object | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)

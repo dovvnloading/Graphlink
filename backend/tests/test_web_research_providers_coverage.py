@@ -512,6 +512,29 @@ class TestBeautifulSoupContentExtractorHtml:
         assert doc.sections == ("Hello world.",)
         assert doc.source_id == "s1-abc"
 
+    def test_html_table_rows_are_preserved_with_paragraphs_in_document_order(self, limits, token):
+        html = (
+            b"<main><p>Annual results</p><table>"
+            b"<tr><th>Revenue</th><td><p>42 million</p></td></tr>"
+            b"<tr><th>Margin</th><td>12%</td></tr>"
+            b"</table><p>Notes follow.</p></main>"
+        )
+        extractor = BeautifulSoupContentExtractor()
+        doc = extractor.extract(_payload(body=html), limits=limits, token=token)
+
+        assert doc.text.splitlines() == [
+            "Annual results", "Revenue | 42 million", "Margin | 12%", "Notes follow.",
+        ]
+        assert doc.sections == tuple(doc.text.splitlines())
+        assert doc.truncated is False
+        tight = extractor.extract(
+            _payload(body=html), limits=ResearchLimits(max_chars_per_source=35), token=token,
+        )
+        assert tight.truncated is True
+        assert len(tight.text) <= 35
+        assert all(section in tight.text for section in tight.sections)
+
+
     def test_falls_back_to_the_hostname_when_there_is_no_title_tag(self, limits, token):
         html = b"<html><body><p>No title here.</p></body></html>"
         extractor = BeautifulSoupContentExtractor()

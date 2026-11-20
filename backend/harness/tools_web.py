@@ -210,7 +210,12 @@ async def _fetch(call: ToolCall, ctx: RunContext) -> ToolResult:
 
     from graphlink_plugins.web_research.service import WebResearchService
 
-    service = WebResearchService()
+    # Keep the fetcher (and its CrawlEtiquette robots / last-fetch caches)
+    # for this task only. Domain approval remains a separate per-task gate.
+    service = ctx._workspace_web_fetch_service
+    if service is None:
+        service = WebResearchService()
+        ctx._workspace_web_fetch_service = service
     token = _TaskResearchToken(ctx.cancel)
     limits = ResearchLimits()
     loop = asyncio.get_running_loop()
