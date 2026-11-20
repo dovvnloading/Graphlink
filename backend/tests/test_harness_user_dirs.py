@@ -38,6 +38,28 @@ def test_a_trusted_existing_dir_binds_as_a_user_dir(workspace_root, tmp_path):
     assert is_user_dir and root == project.resolve()
 
 
+def test_replacing_a_granted_folder_with_a_symlink_does_not_transfer_trust(workspace_root, tmp_path):
+    project = tmp_path / "project"
+    private = tmp_path / "private"
+    project.mkdir()
+    private.mkdir()
+    (private / "secret.md").write_text("not approved")
+    settings = FakeSettings([str(project.resolve())])
+
+    project.rename(tmp_path / "project-old")
+    try:
+        project.symlink_to(private, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("Creating directory symlinks is unavailable")
+
+    root, is_user_dir = bound_root("ws1", str(project), settings_manager=settings)
+    assert not is_user_dir and root == ensure_workspace("ws1")
+    assert root != private.resolve()
+    # Only a fresh, explicit grant of the canonical private path works.
+    settings._trusted.append(str(private.resolve()))
+    assert bound_root("ws1", str(project), settings_manager=settings) == (private.resolve(), True)
+
+
 def test_an_untrusted_dir_silently_falls_back_to_scratch(workspace_root, tmp_path):
     project = tmp_path / "project"
     project.mkdir()

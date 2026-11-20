@@ -7,6 +7,29 @@ type StateListener = (payload: Record<string, unknown>) => void;
 type PatchListener = (patch: ScenePatch) => void;
 type VersionRejectionListener = (rejection: BridgeRejection | null) => void;
 
+describe("Workspace preview selection and list-root validation", () => {
+  it("forwards the displayed root with reads so revocations cannot switch content", async () => {
+    const { transport, requestResults, requests } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    requestResults.push({ path: "notes.md", content: "# from project", truncated: false });
+    await expect(store.readHarnessWorkspaceFile("agent-1", "notes.md", "/project"))
+      .resolves.toMatchObject({ content: "# from project" });
+    expect(requests).toContainEqual({
+      topic: "harness", intent: "readWorkspaceFile", args: ["agent-1", "notes.md", "/project"],
+    });
+  });
+
+  it("invalidates earlier previews when a newer request or close occurs", () => {
+    const store = new SceneStore(makeFakeTransport().transport);
+    const first = store.beginWorkspacePreview();
+    const second = store.beginWorkspacePreview();
+    expect(store.isCurrentWorkspacePreview(first)).toBe(false);
+    expect(store.isCurrentWorkspacePreview(second)).toBe(true);
+    store.cancelWorkspacePreview();
+    expect(store.isCurrentWorkspacePreview(second)).toBe(false);
+  });
+});
+
 describe("Agent settings intent forwarding", () => {
   it("sends the shell preference without starting or cancelling a task", () => {
     const { transport, intents } = makeFakeTransport();
@@ -1909,7 +1932,8 @@ describe("SceneStore", () => {
     const { transport, listeners } = makeFakeTransport();
     const store = new SceneStore(transport);
     store.connect();
-    expect(listeners.size).toBe(4);
+    expect(listeners.size).toBe(5);
+    expect(listeners.has("app-settings")).toBe(true);
     store.dispose();
     expect(listeners.size).toBe(0);
   });

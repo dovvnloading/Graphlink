@@ -140,15 +140,25 @@ def register_harness_workspace_intents(
         listing = await asyncio.to_thread(list_workspace_files, root, relative_path, cursor)
         return {"root": str(root), "isScratch": not user_dir, **listing}
 
-    async def read_file(node_id: str, relative_path: str):
+    async def read_file(node_id: str, relative_path: str, expected_root: str | None = None):
         root, _ = _workspace_for_node(node_id)
-        return await asyncio.to_thread(read_workspace_file, root, relative_path)
+        # A file button belongs to the root shown in its listing. If trust
+        # was revoked since that listing, never open a same-named scratch
+        # file under a different root. Older clients can omit this argument.
+        if expected_root is not None and expected_root != str(root):
+            raise WorkspaceError("Workspace folder changed. Refresh the Files list and choose a file again.")
+        file = await asyncio.to_thread(read_workspace_file, root, relative_path)
+        # Revocation may have happened while the (possibly slow) preview
+        # was being read in the worker. Do not return that stale preview.
+        if expected_root is not None and str(_workspace_for_node(node_id)[0]) != expected_root:
+            raise WorkspaceError("Workspace folder changed. Refresh the Files list and choose a file again.")
+        return file
 
     async def reveal_folder(node_id: str):
         root, _ = _workspace_for_node(node_id)
         try:
             await asyncio.to_thread(reveal_workspace, root)
-        except OSError as exc:
+        except (OSError, WorkspaceError) as exc:
             notifications.show(f"Could not open the workspace folder: {exc}", "error")
             await bus.publish("notification")
 

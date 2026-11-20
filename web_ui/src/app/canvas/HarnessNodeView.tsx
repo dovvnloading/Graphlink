@@ -82,7 +82,8 @@ export interface HarnessNodeData extends Record<string, unknown> {
   onPickWorkspace: () => void;
   onUseScratch: () => void;
   onListWorkspaceFiles: (path: string, cursor?: string) => Promise<HarnessWorkspaceListing>;
-  onOpenWorkspaceFile: (path: string) => Promise<void>;
+  onOpenWorkspaceFile: (path: string, expectedRoot: string) => Promise<void>;
+  onWorkspaceTrustChanged: (listener: () => void) => () => void;
   onRevealWorkspace: () => void;
   onSetShell: (shell: string) => void;
   onRemoveShellAllowRule: (rule: string) => void;
@@ -656,6 +657,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
         key={data.harnessWorkspacePath}
         onList={data.onListWorkspaceFiles}
         onOpen={data.onOpenWorkspaceFile}
+        onTrustChanged={data.onWorkspaceTrustChanged}
         onReveal={data.onRevealWorkspace}
       />
 

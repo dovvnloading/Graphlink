@@ -82,7 +82,8 @@ def bound_root(
 
     A non-empty workspace_path is honored only when it passes the trust
     gate: settings_manager.get_harness_trusted_dirs() must contain its
-    resolved absolute string AND it must still be an existing directory.
+    canonical absolute string AS STORED (never re-resolved) AND the requested
+    path must still resolve to an existing directory.
     Any failure - untrusted, missing, gone, no settings manager - falls
     back silently to the managed scratch workspace. This is the load-
     bearing check: a session file naming a directory is a REQUEST, never a
@@ -97,7 +98,11 @@ def bound_root(
                 trusted = set(settings_manager.get_harness_trusted_dirs())
             except Exception:
                 trusted = set()
-            if str(candidate) in {str(Path(t).resolve()) for t in trusted if isinstance(t, str)}:
+            # Settings stores the canonical path chosen by the native picker.
+            # Do NOT resolve stored grants again: if that path is later
+            # replaced with a symlink, resolving it would transfer trust to
+            # an entirely different, never-approved directory.
+            if str(candidate) in trusted:
                 return candidate, True
     return ensure_workspace(workspace_id), False
 

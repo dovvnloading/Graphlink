@@ -17,6 +17,7 @@
  */
 
 import { validateSceneState } from "../../lib/bridge-core/generated/scene-state";
+import { validateAppSettingsState } from "../../lib/bridge-core/generated/app-settings-state";
 import { bindTopic, type LiveTopicName } from "../../lib/api-contract/bindTopic";
 import {
   hydrateSceneNodeRow,
@@ -265,6 +266,14 @@ export class SceneStore {
   private fontConfig: FontControlState = initialFontControlState;
   private readonly listeners = new Set<Listener>();
   private readonly unsubscribers: Array<() => void> = [];
+  // A change to the persisted trust list invalidates displayed workspace
+  // listings (and in-flight previews), but unrelated Settings publishes
+  // must not tear down each Agent's Files browser.
+  private trustedWorkspaceDirs: readonly string[] | null = null;
+  private readonly workspaceTrustListeners = new Set<Listener>();
+  // Shared across all Agent cards: only the most recently requested
+  // workspace preview may open the global Document View panel.
+  private workspacePreviewGeneration = 0;
   // R5.1: the currently-selected canvas node id, mirrored from React Flow's
   // own onSelectionChange (see SceneCanvas.tsx) - local UI state only, never
   // sent over the wire on its own. Exists so PluginPicker can attach "which
@@ -518,6 +527,9 @@ export class SceneStore {
   connect(): void {
     this.unsubscribers.push(
       this.bind<SceneState>("scene", (v) => {
+        // A full canvas replacement/resync invalidates reads started in
+        // the previous canvas context, even if they resolve later.
+        this.cancelWorkspacePreview();
         this.scene = v;
         this.pruneScientificEditors();
         // ADR-003 stage 3.4 review-fix: the snapshot that closes an
@@ -526,6 +538,18 @@ export class SceneStore {
         // Review-fix: a full snapshot is also proof of being caught up.
         this.sceneVersionRecovering = false;
         this.updateSceneBlockedState();
+      }),
+      this.transport.subscribe("app-settings", (payload) => {
+        const validated = validateAppSettingsState(payload);
+        if (!validated.ok) return;
+        const dirs = validated.value.harnessTrustedDirs;
+        const previous = this.trustedWorkspaceDirs;
+        this.trustedWorkspaceDirs = dirs;
+        if (previous !== null &&
+            (previous.length !== dirs.length || previous.some((dir, i) => dir !== dirs[i]))) {
+          this.cancelWorkspacePreview();
+          for (const listener of this.workspaceTrustListeners) listener();
+        }
       }),
       this.bind<GridControlState>("grid-control", (v) => (this.grid = v)),
       this.bind<DragSpeedState>("drag-speed", (v) => (this.dragConfig = v)),
@@ -645,6 +669,8 @@ export class SceneStore {
   }
 
   dispose(): void {
+    this.cancelWorkspacePreview();
+    this.workspaceTrustListeners.clear();
     this.scientificEditors.clear();
     for (const unsubscribe of this.unsubscribers) unsubscribe();
     this.unsubscribers.length = 0;
@@ -653,6 +679,19 @@ export class SceneStore {
   subscribe = (listener: Listener): (() => void) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  };
+
+  // A preview is selected on click, not on completion of its async read.
+  // Opening another document or closing Document View also cancels reads.
+  beginWorkspacePreview(): number { return ++this.workspacePreviewGeneration; }
+  isCurrentWorkspacePreview(generation: number): boolean {
+    return generation === this.workspacePreviewGeneration;
+  }
+  cancelWorkspacePreview(): void { ++this.workspacePreviewGeneration; }
+
+  subscribeWorkspaceTrust = (listener: Listener): (() => void) => {
+    this.workspaceTrustListeners.add(listener);
+    return () => this.workspaceTrustListeners.delete(listener);
   };
 
   getScene = (): SceneState => this.scene;
@@ -1188,8 +1227,9 @@ export class SceneStore {
     return parseHarnessWorkspaceListing(result);
   }
 
-  async readHarnessWorkspaceFile(nodeId: string, path: string): Promise<HarnessWorkspaceDocument> {
-    const result: unknown = await this.transport.request("harness", "readWorkspaceFile", [nodeId, path]);
+  async readHarnessWorkspaceFile(nodeId: string, path: string, expectedRoot?: string): Promise<HarnessWorkspaceDocument> {
+    const args = expectedRoot === undefined ? [nodeId, path] : [nodeId, path, expectedRoot];
+    const result: unknown = await this.transport.request("harness", "readWorkspaceFile", args);
     return parseHarnessWorkspaceDocument(result);
   }
 
@@ -1752,6 +1792,7 @@ export class SceneStore {
   // exists and is wired from the chat-library dialog, this just gives the
   // command palette a second entry point to the same real intent.
   newChat(): void {
+    this.cancelWorkspacePreview();
     this.transport.fireIntent("app-chat-library", "newChat", []);
   }
 

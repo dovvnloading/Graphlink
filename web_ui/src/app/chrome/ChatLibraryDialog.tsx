@@ -404,6 +404,7 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
 
   async function loadChat(id: number) {
     if (!confirmNavigation("Open another chat? Current edits will be saved before switching.")) return;
+    store.cancelWorkspacePreview();
     try {
       const outcome = await transport.request("app-chat-library", "loadChat", [id]);
       if (outcome === "discard-required") {
@@ -419,6 +420,7 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
 
   async function newChat() {
     if (!confirmNavigation("Start a new chat? Your current edits will be saved before switching.")) return;
+    store.cancelWorkspacePreview();
     // ADR-020 stage 20.2: workspaceId is optional; for a recovery retry,
     // pass null explicitly so the final boolean is never confused for an id.
     const args = selectedWorkspaceId === null ? [] : [selectedWorkspaceId];

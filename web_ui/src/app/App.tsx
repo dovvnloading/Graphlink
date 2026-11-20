@@ -243,16 +243,22 @@ function App() {
   // The composer row's HUD slot: the canvas portals its zoom dock and minimap
   // here so they share the composer card's baseline (see workspace.css).
   const [canvasHud, setCanvasHud] = useState<HTMLDivElement | null>(null);
-  const onOpenDocumentView = useCallback((markdown: string, sourceLabel: string) => {
-    setDocumentViewContent(markdown);
-    setDocumentViewSourceLabel(sourceLabel);
-    setIsDocumentViewOpen(true);
-  }, []);
-  const onCloseDocumentView = useCallback(() => setIsDocumentViewOpen(false), []);
-
   const transport = useMemo(() => new WsTransport(defaultWsUrl()), []);
   const sceneStore = useMemo(() => new SceneStore(transport), [transport]);
   const composerStore = useMemo(() => new ComposerStore(transport), [transport]);
+
+  const onOpenDocumentView = useCallback((markdown: string, sourceLabel: string) => {
+    // A non-workspace document selection must supersede any outstanding
+    // workspace read, just as a newer workspace selection does.
+    sceneStore.cancelWorkspacePreview();
+    setDocumentViewContent(markdown);
+    setDocumentViewSourceLabel(sourceLabel);
+    setIsDocumentViewOpen(true);
+  }, [sceneStore]);
+  const onCloseDocumentView = useCallback(() => {
+    sceneStore.cancelWorkspacePreview();
+    setIsDocumentViewOpen(false);
+  }, [sceneStore]);
   // ADR-018 stage 18.3: "Pin to Current Model" reads the Composer's live
   // route at CLICK time (getComposer() is a stable per-instance getter, not
   // a subscription) - see SceneCanvas.tsx's toFlowNodes own comment on why

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { HarnessWorkspaceListing } from "./harnessWorkspaceFiles";
 
 /** On-demand folder browser. Only relative paths are sent; the backend
@@ -7,16 +7,19 @@ export function HarnessWorkspaceFiles({
   onList,
   onOpen,
   onReveal,
+  onTrustChanged,
 }: {
   onList: (path: string, cursor?: string) => Promise<HarnessWorkspaceListing>;
-  onOpen: (path: string) => Promise<void>;
+  onOpen: (path: string, expectedRoot: string) => Promise<void>;
   onReveal: () => void;
+  onTrustChanged?: (listener: () => void) => () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [path, setPath] = useState("");
   const [cursor, setCursor] = useState<string | null>(null);
   const [previousCursors, setPreviousCursors] = useState<(string | null)[]>([]);
   const requestRef = useRef(0);
+  const openRequestRef = useRef(0);
   const [listing, setListing] = useState<HarnessWorkspaceListing | null>(null);
   const [loading, setLoading] = useState(false);
   const [opening, setOpening] = useState<string | null>(null);
@@ -25,7 +28,8 @@ export function HarnessWorkspaceFiles({
   // Fetch on user actions, not in an effect: this avoids an extra mount
   // request and keeps one pending directory navigation from replacing a
   // newer result if its response happens to arrive last.
-  function loadFolder(nextPath: string, nextCursor: string | null = null, previous: (string | null)[] = []) {
+  const loadFolder = useCallback((nextPath: string, nextCursor: string | null = null,
+    previous: (string | null)[] = []) => {
     const request = ++requestRef.current;
     setPath(nextPath);
     setCursor(nextCursor);
@@ -45,7 +49,7 @@ export function HarnessWorkspaceFiles({
       .finally(() => {
         if (request === requestRef.current) setLoading(false);
       });
-  }
+  }, [onList]);
 
   function toggle() {
     if (expanded) {
@@ -57,18 +61,44 @@ export function HarnessWorkspaceFiles({
     loadFolder(path);
   }
 
-  // Prevent a pending read from updating an unmounted (or rebound) agent.
-  useEffect(() => () => { requestRef.current++; }, []);
+  // A Settings grant/revocation can change the current root without
+  // changing this node's harnessWorkspacePath (and therefore its React key).
+  // Drop the old root and its clickable entries immediately; any pending
+  // response from before the trust change is ignored by its generation.
+  useEffect(() => {
+    if (!onTrustChanged) return;
+    return onTrustChanged(() => {
+      requestRef.current++;
+      openRequestRef.current++;
+      setPath("");
+      setCursor(null);
+      setPreviousCursors([]);
+      setListing(null);
+      setLoading(false);
+      setOpening(null);
+      setError("");
+      if (expanded) loadFolder("");
+    });
+  }, [onTrustChanged, expanded, loadFolder]);
+
+  useEffect(() => () => {
+    requestRef.current++;
+    openRequestRef.current++;
+  }, []);
 
   async function openFile(filePath: string) {
+    if (!listing) return;
+    const request = ++openRequestRef.current;
     setError("");
     setOpening(filePath);
     try {
-      await onOpen(filePath);
+      await onOpen(filePath, listing.root);
     } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : "Could not open this file.");
+      if (request === openRequestRef.current) {
+        setError(reason instanceof Error ? reason.message : "Could not open this file.");
+      }
     } finally {
-      setOpening(null);
+      if (request === openRequestRef.current) setOpening(null);
     }
   }
 
