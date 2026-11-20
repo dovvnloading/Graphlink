@@ -24,6 +24,7 @@ import sys
 import threading
 import uuid
 from pathlib import Path
+from typing import Callable
 
 import api_provider
 import graphlink_task_config as config
@@ -88,7 +89,10 @@ class PythonREPL:
     created it nor may we re-permission it. The caller that supplies a cwd
     is asserting it already exists and is already governed.
     """
-    def __init__(self, repl_id=None, cwd=None, manage_cwd=True, python_executable=None, command_builder=None):
+    def __init__(
+        self, repl_id=None, cwd=None, manage_cwd=True, python_executable=None,
+        command_builder: Callable[[str], tuple[list[str], Callable[[], None]]] | None = None,
+    ):
         self.process = None
         self.last_run_failed = False
         self._boundary_prefix = ""
@@ -126,7 +130,7 @@ class PythonREPL:
         # CLI argv plus a daemon-side teardown callback; no model input is
         # interpolated into a host shell.
         self._command_builder = command_builder
-        self._command_cleanup = None
+        self._command_cleanup: Callable[[], None] | None = None
 
     def start(self):
         with self._lock:
