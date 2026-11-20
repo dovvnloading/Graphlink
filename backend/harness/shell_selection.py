@@ -7,9 +7,10 @@ policy are unchanged by the shell preference.
 
 from __future__ import annotations
 
+import base64
 import os
 import shutil
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from graphlink_process_env import safe_subprocess_env
 
@@ -94,18 +95,36 @@ def _powershell_executable(env: dict[str, str]) -> str:
 
 
 def _powershell_command(command: str) -> str:
-    """Preserve a final native command's code while respecting cmdlet success.
+    """Preserve native status without reusing it for a later cmdlet failure.
 
-    PowerShell -Command normally maps *any* native nonzero exit status to 1.
-    Check $? immediately after the command: a successful final cmdlet must
-    still return 0 even if an earlier native program failed. On failure,
-    propagate a nonzero $LASTEXITCODE if set, or 1 for cmdlet failures.
+    PowerShell retains $LASTEXITCODE even after a cmdlet fails. If the
+    final command can be resolved as a cmdlet/function, discard any stale
+    native status. Keep native codes for applications, and for dynamic
+    calls whose command kind cannot be determined from the syntax.
     """
+    encoded_command = base64.b64encode(command.encode("utf-8")).decode("ascii")
     return (
         f"& {{\n{command}\n"
         "if ($?) { exit 0 }\n"
-        "if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n"
-        "exit 1\n}"
+        "if ($null -eq $LASTEXITCODE -or $LASTEXITCODE -eq 0) { exit 1 }\n"
+        "$__gl_tokens = $null; $__gl_errors = $null\n"
+        "$__gl_ast = [System.Management.Automation.Language.Parser]::ParseInput(\n"
+        f"    [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_command}')),\n"
+        "    [ref]$__gl_tokens, [ref]$__gl_errors)\n"
+        "$__gl_last = $__gl_ast.EndBlock.Statements[-1]\n"
+        "if ($__gl_last -is [System.Management.Automation.Language.PipelineAst]) {\n"
+        "    $__gl_tail = $__gl_last.PipelineElements[-1]\n"
+        "    if ($__gl_tail -is [System.Management.Automation.Language.CommandAst]) {\n"
+        "        $__gl_name = $__gl_tail.GetCommandName()\n"
+        "        if ($__gl_name) {\n"
+        "            $__gl_resolved = Microsoft.PowerShell.Core\\Get-Command $__gl_name -ErrorAction SilentlyContinue\n"
+        "            if (-not $__gl_resolved -or $__gl_resolved.CommandType -notin @('Application', 'ExternalScript')) {\n"
+        "                exit 1\n"
+        "            }\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+        "exit $LASTEXITCODE\n}"
     )
 
 
@@ -117,7 +136,13 @@ def _posix_bash_executable(env: dict[str, str]) -> str:
     # Do not search the working directory when the allowed PATH is empty.
     bash = shutil.which("bash", path=path) if path else None
     if bash:
-        return bash
+        # which() can return a POSIX-absolute path even when the caller
+        # simulates POSIX on Windows. Windows abspath() would rewrite
+        # /bin/bash as a drive-prefixed path; keep absolute results intact.
+        if os.path.isabs(bash) or PurePosixPath(bash).is_absolute():
+            return bash
+        # Relative PATH entries must be bound before Popen changes cwd.
+        return os.path.abspath(bash)
     raise ShellUnavailableError(
         "Bash is not available on the workspace execution PATH. "
         "Install Bash or add it to PATH before starting the Agent."

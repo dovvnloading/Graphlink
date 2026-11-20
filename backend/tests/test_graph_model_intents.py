@@ -158,13 +158,15 @@ def test_live_edits_during_model_call_are_preserved(tmp_path, monkeypatch, edit)
 
         def slow_answer(**_kwargs):
             started.set()
-            assert released.wait(8)
+            # Allow for heavily loaded Windows runners while the test
+            # thread schedules the edit and releases this worker.
+            assert released.wait(30)
             return {"message": {"role": "assistant", "content": "Generated answer"}}
 
         monkeypatch.setattr(graph_model, "local_ollama_complete", slow_answer)
         pending = asyncio.create_task(send("executeGraphModel", *selected, token, "edited-model-run"))
         try:
-            assert await asyncio.to_thread(started.wait, 5)
+            assert await asyncio.to_thread(started.wait, 20)
             if edit == "source":
                 doc.set_note_content(source.id, "Source changed while Ollama was running")
             elif edit == "output":

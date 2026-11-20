@@ -300,7 +300,8 @@ async def _settle(session, *, want_output: bool = True) -> str:
     tail = session.read_new()
     if tail:
         collected.append(tail)
-    return "\n".join(part for part in collected if part)
+    # read_new() preserves real line breaks; adding our own would split prompts.
+    return "".join(collected)
 
 
 def _workspace_for(ctx: RunContext):

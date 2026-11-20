@@ -34,6 +34,9 @@ Structure:
 
 from __future__ import annotations
 
+import codecs
+import io
+import os
 import subprocess
 import sys
 import threading
@@ -210,42 +213,71 @@ class ShellSession:
         self._lines: deque[str] = deque(maxlen=MAX_BUFFERED_LINES)
         self._lock = threading.Lock()
         self._dropped = 0
+        self._line_open = False
         self._process = backend.spawn(command, cwd) if shell == "auto" else backend.spawn(command, cwd, shell)
         self._reader = threading.Thread(target=self._drain, name=f"shell-session-{name}", daemon=True)
         self._reader.start()
 
     def _drain(self) -> None:
-        """Reader thread: pulls stdout line-by-line until EOF. Daemon +
-        best-effort - a process killed out from under this loop raises on
-        read, which is a normal end-of-life, not an error to report."""
+        """Drain flushed bytes immediately without buffering until newline.
+
+        Treat decoded newlines as logical line boundaries, not os.read()
+        chunk boundaries. Each buffered line is capped, and read_new() may
+        consume a partial line before the rest of that line arrives.
+        """
         stream = self._process.stdout
         if stream is None:
             return
         try:
-            # A plain "for line in stream" reads a *complete* logical line
-            # before the MAX_LINE_CHARS truncation. A subprocess producing
-            # gigabytes without a newline would exhaust memory in readline().
-            # Bound each read itself; discard the remainder of an oversized
-            # line without ever materializing it.
-            discarding_long_line = False
+            try:
+                fd = stream.fileno()
+            except (AttributeError, OSError, ValueError):
+                fd = None
+            if fd is not None:
+                decoder = io.IncrementalNewlineDecoder(
+                    codecs.getincrementaldecoder(getattr(stream, "encoding", None) or "utf-8")(
+                        errors="replace"
+                    ),
+                    translate=True,
+                )
+            line_chars = 0
             while True:
-                fragment = stream.readline(MAX_LINE_CHARS + 1)
-                if not fragment:
+                if fd is None:
+                    # StringIO/test doubles have no OS pipe; keep reads bounded.
+                    fragment = stream.readline(MAX_LINE_CHARS + 1)
+                    eof = not fragment
+                else:
+                    raw = os.read(fd, MAX_LINE_CHARS + 1)
+                    eof = not raw
+                    fragment = decoder.decode(raw, final=eof)
+                if fragment:
+                    pieces = fragment.split("\n")
+                    for i, piece in enumerate(pieces):
+                        complete_line = i < len(pieces) - 1
+                        remaining = max(0, MAX_LINE_CHARS - line_chars)
+                        kept = piece[:remaining]
+                        if len(piece) > remaining and line_chars <= MAX_LINE_CHARS:
+                            kept += "…[line truncated]"
+                            line_chars = MAX_LINE_CHARS + 1
+                        else:
+                            line_chars += len(kept)
+                        if complete_line:
+                            kept += "\n"
+                            line_chars = 0
+                        if not kept:
+                            continue
+                        with self._lock:
+                            if self._line_open and self._lines:
+                                self._lines[-1] += kept
+                            else:
+                                if len(self._lines) == self._lines.maxlen:
+                                    self._dropped += 1
+                                self._lines.append(kept)
+                            self._line_open = not complete_line
+                if eof:
                     break
-                completed_line = fragment.endswith("\n")
-                if discarding_long_line:
-                    if completed_line:
-                        discarding_long_line = False
-                    continue
-                text = fragment.rstrip("\n")
-                if len(text) > MAX_LINE_CHARS:
-                    text = text[:MAX_LINE_CHARS] + "…[line truncated]"
-                    discarding_long_line = not completed_line
-                with self._lock:
-                    if len(self._lines) == self._lines.maxlen:
-                        self._dropped += 1
-                    self._lines.append(text)
         except (ValueError, OSError):
+            # Stopping a session can close the pipe under the reader.
             return
 
     @property
@@ -278,9 +310,10 @@ class ShellSession:
             dropped = self._dropped
             self._lines.clear()
             self._dropped = 0
+            self._line_open = False
         if dropped:
-            lines.insert(0, f"…[{dropped} earlier line(s) dropped - output exceeded the buffer]")
-        return "\n".join(lines)
+            lines.insert(0, f"…[{dropped} earlier line(s) dropped - output exceeded the buffer]\n")
+        return "".join(lines)
 
     def stop(self) -> None:
         """Terminate the process and its whole tree, then join the reader."""

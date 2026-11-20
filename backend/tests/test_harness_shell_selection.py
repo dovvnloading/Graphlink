@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -35,12 +36,11 @@ def test_windows_prefers_powershell_7_then_windows_powershell():
         args, use_shell = shell_invocation("Write-Output 'hi'", "auto", env={"PATH": "tools"}, os_name="nt")
     assert not use_shell
     assert args[0].endswith("pwsh.exe")
-    assert args[-1] == (
-        "& {\nWrite-Output 'hi'\n"
-        "if ($?) { exit 0 }\n"
-        "if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n"
-        "exit 1\n}"
-    )
+    launcher = args[-1]
+    assert launcher.startswith("& {\nWrite-Output 'hi'\nif ($?) { exit 0 }\n")
+    assert "Parser]::ParseInput" in launcher
+    assert "CommandType -notin @('Application', 'ExternalScript')" in launcher
+    assert launcher.endswith("exit $LASTEXITCODE\n}")
     assert "-NoProfile" in args
 
     with patch("backend.harness.shell_selection.Path.is_file", return_value=False), \
@@ -55,8 +55,12 @@ def test_windows_prefers_powershell_7_then_windows_powershell():
     ("cmd /c exit 42", 42),
     ("Write-Error 'failed'", 1),
     ("cmd /c exit 0; Write-Error 'failed'", 1),
+    ("cmd /c exit 42; Write-Error 'cmdlet failed'", 1),
+    ("Write-Error 'cmdlet failed'; cmd /c exit 42", 42),
+    ("$program = 'cmd.exe'; & $program /c exit 37", 37),
     ("cmd /c exit 42; Write-Output 'continued'", 0),
     ("Write-Output 'starting'; cmd /c exit 42", 42),
+    ("cmd /c exit 42; Get-Item -LiteralPath Z:\\no-such-graphlink-file", 1),
 ])
 def test_windows_powershell_process_exit_code(command, expected):
     args, use_shell = shell_invocation(command, "powershell", os_name="nt")
@@ -136,6 +140,54 @@ def test_posix_resolves_bash_from_execution_path():
     which.assert_called_once_with("bash", path="/run/current-system/sw/bin")
     assert args == [executable, "--noprofile", "--norc", "-c", "printf '%s' hello"]
     assert not use_shell
+
+
+def test_posix_absolute_bash_is_not_rebased_by_host_path_rules():
+    # Windows abspath("/bin/bash") turns the POSIX path into a drive path.
+    # Check this on every host so Linux CI also catches the regression.
+    with patch("backend.harness.shell_selection.shutil.which", return_value="/bin/bash") as which:
+        with patch("backend.harness.shell_selection.os.path.abspath") as abspath:
+            args, use_shell = shell_invocation(
+                "pwd", "auto", env={"PATH": "/bin"}, os_name="posix",
+            )
+    which.assert_called_once_with("bash", path="/bin")
+    abspath.assert_not_called()
+    assert args == ["/bin/bash", "--noprofile", "--norc", "-c", "pwd"]
+    assert not use_shell
+
+
+def test_posix_relative_bash_is_absolutized_on_every_host():
+    # A relative result from which() must still survive Popen's cwd change.
+    discovered = os.path.join("tools", "bash")
+    with patch("backend.harness.shell_selection.shutil.which", return_value=discovered):
+        args, use_shell = shell_invocation(
+            "pwd", "auto", env={"PATH": "tools"}, os_name="posix",
+        )
+    assert args[0] == os.path.abspath(discovered)
+    assert not use_shell
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX relative PATH resolution")
+def test_posix_relative_path_bash_still_launches_from_workspace(tmp_path, monkeypatch):
+    backend_dir = tmp_path / "backend"
+    workspace = tmp_path / "workspace"
+    tools = backend_dir / "tools"
+    tools.mkdir(parents=True)
+    workspace.mkdir()
+    bash = shutil.which("bash")
+    assert bash is not None
+    (tools / "bash").symlink_to(Path(bash).resolve())
+    monkeypatch.chdir(backend_dir)
+    argv, via_shell = shell_invocation(
+        "printf correct", "auto", env={"PATH": "tools"}, os_name="posix",
+    )
+    assert not via_shell
+    assert argv[0] == str(tools / "bash")
+    result = subprocess.run(
+        argv, cwd=workspace, env={"PATH": "tools"},
+        capture_output=True, text=True, timeout=10, check=True,
+    )
+    assert result.stdout == "correct"
 
 
 def test_posix_reports_missing_bash_instead_of_using_an_unapproved_path():

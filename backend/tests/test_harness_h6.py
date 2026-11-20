@@ -793,6 +793,67 @@ class TestShellSessions:
         finally:
             sessions.stop_all()
 
+    def test_session_flushed_fragment_can_be_read_before_process_exit(self, tmp_path):
+        import time
+        from backend.harness.shell_sessions import ShellSessionRegistry
+
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        script = workspace / "unterminated.py"
+        script.write_text(
+            "import sys, time\n"
+            "sys.stdout.write('READY')\n"
+            "sys.stdout.flush()\n"
+            "time.sleep(30)\n",
+            encoding="utf-8",
+        )
+        command = f'{"& " if sys.platform == "win32" else ""}"{sys.executable}" -u "{script}"'
+        sessions = ShellSessionRegistry()
+        try:
+            session = sessions.start("ws-h6", "partial", command, workspace)
+            output = ""
+            deadline = time.monotonic() + 6
+            while time.monotonic() < deadline and not output:
+                output = session.read_new()
+                if not output:
+                    time.sleep(0.02)
+            assert output == "READY"
+            assert session.running, "flushed text must be readable before the process exits"
+            assert session.read_new() == "", "partial output should not repeat"
+        finally:
+            sessions.stop_all()
+
+    def test_session_start_and_write_surface_unterminated_prompts(self, tmp_path):
+        registry, sessions, workspace = self._setup(tmp_path)
+        script = workspace / "prompt.py"
+        script.write_text(
+            "import sys, time\n"
+            "sys.stdout.write('PROMPT> ')\n"
+            "sys.stdout.flush()\n"
+            "sys.stdin.readline()\n"
+            "sys.stdout.write('ACK')\n"
+            "sys.stdout.flush()\n"
+            "time.sleep(30)\n",
+            encoding="utf-8",
+        )
+        command = f'{"& " if sys.platform == "win32" else ""}"{sys.executable}" -u "{script}"'
+        ctx = _tool_ctx(workspace)
+        try:
+            started = _invoke(registry, "shell.session", {
+                "action": "start", "name": "prompt", "command": command,
+            }, ctx)
+            assert not started.is_error, started.content
+            assert "PROMPT>" in started.content
+            assert sessions.get("ws-h6", "prompt").running
+            written = _invoke(registry, "shell.session", {
+                "action": "write", "name": "prompt", "input": "hello",
+            }, ctx)
+            assert not written.is_error, written.content
+            assert "ACK" in written.content
+            assert sessions.get("ws-h6", "prompt").running
+        finally:
+            sessions.stop_all()
+
     def test_long_newline_free_stdout_is_bounded_before_reading(self, tmp_path):
         import io
 
@@ -810,7 +871,7 @@ class TestShellSessions:
         session = ShellSession("huge-line", "unused", tmp_path, FakeBackend())
         session._reader.join(timeout=2)
         assert not session._reader.is_alive()
-        assert session.read_new() == "a" * MAX_LINE_CHARS + "…[line truncated]\ntail"
+        assert session.read_new() == "a" * MAX_LINE_CHARS + "…[line truncated]\ntail\n"
 
     def test_stalled_stdin_write_times_out_and_stops_the_session(self, tmp_path, monkeypatch):
         import threading
