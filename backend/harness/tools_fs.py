@@ -28,6 +28,7 @@ import secrets
 import stat
 import sys
 import time
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -185,13 +186,72 @@ def _is_metadata_path(path: Path) -> bool:
     return any(part.casefold() in _PROTECTED_METADATA_DIRS for part in path.parts)
 
 
+def _open_bounded_file_fd(path: Path) -> int:
+    """Open a validated canonical file path without following raced links.
+
+    POSIX walks directory descriptors with O_NOFOLLOW all the way to the
+    leaf, rather than allowing a replaced parent directory to redirect the
+    open. Windows verifies the final path of the *opened handle*, not a
+    second potentially-raced path lookup.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+    if os.name == "nt":
+        import msvcrt
+
+        fd = os.open(path, flags)
+        try:
+            actual = ctypes.create_unicode_buffer(32768)
+            get_path = ctypes.windll.kernel32.GetFinalPathNameByHandleW
+            get_path.argtypes = (ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_ulong, ctypes.c_ulong)
+            get_path.restype = ctypes.c_ulong
+            count = get_path(msvcrt.get_osfhandle(fd), actual, len(actual), 0)
+            if count == 0 or count >= len(actual):
+                raise WorkspaceError("Cannot verify opened workspace file path.")
+            final_path = actual.value
+            if final_path.startswith("\\\\?\\UNC\\"):
+                final_path = "\\\\" + final_path[8:]
+            elif final_path.startswith("\\\\?\\"):
+                final_path = final_path[4:]
+            if os.path.normcase(os.path.normpath(final_path)) != os.path.normcase(
+                os.path.normpath(str(path))
+            ):
+                raise WorkspaceError("Workspace file changed while opening; retry the read.")
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd
+
+    if (
+        not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY")
+        or os.open not in os.supports_dir_fd
+    ):
+        raise WorkspaceError("Safe workspace file reads are unavailable on this platform.")
+    absolute = path.absolute()
+    with ExitStack() as stack:
+        dir_flags = flags | os.O_DIRECTORY | os.O_NOFOLLOW
+        directory_fd = os.open(absolute.anchor, dir_flags)
+        stack.callback(os.close, directory_fd)
+        for component in absolute.parts[1:-1]:
+            directory_fd = os.open(component, dir_flags, dir_fd=directory_fd)
+            stack.callback(os.close, directory_fd)
+        return os.open(absolute.name, flags | os.O_NOFOLLOW, dir_fd=directory_fd)
+
+
 def _read_bounded_bytes(path: Path, *, max_bytes: int | None = None) -> bytes:
     # Read one extra byte to detect growth even when a preceding stat()
     # claimed that the file was within bounds. Office parsers consume only
     # these checked bytes, never a second unbounded read of the source path.
     if max_bytes is None:
         max_bytes = _MAX_FS_FILE_BYTES
-    with path.open("rb") as stream:
+    try:
+        fd = _open_bounded_file_fd(path)
+    except OSError as exc:
+        if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+            raise WorkspaceError("Workspace file changed into a symlink while opening.") from exc
+        raise
+    with os.fdopen(fd, "rb") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise WorkspaceError("Only regular workspace files may be read.")
         data = stream.read(max_bytes + 1)
     if len(data) > max_bytes:
         raise WorkspaceError(f"File exceeds the {max_bytes}-byte harness read limit.")

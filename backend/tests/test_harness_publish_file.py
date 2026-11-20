@@ -337,6 +337,51 @@ def test_symlink_cannot_escape_workspace(publisher):
     assert set(document.nodes) == {agent.id}
 
 
+@pytest.mark.parametrize("extension", [".md", ".xlsx"])
+def test_publish_file_rejects_symlink_swapped_before_read(publisher, monkeypatch, extension):
+    from backend.harness import tools_publish
+
+    root, document, agent, _ctx, _registry, _approvals, publish = publisher
+    target = root / f"report{extension}"
+    outside = root.parent / f"{root.name}-private{extension}"
+    for path in (target, outside):
+        if extension == ".xlsx":
+            _xlsx(path)
+        else:
+            path.write_text("private evidence", encoding="utf-8")
+
+    entered, release = threading.Event(), threading.Event()
+    original_read = tools_publish._read_bounded_bytes
+
+    def gated_read(path, **kwargs):
+        entered.set()
+        assert release.wait(timeout=5)
+        return original_read(path, **kwargs)
+
+    monkeypatch.setattr(tools_publish, "_read_bounded_bytes", gated_read)
+    outcomes = []
+    worker = threading.Thread(target=lambda: outcomes.append(publish(target.name)))
+    worker.start()
+    try:
+        assert entered.wait(timeout=5), "publish did not reach the validation/open gap"
+        target.unlink()
+        try:
+            target.symlink_to(outside)
+        except (NotImplementedError, OSError):
+            pytest.skip("Symlinks unavailable on this platform")
+    finally:
+        release.set()
+        worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert len(outcomes) == 1
+    assert outcomes[0].is_error, outcomes[0].content
+    assert set(document.nodes) == {agent.id}
+    assert not document.command_log
+    assert not document.edges
+    assert not document.image_assets
+
+
 def test_denial_scope_and_stale_run_are_noops(publisher):
     root, document, agent, ctx, registry, approvals, publish = publisher
     (root / "notes.txt").write_text("hello", encoding="utf-8")

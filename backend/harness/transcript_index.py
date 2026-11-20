@@ -55,7 +55,15 @@ def _open_index(path: Path) -> sqlite3.Connection:
         definition = db.execute(
             "SELECT sql FROM sqlite_master WHERE name = 'transcript_fts'"
         ).fetchone()
-        if not definition or "using fts5(" not in str(definition[0]).lower():
+        # SQLite accepts an existing FTS5 table with any column layout.
+        # Check the real exposed columns (including their order, because
+        # snippet(..., 0) assumes content is first) before trusting a sidecar.
+        columns = [column[1] for column in db.execute("PRAGMA table_info(transcript_fts)")]
+        if (
+            not definition
+            or "using fts5(" not in str(definition[0]).lower()
+            or columns != ["content", "role", "line_number"]
+        ):
             raise _IncompatibleIndex("Unexpected transcript search FTS schema.")
         db.execute(
             "CREATE TABLE IF NOT EXISTS transcript_index_state ("
