@@ -12,11 +12,11 @@ virtualenv. No environment path, index URL, requirements-file path, or pip
 option is supplied by the model.
 
 In the workspace agent's **Isolated** profile, both Python tools instead run
-in the restricted Docker/Podman container. A compatible Linux project `.venv`
-or `venv` is selected first; otherwise a separate, lazily created
-container-native virtualenv is used. Its scratch/project binding and
-node-deletion cleanup match the host environment rules, but it never runs
-host Python. A host-only project venv cannot be used inside the image.
+in the restricted Docker/Podman container. They always use a separate,
+lazily created container-native virtualenv scoped to the workspace and project.
+The host's `.venv` or `venv` is never selected: even a working host
+interpreter may not exist inside the container image. Scratch/project binding
+and node-deletion cleanup still match the host environment rules.
 
 ## Consent
 
@@ -24,7 +24,7 @@ The tool requires `code.execute` scope. **Ask** and **Auto-edit** require fresh 
 
 When a prompt is needed, the harness computes (without creating) the interpreter that `python.exec` would use. The approval panel shows that interpreter and every requirement; Isolated also discloses the temporary container networking required for approved PyPI wheel downloads. Each prompt has a fresh ID; stale/replayed approvals cannot authorize another install.
 
-The chosen interpreter is pinned and rechecked at installation. If a different `.venv` appears or the workspace/profile changes during consent, the request is refused and must be approved again. Isolated consent is also bound to the resolved workspace root and execution profile so an identical container interpreter path cannot authorize a different project. Rejected or mutated arguments cannot reach the handler.
+The chosen interpreter is pinned and rechecked at installation. In Host mode, a changed project `.venv` can change the target and requires fresh approval. Workspace/profile changes also require a fresh approval. Isolated consent is bound to the resolved workspace root and execution profile so an identical container interpreter path cannot authorize a different project. Rejected or mutated arguments cannot reach the handler.
 
 **Wheels contain executable Python code.** Wheel-only does not make an installation harmless. In Autonomous, cached packages can change the environment without a per-install prompt; use Ask if you want to approve every installation. See [permission modes](WORKSPACE_PERMISSION_MODES.md).
 

@@ -114,7 +114,7 @@ The interpreter is selected automatically; the model cannot choose an arbitrary 
 | --- | --- |
 | **Host + chosen project** | First usable `.venv`, then `venv` inside the project. Otherwise an app-managed virtualenv scoped to this Agent **and** project, outside your project directory. |
 | **Host + scratch** | A lazily created app-managed virtualenv inside the Agent’s scratch workspace. |
-| **Isolated profile** | Container-native Python: a compatible Linux project `.venv` / `venv` if present, otherwise a separate workspace-scoped container virtualenv. Host virtualenvs and host Python are never run inside the container. |
+| **Isolated profile** | Always uses a separate managed, workspace-scoped container-native virtualenv. Project `.venv` / `venv` and Host Python are never selected, since host executability does not establish container compatibility. |
 
 For dependencies, ask the Agent to call **`python.install`** , for example with
 `{"packages": ["requests>=2,<3", "pandas==2.2.3"]}` . It installs into the **same interpreter**

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import os
 from pathlib import Path, PurePosixPath
 from unittest.mock import Mock
 
@@ -58,7 +59,7 @@ def test_container_argv_and_mounts_respect_network_exception(tmp_path, monkeypat
         assert flag in offline and flag in online
 
 
-def test_isolated_env_picks_project_venv_and_scopes_managed_fallback(tmp_path, monkeypatch):
+def test_isolated_env_uses_scoped_managed_venv_even_with_project_venv(tmp_path, monkeypatch):
     monkeypatch.setattr(python_env, "HARNESS_PYTHON_ENV_ROOT", tmp_path / "env-root")
     project, other = tmp_path / "project", tmp_path / "other"
     project.mkdir()
@@ -85,8 +86,39 @@ def test_isolated_env_picks_project_venv_and_scopes_managed_fallback(tmp_path, m
     (supplied / "pyvenv.cfg").write_text("home = /usr/local/bin\n")
     (supplied / "bin/python").write_text("test sentinel")
     chosen = planned_isolated_python_environment("workspace-a", project, is_scratch=False)
-    assert chosen.interpreter == PurePosixPath("/workspace/.venv/bin/python")
-    assert not chosen.managed and chosen.mounts == ()
+    assert chosen.managed
+    assert chosen.interpreter == a.interpreter
+    assert chosen.host_venv == a.host_venv
+    assert chosen.mounts == a.mounts
+    assert (supplied / "bin/python").read_text() == "test sentinel"
+
+
+def test_host_only_project_venv_never_replaces_managed_isolated_exec_or_install(tmp_path, monkeypatch):
+    """A host Python in /opt may work locally but cannot be resolved in python:3.12-slim."""
+    project = tmp_path / "project"
+    supplied = project / ".venv"
+    (supplied / "bin").mkdir(parents=True)
+    (supplied / "pyvenv.cfg").write_text("home = /opt/python311/bin\n")
+    host_python = supplied / "bin" / "python"
+    if os.name == "nt":
+        host_python.write_text("host-only interpreter")
+    else:
+        host_python.symlink_to("/opt/python311/bin/python3.11")
+    monkeypatch.setattr(python_env, "HARNESS_PYTHON_ENV_ROOT", tmp_path / "env-root")
+
+    plan = planned_isolated_python_environment("ws", project, is_scratch=False)
+    assert plan.managed and plan.mounts
+    assert plan.interpreter != PurePosixPath("/workspace/.venv/bin/python")
+    assert plan.host_venv != supplied
+    assert python_install.planned_install_interpreter(
+        "ws", project, is_scratch=False, profile="isolated",
+    ) == plan.interpreter
+
+    monkeypatch.setattr("backend.harness.shell_isolation.shutil.which", Mock(return_value="/usr/bin/docker"))
+    argv, _cleanup = isolated_repl_command(plan, project, "print('hello')")
+    assert argv[-3:] == [str(plan.container_venv), "1", "print('hello')"]
+    assert (supplied / "pyvenv.cfg").is_file()
+    assert host_python.exists() or host_python.is_symlink()
 
 
 def test_repl_command_is_offline_and_cleanup_reaps_daemon_container(tmp_path, monkeypatch):
