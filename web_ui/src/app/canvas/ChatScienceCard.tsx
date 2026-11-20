@@ -1,4 +1,4 @@
-import { formatScienceSummary, formatScienceValue, readableScienceKey } from "./scientificWorkbench";
+import { formatMeasurement, formatScienceSummary, formatScienceValue, readableScienceKey, resultMeasurement, type ScienceResult } from "./scientificWorkbench";
 
 // Mirrors the generated ScienceReferenceRow (web_ui/src/lib/bridge-core/
 // generated/scene-state.ts) field-for-field, like ToolInvocationData.
@@ -10,16 +10,33 @@ export interface ScienceReferenceData {
   summary: string;
   headlineKey: string;
   headlineValueJson: string;
+  headlineContextJson: string;
   resultHash: string;
   receiptHash: string;
 }
 
-function headlineValue(json: string): string | null {
-  if (!json) return null;
+function headlineValue(reference: ScienceReferenceData): string | null {
+  if (!reference.headlineValueJson) return null;
+  let nominal: string;
   try {
-    return formatScienceValue(JSON.parse(json));
+    nominal = formatScienceValue(JSON.parse(reference.headlineValueJson));
   } catch {
     return null;
+  }
+  if (!reference.headlineContextJson) return nominal;
+  // Receipt-derived scalar siblings and propagated uncertainty are enough
+  // to reuse the Workbench's formatting, without huge result JSON.
+  try {
+    const context = JSON.parse(reference.headlineContextJson) as Pick<ScienceResult, "values" | "uncertainty">;
+    if (!context || !context.values || typeof context.values !== "object") return nominal;
+    if (context.uncertainty?.unsupportedOutputs?.[reference.headlineKey])
+      return `${nominal} · uncertainty unavailable`;
+    const measured = resultMeasurement(context, reference.headlineKey);
+    return measured && Number.isFinite(measured.value)
+      && Number.isFinite(measured.standardUncertainty) && typeof measured.unit === "string"
+      ? formatMeasurement(measured) : nominal;
+  } catch {
+    return nominal;
   }
 }
 
@@ -27,7 +44,7 @@ function headlineValue(json: string): string | null {
  * The node's content is exactly what the model reads: full JSON for small
  * results, or explicitly marked excerpts for large ones. */
 export function ChatScienceCard({ reference, content }: { reference: ScienceReferenceData; content: string }) {
-  const value = reference.headlineKey ? headlineValue(reference.headlineValueJson) : null;
+  const value = reference.headlineKey ? headlineValue(reference) : null;
   const excerpted = content.includes("Result excerpts (inspect the source Workbench for complete data):");
   return (
     <section className="chat-science-card" aria-label={`Scientific result: ${reference.operationTitle}`}>

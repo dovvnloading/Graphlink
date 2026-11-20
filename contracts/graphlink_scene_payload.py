@@ -366,7 +366,8 @@ class ScienceReferenceRow:
     the chat node's `content` still carries the complete snapshot the model
     reads. `headlineValueJson` is the operation's declared headline value,
     JSON-encoded (a number or short string), or "" when the result has none;
-    the frontend formats it the way the Workbench node does."""
+    headlineContextJson contains the numeric uncertainty siblings and
+    propagated headline measurement needed for source-equivalent formatting."""
 
     packId: str
     packTitle: str
@@ -375,6 +376,7 @@ class ScienceReferenceRow:
     summary: str
     headlineKey: str
     headlineValueJson: str
+    headlineContextJson: str
     resultHash: str
     receiptHash: str
 

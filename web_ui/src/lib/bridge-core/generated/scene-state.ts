@@ -363,6 +363,7 @@ export interface ScienceReferenceRow {
   summary: string;
   headlineKey: string;
   headlineValueJson: string;
+  headlineContextJson: string;
   resultHash: string;
   receiptHash: string;
 }
@@ -604,6 +605,7 @@ const SCIENCE_REFERENCE_ROW_FIELDS: WireFields = [
   ["summary", "s", 0],
   ["headlineKey", "s", 0],
   ["headlineValueJson", "s", 0],
+  ["headlineContextJson", "s", 0],
   ["resultHash", "s", 0],
   ["receiptHash", "s", 0],
 ];

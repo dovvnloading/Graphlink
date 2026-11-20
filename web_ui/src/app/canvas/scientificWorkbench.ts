@@ -215,7 +215,7 @@ export function formatMeasurement(measurement: ScientificMeasurement): string {
 }
 
 /** Also understand pre-existing pack outputs without changing their receipts. */
-export function resultMeasurement(result: ScienceResult, name: string): ScientificMeasurement | undefined {
+export function resultMeasurement(result: Pick<ScienceResult, "values" | "uncertainty">, name: string): ScientificMeasurement | undefined {
   const value = result.values[name];
   if (!finite(value)) return undefined;
   const attached = result.uncertainty?.outputs[name];

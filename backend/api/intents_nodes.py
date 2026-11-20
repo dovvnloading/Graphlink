@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 import re
 
 from backend.agents import AgentDispatcher
@@ -32,12 +33,19 @@ from graphlink_plugins.scientific.core import readable_result
 from graphlink_plugins.scientific.methods import render_result_methods
 
 
-def _science_discussion_context(source_id: str, result: dict) -> str:
+def _science_discussion_context(source_id: str, result: dict, *, source_key: str = "") -> str:
     """Snapshot a verified receipt for chat without flooding the model with huge tables."""
     receipt = result["provenance"]
+    # Unlike n1/n2, a Workbench nodeKey survives scene save/load. Older
+    # snapshots without one keep the original ID, explicitly historical.
+    source_hint = (
+        f"Source key: {source_key}\n"
+        if isinstance(source_key, str) and re.fullmatch(r"[0-9a-f]{32}", source_key)
+        else f"Source node at capture (historical ID, may differ after reload): {source_id}\n"
+    )
     heading = (
         "Scientific Workbench result — verified saved snapshot\n"
-        f"Source node: {source_id}\n"
+        f"{source_hint}"
         f"Pack: {receipt['packId']} · Operation: {result['operationId']}\n"
         f"Result hash: {receipt['resultHash']}\n"
         f"Receipt hash: {receipt.get('receiptHash', receipt['resultHash'])}\n"
@@ -70,15 +78,49 @@ def _science_discussion_context(source_id: str, result: dict) -> str:
 
 
 def _science_reference(pack: str, result: dict) -> dict[str, str]:
-    """The chat card's summary of a verified result (ChatState.science_reference).
+    """Receipt-derived, compact chat card data; never use saved metadata to rebuild it.
 
-    Titles come from the live catalog; an operation a newer version removed
-    keeps its id as the title and simply shows no headline."""
+    Keep the numeric siblings used by the Workbench's resultMeasurement
+    formatter, plus the declared headline's propagated measurement/unsupported
+    marker. This lets the card share the exact same JS formatting as the source
+    without copying large result tables or uncertainty budgets onto the wire.
+    """
     receipt = result["provenance"]
     operation = next((op for op in operations(pack) if op.id == result["operationId"]), None)
     key = operation.headline if operation else ""
     value = result["values"].get(key) if key else None
     scalar = isinstance(value, (int, float, str)) and not isinstance(value, bool)
+
+    headline_context = ""
+    if scalar:
+        numbers = {
+            name: item for name, item in result["values"].items()
+            if (name == key or name in ("combined_standard_uncertainty", "coverage_factor", "coverage_probability")
+                or "standard_uncertainty" in name or "standard_error" in name)
+            and type(item) in (int, float) and math.isfinite(item)
+        }
+        context: dict = {"values": numbers}
+        uncertainty = result.get("uncertainty")
+        if isinstance(uncertainty, dict):
+            outputs = uncertainty.get("outputs")
+            unsupported = uncertainty.get("unsupportedOutputs")
+            detail: dict = {}
+            if isinstance(outputs, dict) and isinstance(outputs.get(key), dict):
+                measured = outputs[key]
+                # formatMeasurement uses only these fields, not the potentially
+                # large GUM budget, coverage intervals or input PDF records.
+                detail["outputs"] = {key: {
+                    field: measured[field] for field in (
+                        "value", "standardUncertainty", "coverageFactor",
+                        "unit", "method", "monteCarloMean",
+                    ) if field in measured
+                }}
+            if isinstance(unsupported, dict) and isinstance(unsupported.get(key), str) and unsupported[key]:
+                detail["unsupportedOutputs"] = {key: unsupported[key]}
+            if detail:
+                context["uncertainty"] = detail
+        headline_context = json.dumps(context, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+
     return {
         "packId": pack,
         "packTitle": PACKS[pack][0],
@@ -87,6 +129,7 @@ def _science_reference(pack: str, result: dict) -> dict[str, str]:
         "summary": result["summary"],
         "headlineKey": key if scalar else "",
         "headlineValueJson": json.dumps(value, ensure_ascii=False) if scalar else "",
+        "headlineContextJson": headline_context,
         "resultHash": receipt["resultHash"],
         "receiptHash": receipt.get("receiptHash", receipt["resultHash"]),
     }
@@ -112,7 +155,7 @@ def _create_scientific_discussion(
             or receipt.get("receiptHash", receipt["resultHash"]) != expected_receipt_hash):
         raise SceneError("The scientific result changed. Review the current run before discussing it.")
 
-    context = _science_discussion_context(source_node_id, result)
+    context = _science_discussion_context(source_node_id, result, source_key=data.get("nodeKey", ""))
     reference = _science_reference(pack, result)
 
     def create_chat():

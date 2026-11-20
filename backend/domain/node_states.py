@@ -833,21 +833,37 @@ class CodeReviewState(NodeState):
     code_review_error: str = ""
 
 
-# ChatState.science_reference's keys - contracts/graphlink_scene_payload.py's
-# ScienceReferenceRow fields, which the frontend validates on every scene.
-SCIENCE_REFERENCE_KEYS = (
+# The card's wire fields. Older sessions lack headlineContextJson; they can
+# only be upgraded after matching an independently verified source snapshot.
+SCIENCE_REFERENCE_LEGACY_KEYS = (
     "packId", "packTitle", "operationId", "operationTitle",
     "summary", "headlineKey", "headlineValueJson", "resultHash", "receiptHash",
 )
+SCIENCE_REFERENCE_KEYS = (
+    "packId", "packTitle", "operationId", "operationTitle",
+    "summary", "headlineKey", "headlineValueJson", "headlineContextJson",
+    "resultHash", "receiptHash",
+)
 
 
-def science_reference_or_none(value: Any) -> dict[str, str] | None:
-    """A copy of a well-formed science reference, else None. Saved files are
-    untrusted: one malformed reference must not fail the whole scene payload."""
-    if (isinstance(value, dict) and set(value) == set(SCIENCE_REFERENCE_KEYS)
-            and all(isinstance(value[key], str) for key in SCIENCE_REFERENCE_KEYS)):
-        return {key: value[key] for key in SCIENCE_REFERENCE_KEYS}
-    return None
+def science_reference_or_none(
+    value: Any, *, expected: dict[str, str] | None = None,
+) -> dict[str, str] | None:
+    """Accept a saved card only if it equals an independently reconstructed
+    receipt-verified reference. Shape alone is NOT proof of provenance.
+
+    An old nine-field card may be upgraded once verified; tampering or an
+    absent source fails closed to plain chat content without breaking load.
+    """
+    if not isinstance(value, dict) or expected is None:
+        return None
+    if set(value) not in (set(SCIENCE_REFERENCE_KEYS), set(SCIENCE_REFERENCE_LEGACY_KEYS)):
+        return None
+    if (set(expected) != set(SCIENCE_REFERENCE_KEYS)
+            or not all(isinstance(value[key], str) for key in value)
+            or any(value[key] != expected[key] for key in value)):
+        return None
+    return dict(expected)
 
 
 @dataclass

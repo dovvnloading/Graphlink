@@ -505,9 +505,9 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
             tool_invocations=[
                 dict(call) for call in (payload.get("tool_invocations") or []) if isinstance(call, dict)
             ],
-            # Absent from older saves, and dropped when malformed: the card
-            # then falls back to the plain snapshot text in `content`.
-            science_reference=science_reference_or_none(payload.get("science_reference")),
+            # Saved metadata is untrusted even when all fields are strings.
+            # Attach only after edges and source receipts have been restored.
+            science_reference=None,
             # ADR-018 stage 18.3: absent in every pre-18.3 save -> "",
             # matching the dataclass default ("no pin").
             override_provider=str(payload.get("override_provider", "") or ""),
@@ -2051,6 +2051,100 @@ def _restore_view_state(document: SceneDocument, chat_data: dict[str, Any]) -> N
         pass
 
 
+def _restore_verified_science_references(
+    document: SceneDocument, node_payloads: list, all_nodes_map: dict[int, str],
+) -> None:
+    """Rebuild imported cards from verified snapshots, never imported labels.
+
+    Run only AFTER edge remapping: a saved metadata dict with valid string
+    types is not evidence that its headline, receipt or source is genuine.
+    A missing source, corrupt receipt, changed excerpt or forged card degrades
+    to the model-visible raw snapshot without preventing scene loading.
+    """
+    from backend.api.intents_nodes import _science_discussion_context, _science_reference
+    from graphlink_plugins.scientific.catalog import PACKS
+    from graphlink_plugins.scientific.core import readable_result
+
+    heading = "Scientific Workbench result — verified saved snapshot"
+    historical = "Source node at capture (historical ID, may differ after reload): "
+    by_chat: dict[str, list[str]] = {}
+    for edge in document.edges.values():
+        if edge.role == "reference":
+            by_chat.setdefault(edge.target, []).append(edge.source)
+
+    for index, payload in enumerate(node_payloads):
+        if not isinstance(payload, dict):
+            continue
+        chat_id = all_nodes_map.get(index)
+        chat = document.nodes.get(chat_id) if chat_id is not None else None
+        if chat is None or chat.kind != "chat":
+            continue
+
+        # Older snapshots have a bare nN pointer that may now identify
+        # another node (even this chat). Change ONLY the provenance label,
+        # never the verified result JSON/excerpts, so the model cannot mistake
+        # a capture-time ID for a live node after renumbering.
+        lines = chat.content.split("\n", 2)
+        if len(lines) == 3 and lines[0] == heading and lines[1].startswith("Source node: "):
+            old_id = lines[1].removeprefix("Source node: ")
+            if re.fullmatch(r"n[0-9]+", old_id):
+                chat.content = "\n".join((heading, historical + old_id, lines[2]))
+                lines = chat.content.split("\n", 2)
+
+        candidate = payload.get("science_reference")
+        if (not isinstance(candidate, dict) or not chat.state.is_user
+                or chat.state.content_parts is not None or len(lines) != 3
+                or lines[0] != heading):
+            continue
+        source_ids = by_chat.get(chat.id, [])
+        if len(source_ids) != 1:
+            continue
+        source = document.nodes.get(source_ids[0])
+        match = re.fullmatch(r"science_([a-z0-9_]+)\.workbench", source.kind) if source else None
+        if match is None or match.group(1) not in PACKS:
+            continue
+        pack = match.group(1)
+        data = getattr(source.state, "data", None)
+        if not isinstance(data, dict) or not readable_result(data, pack):
+            continue
+
+        source_key, historical_id = "", ""
+        if lines[1].startswith("Source key: "):
+            source_key = lines[1].removeprefix("Source key: ")
+            if not re.fullmatch(r"[0-9a-f]{32}", source_key) or source_key != data.get("nodeKey"):
+                continue
+        elif lines[1].startswith(historical):
+            historical_id = lines[1].removeprefix(historical)
+            if not re.fullmatch(r"n[0-9]+", historical_id):
+                continue
+        else:
+            continue
+
+        try:
+            if "\nResult JSON:\n" in chat.content:
+                # The immutable full snapshot carries its own verifiable
+                # result receipt, even if the Workbench has since rerun.
+                result = json.loads(chat.content.split("\nResult JSON:\n", 1)[1])
+                if not isinstance(result, dict) or not readable_result({"version": 1, "latest": result}, pack):
+                    continue
+            else:
+                # An excerpt is not a complete receipt. It can only be
+                # checked against the source's CURRENT validated snapshot.
+                result = data.get("latest")
+                if not isinstance(result, dict):
+                    continue
+            expected_content = _science_discussion_context(historical_id, result, source_key=source_key)
+            if chat.content != expected_content:
+                continue
+            expected_reference = _science_reference(pack, result)
+            verified = science_reference_or_none(candidate, expected=expected_reference)
+            if verified is not None:
+                chat.state.science_reference = verified
+        except (TypeError, ValueError, KeyError, OverflowError, RecursionError):
+            # Bad imported cards are never allowed to take down the scene.
+            continue
+
+
 def restore_chat_into_document(
     document: SceneDocument,
     chat: dict[str, Any],
@@ -2250,6 +2344,7 @@ def _restore_chat_into_document(
             document, chat_data, notes_map, chat_nodes_map, nodes_by_id
         )
 
+    _restore_verified_science_references(document, node_payloads, all_nodes_map)
     _restore_pins(document, pins_data)
     _restore_view_state(document, chat_data)
 
