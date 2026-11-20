@@ -1191,9 +1191,9 @@ def register_graph_tools(registry: ToolRegistry, document: SceneDocument, settin
     )
     registry.register(
         GRAPH_READ_SUBGRAPH_SPEC, make_read_subgraph_handler(document),
-        scopes={GRAPH_READ}, approval="auto",
+        scopes={GRAPH_READ}, approval="auto", parallel_safe=True,
     )
     registry.register(
         GRAPH_LIST_NODES_SPEC, make_list_nodes_handler(document),
-        scopes={GRAPH_READ}, approval="auto",
+        scopes={GRAPH_READ}, approval="auto", parallel_safe=True,
     )

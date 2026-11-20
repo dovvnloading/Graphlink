@@ -68,6 +68,19 @@ def test_builtin_modules_keep_their_scopes_approvals_and_hints(tmp_path):
         assert registry.scopes_for("graph.publish_file") == frozenset({FS_READ, GRAPH_MUTATE})
         assert registry.approval_for("graph.publish_file") == "once"
 
+        parallel_reads = {
+            "fs.list", "fs.read", "fs.grep", "knowledge.search",
+            "graph.list_nodes", "graph.read_subgraph", "subagent.spawn",
+        }
+        for name in parallel_reads:
+            assert registry.parallel_safe_for(name), name
+        for name in (
+            "fs.write", "fs.edit", "shell.exec", "python.exec", "python.install",
+            "plan.update", "user.ask", "graph.delete_node", "graph.run_node",
+            "graph.publish_file", "missing.tool",
+        ):
+            assert not registry.parallel_safe_for(name), name
+
         first = tuple(spec.name for spec in registry.specs())
         assert HarnessDispatchOps.harness_tool_registry(dispatcher, document) is registry
         assert tuple(spec.name for spec in registry.specs()) == first

@@ -24,6 +24,18 @@ endpoint errors still propagate normally.
 **Builder** continues to require native tools. The JSON fallback is enabled
 only by the workspace and subagent callers.
 
+## Tool execution order
+
+On either native or JSON-fallback model turns, consecutive independent,
+explicitly parallel-safe read-only calls run concurrently (at most four at
+a time). Their results appear in the transcript, activity log and next model
+turn **in the order requested**, regardless of completion order. Every other
+call is a barrier: all previous reads finish before it starts, it runs alone
+under its existing approval policy, and later reads wait until it finishes.
+Auto approval alone does not imply concurrency (e.g. `plan.update` and
+`user.ask` remain serial). This preserves individual approvals for file,
+graph, shell and Python mutations.
+
 ## Protocol and safety
 
 For every model turn the adapter supplies available tool descriptions and

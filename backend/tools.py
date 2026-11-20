@@ -29,6 +29,10 @@ gates named in the ADR's own §2:
   fingerprint. Python is deliberately stricter: every call re-prompts,
   arguments are copied before disclosure, and a pending mutation is refused.
 
+Concurrent execution is an explicit, opt-in registration property
+(`parallel_safe=True`), not inferred from `approval="auto"`: some
+auto-approved tools change the run's state or wait for a human.
+
 invoke() never raises for an EXPECTED denial (unknown tool, out-of-scope,
 approval denied, handler exception) - each becomes an error ToolResult, the
 shape a tool-use loop feeds back to the model as the tool's own result text,
@@ -148,6 +152,10 @@ class _Registration:
     # defeats remembered grants". None leaves the existing fingerprint
     # memo unchanged; arbitrary execution tools opt into fresh consent.
     always_reprompt: "Callable[[ToolCall], bool] | None" = None
+    # Only independent, read-only calls opt into bounded parallel execution
+    # by the workspace harness. Default serial, including auto-approved
+    # interaction tools (plan.update/user.ask).
+    parallel_safe: bool = False
 
 
 def _tool_call_fingerprint(call: ToolCall) -> str:
@@ -175,6 +183,7 @@ class ToolRegistry:
         scopes: set[str] | frozenset[str],
         approval: str,
         always_reprompt: "Callable[[ToolCall], bool] | None" = None,
+        parallel_safe: bool = False,
     ) -> None:
         if approval not in _KNOWN_APPROVAL_POLICIES:
             raise ValueError(
@@ -188,10 +197,17 @@ class ToolRegistry:
                 f"Unknown scope(s) {sorted(unknown_scopes)} for tool {spec.name!r} - "
                 f"must be a subset of {sorted(KNOWN_SCOPES)}."
             )
+        if parallel_safe and (
+            approval != "auto" or scope_set & {GRAPH_MUTATE, FS_WRITE, CODE_EXECUTE}
+        ):
+            raise ValueError(
+                "Parallel-safe tools must be auto-approved and may not have "
+                "mutation or execution scopes."
+            )
         if spec.name in self._registrations:
             raise ValueError(f"Tool {spec.name!r} is already registered.")
         self._registrations[spec.name] = _Registration(
-            spec, handler, scope_set, approval, always_reprompt,
+            spec, handler, scope_set, approval, always_reprompt, parallel_safe,
         )
 
     def scopes_for(self, name: str) -> frozenset[str] | None:
@@ -212,6 +228,14 @@ class ToolRegistry:
         router now refuses to auto-approve an "always" tool in any mode."""
         registration = self._registrations.get(name)
         return registration.approval if registration is not None else None
+
+    def parallel_safe_for(self, name: str) -> bool:
+        """Only explicitly registered independent read tools run concurrently.
+
+        An unknown tool or an auto-approved interactive tool remains serial.
+        """
+        registration = self._registrations.get(name)
+        return bool(registration is not None and registration.parallel_safe)
 
     def specs(self) -> tuple[ToolSpec, ...]:
         """Every registered tool's neutral spec, in registration order - what
