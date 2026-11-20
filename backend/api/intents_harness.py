@@ -142,8 +142,10 @@ def register_harness_intents(
         requested_workspace = str(workspace_path or "").strip()[:_PATH_CAP]
         if requested_workspace:
             node.state.harness_workspace_path = requested_workspace
-        await publish_scene()
 
+        # The busy guard above and the dispatcher's synchronous run claim
+        # must not yield to a second start. Publishing here previously let
+        # both callers commit a creation before one of their runs was denied.
         request_id = await agent_dispatcher.start_harness_run(
             bus=bus, notifications_state=notifications, document=document,
             harness_node_id=node.id, user_text=goal_text, model_ref=model_ref,
@@ -153,6 +155,7 @@ def register_harness_intents(
             # the builder-plan precedent: the run id cannot exist before
             # the node does (the claim needs a node_id).
             command.run_id = request_id
+            await publish_scene()
         return node.id if request_id is not None else None
 
     async def send(node_id, text, allow_session_grants=True, *, model_ref=None):
