@@ -284,7 +284,7 @@ export function Composer({
               ? "Give the workspace agent a task…"
               : isSynthesizing
                 ? "Describe how to combine these branches…"
-                : "Ask about this graph…" 
+                : "Ask about this graph…"
           }
           aria-label="Message composer"
           rows={1}
