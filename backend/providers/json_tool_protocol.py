@@ -222,5 +222,6 @@ def structured_output_rejected(exc: Exception) -> bool:
     message = str(exc).lower()
     return any(term in message for term in (
         "response_format", "json_schema", "grammar", "structured output",
-        "unsupported format", "format is not supported",
+        "unsupported format", "format is not supported", "does not support format",
+        "format not supported", "invalid format", "unknown field format",
     ))
