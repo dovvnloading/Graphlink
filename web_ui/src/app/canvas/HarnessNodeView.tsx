@@ -60,6 +60,8 @@ export interface HarnessNodeData extends Record<string, unknown> {
   harnessShell: string;
   harnessShellAllowRules: string[];
   harnessExecutionProfile: string;
+  harnessPermissionMode: string;
+  harnessTaskPermissionMode: string;
   harnessNetworkAlways: boolean;
   harnessMaxTurns: number;
   harnessSpentTurns: number;
@@ -84,6 +86,7 @@ export interface HarnessNodeData extends Record<string, unknown> {
   onSetShell: (shell: string) => void;
   onRemoveShellAllowRule: (rule: string) => void;
   onSetExecutionProfile: (profile: string) => void;
+  onSetPermissionMode: (mode: string) => void;
   onSetNetworkAlways: (enabled: boolean) => void;
   onGetIsolationEngine: () => Promise<string | null>;
 }
@@ -138,7 +141,7 @@ function HarnessNodeMenu({
  * transformed React Flow node. Otherwise fixed coordinates drift with zoom. */
 function AgentSettingsPopover({
   position, shell, rules, onSetShell, onRemoveRule, profile, onSetExecutionProfile,
-  allowNetwork, onSetNetworkAlways, onGetIsolationEngine, onClose, triggerRef,
+  permissionMode, onSetPermissionMode, allowNetwork, onSetNetworkAlways, onGetIsolationEngine, onClose, triggerRef,
 }: {
   position: MenuPosition;
   shell: string;
@@ -147,6 +150,8 @@ function AgentSettingsPopover({
   onRemoveRule: (rule: string) => void;
   profile: string;
   onSetExecutionProfile: (profile: string) => void;
+  onSetPermissionMode: (mode: string) => void;
+  permissionMode: string;
   allowNetwork: boolean;
   onSetNetworkAlways: (enabled: boolean) => void;
   onGetIsolationEngine: () => Promise<string | null>;
@@ -252,13 +257,29 @@ function AgentSettingsPopover({
         </select>
       </label>
       <label className="harness-node-settings-field">
+        <span>Permission mode</span>
+        <select
+          className="nodrag nowheel"
+          aria-label="Permission mode"
+          value={permissionMode}
+          onChange={(event) => onSetPermissionMode(event.target.value)}
+        >
+          <option value="ask">Ask — approve each action</option>
+          <option value="auto_edit">Auto-edit — workspace file writes</option>
+          <option value="autonomous" disabled={profile !== "isolated"}>
+            Autonomous — Isolated only
+          </option>
+        </select>
+      </label>
+      <p>Dangerous commands, outside-workspace paths and network requests still ask. A looser mode takes effect on the next task.</p>
+      <label className="harness-node-settings-field">
         <span>
           <input
             type="checkbox"
             className="nodrag"
             aria-label="Allow network for every task"
             checked={allowNetwork}
-            disabled={profile !== "isolated"}
+            disabled={profile !== "isolated" || permissionMode === "autonomous"}
             onChange={(event) => onSetNetworkAlways(event.target.checked)}
           />
           {" "}Allow network for every task
@@ -269,7 +290,7 @@ function AgentSettingsPopover({
       ) : engine === null ? (
         <p role="status">No container engine found. Install Docker Desktop (Windows/macOS), Docker Engine (Linux), or Podman to use Isolated execution. Isolated commands never fall back to Host.</p>
       ) : (
-        <p role="status">{engine === "docker" ? "Docker" : "Podman"} detected. Isolated runs shell and Python in a container (1 CPU, 512 MiB RAM; workspace at /workspace). Shell networking is {allowNetwork ? "allowed for every task by the node setting" : "off by default and requestable with per-command approval"}. shell.session and python.exec stay offline; python.install may separately download approved PyPI wheels. Approved Web Research and provider calls still use the backend network. Pull python:3.12-slim with {engine} before your first run.</p>
+        <p role="status">{engine === "docker" ? "Docker" : "Podman"} detected. Isolated runs shell and Python in a container (1 CPU, 512 MiB RAM; workspace at /workspace). Shell networking is {permissionMode === "autonomous" ? "approval-only for each network command" : allowNetwork ? "allowed for every task by the node setting" : "off by default and requestable with per-command approval"}. shell.session and python.exec stay offline; python.install may separately download approved PyPI wheels. Approved Web Research and provider calls still use the backend network. Pull python:3.12-slim with {engine} before your first run.</p>
       )}
       <p>Network access only applies to Isolated shell.exec commands. Each command still needs approval. Settings are saved with this graph. Changes apply from the next task.</p>
       <div className="harness-node-allow-rules">
@@ -545,6 +566,8 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
             onRemoveRule={data.onRemoveShellAllowRule}
             profile={data.harnessExecutionProfile}
             onSetExecutionProfile={data.onSetExecutionProfile}
+            permissionMode={data.harnessPermissionMode}
+            onSetPermissionMode={data.onSetPermissionMode}
             allowNetwork={data.harnessNetworkAlways}
             onSetNetworkAlways={data.onSetNetworkAlways}
             onGetIsolationEngine={data.onGetIsolationEngine}
@@ -555,6 +578,9 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
       }
     >
       <div className={`plan-node-status ${statusClass(data)}`}>{statusLabel(data)}</div>
+      {data.harnessRunId && (
+        <p className="plan-node-detail">Task permission: {data.harnessTaskPermissionMode === "auto_edit" ? "Auto-edit" : data.harnessTaskPermissionMode === "autonomous" ? "Autonomous" : "Ask"}</p>
+      )}
       {data.harnessStatusDetail && (
         <p className="plan-node-detail" role={data.harnessStatus === "failed" ? "alert" : undefined}>
           {data.harnessStatusDetail}
@@ -720,14 +746,14 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
                 >
                   Allow network once
                 </button>
-                <button
+                {data.harnessTaskPermissionMode !== "autonomous" && <button
                   type="button"
                   className="plan-node-button nodrag"
                   onClick={() => approveNetwork("task")}
                   disabled={decisionPending}
                 >
                   Allow network for this task
-                </button>
+                </button>}
               </>
             ) : (
               <button
