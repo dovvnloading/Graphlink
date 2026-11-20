@@ -9,6 +9,8 @@ an ordinary Ctrl+Z-undoable command, the builder-plan precedent exactly.
 from __future__ import annotations
 
 import asyncio
+import re
+from collections import OrderedDict
 
 from backend.api._shared import make_publish_scene
 from backend.api.intents_harness_workspace import register_harness_workspace_intents
@@ -33,6 +35,8 @@ _MESSAGE_CAP = 20_000
 # hands this across the wire, so it is untrusted length as well as untrusted
 # content (the trust list is what settles the content, at run time).
 _PATH_CAP = 4_000
+# The same bounded, session-local receipt posture as MCP agent task control.
+_MAX_SEND_RECEIPTS = 2_048
 
 
 def _place_harness_node(document: SceneDocument) -> tuple[float, float]:
@@ -177,7 +181,7 @@ def register_harness_intents(
             await publish_scene()
         return node.id if request_id is not None else None
 
-    async def send(node_id, text, allow_session_grants=True, *, model_ref=None):
+    async def send(node_id, text, allow_session_grants=True, operation_id=None, *, model_ref=None):
         message = str(text or "").strip()
         node = document.nodes.get(node_id)
         if node is None or not isinstance(node.state, HarnessState):
@@ -192,16 +196,49 @@ def register_harness_intents(
             notifications.show("Agent tasks cannot exceed 20,000 characters. Shorten the draft and retry.", "warning")
             await bus.publish("notification")
             return None
+        # A WebSocket reply can be lost AFTER start_harness_run has claimed
+        # the task. A card retries that uncertain send using the same client
+        # operation ID; check its receipt BEFORE the busy guard, even when the
+        # original run has already finished. Explicit refusals have no receipt.
+        receipts = None
+        fingerprint = None
+        if operation_id is not None:
+            if (not isinstance(operation_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", operation_id)):
+                notifications.show("Invalid agent send operation ID.", "warning")
+                await bus.publish("notification")
+                return None
+            if getattr(agent_dispatcher, "_harness_send_document", None) is not document:
+                agent_dispatcher._harness_send_document = document
+                agent_dispatcher._harness_send_receipts = OrderedDict()
+            receipts = agent_dispatcher._harness_send_receipts
+            fingerprint = (
+                node_id, message, allow_session_grants is True,
+                (model_ref.provider, model_ref.model_id) if model_ref is not None else None,
+                node.state.harness_workspace_id,
+            )
+            previous = receipts.get(operation_id)
+            if previous is not None:
+                if previous[0] != fingerprint:
+                    notifications.show("Agent send operation ID was reused for a different task.", "warning")
+                    await bus.publish("notification")
+                    return None
+                receipts.move_to_end(operation_id)
+                return previous[1]
         if node.pending_request_id:
             notifications.show("This agent is still working - stop it or wait.", "info")
             await bus.publish("notification")
             return None
-        return await agent_dispatcher.start_harness_run(
+        request_id = await agent_dispatcher.start_harness_run(
             bus=bus, notifications_state=notifications, document=document,
             harness_node_id=node_id, user_text=message, model_ref=model_ref,
             # MCP task starts opt out; UI/composer sends retain normal grants.
             allow_session_grants=allow_session_grants is True,
         )
+        if request_id is not None and receipts is not None:
+            receipts[operation_id] = (fingerprint, request_id)
+            if len(receipts) > _MAX_SEND_RECEIPTS:
+                receipts.popitem(last=False)
+        return request_id
 
     async def cancel(request_id):
         agent_dispatcher.cancel_harness(request_id)
