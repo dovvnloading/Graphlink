@@ -44,8 +44,8 @@ from graphlink_plugins.web_research import service as research_service_module
 from graphlink_plugins.web_research.domain import FetchedDocument, FetchedPayload, SearchResult
 
 
-def _call(call_id, name, **arguments):
-    return ToolCall(id=call_id, name=name, arguments=arguments)
+def _call(call_id, tool_name, **arguments):
+    return ToolCall(id=call_id, name=tool_name, arguments=arguments)
 
 
 def _result(request, call_id):
