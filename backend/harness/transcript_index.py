@@ -155,8 +155,8 @@ def _open_index(path: Path) -> sqlite3.Connection:
         if image is not None:
             # WAL-mode main images need separate companion files, which must
             # never be opened by name here. Rebuild from JSONL instead.
-            if (not image.startswith(b"SQLite format 3\\x00") or len(image) < 20
-                    or image[18:20] != b"\\x01\\x01"):
+            if (not image.startswith(b"SQLite format 3\x00") or len(image) < 20
+                    or image[18:20] != b"\x01\x01"):
                 raise _IncompatibleIndex("Unexpected transcript search database image.")
             db.deserialize(image)
         db.execute(
