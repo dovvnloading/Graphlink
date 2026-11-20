@@ -466,3 +466,10 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
     # "once" is the honest name for a scratch-confined write).
     registry.register(FS_WRITE_SPEC, fs_write, scopes={FS_WRITE}, approval="once")
     registry.register(FS_EDIT_SPEC, fs_edit, scopes={FS_WRITE}, approval="once")
+
+
+USAGE_HINT = "fs.list locates workspace files; fs.read opens them; fs.grep finds matching lines; fs.write and fs.edit change files (with approval)."
+
+
+def register_workspace_tools(registry: ToolRegistry, dispatcher, document) -> None:
+    register_harness_fs_tools(registry)

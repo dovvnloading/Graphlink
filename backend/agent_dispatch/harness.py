@@ -138,19 +138,14 @@ class HarnessDispatchOps(DispatcherParts):
         everything outside HARNESS_GRANTED_SCOPES, so each loop offers its
         model only what its own grant set could pass at invoke()."""
         registry = self.builder_tool_registry(document)
-        if not getattr(self, "_harness_fs_registered", False):
-            from backend.harness.subagents import register_subagent_tool
-            from backend.harness.tools_fs import register_harness_fs_tools
-            from backend.harness.tools_interaction import register_harness_interaction_tools
-            from backend.harness.tools_python import register_harness_python_tool
-            from backend.harness.tools_shell import register_harness_shell_tool
+        # The builder registry can be invalidated (e.g. after an MCP
+        # configuration change). Register once per registry INSTANCE, not
+        # once per dispatcher, so a rebuilt registry never loses harness tools.
+        if getattr(self, "_harness_tools_registered_on", None) is not registry:
+            from backend.harness.tool_catalog import register_tool_modules
 
-            register_harness_fs_tools(registry)
-            register_harness_shell_tool(registry, self.harness_shell_sessions())
-            register_harness_python_tool(registry, self.harness_python_repls())
-            register_harness_interaction_tools(registry)
-            register_subagent_tool(registry)
-            self._harness_fs_registered = True
+            register_tool_modules(registry, self, document)
+            self._harness_tools_registered_on = registry
         return registry
 
     async def start_harness_run(

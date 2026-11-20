@@ -300,7 +300,8 @@ PROMPT_REGISTRY: dict[str, PromptEntry] = {
         # v3 (H4): teaches subagent.spawn.
         # v4 (H6): teaches python.exec, shell.session, the graph.* canvas
         # tools, and the plan.update/user.ask interaction pair.
-        ("harness-core", 5, "50410d1dec8bba695d8373c99256c3419a331aef7cbca0759f16c1454a797bcc"),
+        # v6: tool enumeration is assembled from per-file usage hints at run time.
+        ("harness-core", 6, "2b08cd0f6525a7b8220894a426121ed30246baa2fe2db2a1ffa3c56c66aaa4a1"),
         ("reasoning-hint-low", 1, "87d4a1d2e09416005d656faaca77fa2fb2305f0c4b52940f0dbaf0d234669552"),
         ("reasoning-hint-high", 1, "7a004877f0362c73208a61bdd81103d22d5b1eaafe998e82138d970273919d9b"),
     ]
