@@ -210,7 +210,7 @@ async def _fetch(call: ToolCall, ctx: RunContext) -> ToolResult:
     loop = asyncio.get_running_loop()
 
     def approve_request(request_url: str) -> None:
-        """Runs on the fetch worker, after DNS/IP validation, before any I/O.
+        """Runs on the fetch worker, after DNS/IP validation, before HTTP traffic.
 
         Cross-domain redirects call this again; the event-loop future keeps
         the normal asynchronous approval panel responsive. This callback is
