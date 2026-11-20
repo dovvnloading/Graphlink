@@ -140,6 +140,21 @@ def test_exactly_sized_reader_chunk_preserves_repl_framing():
 
 
 
+def test_live_callback_continues_after_model_output_is_truncated():
+    repl = PythonREPL(repl_id="core-live-tail-test")
+    pieces: list[str] = []
+    try:
+        result = repl.execute(
+            "print('x' * 25000); print('late marker')",
+            on_output=pieces.append,
+        )
+        assert "output truncated" in result
+        assert "late marker" not in result
+        assert "late marker" in "".join(pieces)
+    finally:
+        repl.stop()
+
+
 def test_repl_emits_unbuffered_output_before_execution_finishes():
     """Output must reach the callback while the child is still sleeping."""
     repl = PythonREPL(repl_id="core-live-output-test")
