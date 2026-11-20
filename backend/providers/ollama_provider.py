@@ -68,6 +68,7 @@ from backend.providers.base import (
     ChatRequest,
     ProviderCapabilities,
     ProviderEvent,
+    require_successful_stop,
     ToolCall,
     normalize_usage,
     tool_arguments,
@@ -230,6 +231,7 @@ class OllamaProvider:
             # Require done:true even when calls arrived in earlier chunks.
             # A disconnected stream must not execute potentially torn calls.
             saw_done = False
+            done_reason = None
             # ollama types its streaming chat() as `Iterator[ChatResponse]`,
             # which has no close() - but the object it actually returns is the
             # generator ollama/_client.py's own `_request` builds around
@@ -259,6 +261,7 @@ class OllamaProvider:
                     tool_call_parts.extend(part["message"].get("tool_calls") or ())
                     if part.get("done"):
                         saw_done = True
+                        done_reason = part.get("done_reason")
                         # ADR-006 stage 6.8: the terminal chunk carries
                         # Ollama's real token counts.
                         usage = normalize_usage(
@@ -280,6 +283,7 @@ class OllamaProvider:
                 raise RuntimeError(
                     "Ollama stream ended unexpectedly before completion. Please try again."
                 )
+            require_successful_stop("Ollama", done_reason, {"stop"})
 
             tool_calls = self._extract_tool_calls({"tool_calls": tool_call_parts})
             if tool_calls:
