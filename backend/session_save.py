@@ -575,6 +575,8 @@ def _serialize_harness_node(raw_node: SceneNode) -> dict[str, Any]:
         "shell": node.state.harness_shell,
         "shell_allow_rules": list(node.state.harness_shell_allow_rules),
         "execution_profile": node.state.harness_execution_profile,
+        "permission_mode": node.state.harness_permission_mode,
+        "task_permission_mode": node.state.harness_task_permission_mode,
         "network_always": node.state.harness_network_always is True,
         "activity": [dict(a) for a in node.state.harness_activity],
         "max_turns": node.state.harness_max_turns,
