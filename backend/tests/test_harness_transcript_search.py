@@ -184,7 +184,9 @@ def test_sidecar_open_race_never_follows_replaced_symlink(tmp_path, monkeypatch)
     """
     from backend.harness import tools_fs
 
-    transcript = transcript_path(tmp_path)
+    scratch = tmp_path / "managed-workspace"
+    scratch.mkdir()
+    transcript = transcript_path(scratch)
     transcript.write_text(
         '{"t":"msg","role":"user","content":"violet ledger"}\n', encoding="utf-8",
     )
