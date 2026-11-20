@@ -16,8 +16,8 @@ place results back on the canvas. You stay in control of workspace access and to
    into a saved graph does **not** grant it.
 4.  Set **Max turns** if needed (default 16; allowed range 1–64), then choose **Start the agent** .
    The turn budget is a hard stop, not an estimated time.
-5.  Follow the Agent card’s status, checklist, activity and tool-call details. Review any proposed
-   tool call and select **Approve once** or **Deny** . When the run ends, use **Send a follow-up…**
+5.  Follow the Agent card’s status, checklist, activity and tool-call details. Review approval
+   requests when shown and select **Approve once** or **Deny** . When the run ends, use **Send a follow-up…**
    to continue in the same Agent; **Stop** cancels a running task.
 
 The Agent may ask a specific question in a separate **Answer** panel. Answering that question is
@@ -77,7 +77,7 @@ actual root in your file manager. For work done by the model:
 | --- | --- |
 | `fs.list` / `fs.grep` | Find files and search text inside the workspace. |
 | `fs.read` | Read text or supported images and extract text from PDF, Word `.docx`, Excel `.xlsx` / `.xlsm`. |
-| `fs.write` / `fs.edit` | Create, replace or edit files after approval. Review the proposed content or unified diff; if no safe preview is available, deny and ask the Agent to retry. |
+| `fs.write` / `fs.edit` | Create, replace or edit workspace files. **Ask** requests approval; **Auto-edit** and **Autonomous** can skip it for confined paths. When prompted, review the proposed content or unified diff; if no safe preview is available, deny and ask the Agent to retry. |
 
 For `fs.read` , use `page_start` / `page_end` for inclusive, 1-based PDF pages; `sheet` or
 `sheet_start` / `sheet_end` for Excel; and `offset` / `limit` to window text lines. Legacy `.doc` /
@@ -85,13 +85,48 @@ For `fs.read` , use `page_start` / `page_end` for inclusive, 1-based PDF pages; 
 Reads are bounded (8 MiB source files and 40,000-character results), so request a narrower range
 for large documents. [Document-reading details](WORKSPACE_DOCUMENT_READS.md) .
 
+## Permission modes
+
+On the Agent card, open **Agent settings → Permission mode** to choose when the Agent
+asks for tool approval. The mode applies only to this Agent's already-granted tools and
+bound workspace; it never grants access to another folder or a new tool scope.
+
+| Mode | Available with | What stops asking |
+| --- | --- | --- |
+| **Ask** (default) | Host or Isolated | Nothing additional: tools use their usual approval prompts and any explicitly saved, eligible shell-command prefixes. |
+| **Auto-edit** | Host or Isolated | Workspace-confined `fs.write` and `fs.edit` no longer prompt. Shell, Python and other tools keep Ask's approval behavior. |
+| **Autonomous** | **Isolated only** | Includes Auto-edit, plus conservatively screened offline `shell.exec` commands, safe `python.exec` code, eligible `shell.session` starts and read/list/stop actions, and `python.install` from already-cached offline wheels. |
+
+**What still asks:** Dangerous, destructive or ambiguous shell commands; commands
+that may access the network; outside-workspace paths (including symlink escapes);
+and Python code the safety checks cannot confidently screen. Saved shell-prefix or
+session grants cannot suppress these sensitive prompts. File operations outside
+the workspace may also be blocked after approval. **Writing stdin to a shell
+session always requires fresh approval.** Graph mutations and scientific runs
+retain their ordinary approvals; Web Research keeps its per-service and
+per-hostname consent rules.
+
+In Autonomous, an Isolated shell network command needs a fresh, **per-command**
+network decision; task-wide network approval is unavailable. For `python.install`,
+a missing cached wheel stops the install **before contacting PyPI** and asks for
+fresh approval tied to the exact packages and interpreter. No mode auto-approves
+network access.
+
+The backend captures the effective permission mode and execution profile when
+each task starts. **Choosing a looser mode while a task runs takes effect only
+on the next task**; the current task keeps its original permissions. The Agent
+card shows the last task's mode, and the workspace transcript records the mode
+for each task. Autonomous cannot be selected with Host; switching from Isolated
+to Host resets an Autonomous preference to Ask.
+
 ## Python: execution, environments and installs
 
 Ask the Agent to use **`python.exec`** for analysis, scripts or data transformations. It is a
 **persistent Python interpreter** : imports and variables survive between calls in the same
 Agent/workspace/profile until the interpreter is retired. Use `print()` to display results; a bare
-expression is not echoed. **Every execution needs fresh approval** , even if the same code was
-approved before. Host Python has your user account’s permissions and is **not a sandbox** .
+expression is not echoed. In **Ask** and **Auto-edit**, every execution needs fresh approval, even if the same code was
+approved before. **Autonomous** can skip the prompt only for conservatively screened Isolated code;
+other code still asks. Host Python has your user account’s permissions and is **not a sandbox** .
 
 The interpreter is selected automatically; the model cannot choose an arbitrary environment:
 
@@ -103,9 +138,11 @@ The interpreter is selected automatically; the model cannot choose an arbitrary 
 
 For dependencies, ask the Agent to call **`python.install`** , for example with
 `{"packages": ["requests>=2,<3", "pandas==2.2.3"]}` . It installs into the **same interpreter**
-that `python.exec` uses. The approval panel identifies that interpreter and
-**every requested requirement** . **Each installation requires its own new approval** ; earlier
-approvals and saved shell rules cannot authorize a later install. The tool accepts named PyPI
+that `python.exec` uses. When approval is needed, the panel identifies that interpreter and
+**every requested requirement** . **Ask** and **Auto-edit** require a new approval for each
+installation. **Autonomous** can install offline from cached wheels without a prompt, but asks for
+fresh, interpreter-bound approval before downloading missing wheels from PyPI. Earlier approvals
+and saved shell rules cannot authorize a later download. The tool accepts named PyPI
 packages, extras and version constraints—not arbitrary URLs, VCS repositories, requirements files,
 local paths or pip flags. Binary wheels still contain executable code, so inspect the packages
 before approving.
@@ -126,11 +163,13 @@ Windows); on macOS/Linux it uses **Bash** . The setting applies to the **next ta
 command already running. In the Isolated profile, shell commands instead execute in the Linux
 container using `/bin/sh` .
 
--  **`shell.exec`** runs a one-shot command in the bound workspace and requests permission for the
-  command. It has a 120-second hard timeout.
+-  **`shell.exec`** runs a one-shot command in the bound workspace. **Ask** and **Auto-edit**
+  request permission unless an eligible saved prefix applies; **Autonomous** may skip approval for
+  screened offline commands. It has a 120-second hard timeout.
 -  **`shell.session`** manages a long-running named process, such as a development server: start,
-  read output, write stdin, list and stop. Starting a session and sending input require fresh
-  consent; saved `shell.exec` rules do not authorize interactive stdin.
+  read output, write stdin, list and stop. Starting a session normally requires approval, except
+  for screened Autonomous starts. Sending input always requires fresh consent; saved `shell.exec`
+  rules do not authorize interactive stdin.
 -  The approval panel discloses proposed shell commands, including command segments in a chain. For
   safe, unambiguous `shell.exec` commands, **Always allow** stores a
   **shell-specific command prefix on that Agent** ; later commands can skip the prompt only if
@@ -263,7 +302,7 @@ tool approval, or override safety rules. Treat skills copied from strangers as u
 | Agent reads scratch instead of a selected project | Re-select the folder with **Choose folder…**; check **Settings → Workspace Agent → Trusted Folders**. Imported paths do not grant access automatically. |
 | Python cannot import a package | Confirm the intended workspace/profile; use approved `python.install` so it targets `python.exec`'s interpreter. An incompatible wheel may not be available. |
 | Isolated commands cannot start | Start Docker/Podman and pre-pull `python:3.12-slim`; the Agent will not silently use Host. |
-| The Agent keeps asking to approve a command | Dangerous/ambiguous shell commands, `python.exec`, `python.install` and interactive stdin still require fresh approval; **Always allow** applies only to eligible `shell.exec` prefixes. |
+| The Agent keeps asking to approve a command | Dangerous/ambiguous commands, out-of-workspace paths, network access and interactive stdin keep prompting. **Autonomous** only skips screened Isolated commands/code and offline cached-wheel installs; **Always allow** applies only to eligible `shell.exec` prefixes. |
 | A web page needs another approval | A new task or a redirected-to hostname gets a new domain consent prompt. |
 | A document read is empty or truncated | Try a narrower page/sheet/text range; scanned PDFs require OCR outside `fs.read`. |
 
