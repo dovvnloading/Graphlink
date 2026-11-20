@@ -524,6 +524,25 @@ def test_powershell_shell_exec_from_scripted_agent(scenario, monkeypatch):
     assert run.transcript[-1]["content"] == "PowerShell command completed."
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="PowerShell host scenario runs on Windows")
+def test_powershell_shell_exec_reports_native_exit_code(scenario, monkeypatch):
+    scenario.agent.state.harness_shell = "powershell"
+    observed = {}
+
+    def finish(request):
+        observed["output"] = _result(request, "native_exit")
+        return {"answer": "The native command failed with exit code 42."}
+
+    run = _drive(scenario, monkeypatch, [
+        {"calls": [_call("native_exit", "shell.exec", command="cmd /c exit 42")]},
+        finish,
+    ], approvals=[("shell.exec", True)])
+
+    assert observed["output"].startswith("exit code 42\n")
+    assert _activity(scenario) == [("shell.exec", "error")]
+    assert [tool for tool, _ in run.approvals] == ["shell.exec"]
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="Bash host scenario runs on POSIX")
 def test_bash_shell_exec_from_scripted_agent(scenario, monkeypatch):
     scenario.agent.state.harness_shell = "bash"
