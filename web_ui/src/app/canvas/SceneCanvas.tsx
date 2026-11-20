@@ -49,6 +49,7 @@ import type { ThinkingFlowNode } from "./ThinkingNodeView";
 import type { WebResearchFlowNode } from "./WebResearchNodeView";
 import type { PlanFlowNode, PlanStepData } from "./PlanNodeView";
 import type { HarnessFlowNode } from "./HarnessNodeView";
+import { harnessFileDocumentMarkdown } from "./harnessWorkspaceFiles";
 import {
   GRAPH_FIT_OPTIONS,
   GROUP_FALLBACK_HEIGHT,
@@ -935,6 +936,13 @@ function makeHarnessFns(id: string, liveRef: { current: DispatcherLive }) {
     },
     onPickWorkspace: () => liveRef.current.store.pickHarnessWorkspace(id),
     onUseScratch: () => liveRef.current.store.useHarnessScratch(id),
+    onListWorkspaceFiles: (path: string) => liveRef.current.store.listHarnessWorkspaceFiles(id, path),
+    onOpenWorkspaceFile: async (path: string) => {
+      const { store, onOpenDocumentView } = liveRef.current;
+      const file = await store.readHarnessWorkspaceFile(id, path);
+      onOpenDocumentView(harnessFileDocumentMarkdown(file), `Workspace: ${file.path}`);
+    },
+    onRevealWorkspace: () => liveRef.current.store.revealHarnessWorkspace(id),
   };
 }
 
