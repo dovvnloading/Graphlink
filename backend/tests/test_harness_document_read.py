@@ -191,14 +191,15 @@ def test_xlsx_default_read_and_ranges_skip_chartsheet(fs):
     _xlsx(root / "with-charts.xlsx", chartsheet_first=True)
     default = read("with-charts.xlsx")
     assert not default.is_error, default.content
-    assert default.content.startswith("[Sheet 1: Overview]")
+    # fs.read includes a line-count preamble before the extracted document text.
+    assert default.content.splitlines()[1] == "[Sheet 1: Overview]"
     assert "[Sheet 2: Details]" in default.content
     assert "[Sheet 3: Empty]" in default.content
     assert "Charts" not in default.content
 
     selected = read("with-charts.xlsx", sheet_start=2, sheet_end=2)
     assert not selected.is_error, selected.content
-    assert selected.content.startswith("[Sheet 2: Details]")
+    assert selected.content.splitlines()[1] == "[Sheet 2: Details]"
     assert "Overview" not in selected.content
     assert read("with-charts.xlsx", sheet="Charts").is_error
 
