@@ -573,6 +573,7 @@ def _serialize_harness_node(raw_node: SceneNode) -> dict[str, Any]:
         # must never imply trust on a machine that does not.
         "workspace_path": node.state.harness_workspace_path,
         "shell": node.state.harness_shell,
+        "shell_allow_rules": list(node.state.harness_shell_allow_rules),
         "activity": [dict(a) for a in node.state.harness_activity],
         "max_turns": node.state.harness_max_turns,
         "spent_turns": node.state.harness_spent_turns,
