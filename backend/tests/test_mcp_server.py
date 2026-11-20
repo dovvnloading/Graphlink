@@ -261,9 +261,23 @@ def test_mcp_writes_are_hidden_unless_adapter_explicitly_receives_a_write_token(
         "graphlink_get_graph", "graphlink_list_nodes", "graphlink_read_subgraph",
         "graphlink_get_agent_task",
     }
-    assert next(item for item in listed if item["name"] == "graphlink_cancel_agent_task")[
+    # The only non-destructive write-capability tool is a status read.
+    # Agent start may auto-edit files; content replacement and Save can
+    # overwrite existing work, even if the HTTP authorization is sound.
+    assert {item["name"] for item in listed if item["annotations"]["destructiveHint"]} == {
+        "graphlink_create_node", "graphlink_connect_nodes",
+        "graphlink_set_node_content", "graphlink_save_graph",
+        "graphlink_start_agent_task", "graphlink_cancel_agent_task",
+    }
+    assert next(item for item in listed if item["name"] == "graphlink_get_agent_task")[
         "annotations"
-    ]["destructiveHint"] is True
+    ]["destructiveHint"] is False
+    modern_list = enabled.handle(request(22, "tools/list", modern_params()))["result"]["tools"]
+    assert {item["name"] for item in modern_list if item["annotations"]["destructiveHint"]} == {
+        "graphlink_create_node", "graphlink_connect_nodes",
+        "graphlink_set_node_content", "graphlink_save_graph",
+        "graphlink_start_agent_task", "graphlink_cancel_agent_task",
+    }
 
     revision = "a" * 64
     call = enabled.handle(request(3, "tools/call", {
