@@ -279,15 +279,15 @@ def _install_in_worker(
             pip_wheels = f"{CONTAINER_WHEEL_CACHE}/wheels"
             pip_http = f"{CONTAINER_WHEEL_CACHE}/pip-http"
 
-            def run_pip(argv: list[str], *, network: bool = False) -> tuple[int, str]:
-                return _checked_isolated_command(
-                    argv, cwd, cancel_event, isolated_plan, cache_root, network=network,
-                )
         else:
             pip_wheels, pip_http = str(wheels), str(http)
 
-            def run_pip(argv: list[str], *, network: bool = False) -> tuple[int, str]:
-                return _checked_pip(argv, cwd, cancel_event)
+        def run_pip(argv: list[str], *, network: bool = False) -> tuple[int, str]:
+            if isolated_plan is not None:
+                return _checked_isolated_command(
+                    argv, cwd, cancel_event, isolated_plan, cache_root, network=network,
+                )
+            return _checked_pip(argv, cwd, cancel_event)
 
         common = [
             str(interpreter), "-m", "pip", "--no-input",
