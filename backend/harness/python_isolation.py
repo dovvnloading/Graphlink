@@ -10,7 +10,7 @@ All interpreter startup and virtualenv creation occur inside the container.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable
 
 from backend.harness import python_env
@@ -53,13 +53,13 @@ if len(sys.argv) > 3:
 
 @dataclass(frozen=True)
 class IsolatedPythonPlan:
-    interpreter: Path                 # Path as seen *inside* the container
+    interpreter: PurePosixPath        # Linux path inside container, even on Windows hosts
     host_venv: Path                   # Used for symlink checks, never executed
     managed: bool
     mounts: tuple[tuple[Path, str], ...] = ()
 
     @property
-    def container_venv(self) -> Path:
+    def container_venv(self) -> PurePosixPath:
         return self.interpreter.parent.parent
 
 
@@ -78,13 +78,13 @@ def planned_isolated_python_environment(
         candidate = cwd / name
         if _project_container_venv_exists(candidate):
             return IsolatedPythonPlan(
-                Path("/workspace") / name / "bin" / "python", candidate, False,
+                PurePosixPath("/workspace") / name / "bin" / "python", candidate, False,
             )
 
     if is_scratch:
         host_venv = cwd / ".graphlink-isolated-python-venv"
         return IsolatedPythonPlan(
-            Path("/workspace/.graphlink-isolated-python-venv/bin/python"),
+            PurePosixPath("/workspace/.graphlink-isolated-python-venv/bin/python"),
             host_venv, True,
         )
 
@@ -96,7 +96,7 @@ def planned_isolated_python_environment(
     project_key = host_venv.parent.name
     mount_at = f"{CONTAINER_MANAGED_ENVS}/{safe_scratch_id(workspace_id)}/{project_key}"
     return IsolatedPythonPlan(
-        Path(mount_at) / "isolated-venv" / "bin" / "python",
+        PurePosixPath(mount_at) / "isolated-venv" / "bin" / "python",
         host_venv, True, ((host_venv.parent, mount_at),),
     )
 
