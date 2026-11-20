@@ -395,7 +395,8 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     # in the workspace transcript, never on the wire).
     "harnessGoal", "harnessReply", "harnessStatus", "harnessStatusDetail",
     "harnessRunId", "harnessActivity", "harnessShell", "harnessShellAllowRules",
-    "harnessExecutionProfile", "harnessNetworkAlways", "harnessMaxTurns", "harnessSpentTurns",
+    "harnessExecutionProfile", "harnessPermissionMode", "harnessTaskPermissionMode",
+    "harnessNetworkAlways", "harnessMaxTurns", "harnessSpentTurns",
     "harnessSpentTokens", "harnessAwaitingApproval", "harnessApprovalToolName",
     "harnessApprovalSummary", "harnessContextTokens", "harnessMaxContextTokens",
     # Per-call Python approval identity, added with the approval hardening.

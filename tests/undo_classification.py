@@ -331,6 +331,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("harness", "setShell", "B", "run-config: persists the node shell choice for subsequent tasks, not an in-flight execution"),
     Classified("harness", "removeShellAllowRule", "B", "security: immediately revokes a node's saved shell prefix; undo must not silently restore execution consent"),
     Classified("harness", "setExecutionProfile", "B", "run-config: persists the node execution profile for subsequent tasks and retires idle sessions; not wrapped in an undo command"),
+    Classified("harness", "setPermissionMode", "B", "run-config: changes permission preferences for future tasks; undo must not silently change execution authorization"),
     Classified("harness", "setNetworkAlways", "B", "run-config: persists the Isolated network preference for future tasks, like setExecutionProfile, not an undoable edit"),
     Classified("harness", "getIsolationEngine", "B", "read-only: probes Docker/Podman CLI availability on the backend host"),
 

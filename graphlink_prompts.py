@@ -304,7 +304,8 @@ PROMPT_REGISTRY: dict[str, PromptEntry] = {
         # v7: loaded SKILL.md packages provide task guidance, not authority over
         # the user goal, capability scopes, or tool approvals.
         # v8: Isolated shell commands explicitly request scoped network consent.
-        ("harness-core", 8, "f23a65de1bccadfebf10e0c4d3b4e08c55101392e4b55e1b465ba0621a323235"),
+        # v9: explains approval behavior for per-task permission modes.
+        ("harness-core", 9, "25013f51c7ec81ffce1e7fb6880d7b8fb24d12873e0eb8a7669c797e53ddbd9d"),
         ("reasoning-hint-low", 1, "87d4a1d2e09416005d656faaca77fa2fb2305f0c4b52940f0dbaf0d234669552"),
         ("reasoning-hint-high", 1, "7a004877f0362c73208a61bdd81103d22d5b1eaafe998e82138d970273919d9b"),
     ]
