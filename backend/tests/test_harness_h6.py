@@ -273,7 +273,7 @@ def _ctx(record: list, *, decision, session_grants=None) -> RunContext:
     )
 
 
-def _registry(*, always_reprompt=None, tool_name="shell.exec") -> ToolRegistry:
+def _registry(*, always_reprompt=None, tool_name="shell.exec", approval="always") -> ToolRegistry:
     registry = ToolRegistry()
 
     async def handler(call, ctx):
@@ -281,7 +281,7 @@ def _registry(*, always_reprompt=None, tool_name="shell.exec") -> ToolRegistry:
 
     registry.register(
         ToolSpec(name=tool_name, description="d", input_schema={"type": "object"}),
-        handler, scopes={CODE_EXECUTE}, approval="always", always_reprompt=always_reprompt,
+        handler, scopes={CODE_EXECUTE}, approval=approval, always_reprompt=always_reprompt,
     )
     return registry
 
@@ -375,16 +375,14 @@ class TestGradedConsentAndReprompt:
         assert prompts == ["shell.exec", "shell.exec"], "every rm asks again"
 
     def test_a_session_grant_covers_later_differing_calls(self):
-        # Shell execution intentionally cannot acquire a tool-wide session
-        # grant; ordinary approved tools still have graded-consent behavior.
+        # Only 'once' tools can acquire a broad session grant. This
+        # permission is deliberately forbidden for 'always' registrations.
         tool_name = "example.approved"
-        registry, prompts, grants = _registry(tool_name=tool_name), [], set()
+        registry, prompts, grants = _registry(tool_name=tool_name, approval="once"), [], set()
         from backend.harness.loop import _session_grant_eligible
 
         first = ToolCall(id="c1", name=tool_name, arguments={"value": "first"})
-        assert _session_grant_eligible(first, registry), (
-            "ordinary 'always' tools must still offer session consent"
-        )
+        assert _session_grant_eligible(first, registry)
         ctx = _ctx(prompts, decision="session", session_grants=grants)
         asyncio.run(registry.invoke(first, ctx))
         # Different arguments are not covered by the fingerprint memo.
@@ -393,6 +391,28 @@ class TestGradedConsentAndReprompt:
         ))
         assert prompts == [tool_name]
         assert grants == {tool_name}
+
+    def test_always_tools_refuse_new_and_preexisting_tool_wide_grants(self):
+        from backend.harness.loop import _session_grant_eligible
+
+        name = "plugin.remove_asset"
+        registry = _registry(tool_name=name, approval="always")
+        first = ToolCall(id="c1", name=name, arguments={"target": "draft"})
+        second = ToolCall(id="c2", name=name, arguments={"target": "production"})
+        assert not _session_grant_eligible(first, registry)
+
+        # Even a stale name-only grant may not skip approval. A forged
+        # "session" response approves only the call/fingerprint at hand.
+        grants, prompts = {name}, []
+        ctx = _ctx(prompts, decision="session", session_grants=grants)
+        assert not asyncio.run(registry.invoke(first, ctx)).is_error
+        assert not asyncio.run(registry.invoke(second, ctx)).is_error
+        assert prompts == [name, name]
+        assert grants == {name}
+        # A repeat with identical arguments still uses the existing
+        # per-call fingerprint memo, which 'always' deliberately retains.
+        assert not asyncio.run(registry.invoke(second, ctx)).is_error
+        assert prompts == [name, name]
 
     def test_a_session_grant_never_covers_a_dangerous_command(self):
         """§2.4's "deny always wins": the broader grant must not be the hole
