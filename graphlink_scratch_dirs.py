@@ -52,6 +52,9 @@ EXECUTION_SANDBOX_ROOT = Path(tempfile.gettempdir()) / "graphlink_execution_sand
 # all three GC triggers (delete/evict/age-sweep) cover conversation history
 # and working files as one unit.
 HARNESS_WORKSPACE_ROOT = Path(tempfile.gettempdir()) / "graphlink_harness_workspaces"
+# App-owned virtual environments for harness agents bound to real projects.
+# Unlike scratch workspace venvs these must not live inside a user's folder.
+HARNESS_PYTHON_ENV_ROOT = Path(tempfile.gettempdir()) / "graphlink_harness_python_envs"
 
 # A generous default: this is a crash/abandoned-session net, not the
 # primary GC path (delete/evict are) - it should never race a normal,
@@ -251,12 +254,15 @@ def gc_stale_by_age(root: Path, max_age_seconds: float = DEFAULT_MAX_AGE_SECONDS
 def sweep_stale_scratch_dirs_on_launch(max_age_seconds: float = DEFAULT_MAX_AGE_SECONDS) -> None:
     """The one-time-per-launch age sweep - called from
     graphlink_desktop.py's main(), see this module's own docstring for why
-    this trigger exists alongside delete/evict. Iterates all three scratch
+    this trigger exists alongside delete/evict. Iterates all four scratch
     roots; a failure sweeping one root is logged and does not stop the
     others from being swept, and no failure is allowed to abort app
     startup (matching mark_running()/configure_logging()'s own
     best-effort-and-log stance in backend/crash_recovery.py)."""
-    for root in (PYTHON_REPL_ROOT, EXECUTION_SANDBOX_ROOT, HARNESS_WORKSPACE_ROOT):
+    for root in (
+        PYTHON_REPL_ROOT, EXECUTION_SANDBOX_ROOT,
+        HARNESS_WORKSPACE_ROOT, HARNESS_PYTHON_ENV_ROOT,
+    ):
         try:
             removed = gc_stale_by_age(root, max_age_seconds)
         except OSError:
