@@ -657,6 +657,12 @@ async def run_harness(
                 sessions.bind_root, node.state.harness_workspace_id, root,
                 ctx.harness_execution_profile,
             )
+        repls = getattr(dispatcher, "_harness_python_repls", None)
+        if repls is not None:
+            await asyncio.to_thread(
+                repls.bind_root, node.state.harness_workspace_id, root,
+                ctx.harness_execution_profile,
+            )
         # The root this run ACTUALLY bound, scratch included: a "" here
         # means "no run yet", which is what lets the card distinguish a
         # refused grant from a binding that has simply not run.
