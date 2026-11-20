@@ -235,6 +235,9 @@ class ProviderEvent:
                    rides the done event as {"prompt_tokens": int | None,
                    "completion_tokens": int | None} - normalized keys, never
                    a separate event.
+                   The optional `replay` payload on "done" contains
+                   provider-native context for a subsequent tool turn; it is
+                   not visible text or a portable cross-provider field.
     - "usage":     reserved in the union for protocol completeness; today no
                    provider emits it standalone (usage rides "done" - see
                    EVENT_TYPES' own comment).
@@ -249,6 +252,9 @@ class ProviderEvent:
     text: str = ""
     usage: dict | None = None
     tool_call: ToolCall | None = None
+    # Provider-native tool-turn context, available only on terminal "done".
+    # The dispatcher scopes this metadata to the originating provider/model.
+    replay: dict | None = None
 
 
 def require_successful_stop(provider: str, reason: object, allowed: set[str]) -> None:

@@ -92,6 +92,16 @@ def message_tokens(message: dict) -> int:
     reasoning = message.get("provider_reasoning")
     if isinstance(reasoning, dict):
         text += str(reasoning.get("text") or "")
+    replay = message.get("provider_replay")
+    if isinstance(replay, dict):
+        # Already count visible content/tool calls below. Only add the
+        # otherwise invisible thinking and opaque signatures to the budget.
+        text += str(replay.get("thinking") or "")
+        blocks = replay.get("content_blocks")
+        if isinstance(blocks, list):
+            for block in blocks:
+                if isinstance(block, dict) and block.get("type") in ("thinking", "redacted_thinking"):
+                    text += "".join(str(block.get(field) or "") for field in ("thinking", "signature", "data"))
     tool_calls = message.get("tool_calls")
     if tool_calls:
         text += json.dumps(tool_calls, ensure_ascii=False)

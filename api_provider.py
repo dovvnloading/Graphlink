@@ -1007,6 +1007,11 @@ def _prepare_ollama_messages(messages: list) -> list:
                     for call in tool_calls
                 ],
             }
+            # Native Ollama tool calling requires replaying the preceding
+            # streamed thinking together with its content and tool calls.
+            thinking = msg.get("_ollama_thinking")
+            if isinstance(thinking, str) and thinking:
+                assistant_turn["thinking"] = thinking
             processed_messages.append(assistant_turn)
             continue
 
@@ -2287,17 +2292,54 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
         # tool turns. Keep it scoped to its originating profile and model,
         # and never pass Graphlink's private history metadata to another API.
         replay = bool(tools and profile and profile.replay_reasoning and not use_json_protocol)
+        # Anthropic signed blocks and Ollama thinking are not portable
+        # reasoning_content; replay only to the originating native adapter.
+        native_replay = bool(
+            tools and not use_json_protocol
+            and provider_name in (config.API_PROVIDER_ANTHROPIC, config.LOCAL_PROVIDER_OLLAMA)
+        )
         wire_messages = []
         for message in messages:
             if "_harness_image_observation" in message:
                 message = dict(message)
                 message.pop("_harness_image_observation")
+            # Internal wire keys are generated here, not trusted from history.
+            if "_anthropic_content_blocks" in message or "_ollama_thinking" in message:
+                message = {k: v for k, v in message.items()
+                           if k not in ("_anthropic_content_blocks", "_ollama_thinking")}
             if "provider_reasoning" in message:
                 message = dict(message)
                 saved = message.pop("provider_reasoning")
                 if (replay and isinstance(saved, dict) and saved.get("provider") == provider_name
                         and saved.get("model") == provider.model_id and isinstance(saved.get("text"), str)):
                     message["reasoning_content"] = saved["text"]
+            if "provider_replay" in message:
+                message = dict(message)
+                saved_turn = message.pop("provider_replay")
+                if (native_replay and message.get("role") == "assistant" and message.get("tool_calls")
+                        and isinstance(saved_turn, dict)
+                        and saved_turn.get("provider") == provider_name
+                        and saved_turn.get("model") == provider.model_id):
+                    if provider_name == config.API_PROVIDER_ANTHROPIC:
+                        blocks = saved_turn.get("content_blocks")
+                        if (
+                            isinstance(blocks, list) and blocks
+                            and all(isinstance(block, dict) for block in blocks)
+                            and all(block.get("type") in (
+                                "text", "thinking", "redacted_thinking", "tool_use"
+                            ) for block in blocks)
+                            and [block.get("id") for block in blocks if block.get("type") == "tool_use"]
+                                == [call.get("id") for call in message["tool_calls"]]
+                            and all(
+                                block.get("type") != "thinking"
+                                or (isinstance(block.get("signature"), str) and block["signature"])
+                                for block in blocks
+                            )
+                        ):
+                            message["_anthropic_content_blocks"] = blocks
+                    elif provider_name == config.LOCAL_PROVIDER_OLLAMA:
+                        if isinstance(saved_turn.get("thinking"), str) and saved_turn["thinking"]:
+                            message["_ollama_thinking"] = saved_turn["thinking"]
             wire_messages.append(message)
         canonical_names: dict[str, str] = {}
         if profile and not use_json_protocol:
@@ -2316,6 +2358,7 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
         while True:
             full_response_content = None
             reasoning_parts: list[str] = []
+            replay_payload = None
             usage = None
             tool_calls = []
             saw_terminal_done = False
@@ -2341,6 +2384,7 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                         reasoning_parts.append(event.text)
                     elif event.type == "reset":
                         reasoning_parts.clear()
+                        replay_payload = None
                         # A reasoning-retry discarded the prior attempt
                         # wholesale - its collected tool calls go with it,
                         # exactly like the streaming path's partial text.
@@ -2349,6 +2393,7 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                         saw_terminal_done = True
                         full_response_content = event.text
                         usage = getattr(event, "usage", None)
+                        replay_payload = getattr(event, "replay", None)
                 if not saw_terminal_done:
                     raise RuntimeError("Provider stream ended without a terminal done event.")
                 break
@@ -2408,6 +2453,11 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
         if reasoning_parts:
             assistant_message["provider_reasoning"] = {
                 "provider": provider_name, "model": provider.model_id, "text": "".join(reasoning_parts),
+            }
+        if (tool_calls and native_replay and not use_json_protocol
+                and isinstance(replay_payload, dict) and replay_payload):
+            assistant_message["provider_replay"] = {
+                "provider": provider_name, "model": provider.model_id, **replay_payload,
             }
         return {
             "message": assistant_message,

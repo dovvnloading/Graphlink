@@ -295,7 +295,10 @@ class OllamaProvider:
                 # streamed above as ordinary "text" events.
                 for call in tool_calls:
                     yield ProviderEvent("tool_call", tool_call=call)
-                yield ProviderEvent("done", "".join(content_parts), usage=usage)
+                yield ProviderEvent(
+                    "done", "".join(content_parts), usage=usage,
+                    replay={"thinking": "".join(thinking_parts)} if thinking_parts else None,
+                )
                 return
 
             try:
