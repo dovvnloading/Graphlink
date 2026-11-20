@@ -939,10 +939,14 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
             return ToolResult(content="VCS metadata cannot be modified by harness filesystem tools.", is_error=True)
         states = getattr(ctx, "harness_file_approval_states", {})
         approved_state = states.pop(call.id, None)
-        if approved_state is not None and not _file_approval_state_matches(target, approved_state):
+        if approved_state is not None and approved_state.target != target:
             return ToolResult(content=_STALE_FILE_APPROVAL, is_error=True)
         try:
-            _write_atomic_text(target, content, approval_state=approved_state)
+            with _pinned_write_target(root, target) as (pinned, verify_parent):
+                approval = replace(approved_state, target=pinned) if approved_state is not None else None
+                if approval is not None and not _file_approval_state_matches(pinned, approval):
+                    return ToolResult(content=_STALE_FILE_APPROVAL, is_error=True)
+                _write_atomic_text(pinned, content, approval_state=approval, before_publish=verify_parent)
         except (OSError, WorkspaceError) as exc:
             return ToolResult(content=f"Could not write file: {exc}", is_error=True)
         return ToolResult(content=f"Wrote {len(content)} characters to {call.arguments.get('path')}.")
@@ -967,27 +971,31 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
             return ToolResult(content="VCS metadata cannot be modified by harness filesystem tools.", is_error=True)
         states = getattr(ctx, "harness_file_approval_states", {})
         approved_state = states.pop(call.id, None)
-        if approved_state is not None and not _file_approval_state_matches(target, approved_state):
+        if approved_state is not None and approved_state.target != target:
             return ToolResult(content=_STALE_FILE_APPROVAL, is_error=True)
-        if not target.is_file():
-            return ToolResult(content=f"Not a file: {call.arguments.get('path')!r}.", is_error=True)
         try:
-            text = _read_bounded_text(target)
-        except (OSError, UnicodeError, WorkspaceError) as exc:
-            return ToolResult(content=f"Could not read file: {exc}", is_error=True)
-        occurrences = text.count(old_string)
-        if occurrences == 0:
-            return ToolResult(content="old_string was not found in the file - fs.read it and retry with exact text.", is_error=True)
-        if occurrences > 1:
-            return ToolResult(
-                content=f"old_string occurs {occurrences} times - include more surrounding context so it is unique.",
-                is_error=True,
-            )
-        replacement = text.replace(old_string, new_string, 1)
-        if len(replacement.encode("utf-8")) > _MAX_FS_FILE_BYTES:
-            return ToolResult(content="Edited file would exceed the permitted size.", is_error=True)
-        try:
-            _write_atomic_text(target, replacement, approval_state=approved_state)
+            with _pinned_write_target(root, target) as (pinned, verify_parent):
+                approval = replace(approved_state, target=pinned) if approved_state is not None else None
+                if approval is not None and not _file_approval_state_matches(pinned, approval):
+                    return ToolResult(content=_STALE_FILE_APPROVAL, is_error=True)
+                if not pinned.is_file():
+                    return ToolResult(content=f"Not a file: {call.arguments.get('path')!r}.", is_error=True)
+                try:
+                    text = _read_bounded_text(pinned)
+                except (OSError, UnicodeError, WorkspaceError) as exc:
+                    return ToolResult(content=f"Could not read file: {exc}", is_error=True)
+                occurrences = text.count(old_string)
+                if occurrences == 0:
+                    return ToolResult(content="old_string was not found in the file - fs.read it and retry with exact text.", is_error=True)
+                if occurrences > 1:
+                    return ToolResult(
+                        content=f"old_string occurs {occurrences} times - include more surrounding context so it is unique.",
+                        is_error=True,
+                    )
+                replacement = text.replace(old_string, new_string, 1)
+                if len(replacement.encode("utf-8")) > _MAX_FS_FILE_BYTES:
+                    return ToolResult(content="Edited file would exceed the permitted size.", is_error=True)
+                _write_atomic_text(pinned, replacement, approval_state=approval, before_publish=verify_parent)
         except (OSError, WorkspaceError) as exc:
             return ToolResult(content=f"Could not write file: {exc}", is_error=True)
         return ToolResult(content=f"Edited {call.arguments.get('path')}.")
