@@ -183,6 +183,22 @@ class PythonReplRegistry:
         elif entry is not None:
             entry[0].stop()
 
+    def stop_root(self, root: Path, *, excluding: set[str] | None = None) -> None:
+        """Retire REPLs still running in a revoked trusted directory."""
+        resolved = root.resolve()
+        protected = excluding or set()
+        with self._lock:
+            retired = []
+            for workspace_id, (repl, cwd) in list(self._repls.items()):
+                if workspace_id in protected or cwd.resolve() != resolved:
+                    continue
+                retired.append(repl)
+                self._repls.pop(workspace_id, None)
+                self._owner_events.pop(workspace_id, None)
+                self._profiles.pop(workspace_id, None)
+        for repl in retired:
+            repl.stop()
+
     def stop_all(self) -> None:
         with self._lock:
             entries = list(self._repls.values())

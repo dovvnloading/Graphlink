@@ -102,6 +102,7 @@ class LocalSubprocessBackend(ShellBackend):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                errors="replace",
                 bufsize=1,
                 cwd=str(cwd),
                 **guard.popen_kwargs(),
@@ -160,7 +161,7 @@ class ContainerSubprocessBackend(LocalSubprocessBackend):
             process = spawn_guarded_subprocess(
                 guard, argv, shell=False,
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, bufsize=1, cwd=str(cwd),
+                text=True, errors="replace", bufsize=1, cwd=str(cwd),
                 **guard.popen_kwargs(), **kwargs,
             )
             try:
@@ -398,6 +399,21 @@ class ShellSessionRegistry:
             self._roots.pop(workspace_id, None)
             self._profiles.pop(workspace_id, None)
         for session in sessions.values():
+            session.stop()
+
+    def stop_root(self, root: Path, *, excluding: set[str] | None = None) -> None:
+        """Retire sessions bound to a revoked directory, not other roots."""
+        resolved = root.resolve()
+        protected = excluding or set()
+        with self._lock:
+            retired = []
+            for workspace_id, bound in list(self._roots.items()):
+                if bound != resolved or workspace_id in protected:
+                    continue
+                retired.extend(self._by_workspace.pop(workspace_id, {}).values())
+                self._roots.pop(workspace_id, None)
+                self._profiles.pop(workspace_id, None)
+        for session in retired:
             session.stop()
 
     def stop_all(self) -> None:
