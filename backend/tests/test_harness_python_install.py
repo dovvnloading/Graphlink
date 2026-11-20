@@ -174,7 +174,10 @@ def test_install_rejects_symlinked_venv_retargeted_during_approval(tmp_path, mon
         # Same approved pathname, different venv backing directory.
         replacement = project / ".venv-replacement"
         replacement.symlink_to(".venv-b", target_is_directory=True)
-        replacement.replace(link)
+        # Windows cannot replace an existing directory symlink with os.replace.
+        # Move the old link aside before reusing the same approved pathname.
+        link.rename(project / ".venv-original")
+        replacement.rename(link)
         assert install.planned_install_interpreter(
             "test-agent", project, is_scratch=False,
         ) == selected
