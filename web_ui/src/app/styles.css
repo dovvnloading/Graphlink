@@ -9392,6 +9392,11 @@ mark.document-view-search-match-current {
 .harness-node .harness-approval-diff-removed {
   color: var(--gl-semantic-status-error, var(--gl-surface-text-primary));
 }
+.harness-node .harness-approval-preview-warning {
+  margin: 0;
+  font-size: 11px;
+  color: var(--gl-semantic-status-warning, var(--gl-surface-text-secondary));
+}
 
 /* -- Card buttons ---------------------------------------------------------
 
