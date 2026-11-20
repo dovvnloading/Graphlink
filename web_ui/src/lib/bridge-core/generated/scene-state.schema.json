@@ -1454,6 +1454,9 @@
             "additionalProperties": false,
             "default": null,
             "properties": {
+              "headlineContextJson": {
+                "type": "string"
+              },
               "headlineKey": {
                 "type": "string"
               },
@@ -1490,6 +1493,7 @@
               "summary",
               "headlineKey",
               "headlineValueJson",
+              "headlineContextJson",
               "resultHash",
               "receiptHash"
             ],

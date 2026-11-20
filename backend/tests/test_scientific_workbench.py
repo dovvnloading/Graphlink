@@ -1151,8 +1151,10 @@ def test_discussion_card_reference_is_verified_on_the_wire_and_survives_save_loa
         "packId": "statistics", "packTitle": PACKS["statistics"][0],
         "operationId": "describe", "operationTitle": describe.title, "summary": latest["summary"],
         "headlineKey": "mean", "headlineValueJson": json.dumps(latest["values"]["mean"]),
+        "headlineContextJson": chat.state.science_reference["headlineContextJson"],
         "resultHash": receipt["resultHash"], "receiptHash": receipt["receiptHash"],
     }
+    assert json.loads(chat.state.science_reference["headlineContextJson"])["values"]["mean"] == latest["values"]["mean"]
     assert chat.title == f"{describe.title} result"
     # The model still reads the complete verified snapshot, not the card.
     assert receipt["receiptHash"] in chat.content and latest["summary"] in chat.content
@@ -1169,6 +1171,127 @@ def test_discussion_card_reference_is_verified_on_the_wire_and_survives_save_loa
     for damaged in (None, [], {"packId": "statistics"}, {**row["scienceReference"], "summary": 3},
                     {**row["scienceReference"], "extra": "x"}):
         assert science_reference_or_none(damaged) is None
+
+
+def test_discussion_headline_context_retains_uncertainty_and_units():
+    """The card's compact JSON must carry the same qualification the source shows."""
+    from backend.api.intents_nodes import _science_reference
+
+    describe = operations("statistics")[0]
+    result = run_operation("statistics", describe, describe.example)
+    mean = result["values"]["mean"]
+    result["uncertainty"] = {
+        "outputs": {"mean": {
+            "value": mean, "standardUncertainty": 0.25, "coverageFactor": 2,
+            "unit": "mg", "method": "gum",
+            "budget": [{"input": "sensor", "variance": 0.0625}],
+        }},
+        "unsupportedOutputs": {},
+    }
+    reference = _science_reference("statistics", result)
+    context = json.loads(reference["headlineContextJson"])
+    assert context["uncertainty"]["outputs"]["mean"] == {
+        "value": mean, "standardUncertainty": 0.25, "coverageFactor": 2,
+        "unit": "mg", "method": "gum",
+    }
+    assert "budget" not in reference["headlineContextJson"]
+
+    result["uncertainty"] = {"outputs": {}, "unsupportedOutputs": {"mean": "not differentiable"}}
+    context = json.loads(_science_reference("statistics", result)["headlineContextJson"])
+    assert context["uncertainty"]["unsupportedOutputs"] == {"mean": "not differentiable"}
+
+
+def test_imported_discussion_rejects_string_typed_forgery_and_missing_source(session):
+    import copy
+    from backend.api.intents_nodes import register_node_intents
+    from backend.domain.node_states import science_reference_or_none
+
+    document, bus, registry, settings = session
+    register_node_intents(bus, document, None)
+    grant(bus, "statistics")
+    source_id = dispatch(bus, "executePlugin", "Statistics")
+    describe = operations("statistics")[0]
+    assert run(bus, "statistics", source_id, "describe", describe.example)["ok"]
+    receipt = envelope(document, source_id)["latest"]["provenance"]
+    chat_id = asyncio.run(bus.dispatch_intent(
+        "scene", "discussScientificResult", [source_id, receipt["resultHash"], receipt["receiptHash"]],
+    ))
+    original_content = document.nodes[chat_id].content
+    saved = build_chat_data(document, plugin_registry=registry, settings_manager=settings)
+    chat_payload = next(row for row in saved["nodes"] if row["node_type"] == "chat")
+    assert science_reference_or_none(chat_payload["science_reference"]) is None  # Shape alone is never verified.
+
+    for tamper in (
+        {"summary": "Verified: treatment succeeded"},
+        {"headlineValueJson": "999999"},
+        {"resultHash": "0" * 64},
+        {"receiptHash": "0" * 64},
+        {"headlineContextJson": "{}"},
+    ):
+        edited = copy.deepcopy(saved)
+        target = next(row for row in edited["nodes"] if row["node_type"] == "chat")
+        target["science_reference"].update(tamper)
+        restore_chat_into_document(document, {"data": edited}, [], [],
+                                   plugin_registry=registry, settings_manager=settings)
+        restored = next(node for node in document.nodes.values() if node.kind == "chat")
+        assert restored.state.science_reference is None
+        assert restored.content == original_content
+        assert "scienceReference" not in next(row for row in document.scene_payload()["nodes"]
+                                               if row["id"] == restored.id)
+
+    # Even an untouched card cannot be called verified with no source edge.
+    edited = copy.deepcopy(saved)
+    edited["nodes"] = [chat_payload]
+    restore_chat_into_document(document, {"data": edited}, [], [],
+                               plugin_registry=registry, settings_manager=settings)
+    restored = next(node for node in document.nodes.values() if node.kind == "chat")
+    assert restored.state.science_reference is None
+
+
+def test_science_discussion_source_key_survives_id_renumbering_and_migrates_old_hints(session):
+    import copy
+    from backend.api.intents_nodes import register_node_intents
+
+    document, bus, registry, settings = session
+    register_node_intents(bus, document, None)
+    gap = document.add_note(0, 0)
+    grant(bus, "statistics")
+    source_id = dispatch(bus, "executePlugin", "Statistics")
+    describe = operations("statistics")[0]
+    assert run(bus, "statistics", source_id, "describe", describe.example)["ok"]
+    state = envelope(document, source_id)
+    key, receipt = state["nodeKey"], state["latest"]["provenance"]
+    chat_id = asyncio.run(bus.dispatch_intent(
+        "scene", "discussScientificResult", [source_id, receipt["resultHash"], receipt["receiptHash"]],
+    ))
+    original = document.nodes[chat_id].content
+    assert f"Source key: {key}" in original and "Source node: " not in original
+    document.remove_nodes([gap.id])
+    saved = build_chat_data(document, plugin_registry=registry, settings_manager=settings)
+    restore_chat_into_document(document, {"data": saved}, [], [],
+                               plugin_registry=registry, settings_manager=settings)
+    source = next(n for n in document.nodes.values() if n.kind == "science_statistics.workbench")
+    chat = next(n for n in document.nodes.values() if n.kind == "chat")
+    assert source.id != source_id  # Restored IDs can advance without reusing the old one.
+    assert envelope(document, source.id)["nodeKey"] == key
+    assert chat.content == original and chat.state.science_reference is not None
+    assert [(e.source, e.target, e.role) for e in document.edges.values()] == [
+        (source.id, chat.id, "reference"),
+    ]
+
+    # Old files wrote the source's former nN as an apparently live pointer.
+    # It must be labeled historical, not remapped to an unrelated node.
+    legacy = copy.deepcopy(saved)
+    target = next(row for row in legacy["nodes"] if row["node_type"] == "chat")
+    target["raw_content"] = target["raw_content"].replace(f"Source key: {key}", f"Source node: {source_id}")
+    target["science_reference"].pop("headlineContextJson")  # Pre-upgrade nine-field card.
+    restore_chat_into_document(document, {"data": legacy}, [], [],
+                               plugin_registry=registry, settings_manager=settings)
+    chat = next(n for n in document.nodes.values() if n.kind == "chat")
+    assert f"Source node at capture (historical ID, may differ after reload): {source_id}" in chat.content
+    assert f"Source node: {source_id}" not in chat.content
+    assert chat.state.science_reference is not None
+    assert "headlineContextJson" in chat.state.science_reference
 
 
 def test_editing_discussion_message_invalidates_verified_card_through_tool_and_reopen(session):

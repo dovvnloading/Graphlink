@@ -513,7 +513,7 @@ describe("ChatNodeView Discuss in chat result card", () => {
     packId: "plate_assays", packTitle: "Plate Assays", operationId: "standard_curve",
     operationTitle: "Standard curves and diluted unknowns",
     summary: "4PL standard curve fitted to 7 standards; 2 of 2 unknowns quantified.",
-    headlineKey: "r_squared", headlineValueJson: "0.999984123",
+    headlineKey: "r_squared", headlineValueJson: "0.999984123", headlineContextJson: "",
     resultHash: "f8ef2bd8b5d87c8f", receiptHash: "2bc2674106ebade3bc929bb0",
   };
 
@@ -534,6 +534,43 @@ describe("ChatNodeView Discuss in chat result card", () => {
     await user.click(sent);
     expect(sent.closest("details")).toHaveAttribute("open");
     expect(card.querySelector("pre")).toHaveTextContent("Result JSON:");
+  });
+
+  it("keeps propagated standard uncertainty and units in the headline", () => {
+    const context = {
+      values: { distance_m: 120 },
+      uncertainty: { outputs: {
+        distance_m: { value: 120, standardUncertainty: 2.5, coverageFactor: 2, unit: "m", method: "gum" },
+      } },
+    };
+    renderChatNode({ isUser: true, content: snapshot, scienceReference: {
+      ...reference, headlineKey: "distance_m", headlineValueJson: "120",
+      headlineContextJson: JSON.stringify(context),
+    } });
+    const highlight = screen.getByTitle("distance_m").parentElement;
+    expect(highlight).toHaveTextContent("120 ± 2.5 m");
+    expect(screen.getByText(/Verified snapshot/)).toBeVisible();
+  });
+
+  it("keeps the Workbench's explicit unsupported-uncertainty warning", () => {
+    renderChatNode({ isUser: true, content: snapshot, scienceReference: {
+      ...reference, headlineKey: "distance_m", headlineValueJson: "120",
+      headlineContextJson: JSON.stringify({
+        values: { distance_m: 120 },
+        uncertainty: { unsupportedOutputs: { distance_m: "nonlinear output" } },
+      }),
+    } });
+    expect(screen.getByTitle("distance_m").parentElement).toHaveTextContent("120 · uncertainty unavailable");
+  });
+
+  it("also formats native standard errors and unit-suffixed outputs like the Workbench", () => {
+    renderChatNode({ isUser: true, content: snapshot, scienceReference: {
+      ...reference, headlineKey: "distance_m", headlineValueJson: "7.5",
+      headlineContextJson: JSON.stringify({
+        values: { distance_m: 7.5, distance_m_standard_error: 0.25 },
+      }),
+    } });
+    expect(screen.getByTitle("distance_m").parentElement).toHaveTextContent("7.5 ± 0.25 m");
   });
 
   it("warns visibly when a large result sent only excerpts to the model", async () => {
