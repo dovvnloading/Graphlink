@@ -141,6 +141,23 @@ def test_autonomous_python_source_inspection(tmp_path, source, should_prompt):
     assert bool(prompts) == should_prompt
 
 
+def test_sensitive_calls_defeat_saved_session_and_shell_prefix_grants(tmp_path):
+    ctx, prompts = context(tmp_path, mode=AUTO_EDIT, profile="host")
+    ctx.session_grants = {"fs.write"}
+    invoke("fs.write", ctx, path="../outside.txt", content="unsafe")
+    assert len(prompts) == 1, "a saved file-tool grant cannot approve outside paths"
+
+    ctx, prompts = context(tmp_path, mode=ASK, profile="isolated")
+    ctx.shell_allow_rules = ["bash\\ttouch"]
+    invoke("shell.exec", ctx, command="touch ../outside.txt")
+    assert len(prompts) == 1, "a saved shell prefix cannot approve an outside path"
+
+    ctx, prompts = context(tmp_path, mode=ASK, profile="isolated")
+    ctx.shell_allow_rules = ["bash\\techo"]
+    invoke("shell.exec", ctx, command="echo hello", network=True, network_reason="test")
+    assert len(prompts) == 1, "a saved shell prefix cannot approve networking"
+
+
 def test_network_tools_and_graph_tools_are_never_exempted(tmp_path):
     ctx, prompts = context(tmp_path, mode=AUTONOMOUS, profile="isolated")
     invoke("web.search", ctx, query="library")
