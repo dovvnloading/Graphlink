@@ -635,6 +635,9 @@ def create_app(
         from backend.control_writes import register_control_write_api
 
         register_control_write_api(app, bus)
+        from backend.control_agent_tasks import register_control_agent_task_api
+
+        register_control_agent_task_api(app, bus)
 
     @app.websocket("/ws")
     async def ws_endpoint(websocket: WebSocket) -> None:

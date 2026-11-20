@@ -237,21 +237,33 @@ def test_mcp_writes_are_hidden_unless_adapter_explicitly_receives_a_write_token(
     class WriteControl(StubControl):
         can_write = True
 
+        def read(self, path, params, *, write_capability=False):
+            return {"path": path, "params": params, "write_capability": write_capability}
+
         def write(self, path, payload):
             return {"path": path, "payload": payload}
 
     enabled = StdioMcpServer(WriteControl())
     enabled.handle(request(1, "initialize", {"protocolVersion": "2025-11-25"}))
     listed = enabled.handle(request(2, "tools/list"))["result"]["tools"]
-    assert len(listed) == 9
+    assert len(listed) == 12
     names = {entry["name"] for entry in listed}
     assert names - {"graphlink_list_workspaces", "graphlink_list_graphs",
                     "graphlink_get_graph", "graphlink_list_nodes",
                     "graphlink_read_subgraph"} == {
         "graphlink_create_node", "graphlink_connect_nodes",
         "graphlink_set_node_content", "graphlink_save_graph",
+        "graphlink_start_agent_task", "graphlink_get_agent_task",
+        "graphlink_cancel_agent_task",
     }
-    assert all(not entry["annotations"]["readOnlyHint"] for entry in listed[5:])
+    assert {entry["name"] for entry in listed if entry["annotations"]["readOnlyHint"]} == {
+        "graphlink_list_workspaces", "graphlink_list_graphs",
+        "graphlink_get_graph", "graphlink_list_nodes", "graphlink_read_subgraph",
+        "graphlink_get_agent_task",
+    }
+    assert next(item for item in listed if item["name"] == "graphlink_cancel_agent_task")[
+        "annotations"
+    ]["destructiveHint"] is True
 
     revision = "a" * 64
     call = enabled.handle(request(3, "tools/call", {
@@ -283,6 +295,105 @@ def test_mcp_writes_are_hidden_unless_adapter_explicitly_receives_a_write_token(
         "arguments": {"operation_id": "bad", "expected_revision": "not-a-hash"},
     }))
     assert invalid["error"]["code"] == -32602
+
+
+def test_mcp_agent_task_tools_only_route_narrowly_scoped_operations():
+    class AgentControl(StubControl):
+        can_write = True
+
+        def read(self, path, params, *, write_capability=False):
+            return {"path": path, "params": params, "write_capability": write_capability}
+
+        def write(self, path, payload):
+            return {"path": path, "payload": payload}
+
+    server = StdioMcpServer(AgentControl())
+    server.handle(request(1, "initialize", {"protocolVersion": "2025-11-25"}))
+    rev = "b" * 64
+    start = server.handle(request(2, "tools/call", {
+        "name": "graphlink_start_agent_task", "arguments": {
+            "operation_id": "start-task-0001", "expected_revision": rev,
+            "node_id": "n15", "text": "Review these files",
+        },
+    }))
+    assert start["result"]["structuredContent"] == {
+        "path": "/api/control/agent/task/start",
+        "payload": {
+            "operation_id": "start-task-0001", "expected_revision": rev,
+            "node_id": "n15", "text": "Review these files",
+        },
+    }
+    status = server.handle(request(3, "tools/call", {
+        "name": "graphlink_get_agent_task",
+        "arguments": {"node_id": "n15", "run_id": "run-1"},
+    }))
+    assert status["result"]["structuredContent"] == {
+        "path": "/api/control/agent/task",
+        "params": {"node_id": "n15", "run_id": "run-1"},
+        "write_capability": True,
+    }
+    cancel = server.handle(request(4, "tools/call", {
+        "name": "graphlink_cancel_agent_task",
+        "arguments": {"node_id": "n15", "run_id": "run-1"},
+    }))
+    assert cancel["result"]["structuredContent"] == {
+        "path": "/api/control/agent/task/cancel",
+        "payload": {"node_id": "n15", "run_id": "run-1"},
+    }
+    for name, args in (
+        ("graphlink_start_agent_task", {
+            "operation_id": "start-task-0002", "expected_revision": rev,
+            "node_id": "n15", "text": "ok", "approval_id": "fake",
+        }),
+        ("graphlink_start_agent_task", {
+            "operation_id": "short", "expected_revision": rev,
+            "node_id": "n15", "text": "ok",
+        }),
+        ("graphlink_get_agent_task", {"node_id": "n15", "approve": True}),
+        ("graphlink_cancel_agent_task", {"node_id": "n15"}),
+        ("graphlink_approve_agent_tool", {"node_id": "n15"}),
+        ("graphlink_answer_agent_question", {"node_id": "n15"}),
+    ):
+        result = server.handle(request(5, "tools/call", {"name": name, "arguments": args}))
+        assert result["error"]["code"] == -32602
+
+
+def test_task_status_http_get_uses_write_token_only_and_cannot_read_other_routes():
+    client = ControlHttpClient(
+        "http://127.0.0.1:8765", "read-credential", write_token="write-credential",
+    )
+    seen = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, count):
+            return b'{"status":"running"}'
+
+    class Opener:
+        def open(self, req, *, timeout):
+            seen.append((req.get_method(), req.get_header("Authorization"), req.full_url))
+            return Response()
+
+    client._opener = Opener()
+    data = client.read("/api/control/agent/task", {"node_id": "n1"}, write_capability=True)
+    assert data["status"] == "running"
+    client.read("/api/control/scene/nodes", {})
+    assert seen == [
+        ("GET", "Bearer write-credential",
+         "http://127.0.0.1:8765/api/control/agent/task?node_id=n1"),
+        ("GET", "Bearer read-credential", "http://127.0.0.1:8765/api/control/scene/nodes"),
+    ]
+    with pytest.raises(ControlError, match="allowlisted"):
+        client.read("/api/control/scene/nodes", {}, write_capability=True)
+    with pytest.raises(ControlError, match="allowlisted"):
+        ControlHttpClient("http://127.0.0.1:8765", "read-only").read(
+            "/api/control/agent/task", {"node_id": "n1"}, write_capability=True,
+        )
 
 
 def test_mcp_write_http_uses_only_the_write_credential():

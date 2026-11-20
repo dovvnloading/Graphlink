@@ -1,15 +1,15 @@
-# Headless Graphlink and MCP (read-only first stage)
+# Headless Graphlink and MCP (read-only by default)
 
 Graphlink's FastAPI server already owns the real graph state, database,
 assets, intent handlers and harness. The headless launcher starts that SAME
 application without opening the pywebview desktop. A separate local MCP
 stdio adapter connects back to its protected read-only control routes.
 
-The default stage supports **inspection only**. Optional canvas writes
-require an explicit opt-in and a separate scoped credential (described
-below); arbitrary intent execution, unattended approval, filesystem
-access, destructive operations, and remote MCP/HTTP hosting remain
-unavailable.
+The default setup supports **inspection only**. Optional canvas writes
+and workspace-agent task control require an explicit opt-in and a separate
+scoped credential (described below). Arbitrary intent execution, MCP tool
+approvals/permission grants, direct filesystem access and remote MCP/HTTP
+hosting remain unavailable.
 
 ## Start one headless backend
 
@@ -127,12 +127,12 @@ only `http://127.0.0.1:<port>` URLs, ignores proxy environment variables,
 and refuses redirects to prevent forwarding the limited credential to
 another origin.
 
-## Optional MCP canvas writes (explicit opt-in)
+## Optional MCP canvas writes and agent tasks (explicit opt-in)
 
 This is a separate, permission-scoped capability. **Graphlink starts
-read-only by default**, and the existing MCP adapter lists only its five
-read tools until explicitly given a write-token-file path. To enable safe
-non-destructive editing on the **currently open canvas**:
+read-only by default**, and the MCP adapter lists only its five
+read tools until explicitly given a write-token-file path. To enable
+scoped editing and workspace-agent task control on the **currently open canvas**:
 
 ```powershell
 python -m backend.headless --port 8765 --allow-mcp-writes
@@ -150,12 +150,15 @@ backend token that is never published, a read-only token in
 `~/.graphlink/headless.token`, and a write token in
 `~/.graphlink/headless.write.token`. Both files use the same secure
 atomic creation and Windows DACL/POSIX permission protection. The write
-token authorizes ONLY two named POST routes; it does not authorize
-`/ws`, `/api/health`, reads, deletion, shell execution, or arbitrary
-intent dispatch. Do not share it with untrusted MCP hosts: when a
-trusted host has the write file, it can change the live canvas.
+token authorizes only five exact control routes: canvas mutation/save
+(POST), workspace-agent task start/cancel (POST), and agent task status
+(GET). The task-status GET requires the **write token**, not the read
+token. It does not authorize `/ws`, `/api/health`, general graph reads,
+deletion, shell execution, workspace grants, tool approval, or arbitrary
+intent dispatch. Do not share it with untrusted MCP hosts: a host with
+this file can change the live canvas and start tasks on existing agents.
 
-**Four write tools are available only with this opt-in:**
+**Seven additional MCP tools are available only with this opt-in:**
 
 | MCP tool | Behavior |
 | --- | --- |
@@ -163,17 +166,41 @@ trusted host has the write file, it can change the live canvas.
 | `graphlink_connect_nodes` | Connect existing canvas node IDs |
 | `graphlink_set_node_content` | Replace content of chat, note, code, or document nodes |
 | `graphlink_save_graph` | Save the live graph using Graphlink's normal guarded Save |
+| `graphlink_start_agent_task` | Start a task on an **existing live harness (Agent) node** by `node_id` |
+| `graphlink_get_agent_task` | Read the node's latest run ID, status, checklist, bounded reply and app-attention flags |
+| `graphlink_cancel_agent_task` | Request cancellation of the specified `node_id` + `run_id` |
 
-Every call requires an `expected_revision` (64-character hex digest)
-returned by `graphlink_list_nodes` and a caller-generated
-`operation_id` of 8–100 characters (letters, digits, underscore or
-hyphen). On 409 conflict, re-read the scene before trying a *new*
-operation; never blindly retry with a fresh revision when the first
-call might already have succeeded. To recover a lost response, retry
-with the **same operation ID and exact original arguments**. During one
-backend process, the server returns the cached result without
-reapplying; after a restart, stale-revision checks prevent blind
-duplication. Only 256 recent successes are retained.
+Every **canvas mutation/save** and **agent-task start** requires an
+`expected_revision` (64-character hex digest returned by
+`graphlink_list_nodes`) and a caller-generated `operation_id`
+of 8–100 characters (letters, digits, underscore or hyphen).
+For 409 conflicts, re-read the scene before trying a *new* operation;
+never blindly retry with a fresh revision when the first call might
+have succeeded. To recover a lost response, retry with the **same
+operation ID and exact original arguments**. During one backend process,
+the server caches up to 256 recent successful operations per control
+surface; scene changes or new agent runs prevent stale cross-canvas
+replays. Restarts invalidate old revisions.
+
+For agent tasks, identify an existing `harness` node using
+`graphlink_list_nodes`, then call `graphlink_start_agent_task` with
+that `node_id`, a task `text`, an operation ID and the observed revision.
+This does **not** create a new agent node or switch graphs. Poll
+`graphlink_get_agent_task` by `node_id`; optionally supply `run_id` to
+reject a status read if a newer task has replaced it. `checklist`
+contains the agent's `plan.update` entries; `reply` is the latest
+available agent reply, truncated to 16,000 characters with
+`reply_truncated` signaling truncation. Cancel using both `node_id`
+and the exact `run_id` returned by start; a stale run cannot cancel
+a newer task.
+
+**Approval remains exclusively inside the Graphlink app.** An MCP-started
+agent can pause for a sensitive tool approval or user question; status
+indicates `awaiting_app_approval` or `awaiting_app_answer`. Neither
+MCP tool schemas nor the write-token HTTP routes expose an approval,
+denial, question answer, tool grant, workspace-folder selection, or
+unrestricted harness intent endpoint. A person must use the app to
+make these decisions.
 
 **Mutations change the live in-memory canvas and are NOT durable until
 `graphlink_save_graph` succeeds.** Save failures and stale revisions
@@ -185,7 +212,7 @@ handling. The UI remains usable through its existing WebSocket intents.
 ## Verification
 
 ```powershell
-python -m pytest -q backend/tests/test_control_api.py backend/tests/test_mcp_server.py
+python -m pytest -q backend/tests/test_control_api.py backend/tests/test_control_writes.py backend/tests/test_control_agent_tasks.py backend/tests/test_mcp_server.py
 ```
 
 The tests include a real stdio subprocess connecting to a real loopback
@@ -200,9 +227,9 @@ can connect successfully.
 
 ## Next increments
 
-Expand the initial opt-in, non-destructive live-canvas write tools with
-safe graph creation/selection and durable multi-operation controls. Then
-expose durable harness run handles, status/transcript/cancellation, and
-human approval handling. Remote HTTP MCP must remain opt-in with
-separately scoped credentials. Never expose an unrestricted
+Future increments could add safe graph creation/selection, durable
+multi-operation controls and bounded transcript pagination for agent
+tasks. Tool approvals, workspace grants and user answers must stay
+in the Graphlink app, never in MCP. Remote HTTP MCP must remain
+separately opt-in with scoped credentials. Never expose an unrestricted
 `dispatch_intent` tool.
