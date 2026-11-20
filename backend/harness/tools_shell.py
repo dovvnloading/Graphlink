@@ -68,7 +68,7 @@ _READER_JOIN_SECONDS = 2.0
 _OUTPUT_READ_CHUNK_CHARS = 4096
 
 
-def _drain_bounded_output(stream, chunks: list[str]) -> None:
+def _drain_bounded_output(stream, chunks: list[str], on_output=None) -> None:
     """Drain all stdout without ever storing a whole unbounded line.
 
     The extra character lets the caller distinguish a truly 20K output
@@ -86,6 +86,8 @@ def _drain_bounded_output(stream, chunks: list[str]) -> None:
             retained = fragment[:budget - buffered]
             chunks.append(retained)
             buffered += len(retained)
+            if retained and on_output is not None:
+                on_output(retained)
 
 
 SHELL_EXEC_SPEC = ToolSpec(
@@ -106,7 +108,7 @@ SHELL_EXEC_SPEC = ToolSpec(
 )
 
 
-def _run_command(command: str, cwd, cancel_event) -> tuple[str, "int | None", str]:
+def _run_command(command: str, cwd, cancel_event, on_output=None) -> tuple[str, "int | None", str]:
     """Blocking worker (called via to_thread): returns (output, exit_code,
     ended) where ended is "ok" | "timeout" | "cancelled". Guarded spawn,
     then a poll loop so cancel/timeout kill the whole tree promptly.
@@ -168,7 +170,7 @@ def _run_command(command: str, cwd, cancel_event) -> tuple[str, "int | None", st
             if stream is None:
                 return
             try:
-                _drain_bounded_output(stream, chunks)
+                _drain_bounded_output(stream, chunks, on_output)
             except (ValueError, OSError):
                 return
 
@@ -388,8 +390,11 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
             return ToolResult(content=f"Could not prepare the workspace: {exc}", is_error=True)
 
         cancel_event = ctx.cancel.event if ctx.cancel is not None else None
+        on_output = getattr(ctx, "on_tool_output", None)
+        if on_output is not None:
+            on_output("")  # the live row starts only after approval
         output, exit_code, ended = await asyncio.to_thread(
-            _run_command, command, workspace, cancel_event,
+            _run_command, command, workspace, cancel_event, on_output,
         )
         if ended == "cancelled":
             # The one exception invoke() propagates - cancellation is the
