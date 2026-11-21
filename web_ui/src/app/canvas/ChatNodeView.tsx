@@ -239,6 +239,7 @@ function ChatNodeMenu({
   onUndockChild,
   onRegenerate,
   onRerunFromHere,
+  menuTriggerRef,
   canRerun,
   onEdit,
   onEditAsNewBranch,
@@ -272,6 +273,7 @@ function ChatNodeMenu({
   onUndockChild: (childId: string) => void;
   onRegenerate: () => void;
   onRerunFromHere?: () => void;
+  menuTriggerRef: React.RefObject<HTMLButtonElement | null>;
   canRerun: boolean;
   onEdit: () => void;
   onEditAsNewBranch: () => void;
@@ -583,8 +585,7 @@ function ChatNodeMenu({
           onClick={() => {
             // Preserve a connected focus target when the context menu unmounts.
             const trigger = document.getElementById("chat-rerun-trigger-" + nodeId)
-              ?? Array.from(document.querySelectorAll<HTMLElement>(".react-flow__node"))
-                .find((element) => element.dataset.id === nodeId);
+              ?? menuTriggerRef.current;
             trigger?.focus();
             onRerunFromHere();
             onClose();
@@ -1094,6 +1095,7 @@ export const ChatNodeView = memo(function ChatNodeView({
             onUndockChild={data.onUndockChild}
             onRegenerate={data.onRegenerate}
             onRerunFromHere={data.onRerunFromHere}
+            menuTriggerRef={menuTriggerRef}
             canRerun={data.isUser ? data.versionCount > 1 : data.staleness === "out_of_date"}
             onEdit={() => beginEdit("in-place")}
             onEditAsNewBranch={() => beginEdit("new-branch")}
