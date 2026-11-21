@@ -1,6 +1,7 @@
 import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useEffect, useRef, useState } from "react";
 import { CollapseToggleButton } from "./CollapseToggleButton";
+import { Dialog, useOverlays } from "../overlays/overlays";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
@@ -107,6 +108,19 @@ export interface CodeReviewQa {
   answer: string;
 }
 
+/** Only the server may author the exact GitHub comment, line, and PR. */
+export interface ReviewCommentPreview {
+  previewId: string;
+  body: string;
+  pr: string;
+  path: string;
+  line: number;
+}
+
+export type ReviewCommentPreviewResult = ReviewCommentPreview | { error: string };
+export type ReviewCommentPostResult = { posted?: boolean; error?: string };
+export type ReviewFixDraftResult = { nodeId?: string; error?: string };
+
 export interface CodeReviewNodeData extends Record<string, unknown> {
   codeReviewPrUrl: string;
   codeReviewRepo: string;
@@ -148,6 +162,9 @@ export interface CodeReviewNodeData extends Record<string, unknown> {
   onCancel: () => void;
   onAsk: (question: string) => void;
   onDismissFinding: (findingId: string) => void;
+  onPreviewComment: (findingId: string) => Promise<ReviewCommentPreviewResult>;
+  onPostComment: (previewId: string) => Promise<ReviewCommentPostResult>;
+  onProposeFix: (findingId: string) => Promise<ReviewFixDraftResult>;
   onToggleCollapse: () => void;
   onDelete: () => void;
 }
@@ -283,7 +300,7 @@ const TABS: { key: TabKey; label: string }[] = [
 
 // -- view ----------------------------------------------------------------
 
-function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode>) {
+function CodeReviewNodeViewImpl({ id, data, selected }: NodeProps<CodeReviewFlowNode>) {
   const lodCollapsed = useLodVisibility();
   const collapsed = data.isCollapsed || lodCollapsed;
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
@@ -375,6 +392,87 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
     // fetchedForVersionRef is the real re-fetch guard.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, data.codeReviewDiffVersion, data.codeReviewState]);
+
+
+  // Gitlink's existing named Dialog owns the focus trap, Escape dismissal
+  // and focus restoration. A preview is never permission to POST; only the
+  // dialog's dedicated approval button invokes onPostComment.
+  const overlays = useOverlays();
+  const commentOverlayName = `review-lens-comment-${id}`;
+  const [commentPreview, setCommentPreview] = useState<ReviewCommentPreview | null>(null);
+  const [commentError, setCommentError] = useState("");
+  const [commentStatus, setCommentStatus] = useState("");
+  const [previewingId, setPreviewingId] = useState<string | null>(null);
+  const [proposingId, setProposingId] = useState<string | null>(null);
+  const [posting, setPosting] = useState(false);
+  const postClaimRef = useRef(false);
+  const previewSeqRef = useRef(0);
+
+  async function previewComment(findingId: string) {
+    if (busy || previewingId !== null || posting) return;
+    const seq = ++previewSeqRef.current;
+    setCommentError("");
+    setCommentStatus("");
+    setPreviewingId(findingId);
+    try {
+      const result = await data.onPreviewComment(findingId);
+      if (previewSeqRef.current !== seq) return;
+      if ("error" in result) {
+        setCommentError(result.error);
+      } else if (result.previewId && result.body && result.path && result.line > 0 && result.pr) {
+        setCommentPreview(result);
+        overlays.open(commentOverlayName, "dialog");
+      } else {
+        setCommentError("GitHub did not provide a usable comment preview.");
+      }
+    } catch {
+      if (previewSeqRef.current === seq) setCommentError("Could not preview this GitHub comment.");
+    } finally {
+      if (previewSeqRef.current === seq) setPreviewingId(null);
+    }
+  }
+
+  async function approveComment() {
+    if (!commentPreview || busy || postClaimRef.current) return;
+    postClaimRef.current = true;
+    setPosting(true);
+    setCommentError("");
+    const previewId = commentPreview.previewId;
+    try {
+      const response = await data.onPostComment(previewId);
+      if (response.posted === true) {
+        setCommentStatus("Review comment posted to the pull request.");
+      } else {
+        setCommentError(response.error || "The comment was not posted. Preview it again before retrying.");
+      }
+    } catch {
+      setCommentError("Posting was not confirmed. Refresh the pull request before trying again.");
+    } finally {
+      setPosting(false);
+      postClaimRef.current = false;
+      setCommentPreview(null); // server consumes approval on EVERY attempt
+      overlays.close();
+    }
+  }
+
+  async function proposeFix(findingId: string) {
+    if (busy || proposingId !== null) return;
+    setCommentError("");
+    setCommentStatus("");
+    setProposingId(findingId);
+    try {
+      const result = await data.onProposeFix(findingId);
+      if (result.nodeId) {
+        setCommentStatus("Gitlink fix draft created on the canvas. Generate and review its change set before applying.");
+      } else {
+        setCommentError(result.error || "Could not create a Gitlink draft.");
+      }
+    } catch {
+      setCommentError("Could not create a Gitlink fix draft.");
+    } finally {
+      setProposingId(null);
+    }
+  }
 
   // -- Findings tab ------------------------------------------------------
   const dismissed = new Set(data.codeReviewDismissedIds);
@@ -702,6 +800,9 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
             </p>
           )}
 
+          {commentError && <p role="alert" className="code-review-node-banner-error">{commentError}</p>}
+          {commentStatus && <p role="status" aria-live="polite" className="code-review-node-comment-status">{commentStatus}</p>}
+
           {visibleErrors.map((error) => (
             <article key={error.id} className="code-review-node-finding">
               <div className="code-review-node-finding-head">
@@ -733,6 +834,24 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
                   onClick={() => copyText(`[${error.severity}] ${error.title} (${findingLocation(error.path, error.line)}): ${error.evidence} Fix: ${error.fix}`)}
                 >
                   Copy
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Preview GitHub comment for error: ${error.title}`}
+                  disabled={busy || previewingId !== null || posting || !error.path || error.line <= 0}
+                  title={error.line <= 0 ? "Only added PR lines can receive inline comments." : undefined}
+                  onClick={() => void previewComment(error.id)}
+                >
+                  Post to PR…
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Propose Gitlink fix for error: ${error.title}`}
+                  disabled={busy || proposingId !== null || !error.path || error.line <= 0}
+                  title={error.line <= 0 ? "A file and added line are required to propose a fix." : undefined}
+                  onClick={() => void proposeFix(error.id)}
+                >
+                  Propose fix
                 </button>
                 <button
                   type="button"
@@ -784,6 +903,24 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
                 </button>
                 <button
                   type="button"
+                  aria-label={`Preview GitHub comment for finding: ${finding.title}`}
+                  disabled={busy || previewingId !== null || posting || !finding.path || finding.line <= 0}
+                  title={finding.line <= 0 ? "Only added PR lines can receive inline comments." : undefined}
+                  onClick={() => void previewComment(finding.id)}
+                >
+                  Post to PR…
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Propose Gitlink fix for finding: ${finding.title}`}
+                  disabled={busy || proposingId !== null || !finding.path || finding.line <= 0}
+                  title={finding.line <= 0 ? "A file and added line are required to propose a fix." : undefined}
+                  onClick={() => void proposeFix(finding.id)}
+                >
+                  Propose fix
+                </button>
+                <button
+                  type="button"
                   aria-label={`Dismiss finding: ${finding.title}`}
                   onClick={() => data.onDismissFinding(finding.id)}
                 >
@@ -801,6 +938,42 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
           )}
         </div>
       )}
+
+      <Dialog name={commentOverlayName} title="Post Review Lens comment to GitHub?" className="code-review-node-comment-dialog">
+        {commentPreview && (
+          <>
+            <p>
+              Verify the exact text and location below. Posting is a public GitHub action
+              that cannot be undone with the canvas Undo command.
+            </p>
+            <dl className="code-review-node-comment-details">
+              <dt>Pull request</dt><dd>{commentPreview.pr}</dd>
+              <dt>File</dt><dd>{commentPreview.path}</dd>
+              <dt>New-side line</dt><dd>{commentPreview.line}</dd>
+            </dl>
+            <pre
+              className="code-review-node-comment-preview nowheel nodrag"
+              // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- the exact preview must be keyboard-scrollable
+              tabIndex={0}
+              role="region"
+              aria-label="Exact GitHub comment text"
+            >{commentPreview.body}</pre>
+            <div className="code-review-node-comment-actions">
+              <button type="button" disabled={posting} onClick={() => overlays.close()}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={posting || busy}
+                aria-label="Approve and post this exact review comment to GitHub"
+                onClick={() => void approveComment()}
+              >
+                Post comment
+              </button>
+            </div>
+          </>
+        )}
+      </Dialog>
     </NodeShell>
   );
 }
@@ -928,6 +1101,9 @@ function codeReviewNodeDataAreEqual(prev: CodeReviewNodeData, next: CodeReviewNo
     prev.onCancel === next.onCancel &&
     prev.onAsk === next.onAsk &&
     prev.onDismissFinding === next.onDismissFinding &&
+    prev.onPreviewComment === next.onPreviewComment &&
+    prev.onPostComment === next.onPostComment &&
+    prev.onProposeFix === next.onProposeFix &&
     prev.onToggleCollapse === next.onToggleCollapse &&
     prev.onDelete === next.onDelete
   );

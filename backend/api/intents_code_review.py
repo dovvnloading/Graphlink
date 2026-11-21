@@ -25,6 +25,7 @@ from backend.domain.node_access import is_node_of
 from backend.domain.node_states import CodeReviewState
 from backend.events import SessionBus
 from backend.notifications import NotificationState
+from backend.api.intents_code_review_phase2 import register_code_review_phase2_intents
 
 
 def register_code_review_intents(
@@ -188,3 +189,4 @@ def register_code_review_intents(
     bus.register_intent("scene", "cancelCodeReviewRequest", cancel_code_review_request)
     bus.register_intent("scene", "askCodeReviewQuestion", ask_code_review_question)
     bus.register_intent("scene", "dismissCodeReviewFinding", dismiss_code_review_finding)
+    register_code_review_phase2_intents(bus, document, notifications, agent_dispatcher)

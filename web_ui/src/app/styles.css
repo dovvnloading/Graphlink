@@ -10769,3 +10769,68 @@ mark.document-view-search-match-current {
   .chat-version-compare-panes { min-height: 320px; }
   .chat-version-compare-pane-heading .document-view-panel-subtitle { font-size: 10px; }
 }
+
+
+/* Review Lens: the Gitlink-pattern approval modal is entirely token themed. */
+.code-review-node-comment-status {
+  margin: 0;
+  padding: 6px 10px;
+  color: var(--gl-surface-text-primary);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+.code-review-node-comment-dialog {
+  max-width: 600px;
+}
+
+.code-review-node-comment-details {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 12px;
+  font-size: 12px;
+}
+
+.code-review-node-comment-details dt {
+  color: var(--gl-surface-text-muted);
+}
+
+.code-review-node-comment-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-comment-preview {
+  overflow: auto;
+  max-height: 260px;
+  padding: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.code-review-node-comment-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.code-review-node-comment-actions button {
+  padding: 7px 12px;
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 6px;
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-neutral-button-background);
+  cursor: pointer;
+}
+
+.code-review-node-comment-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

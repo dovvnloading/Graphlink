@@ -1076,6 +1076,9 @@ function makeCodeReviewFns(id: string, liveRef: { current: DispatcherLive }) {
     },
     onAsk: (question: string) => liveRef.current.store.askCodeReviewQuestion(id, question),
     onDismissFinding: (findingId: string) => liveRef.current.store.dismissCodeReviewFinding(id, findingId),
+    onPreviewComment: (findingId: string) => liveRef.current.store.previewCodeReviewComment(id, findingId),
+    onPostComment: (previewId: string) => liveRef.current.store.postCodeReviewComment(id, previewId),
+    onProposeFix: (findingId: string) => liveRef.current.store.proposeCodeReviewFix(id, findingId),
   };
 }
 

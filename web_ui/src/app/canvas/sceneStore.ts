@@ -1619,6 +1619,34 @@ export class SceneStore {
     this.transport.fireIntent("scene", "dismissCodeReviewFinding", [nodeId, findingId]);
   }
 
+  /** Preview & approval are request/response only: NEVER queue or replay posting. */
+  previewCodeReviewComment(
+    nodeId: string, findingId: string,
+  ): Promise<
+    | { previewId: string; body: string; path: string; line: number; pr: string }
+    | { error: string }
+  > {
+    return this.transport.request("scene", "previewCodeReviewComment", [nodeId, findingId]) as Promise<
+      | { previewId: string; body: string; path: string; line: number; pr: string }
+      | { error: string }
+    >;
+  }
+
+  postCodeReviewComment(nodeId: string, previewId: string): Promise<{ posted?: boolean; error?: string }> {
+    // Neither comment contents nor credentials cross the wire. This is
+    // intentionally NOT fireIntent(queueable=true): a lost reply must
+    // never cause a second GitHub comment on reconnect.
+    return this.transport.request("scene", "postCodeReviewComment", [nodeId, previewId]) as Promise<{
+      posted?: boolean; error?: string;
+    }>;
+  }
+
+  proposeCodeReviewFix(nodeId: string, findingId: string): Promise<{ nodeId?: string; error?: string }> {
+    return this.transport.request("scene", "proposeCodeReviewFix", [nodeId, findingId]) as Promise<{
+      nodeId?: string; error?: string;
+    }>;
+  }
+
   // R5.4: Execution Sandbox node - setCodeSandboxRequirements/
   // runCodeSandbox/cancelCodeSandboxRequest mirror backend/canvas.py's
   // registered intent names 1:1, same convention as every scene intent
