@@ -166,6 +166,27 @@ def test_preview_canonical_scopes_order_models_tokens_and_nonchat_isolation():
     assert [row["nodeId"] for row in other_path["replies"]] == [branch.id]
 
 
+def test_preview_input_cost_reprices_with_current_exact_model_override():
+    document, user, *_ = _thread()
+    dispatcher = _Dispatcher()
+
+    class Pricing:
+        prices = {"test-model": {"input": 2.0, "output": 6.0}}
+
+        def get_pricing_overrides(self):
+            return self.prices
+
+    settings = Pricing()
+    dispatcher._settings_manager = settings
+    first = _preview_plan(document, dispatcher, None, user.id, "this_path")
+    row = first["replies"][0]
+    assert row["estimatedInputCostUsd"] == round(row["estimatedInputTokens"] * 2.0 / 1_000_000, 6)
+    settings.prices = {"test-model": {"input": 300.0, "output": 600.0}}
+    second = _preview_plan(document, dispatcher, None, user.id, "this_path")
+    assert second["replies"][0]["estimatedInputCostUsd"] > row["estimatedInputCostUsd"]
+    assert second["previewToken"] != first["previewToken"]
+
+
 def test_only_edited_user_or_stale_reply_may_start():
     document = SceneDocument()
     user = document.add_chat_node(0, 0, "unedited", True)
@@ -723,5 +744,63 @@ def test_late_usage_cannot_rewrite_batch_snapshot_after_a_concurrent_edit():
         document.undo()
         document.undo()
         assert document.nodes[first.id].content == "first answer"
+
+    asyncio.run(exercise())
+
+
+def test_preview_hashes_a_branch_once_not_once_per_reply():
+    from unittest.mock import patch
+
+    import backend.domain.staleness as staleness
+
+    document, user, *_ = _thread()
+    with patch.object(staleness, "_message_input", wraps=staleness._message_input) as hashed:
+        preview = _preview_plan(document, _Dispatcher(), None, user.id, "all_branches_below")
+    assert preview["count"] == 3
+    # One pass to determine stale targets and one to snapshot ALL history
+    # digests. A per-reply lineage walk makes this four passes instead.
+    assert hashed.call_count == 2 * len(document.nodes)
+
+
+def test_large_preview_and_start_validation_yield_the_event_loop():
+    async def exercise():
+        document, user, *_ = _thread()
+        intents, _ = _register(document, _Dispatcher())
+        tick = asyncio.create_task(asyncio.sleep(0))
+        preview = await intents["previewChatRerun"](user.id, "all_branches_below")
+        assert tick.done(), "preview tokenization blocked the event loop"
+        assert preview["count"] == 3
+
+        # A real grant is needed to exercise off-thread stale-plan validation.
+        grant = await intents["previewChatRerun"](user.id, "this_path")
+        document.edit_chat_message(user.id, "changed after preview", "edited prompt")
+        tick = asyncio.create_task(asyncio.sleep(0))
+        with pytest.raises(SceneError, match="changed since the preview"):
+            await intents["startChatRerun"](user.id, "this_path", grant["previewToken"], False)
+        assert tick.done(), "start-time preview validation blocked the event loop"
+
+    asyncio.run(exercise())
+
+
+def test_rerun_preserves_request_time_routing_reason_through_undo_and_redo():
+    from types import SimpleNamespace
+
+    class ReasonedDispatcher(_Dispatcher):
+        def _resolve_model_for_dispatch(self, _document, _node_id, bus=None):
+            return SimpleNamespace(ref="selected-model", rung="node override")
+
+    async def exercise():
+        document, user, first, *_ = _thread()
+        first.state.model_reason = "task assignment"
+        document.sync_chat_version(first.id)
+        intents, _ = _register(document, ReasonedDispatcher())
+        preview = await intents["previewChatRerun"](user.id, "this_path")
+        job = await intents["startChatRerun"](user.id, "this_path", preview["previewToken"])
+        assert (await _status(intents, job["jobId"]))["status"] == "completed"
+        assert document.nodes[first.id].state.model_reason == "node override"
+        document.undo()
+        assert document.nodes[first.id].state.model_reason == "task assignment"
+        document.redo()
+        assert document.nodes[first.id].state.model_reason == "node override"
 
     asyncio.run(exercise())

@@ -1,10 +1,9 @@
 import type { Node, NodeProps } from "@xyflow/react";
-import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { StreamListener } from "../../lib/ws/transport";
 import { CHAT_SCROLL_REPORT_DEBOUNCE_MS } from "./canvasConstants";
 import { CollapseToggleButton } from "./CollapseToggleButton";
 import { downloadTextFile } from "./downloadTextFile";
-import { GROUP_MONO_COLORS, GROUP_NAMED_COLORS } from "./GroupColorPicker";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { ChatCitationChips, KNOWLEDGE_CITATION_RECORD, citationsForReply, type KnowledgeCitationSource } from "./ChatCitationChips";
@@ -121,6 +120,9 @@ export interface ChatNodeData extends Record<string, unknown> {
   // ADR's own "provider/model provenance" acceptance criterion.
   provider: string | null;
   model: string | null;
+  /** Request-time routing rule, absent for replies created before this field. */
+  modelReason: string | null;
+  onOpenModelSettings: () => void;
   isBranchSynthesis: boolean;
   synthesisInstructions: string;
   synthesisSourceNodeIds: string[];
@@ -228,23 +230,6 @@ const BRANCH_STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "superseded", label: "Superseded" },
 ];
 
-// ADR-002 Workstream 1 ("Branch status and lifecycle"): the status-dot
-// badge's colors REUSE GroupColorPicker.tsx's own named palette verbatim
-// (looked up by name, not by array index, so a future reordering of that
-// palette can't silently retarget these) rather than defining new hex
-// literals - that palette is the one place in this codebase with real,
-// visually-distinct color values for a "pick one of several named
-// semantic colors" concept (the --gl-semantic-status-* CSS token names
-// exist for exactly this kind of status vocabulary, but their current
-// values are indistinguishable placeholder grays - see that token's own
-// definition for why this reuses GroupColorPicker's palette instead).
-const BRANCH_STATUS_COLORS: Record<string, string> = {
-  active: GROUP_MONO_COLORS.find((c) => c.name === "Mid Gray")!.hex,
-  accepted: GROUP_NAMED_COLORS.find((c) => c.name === "Green")!.hex,
-  rejected: GROUP_NAMED_COLORS.find((c) => c.name === "Red")!.hex,
-  superseded: GROUP_NAMED_COLORS.find((c) => c.name === "Orange")!.hex,
-};
-
 function ChatNodeMenu({
   position,
   nodeId,
@@ -257,6 +242,7 @@ function ChatNodeMenu({
   onUndockChild,
   onRegenerate,
   onRerunFromHere,
+  menuTriggerRef,
   canRerun,
   onEdit,
   onEditAsNewBranch,
@@ -290,6 +276,7 @@ function ChatNodeMenu({
   onUndockChild: (childId: string) => void;
   onRegenerate: () => void;
   onRerunFromHere?: () => void;
+  menuTriggerRef: RefObject<HTMLButtonElement>;
   canRerun: boolean;
   onEdit: () => void;
   onEditAsNewBranch: () => void;
@@ -317,7 +304,7 @@ function ChatNodeMenu({
 
 
   return (
-    <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
+    <NodeMenu position={position} onClose={onClose} className="chat-node-menu" ariaLabel="Chat message actions">
       <button
         type="button"
         role="menuitem"
@@ -601,8 +588,7 @@ function ChatNodeMenu({
           onClick={() => {
             // Preserve a connected focus target when the context menu unmounts.
             const trigger = document.getElementById("chat-rerun-trigger-" + nodeId)
-              ?? Array.from(document.querySelectorAll<HTMLElement>(".react-flow__node"))
-                .find((element) => element.dataset.id === nodeId);
+              ?? menuTriggerRef.current;
             trigger?.focus();
             onRerunFromHere();
             onClose();
@@ -771,6 +757,7 @@ export function chatNodePropsAreEqual(prev: NodeProps<ChatFlowNode>, next: NodeP
     a.isFinalDeliverable === b.isFinalDeliverable &&
     a.provider === b.provider &&
     a.model === b.model &&
+    a.modelReason === b.modelReason &&
     a.overrideProvider === b.overrideProvider &&
     a.overrideModelId === b.overrideModelId &&
     a.isBranchSynthesis === b.isBranchSynthesis &&
@@ -805,11 +792,72 @@ export function chatNodePropsAreEqual(prev: NodeProps<ChatFlowNode>, next: NodeP
     a.onCollapseBranch === b.onCollapseBranch &&
     a.onPinToCurrentModel === b.onPinToCurrentModel &&
     a.onClearModelOverride === b.onClearModelOverride &&
+    a.onOpenModelSettings === b.onOpenModelSettings &&
     a.onCancelRegenerate === b.onCancelRegenerate &&
     a.subscribeStream === b.subscribeStream &&
     dockedChildrenEqual(a.dockedChildren, b.dockedChildren) &&
     toolInvocationsEqual(a.toolInvocations, b.toolInvocations) &&
     stringArraysEqual(a.synthesisSourceNodeIds, b.synthesisSourceNodeIds)
+  );
+}
+
+/** Request-time reason: the words deliberately describe the OLD reply,
+ * while the actions below change routing for FUTURE replies only. */
+function describeModelReason(reason: string): string {
+  if (reason === "node override") return "A model pin on the sending node selected this reply's model.";
+  if (reason === "branch override") return "A model pin on this conversation branch selected this model.";
+  if (reason === "workspace default") return "The workspace default model selected this reply's model.";
+  if (reason === "task assignment") return "The chat task's assigned model selected this reply's model.";
+  if (reason === "conversation default") return "The conversation default selected this reply's model.";
+  if (reason.startsWith("auto: ")) return `Automatic routing selected this model using the ${reason.slice(6)} policy.`;
+  return `Routing rule: ${reason}`;
+}
+
+/** Same portaled, light-dismiss and roving-keyboard-focus pattern as
+ * GroupColorPicker's NodeMenu popover. Never render for legacy replies. */
+function ModelReasonDisclosure({
+  model, reason, onOpenNodePinMenu, onOpenModelSettings,
+}: {
+  model: string;
+  reason: string;
+  onOpenNodePinMenu: (position: MenuPosition) => void;
+  onOpenModelSettings: () => void;
+}) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [anchor, setAnchor] = useState<MenuPosition | null>(null);
+  function toggle() {
+    if (anchor) {
+      setAnchor(null);
+      return;
+    }
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (rect) setAnchor({ x: rect.left, y: rect.bottom + 6 });
+  }
+  return (
+    <span className="chat-node-model-reason nodrag">
+      <button
+        ref={triggerRef} type="button" className="chat-node-model-reason-trigger nodrag"
+        aria-label={`Why this model: ${model}`}
+        aria-haspopup="menu" aria-expanded={anchor !== null}
+        onClick={toggle}
+      >Why this model</button>
+      {anchor && (
+        <NodeMenu
+          position={anchor} onClose={() => setAnchor(null)}
+          ignoreRef={triggerRef} className="chat-node-model-reason-popover"
+          ariaLabel={`Why this model: ${model}`}
+        >
+          <p className="chat-node-model-reason-description">{describeModelReason(reason)}</p>
+          <p className="chat-node-model-reason-hint">Changes affect future replies, not this recorded answer.</p>
+          <button type="button" role="menuitem" className="chat-node-model-reason-action"
+            onClick={() => { onOpenNodePinMenu(anchor); setAnchor(null); }}>Change node pin</button>
+          <button type="button" role="menuitem" className="chat-node-model-reason-action"
+            onClick={() => { setAnchor(null); onOpenModelSettings(); }}>
+            {reason.startsWith("auto: ") ? "Change automatic selection policy" : "Change task model setting"}
+          </button>
+        </NodeMenu>
+      )}
+    </span>
   );
 }
 
@@ -827,14 +875,24 @@ export const ChatNodeView = memo(function ChatNodeView({
   const [editError, setEditError] = useState("");
   const [editSaving, setEditSaving] = useState(false);
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
+  const restoreEditFocus = useRef(false);
   const staleEdit = editMode !== null && data.content !== editBase;
 
   useEffect(() => {
-    if (editMode) editorRef.current?.focus();
+    if (editMode) {
+      editorRef.current?.focus();
+    } else if (restoreEditFocus.current) {
+      // The textarea is gone on Save or Escape; don't strand focus on body.
+      // The NodeShell menu button survives collapse and low-detail views.
+      restoreEditFocus.current = false;
+      if (menuTriggerRef.current?.isConnected) menuTriggerRef.current.focus();
+    }
   }, [editMode]);
 
   function beginEdit(mode: "in-place" | "new-branch") {
     if (!data.isUser || data.pendingRequestId) return;
+    restoreEditFocus.current = true;
     setEditBase(data.content);
     setEditDraft(data.content);
     setEditError("");
@@ -989,7 +1047,13 @@ export const ChatNodeView = memo(function ChatNodeView({
   ) : hasMetadata && (
     <div className="chat-node-metadata">
       {data.model && (
-        <span className="chat-node-model-badge" title={data.provider ?? undefined}>{data.model}</span>
+        <>
+          <span className="chat-node-model-badge" title={data.provider ?? undefined}>{data.model}</span>
+          {data.modelReason && (
+            <ModelReasonDisclosure model={data.model} reason={data.modelReason}
+              onOpenNodePinMenu={setMenuPosition} onOpenModelSettings={data.onOpenModelSettings} />
+          )}
+        </>
       )}
       {data.overrideModelId && (
         <span className="chat-node-model-override-badge"
@@ -1014,6 +1078,7 @@ export const ChatNodeView = memo(function ChatNodeView({
       staleness={data.staleness}
       manualRerun={manualRerun}
       onMenuChange={setMenuPosition}
+      menuTriggerRef={menuTriggerRef}
       onBodyDoubleClick={data.isUser && editMode === null ? () => beginEdit("in-place") : undefined}
       header={
         <NodeHeading
@@ -1028,7 +1093,12 @@ export const ChatNodeView = memo(function ChatNodeView({
                   aria-label="Previous version" title="Previous version"
                   disabled={data.versionIndex <= 0 || !!data.pendingRequestId}
                   onClick={() => data.onSelectVersion(data.versionIndex - 1)}>‹</button>
-                <span aria-live="polite">{data.versionIndex + 1}/{data.versionCount}</span>
+                <span>
+                  <span aria-hidden="true">{data.versionIndex + 1}/{data.versionCount}</span>
+                  <span className="visually-hidden" role="status" aria-live="polite">
+                    Version {data.versionIndex + 1} of {data.versionCount} selected
+                  </span>
+                </span>
                 <button type="button" className="chat-node-version-button nodrag"
                   aria-label="Next version" title="Next version"
                   disabled={data.versionIndex >= data.versionCount - 1 || !!data.pendingRequestId}
@@ -1038,13 +1108,13 @@ export const ChatNodeView = memo(function ChatNodeView({
                   disabled={!!data.pendingRequestId} onClick={data.onCompareVersions}>Compare</button>
               </span>
             )}
-            <span
-              className="chat-node-status-badge"
-              data-status={data.branchStatus}
-              style={{ backgroundColor: BRANCH_STATUS_COLORS[data.branchStatus] ?? BRANCH_STATUS_COLORS.active }}
-              title={`Branch status: ${data.branchStatus}`}
-              aria-label={`Branch status: ${data.branchStatus}`}
-            />
+            {data.branchStatus && data.branchStatus !== "active" && (
+              <span className="chat-node-status-badge" role="status" data-status={data.branchStatus}
+                title={`Branch status: ${data.branchStatus}`}
+                aria-label={`Branch status: ${data.branchStatus}`}>
+                {data.branchStatus.charAt(0).toUpperCase() + data.branchStatus.slice(1)}
+              </span>
+            )}
             {data.dockedChildren.length > 0 && (
               <span className="chat-node-docked-badge" title="Docked items">{data.dockedChildren.length}</span>
             )}
@@ -1101,6 +1171,7 @@ export const ChatNodeView = memo(function ChatNodeView({
             onUndockChild={data.onUndockChild}
             onRegenerate={data.onRegenerate}
             onRerunFromHere={data.onRerunFromHere}
+            menuTriggerRef={menuTriggerRef}
             canRerun={canRerunFromHere}
             onEdit={() => beginEdit("in-place")}
             onEditAsNewBranch={() => beginEdit("new-branch")}

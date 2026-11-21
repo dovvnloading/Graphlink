@@ -74,6 +74,20 @@ export interface McpServerConfig {
   envKeys: string[];
 }
 
+export interface ModelPricingOverride {
+  modelId: string;
+  inputPerMillion: number;
+  outputPerMillion: number;
+}
+
+export interface EffectiveModelPrice {
+  modelId: string;
+  provider: string;
+  inputPerMillion?: number | null;
+  outputPerMillion?: number | null;
+  source: string;
+}
+
 export interface AppSettingsState {
   schemaVersion: number;
   revision: number;
@@ -160,6 +174,8 @@ export interface AppSettingsState {
   llamaCppNotice: string;
   harnessTrustedDirs: string[];
   mcpServers: McpServerConfig[];
+  pricingOverrides?: ModelPricingOverride[] | null;
+  effectiveModelPrices?: EffectiveModelPrice[] | null;
   minCompatibleSchemaVersion?: number | null;
 }
 
@@ -229,6 +245,20 @@ const MCP_SERVER_CONFIG_FIELDS: WireFields = [
   ["enabled", "b", 0],
   ["timeout", "n", 0],
   ["envKeys", { a: "s" }, 0],
+];
+
+const MODEL_PRICING_OVERRIDE_FIELDS: WireFields = [
+  ["modelId", "s", 0],
+  ["inputPerMillion", "n", 0],
+  ["outputPerMillion", "n", 0],
+];
+
+const EFFECTIVE_MODEL_PRICE_FIELDS: WireFields = [
+  ["modelId", "s", 0],
+  ["provider", "s", 0],
+  ["inputPerMillion", "n", 1],
+  ["outputPerMillion", "n", 1],
+  ["source", "s", 0],
 ];
 
 const APP_SETTINGS_STATE_FIELDS: WireFields = [
@@ -317,6 +347,8 @@ const APP_SETTINGS_STATE_FIELDS: WireFields = [
   ["llamaCppNotice", "s", 0],
   ["harnessTrustedDirs", { a: "s" }, 0],
   ["mcpServers", { a: { o: MCP_SERVER_CONFIG_FIELDS } }, 0],
+  ["pricingOverrides", { a: { o: MODEL_PRICING_OVERRIDE_FIELDS } }, 1],
+  ["effectiveModelPrices", { a: { o: EFFECTIVE_MODEL_PRICE_FIELDS } }, 1],
   ["minCompatibleSchemaVersion", "n", 1],
 ];
 

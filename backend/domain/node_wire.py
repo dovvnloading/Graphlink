@@ -86,6 +86,7 @@ WIRE_DEFAULTS: dict[str, Any] = {
     "pendingRequestId": None,
     "provider": None,
     "model": None,
+    "modelReason": None,
     "overrideProvider": "",
     "overrideModelId": "",
     "indexIntoKnowledge": False,
@@ -507,6 +508,7 @@ _STATE_FIELDS: dict[type, tuple[_Entry, ...]] = {
         # ADR-002 Workstream 1 ("Synthesize Branches") - output provenance.
         ("provider", "provider"),
         ("model", "model"),
+        ("modelReason", "model_reason"),
         # ADR-018 stage 18.3: the input routing pin, distinct from the pair
         # above - see ChatState's own comment.
         ("overrideProvider", "override_provider"),

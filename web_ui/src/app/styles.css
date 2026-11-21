@@ -879,6 +879,11 @@ body {
   background-color: var(--gl-neutral-button-hover);
 }
 
+.chat-node-menu button:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: -2px;
+}
+
 .chat-node-menu button:disabled {
   opacity: 0.5;
   cursor: default;
@@ -1220,6 +1225,67 @@ body {
   max-width: 140px;
 }
 
+/* Recorded model-routing disclosure: plain --gl-* surface tokens only,
+   positioned outside React Flow's clipped/transformed node by NodeMenu. */
+.chat-node-model-reason {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.chat-node-model-reason-trigger {
+  padding: 2px 4px;
+  color: var(--gl-surface-text-muted);
+  background: transparent;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.chat-node-model-reason-trigger:hover,
+.chat-node-model-reason-trigger:focus-visible {
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-hover);
+}
+.chat-node-model-reason-popover {
+  z-index: var(--gl-z-node-menu);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  width: 240px;
+  max-width: 85vw;
+  padding: 10px;
+  background-color: var(--gl-surface-node-body);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  box-shadow: var(--gl-shadow-1);
+  color: var(--gl-surface-text-primary);
+}
+.chat-node-model-reason-description,
+.chat-node-model-reason-hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.chat-node-model-reason-hint {
+  color: var(--gl-surface-text-muted);
+}
+.chat-node-model-reason-action {
+  padding: 6px 8px;
+  text-align: left;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: var(--gl-radius-sm);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.chat-node-model-reason-action:hover,
+.chat-node-model-reason-action:focus-visible {
+  background-color: var(--gl-neutral-button-hover);
+}
+
 /* ADR-018 stage 18.3: the model-override PIN - same plain-text scale as
    .chat-node-model-badge above, but tinted (not muted) since it reflects a
    deliberate user choice governing the NEXT reply, not passive provenance
@@ -1249,16 +1315,19 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* ADR-002 Workstream 1 ("Branch status and lifecycle"): a small filled dot,
-   ALWAYS rendered (unlike every other badge above, which is conditional) -
-   backgroundColor is set inline per-node (one of 4 real, visually-distinct
-   colors reused from GroupColorPicker.tsx's own palette - see
-   BRANCH_STATUS_COLORS in ChatNodeView.tsx), so no color rule lives here. */
+/* An explicit label for non-default branch states, readable without
+   color perception and using only the same high-contrast theme tokens. */
 .chat-node-status-badge {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  border: 1px dashed var(--gl-surface-border);
+  border-radius: 4px;
+  background: var(--gl-neutral-button-background);
+  color: var(--gl-surface-text-primary);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.3;
   flex-shrink: 0;
 }
 
@@ -10750,7 +10819,7 @@ mark.document-view-search-match-current {
   border-bottom: 2px solid var(--gl-graph-selection);
   background: var(--gl-neutral-button-hover);
 }
-.chat-version-compare-pane:focus-visible,
+.chat-version-compare-text:focus-visible,
 .chat-version-compare-selectors select:focus-visible,
 .chat-version-compare-focus-actions button:focus-visible {
   outline: 2px solid var(--gl-graph-selection);

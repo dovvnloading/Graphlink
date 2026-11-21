@@ -321,6 +321,8 @@ def register_canvas(
         token_counter = TokenCounterState()
 
     document = SceneDocument()
+    # Displayed reply costs use live pricing without rewriting historical usage.
+    document.reply_cost_estimator = token_counter.estimate_cost_for
 
     # ADR-003 stage 3.4: the ONE topic large enough to be worth a delta
     # protocol (a 500-node scene snapshot is ~1.6 MB; every other topic's

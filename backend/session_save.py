@@ -270,6 +270,7 @@ def _serialize_chat_versions(node: SceneNode) -> tuple[list[dict[str, Any]], int
             "content": version.content,
             "provider": version.provider_name,
             "model": version.model_name,
+            "model_reason": version.model_reason,
             "created_at": version.created_at,
             "incomplete": version.incomplete,
             "prompt_tokens": version.input_tokens,
@@ -290,6 +291,7 @@ def _serialize_chat_versions(node: SceneNode) -> tuple[list[dict[str, Any]], int
         "content": node.content,
         "provider": node.state.provider,
         "model": node.state.model,
+        "model_reason": node.state.model_reason,
         "incomplete": node.state.response_incomplete,
         "prompt_tokens": node.state.prompt_tokens,
         "completion_tokens": node.state.completion_tokens,
@@ -329,6 +331,7 @@ def _serialize_chat_node(raw_node: SceneNode) -> dict[str, Any]:
         # separate edit.
         "provider": node.state.provider,
         "model": node.state.model,
+        "model_reason": node.state.model_reason,
         "is_branch_synthesis": bool(node.state.is_branch_synthesis),
         "synthesis_instructions": node.state.synthesis_instructions,
         "item_ids": list(node.item_ids),

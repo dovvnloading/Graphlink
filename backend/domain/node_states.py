@@ -878,6 +878,7 @@ class ChatVersion:
     content: str
     provider_name: str | None = None
     model_name: str | None = None
+    model_reason: str | None = None
     created_at: str = ""
     incomplete: bool = False
     input_tokens: int | None = None
@@ -978,6 +979,9 @@ class ChatState(NodeState):
     content_parts: list[dict[str, Any]] | None = None
     provider: str | None = None
     model: str | None = None
+    # Recorded at dispatch, never re-resolved against later routing settings.
+    # None is intentional for messages saved before this field existed.
+    model_reason: str | None = None
     is_branch_synthesis: bool = False
     synthesis_instructions: str = ""
     branch_status: str = "active"
@@ -996,13 +1000,11 @@ class ChatState(NodeState):
     # replies also stamp as of 6.8.
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
-    # ADR-016 stage 16.2: the USD cost estimated AT THE TIME this reply's
-    # usage was stamped (backend/api/intents_chat.py's _on_usage, via
-    # TokenCounterState.estimate_cost_for) - a snapshot, not a live
-    # recomputation, so an override changed later does not retroactively
-    # rewrite what an already-completed reply is shown to have cost. None
-    # for every node prompt_tokens/completion_tokens is also None for, plus
-    # local providers' genuine $0.00 and unknown-model's genuine "no guess".
+    # The saved cost is the estimate stamped at response time. The scene
+    # wire projects a fresh value from unchanged token counts and current
+    # overrides when canvas has a live estimator, without altering saved
+    # usage or generating undo history. Unknown models are unpriced, and
+    # local model prices are genuinely zero.
     estimated_cost_usd: float | None = None
     # ADR-007 stage 7.4: this turn's tool calls + their results, in call
     # order - empty for the overwhelming majority of chat nodes (no tool-use

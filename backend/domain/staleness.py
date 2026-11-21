@@ -148,7 +148,22 @@ def fingerprint_for_reply(
     reparenting, model-pin changes and knowledge-preference changes cannot
     silently rewrite the context that the model actually received.
     """
+    return fingerprint_from_history_hashes(
+        history_hashes(document), context_node_id, provider, model, knowledge_enabled,
+    )
+
+
+def history_hashes(document: SceneDocument) -> dict[str, bytes]:
+    """One parent-first pass for a batch preview; never rehash per reply."""
     hashes, _ = _lineage(document)
+    return hashes
+
+
+def fingerprint_from_history_hashes(
+    hashes: dict[str, bytes], context_node_id: str,
+    provider: str | None, model: str | None, knowledge_enabled: bool,
+) -> str:
+    """Stamp a reply from the same once-computed lineage used by single replies."""
     return _reply_digest(hashes.get(context_node_id, _ROOT), provider, model, knowledge_enabled)
 
 

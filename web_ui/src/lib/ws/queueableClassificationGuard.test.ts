@@ -164,14 +164,19 @@ describe("queueable intent classification (ADR-003 stage 3.6)", () => {
   it("collects the settings call sites, including the cloud profile form", () => {
     // Ollama settings and the shared local-provider switch now live in separate components.
     const sites = collectFireIntentCallSites().filter((s) =>
-      /chrome\/(SettingsDialog|CloudProviderSettings|OllamaSettingsPage|LocalProviderSettings)\.tsx$/.test(s.file.replace(/\\/g, "/")),
+      /chrome\/(SettingsDialog|CloudProviderSettings|OllamaSettingsPage|LocalProviderSettings|ModelPricingSettings)\.tsx$/.test(s.file.replace(/\\/g, "/")),
     );
     // Workspace Agent adds one queueable, idempotent per-folder revoke action.
     // Ollama health checks are ephemeral, and starting a daemon is a one-shot
     // side effect; neither may be replayed after reconnecting from offline.
     // Per-model Ollama metadata inspection and its idempotent setter.
     // Model Check and cancellation are session-only: neither can be replayed after reconnect.
+    // Pricing writes are tracked requests, never queued fire-and-forget intents.
+    // They do not change the pinned 56 queueable-classification call sites.
     expect(sites).toHaveLength(56);
+    const pricingSource = readFileSync(join(APP_SRC, "chrome", "ModelPricingSettings.tsx"), "utf-8");
+    expect(pricingSource).toContain('transport.request("app-settings", "setPricingOverrides"');
+    expect(pricingSource).not.toContain('fireIntent("app-settings", "setPricingOverrides"');
     expect(sites.filter((s) => s.intent === "setOllamaContextWindow").map((s) => s.queueable)).toEqual([true]);
     expect(sites.filter((s) => s.intent === "inspectOllamaContextModel").map((s) => s.queueable)).toEqual([false]);
     expect(sites.filter((s) => s.intent === "checkOllamaModel").map((s) => s.queueable)).toEqual([false]);

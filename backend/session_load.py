@@ -467,6 +467,7 @@ def _migrate_chat_versions(
             content=current_content,
             provider_name=payload.get("provider") if isinstance(payload.get("provider"), str) else None,
             model_name=payload.get("model") if isinstance(payload.get("model"), str) else None,
+            model_reason=payload.get("model_reason") if isinstance(payload.get("model_reason"), str) else None,
             created_at=str(payload.get("created_at") or "") if isinstance(payload.get("created_at"), str) else "",
             incomplete=bool(payload.get("response_incomplete", False)),
             input_tokens=payload.get("prompt_tokens"),
@@ -500,6 +501,7 @@ def _migrate_chat_versions(
             content=row["content"],
             provider_name=row.get("provider") if isinstance(row.get("provider"), str) else None,
             model_name=row.get("model") if isinstance(row.get("model"), str) else None,
+            model_reason=row.get("model_reason") if isinstance(row.get("model_reason"), str) else None,
             created_at=row.get("created_at") if isinstance(row.get("created_at"), str) else "",
             incomplete=bool(row.get("incomplete", False)),
             input_tokens=row.get("prompt_tokens"),
@@ -576,6 +578,7 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
             chat_scroll_value=_finite_float(payload.get("scroll_value", 0.0) or 0.0),
             provider=selected.provider_name,
             model=selected.model_name,
+            model_reason=selected.model_reason,
             is_branch_synthesis=bool(payload.get("is_branch_synthesis", False)),
             synthesis_instructions=str(payload.get("synthesis_instructions", "") or ""),
             branch_status=(
