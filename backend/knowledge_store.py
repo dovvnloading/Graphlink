@@ -1116,10 +1116,17 @@ def library_document_text(db_path: Path, *, collection_id: int, document_id: int
 
 # -- opt-in workspace folder subscriptions ----------------------------------
 
+_WATCHED_FOLDER_SELECT = (
+    "SELECT folders.id, folders.workspace_id, folders.path, folders.last_sync_at, folders.last_error, "
+    "(SELECT COUNT(*) FROM watched_folder_files AS files WHERE files.folder_id = folders.id) "
+    "FROM watched_folders AS folders"
+)
+
+
 def _watched_folder_row(row: tuple) -> dict[str, Any]:
     return {
         "id": int(row[0]), "workspaceId": int(row[1]), "path": str(row[2]),
-        "lastSyncAt": row[3], "lastError": str(row[4]),
+        "lastSyncAt": row[3], "lastError": str(row[4]), "fileCount": int(row[5]),
     }
 
 
@@ -1127,11 +1134,12 @@ def list_watched_folders(db_path: Path, workspace_id: int | None = None) -> list
     """Return only explicitly configured subscriptions; never discover folders."""
     conn = _connect(db_path)
     try:
-        sql = "SELECT id, workspace_id, path, last_sync_at, last_error FROM watched_folders"
         if workspace_id is None:
-            rows = conn.execute(sql + " ORDER BY id").fetchall()
+            rows = conn.execute(_WATCHED_FOLDER_SELECT + " ORDER BY folders.id").fetchall()
         else:
-            rows = conn.execute(sql + " WHERE workspace_id = ? ORDER BY id", (workspace_id,)).fetchall()
+            rows = conn.execute(
+                _WATCHED_FOLDER_SELECT + " WHERE folders.workspace_id = ? ORDER BY folders.id", (workspace_id,),
+            ).fetchall()
         return [_watched_folder_row(row) for row in rows]
     finally:
         conn.close()
@@ -1153,8 +1161,7 @@ def add_watched_folder(db_path: Path, workspace_id: int, path: str) -> dict[str,
                 (workspace_id, str(resolved)),
             )
             row = conn.execute(
-                "SELECT id, workspace_id, path, last_sync_at, last_error FROM watched_folders "
-                "WHERE workspace_id = ? AND path = ?",
+                _WATCHED_FOLDER_SELECT + " WHERE folders.workspace_id = ? AND folders.path = ?",
                 (workspace_id, str(resolved)),
             ).fetchone()
             if row is None:

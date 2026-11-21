@@ -4062,6 +4062,11 @@ body {
   opacity: 0.5;
 }
 
+.knowledge-search-button:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 2px;
+}
+
 .knowledge-empty {
   margin: 0;
   font-size: 12px;
@@ -4178,6 +4183,7 @@ body {
 
 .knowledge-library-heading {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
@@ -4239,6 +4245,18 @@ body {
   white-space: nowrap;
 }
 
+.knowledge-watch-path {
+  max-width: 320px;
+  min-width: 180px;
+  overflow-wrap: anywhere;
+}
+
+.knowledge-watch-error {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--gl-semantic-status-error);
+  overflow-wrap: anywhere;
+}
 
 /* -- Global search dialog (ADR-020 stage 20.4) ------------------------------
    A sibling of .knowledge-search-dialog just above, same rules renamed to
