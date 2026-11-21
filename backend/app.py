@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import asynccontextmanager
 import os
 import time
 from pathlib import Path
@@ -53,7 +54,9 @@ from backend.auth import (
     token_matches,
 )
 from backend.canvas import register_canvas
-from backend.chat_library import flush_dirty_session_before_teardown, register_chat_library
+from backend.chat_library import (
+    DEFAULT_DB_PATH as DEFAULT_CHAT_DB_PATH, flush_dirty_session_before_teardown, register_chat_library,
+)
 from backend.composer import register_composer
 from backend.api.intents_diagnostics import register_diagnostics_intents
 from backend.api.intents_fal_media import register_fal_media_intents
@@ -71,6 +74,8 @@ from backend.events import (
 )
 from backend.execution_limits import register_execution_limits
 from backend.notifications import register_notifications
+from backend.knowledge_store import DEFAULT_DB_PATH as DEFAULT_KNOWLEDGE_DB_PATH
+from backend.knowledge_watches import WatchedFolderService
 from backend.plugins import register_plugins
 from backend.packaging_resources import resolve_spa_dir
 from backend.session_context import (
@@ -202,6 +207,7 @@ def _configure_session(
     chat_db_path: Path | None,
     previous_run_crashed: bool = False,
     session_count_fn=None,
+    watch_service: WatchedFolderService | None = None,
 ) -> None:
     """Give every session the R0 topic surface. Later phases extend this
     with canvas/chrome/node topics - one registrar, one place to read the
@@ -268,7 +274,8 @@ def _configure_session(
     # there was previously no way to get from a session id back to its
     # canvas document outside this closure.
     canvas_document = register_canvas(
-        bus, notifications_state, agent_dispatcher, composer_document, token_counter
+        bus, notifications_state, agent_dispatcher, composer_document, token_counter,
+        watch_service=watch_service,
     )
 
     # ADR-016 stage 16.4: the diagnostics topic's two intents (export bundle,
@@ -407,8 +414,30 @@ def create_app(
     control_read_token: str | None = None,
     control_write_token: str | None = None,
     allow_unauthenticated_for_tests: bool = False,
+    knowledge_db_path: Path | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="Graphlink backend", version=BACKEND_VERSION)
+    # Explicit custom chats.db paths (especially isolated test instances)
+    # keep their knowledge DB beside them; the shipped default retains the
+    # established ~/.graphlink/knowledge/knowledge.db location.
+    effective_knowledge_path = knowledge_db_path or (
+        chat_db_path.with_name("knowledge.db")
+        if chat_db_path is not None and chat_db_path != DEFAULT_CHAT_DB_PATH
+        else DEFAULT_KNOWLEDGE_DB_PATH
+    )
+    watch_service = WatchedFolderService(effective_knowledge_path)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        # Starts on application startup, not create_app construction; no
+        # background work is spawned by a mere TestClient/app factory call.
+        watch_service.start()
+        try:
+            yield
+        finally:
+            await watch_service.stop()
+
+    app = FastAPI(title="Graphlink backend", version=BACKEND_VERSION, lifespan=lifespan)
+    app.state.watched_folders = watch_service
     # ADR-004 stage 4.1: the per-launch capability token gating /api/* and
     # /ws - see backend/auth.py's own docstring for the threat (audit C5) and
     # why a token rather than accounts. Missing credentials now FAIL CLOSED.
@@ -469,6 +498,7 @@ def create_app(
             # fully returned and bound the name in the enclosing scope, even
             # though it's syntactically referenced mid-construction here.
             session_count_fn=lambda: len(bus._sessions),
+            watch_service=watch_service,
         ),
         # ADR-004 stage 4.3: see _evict_idle_session's own docstring.
         evict_idle_session=_evict_idle_session,
