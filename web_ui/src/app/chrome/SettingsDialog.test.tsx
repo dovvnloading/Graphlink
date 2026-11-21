@@ -68,6 +68,14 @@ const snapshot = {
   ollamaReasoningLevel: "high",
   ollamaCurrentModel: "",
   ollamaModelAssignments: {},
+  ollamaContextWindows: {},
+  ollamaContextModel: "",
+  ollamaContextStatus: "idle",
+  ollamaContextNotice: "",
+  ollamaContextTrainedLength: 0,
+  ollamaContextModelSizeBytes: 0,
+  ollamaContextKvBytesPerToken: 0,
+  ollamaContextAvailableMemoryBytes: 0,
   ollamaScannedModels: [],
   ollamaScanSummary: "No saved scan yet. Run a system scan or choose a folder to build the local model list.",
   ollamaScanStatus: "idle",
@@ -438,6 +446,70 @@ describe("SettingsDialog", () => {
     await user.type(screen.getByPlaceholderText("Advanced model ID entry"), "llama3.2:3b");
 
     expect(screen.getByRole("button", { name: "Validating..." })).toBeDisabled();
+  });
+
+  it("selects an Ollama context window per model and defaults to 8k", async () => {
+    const { user, push, intents } = setup();
+    await goToOllama(user, push, {
+      ollamaCurrentModel: "llama:7b",
+      ollamaScannedModels: ["llama:7b", "qwen:8b"],
+      ollamaContextModel: "llama:7b",
+      ollamaContextStatus: "ready",
+      ollamaContextTrainedLength: 131072,
+      ollamaContextKvBytesPerToken: 131072,
+      ollamaContextAvailableMemoryBytes: 64 * 1024 ** 3,
+    });
+    expect(screen.getByRole("button", { name: "Ollama context window" })).toHaveTextContent("8k");
+    await chooseCustomOption(user, "Ollama context window", "32k");
+    expect(intents).toContainEqual(["app-settings", "setOllamaContextWindow", ["llama:7b", 32768]]);
+    await chooseCustomOption(user, "Ollama context model", "qwen:8b");
+    expect(intents).toContainEqual(["app-settings", "inspectOllamaContextModel", ["qwen:8b"]]);
+  });
+
+  it("does not offer context sizes beyond the selected model's trained length", async () => {
+    const { user, push } = setup();
+    await goToOllama(user, push, {
+      ollamaCurrentModel: "small:3b",
+      ollamaContextModel: "small:3b",
+      ollamaContextStatus: "ready",
+      ollamaContextTrainedLength: 16384,
+      ollamaContextKvBytesPerToken: 131072,
+    });
+    await user.click(screen.getByRole("button", { name: "Ollama context window" }));
+    expect(screen.getByRole("button", { name: "16k" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "32k" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "128k" })).toBeNull();
+  });
+
+  it("shows an estimated memory figure and warns when it exceeds available system RAM", async () => {
+    const { user, push } = setup();
+    await goToOllama(user, push, {
+      ollamaCurrentModel: "large:7b",
+      ollamaContextWindows: { "large:7b": 32768 },
+      ollamaContextModel: "large:7b",
+      ollamaContextStatus: "ready",
+      ollamaContextTrainedLength: 131072,
+      ollamaContextModelSizeBytes: 4 * 1024 ** 3,
+      ollamaContextKvBytesPerToken: 131072,
+      ollamaContextAvailableMemoryBytes: 5 * 1024 ** 3,
+    });
+    expect(screen.getByText(/Estimated model weights \+ KV cache:/)).toHaveTextContent("8.0 GiB");
+    expect(screen.getByRole("alert")).toHaveTextContent(/exceeds available system RAM/i);
+  });
+
+  it("does not claim a memory warning when available RAM is unknown", async () => {
+    const { user, push } = setup();
+    await goToOllama(user, push, {
+      ollamaCurrentModel: "offline:7b",
+      ollamaContextModel: "offline:7b",
+      ollamaContextStatus: "ready",
+      ollamaContextTrainedLength: 131072,
+      ollamaContextModelSizeBytes: 4 * 1024 ** 3,
+      ollamaContextKvBytesPerToken: 131072,
+      ollamaContextAvailableMemoryBytes: 0,
+    });
+    expect(screen.getByText(/Available system RAM:/)).toHaveTextContent("unavailable");
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("an ollamaNotice renders as an inline error", async () => {
