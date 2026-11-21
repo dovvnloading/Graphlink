@@ -416,9 +416,9 @@ describe("Settings > Ollama", () => {
   });
 
   it("rejects path tricks and oversized custom model IDs before dispatch", async () => {
-    const { user, intents } = setup();
-    const input = screen.getByRole("combobox", { name: "Validate and Pull Model" });
-    const pull = screen.getByRole("button", { name: "Validate and Pull Model" });
+    const { user, intents } = setup({ ollamaServerStatus: "running", ollamaServerReachable: true });
+    const input = screen.getByRole("combobox", { name: "Model ID to download" });
+    const pull = screen.getByRole("button", { name: "Download model" });
     await user.type(input, "../outside:latest");
     expect(pull).toBeDisabled();
     await user.clear(input);
@@ -430,7 +430,7 @@ describe("Settings > Ollama", () => {
   });
 
   it("keeps model operations disabled during post-download verification", () => {
-    const { update } = setup();
+    const { update } = setup({ ollamaServerStatus: "running", ollamaServerReachable: true });
     update({
       ollamaPullStatus: "finalizing", ollamaPullModel: "gemma3:4b",
       ollamaPullMessage: "Verifying installed model...",
@@ -438,7 +438,7 @@ describe("Settings > Ollama", () => {
     expect(screen.getByText(/Verifying installed model/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Cancel download" })).toBeNull();
     expect(screen.getByRole("button", { name: "Pull qwen3:4b" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "System Scan" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Refresh installed models" })).toBeDisabled();
   });
 
   it("scans and refreshes, supports manual pull, and cancels running downloads", async () => {
