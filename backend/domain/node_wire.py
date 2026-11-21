@@ -66,6 +66,8 @@ from backend.domain.node_states import (
 WIRE_DEFAULTS: dict[str, Any] = {
     "content": "",
     "isUser": False,
+    "versionCount": 0,
+    "versionIndex": 0,
     "isCollapsed": False,
     "code": "",
     "language": "",
@@ -499,6 +501,8 @@ _GROUP_SIZE_FIELDS = (("groupWidth", "group_width"), ("groupHeight", "group_heig
 _STATE_FIELDS: dict[type, tuple[_Entry, ...]] = {
     ChatState: _table(
         ("isUser", "is_user"),
+        ("versionCount", "versions", len),
+        ("versionIndex", "version_index"),
         # ADR-002 Workstream 1 ("Synthesize Branches") - output provenance.
         ("provider", "provider"),
         ("model", "model"),
@@ -747,6 +751,10 @@ def node_wire(
         wire["isFinalDeliverable"] = True
     if node.state is not None:
         _put_non_default(wire, node.state, _fields_for(type(node.state)))
+        if isinstance(node.state, ChatState) and node.state.versions:
+            # The switcher needs an explicit selection, even when it is 0.
+            # Histories still never cross the sparse scene wire.
+            wire["versionIndex"] = node.state.version_index
     if text_input_status != "unbound":
         wire["textInputStatus"] = text_input_status
     if plugin_state:

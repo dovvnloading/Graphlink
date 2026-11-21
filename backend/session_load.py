@@ -220,6 +220,7 @@ from backend.domain.graph_run_history import restore_graph_runs
 from backend.domain.node_states import (
     ARTIFACT_MAX_CHARS, ChartState, FrameState, NoteState, FalMediaState, ModelState, ModelTextBinding,
     NodeState, PersistedPluginState, PluginStateSnapshot, science_reference_or_none,
+    ChatVersion, MAX_CHAT_VERSIONS,
 )
 from backend.plugin_sdk import MAX_PLUGIN_STATE_BYTES, NodeKindSpec, PluginRegistry, discover_plugins
 from graphlink_chart_data import ChartDataError, canonicalize_chart_data
@@ -441,6 +442,61 @@ def _position(payload: dict[str, Any]) -> tuple[float, float]:
 # _restore_node below, NOT by these functions - clean separation between
 # "build this node's own fields" and "does it have a valid parent".
 
+def _migrate_chat_versions(
+    payload: dict[str, Any], current_content: str,
+) -> tuple[list[ChatVersion], int]:
+    """Saved-graph v1 -> v2 migration for chat nodes.
+
+    A v1/legacy node had one raw_content/provenance pair and no version
+    history. Wrap exactly that selected answer in one version. Historical
+    creation time is unknown (empty string), not fabricated at load time.
+    Modern saves are parsed defensively and bounded even if hand-edited.
+    """
+    raw = payload.get("versions")
+    if not isinstance(raw, list) or not raw:
+        # Legacy graph: preserve its existing selected answer and metadata.
+        return [ChatVersion(
+            content=current_content,
+            provider_name=payload.get("provider") if isinstance(payload.get("provider"), str) else None,
+            model_name=payload.get("model") if isinstance(payload.get("model"), str) else None,
+            created_at=str(payload.get("created_at") or "") if isinstance(payload.get("created_at"), str) else "",
+            incomplete=bool(payload.get("response_incomplete", False)),
+            input_tokens=payload.get("prompt_tokens"),
+            output_tokens=payload.get("completion_tokens"),
+            cost_usd=payload.get("estimated_cost_usd"),
+            calls=[dict(call) for call in (payload.get("tool_invocations") or [])
+                   if isinstance(call, dict)],
+        )], 0
+
+    start = max(0, len(raw) - MAX_CHAT_VERSIONS)
+    kept = raw[start:]
+    if not all(isinstance(row, dict) and isinstance(row.get("content"), str) for row in kept):
+        # A broken versions field must never erase the older raw_content.
+        return _migrate_chat_versions({k: v for k, v in payload.items() if k != "versions"}, current_content)
+
+    versions = [
+        ChatVersion(
+            content=row["content"],
+            provider_name=row.get("provider") if isinstance(row.get("provider"), str) else None,
+            model_name=row.get("model") if isinstance(row.get("model"), str) else None,
+            created_at=row.get("created_at") if isinstance(row.get("created_at"), str) else "",
+            incomplete=bool(row.get("incomplete", False)),
+            input_tokens=row.get("prompt_tokens"),
+            output_tokens=row.get("completion_tokens"),
+            cost_usd=row.get("estimated_cost_usd"),
+            calls=[dict(call) for call in row.get("tool_invocations", [])
+                   if isinstance(call, dict)] if isinstance(row.get("tool_invocations", []), list) else [],
+            parts=_content_codec.process_content_for_deserialization(row["parts"])
+                  if isinstance(row.get("parts"), list) else None,
+        )
+        for row in kept
+    ]
+    saved_index = payload.get("version_index")
+    if type(saved_index) is not int:
+        saved_index = len(raw) - 1
+    return versions, max(0, min(len(versions) - 1, saved_index - start))
+
+
 def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
     x, y = _position(payload)
     raw_content = payload.get("raw_content", payload.get("text", ""))
@@ -451,9 +507,18 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
         content_text = _flatten_multimodal_text(content_parts)
     else:
         content_text = str(raw_content or "")
+    versions, version_index = _migrate_chat_versions(payload, content_text)
+    selected = versions[version_index]
+    # raw_content is the live projection in both save formats. Honor it even
+    # if a legacy import has updated it but retained an older versions array.
+    if "raw_content" in payload or "text" in payload:
+        selected.content = content_text
+    # The active version's media lives in raw_content for compatibility and
+    # to avoid duplicating large attachments in the versions array on disk.
+    selected.parts = content_parts
     return SceneNode(
         id="", x=x, y=y, title="Chat", kind="chat",
-        content=content_text,
+        content=selected.content,
         is_collapsed=bool(payload.get("is_collapsed", False)),
         history=_restore_history(payload.get("conversation_history")),
         # ADR-002 Workstream 1 ("Branch status and lifecycle") - confirmed,
@@ -477,9 +542,11 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
             # relabel every AI response in an old save as if the user had
             # typed it.
             is_user=bool(payload.get("is_user", True)),
+            versions=versions,
+            version_index=version_index,
             chat_scroll_value=_finite_float(payload.get("scroll_value", 0.0) or 0.0),
-            provider=payload.get("provider"),
-            model=payload.get("model"),
+            provider=selected.provider_name,
+            model=selected.model_name,
             is_branch_synthesis=bool(payload.get("is_branch_synthesis", False)),
             synthesis_instructions=str(payload.get("synthesis_instructions", "") or ""),
             branch_status=(
@@ -489,22 +556,20 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
             ),
             # ADR-006 stage 6.4: absent in every pre-6.4 save -> False,
             # matching the dataclass default.
-            response_incomplete=bool(payload.get("response_incomplete", False)),
+            response_incomplete=selected.incomplete,
             # ADR-006 stage 6.8: absent in every pre-6.8 save -> None,
             # matching the dataclass default ("not reported").
-            prompt_tokens=payload.get("prompt_tokens"),
-            completion_tokens=payload.get("completion_tokens"),
+            prompt_tokens=selected.input_tokens,
+            completion_tokens=selected.output_tokens,
             # ADR-016 stage 16.2: absent in every pre-16.2 save -> None,
             # matching the dataclass default.
-            estimated_cost_usd=payload.get("estimated_cost_usd"),
+            estimated_cost_usd=selected.cost_usd,
             # ADR-007 stage 7.4: absent in every pre-7.4 save -> [], matching
             # the dataclass default. Each item is validated only loosely
             # (dict(...) below tolerates hand-edited/legacy entries missing a
             # key - scene_payload()'s own .get()-based wire projection is
             # what actually protects the frontend from a malformed one).
-            tool_invocations=[
-                dict(call) for call in (payload.get("tool_invocations") or []) if isinstance(call, dict)
-            ],
+            tool_invocations=[dict(call) for call in selected.calls],
             # Saved metadata is untrusted even when all fields are strings.
             # Attach only after edges and source receipts have been restored.
             science_reference=None,
@@ -2094,6 +2159,9 @@ def _restore_verified_science_references(
             old_id = lines[1].removeprefix("Source node: ")
             if re.fullmatch(r"n[0-9]+", old_id):
                 chat.content = "\n".join((heading, historical + old_id, lines[2]))
+                # The migrated display text must also survive version
+                # selection and a subsequent save/reload.
+                chat.state.versions[chat.state.version_index].content = chat.content
                 lines = chat.content.split("\n", 2)
 
         candidate = payload.get("science_reference")

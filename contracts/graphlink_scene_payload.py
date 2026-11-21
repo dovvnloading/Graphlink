@@ -562,6 +562,11 @@ class SceneNodeRow:
     kind: str
     content: str = ""
     isUser: bool = False
+    # Version texts live in the saved graph, not in every scene snapshot.
+    # A switch needs only the count and selected zero-based index; content
+    # and provider/model above continue to describe the selected version.
+    versionCount: int = 0
+    versionIndex: int = 0
     isCollapsed: bool = False
     # R3.5: the code node's real persisted shape - populated for kind=="code"
     # rows, defaulted (empty string) for every other kind.
