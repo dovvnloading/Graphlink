@@ -89,6 +89,7 @@ from backend.chat_library import (
     ConcurrentSaveConflict,
     _content_digest,
     _fallback_title,
+    _existing_title_or_content_title,
     _maybe_backup_before_write,
     _resolve_seed_message,
     _schedule_embeddings_after_graph_save,
@@ -215,9 +216,9 @@ async def autosave_tick(
                 await bus.publish("notification")
             return
         if existing_row is not None:
-            # Never regenerate an existing chat's title - same rule
-            # saveChat's own resave path follows.
-            title = str(existing_row.get("title") or "Untitled")
+            # Keep existing/renamed titles; only a "New Chat" placeholder
+            # saved before its first message can gain a content-based title.
+            title = _existing_title_or_content_title(existing_row, canvas_document)
             chat_id_for_save = int(current_id)
             saved_workspace_id = int(existing_row["workspace_id"])
             if last_saved.get("chat_id") == int(current_id):

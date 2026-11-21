@@ -88,6 +88,29 @@ def test_autosave_tick_inserts_a_new_row_for_a_fresh_canvas_with_content(db_path
     assert not notifications.visible
 
 
+def test_autosave_promotes_new_chat_placeholder_and_sanitizes_citation_preview(db_path):
+    bus, document, notifications = _bus(db_path)
+    last_saved = _new_save_state()
+    document.add_note(0, 0)
+
+    asyncio.run(autosave_tick(bus, db_path, document, notifications, last_saved))
+    [before] = get_all_chats(db_path)
+    assert before["title"] == "New Chat"
+
+    user = document.add_chat_node(0, 0, "Investigate why backups failed", is_user=True)
+    document.add_chat_node(
+        0, 100, "The drive is full [kb:0b20173e0f2e3ce167e7].",
+        is_user=False, parent_id=user.id,
+    )
+    asyncio.run(autosave_tick(bus, db_path, document, notifications, last_saved))
+
+    [after] = get_all_chats(db_path)
+    assert after["id"] == before["id"]
+    assert after["title"] == "Investigate why backups failed"
+    assert after["preview"] == "The drive is full."
+    assert document.current_chat_id == after["id"]
+
+
 def test_autosave_tick_is_a_no_op_when_nothing_changed_since_the_last_tick(db_path, monkeypatch):
     bus, document, notifications = _bus(db_path)
     document.add_chat_node(0, 0, "hello autosave", is_user=True)
@@ -130,8 +153,8 @@ def test_autosave_tick_writes_again_after_a_real_change(db_path):
 
 def test_autosave_tick_never_regenerates_an_existing_chats_title(db_path):
     # Audit fix - this test used to be unable to fail. Its only inter-tick
-    # change was add_code_node, but _resolve_seed_message reads chat-kind
-    # nodes ONLY, so the regenerated title would have been byte-identical to
+    # change was add_code_node, which adds no user message, so even if the
+    # title were regenerated the result would have been byte-identical to
     # the original and the assertion held whether or not the implementation
     # preserved the row's title (verified by mutation: swapping the
     # preserve-title line for the regeneration it exists to prevent still
