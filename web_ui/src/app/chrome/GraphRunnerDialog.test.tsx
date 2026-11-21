@@ -30,7 +30,7 @@ function setup(selectedIds: string[] = [], sceneNodes: Array<Record<string, unkn
   render(<OverlayProvider><ReactFlowProvider initialNodes={nodes}>
     <OpenRunner /><GraphRunnerDialog store={store} />
   </ReactFlowProvider></OverlayProvider>);
-  return { user, request };
+  return { user, request, store };
 }
 
 describe("Graph Runner", () => {
@@ -65,6 +65,52 @@ describe("Graph Runner", () => {
     await user.click(preview);
     expect(request).toHaveBeenLastCalledWith("scene", "previewGraphRun", [[]]);
     expect(await screen.findByText(/No connected outputs/)).toBeVisible();
+  });
+
+  it("accepts a bound-node handoff without executing anything before separate approval", async () => {
+    const { user, request, store } = setup([], [
+      { id: "bound-model", kind: "model", title: "Bound local model" },
+    ]);
+    request.mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ previewToken: "review-only", steps: [step] });
+    store.requestGraphRunnerNodes(["bound-model", "bound-model"]);
+    await user.click(screen.getByRole("button", { name: "Open runner" }));
+    expect(await screen.findByRole("combobox", { name: "Run scope" })).toHaveValue("selection");
+    await user.click(screen.getByRole("button", { name: "Preview run" }));
+    expect(request).toHaveBeenCalledWith("scene", "previewGraphRun", [["bound-model"]]);
+    expect(await screen.findByRole("region", { name: "Run preview" })).toBeInTheDocument();
+    expect(request.mock.calls.filter(([, intent]) =>
+      intent === "executeGraphRun" || intent === "executeGraphModel")).toHaveLength(0);
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(store.getGraphRunnerRequestedIds()).toBeNull());
+  });
+
+  it("routes a saved Model-to-Note handoff into the existing model preview, not execution", async () => {
+    const { user, request, store } = setup([], [
+      { id: "source", kind: "chat", title: "Model source" },
+      { id: "note", kind: "note", title: "Local model output" },
+    ]);
+    const saved = [{
+      sourceId: "source", targetId: "note", nodeKind: "note",
+      provider: "Ollama", modelId: "qwen3:8b",
+      inputType: "text", outputType: "text", version: 1, status: "stale",
+    }];
+    request.mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(saved)
+      .mockResolvedValueOnce({ previewToken: "review-model", steps: [{
+        ...step, nodeId: "note", sourceId: "source", kind: "model", operation: "model",
+      }] });
+    store.requestGraphRunnerNodes(["note"]);
+    await user.click(screen.getByRole("button", { name: "Open runner" }));
+    const modelInput = await screen.findByRole("textbox", { name: "Installed Ollama model ID" });
+    await waitFor(() => expect(modelInput).toHaveValue("qwen3:8b"));
+    expect(screen.getByText(/a separate approval is required/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Preview model step" }));
+    expect(request).toHaveBeenCalledWith(
+      "scene", "previewGraphModel", ["source", "note", "Ollama", "qwen3:8b"],
+    );
+    expect(request.mock.calls.filter(([, intent]) =>
+      intent === "executeGraphRun" || intent === "executeGraphModel")).toHaveLength(0);
   });
 
   it("retries a reviewed preview with the same operation ID after a lost reply", async () => {

@@ -966,6 +966,11 @@ export const ChatNodeView = memo(function ChatNodeView({
 
   // Citation provenance uses a reserved structured row, not a model tool call.
   const visibleToolInvocations = data.toolInvocations.filter((item) => item.name !== KNOWLEDGE_CITATION_RECORD);
+  // Executed tools are not a normal model reply: neither the menu nor its
+  // quick action may offer automatic replay. Citations are metadata only.
+  const manualRerun = visibleToolInvocations.length > 0 || data.isBranchSynthesis;
+  const canRerunFromHere = !manualRerun &&
+    (data.isUser ? data.versionCount > 1 : data.staleness === "out_of_date");
   const replyCitations = !data.isUser && !data.pendingRequestId
     ? citationsForReply(data.content, data.toolInvocations) : undefined;
   const hasUsage = data.promptTokens != null || data.completionTokens != null;
@@ -1007,6 +1012,7 @@ export const ChatNodeView = memo(function ChatNodeView({
       selected={!!selected}
       collapsed={collapsed}
       staleness={data.staleness}
+      manualRerun={manualRerun}
       onMenuChange={setMenuPosition}
       onBodyDoubleClick={data.isUser && editMode === null ? () => beginEdit("in-place") : undefined}
       header={
@@ -1062,8 +1068,7 @@ export const ChatNodeView = memo(function ChatNodeView({
                   title="Branch from here" aria-label="Branch from here">
                   <ChatNodeIcon name="branch" />
                 </button>
-                {(data.isUser ? data.versionCount > 1 : data.staleness === "out_of_date")
-                  && data.onRerunFromHere && (
+                {canRerunFromHere && data.onRerunFromHere && (
                   <button type="button" className="chat-node-quick-action nodrag"
                     id={"chat-rerun-trigger-" + id}
                     disabled={!!data.pendingRequestId} onClick={data.onRerunFromHere}
@@ -1096,7 +1101,7 @@ export const ChatNodeView = memo(function ChatNodeView({
             onUndockChild={data.onUndockChild}
             onRegenerate={data.onRegenerate}
             onRerunFromHere={data.onRerunFromHere}
-            canRerun={data.isUser ? data.versionCount > 1 : data.staleness === "out_of_date"}
+            canRerun={canRerunFromHere}
             onEdit={() => beginEdit("in-place")}
             onEditAsNewBranch={() => beginEdit("new-branch")}
             editDisabled={!!data.pendingRequestId}
