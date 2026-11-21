@@ -173,17 +173,11 @@ def _format_search_results(results: list[dict]) -> list[dict]:
     return [format_search_result_row(r) for r in results]
 
 
-def register_knowledge_intents(
+def register_knowledge_search_intents(
     bus: SessionBus,
     document: SceneDocument,
-    notifications: NotificationState | None = None,
     settings_manager=None,
 ) -> None:
-    publish_scene = make_publish_scene(bus)
-    ingest_jobs = KnowledgeIngestManager(bus, DEFAULT_DB_PATH)
-    uploads = KnowledgeDropUploads(DEFAULT_DB_PATH)
-    bus.register_topic("knowledge-ingest", ingest_jobs.snapshot)
-
     async def search(query, k):
         k = min(max(int(k or _DEFAULT_K), 1), _MAX_K)
         workspace_id = document.current_workspace_id
@@ -234,6 +228,21 @@ def register_knowledge_intents(
         if document.current_workspace_id != workspace_id:
             return {"document": None}
         return {"document": source}
+
+    bus.register_intent("knowledge", "search", search, args_schema=SearchArgs)
+    bus.register_intent("knowledge", "openCitation", open_citation, args_schema=OpenCitationArgs)
+
+
+def register_knowledge_intents(
+    bus: SessionBus,
+    document: SceneDocument,
+    notifications: NotificationState | None = None,
+    settings_manager=None,
+) -> None:
+    publish_scene = make_publish_scene(bus)
+    ingest_jobs = KnowledgeIngestManager(bus, DEFAULT_DB_PATH)
+    uploads = KnowledgeDropUploads(DEFAULT_DB_PATH)
+    bus.register_topic("knowledge-ingest", ingest_jobs.snapshot)
 
     async def set_chat_index_into_knowledge(node_id, enabled):
         """Runs the actual knowledge-store write (chat_branch_history() ->
@@ -429,8 +438,7 @@ def register_knowledge_intents(
     async def cancel_upload(upload_id):
         return await asyncio.to_thread(uploads.cancel, upload_id)
 
-    bus.register_intent("knowledge", "search", search, args_schema=SearchArgs)
-    bus.register_intent("knowledge", "openCitation", open_citation, args_schema=OpenCitationArgs)
+    register_knowledge_search_intents(bus, document, settings_manager=settings_manager)
     bus.register_intent("knowledge", "addFiles", add_files)
     bus.register_intent("knowledge", "addFolder", add_folder)
     bus.register_intent("knowledge", "cancelIngest", cancel_ingest, args_schema=CancelIngestArgs)
