@@ -375,11 +375,12 @@ describe("SettingsDialog", () => {
       ollamaServerReachable: true,
     });
 
-    expect(screen.getByText("vision:latest")).toBeInTheDocument();
-    expect(screen.getByText(/5.0 GiB memory in use/)).toBeInTheDocument();
-    expect(screen.getByText(/4.0 GiB on disk/)).toBeInTheDocument();
-    expect(screen.getByText(/Trained context: 131,072 tokens/)).toBeInTheDocument();
-    expect(screen.getByText(/chat, tools, vision, thinking/)).toBeInTheDocument();
+    const inventory = within(screen.getByRole("group", { name: "Local model inventory" }));
+    expect(inventory.getByText("vision:latest")).toBeInTheDocument();
+    expect(inventory.getByText(/5.0 GiB memory in use/)).toBeInTheDocument();
+    expect(inventory.getByText(/4.0 GiB on disk/)).toBeInTheDocument();
+    expect(inventory.getByText(/Trained context: 131,072 tokens/)).toBeInTheDocument();
+    expect(inventory.getByText(/chat, tools, vision, thinking/)).toBeInTheDocument();
   });
 
   it("System Scan fires scanOllamaSystem and disables while running", async () => {
