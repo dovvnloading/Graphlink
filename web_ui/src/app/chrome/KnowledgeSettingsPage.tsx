@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AppSettingsState } from "../../lib/bridge-core/generated/app-settings-state";
-import type { WsTransport } from "../../lib/ws/transport";
+import { WsTimeoutError, WsUnavailableError, type WsTransport } from "../../lib/ws/transport";
 import { CustomSelect } from "./CustomSelect";
 
 type EmbeddingSource = "off" | "ollama" | "cloud";
@@ -88,9 +88,14 @@ export function KnowledgeSettingsPage({
     // successfully even if this longer reply deadline is exceeded.
     void transport.request(
       "app-settings", "testKnowledgeEmbedding", args, EMBEDDING_TEST_TIMEOUT_MS,
-    ).catch(() => {
-      // The status publish, including a late success or a backend test error,
-      // is what the user sees. Never leave a speculative timeout toast behind.
+    ).catch((error: unknown) => {
+      // A missing reply does not mean the test failed: its eventual result
+      // still arrives through app-settings. Connection loss already has its
+      // own indicator; keep genuine protocol errors visible in the usual way.
+      if (error instanceof WsTimeoutError || error instanceof WsUnavailableError) return;
+      transport.intent("notification", "showError", [
+        error instanceof Error ? error.message : "Could not start embedding test.",
+      ]);
     });
   };
 
