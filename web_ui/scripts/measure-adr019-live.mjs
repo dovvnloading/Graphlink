@@ -131,7 +131,7 @@ async function reachInteractiveCanvas(page, url) {
   // the same one used in the existing E2E helper, not a test-only hook.
   const onboarding = page.getByRole("dialog", { name: "Welcome to Graphlink" });
   try {
-    await onboarding.waitFor({ state: "visible", timeout: 2_000 });
+    await onboarding.waitFor({ state: "visible", timeout: 5_000 });
     await page.keyboard.press("Escape");
     await onboarding.waitFor({ state: "hidden", timeout: 10_000 });
   } catch {
