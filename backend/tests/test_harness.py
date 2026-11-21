@@ -1516,6 +1516,46 @@ class TestCompaction:
         assert context_module.compact_history(history, goal="g", budget_tokens=100_000) is None
         assert called["n"] == 0
 
+    def test_unread_parallel_tool_results_are_never_cut_by_compaction_or_wire_fit(self, monkeypatch):
+        calls = [
+            {"id": "k1", "name": "knowledge.search", "arguments": {"query": "one"}},
+            {"id": "k2", "name": "knowledge.search", "arguments": {"query": "two"}},
+        ]
+        history = [
+            {"role": "user", "content": "old context " * 1_000},
+            {"role": "assistant", "content": "old reply"},
+            {"role": "user", "content": "Find both figures"},
+            {"role": "assistant", "content": "", "tool_calls": calls},
+            {"role": "tool", "tool_call_id": "k1", "name": "knowledge.search", "content": "figure A: 47.3"},
+            {"role": "tool", "tool_call_id": "k2", "name": "knowledge.search", "content": "figure B: 28.6"},
+        ]
+        dropped = []
+
+        def summarize(messages, **_kwargs):
+            dropped.extend(messages)
+            return "Old context summarized"
+
+        monkeypatch.setattr(context_module, "summarize_dropped", summarize)
+        compacted, _ = context_module.compact_history(history, goal="find figures", budget_tokens=100)
+        assert compacted[-3:] == history[-3:]
+        assert all("figure A" not in str(msg) and "figure B" not in str(msg) for msg in dropped)
+        assert context_module.unread_tool_start(history) == 3
+
+        # The normal wire fallback may discard old context but must not
+        # return a summary without both tool results (and their caller).
+        room = lambda messages: sum(context_module.message_tokens(m) for m in messages) < 120
+        fitted = context_module.fit_history_to_window(
+            history, goal="find figures", latest_request="Find both figures", fits=room,
+        )
+        assert fitted is not None and fitted[-3:] == history[-3:]
+        assert context_module.fit_history_to_window(
+            history, goal="find figures", latest_request="Find both figures",
+            fits=lambda candidate: len(candidate) <= 1,
+        ) is None
+        # Even a new user turn after an interrupted run does not make the
+        # previous tool batch eligible for summarization.
+        assert context_module.unread_tool_start([*history, {"role": "user", "content": "Continue"}]) == 3
+
     def test_loop_compacts_over_budget_and_records_it_in_the_transcript(self, workspace_root, monkeypatch):
         document = SceneDocument()
         node = document.add_harness_node(0, 0, "long running task")
