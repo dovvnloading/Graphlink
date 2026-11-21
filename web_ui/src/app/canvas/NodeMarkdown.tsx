@@ -11,6 +11,7 @@ import "react-medium-image-zoom/dist/styles.css";
 import "katex/dist/katex.min.css";
 import { useCanvasSearchQuery } from "./CanvasSearchContext";
 import { rehypeHighlightSearchMatches } from "./documentViewSearchHighlight";
+import type { DisplayCitation, KnowledgeCitationSource } from "./ChatCitationChips";
 
 /**
  * Shared markdown renderer for scene NODE cards (node redesign, stage 1 of 4
@@ -239,16 +240,93 @@ function SafeAnchor({ node: _node, href, children, ...props }: JSX.IntrinsicElem
   );
 }
 
+/** Only assistant chat renders citation tokens as buttons. Traverse text leaves
+ * without interpreting any model-authored HTML, URLs or code as citations. */
+interface CitationTree {
+  type: string;
+  tagName?: string;
+  value?: string;
+  properties?: Record<string, unknown>;
+  children?: CitationTree[];
+}
+export function rehypeInlineKnowledgeCitations() {
+  return (tree: CitationTree) => {
+    const token = /\\[(kb:[A-Za-z0-9_-]{1,128})\\]/g;
+    function walk(node: CitationTree, excluded = false) {
+      if (!node.children) return;
+      const blocked = excluded || (node.type === "element" &&
+        ["a", "pre", "code", "button", "script", "style"].includes(node.tagName ?? ""));
+      for (let i = 0; i < node.children.length; i++) {
+        const child = node.children[i];
+        if (child.type !== "text" || blocked) {
+          walk(child, blocked);
+          continue;
+        }
+        const value = child.value ?? "";
+        token.lastIndex = 0;
+        const parts: CitationTree[] = [];
+        let previous = 0;
+        let match: RegExpExecArray | null;
+        while ((match = token.exec(value)) !== null) {
+          if (match.index > previous) parts.push({ type: "text", value: value.slice(previous, match.index) });
+          parts.push({
+            type: "element", tagName: "span",
+            properties: { dataCitationId: match[1] },
+            children: [],
+          });
+          previous = token.lastIndex;
+        }
+        if (!parts.length) continue;
+        if (previous < value.length) parts.push({ type: "text", value: value.slice(previous) });
+        node.children.splice(i, 1, ...parts);
+        i += parts.length - 1;
+      }
+    }
+    walk(tree);
+  };
+}
+
 const MARKDOWN_COMPONENTS = { pre: CodeBlock, table: TableWrapper, img: ZoomImage, a: SafeAnchor };
 
-export const NodeMarkdown = memo(function NodeMarkdown({ content }: { content: string }) {
+export const NodeMarkdown = memo(function NodeMarkdown({ content, citations, onCitationClick }: {
+  content: string;
+  citations?: DisplayCitation[];
+  onCitationClick?: (source: KnowledgeCitationSource) => void;
+}) {
   const searchQuery = useCanvasSearchQuery();
+  const showCitations = citations !== undefined;
   const rehypePlugins = useMemo<PluggableList>(
-    () => [rehypeHighlight, rehypeKatex, [rehypeHighlightSearchMatches, searchQuery]],
-    [searchQuery],
+    () => [
+      rehypeHighlight, rehypeKatex,
+      ...(showCitations ? [rehypeInlineKnowledgeCitations] : []),
+      [rehypeHighlightSearchMatches, searchQuery],
+    ],
+    [searchQuery, showCitations],
   );
+  const components = useMemo(() => ({
+    ...MARKDOWN_COMPONENTS,
+    span: ({ node, children, ...props }: JSX.IntrinsicElements["span"] & ExtraProps) => {
+      const citationId = node?.properties?.dataCitationId;
+      if (typeof citationId === "string") {
+        const item = citations?.find((entry) => entry.citationId === citationId);
+        if (item?.source && item.number !== null) {
+          const source = item.source;
+          return (
+            <button type="button" className="chat-citation-inline nodrag"
+              title={`Open ${source.documentTitle} in Document View`}
+              aria-label={`Source ${item.number}: ${source.documentTitle}`}
+              onClick={() => onCitationClick?.(source)}>
+              [{item.number}]
+            </button>
+          );
+        }
+        return <span className="chat-citation-unverified" title="Unverified citation">[{citationId}] (unverified)</span>;
+      }
+      return <span {...props}>{children}</span>;
+    },
+  }), [citations, onCitationClick]);
   return (
-    <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={rehypePlugins} components={MARKDOWN_COMPONENTS}>
+    <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={rehypePlugins} components={components}>
       {content}
     </ReactMarkdown>
   );
