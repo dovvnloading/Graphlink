@@ -326,6 +326,33 @@
       },
       "type": "object"
     },
+    "ollamaContextAvailableMemoryBytes": {
+      "type": "integer"
+    },
+    "ollamaContextKvBytesPerToken": {
+      "type": "integer"
+    },
+    "ollamaContextModel": {
+      "type": "string"
+    },
+    "ollamaContextModelSizeBytes": {
+      "type": "integer"
+    },
+    "ollamaContextNotice": {
+      "type": "string"
+    },
+    "ollamaContextStatus": {
+      "type": "string"
+    },
+    "ollamaContextTrainedLength": {
+      "type": "integer"
+    },
+    "ollamaContextWindows": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "type": "object"
+    },
     "ollamaCurrentModel": {
       "type": "string"
     },
@@ -492,6 +519,14 @@
     "ollamaReasoningLevel",
     "ollamaCurrentModel",
     "ollamaModelAssignments",
+    "ollamaContextWindows",
+    "ollamaContextModel",
+    "ollamaContextStatus",
+    "ollamaContextNotice",
+    "ollamaContextTrainedLength",
+    "ollamaContextModelSizeBytes",
+    "ollamaContextKvBytesPerToken",
+    "ollamaContextAvailableMemoryBytes",
     "ollamaScannedModels",
     "ollamaInventory",
     "ollamaInventorySource",
