@@ -1447,7 +1447,7 @@ describe("Settings > Knowledge embedding source", () => {
     // Its later done publish, not the timed-out reply, is the test result.
     let rejectReply!: (reason?: unknown) => void;
     vi.spyOn(transport, "request").mockImplementation((topic, intent, args, timeoutMs) => {
-      requests.push([topic, intent, args, timeoutMs]);
+      requests.push([topic, intent, args ?? [], timeoutMs]);
       return new Promise<unknown>((_resolve, reject) => { rejectReply = reject; });
     });
     await user.click(screen.getByRole("button", { name: "Test" }));
