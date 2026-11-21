@@ -1,9 +1,16 @@
 /** A shape and explicit text carry status without any color requirement. */
 import "./NodeCards.css";
 
-export function StalenessBadge({ status }: { status?: unknown }) {
-  const label = status === "out_of_date" ? "Out of date"
-    : status === "upstream_changed" ? "Upstream changed" : null;
+export function StalenessBadge({
+  status, manualRerun = false, onRunBoundNodes,
+}: {
+  status?: unknown;
+  manualRerun?: boolean;
+  onRunBoundNodes?: () => void;
+}) {
+  const label = status === "out_of_date"
+    ? (manualRerun ? "Upstream changed - re-run manually" : "Out of date")
+    : status === "upstream_changed" ? "Upstream changed - re-run manually" : null;
   if (!label) return null;
   return (
     <div className="node-staleness-badge" role="status">
@@ -13,6 +20,12 @@ export function StalenessBadge({ status }: { status?: unknown }) {
         <path d="M10 7v4.5M10 14.5h.01" strokeLinecap="round" />
       </svg>
       <span>{label}</span>
+      {status === "upstream_changed" && onRunBoundNodes && (
+        <button type="button" className="node-staleness-run-bound nodrag"
+          onClick={onRunBoundNodes} aria-label="Run bound nodes">
+          Run bound nodes
+        </button>
+      )}
     </div>
   );
 }

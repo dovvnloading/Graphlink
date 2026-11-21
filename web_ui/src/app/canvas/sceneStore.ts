@@ -150,6 +150,14 @@ export interface ChatRerunPreview {
     model: string;
     estimatedInputTokens: number;
   }>;
+  /** All excluded nodes are server-selected, never guessed from canvas layout. */
+  skipped: Array<{
+    nodeId: string;
+    title: string;
+    kind: string;
+    category: "manual" | "bound";
+    reason: string;
+  }>;
   count: number;
   requiresConfirmation: boolean;
 }
@@ -346,6 +354,9 @@ export class SceneStore {
   // node was selected when a plugin was launched" to executePlugin without
   // either component reaching into the other's internals.
   private selectedNodeId: string | null = null;
+  // Transient handoff to Graph Runner's existing preview/approval dialog.
+  // This is UI-only selection; it never dispatches a graph execution.
+  private graphRunnerRequestedIds: readonly string[] | null = null;
   // ADR-002 Workstream 1 ("Branch from here"): which chat node the NEXT
   // sendMessage should reply to instead of the current branch tip - local
   // UI state only, same posture as selectedNodeId above. Set by a chat
@@ -792,6 +803,7 @@ export class SceneStore {
   getDragConfig = (): DragSpeedState => this.dragConfig;
   getFontConfig = (): FontControlState => this.fontConfig;
   getSelectedNodeId = (): string | null => this.selectedNodeId;
+  getGraphRunnerRequestedIds = (): readonly string[] | null => this.graphRunnerRequestedIds;
   getReplyTargetNodeId = (): string | null => this.replyTargetNodeId;
   getSynthesizeTargetNodeIds = (): string[] | null => this.synthesizeTargetNodeIds;
   getFocusAcceptedPaths = (): boolean => this.focusAcceptedPaths;
@@ -819,6 +831,20 @@ export class SceneStore {
   setSelectedNodeId(id: string | null): void {
     if (id === this.selectedNodeId) return;
     this.selectedNodeId = id;
+    this.emit();
+  }
+
+  requestGraphRunnerNodes(ids: readonly string[]): void {
+    if (ids.length === 0) return;
+    // No arbitrary Graph Runner execution here: the receiving dialog still
+    // requires its backend preview followed by a separate approval click.
+    this.graphRunnerRequestedIds = [...new Set(ids)];
+    this.emit();
+  }
+
+  clearGraphRunnerRequestedIds(): void {
+    if (this.graphRunnerRequestedIds === null) return;
+    this.graphRunnerRequestedIds = null;
     this.emit();
   }
 
