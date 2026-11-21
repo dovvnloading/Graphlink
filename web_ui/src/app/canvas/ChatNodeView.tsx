@@ -343,6 +343,35 @@ function ChatNodeMenu({
           </button>
         </>
       )}
+      {/* ADR-002 Workstream 1: stages this node as the composer's next reply
+          target (sceneStore's replyTargetNodeId) - available regardless of
+          isUser, since either a user message or an assistant reply is a
+          valid point to fork a new branch from. The composer shows a
+          "Replying to" indicator once set; the actual second-child branch
+          is created server-side the moment the user sends. */}
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onBranchFromHere();
+          onClose();
+        }}
+      >
+        Branch from Here
+      </button>
+      {canRerun && onRerunFromHere && (
+        <button type="button" role="menuitem" disabled={editDisabled}
+          onClick={() => {
+            // Preserve a connected focus target when the context menu unmounts.
+            const trigger = document.getElementById("chat-rerun-trigger-" + nodeId)
+              ?? menuTriggerRef.current;
+            trigger?.focus();
+            onRerunFromHere();
+            onClose();
+          }}>
+          Re-run from here
+        </button>
+      )}
       <button
         type="button"
         role="menuitem"
@@ -373,22 +402,6 @@ function ChatNodeMenu({
       >
         {isBranchFocusActive ? "Show All Branches" : "Hide Other Branches"}
       </button>
-      {/* ADR-002 Workstream 1: stages this node as the composer's next reply
-          target (sceneStore's replyTargetNodeId) - available regardless of
-          isUser, since either a user message or an assistant reply is a
-          valid point to fork a new branch from. The composer shows a
-          "Replying to" indicator once set; the actual second-child branch
-          is created server-side the moment the user sends. */}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onBranchFromHere();
-          onClose();
-        }}
-      >
-        Branch from Here
-      </button>
       <button type="button" role="menuitemcheckbox" aria-checked={indexIntoKnowledge}
         onClick={() => {
           onSetIndexIntoKnowledge(!indexIntoKnowledge);
@@ -397,9 +410,8 @@ function ChatNodeMenu({
         {indexIntoKnowledge ? "Remove from Knowledge Library" : "Add branch to Knowledge Library"}
       </button>
       {/* ADR-002 Workstream 1 ("Branch status and lifecycle"): the final
-          sequenced item after fork/compare/synthesize, grouped here right
-          after Branch from Here since all three below are branch-lifecycle
-          actions. Mark Status reuses the exact click-to-expand submenu
+          sequenced item after fork/compare/synthesize. Mark Status reuses
+          the exact click-to-expand submenu
           idiom Generate Chart below already established (chartMenuOpen),
           not a new interaction pattern - role="menuitemradio"/aria-checked
           marks the currently active status. */}
@@ -587,30 +599,6 @@ function ChatNodeMenu({
       >
         Generate Image
       </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="chat-node-menu-danger"
-        onClick={() => {
-          onDelete();
-          onClose();
-        }}
-      >
-        Delete Node
-      </button>
-      {canRerun && onRerunFromHere && (
-        <button type="button" role="menuitem" disabled={editDisabled}
-          onClick={() => {
-            // Preserve a connected focus target when the context menu unmounts.
-            const trigger = document.getElementById("chat-rerun-trigger-" + nodeId)
-              ?? menuTriggerRef.current;
-            trigger?.focus();
-            onRerunFromHere();
-            onClose();
-          }}>
-          Re-run from here
-        </button>
-      )}
       {!isUser && (
         <button
           type="button"
@@ -623,6 +611,18 @@ function ChatNodeMenu({
           Regenerate Response
         </button>
       )}
+      <div className="chat-node-menu-separator" role="separator" />
+      <button
+        type="button"
+        role="menuitem"
+        className="chat-node-menu-danger"
+        onClick={() => {
+          onDelete();
+          onClose();
+        }}
+      >
+        Delete Node
+      </button>
     </NodeMenu>
   );
 }

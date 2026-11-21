@@ -597,7 +597,7 @@ interface DispatcherLive {
   store: SceneStore;
   onOpenDocumentView: (markdown: string, sourceLabel: string, citation?: KnowledgeCitationSource) => void;
   onToggleBranchFocus: (nodeId: string) => void;
-  onCompareChatVersions?: (nodeId: string, count: number, selectedIndex: number) => void;
+  onCompareChatVersions?: (nodeId: string, count: number, selectedIndex: number, isUser: boolean) => void;
   onOpenChatRerun?: (nodeId: string) => void;
   onOpenModelSettings?: (provider: string | null, reason: string | null) => void;
   // ADR-018 stage 18.3: optional - only the chat dispatcher's own call
@@ -672,7 +672,7 @@ function getDispatcher<T extends Record<string, unknown>>(
   return fns;
 }
 
-const NO_COMPARE_CHAT_VERSIONS: (nodeId: string, count: number, selectedIndex: number) => void = () => {};
+const NO_COMPARE_CHAT_VERSIONS: (nodeId: string, count: number, selectedIndex: number, isUser: boolean) => void = () => {};
 
 function makeChatFns(id: string, liveRef: { current: DispatcherLive }) {
   return {
@@ -691,7 +691,7 @@ function makeChatFns(id: string, liveRef: { current: DispatcherLive }) {
       liveRef.current.store.editChatMessageAsNewBranch(id, content, expectedContent, onSettled),
     onCompareVersions: () => {
       const { n, onCompareChatVersions } = liveRef.current;
-      onCompareChatVersions?.(id, n.versionCount, n.versionIndex);
+      onCompareChatVersions?.(id, n.versionCount, n.versionIndex, n.isUser);
     },
     onGenerateImage: () => liveRef.current.store.generateImage(id),
     // R6.2: real chart generation - fires the new generateChart intent with
@@ -1200,7 +1200,7 @@ export function toFlowNodes(
   // omits these two keeps working unchanged.
   filterKinds: ReadonlySet<string> = new Set(),
   filterStatuses: ReadonlySet<string> = new Set(),
-  onCompareChatVersions: (nodeId: string, count: number, selectedIndex: number) => void = NO_COMPARE_CHAT_VERSIONS,
+  onCompareChatVersions: (nodeId: string, count: number, selectedIndex: number, isUser: boolean) => void = NO_COMPARE_CHAT_VERSIONS,
   onOpenChatRerun: (nodeId: string) => void = () => {},
   onOpenModelSettings: (provider: string | null, reason: string | null) => void = () => {},
 ): SceneFlowNode[] {
@@ -2732,7 +2732,7 @@ function CanvasInner({
 }: {
   store: SceneStore;
   onOpenDocumentView: (markdown: string, sourceLabel: string, citation?: KnowledgeCitationSource) => void;
-  onCompareChatVersions: (nodeId: string, count: number, selectedIndex: number) => void;
+  onCompareChatVersions: (nodeId: string, count: number, selectedIndex: number, isUser: boolean) => void;
   // ADR-018 stage 18.3: passed straight through to toFlowNodes - see that
   // function's own comment on why a getter, not a subscribed value.
   getComposerRoute: () => { provider: string; modelId: string };
@@ -3375,7 +3375,7 @@ export function SceneCanvas({
 }: {
   store: SceneStore;
   onOpenDocumentView: (markdown: string, sourceLabel: string, citation?: KnowledgeCitationSource) => void;
-  onCompareChatVersions?: (nodeId: string, count: number, selectedIndex: number) => void;
+  onCompareChatVersions?: (nodeId: string, count: number, selectedIndex: number, isUser: boolean) => void;
   getComposerRoute?: () => { provider: string; modelId: string };
   /** Where the zoom dock and minimap render; see CanvasInner's own prop. */
   hudContainer?: HTMLElement | null;

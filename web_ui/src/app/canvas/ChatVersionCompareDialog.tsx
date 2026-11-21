@@ -6,6 +6,7 @@ import type { ChatDiffChunk, ChatWordDiff } from "./chatVersionWordDiff";
 
 export interface ChatVersionCompareTarget {
   nodeId: string;
+  isUser: boolean;
   versionCount: number;
   selectedIndex: number;
   requestId: number;
@@ -44,13 +45,14 @@ function DiffContents({ chunks }: { chunks: ChatDiffChunk[] }) {
 }
 
 function VersionPane({
-  side, index, version, chunks, unavailable, paneRef, onKeyDown,
+  side, index, version, chunks, unavailable, isUser, paneRef, onKeyDown,
 }: {
   side: "Left" | "Right";
   index: number;
   version: ChatVersionSnapshot | null;
   chunks: ChatDiffChunk[] | null;
   unavailable: boolean;
+  isUser: boolean;
   paneRef: RefObject<HTMLDivElement>;
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
 }) {
@@ -68,9 +70,10 @@ function VersionPane({
           <h3>Version {index + 1}</h3>
           <p className="document-view-panel-subtitle">
             {version
-              ? (version.provider || "Provider not recorded") + " / " +
-                (version.model || "Model not recorded") + " · " + versionTime(version.createdAt)
-              : "Provider, model and time loading…"}
+              ? (isUser ? versionTime(version.createdAt)
+                : (version.provider || "Provider not recorded") + " / " +
+                  (version.model || "Model not recorded") + " · " + versionTime(version.createdAt))
+              : (isUser ? "Time loading…" : "Provider, model and time loading…")}
           </p>
         </div>
         <div className="chat-version-compare-text-body">
@@ -150,9 +153,9 @@ export function ChatVersionCompareDialog({
   };
 
   return (
-    <Dialog name="chat-version-compare" title="Document View · Compare reply versions" className="chat-version-compare-dialog">
+    <Dialog name="chat-version-compare" title={`Document View · Compare ${target.isUser ? "message" : "reply"} versions`} className="chat-version-compare-dialog">
       <p className="chat-version-compare-help">
-        Choose two saved replies. This comparison is read-only and never changes the active version.
+        Choose two saved {target.isUser ? "versions" : "replies"}. This comparison is read-only and never changes the active version.
         Use Alt+Left/Right Arrow to switch reading panes, or Tab to the pane focus buttons. Escape closes.
       </p>
       <div className="chat-version-compare-selectors">
@@ -176,7 +179,7 @@ export function ChatVersionCompareDialog({
       <div className="chat-version-compare-legend" role="group" aria-label="Text difference legend">
         <span><span aria-hidden="true">− </span>Deleted: <del>struck through</del></span>
         <span><span aria-hidden="true">+ </span>Inserted: <ins>underlined</ins></span>
-        <span>Raw reply text, including Markdown syntax</span>
+        <span>Raw {target.isUser ? "message" : "reply"} text, including Markdown syntax</span>
       </div>
       <div className="chat-version-compare-focus-actions">
         <button type="button" onClick={() => leftRef.current?.focus()}>Focus left pane</button>
@@ -187,11 +190,11 @@ export function ChatVersionCompareDialog({
       </p>
       <div className="chat-version-compare-panes">
         <VersionPane
-          side="Left" index={leftIndex} version={pair?.left ?? null} chunks={diff?.left ?? null}
+          isUser={target.isUser} side="Left" index={leftIndex} version={pair?.left ?? null} chunks={diff?.left ?? null}
           unavailable={!!error} paneRef={leftRef} onKeyDown={switchPane}
         />
         <VersionPane
-          side="Right" index={rightIndex} version={pair?.right ?? null} chunks={diff?.right ?? null}
+          isUser={target.isUser} side="Right" index={rightIndex} version={pair?.right ?? null} chunks={diff?.right ?? null}
           unavailable={!!error} paneRef={rightRef} onKeyDown={switchPane}
         />
       </div>

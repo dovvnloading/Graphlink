@@ -162,3 +162,17 @@ describe("NodeMenu disabled and nested action keyboard navigation", () => {
     expect(screen.getByRole("menuitem", { name: "Last action" })).toHaveFocus();
   });
 });
+
+describe("Chat node menu destructive action styling", () => {
+  it("separates Delete Node and colors it with graphlink tokens", () => {
+    const css = readFileSync(join(REPO_SRC, "app/styles.css"), "utf-8");
+    const separatorStart = css.indexOf(".chat-node-menu-separator {");
+    expect(separatorStart).toBeGreaterThanOrEqual(0);
+    const separatorRule = css.slice(separatorStart, css.indexOf("}", separatorStart));
+    expect(separatorRule).toContain("border-top: 1px solid var(--gl-surface-border)");
+    const dangerStart = css.indexOf(".chat-node-menu button.chat-node-menu-danger {");
+    expect(dangerStart).toBeGreaterThanOrEqual(0);
+    const dangerRule = css.slice(dangerStart, css.indexOf("}", dangerStart));
+    expect(dangerRule).toContain("color: var(--gl-semantic-status-error)");
+  });
+});
