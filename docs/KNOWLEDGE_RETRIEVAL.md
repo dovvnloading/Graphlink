@@ -17,8 +17,19 @@ connection and an explicitly entered embedding-model ID. The user must
 check the consent control explaining that **document text leaves the
 machine**: indexed passages and search queries will be transmitted to
 that service. The backend checks the persisted consent on every use, not
-only when saving settings or rendering the UI. Turning the choice Off
-clears that consent and stops future embedding requests.
+only when saving settings or rendering the UI. Consent is bound to the
+**actual embedding API endpoint URL**, not just its provider name. Changing
+the endpoint or loading legacy opt-in settings without this binding requires
+a fresh explicit opt-in. Cloud endpoints must use HTTPS, except HTTP to
+local loopback addresses. Turning the choice Off clears consent and stops
+subsequent requests; an already-started request cannot be recalled.
+
+The embedding endpoint receives extracted text chunks (at most 32 per
+batch) and semantic search queries, not original file bytes or paths.
+An initial cold workspace search can send one batch of up to 32 chunks.
+This choice does **not** control cloud chat-model egress: enabling Knowledge
+in a chat with a cloud model can separately send cited passages to its
+provider even if embeddings are Off.
 
 The page's **Test** button embeds a fixed synthetic phrase, not any
 stored document. A saved choice starts a **background embedding job** for
@@ -106,6 +117,25 @@ untrusted excerpts without accepting a model-supplied collection ID. Only
 the workspace Agent can call `knowledge.add` (`path` within its bound
 workspace); each write requires fresh human approval, including in modes
 that auto-approve ordinary file edits. The source file is not modified.
+
+## Filesystem and archive boundaries
+
+Source files are opened with a bounded, no-follow descriptor reader and
+parsed from a private snapshot, preserving the protections added in #906.
+Watched-folder scans additionally pin the root's device and inode for the
+whole import, including before database writes and missing-file pruning,
+so a different directory at the same pathname cannot silently inherit
+the original watch authorization.
+
+Knowledge imports limit DOCX and XLSX ZIP archives to 2,048 members,
+32 MiB total expanded bytes and 4 MiB per XML member before the parser
+allocates a document tree. Existing document XML element/entity checks
+and PDF protections remain in effect. On POSIX, the dedicated knowledge
+directory and SQLite files are secured before opening; hardlinked database
+and WAL/SHM files are rejected so other paths cannot share knowledge data.
+Legacy retrieval context encodes every source-controlled field, including
+citation IDs, as JSON strings so embedded newlines cannot spoof extra
+citation blocks or top-level instructions.
 
 ## Pipeline
 
