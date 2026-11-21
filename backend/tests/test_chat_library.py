@@ -45,6 +45,7 @@ from backend.chat_library import (
     delete_chat,
     get_all_chats,
     get_all_workspaces,
+    get_default_workspace_id,
     get_workspace_default_model,
     load_chat_row,
     load_chat_snapshot,
@@ -1826,6 +1827,107 @@ def test_reopening_saved_agent_and_new_chat_disarm_live_tool_grants(db_path, tmp
     assert not document.nodes
 
 
+def test_fresh_session_keeps_default_workspace_for_knowledge_watches_search_and_save(db_path, tmp_path):
+    """Regression: Knowledge Library and agent tools must work before any chat is opened."""
+    from backend.api.intents_knowledge import register_knowledge_watched_folder_intents
+    from backend.harness.loop import HarnessRunContext
+    from backend.knowledge_chunking import chunk_text
+    from backend.knowledge_watches import WatchedFolderService
+    from backend.providers.base import ToolCall
+    from backend.tools import KNOWLEDGE_READ, ToolRegistry
+    from backend.tools_knowledge import register_knowledge_tools
+
+    knowledge_db = tmp_path / "knowledge.db"
+    default_id = get_default_workspace_id(db_path)
+    unrelated_id = create_workspace(db_path, "Other")["id"]
+    legacy_file = tmp_path / "notes.md"
+    legacy_file.write_text("Important hedgehog manual", encoding="utf-8")
+    old = knowledge_store_module.upsert_file_with_chunks(
+        knowledge_db, source_uri=str(legacy_file.resolve()), title=legacy_file.name,
+        mime="text/markdown", text=legacy_file.read_text(encoding="utf-8"),
+        chunks=chunk_text("Important hedgehog manual"), collection_id=0,
+    )
+    unrelated_collection = knowledge_store_module.get_or_create_workspace_collection(
+        knowledge_db, unrelated_id,
+    )
+    knowledge_store_module.add_document_with_chunks(
+        knowledge_db, source_uri="other.md", title="Other", mime="text/markdown",
+        text="other workspace secret", chunks=chunk_text("other workspace secret"),
+        collection_id=unrelated_collection,
+    )
+
+    bus = SessionBus("fresh-session-with-knowledge")
+    document = SceneDocument()
+    notifications = NotificationState()
+    bus.register_topic("scene", document.scene_payload)
+    bus.register_topic("notification", notifications.payload)
+    bus.register_topic("knowledge", lambda: {})
+    register_chat_library(
+        bus, db_path, document, notifications, autosave_interval_seconds=None,
+        knowledge_db_path=knowledge_db,
+    )
+
+    default_collection = knowledge_store_module.get_or_create_workspace_collection(knowledge_db, default_id)
+    assert document.current_chat_id is None
+    assert document.current_workspace_id == default_id
+    assert knowledge_store_module.list_documents(knowledge_db, collection_id=0) == []
+    assert {d["id"] for d in knowledge_store_module.list_documents(
+        knowledge_db, collection_id=default_collection,
+    )} == {old.document_id}
+    assert knowledge_store_module.file_sources_for_document(
+        knowledge_db, collection_id=default_collection, document_id=old.document_id,
+    ) == [str(legacy_file.resolve())]
+    assert len(knowledge_store_module.list_documents(knowledge_db, collection_id=unrelated_collection)) == 1
+
+    # The watched-folder list must not raise a "select a workspace" error.
+    register_knowledge_watched_folder_intents(bus, document, WatchedFolderService(knowledge_db))
+    assert asyncio.run(bus.dispatch_intent("knowledge", "listWatchedFolders", [])) == {"folders": []}
+
+    # The workspace agent's knowledge.search succeeds before New Chat or Load.
+    registry = ToolRegistry()
+    register_knowledge_tools(registry, document=document, db_path=knowledge_db)
+
+    async def no_approval(_call):
+        raise AssertionError("Read-only knowledge search must not request approval")
+
+    response = asyncio.run(registry.invoke(
+        ToolCall("search-default", "knowledge.search", {"query": "hedgehog"}),
+        HarnessRunContext(
+            granted_scopes=frozenset({KNOWLEDGE_READ}), request_approval=no_approval,
+        ),
+    ))
+    assert not response.is_error, response.content
+    assert {hit["source_uri"] for hit in json.loads(response.content)["results"]} == {
+        str(legacy_file.resolve()),
+    }
+
+    document.add_chat_node(0, 0, "A fresh chat", is_user=True)
+    assert asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", [])) is True
+    assert document.current_workspace_id == default_id
+    assert load_chat_row(db_path, document.current_chat_id)["workspace_id"] == default_id
+    assert knowledge_store_module.get_document(knowledge_db, old.document_id)["collection_id"] == default_collection
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "newChat", []))
+    assert document.current_workspace_id == default_id
+    asyncio.run(bus.dispatch_intent("app-chat-library", "newChat", [999999]))
+    assert document.current_workspace_id == default_id
+    asyncio.run(bus.dispatch_intent("app-chat-library", "newChat", [unrelated_id]))
+    assert document.current_workspace_id == unrelated_id
+    asyncio.run(bus.dispatch_intent("app-chat-library", "newChat", []))
+    assert document.current_workspace_id == default_id
+
+    # Reconnecting a new session cannot re-copy or hide migrated documents.
+    second_bus = SessionBus("another-fresh-session")
+    second_document = SceneDocument()
+    register_chat_library(
+        second_bus, db_path, second_document, autosave_interval_seconds=None,
+        knowledge_db_path=knowledge_db,
+    )
+    assert second_document.current_workspace_id == default_id
+    assert knowledge_store_module.list_documents(knowledge_db, collection_id=0) == []
+    assert knowledge_store_module.get_document(knowledge_db, old.document_id)["collection_id"] == default_collection
+
+
 def test_load_chat_intent_restores_a_real_node_into_the_canvas_document(db_path):
     chat_data = {
         "nodes": [
@@ -1871,7 +1973,7 @@ def test_load_chat_intent_sets_current_workspace_id_from_the_loaded_graphs_own_r
         db_path, None, "In Research", {"nodes": []}, [], [], workspace_id=other_workspace["id"],
     )
     bus, document, notifications = _bus_with_canvas(db_path)
-    assert document.current_workspace_id is None  # nothing loaded yet
+    assert document.current_workspace_id == get_default_workspace_id(db_path)  # fresh sessions start in Default
 
     asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [chat_id]))
 
@@ -2079,10 +2181,9 @@ def test_new_chat_intent_clears_canvas_and_resets_current_chat_id(db_path):
 
     assert document.nodes == {}
     assert document.current_chat_id is None
-    # ADR-020 stage 20.2: every OTHER caller of newChat (e.g. commands.ts's
-    # palette command) keeps calling with zero args - byte-identical
-    # pre-20.2 behavior, including current_workspace_id staying unset.
-    assert document.current_workspace_id is None
+    # Zero-argument New Chat also selects Default, without leaving the
+    # Knowledge Library or workspace agent unscoped.
+    assert document.current_workspace_id == get_default_workspace_id(db_path)
 
 
 def test_new_chat_intent_honors_an_explicit_valid_workspace_id(db_path):
@@ -2108,7 +2209,7 @@ def test_new_chat_intent_defaults_to_default_workspace_when_id_is_invalid(db_pat
 
     # A workspace id that has never existed.
     asyncio.run(bus.dispatch_intent("app-chat-library", "newChat", [999999]))
-    assert document.current_workspace_id is None
+    assert document.current_workspace_id == default_workspace_id
 
     document.add_chat_node(0, 0, "hello", is_user=True)
     asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", []))
@@ -3551,7 +3652,7 @@ class TestExportWorkspaceIntent:
         default = get_all_workspaces(db_path)[0]
         bus, document, notifications = _bus_with_canvas(db_path)
         document.add_chat_node(0, 0, "default unsaved graph", is_user=True)
-        assert document.current_workspace_id is None
+        assert document.current_workspace_id == default["id"]
 
         target = tmp_path / "default-new.graphlink"
 
