@@ -418,6 +418,38 @@
       },
       "type": "object"
     },
+    "ollamaModelChecks": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "loadSeconds": {
+            "type": "number"
+          },
+          "message": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tokensPerSecond": {
+            "type": "number"
+          },
+          "toolCallingWorks": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "status",
+          "message"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
     "ollamaNotice": {
       "type": "string"
     },
@@ -520,6 +552,7 @@
     "ollamaContextAvailableMemoryBytes",
     "ollamaScannedModels",
     "ollamaInventory",
+    "ollamaModelChecks",
     "ollamaInventorySource",
     "ollamaServerStatus",
     "ollamaStartStatus",

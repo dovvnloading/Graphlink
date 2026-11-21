@@ -173,6 +173,7 @@ const initialState: AppSettingsState = {
   ollamaContextAvailableMemoryBytes: 0,
   ollamaScannedModels: [],
   ollamaInventory: [],
+  ollamaModelChecks: [],
   ollamaInventorySource: "",
   ollamaServerReachable: null,
   ollamaServerStatus: "checking",
@@ -846,6 +847,7 @@ function formatOllamaBytes(value: number | null | undefined): string {
 
 function OllamaPage({ state, transport }: { state: AppSettingsState; transport: WsTransport }) {
   const [draftPullModel, setDraftPullModel] = useState("");
+  const checkInProgress = state.ollamaModelChecks.some((check) => check.status === "running");
   const [selectedContextModel, setSelectedContextModel] = useState("");
   const contextModels = Array.from(new Set([
     ...state.ollamaScannedModels,
@@ -956,27 +958,61 @@ function OllamaPage({ state, transport }: { state: AppSettingsState; transport: 
 
       <fieldset className="settings-fieldset">
         <legend>Local model inventory</legend>
+        <p className="settings-field-hint">
+          Check loads a model and runs brief probes. Results are reports only: no settings change and tool calls are never executed.
+        </p>
         {state.ollamaInventory.length === 0 && (
           <p className="settings-field-hint">Run a system scan to inspect installed models.</p>
         )}
-        {state.ollamaInventory.map((model) => (
-          <div className="settings-field" key={model.name}>
-            <strong>{model.name}</strong>
-            <span className="settings-field-hint">
-              {model.loaded === true
-                ? `Loaded · ${formatOllamaBytes(model.memoryBytes)} memory in use · ${formatOllamaBytes(model.vramBytes)} VRAM`
-                : model.loaded === false ? "Not loaded" : "Load state unavailable"}
-            </span>
-            <span className="settings-field-hint">
-              {formatOllamaBytes(model.sizeBytes)} on disk · {model.family || "Unknown family"} ·
-              {" "}{model.parameterSize || "Unknown parameter size"} · {model.quantization || "Unknown quantization"}
-              {" "}· Trained context: {model.trainedContextLength?.toLocaleString() ?? "Unknown"} tokens
-            </span>
-            <span className="settings-field-hint">
-              Capabilities: {model.capabilities.join(", ") || "Unavailable"}
-            </span>
-          </div>
-        ))}
+        {state.ollamaInventory.map((model) => {
+          const report = state.ollamaModelChecks.find((item) => item.name === model.name);
+          return (
+            <div className="settings-field" key={model.name}>
+              <strong>{model.name}</strong>
+              <span className="settings-field-hint">
+                {model.loaded === true
+                  ? `Loaded · ${formatOllamaBytes(model.memoryBytes)} memory in use · ${formatOllamaBytes(model.vramBytes)} VRAM`
+                  : model.loaded === false ? "Not loaded" : "Load state unavailable"}
+              </span>
+              <span className="settings-field-hint">
+                {formatOllamaBytes(model.sizeBytes)} on disk · {model.family || "Unknown family"} ·
+                {" "}{model.parameterSize || "Unknown parameter size"} · {model.quantization || "Unknown quantization"}
+                {" "}· Trained context: {model.trainedContextLength?.toLocaleString() ?? "Unknown"} tokens
+              </span>
+              <span className="settings-field-hint">
+                Capabilities: {model.capabilities.join(", ") || "Unavailable"}
+              </span>
+              <div className="settings-button-row">
+                <button type="button" className="settings-button" aria-label={`Check ${model.name}`}
+                  disabled={checkInProgress || state.ollamaScanStatus === "running"}
+                  onClick={() => transport.fireIntent("app-settings", "checkOllamaModel", [model.name])}>
+                  {report?.status === "running" ? "Checking..." : "Check"}
+                </button>
+                {report?.status === "running" && (
+                  <button type="button" className="settings-button" aria-label={`Cancel check ${model.name}`}
+                    onClick={() => transport.fireIntent("app-settings", "cancelOllamaModelCheck", [model.name])}>
+                    Cancel
+                  </button>
+                )}
+              </div>
+              {report && (
+                <p className="settings-update-status" role="status"
+                  data-level={report.status === "error" ? "error" : undefined}>
+                  {report.status === "running" ? "Checking model..." :
+                    report.status === "cancelled" ? "Check cancelled." :
+                    report.status === "error" ? report.message :
+                    `Load: ${report.loadSeconds == null ? "Unavailable" : `${report.loadSeconds.toFixed(2)} s`} ·
+                    Speed: ${report.tokensPerSecond == null ? "Unavailable" : `${report.tokensPerSecond.toFixed(1)} tokens/s`} ·
+                    Tool calling: ${report.toolCallingWorks === true ? "Works" :
+                      report.toolCallingWorks === false ? "Not working" : "Unavailable"}`}
+                </p>
+              )}
+              {report?.status === "complete" && report.message && (
+                <span className="settings-field-hint">{report.message}</span>
+              )}
+            </div>
+          );
+        })}
       </fieldset>
 
       <datalist id={OLLAMA_MODELS_DATALIST_ID}>
