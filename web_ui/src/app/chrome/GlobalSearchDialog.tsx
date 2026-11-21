@@ -3,6 +3,7 @@ import { useRef, useState } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
 import { motionDuration } from "../reducedMotion";
 import { Dialog, useOverlays } from "../overlays/overlays";
+import { knowledgeSourceLabel } from "../knowledgeSourceLabel";
 
 /**
  * ADR-020 stage 20.4: the "Global Search" dialog - search across every
@@ -119,7 +120,7 @@ function GlobalSearchResultCard({ transport, result }: { transport: WsTransport;
       >
         <span className="global-search-result-title">{result.documentTitle}</span>
         <span className="global-search-result-kind">{graphHit ? "Graph" : "Document"}</span>
-        <span className="global-search-result-source">{result.sourceUri}</span>
+        <span className="global-search-result-source">{knowledgeSourceLabel(result.sourceUri, result.documentTitle)}</span>
       </button>
       {expanded && (
         <div className="global-search-result-body">
