@@ -137,12 +137,14 @@ export function ModelPricingSettings({ state, transport }: {
                     Input: {formatRate(row.inputPerMillion)} · Output: {formatRate(row.outputPerMillion)}
                   </span>
                 </div>
-                {row.source !== "local" && (
+                {(row.source !== "local" || overridden) && (
                   <div className="settings-button-row settings-model-pricing-actions">
-                    <button type="button" className="settings-button" disabled={saving}
-                      aria-label={`Edit pricing for ${rowLabel}`} onClick={() => edit(row)}>
-                      Edit
-                    </button>
+                    {row.source !== "local" && (
+                      <button type="button" className="settings-button" disabled={saving}
+                        aria-label={`Edit pricing for ${rowLabel}`} onClick={() => edit(row)}>
+                        Edit
+                      </button>
+                    )}
                     {overridden && (
                       <button type="button" className="settings-button" disabled={saving}
                         aria-label={`Remove override for ${rowLabel}`}
