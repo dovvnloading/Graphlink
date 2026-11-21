@@ -123,6 +123,18 @@ def _offered_harness_specs(registry: ToolRegistry, execution_profile: str) -> tu
     )
 
 
+# Small local models cannot spend most of their KV window on Fal, graph,
+# scientific and other schemas unrelated to the immediate task. The core
+# stays usable without a discovery round trip; tools.enable exposes any
+# omitted schema on demand without expanding scopes or skipping approvals.
+_SMALL_LOCAL_CONTEXT_MAX = 16_384
+_SMALL_LOCAL_CORE_TOOLS = frozenset({
+    "tools.enable", "knowledge.search", "fs.list", "fs.read", "fs.grep",
+    "fs.write", "fs.edit", "shell.exec", "python.exec", "graph.list_nodes",
+    "web.search", "plan.update", "user.ask",
+})
+
+
 def _retire_host_repl_for_isolated(dispatcher, workspace_id: str) -> None:
     """Retire a Host task's persistent interpreter when switching profiles."""
     repls = getattr(dispatcher, "_harness_python_repls", None)
@@ -917,12 +929,43 @@ async def run_harness(
             await _land("failed", refusal)
             return
 
-        # ADR-021 stage 21.1 posture: offer only tools this run could
-        # actually pass the scope gate with - anything else spends context
-        # per turn to buy a guaranteed denial.
-        specs = _offered_harness_specs(registry, ctx.harness_execution_profile)
-        # Enforce this same catalog on calls returned by the model, even when
-        # a model fabricates a tool name that was never in its schemas.
+        # ADR-021 stage 21.1 posture: no offered tool may bypass its scope
+        # gate. With a small local context, start with a useful lean catalog;
+        # additional schemas can be activated through tools.enable. All calls
+        # still go through the unchanged registry permissions and approvals.
+        all_specs = _offered_harness_specs(registry, ctx.harness_execution_profile)
+        budget = max(1_000, int(node.state.harness_max_context_tokens))
+        served_window = context_module.served_context_window(model_ref=model_ref, runtime=runtime)
+        window = min(budget, served_window)
+        node.state.harness_effective_context_tokens = window
+        input_limit = context_module.prompt_token_limit(window)
+        provider_name, _ = api_provider.describe_active_model(
+            config.TASK_CHAT, runtime=runtime, model_ref=model_ref,
+        )
+        use_small_catalog = (
+            window <= _SMALL_LOCAL_CONTEXT_MAX
+            and provider_name.casefold() in {
+                config.LOCAL_PROVIDER_OLLAMA.casefold(),
+                config.LOCAL_PROVIDER_LLAMACPP.casefold(),
+            }
+            and any(spec.name == "tools.enable" for spec in all_specs)
+        )
+        optional_names = tuple(
+            spec.name for spec in all_specs
+            if spec.name not in _SMALL_LOCAL_CORE_TOOLS
+        ) if use_small_catalog else ()
+        ctx.harness_available_tool_names = frozenset(optional_names)
+        ctx.harness_enabled_tool_names = ()
+
+        def _current_specs(extra: tuple[str, ...] = ()) -> tuple[ToolSpec, ...]:
+            if not use_small_catalog:
+                return all_specs
+            selected = _SMALL_LOCAL_CORE_TOOLS | set(extra)
+            return tuple(spec for spec in all_specs if spec.name in selected)
+
+        specs = _current_specs()
+        # This also guards a forged model call that names a tool never
+        # included in the schemas of its most recent model turn.
         ctx.offered_tool_names = frozenset(spec.name for spec in specs)
         # Probe the actual execution machine once per dispatcher session
         # and bound root, not on every model turn (or every follow-up task).
@@ -952,6 +995,7 @@ async def run_harness(
         # remain in the cacheable system message, outside compactable history.
         system_prompt = context_module.build_system_prompt(
             root, machine_context=machine_context,
+            compact_tool_names=optional_names if use_small_catalog else None,
         )
         append_task_start(
             transcript_dir, run_id=request_id,
@@ -980,15 +1024,17 @@ async def run_harness(
 
         turns = 0
         max_turns = max(1, int(node.state.harness_max_turns))
-        budget = max(1_000, int(node.state.harness_max_context_tokens))
-        # The configured history ceiling is not the model's served KV window.
-        # Ollama sends options.num_ctx from this same source of truth; a
-        # 48k node budget cannot override an 8,192-token daemon context.
-        served_window = context_module.served_context_window(model_ref=model_ref, runtime=runtime)
-        window = min(budget, served_window)
-        node.state.harness_effective_context_tokens = window
-        input_limit = context_module.prompt_token_limit(window)
+        # The configured history ceiling is not the model's served KV
+        # window. Ollama's options.num_ctx uses the same served_window
+        # measured above, rather than the 48k node preference.
         fixed_tokens = context_module.request_tokens(system_prompt, [], specs)
+        if use_small_catalog:
+            # A tool-enablement request may not consume all the room freed
+            # by the lean catalog. Keep space for retrieved evidence/reply.
+            ctx.harness_enable_fits = lambda names: (
+                context_module.request_tokens(system_prompt, [], _current_specs(names))
+                <= input_limit - min(1_024, window // 4)
+            )
         # Report the fixed overhead even if no history can safely be sent.
         node.state.harness_context_tokens = fixed_tokens
         if fixed_tokens >= input_limit:
@@ -1054,6 +1100,18 @@ async def run_harness(
         while True:
             if cancel_event.is_set():
                 raise api_provider.RequestCancelledError("stopped")
+            # tools.enable changes the *next* turn's tool definitions, not
+            # the current turn's. Re-budget and renew the offered-name gate.
+            specs = _current_specs(ctx.harness_enabled_tool_names)
+            ctx.offered_tool_names = frozenset(spec.name for spec in specs)
+            fixed_tokens = context_module.request_tokens(system_prompt, [], specs)
+            history_budget = max(1, input_limit - fixed_tokens)
+            if fixed_tokens >= input_limit:
+                await _land(
+                    "failed", "Enabled tool schemas exceed the served context window. "
+                    "Enable fewer tools or increase Ollama num_ctx.",
+                )
+                return
             if turns >= max_turns:
                 await _land(
                     "failed",
@@ -1086,13 +1144,22 @@ async def run_harness(
                     fits=lambda candidate: _estimated_input(candidate) <= input_limit,
                 )
                 if send_history is None:
-                    await _land(
-                        "failed",
-                        f"The {window:,}-token context window cannot fit the current "
-                        "request and workspace tools with reply headroom. "
-                        "Shorten the task or increase Ollama num_ctx / select a "
-                        "larger-window model.",
-                    )
+                    if context_module.unread_tool_start(history) is not None:
+                        detail = (
+                            f"The {window:,}-token context window cannot fit the most "
+                            "recent unread tool result with the workspace tools. "
+                            "The result was preserved, not compacted away. "
+                            "Try a narrower search (knowledge.search k=1) or "
+                            "increase Ollama num_ctx / select a larger-window model."
+                        )
+                    else:
+                        detail = (
+                            f"The {window:,}-token context window cannot fit the current "
+                            "request and workspace tools with reply headroom. "
+                            "Shorten the task or increase Ollama num_ctx / select a "
+                            "larger-window model."
+                        )
+                    await _land("failed", detail)
                     return
                 node.state.harness_context_tokens = _estimated_input(send_history)
                 await bus.publish("scene")
