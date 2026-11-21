@@ -205,7 +205,10 @@ export function KnowledgeSearchDialog({ transport }: { transport: WsTransport })
         >
           {picking === "folder" ? "Choosing folder…" : "Add folder"}
         </button>
-        <span className="knowledge-import-hint">Up to 25 MiB/file, 500 MiB or 10,000 files/job.</span>
+        <span className="knowledge-import-hint">
+          PDF, DOCX, XLSX, Markdown, text, CSV, JSON, HTML, code ·
+          25 MiB/file; 500 MiB or 10,000 files/job
+        </span>
       </div>
       {importError && <p className="knowledge-empty" role="alert">{importError}</p>}
       {importJobs.map((job) => (

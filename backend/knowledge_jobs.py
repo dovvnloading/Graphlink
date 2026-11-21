@@ -26,7 +26,8 @@ MAX_JOB_BYTES = 500 * 1024 * 1024
 MAX_JOB_FILES = 10_000
 _EXCLUDED_DIRS = {
     ".git", "node_modules", "venv", ".venv", "virtualenv", ".virtualenv",
-    "env", ".env", "__pycache__", ".tox", ".mypy_cache", ".pytest_cache",
+    "env", ".env", "venvs", ".venvs", "virtualenvs", "site-packages",
+    "__pypackages__", "__pycache__", ".tox", ".mypy_cache", ".pytest_cache",
     ".hg", ".svn", ".idea",
 }
 _FINAL = {"completed", "cancelled", "failed"}
