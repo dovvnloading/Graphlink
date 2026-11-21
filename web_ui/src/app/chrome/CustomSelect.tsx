@@ -91,6 +91,40 @@ export function CustomSelect({
 
   useOutsideDismiss(open, triggerRef, panelRef, () => setOpen(false));
 
+  // The options are portaled outside the Settings dialog's Tab trap. Move
+  // focus into the popup explicitly; Arrow/Home/End work without a mouse,
+  // and Escape/selection return focus to the trigger.
+  useEffect(() => {
+    if (!open) return;
+    const selectedIndex = Math.max(0, options.findIndex((option) => option.id === value));
+    panelRef.current?.querySelectorAll<HTMLButtonElement>(".reasoning-option")[selectedIndex]?.focus();
+    // The opening selection is intentional; live option updates should not
+    // steal focus from a keyboard user moving within the open popup.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const onPanelKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const buttons = [...(panelRef.current?.querySelectorAll<HTMLButtonElement>(".reasoning-option") ?? [])];
+    if (!buttons.length) return;
+    const focused = buttons.findIndex((button) => button === document.activeElement);
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const delta = event.key === "ArrowDown" ? 1 : -1;
+      buttons[(focused + delta + buttons.length) % buttons.length].focus();
+    } else if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      buttons[event.key === "Home" ? 0 : buttons.length - 1].focus();
+    } else if (event.key === "Tab") {
+      const atBoundary = event.shiftKey ? focused === 0 : focused === buttons.length - 1;
+      if (atBoundary) {
+        // Don't send Tab past the portaled list into the background app.
+        event.preventDefault();
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
+    }
+  };
+
   const selected = options.find((option) => option.id === value);
 
   return (
@@ -104,6 +138,12 @@ export function CustomSelect({
         aria-label={ariaLabel}
         disabled={disabled}
         onClick={() => setOpen((isOpen) => !isOpen)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            setOpen(true);
+          }
+        }}
       >
         <span className="custom-select-value">{selected ? selected.label : placeholder}</span>
         <ChevronIcon />
@@ -117,6 +157,7 @@ export function CustomSelect({
             aria-label={ariaLabel}
             tabIndex={-1}
             className="overlay-popover overlay-popover-anchored custom-select-panel"
+            onKeyDown={onPanelKeyDown}
             style={placement ? { top: placement.top, left: placement.left, minWidth: placement.minWidth } : undefined}
           >
             {options.map((option) => (
