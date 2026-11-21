@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { ReactFlowProvider } from "@xyflow/react";
 import { describe, expect, it, vi } from "vitest";
-import { HarnessNodeView, approvalPanDelta, type HarnessNodeData } from "./HarnessNodeView";
+import { HarnessNodeView, approvalPanDelta, type HarnessHook, type HarnessNodeData } from "./HarnessNodeView";
 import { ModelCapabilityContext, ComposerModelStoreContext } from "../context/ModelCapabilityContext";
 import { OverlayProvider } from "../overlays/overlays";
 import { initialComposerState, type ComposerStore } from "../chrome/composerStore";
@@ -271,8 +271,9 @@ describe("HarnessNodeView", () => {
 
   it("lists saved hooks, edits phases and commands, and saves only on explicit action", async () => {
     const user = userEvent.setup();
+    const hooks: HarnessHook[] = [{ phase: "before_tool", command: "echo check", enabled: true }];
     const data = makeData({
-      onGetHooks: vi.fn(async () => [{ phase: "before_tool", command: "echo check", enabled: true }]),
+      onGetHooks: vi.fn(async () => hooks),
     });
     renderHarness(data);
     await user.click(screen.getByRole("button", { name: "Agent settings" }));
@@ -328,9 +329,10 @@ describe("HarnessNodeView", () => {
 
   it("reports hook-save errors without pretending an unsafe configuration was saved", async () => {
     const user = userEvent.setup();
+    const hooks: HarnessHook[] = [{ phase: "end_run", command: "echo end", enabled: false }];
     renderHarness(makeData({
       onSetHooks: vi.fn(async () => { throw new Error("denied"); }),
-      onGetHooks: vi.fn(async () => [{ phase: "end_run", command: "echo end", enabled: false }]),
+      onGetHooks: vi.fn(async () => hooks),
     }));
     await user.click(screen.getByRole("button", { name: "Agent settings" }));
     const dialog = screen.getByRole("dialog", { name: "Agent settings" });

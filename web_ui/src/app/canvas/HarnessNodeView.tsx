@@ -257,7 +257,7 @@ function AgentSettingsPopover({
   }, [position.x, position.y, engine, hooks]);
 
   useEffect(() => {
-    panelRef.current?.querySelector("select:not([disabled])")?.focus();
+    panelRef.current?.querySelector<HTMLElement>("select:not([disabled])")?.focus();
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as HTMLElement;
       if (panelRef.current?.contains(target) || triggerRef.current?.contains(target)) return;

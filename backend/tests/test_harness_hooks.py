@@ -235,7 +235,7 @@ def test_isolated_hook_never_changes_to_host_or_inherits_network_or_secrets(setu
     node.state.harness_network_always = True
     node.state.harness_shell_allow_rules = ["untrusted\tunsafe"]
     configure(node, command="echo isolated")
-    script(monkeypatch, tools=False)
+    script(monkeypatch)
     monkeypatch.setenv("GRAPH_LINK_SECRET_FOR_TEST", "never-leak")
     assert "GRAPH_LINK_SECRET_FOR_TEST" not in safe_subprocess_env()
     observed = []
@@ -262,6 +262,35 @@ def test_isolated_hook_never_changes_to_host_or_inherits_network_or_secrets(setu
         "isolated", "ask", False, [], None, None, None,
         {"command": "echo isolated", "network": False},
     )]
+
+
+def test_missing_isolation_engine_is_reported_and_blocks_hook(setup, monkeypatch):
+    from backend.harness.shell_isolation import IsolationUnavailableError
+
+    document, node, workspace, registry = setup
+    node.state.harness_execution_profile = "isolated"
+    configure(node, command="echo isolated")
+    seen = script(monkeypatch)
+
+    def no_engine(*args, **kwargs):
+        raise IsolationUnavailableError("No container engine; Host execution was NOT attempted.")
+
+    monkeypatch.setattr(tools_shell, "container_invocation", no_engine)
+    monkeypatch.setattr(tools_shell, "spawn_guarded_subprocess",
+                        lambda *args, **kwargs: pytest.fail("host subprocess launched"))
+
+    prompts = run(document, node, registry)
+    assert len(prompts) == 1
+    assert node.state.harness_status == "done"
+    hook_rows = [row for row in node.state.harness_activity if row["tool"] == "hook.before_tool"]
+    assert len(hook_rows) == 1 and hook_rows[0]["outcome"] == "error"
+    assert "No container engine" in hook_rows[0]["summary"]
+    tool_result = next(row for row in audit_lines(workspace)
+                       if row["t"] == "msg" and row.get("tool_call_id") == "real-tool-1")
+    assert "Blocked by workspace before-tool hook" in tool_result["content"]
+    assert "No container engine" in tool_result["content"]
+    assert "Host execution was NOT attempted" in tool_result["content"]
+    assert "No container engine" in str(seen[1])
 
 
 def test_missing_isolation_engine_fails_closed_before_host_spawn(tmp_path, monkeypatch):
