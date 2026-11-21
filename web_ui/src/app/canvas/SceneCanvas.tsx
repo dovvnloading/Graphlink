@@ -2,6 +2,7 @@ import {
   ReactFlow,
   ViewportPortal,
   useReactFlow,
+  useStore,
   useStoreApi,
   type Connection,
   type Edge,
@@ -155,6 +156,28 @@ const EDGE_TYPES = {
 // defaultNodes is read once when React Flow initialises its store; a stable
 // module constant keeps that unambiguous and allocation-free.
 const EMPTY_NODES: SceneFlowNode[] = [];
+
+/**
+ * Check a new node's header and expected card width against the usable
+ * stage, not the window (the composer lives outside the React Flow stage).
+ * Nodes that have not mounted yet have no measured size under virtualization.
+ */
+export function needsNodeReveal(
+  node: Pick<SceneNodeRow, "x" | "y">,
+  transform: readonly [number, number, number],
+  viewportWidth: number,
+  viewportHeight: number,
+): boolean {
+  const [panX, panY, zoom] = transform;
+  const margin = 24;
+  const left = panX + node.x * zoom;
+  const top = panY + node.y * zoom;
+  const cardWidth = Math.min(420 * zoom, Math.max(0, viewportWidth - 2 * margin));
+  const headerHeight = Math.min(96 * zoom, Math.max(0, viewportHeight - 2 * margin));
+  return left < margin || top < margin ||
+    left + cardWidth > viewportWidth - margin ||
+    top + headerHeight > viewportHeight - margin;
+}
 // React Flow renders no connections at all now - ConnectionCanvas draws
 // every one of them. Handing it a stable empty array keeps its own edge
 // machinery inert rather than merely invisible.
@@ -2758,6 +2781,8 @@ function CanvasInner({
   // R6.3: viewport (pan/zoom) reporting - see the hook's own doc and
   // makeDebouncedViewportReport's for why the debounce is load-bearing.
   const { onMove, viewportTimerRef } = useViewportReporting(store);
+  const flowWidth = useStore((state) => state.width);
+  const flowHeight = useStore((state) => state.height);
 
   useEffect(() => {
     if (draggingRef.current) {
@@ -2828,6 +2853,49 @@ function CanvasInner({
     // finally allowed to run once dragging stops.
     dragActive,
   ]);
+
+  // Follow NEW nodes and newly parked approvals, not ordinary content or
+  // viewport echoes. A graph.publish_file node can be created off-screen
+  // under virtualization, where no card mounts to reveal its own location.
+  // The first Agent also needs an intentional <=100% framing rather than
+  // React Flow's implicit first-node fit (which could jump to 250%).
+  const revealedSceneRef = useRef<{ ids: Set<string>; approvals: Set<string> } | null>(null);
+  useEffect(() => {
+    if (flowWidth <= 0 || flowHeight <= 0) return;
+    const previous = revealedSceneRef.current;
+    const ids = new Set(scene.nodes.map((node) => node.id));
+    const approvals = new Set(
+      scene.nodes.filter((node) => node.kind === "harness" && node.harnessAwaitingApproval && node.harnessApprovalId)
+        .map((node) => `${node.id}:${node.harnessApprovalId}`),
+    );
+    const added = scene.nodes.filter((node) => !node.isDocked && !previous?.ids.has(node.id));
+    const waiting = scene.nodes.filter((node) =>
+      node.kind === "harness" && node.harnessAwaitingApproval && node.harnessApprovalId &&
+      !previous?.approvals.has(`${node.id}:${node.harnessApprovalId}`),
+    );
+    revealedSceneRef.current = { ids, approvals };
+    const firstPopulation = previous === null || previous.ids.size === 0;
+    if (firstPopulation && scene.nodes.filter((node) => !node.isDocked).length > 1) {
+      void reactFlow.fitView({ ...GRAPH_FIT_OPTIONS, duration: 0 });
+      return;
+    }
+    const transform = storeApi.getState().transform;
+    const offscreen = (node: SceneNodeRow) =>
+      needsNodeReveal(node, transform, flowWidth, flowHeight);
+    // For a visible Agent card, HarnessNodeView will pan the actual approval
+    // ACTIONS into view. Here we only bring unmounted/off-screen cards close
+    // enough to render, so that more precise measurement can happen.
+    const target = waiting.find(offscreen) ??
+      [...added].reverse().find(offscreen) ??
+      (firstPopulation ? added[added.length - 1] : undefined);
+    if (!target) return;
+    // The fixed width is only a fallback until React Flow can measure this
+    // node; never increase zoom just because the new node is the only one.
+    void reactFlow.setCenter(target.x + 200, target.y + 60, {
+      zoom: Math.min(1, transform[2] || 1),
+      duration: motionDuration(240),
+    });
+  }, [scene.nodes, flowWidth, flowHeight, reactFlow, storeApi]);
 
   // ADR-012 stage 12.3: Shift+F10 / the ContextMenu key opens a node's menu
   // via the keyboard - see keyboardContextMenu.ts's own doc for why this
@@ -3057,8 +3125,8 @@ function CanvasInner({
         // event first; with that gone, the standard canvas behavior every
         // node editor has is the better use of the gesture.
         zoomOnDoubleClick
-        fitView
-        fitViewOptions={GRAPH_FIT_OPTIONS}
+        // New nodes are revealed deliberately above rather than via
+        // fitView's one-shot initial auto-fit at an arbitrary zoom level.
         minZoom={0.1}
         maxZoom={2.5}
         deleteKeyCode={DELETE_KEY_CODES}
