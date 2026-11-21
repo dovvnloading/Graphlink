@@ -246,7 +246,8 @@ export function Composer({
   const modelLabel = composer.route.modelLabel || composer.route.modelId || "Select a model";
   // Only describe the exact selected route. A pending/late lookup must not
   // warn about the model that was selected before this one.
-  const currentModelCapabilities = modelCapabilities?.provider === composer.route.provider
+  const currentModelCapabilities = modelCapabilities !== null
+    && modelCapabilities.provider === composer.route.provider
     && modelCapabilities.modelId === composer.route.modelId ? modelCapabilities : null;
   const isSynthesizing = !!synthesizeTargetNodeIds && synthesizeTargetNodeIds.length > 0;
 
