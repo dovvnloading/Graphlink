@@ -1799,6 +1799,7 @@ def test_pull_ollama_model_maps_errors_to_friendly_messages(manager, monkeypatch
 @pytest.mark.parametrize("statuses", [
     [{"status": "downloading", "completed": float("inf"), "total": -1}],
     [{"status": "successfully finished"}],
+    [{"status": "success"}, {"status": "downloading"}],
     [],
 ])
 def test_pull_does_not_install_without_ollama_success_event(manager, monkeypatch, statuses):
