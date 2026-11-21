@@ -172,7 +172,51 @@ function ZoomImage({ node: _node, alt, src, ...props }: JSX.IntrinsicElements["i
   );
 }
 
-export function DocumentViewMarkdown({ content, searchQuery }: { content: string; searchQuery?: string }) {
+/** Citation offsets refer to the stored source markdown, not to user-entered
+ * search text. Highlight rendered block elements whose source positions
+ * overlap the verified chunk, including across inline markdown formatting. */
+export interface DocumentCitationTarget {
+  citationId: string;
+  offsetStart: number;
+  offsetEnd: number;
+}
+
+interface PositionedElement {
+  type: string;
+  tagName?: string;
+  properties?: Record<string, unknown>;
+  children?: PositionedElement[];
+  position?: { start?: { offset?: number }; end?: { offset?: number } };
+}
+
+export function rehypeHighlightCitedPassage(start: number, end: number) {
+  return (tree: PositionedElement) => {
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start) return;
+    const blocks = new Set(["p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "pre", "table", "blockquote"]);
+    function mark(node: PositionedElement) {
+      const first = node.position?.start?.offset;
+      const last = node.position?.end?.offset;
+      if (node.type === "element" && blocks.has(node.tagName ?? "") &&
+          typeof first === "number" && typeof last === "number" &&
+          first < end && last > start) {
+        const existing = node.properties?.className;
+        const classNames = Array.isArray(existing) ? existing : [];
+        node.properties = {
+          ...node.properties,
+          className: [...classNames, "document-view-cited-passage"],
+        };
+      }
+      node.children?.forEach(mark);
+    }
+    mark(tree);
+  };
+}
+
+export function DocumentViewMarkdown({ content, searchQuery, citation }: {
+  content: string;
+  searchQuery?: string;
+  citation?: DocumentCitationTarget | null;
+}) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkAlert]}
@@ -189,6 +233,7 @@ export function DocumentViewMarkdown({ content, searchQuery }: { content: string
         rehypeHighlight,
         [rehypeExternalLinks, { target: "_blank", rel: ["nofollow", "noopener", "noreferrer"] }],
         [rehypeHighlightSearchMatches, searchQuery ?? ""],
+        [rehypeHighlightCitedPassage, citation?.offsetStart ?? -1, citation?.offsetEnd ?? -1],
       ]}
       components={{ pre: CodeBlock, table: TableWrapper, img: ZoomImage }}
     >
