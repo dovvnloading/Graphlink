@@ -45,6 +45,7 @@ from backend.api._shared import make_publish_scene, make_publish_token_counter
 from backend.composer import ComposerDocument
 from backend.domain.graph import SceneDocument
 from backend.domain.model import SceneError
+from backend.domain.staleness import fingerprint_for_reply
 
 
 async def _history_with_chat_knowledge(
@@ -272,7 +273,10 @@ def _regenerate_in_place(document, node_to_regenerate, reply_text):
             )
 
 
-def _land_partial_reply_node(document, parent_node, partial_text):
+def _land_partial_reply_node(
+    document, parent_node, partial_text, fingerprint=None, knowledge_enabled=None,
+    provider=None, model=None,
+):
     """ADR-006 stage 6.4 (H5): a Composer send's stream died mid-reply - land
     the accumulated text as a real assistant node flagged incomplete instead
     of losing it. NOT parsed into thinking/code children (a truncated reply
@@ -284,6 +288,9 @@ def _land_partial_reply_node(document, parent_node, partial_text):
         ax, ay = document.place_child(parent_node.id, "chat")
         ai = document.add_chat_node(ax, ay, partial_text, False, parent_id=parent_node.id)
         ai.state.response_incomplete = True
+        _stamp_reply_provenance(ai, provider, model)
+        ai.state.reply_history_fingerprint = fingerprint
+        ai.state.reply_knowledge_enabled = knowledge_enabled
         # Inside the mutator so the command's after-snapshot of the chat
         # pointers names this node - see _make_send_on_reply's _commit.
         document.last_chat_node_id = ai.id
@@ -384,6 +391,7 @@ def _make_on_usage(
 def _make_send_on_reply(
     document, node, token_counter, publish_token_counter, reply_ref,
     provenance_provider=None, provenance_model=None,
+    request_fingerprint=None, knowledge_enabled=None,
 ):
     """send_message's completion callback, built at module level for the
     same 300-line-cap reason as _make_regenerate_on_reply below. `node` is
@@ -480,6 +488,8 @@ def _make_send_on_reply(
             # The command's after-snapshot must contain the request-time
             # provider/model, not an unstamped copy of this reply.
             _stamp_reply_provenance(ai, provenance_provider, provenance_model)
+            ai.state.reply_history_fingerprint = request_fingerprint
+            ai.state.reply_knowledge_enabled = knowledge_enabled
             apply_reply_citations(ai, reply_text)
             return ai
 
@@ -510,6 +520,7 @@ def _make_send_on_reply(
 def _make_regenerate_on_reply(
     document, bus, notifications, token_counter, publish_token_counter, node_to_regenerate,
     provenance_provider=None, provenance_model=None, command_ref=None,
+    request_fingerprint=None, knowledge_enabled=None,
 ):
     """regenerate_response's completion callback, built at module level for
     the same 300-line-cap reason as its siblings above (ADR-006 stage 6.4's
@@ -570,6 +581,8 @@ def _make_regenerate_on_reply(
             _regenerate_in_place(document, node_to_regenerate, reply_text)
             # Stamp inside record_command so Undo/Redo retains the model.
             _stamp_reply_provenance(node_to_regenerate, provenance_provider, provenance_model)
+            node_to_regenerate.state.reply_history_fingerprint = request_fingerprint
+            node_to_regenerate.state.reply_knowledge_enabled = knowledge_enabled
             apply_reply_citations(node_to_regenerate, reply_text)
 
         _, command = document.record_command(
@@ -584,7 +597,10 @@ def _make_regenerate_on_reply(
     return _on_reply
 
 
-def _land_partial_regenerate(document, node_to_regenerate, partial_text):
+def _land_partial_regenerate(
+    document, node_to_regenerate, partial_text, fingerprint=None, knowledge_enabled=None,
+    provider=None, model=None,
+):
     """ADR-006 stage 6.4 (H5): a regenerate's stream died - preserve the
     accumulated text instead of silently keeping the old content with the
     new text lost. The old content children are torn down (they annotated
@@ -601,6 +617,9 @@ def _land_partial_regenerate(document, node_to_regenerate, partial_text):
         document.update_chat_node_content(
             node_to_regenerate.id, partial_text, incomplete=True
         )
+        _stamp_reply_provenance(node_to_regenerate, provider, model)
+        node_to_regenerate.state.reply_history_fingerprint = fingerprint
+        node_to_regenerate.state.reply_knowledge_enabled = knowledge_enabled
         # A failed stream has no trusted included-passage snapshot. Drop
         # the previous reply's ledger within this same undoable mutation,
         # preserving real tool-call rows.
@@ -714,9 +733,10 @@ async def _send_model_comparison(
     document.add_session_tokens(full_text)
 
     history = document.chat_branch_history(user.id)
+    knowledge_enabled = await _use_knowledge_for_node(document, user.id)
     history = await _history_with_chat_knowledge(
         history, text, document.current_workspace_id,
-        enabled=await _use_knowledge_for_node(document, user.id),
+        enabled=knowledge_enabled,
         settings_manager=getattr(agent_dispatcher, "_settings_manager", None),
     )
     parent_edge = document._branch_parent_edge(user.id)
@@ -745,6 +765,10 @@ async def _send_model_comparison(
             reply.state.override_model_id = ref_fields["model_id"]
             reply.state.provider, reply.state.model = api_provider.describe_active_model(
                 __import__("graphlink_task_config").TASK_CHAT, model_ref=ref,
+            )
+            reply.state.reply_knowledge_enabled = knowledge_enabled
+            reply.state.reply_history_fingerprint = fingerprint_for_reply(
+                document, user.id, reply.state.provider, reply.state.model, knowledge_enabled,
             )
             created.append(reply)
         # Deliberately leave last_chat_node_id pointing at the USER turn:
@@ -1002,9 +1026,10 @@ def register_chat_intents(
         document.add_session_tokens(full_text)
         await publish_scene()
         history = document.chat_branch_history(node.id)
+        knowledge_enabled = await _use_knowledge_for_node(document, node.id)
         history = await _history_with_chat_knowledge(
             history, text, document.current_workspace_id,
-            enabled=await _use_knowledge_for_node(document, node.id),
+            enabled=knowledge_enabled,
             settings_manager=getattr(agent_dispatcher, "_settings_manager", None),
         )
 
@@ -1039,10 +1064,13 @@ def register_chat_intents(
         request_provider, request_model = _snapshot_active_provider_model(
             agent_dispatcher, document, node.id, bus,
         )
+        request_fingerprint = fingerprint_for_reply(
+            document, node.id, request_provider, request_model, knowledge_enabled,
+        )
 
         _on_reply = _make_send_on_reply(
             document, node, token_counter, publish_token_counter, reply_ref,
-            request_provider, request_model,
+            request_provider, request_model, request_fingerprint, knowledge_enabled,
         )
 
         async def _on_partial(partial_text):
@@ -1053,7 +1081,10 @@ def register_chat_intents(
             document.add_session_tokens(partial_text)
             token_counter.set_output_text(partial_text)
             await publish_token_counter()
-            _land_partial_reply_node(document, node, partial_text)
+            _land_partial_reply_node(
+                document, node, partial_text, request_fingerprint, knowledge_enabled,
+                request_provider, request_model,
+            )
 
         _on_usage = _make_on_usage(
             document, token_counter, publish_token_counter, publish_scene,
@@ -1099,9 +1130,10 @@ def register_chat_intents(
             return None
 
         history = document.chat_branch_history(parent_id)
+        knowledge_enabled = await _use_knowledge_for_node(document, parent_id)
         history = await _history_with_chat_knowledge(
             history, _latest_user_query(history), document.current_workspace_id,
-            enabled=await _use_knowledge_for_node(document, parent_id),
+            enabled=knowledge_enabled,
             settings_manager=getattr(agent_dispatcher, "_settings_manager", None),
         )
         # R8a (token counter wiring): unlike send_message, `history` here
@@ -1122,17 +1154,24 @@ def register_chat_intents(
         request_provider, request_model = _snapshot_active_provider_model(
             agent_dispatcher, document, parent_id, bus,
         )
+        request_fingerprint = fingerprint_for_reply(
+            document, parent_id, request_provider, request_model, knowledge_enabled,
+        )
         command_ref = {}
         _on_reply = _make_regenerate_on_reply(
             document, bus, notifications, token_counter, publish_token_counter,
             node_to_regenerate, request_provider, request_model, command_ref,
+            request_fingerprint, knowledge_enabled,
         )
 
         def _on_partial(partial_text):
             # See _land_partial_regenerate; same liveness check as _on_reply.
             if node_to_regenerate.id not in document.nodes:
                 return
-            _land_partial_regenerate(document, node_to_regenerate, partial_text)
+            _land_partial_regenerate(
+                document, node_to_regenerate, partial_text, request_fingerprint,
+                knowledge_enabled, request_provider, request_model,
+            )
 
         _on_usage = _make_on_usage(
             document, token_counter, publish_token_counter, publish_scene,
