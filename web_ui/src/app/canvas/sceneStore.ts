@@ -1197,8 +1197,11 @@ export class SceneStore {
     ) as Promise<{ jobId: string }>;
   }
 
-  getChatRerunStatus(jobId: string): Promise<ChatRerunStatus> {
-    return this.transport.request("scene", "getChatRerunStatus", [jobId]) as Promise<ChatRerunStatus>;
+  getChatRerunStatus(jobId: string, afterCompleted?: number): Promise<ChatRerunStatus> {
+    // Opt-in cursor replays intermediate completions even if the job finishes
+    // between polls. Existing callers without a cursor retain live-status reads.
+    const args = afterCompleted === undefined ? [jobId] : [jobId, afterCompleted];
+    return this.transport.request("scene", "getChatRerunStatus", args) as Promise<ChatRerunStatus>;
   }
 
   cancelChatRerun(jobId: string): Promise<{ ok: boolean }> {
