@@ -54,6 +54,7 @@ const settingsSnapshot: AppSettingsState = {
   ollamaModelAssignments: {},
   ollamaScannedModels: [],
   ollamaInventory: [],
+  ollamaModelChecks: [],
   ollamaInventorySource: "",
   ollamaServerReachable: null,
   ollamaScanSummary: "",

@@ -49,7 +49,20 @@ def register_ollama_model_check_intents(bus: SessionBus, state: SettingsSessionS
 
         # Return from the intent immediately: cancellation arrives through
         # another intent while the async Ollama request is still pending.
-        state.ollama_check_task = asyncio.create_task(run_probe())
+        task = asyncio.create_task(run_probe())
+
+        def recover_prestart_cancellation(done: asyncio.Task[None]) -> None:
+            # A task cancelled before its first instruction never reaches
+            # run_probe's try/finally. Restore the session gate in that case.
+            if done.cancelled() and state.ollama_check_task is done:
+                report["status"] = "cancelled"
+                report["message"] = "Check cancelled."
+                state.ollama_check_task = None
+                state.ollama_check_name = ""
+                asyncio.create_task(bus.publish("app-settings"))
+
+        state.ollama_check_task = task
+        task.add_done_callback(recover_prestart_cancellation)
         await bus.publish("app-settings")
 
     async def cancel_ollama_model_check(model_name: str) -> None:
