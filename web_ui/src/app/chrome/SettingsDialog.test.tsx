@@ -369,7 +369,8 @@ describe("SettingsDialog", () => {
     await goToOllama(user, push);
 
     await chooseCustomOption(user, "Chart Generation Model", "Custom model ID...");
-    const modelId = screen.getByRole("textbox", { name: "Chart Generation Model (custom model ID)" });
+    // Datalist-backed text inputs expose the combobox role, not textbox.
+    const modelId = screen.getByRole("combobox", { name: "Chart Generation Model (custom model ID)" });
     expect(modelId).toHaveAttribute("aria-label", "Chart Generation Model (custom model ID)");
     await user.type(modelId, "x");
 
@@ -396,7 +397,7 @@ describe("SettingsDialog", () => {
     await goToOllama(user, push);
 
     const pullButton = screen.getByRole("button", { name: "Validate and Pull Model" });
-    expect(screen.getByRole("textbox", { name: "Validate and Pull Model" }))
+    expect(screen.getByRole("combobox", { name: "Validate and Pull Model" }))
       .toHaveAttribute("aria-label", "Validate and Pull Model");
     expect(pullButton).toBeDisabled();
 
