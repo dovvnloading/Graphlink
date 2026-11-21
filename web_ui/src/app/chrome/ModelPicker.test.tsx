@@ -9,11 +9,12 @@ function makeStore(models: PickerModel[]) {
   const loadPickerModels = vi.fn().mockResolvedValue(models);
   const selectPickerModel = vi.fn();
   const openOllamaSettings = vi.fn();
+  const composer = { ...initialComposerState, route: {
+    ...initialComposerState.route, mode: "ollama" as const, modelId: "",
+  } };
   const store = {
     subscribe: () => () => {},
-    getComposer: () => ({ ...initialComposerState, route: {
-      ...initialComposerState.route, mode: "ollama" as const, modelId: "",
-    } }),
+    getComposer: () => composer,
     loadPickerModels,
     selectPickerModel,
     openOllamaSettings,

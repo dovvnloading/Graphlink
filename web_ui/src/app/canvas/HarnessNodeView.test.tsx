@@ -960,13 +960,14 @@ describe("Agent model picker", () => {
         label: "Anthropic Claude · claude-test", source: "cloud",
         capabilities: [], sizeBytes: null },
     ]);
+    const composer = {
+      ...initialComposerState,
+      request: { ...initialComposerState.request, canSend: true },
+      route: { ...initialComposerState.route, modelId: "", modelLabel: "Select a model" },
+    };
     const store = {
       subscribe: () => () => {},
-      getComposer: () => ({
-        ...initialComposerState,
-        request: { ...initialComposerState.request, canSend: true },
-        route: { ...initialComposerState.route, modelId: "", modelLabel: "Select a model" },
-      }),
+      getComposer: () => composer,
       loadPickerModels, selectPickerModel, openOllamaSettings: vi.fn(),
     } as unknown as ComposerStore;
 
