@@ -103,7 +103,7 @@ export function CustomSelect({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const onPanelKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+  const onOptionKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
     const buttons = [...(panelRef.current?.querySelectorAll<HTMLButtonElement>(".reasoning-option") ?? [])];
     if (!buttons.length) return;
     const focused = buttons.findIndex((button) => button === document.activeElement);
@@ -156,7 +156,6 @@ export function CustomSelect({
             aria-label={ariaLabel}
             tabIndex={-1}
             className="overlay-popover overlay-popover-anchored custom-select-panel"
-            onKeyDown={onPanelKeyDown}
             style={placement ? { top: placement.top, left: placement.left, minWidth: placement.minWidth } : undefined}
           >
             {options.map((option) => (
@@ -164,6 +163,7 @@ export function CustomSelect({
                 key={option.id}
                 type="button"
                 className={"reasoning-option" + (option.id === value ? " active" : "")}
+                onKeyDown={onOptionKeyDown}
                 onClick={() => {
                   onChange(option.id);
                   setOpen(false);
