@@ -272,13 +272,18 @@ def test_check_rejects_disk_only_models_even_if_the_name_is_in_the_inventory(tmp
         return {}
 
     monkeypatch.setattr(intents_ollama_model_check, "probe_ollama_model", fake_probe)
+    monkeypatch.setattr(intents_settings_ollama, "build_ollama_inventory", lambda _: {
+        "models": ["first:latest"],
+        "inventory": [{"name": "first:latest", "source": "folder", "capabilities": []}],
+        "source": "folder", "server_reachable": False, "scan_mode": "folder",
+        "scan_path": "", "locations": [],
+    })
 
     async def scenario():
         await bus.dispatch_intent("app-settings", "scanOllamaSystem", [])
         # A stale or offline folder snapshot isn't proof that the daemon can
         # load the model. No HTTP request should be sent for it.
-        state = intents_ollama_model_check
-        assert state is not None
+        await bus.dispatch_intent("app-settings", "checkOllamaModel", ["first:latest"])
         await bus.dispatch_intent("app-settings", "checkOllamaModel", ["../unsafe"])
         await bus.dispatch_intent("app-settings", "checkOllamaModel", ["not-installed:latest"])
 
