@@ -40,7 +40,6 @@ async def _completed(manager: KnowledgeIngestManager, job_id: str) -> dict:
     pytest.fail("knowledge import did not terminate")
 
 
-
 async def _completed_intent_job(bus: SessionBus, job_id: str) -> dict:
     """Wait for a terminal job publication, not a fixed number of 20-ms polls."""
     changed = asyncio.Event()
