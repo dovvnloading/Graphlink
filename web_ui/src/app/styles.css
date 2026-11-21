@@ -1264,7 +1264,9 @@ body {
   border-radius: 4px;
   background: var(--gl-neutral-button-background);
   color: var(--gl-surface-text-primary);
-  font: 600 10px/1.3 var(--gl-font-family);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.3;
   flex-shrink: 0;
 }
 
