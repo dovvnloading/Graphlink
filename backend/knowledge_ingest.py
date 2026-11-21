@@ -30,7 +30,6 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from backend.attachments import (
-    AttachmentError,
     _can_read_as_document,
     _read_docx,
     _read_pdf,
