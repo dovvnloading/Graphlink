@@ -25,7 +25,7 @@ from backend.harness.loop import HarnessRunContext, _BoundedToolOutput, run_harn
 from backend.harness.tools_fs import register_harness_fs_tools
 from backend.harness.tools_interaction import register_harness_interaction_tools
 from backend.harness.tools_enable import register_workspace_tools as register_enable_tool
-from backend.harness.transcript import append_message, load_messages, transcript_path
+from backend.harness.transcript import append_compaction, append_message, load_messages, transcript_path
 from backend.harness.workspace import WorkspaceError, ensure_workspace, resolve_in_workspace
 from backend.providers.base import CancelToken, ToolCall, ToolSpec
 from backend.run_lifecycle import RunRegistry
@@ -155,6 +155,25 @@ class TestTranscript:
         assert load_messages(ws) == [
             {"role": "user", "content": "hello"},
             {"role": "assistant", "content": "hi"},
+        ]
+
+    def test_compaction_reload_retains_unread_tool_result(self, workspace_root):
+        ws = ensure_workspace("ws1")
+        assistant = {
+            "role": "assistant", "content": "",
+            "tool_calls": [{"id": "k1", "name": "knowledge.search", "arguments": {"query": "figure"}}],
+        }
+        result = {
+            "role": "tool", "tool_call_id": "k1", "name": "knowledge.search",
+            "content": "Citation report:12, figure 47.3 million",
+        }
+        append_message(ws, {"role": "user", "content": "Earlier request"})
+        append_message(ws, assistant)
+        append_message(ws, result)
+        append_compaction(ws, "Previous request summarized.", tail=[assistant, result])
+        assert load_messages(ws) == [
+            {"role": "user", "content": "Previous request summarized."},
+            assistant, result,
         ]
 
     def test_corrupt_lines_are_skipped_not_fatal(self, workspace_root):
@@ -468,7 +487,7 @@ class TestLoop:
             pytest.fail("Unable to construct a representative tool schema footprint")
 
         async def read(_call, _ctx):
-            return ToolResult(content="Observed workspace data " * 450)
+            return ToolResult(content="Observed workspace data " * 12)
 
         registry.register(spec, read, scopes={FS_READ}, approval="auto")
         received = []
@@ -499,6 +518,13 @@ class TestLoop:
             <= context_module.prompt_token_limit(8_192)
             for messages, tools in received
         )
+        assert all(
+            any(
+                m.get("role") == "tool" and "Observed workspace data" in str(m.get("content"))
+                for m in messages
+            )
+            for messages, _tools in received[1:]
+        ), "Each tool result must reach the next model turn before it can be summarized"
         assert node.state.harness_max_context_tokens == 48_000  # configured budget intact
         assert node.state.harness_effective_context_tokens == 8_192  # served window in meter
         assert node.state.harness_context_tokens >= 6_500  # not 1-8% of context
@@ -1543,7 +1569,7 @@ class TestCompaction:
 
         # The normal wire fallback may discard old context but must not
         # return a summary without both tool results (and their caller).
-        room = lambda messages: sum(context_module.message_tokens(m) for m in messages) < 120
+        room = lambda messages: sum(context_module.message_tokens(m) for m in messages) < 800
         fitted = context_module.fit_history_to_window(
             history, goal="find figures", latest_request="Find both figures", fits=room,
         )
