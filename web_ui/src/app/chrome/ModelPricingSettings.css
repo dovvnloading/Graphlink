@@ -1,0 +1,61 @@
+/* Local pricing shares Settings' existing controls; all colors use --gl-* tokens. */
+.settings-model-pricing-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-model-pricing-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--gl-surface-border);
+}
+
+.settings-model-pricing-detail {
+  display: flex;
+  flex: 1 1 190px;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+
+.settings-model-pricing-name {
+  color: var(--gl-surface-text-primary);
+}
+
+.settings-model-pricing-rates {
+  font-size: 12px;
+  color: var(--gl-surface-text-muted);
+}
+
+.settings-model-pricing-actions {
+  flex-wrap: wrap;
+}
+
+.settings-model-pricing-inputs {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-model-pricing-inputs legend {
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+  padding: 0 0 8px;
+}
+
+.settings-model-pricing-error {
+  margin: 0;
+  color: var(--gl-semantic-status-error);
+}
