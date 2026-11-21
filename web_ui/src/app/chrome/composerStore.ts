@@ -288,11 +288,12 @@ export class ComposerStore {
     models: Array<Pick<ComparisonModel, "provider" | "modelId">>,
     branchFromNodeId: string | null,
     onSettled?: (succeeded: boolean) => void,
+    useKnowledge: boolean | null = null,
   ): void {
     // Creating a shared user turn and several assistant branches is NOT an
     // offline-queueable intent. Never replay an already-expensive fan-out.
     this.transport.fireIntent(
-      "scene", "compareModels", [text, models, branchFromNodeId],
+      "scene", "compareModels", [text, models, branchFromNodeId, useKnowledge],
       undefined, false, undefined, onSettled,
     );
   }

@@ -166,6 +166,14 @@ export interface OrganizationPreview {
 
 export type EdgeRole = "legacy" | "primary" | "secondary" | "reference" | "association";
 
+/** Resolved by the backend from this branch and its workspace collection. */
+export interface ChatKnowledgePreference {
+  nodeId: string | null;
+  hasDocuments: boolean;
+  enabled: boolean;
+  override: boolean | null;
+}
+
 export interface GraphRunExternalAttempt {
   requestId: string;
   kind: "model" | "tool";
@@ -1539,7 +1547,7 @@ export class SceneStore {
   // and returns early. The two staging fields are already kept mutually
   // exclusive by their own setters, so this branch and the replyTargetNodeId
   // branch below it can never both apply to the same call.
-  sendMessage(text: string): void {
+  sendMessage(text: string, useKnowledge: boolean | null = null): void {
     const synthesizeNodeIds = this.synthesizeTargetNodeIds;
     if (synthesizeNodeIds !== null) {
       // REVIEW-FIX: this used to clear the staged synthesize-target selection
@@ -1567,7 +1575,8 @@ export class SceneStore {
     }
     const branchFromNodeId = this.replyTargetNodeId;
     const args: unknown[] = [text];
-    if (branchFromNodeId !== null) args.push(branchFromNodeId);
+    if (branchFromNodeId !== null || useKnowledge !== null) args.push(branchFromNodeId);
+    if (useKnowledge !== null) args.push(useKnowledge);
     // REVIEW-FIX: same optimistic-clear-before-confirm bug as above, for the
     // "Branch from here" reply target. Cleared only once the send has
     // actually settled successfully, so a failure leaves the staged branch
@@ -1578,6 +1587,16 @@ export class SceneStore {
     this.transport.fireIntent("scene", "sendMessage", args, undefined, false, undefined, (succeeded) => {
       if (succeeded && branchFromNodeId !== null) this.setReplyTargetNodeId(null);
     });
+  }
+
+  getChatKnowledgePreference(nodeId: string | null = null): Promise<ChatKnowledgePreference> {
+    return this.transport.request(
+      "scene", "getChatKnowledgePreference", [nodeId],
+    ) as Promise<ChatKnowledgePreference>;
+  }
+
+  async setChatUseKnowledge(nodeId: string, enabled: boolean): Promise<void> {
+    await this.transport.request("scene", "setChatUseKnowledge", [nodeId, enabled]);
   }
 
   moveNode(id: string, x: number, y: number): void {

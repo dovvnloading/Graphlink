@@ -16,7 +16,7 @@ from backend.context_engine.citations import (
 )
 from backend.domain.graph import SceneDocument
 from backend.knowledge_chunking import chunk_text
-from backend.knowledge_retrieval import search_chat_knowledge
+from backend.knowledge_retrieval import search_chat_knowledge, workspace_has_chat_knowledge
 from backend.knowledge_store import add_document_with_chunks, get_or_create_workspace_collection
 from graphlink_chat_agent import ChatWorker
 
@@ -209,13 +209,19 @@ def test_missing_database_and_cross_workspace_retrieval_isolation(tmp_path):
     db = tmp_path / "knowledge.db"
     assert search_chat_knowledge("recovery", 41, db_path=db) == []
     assert not db.exists()
+    assert workspace_has_chat_knowledge(41, db_path=db) is False
+    assert not db.exists()
     collection = get_or_create_workspace_collection(db, 41)
+    assert workspace_has_chat_knowledge(41, db_path=db) is False
     text = "# Recovery\n\nUse the cobalt cascade switch for failover."
     add_document_with_chunks(
         db, source_uri="ops/recovery.md", title="Operations recovery",
         mime="text/markdown", text=text,
         chunks=chunk_text(text), collection_id=collection,
     )
+    assert workspace_has_chat_knowledge(41, db_path=db) is True
+    assert workspace_has_chat_knowledge(42, db_path=db) is False
+    assert workspace_has_chat_knowledge(None, db_path=db) is False
     hits = search_chat_knowledge("cobalt cascade", 41, db_path=db)
     assert len(hits) == 1
     assert hits[0]["source_file"] == "ops/recovery.md"
@@ -237,6 +243,10 @@ def test_async_intent_snapshot_is_ephemeral_and_failed_search_is_nonfatal(monkey
     enriched = asyncio.run(intents_chat._history_with_chat_knowledge(history, "Restore?", 2))
     assert history == [{"role": "user", "content": "Restore?"}]
     assert enriched[-1]["_knowledge_hits"] == [_hit()]
+    no_hits = asyncio.run(intents_chat._history_with_chat_knowledge(
+        history, "Restore?", 2, enabled=False,
+    ))
+    assert no_hits is history
     assert intents_chat._latest_user_query([
         {"role": "user", "content": "hello\n\n--- Attached: README ---\ntext"}
     ]) == "hello"
