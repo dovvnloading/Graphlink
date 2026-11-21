@@ -12,6 +12,8 @@ import asyncio
 import re
 from collections import OrderedDict
 
+import ollama
+
 from backend.api._shared import make_publish_scene
 from backend.api.intents_harness_workspace import register_harness_workspace_intents
 from backend.domain.graph import SceneDocument
@@ -19,6 +21,8 @@ from backend.domain.node_states import HarnessState
 from backend.harness.shell_selection import VALID_SHELLS
 from backend.harness.shell_isolation import VALID_EXECUTION_PROFILES, available_engine
 from backend.harness.permission_modes import AUTONOMOUS, VALID_PERMISSION_MODES
+from backend.ollama_context import DEFAULT_CONTEXT_WINDOW, available_memory_bytes, estimated_memory_bytes, kv_bytes_per_token
+from backend.ollama_inventory import build_ollama_inventory
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 from graphlink_cloud_providers import CLOUD_PROVIDERS
@@ -40,13 +44,60 @@ _MAX_SEND_RECEIPTS = 2_048
 
 
 
+def _memory_safe_tool_model(settings_manager, excluded_model: str) -> str | None:
+    """Recommend only a server-verified, tool-capable model with an estimated RAM fit.
+
+    Use the same weights + KV-cache estimate and available-system-RAM basis as
+    Ollama Settings. Missing weights or RAM cannot establish a fit, and a
+    folder-only scan is not evidence that a model is installed in the daemon.
+    """
+    available = available_memory_bytes()
+    if available <= 0:
+        return None
+    inventory = build_ollama_inventory()
+    if inventory.get("source") != "server":
+        return None
+    windows = settings_manager.get_ollama_context_windows() or {}
+    candidates: list[tuple[int, str, str]] = []
+    for row in inventory.get("inventory", ()):
+        if not isinstance(row, dict) or row.get("source") != "server":
+            continue
+        name = row.get("name")
+        size = row.get("sizeBytes")
+        capabilities = row.get("capabilities")
+        if (not isinstance(name, str) or not name or name.casefold() == excluded_model.casefold()
+                or type(size) is not int or size <= 0 or not isinstance(capabilities, (list, tuple))
+                or "tools" not in capabilities):
+            continue
+        trained = row.get("trainedContextLength")
+        limit = trained if type(trained) is int and trained > 0 else DEFAULT_CONTEXT_WINDOW
+        configured = windows.get(name.casefold(), DEFAULT_CONTEXT_WINDOW)
+        window = configured if type(configured) is int and configured > 0 else DEFAULT_CONTEXT_WINDOW
+        window = min(window, limit)
+
+        try:
+            show = ollama.show(name)
+            if isinstance(show, dict):
+                info = show.get("model_info") or show.get("modelinfo")
+            else:
+                info = getattr(show, "model_info", None) or getattr(show, "modelinfo", None)
+        except Exception:
+            info = None
+        estimate = estimated_memory_bytes(size, window, kv_bytes_per_token(info))
+        if estimate <= available:
+            candidates.append((estimate, name.casefold(), name))
+    # Prefer the least memory-intensive verified fit, not alphabetic order
+    # (which used to recommend an oversized gemma4 before a smaller qwen3).
+    return min(candidates)[2] if candidates else None
+
+
 def _model_capability_preview(settings_manager, provider: str, model_id: str) -> dict[str, object]:
     """Read explicit per-model support without guessing from provider names.
 
     Ollama's /api/show probe returns None when unavailable (unknown, not
     unsupported). Cloud catalogs may contain only IDs; an empty capability
     list is likewise unknown. Suggestions are limited to scanned, installed
-    Ollama models with confirmed tool support.
+    Ollama models with confirmed tool support and a verified estimated RAM fit.
     """
     import api_provider
 
@@ -88,14 +139,9 @@ def _model_capability_preview(settings_manager, provider: str, model_id: str) ->
             break
 
     if preview["tools"] is False and settings_manager is not None:
-        installed = settings_manager.get_ollama_scanned_models() or ()
-        for candidate in sorted({str(name).strip() for name in installed if str(name).strip()}, key=str.casefold):
-            if is_ollama and candidate.casefold() == model_id.casefold():
-                continue
-            reported = api_provider._get_ollama_capabilities(candidate)
-            if reported is not None and "tools" in names(reported):
-                preview["suggestedToolModel"] = {"provider": "Ollama (Local)", "modelId": candidate}
-                break
+        candidate = _memory_safe_tool_model(settings_manager, model_id if is_ollama else "")
+        if candidate is not None:
+            preview["suggestedToolModel"] = {"provider": "Ollama (Local)", "modelId": candidate}
     return preview
 
 

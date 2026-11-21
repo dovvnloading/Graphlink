@@ -229,6 +229,68 @@ describe("Composer", () => {
     expect(screen.queryByText(/does not support image input/)).toBeNull();
   });
 
+  it("warns before the first Agent send and suggests a memory-fit installed model", async () => {
+    const route = { ...initialComposerState.route, modelId: "translategemma:4b", modelLabel: "translategemma:4b" };
+    const { store } = makeStore({ composer: {
+      route,
+      draft: { ...initialComposerState.draft, text: "Inspect this workspace" },
+      request: { ...initialComposerState.request, canSend: true },
+    } });
+    const preview: ModelCapabilityPreview = {
+      provider: route.provider, modelId: route.modelId, tools: false, vision: false,
+      suggestedToolModel: { provider: "Ollama (Local)", modelId: "qwen3:8b" },
+    };
+    const { sceneStore, sendComposerAgentMessage } = makeSceneStore();
+    render(
+      <ModelCapabilityContext.Provider value={preview}>
+        <OverlayProvider>
+          {/* @ts-expect-error - minimal test store */}
+          <Composer store={store} sceneStore={sceneStore} />
+        </OverlayProvider>
+      </ModelCapabilityContext.Provider>,
+    );
+    expect(screen.queryByText(/does not support tool calling/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Send to workspace agent" }));
+    const warning = screen.getByText(/translategemma:4b does not support tool calling/);
+    expect(warning).toHaveTextContent("qwen3:8b");
+    expect(warning).toHaveTextContent("estimated to fit available system RAM");
+    expect(sendComposerAgentMessage).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(sendComposerAgentMessage).toHaveBeenCalledWith("Inspect this workspace", "host"));
+  });
+
+  it("warns in Agent mode without fabricating suggestions, but not for unknown or stale support", () => {
+    const route = { ...initialComposerState.route, modelId: "text-only", modelLabel: "Text only" };
+    const { store } = makeStore({ composer: {
+      route, request: { ...initialComposerState.request, canSend: true },
+    } });
+    const preview: ModelCapabilityPreview = {
+      provider: route.provider, modelId: route.modelId, tools: false, vision: null, suggestedToolModel: null,
+    };
+    const renderWith = (value: ModelCapabilityPreview | null) => render(
+      <ModelCapabilityContext.Provider value={value}>
+        <OverlayProvider>
+          {/* @ts-expect-error - minimal test store */}
+          <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+        </OverlayProvider>
+      </ModelCapabilityContext.Provider>,
+    );
+    const first = renderWith(preview);
+    fireEvent.click(screen.getByRole("button", { name: "Send to workspace agent" }));
+    expect(screen.getByText(/Text only does not support tool calling/))
+      .toHaveTextContent("Choose an installed tool-capable model");
+    expect(screen.queryByText(/Try installed Ollama model/)).toBeNull();
+    first.unmount();
+
+    for (const value of [null, { ...preview, tools: null }, { ...preview, tools: true },
+      { ...preview, modelId: "old-route" }]) {
+      const view = renderWith(value);
+      fireEvent.click(screen.getByRole("button", { name: "Send to workspace agent" }));
+      expect(screen.queryByText(/does not support tool calling/)).toBeNull();
+      view.unmount();
+    }
+  });
+
   it("defaults Use knowledge on for a workspace with documents and can turn it off before first Send", async () => {
     const user = userEvent.setup();
     const { store } = makeStore({ composer: {
