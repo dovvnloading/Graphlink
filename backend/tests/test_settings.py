@@ -43,6 +43,10 @@ def test_settings_payload_shape_matches_generated_validator_shape(manager):
         "autoModelPolicy",
         "theme",
         "hasCompletedOnboarding",
+        "knowledgeEmbeddingSource",
+        "knowledgeEmbeddingModel",
+        "knowledgeCloudProvider",
+        "knowledgeCloudOptIn",
     }
 
 
