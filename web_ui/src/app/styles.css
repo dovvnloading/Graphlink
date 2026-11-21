@@ -3950,6 +3950,48 @@ body {
   overflow-y: auto;
 }
 
+
+.knowledge-import-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.knowledge-import-hint,
+.knowledge-import-stats {
+  font-size: 11px;
+  color: var(--gl-surface-text-muted);
+}
+
+.knowledge-import-job {
+  padding: 8px 10px;
+  margin-bottom: 12px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+  background: var(--gl-surface-node-body);
+}
+
+.knowledge-import-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--gl-surface-text-primary);
+}
+
+.knowledge-import-progress {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+}
+
+.knowledge-import-stats {
+  margin: 5px 0 0;
+}
+
 .knowledge-search-row {
   display: flex;
   gap: 8px;

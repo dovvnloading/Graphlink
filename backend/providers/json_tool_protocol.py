@@ -200,8 +200,14 @@ def parse_tool_turn(raw: str, tools: tuple[ToolSpec, ...]) -> tuple[str, list[To
     try:
         data = json.loads(clean)
     except (TypeError, json.JSONDecodeError) as exc:
+        # Preserve the JSON decoder's actual failure location. This text is
+        # safe to surface: it describes syntax, not the model's raw response.
+        detail = (
+            f"{exc.msg} (line {exc.lineno}, column {exc.colno})"
+            if isinstance(exc, json.JSONDecodeError) else str(exc)
+        )
         raise JSONToolProtocolError(
-            "The model did not return valid constrained JSON for workspace tools. "
+            f"The model did not return valid constrained JSON for workspace tools: {detail}. "
             "Choose a model/endpoint that honors JSON-schema or grammar-constrained output."
         ) from exc
     if (not isinstance(data, dict) or set(data) != {"tool_calls", "final_answer"}

@@ -15,7 +15,7 @@ from backend.harness.tools_python import PythonReplRegistry
 from backend.providers.base import ToolCall, ToolSpec
 from backend.tools import (
     CODE_EXECUTE, FS_READ, FS_WRITE, GRAPH_MUTATE, GRAPH_READ,
-    KNOWLEDGE_READ, NET_FETCH, PROVIDER_CALL, RunContext, ToolRegistry, ToolResult,
+    KNOWLEDGE_READ, KNOWLEDGE_WRITE, NET_FETCH, PROVIDER_CALL, RunContext, ToolRegistry, ToolResult,
 )
 
 
@@ -71,6 +71,9 @@ def test_builtin_modules_keep_their_scopes_approvals_and_hints(tmp_path):
         # single-call approval policy.
         assert registry.scopes_for("graph.publish_file") == frozenset({FS_READ, GRAPH_MUTATE})
         assert registry.approval_for("graph.publish_file") == "once"
+        assert registry.scopes_for("knowledge.add") == frozenset({FS_READ, KNOWLEDGE_WRITE})
+        assert registry.approval_for("knowledge.add") == "once"
+        assert not registry.allows_session_grant("knowledge.add")
 
         parallel_reads = {
             "fs.list", "fs.read", "fs.grep", "session.search", "skills.load", "knowledge.search",
@@ -81,7 +84,7 @@ def test_builtin_modules_keep_their_scopes_approvals_and_hints(tmp_path):
         for name in (
             "fs.write", "fs.edit", "shell.exec", "python.exec", "python.install",
             "plan.update", "user.ask", "graph.delete_node", "graph.run_node",
-            "graph.publish_file", "web.search", "web.fetch", "missing.tool",
+            "graph.publish_file", "knowledge.add", "web.search", "web.fetch", "missing.tool",
         ):
             assert not registry.parallel_safe_for(name), name
 
@@ -94,6 +97,7 @@ def test_builtin_modules_keep_their_scopes_approvals_and_hints(tmp_path):
         assert "session.search" in guide
         assert "skills.load" in guide
         assert "graph.publish_file" in guide
+        assert "knowledge.add" in guide
         assert "web.search" in guide and "web.fetch" in guide
         prompt = build_system_prompt(tmp_path)
         assert guide in prompt
@@ -108,6 +112,7 @@ def test_builtin_modules_keep_their_scopes_approvals_and_hints(tmp_path):
         assert rebuilt.scopes_for("skills.load") == frozenset({FS_READ})
         assert rebuilt.approval_for("fs.write") == "once"
         assert rebuilt.scopes_for("web.fetch") == frozenset({NET_FETCH})
+        assert rebuilt.scopes_for("knowledge.add") == frozenset({FS_READ, KNOWLEDGE_WRITE})
     finally:
         dispatcher.shell.stop_all()
         dispatcher.python.stop_all()
@@ -141,7 +146,8 @@ def test_workspace_only_registrations_do_not_leak_to_builder_after_agent_setup()
             and spec.name not in ("web.search", "web.fetch")
         }
         assert offered == {"builder.ping"}
-        assert {"shell.exec", "python.exec", "plan.update", "user.ask"}.isdisjoint(offered)
+        assert {"shell.exec", "python.exec", "plan.update", "user.ask", "knowledge.add"}.isdisjoint(offered)
+        assert builder.scopes_for("knowledge.add") is None
         reply = asyncio.run(harness.invoke(
             ToolCall("ping_1", "builder.ping", {}),
             RunContext(granted_scopes=frozenset({GRAPH_READ}), request_approval=allow),

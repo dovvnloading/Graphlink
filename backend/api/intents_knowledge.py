@@ -18,6 +18,9 @@ actual knowledge-store write happens BEFORE that call, not inside it.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
+from backend import native_dialogs
+from backend.knowledge_jobs import KnowledgeIngestManager
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -25,7 +28,7 @@ from backend.api._shared import make_publish_scene
 from backend.domain.graph import SceneDocument, SceneError
 from backend.events import SessionBus
 from backend.knowledge_chunking import chunk_text
-from backend.knowledge_ingest import IngestError
+from backend.knowledge_ingest import IngestError, is_supported_knowledge_file
 from backend.knowledge_retrieval import hybrid_search
 from backend.knowledge_store import (
     DEFAULT_DB_PATH, get_or_create_workspace_collection, open_cited_document, replace_branch_document_with_chunks,
@@ -53,6 +56,11 @@ class OpenCitationArgs:
 class SetChatIndexIntoKnowledgeArgs:
     nodeId: str
     enabled: bool
+
+
+@dataclass
+class CancelIngestArgs:
+    jobId: str
 
 
 def _resolve_workspace_collection_id(document: SceneDocument, db_path=None) -> int:
@@ -147,6 +155,8 @@ def register_knowledge_intents(
     notifications: NotificationState | None = None,
 ) -> None:
     publish_scene = make_publish_scene(bus)
+    ingest_jobs = KnowledgeIngestManager(bus, DEFAULT_DB_PATH)
+    bus.register_topic("knowledge-ingest", ingest_jobs.snapshot)
 
     async def search(query, k):
         k = min(max(int(k or _DEFAULT_K), 1), _MAX_K)
@@ -268,8 +278,43 @@ def register_knowledge_intents(
         )
         await publish_scene()
 
+
+    async def add_files():
+        """The native multiple-file picker is the filesystem access grant.
+
+        Capture the workspace before opening a potentially long-lived
+        picker, so switching workspaces while it is open cannot redirect
+        the finished import into the next workspace.
+        """
+        workspace_id = document.current_workspace_id
+        selected = await native_dialogs.pick_files()
+        if not selected:
+            return {"cancelled": True}
+        # Unsupported explicit selections are user errors, not jobs that
+        # appear successful after silently processing zero files.
+        if any(not is_supported_knowledge_file(Path(path)) for path in selected):
+            raise IngestError("Selection contains an unsupported file type.")
+        return ingest_jobs.start(selected, folder=False, workspace_id=workspace_id)
+
+    async def add_folder():
+        workspace_id = document.current_workspace_id
+        selected = await native_dialogs.pick_folder()
+        if not selected:
+            return {"cancelled": True}
+        return ingest_jobs.start(selected, folder=True, workspace_id=workspace_id)
+
+    async def cancel_ingest(job_id):
+        return ingest_jobs.cancel(job_id)
+
+    async def get_ingest_jobs():
+        return ingest_jobs.snapshot()
+
     bus.register_intent("knowledge", "search", search, args_schema=SearchArgs)
     bus.register_intent("knowledge", "openCitation", open_citation, args_schema=OpenCitationArgs)
+    bus.register_intent("knowledge", "addFiles", add_files)
+    bus.register_intent("knowledge", "addFolder", add_folder)
+    bus.register_intent("knowledge", "cancelIngest", cancel_ingest, args_schema=CancelIngestArgs)
+    bus.register_intent("knowledge", "getIngestJobs", get_ingest_jobs)
     bus.register_intent(
         "scene", "setChatIndexIntoKnowledge", set_chat_index_into_knowledge,
         args_schema=SetChatIndexIntoKnowledgeArgs,

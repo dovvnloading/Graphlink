@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
 import { Dialog } from "../overlays/overlays";
 
@@ -39,6 +39,34 @@ interface KnowledgeSearchResult {
   text: string;
   offsetStart: number;
   offsetEnd: number;
+}
+
+
+type ImportStatus = "queued" | "scanning" | "running" | "completed" | "cancelled" | "failed";
+
+interface KnowledgeImportJob {
+  jobId: string;
+  kind: "file" | "folder";
+  workspaceId: number | null;
+  status: ImportStatus;
+  filesTotal: number;
+  filesProcessed: number;
+  bytesTotal: number;
+  bytesProcessed: number;
+  added: number;
+  updated: number;
+  duplicates: number;
+  unchanged: number;
+  skipped: number;
+  failedFiles: number;
+  lastFile: string;
+  error: string;
+  warnings: string[];
+  cancelRequested: boolean;
+}
+
+function isActive(job: KnowledgeImportJob): boolean {
+  return job.status === "queued" || job.status === "scanning" || job.status === "running";
 }
 
 function isHttpUrl(value: string): boolean {
@@ -88,6 +116,41 @@ export function KnowledgeSearchDialog({ transport }: { transport: WsTransport })
   const [results, setResults] = useState<KnowledgeSearchResult[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [importJobs, setImportJobs] = useState<KnowledgeImportJob[]>([]);
+  const [picking, setPicking] = useState<"files" | "folder" | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+
+  // A topic snapshot survives dialog unmount/reopen and websocket reconnect;
+  // no polling or artificial timeouts are needed for background work.
+  useEffect(
+    () =>
+      transport.subscribe("knowledge-ingest", (payload) => {
+        if (Array.isArray(payload.jobs)) setImportJobs(payload.jobs as KnowledgeImportJob[]);
+      }),
+    [transport],
+  );
+
+  function beginImport(kind: "files" | "folder") {
+    if (picking || importJobs.some(isActive)) return;
+    setPicking(kind);
+    setImportError(null);
+    // The picker can legitimately remain open for minutes. This request
+    // resolves as soon as the selection starts an asynchronous job.
+    void transport
+      .request("knowledge", kind === "files" ? "addFiles" : "addFolder", [], 5 * 60_000)
+      .catch((cause: unknown) => {
+        setImportError(cause instanceof Error ? cause.message : "Could not start the import.");
+      })
+      .finally(() => setPicking(null));
+  }
+
+  function cancelImport(jobId: string) {
+    void transport.request("knowledge", "cancelIngest", [jobId]).catch((cause: unknown) => {
+      setImportError(cause instanceof Error ? cause.message : "Could not cancel the import.");
+    });
+  }
+
   // Adversarial-review finding: vector search embeds the query via a
   // network round-trip, so latency is not correlated with send order - a
   // second search fired while the first is still pending could otherwise
@@ -125,6 +188,63 @@ export function KnowledgeSearchDialog({ transport }: { transport: WsTransport })
 
   return (
     <Dialog name="knowledge" title="Knowledge" className="knowledge-search-dialog">
+      <div className="knowledge-import-row">
+        <button
+          type="button"
+          className="knowledge-search-button"
+          disabled={picking !== null || importJobs.some(isActive)}
+          onClick={() => beginImport("files")}
+        >
+          {picking === "files" ? "Choosing files…" : "Add files"}
+        </button>
+        <button
+          type="button"
+          className="knowledge-search-button"
+          disabled={picking !== null || importJobs.some(isActive)}
+          onClick={() => beginImport("folder")}
+        >
+          {picking === "folder" ? "Choosing folder…" : "Add folder"}
+        </button>
+        <span className="knowledge-import-hint">
+          PDF, DOCX, XLSX, Markdown, text, CSV, JSON, HTML, code ·
+          25 MiB/file; 500 MiB or 10,000 files/job
+        </span>
+      </div>
+      {importError && <p className="knowledge-empty" role="alert">{importError}</p>}
+      {importJobs.map((job) => (
+        <div key={job.jobId} className="knowledge-import-job" aria-label="Knowledge import progress">
+          <div className="knowledge-import-head">
+            <span>
+              {job.kind === "folder" ? "Folder" : "Files"} import: {job.status}
+              {job.cancelRequested && isActive(job) ? " (cancelling…)" : ""}
+            </span>
+            {isActive(job) && (
+              <button
+                type="button"
+                className="knowledge-search-button"
+                onClick={() => cancelImport(job.jobId)}
+                disabled={job.cancelRequested}
+              >
+                Cancel import
+              </button>
+            )}
+          </div>
+          <progress
+            className="knowledge-import-progress"
+            max={Math.max(job.filesTotal, 1)}
+            value={job.filesProcessed}
+            aria-label="Files processed"
+          />
+          <p className="knowledge-import-stats">
+            {job.filesProcessed}/{job.filesTotal} files · {job.added} added · {job.updated} updated ·{" "}
+            {job.duplicates + job.unchanged} deduplicated · {job.skipped} skipped ·{" "}
+            {job.failedFiles} failed
+          </p>
+          {job.lastFile && <p className="knowledge-import-stats">Last: {job.lastFile}</p>}
+          {job.error && <p className="knowledge-empty" role="alert">{job.error}</p>}
+          {job.warnings.length > 0 && <p className="knowledge-import-stats">{job.warnings[0]}</p>}
+        </div>
+      ))}
       <div className="knowledge-search-row">
         <input
           type="text"

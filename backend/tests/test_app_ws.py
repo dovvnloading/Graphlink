@@ -165,8 +165,8 @@ def test_subscribe_without_topics_sends_every_registered_topic():
         # R2 surface: canvas + View-popover + composer/counter/notification +
         # R2.5 about/plugins/settings/chat-library topics + ADR-005 stage 5.4's
         # execution-limits topic + ADR-016 stage 16.3's diagnostics topic,
-        # sorted.
-        topics = [ws.receive_json()["topic"] for _ in range(14)]
+        # plus knowledge-ingest progress snapshots, sorted.
+        topics = [ws.receive_json()["topic"] for _ in range(15)]
         assert topics == [
             "app-about",
             "app-chat-library",
@@ -178,6 +178,7 @@ def test_subscribe_without_topics_sends_every_registered_topic():
             "execution-limits",
             "font-control",
             "grid-control",
+            "knowledge-ingest",
             "notification",
             "scene",
             "system",
@@ -429,8 +430,10 @@ def test_args_schema_is_scoped_to_the_known_intents():
     # (("app-chat-library", "exportWorkspace")); a 2026-08-25 tech-debt sweep
     # added 2 more (("knowledge", "search") and ("scene",
     # "setChatIndexIntoKnowledge")); the archive repair adds a schema for
-    # app-chat-library/importWorkspace - each a real, deliberate addition, not
-    # drift - a real intentional addition to this set updates it explicitly,
+    # app-chat-library/importWorkspace, then knowledge/cancelIngest for the
+    # required jobId. The other new ingestion intents (addFiles, addFolder,
+    # getIngestJobs) have no args_schema and are intentionally excluded.
+    # Each intentional schema addition updates this set explicitly, not as drift;
     # the same discipline this test itself exists to enforce.
     client = make_client()
     with client.websocket_connect("/ws") as ws:
@@ -460,6 +463,7 @@ def test_args_schema_is_scoped_to_the_known_intents():
             ("app-chat-library", "exportWorkspace"),
             ("app-chat-library", "importWorkspace"),
             ("knowledge", "search"),
+            ("knowledge", "cancelIngest"),
             ("scene", "setChatIndexIntoKnowledge"),
             ("scene", "bindNoteTextInput"),
             ("scene", "runNoteTextInput"),
