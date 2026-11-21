@@ -277,6 +277,8 @@ def test_rerun_without_reasoning_preserves_thinking_continuation():
         assert document.nodes[thought.id].content == ""
         assert document._branch_parent_edge(follow_up.id).source == thought.id
         assert document.nodes[second.id].content == "new second without thinking"
+        fresh_derived = document.add_code_node(200, 500, "print(42)", "python", second.id)
+        assert scene_staleness(document).get(fresh_derived.id) is None
         document.undo()
         assert document.nodes[thought.id].content == "old private reasoning"
         document.redo()
