@@ -44,6 +44,8 @@ Existing workspace-tool caps are unchanged: the source file is limited to
 **8 MiB** (bounded before parser invocation) and a single `fs.read` response
 to **40,000 characters**, with the existing truncation marker. PDF pages
 retain the attachment parser's page-count and compressed-stream safeguards;
+this includes Flate streams wrapped in ASCII85 (ReportLab's default) or
+ASCIIHex, with limits on both the ASCII-decoded bytes and inflated content.
 Office ZIP containers are checked for total expansion and oversized XML
 parts before parsing. Extracted document text is also limited to
 **1,000,000 characters**. Invalid ranges, corrupt files, and oversized
