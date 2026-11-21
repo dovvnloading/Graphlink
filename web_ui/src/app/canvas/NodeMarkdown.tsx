@@ -249,7 +249,7 @@ interface CitationTree {
   properties?: Record<string, unknown>;
   children?: CitationTree[];
 }
-export function rehypeInlineKnowledgeCitations() {
+function rehypeInlineKnowledgeCitations() {
   return (tree: CitationTree) => {
     const token = /\[(kb:[A-Za-z0-9_-]{1,128})\]/g;
     function walk(node: CitationTree, excluded = false) {
