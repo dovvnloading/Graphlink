@@ -179,6 +179,74 @@ def _format_search_results(results: list[dict]) -> list[dict]:
     return [format_search_result_row(r) for r in results]
 
 
+def register_knowledge_ingest_intents(
+    bus: SessionBus,
+    document: SceneDocument,
+    ingest_jobs: KnowledgeIngestManager,
+) -> None:
+    """Register filesystem ingestion and ingestion-job control intents."""
+    async def add_files():
+        """The native multiple-file picker is the filesystem access grant.
+
+        Capture the workspace before opening a potentially long-lived
+        picker, so switching workspaces while it is open cannot redirect
+        the finished import into the next workspace.
+        """
+        workspace_id = document.current_workspace_id
+        selected = await native_dialogs.pick_files()
+        if not selected:
+            return {"cancelled": True}
+        # Unsupported explicit selections are user errors, not jobs that
+        # appear successful after silently processing zero files.
+        if any(not is_supported_knowledge_file(Path(path)) for path in selected):
+            raise IngestError("Selection contains an unsupported file type.")
+        return ingest_jobs.start(selected, folder=False, workspace_id=workspace_id)
+
+    async def add_folder():
+        workspace_id = document.current_workspace_id
+        selected = await native_dialogs.pick_folder()
+        if not selected:
+            return {"cancelled": True}
+        return ingest_jobs.start(selected, folder=True, workspace_id=workspace_id)
+
+    async def cancel_ingest(job_id):
+        return ingest_jobs.cancel(job_id)
+
+    async def get_ingest_jobs():
+        return ingest_jobs.snapshot()
+
+    bus.register_intent("knowledge", "addFiles", add_files)
+    bus.register_intent("knowledge", "addFolder", add_folder)
+    bus.register_intent("knowledge", "cancelIngest", cancel_ingest, args_schema=CancelIngestArgs)
+    bus.register_intent("knowledge", "getIngestJobs", get_ingest_jobs)
+
+
+def register_knowledge_embedding_intents(
+    bus: SessionBus,
+    document: SceneDocument,
+    embedding_jobs: KnowledgeEmbeddingJobManager,
+) -> None:
+    """Register embedding-job status, cancellation, retry and refresh intents."""
+    async def get_embedding_jobs():
+        return embedding_jobs.snapshot()
+
+    async def cancel_embedding(job_id: str):
+        return embedding_jobs.cancel(job_id)
+
+    async def resume_embedding():
+        return embedding_jobs.resume(document.current_workspace_id)
+
+    async def refresh_embeddings():
+        # Called after Settings > Knowledge saves a genuinely new choice.
+        # Cancels any old provider before queuing the current workspace.
+        return embedding_jobs.refresh(document.current_workspace_id)
+
+    bus.register_intent("knowledge", "getEmbeddingJobs", get_embedding_jobs)
+    bus.register_intent("knowledge", "cancelEmbedding", cancel_embedding, args_schema=CancelEmbeddingArgs)
+    bus.register_intent("knowledge", "resumeEmbedding", resume_embedding)
+    bus.register_intent("knowledge", "refreshEmbeddings", refresh_embeddings)
+
+
 def register_knowledge_intents(
     bus: SessionBus,
     document: SceneDocument,
@@ -320,50 +388,6 @@ def register_knowledge_intents(
         await publish_scene()
 
 
-    async def add_files():
-        """The native multiple-file picker is the filesystem access grant.
-
-        Capture the workspace before opening a potentially long-lived
-        picker, so switching workspaces while it is open cannot redirect
-        the finished import into the next workspace.
-        """
-        workspace_id = document.current_workspace_id
-        selected = await native_dialogs.pick_files()
-        if not selected:
-            return {"cancelled": True}
-        # Unsupported explicit selections are user errors, not jobs that
-        # appear successful after silently processing zero files.
-        if any(not is_supported_knowledge_file(Path(path)) for path in selected):
-            raise IngestError("Selection contains an unsupported file type.")
-        return ingest_jobs.start(selected, folder=False, workspace_id=workspace_id)
-
-    async def add_folder():
-        workspace_id = document.current_workspace_id
-        selected = await native_dialogs.pick_folder()
-        if not selected:
-            return {"cancelled": True}
-        return ingest_jobs.start(selected, folder=True, workspace_id=workspace_id)
-
-    async def cancel_ingest(job_id):
-        return ingest_jobs.cancel(job_id)
-
-    async def get_ingest_jobs():
-        return ingest_jobs.snapshot()
-
-    async def get_embedding_jobs():
-        return embedding_jobs.snapshot()
-
-    async def cancel_embedding(job_id: str):
-        return embedding_jobs.cancel(job_id)
-
-    async def resume_embedding():
-        return embedding_jobs.resume(document.current_workspace_id)
-
-    async def refresh_embeddings():
-        # Called after Settings > Knowledge saves a genuinely new choice.
-        # Cancels any old provider before queuing the current workspace.
-        return embedding_jobs.refresh(document.current_workspace_id)
-
     async def list_documents():
         workspace_id = document.current_workspace_id
 
@@ -452,14 +476,8 @@ def register_knowledge_intents(
 
     bus.register_intent("knowledge", "search", search, args_schema=SearchArgs)
     bus.register_intent("knowledge", "openCitation", open_citation, args_schema=OpenCitationArgs)
-    bus.register_intent("knowledge", "addFiles", add_files)
-    bus.register_intent("knowledge", "addFolder", add_folder)
-    bus.register_intent("knowledge", "cancelIngest", cancel_ingest, args_schema=CancelIngestArgs)
-    bus.register_intent("knowledge", "getIngestJobs", get_ingest_jobs)
-    bus.register_intent("knowledge", "getEmbeddingJobs", get_embedding_jobs)
-    bus.register_intent("knowledge", "cancelEmbedding", cancel_embedding, args_schema=CancelEmbeddingArgs)
-    bus.register_intent("knowledge", "resumeEmbedding", resume_embedding)
-    bus.register_intent("knowledge", "refreshEmbeddings", refresh_embeddings)
+    register_knowledge_ingest_intents(bus, document, ingest_jobs)
+    register_knowledge_embedding_intents(bus, document, embedding_jobs)
     bus.register_intent("knowledge", "listDocuments", list_documents)
     bus.register_intent("knowledge", "openDocument", open_document, args_schema=DocumentIdArgs)
     bus.register_intent("knowledge", "removeDocument", remove_document, args_schema=DocumentIdArgs)
