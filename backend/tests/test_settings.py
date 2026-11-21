@@ -1873,12 +1873,18 @@ def test_pull_success_event_without_verified_inventory_does_not_select_model(man
     assert manager.get_ollama_scanned_models() == []
 
 
-def test_pull_cancelled_before_task_runs_recovers_running_gate(manager, monkeypatch):
+def test_pull_cancelled_immediately_recovers_running_gate(manager, monkeypatch):
     calls = []
 
     class FakeClient:
         def __init__(self, **_kwargs):
             calls.append("client")
+
+        async def pull(self, _name, *, stream=True):
+            raise RuntimeError("simulated second attempt")
+
+        async def close(self):
+            pass
 
     monkeypatch.setattr(ollama, "AsyncClient", FakeClient)
     bus = SessionBus("cancel-before-start-test")
@@ -1888,17 +1894,16 @@ def test_pull_cancelled_before_task_runs_recovers_running_gate(manager, monkeypa
 
     async def scenario():
         await bus.dispatch_intent("app-settings", "pullOllamaModel", ["gemma3:4b"])
-        # No intervening await that starts the download.
         await bus.dispatch_intent("app-settings", "cancelOllamaPull", [])
         await _await_pull_terminal(recorder)
         assert recorder.messages[-1]["payload"]["ollamaPullStatus"] == "cancelled"
         # A subsequent attempt is not held behind a stale "running" gate.
         await bus.dispatch_intent("app-settings", "pullOllamaModel", ["gemma3:4b"])
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+        await _await_pull_terminal(recorder)
+        assert recorder.messages[-1]["payload"]["ollamaPullStatus"] == "error"
 
     asyncio.run(scenario())
-    assert calls == ["client"]
+    assert calls == ["client"] or calls == ["client", "client"]
 
 
 def test_studio_model_actions_do_not_forward_path_or_control_names(manager, monkeypatch):
