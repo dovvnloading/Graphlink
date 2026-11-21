@@ -101,7 +101,7 @@ def test_invalid_pricing_is_rejected_atomically(tmp_path, bad):
 
 
 def test_overrides_refresh_reply_wire_and_topics_without_mutating_usage_or_undo(tmp_path):
-    _, manager, document, counter, bus = _setup(tmp_path)
+    _, _, document, counter, bus = _setup(tmp_path)
     user = document.add_chat_node(0, 0, "input", True)
     reply = document.add_chat_node(0, 120, "response", False, parent_id=user.id)
     reply.state.provider = "OpenAI-Compatible"
