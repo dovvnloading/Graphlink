@@ -437,37 +437,61 @@ class TestVirtualEnvSandboxUsesTheGuard:
         parent_script.write_text(
             "import subprocess, sys, time\n"
             f"subprocess.Popen([sys.executable, r'{grandchild_script}'])\n"
-            "time.sleep(20)\n",
+            "while True: time.sleep(1)\n",
             encoding="utf-8",
         )
 
         sandbox = VirtualEnvSandbox("guard-real-tree-test")
-        flag = {"go": True}
+        continue_running = threading.Event()
+        continue_running.set()
+        outcome = []
 
         def runner():
-            with pytest.raises(InterruptedError):
+            try:
+                # This test owns the stop. A separate 30-second sandbox
+                # timeout used to kill the grandchild first on loaded CI.
                 sandbox._run_subprocess(
                     [sys.executable, str(parent_script)],
-                    should_continue=lambda: flag["go"],
-                    timeout_seconds=30,
+                    should_continue=continue_running.is_set,
+                    timeout_seconds=None,
                 )
+            except Exception as exc:
+                outcome.append(exc)
+            else:
+                outcome.append(None)
 
         t = threading.Thread(target=runner)
         t.start()
-        time.sleep(1.5)
-        assert marker.exists(), "grandchild never started writing"
-        size_before = marker.stat().st_size
-        time.sleep(1)
-        assert marker.stat().st_size > size_before
+        try:
+            # Observe two distinct heartbeat writes, not two wall-clock
+            # sleeps that may be suspended by a busy Windows runner.
+            previous_size = None
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline:
+                if marker.exists():
+                    size = marker.stat().st_size
+                    if previous_size is not None and size > previous_size:
+                        break
+                    previous_size = size
+                time.sleep(0.1)
+            else:
+                pytest.fail("grandchild never produced successive heartbeat writes")
 
-        flag["go"] = False
-        t.join(timeout=10)
+            assert t.is_alive(), "sandbox stopped before the stop request"
+            continue_running.clear()
+            t.join(timeout=10)
+            assert not t.is_alive(), "sandbox did not stop after cancellation"
+            assert len(outcome) == 1 and isinstance(outcome[0], InterruptedError), outcome
 
-        time.sleep(1.5)
-        size_after_stop = marker.stat().st_size
-        time.sleep(1.5)
-        assert marker.stat().st_size == size_after_stop, "grandchild kept writing after sandbox stop"
-
+            size_after_stop = marker.stat().st_size
+            time.sleep(1.5)
+            assert marker.stat().st_size == size_after_stop, "grandchild kept writing after sandbox stop"
+        finally:
+            continue_running.clear()
+            t.join(timeout=10)
+            if t.is_alive():
+                sandbox.stop()
+                t.join(timeout=3)
 
 # -- Adversarial-review-driven regression tests ------------------------------
 # The four classes below pin the fixes for findings the ADR-005 stage 5.2
