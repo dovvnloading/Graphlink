@@ -51,7 +51,8 @@ async def probe_ollama_model(model_name: str) -> dict[str, float | bool | str | 
     Reasoning models can spend a small generation budget entirely on
     thinking. Use the same per-family Ollama think setting as the workspace
     agent's Quick mode, and allow a bounded retry before calling the result
-    inconclusive. keep_alive=0 unloads the model after every request.
+    inconclusive. A five-minute keep-alive lets the model card refresh its
+    loaded state from /api/ps; Ollama can still unload the model later.
     """
     client = ollama.AsyncClient(timeout=180.0)
     try:
@@ -59,7 +60,7 @@ async def probe_ollama_model(model_name: str) -> dict[str, float | bool | str | 
             model=model_name,
             messages=[{"role": "user", "content": "In one short sentence, what is two plus two?"}],
             options={"num_predict": 32, "temperature": 0},
-            keep_alive=0,
+            keep_alive="5m",
         )
         load_ns = _nonnegative_number(_field(response, "load_duration"))
         eval_ns = _nonnegative_number(_field(response, "eval_duration"))
@@ -92,7 +93,7 @@ async def probe_ollama_model(model_name: str) -> dict[str, float | bool | str | 
             "messages": messages,
             "tools": [_TOOL],
             "options": {"num_predict": 256, "temperature": 0},
-            "keep_alive": 0,
+            "keep_alive": "5m",
         }
         if think is not None:
             request["think"] = think

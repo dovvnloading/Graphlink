@@ -21,7 +21,7 @@ from backend.domain.node_states import HarnessState
 from backend.harness.shell_selection import VALID_SHELLS
 from backend.harness.shell_isolation import VALID_EXECUTION_PROFILES, available_engine
 from backend.harness.permission_modes import AUTONOMOUS, VALID_PERMISSION_MODES
-from backend.ollama_context import DEFAULT_CONTEXT_WINDOW, available_memory_bytes, estimated_memory_bytes, kv_bytes_per_token
+from backend.ollama_context import DEFAULT_CONTEXT_WINDOW, available_memory_bytes, estimated_kv_cache_bytes
 from backend.ollama_inventory import build_ollama_inventory
 from backend.events import SessionBus
 from backend.notifications import NotificationState
@@ -83,7 +83,7 @@ def _memory_safe_tool_model(settings_manager, excluded_model: str) -> str | None
                 info = getattr(show, "model_info", None) or getattr(show, "modelinfo", None)
         except Exception:
             info = None
-        estimate = estimated_memory_bytes(size, window, kv_bytes_per_token(info))
+        estimate = size + estimated_kv_cache_bytes(info, window)
         if estimate <= available:
             candidates.append((estimate, name.casefold(), name))
     # Prefer the least memory-intensive verified fit, not alphabetic order

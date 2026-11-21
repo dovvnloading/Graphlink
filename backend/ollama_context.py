@@ -76,6 +76,70 @@ def kv_bytes_per_token(model_info: object) -> int:
     return FALLBACK_KV_BYTES_PER_TOKEN
 
 
+def estimated_kv_cache_bytes(model_info: object, context_window: int) -> int:
+    """Estimate an actual window's KV allocation, including hybrid attention.
+
+    Some GGUF architectures (notably Gemma 4) expose per-layer KV head counts
+    and a sliding/global layer pattern. Sliding layers retain at most their
+    local window, while global layers retain all served tokens. Using one
+    full-context KV cost for every layer can overstate Gemma 4 by many GiB.
+    Without complete geometry, keep the existing approximate fallback.
+    """
+    if type(context_window) is not int or context_window <= 0:
+        return 0
+    fallback = context_window * kv_bytes_per_token(model_info)
+    if not isinstance(model_info, Mapping):
+        return fallback
+    architecture = str(model_info.get("general.architecture") or "").strip()
+    if not architecture:
+        return fallback
+    prefix = f"{architecture}."
+    layers = _positive_int(model_info.get(prefix + "block_count"))
+    # Bound iteration over the untrusted /api/show metadata.
+    if not layers or layers > 1024:
+        return fallback
+    heads = _positive_int(model_info.get(prefix + "attention.head_count"))
+    raw_kv_heads = model_info.get(prefix + "attention.head_count_kv")
+    if isinstance(raw_kv_heads, (list, tuple)):
+        if len(raw_kv_heads) != layers:
+            return fallback
+        kv_heads = [_positive_int(count) for count in raw_kv_heads]
+        if any(count is None or (heads is not None and count > heads) for count in kv_heads):
+            return fallback
+    else:
+        kv_count = _positive_int(raw_kv_heads) or heads
+        if not kv_count or (heads is not None and kv_count > heads):
+            return fallback
+        kv_heads = [kv_count] * layers
+
+    key_length = _positive_int(model_info.get(prefix + "attention.key_length"))
+    value_length = _positive_int(model_info.get(prefix + "attention.value_length"))
+    embedding = _positive_int(model_info.get(prefix + "embedding_length"))
+    if not key_length and heads and embedding and embedding % heads == 0:
+        key_length = embedding // heads
+    if not key_length:
+        return fallback
+    if not value_length:
+        value_length = key_length
+
+    pattern = model_info.get(prefix + "attention.sliding_window_pattern")
+    sliding_window = _positive_int(model_info.get(prefix + "attention.sliding_window"))
+    # Never assume local retention from a missing or malformed layer pattern.
+    if (not isinstance(pattern, (list, tuple)) or len(pattern) != layers
+            or any(type(local) is not bool for local in pattern) or not sliding_window):
+        pattern = [False] * layers
+    swa_key = _positive_int(model_info.get(prefix + "attention.key_length_swa")) or key_length
+    swa_value = _positive_int(model_info.get(prefix + "attention.value_length_swa")) or value_length
+
+    total = 0
+    for kv_head_count, local in zip(kv_heads, pattern):
+        tokens = min(context_window, sliding_window) if local else context_window
+        key = swa_key if local else key_length
+        value = swa_value if local else value_length
+        total += kv_head_count * (key + value) * 2 * tokens  # float16 key + value
+    return total if 0 < total <= MAX_KV_BYTES_PER_TOKEN * context_window else fallback
+
+
 def estimated_memory_bytes(model_size_bytes: int, context_window: int, kv_bytes: int) -> int:
     """Approximate resident model weights plus a single request's KV cache."""
     return max(0, int(model_size_bytes)) + max(0, int(context_window)) * max(0, int(kv_bytes))

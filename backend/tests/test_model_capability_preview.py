@@ -145,6 +145,34 @@ def test_suggestion_respects_context_window_kv_estimate(monkeypatch):
     assert result["suggestedToolModel"] is None
 
 
+
+def test_suggestion_uses_window_specific_hybrid_kv_for_memory_fit(monkeypatch):
+    monkeypatch.setattr(api_provider, "_get_ollama_capabilities", lambda _model: {"completion"})
+    weights = 4 * _GIB
+    _verified_inventory(
+        monkeypatch, [_tool_row("hybrid-tools:latest", weights)],
+        available=weights + 8 * 1024 ** 2,
+    )
+    monkeypatch.setattr(intents_harness.ollama, "show", lambda _model: {"model_info": {
+        "general.architecture": "hybrid",
+        "hybrid.block_count": 2,
+        "hybrid.attention.head_count": 8,
+        "hybrid.attention.head_count_kv": [1, 1],
+        "hybrid.attention.key_length": 64,
+        "hybrid.attention.value_length": 64,
+        "hybrid.attention.sliding_window": 128,
+        "hybrid.attention.sliding_window_pattern": [True, False],
+    }})
+    settings = Catalog()
+    result = _model_capability_preview(settings, "Ollama", "plain:latest")
+    assert result["suggestedToolModel"] == {
+        "provider": "Ollama (Local)", "modelId": "hybrid-tools:latest",
+    }
+
+    # Available RAM must still cover the effective KV cache, not just weights.
+    monkeypatch.setattr(intents_harness, "available_memory_bytes", lambda: weights + 1024 ** 2)
+    assert _model_capability_preview(settings, "Ollama", "plain:latest")["suggestedToolModel"] is None
+
 def test_suggestion_needs_server_verified_size_and_available_ram(monkeypatch):
     monkeypatch.setattr(api_provider, "_get_ollama_capabilities", lambda _model: {"completion"})
     _verified_inventory(monkeypatch, [_tool_row("qwen3:8b", None)])

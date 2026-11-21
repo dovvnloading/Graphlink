@@ -164,8 +164,10 @@ def _field(value: object, name: str, default=None):
 def _nonnegative_int(value: object) -> int | None:
     # Preserve only precise, JSON-safe byte counts. A float, infinity or
     # giant numeric string from a daemon must not reach the JS memory UI.
-    if type(value) is int:
-        number = value
+    if isinstance(value, int) and not isinstance(value, bool):
+        # The Ollama SDK wraps /api/tags and /api/ps sizes in Pydantic
+        # ByteSize (an int subclass). Normalize them before JSON output.
+        number = int(value)
     elif isinstance(value, str) and value.isascii() and value.isdecimal() and len(value) <= 16:
         number = int(value)
     else:
@@ -266,6 +268,40 @@ def _folder_inventory(scan_path: str | None, *, server_error: str = "") -> dict:
     }
 
 
+def _running_models() -> dict[str, object] | None:
+    """Live /api/ps snapshot; None means unavailable, not that nothing is loaded."""
+    try:
+        models = _field(ollama.ps(), "models")
+        if not isinstance(models, (list, tuple)) or len(models) > 2048:
+            return None
+    except Exception:
+        return None
+    return {_key(name): item for item in models if (name := _name(item))}
+
+
+def refresh_ollama_loaded_state(inventory: list[dict]) -> list[dict]:
+    """Update load state after a Check without re-fetching all /api/show rows.
+
+    Each call represents one /api/ps snapshot. A failed request must replace
+    stale load claims with 'unknown', not misreport 'Not loaded'.
+    """
+    running = _running_models()
+    refreshed = []
+    for row in inventory:
+        if row.get("source") != "server":
+            refreshed.append(dict(row))
+            continue
+        name = row.get("name")
+        loaded_model = running.get(_key(name)) if running is not None and isinstance(name, str) else None
+        refreshed.append({
+            **row,
+            "loaded": (loaded_model is not None) if running is not None else None,
+            "memoryBytes": _nonnegative_int(_field(loaded_model, "size")),
+            "vramBytes": _nonnegative_int(_field(loaded_model, "size_vram")),
+        })
+    return refreshed
+
+
 def build_ollama_inventory(scan_path: str | None = None) -> dict:
     """Discover installed models, capabilities and loaded memory in one pass.
 
@@ -280,14 +316,7 @@ def build_ollama_inventory(scan_path: str | None = None) -> dict:
     except Exception as exc:
         return _folder_inventory(None, server_error=str(exc))
 
-    try:
-        running = _field(ollama.ps(), "models")  # /api/ps
-        if not isinstance(running, (list, tuple)) or len(running) > 2048:
-            running = None
-    except Exception:
-        running = None  # Unknown, rather than claiming everything is unloaded.
-
-    loaded_by_name = {_key(_name(item)): item for item in running if _name(item)} if running is not None else {}
+    loaded_by_name = _running_models()
     records_by_name: dict[str, dict] = {}
     for item in tags:
         name = _name(item)
@@ -297,13 +326,13 @@ def build_ollama_inventory(scan_path: str | None = None) -> dict:
             show = ollama.show(name)  # /api/show
         except Exception:
             show = None  # A per-model failure must not discard the tags row.
-        loaded_model = loaded_by_name.get(_key(name))
+        loaded_model = loaded_by_name.get(_key(name)) if loaded_by_name is not None else None
         records_by_name[_key(name)] = _inventory_record(
             name,
             size=_field(item, "size"),
             details=_field(item, "details"),
             show=show,
-            loaded=(loaded_model is not None) if running is not None else None,
+            loaded=(loaded_model is not None) if loaded_by_name is not None else None,
             memory=_field(loaded_model, "size"),
             vram=_field(loaded_model, "size_vram"),
             source="server",
