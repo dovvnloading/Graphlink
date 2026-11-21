@@ -330,6 +330,7 @@ def _configure_session(
     register_chat_library(
         bus, chat_db_path, canvas_document, notifications_state,
         settings_manager=settings_manager, agent_dispatcher=agent_dispatcher,
+        knowledge_db_path=watch_service.db_path if watch_service is not None else None,
     )
 
 
