@@ -189,7 +189,7 @@ interface PositionedElement {
   position?: { start?: { offset?: number }; end?: { offset?: number } };
 }
 
-export function rehypeHighlightCitedPassage(start: number, end: number) {
+function rehypeHighlightCitedPassage(start: number, end: number) {
   return (tree: PositionedElement) => {
     if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start) return;
     const blocks = new Set(["p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "pre", "table", "blockquote"]);
