@@ -74,7 +74,10 @@ class WatchedFolderService:
             bus.register_topic("knowledge-ingest", manager.snapshot)
             self._managers[folder_id] = manager
         jobs = manager.snapshot()["jobs"]
-        if jobs and jobs[-1]["status"] not in _FINAL:
+        if jobs and (
+            jobs[-1]["status"] not in _FINAL
+            or (jobs[-1]["jobId"] in manager._tasks and not manager._tasks[jobs[-1]["jobId"]].done())
+        ):
             return {
                 "folderId": folder_id, "jobId": jobs[-1]["jobId"],
                 "status": jobs[-1]["status"],

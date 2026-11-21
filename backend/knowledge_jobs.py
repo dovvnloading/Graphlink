@@ -64,6 +64,10 @@ class KnowledgeIngestJob:
     last_file: str = ""
     error: str = ""
     warnings: list[str] = field(default_factory=list)
+    # Worker-only scan observations include oversized files, which must not
+    # be mistaken for deletions. scan_complete is false for unreadable paths.
+    observed_paths: set[str] = field(default_factory=set, repr=False)
+    scan_complete: bool = True
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -134,6 +138,7 @@ def _collect_files(path: Path | list[Path], folder: bool, job: KnowledgeIngestJo
         if real in seen_files:
             return
         seen_files.add(real)
+        job.observed_paths.add(str(real))
         size = real.stat().st_size
         if size > MAX_FILE_BYTES:
             job.increment(skipped=1)
@@ -166,6 +171,7 @@ def _collect_files(path: Path | list[Path], folder: bool, job: KnowledgeIngestJo
                 with os.scandir(current) as iterator:
                     entries = sorted(iterator, key=lambda entry: entry.name.casefold())
             except OSError as exc:
+                job.change(scan_complete=False)
                 job.increment(skipped=1)
                 job.warn(f"Skipped unreadable directory {current.name}: {exc}")
                 continue
@@ -188,6 +194,7 @@ def _collect_files(path: Path | list[Path], folder: bool, job: KnowledgeIngestJo
                     if entry.is_file(follow_symlinks=True):
                         add_file(candidate)
                 except (OSError, RuntimeError) as exc:
+                    job.change(scan_complete=False)
                     job.increment(skipped=1)
                     job.warn(f"Skipped unreadable item {entry.name}: {exc}")
 
@@ -276,7 +283,7 @@ class KnowledgeIngestManager:
             )
             watch_id = job.watched_folder_id
             known = known_watched_files(self._db_path, watch_id, collection_id) if watch_id is not None else {}
-            present = {str(file) for file, _ in files}
+            present = set(job.observed_paths)
             for file, planned_size in files:
                 if job.cancel_event.is_set():
                     break
@@ -330,11 +337,12 @@ class KnowledgeIngestManager:
                 job.change(last_file=file.name)
                 self._emit()
             if not job.cancel_event.is_set() and watch_id is not None:
-                # A partial or unsafe scan must not classify unseen files as
-                # deleted. File parsing errors do not affect scan completeness.
+                # Only unreadable entries make a scan incomplete. Oversized
+                # and deliberately excluded items do not hide other deletions;
+                # observed_paths also retains the names of oversized files.
                 removed = reconcile_watched_files(
                     self._db_path, watch_id, collection_id, present,
-                    prune=job.snapshot()["skipped"] == 0,
+                    prune=job.scan_complete,
                 )
                 job.increment(removed=removed)
             job.change(status="cancelled" if job.cancel_event.is_set() else "completed")
@@ -355,7 +363,7 @@ class KnowledgeIngestManager:
                             f'{row["failedFiles"]} file(s) failed: ' + "; ".join(row["warnings"][:3])
                         )
                     elif row["skipped"] and not error:
-                        error = f'{row["skipped"]} item(s) skipped; removal reconciliation deferred.'
+                        error = f'{row["skipped"]} item(s) skipped during watched folder scan.'
                     try:
                         set_watched_folder_sync_result(
                             self._db_path, job.watched_folder_id,

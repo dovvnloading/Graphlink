@@ -19,8 +19,14 @@ async def _finished(service: WatchedFolderService, workspace_id: int, folder_id:
         rows = (await service.list(workspace_id))["folders"]
         row = next(row for row in rows if row["id"] == folder_id)
         if row["jobId"] == job_id and row["syncStatus"] in {"completed", "failed", "cancelled"}:
-            if row["syncStatus"] == "cancelled" or row["lastSyncAt"] or row["lastError"]:
-                return row
+            manager = service._managers.get(folder_id)
+            task = manager._tasks.get(job_id) if manager else None
+            # A job publishes final status immediately before its finally
+            # writes lastSyncAt/lastError. Wait for that write, too.
+            if task is None or task.done():
+                return (await service.list(workspace_id))["folders"][
+                    next(i for i, item in enumerate(rows) if item["id"] == folder_id)
+                ]
         await asyncio.sleep(0.02)
     pytest.fail("watched folder ingestion did not settle")
 
