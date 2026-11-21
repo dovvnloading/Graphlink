@@ -108,6 +108,13 @@ def test_xlsx_imports_shared_strings_inline_strings_and_numbers(tmp_path):
         extract_text(bad)
 
 
+def test_corrupt_docx_archive_is_identified_as_invalid_docx(tmp_path):
+    bad = tmp_path / "bad.docx"
+    bad.write_bytes(b"not a zip file")
+    with pytest.raises(IngestError, match="invalid DOCX"):
+        extract_text(bad)
+
+
 def test_folder_scan_skips_unwanted_dirs_and_escaping_symlinks(tmp_path):
     root = tmp_path / "chosen"
     root.mkdir()

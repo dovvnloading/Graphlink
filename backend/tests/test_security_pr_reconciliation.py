@@ -48,7 +48,7 @@ def test_automatic_repo_inventory_keeps_safe_templates(path):
 
 @pytest.mark.parametrize("part", [".git", ".hg", ".svn", ".bzr", "cvs"])
 def test_gitlink_edits_deny_vcs_metadata(part):
-    with pytest.raises(RuntimeError, match="metadata|\.git"):
+    with pytest.raises(RuntimeError, match=r"metadata|\.git"):
         _normalize_repo_path(f"subdir/{part}/hooks/post-commit")
 
 

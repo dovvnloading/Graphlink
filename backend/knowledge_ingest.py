@@ -82,7 +82,10 @@ def _check_ooxml_archive(path: Path) -> None:
                         and member.file_size > MAX_OOXML_XML_PART_BYTES):
                     raise IngestError("Office XML part exceeds the safe expanded-size limit.")
     except (BadZipFile, LargeZipFile) as exc:
-        raise IngestError("Office document is not a readable ZIP archive.") from exc
+        format_name = "XLSX" if path.suffix.lower() == ".xlsx" else "DOCX"
+        raise IngestError(
+            f"Could not read {format_name} file '{path.name}': invalid {format_name} ZIP archive."
+        ) from exc
 
 
 def _extract_xlsx(path: Path) -> str:
