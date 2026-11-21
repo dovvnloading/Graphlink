@@ -47,8 +47,10 @@ export function KnowledgeSettingsPage({
   // Show the models *installed in the running Ollama server*, rather than
   // guessing based on a local manifest or offering non-installed suggestions.
   useEffect(() => {
-    transport.fireIntent("app-settings", "scanKnowledgeOllamaModels", []);
-  }, [transport]);
+    if (source === "ollama") {
+      transport.fireIntent("app-settings", "scanKnowledgeOllamaModels", []);
+    }
+  }, [source, transport]);
 
   const capable = state.knowledgeOllamaCapableModels;
   const available = useMemo(
