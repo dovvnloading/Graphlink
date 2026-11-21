@@ -167,6 +167,9 @@ def test_malformed_json_turn_gets_one_protocol_feedback_retry(monkeypatch):
     assert result["tool_calls"][0].arguments == {"path": "notes.txt"}
     assert provider.requests[0].messages[0] == provider.requests[1].messages[0]
     assert provider.requests[0].tools == provider.requests[1].tools == ()
+    assert [m["role"] for m in provider.requests[0].messages] == [
+        m["role"] for m in provider.requests[1].messages
+    ], "strict chat templates must not receive two consecutive user turns"
     correction = provider.requests[1].messages[-1]
     assert correction["role"] == "user"
     assert "Invalid JSON arguments for tool 'fs.read'" in correction["content"]
