@@ -125,10 +125,14 @@ def test_a_removed_node_and_its_cascaded_edges_are_both_reported():
     b = document.add_node(100, 0, "b")
     edge = document.connect(a.id, b.id)
     document.take_dirty_patch_ops()
+    published_b = next(row for row in document.published_scene_payload()["nodes"] if row["id"] == b.id)
 
     document.remove_nodes([a.id])
     ops = document.take_dirty_patch_ops()
 
+    # The surviving node's real wire payload is unchanged; losing its
+    # parent must not create a phantom staleness upsert.
+    assert next(row for row in document.scene_payload()["nodes"] if row["id"] == b.id) == published_b
     assert ops_of(ops) == ["removeNodes", "removeEdges"]
     assert ops[0]["ids"] == [a.id]
     assert ops[1]["ids"] == [edge.id]
@@ -440,10 +444,10 @@ def test_a_patch_publish_builds_every_node_payload_exactly_once():
         built = 0
         original = SceneDocument._node_wire
 
-        def counting(self, node, source_digests=None, table_reads=None):
+        def counting(self, node, source_digests=None, table_reads=None, *, staleness="current"):
             nonlocal built
             built += 1
-            return original(self, node, source_digests, table_reads)
+            return original(self, node, source_digests, table_reads, staleness=staleness)
 
         document.move_node(next(iter(document.nodes)), 5, 5)
         SceneDocument._node_wire = counting

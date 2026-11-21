@@ -118,7 +118,13 @@ def _lineage(document: SceneDocument) -> tuple[dict[str, bytes], dict[str, str]]
                 # dependency. Existing sessions without a snapshot do not
                 # acquire one just because they are published.
                 baseline = document.nonchat_upstream_fingerprints.get(item)
-                if baseline is not None and baseline != "v1:" + prior.hex():
+                # With its structural parent removed, this node has no
+                # live upstream history. A stored baseline alone must not
+                # mark an otherwise unchanged orphan as stale.
+                if (
+                    baseline is not None and item in parents
+                    and baseline != "v1:" + prior.hex()
+                ):
                     upstream_changed = True
                 if upstream_changed:
                     statuses[item] = "upstream_changed"

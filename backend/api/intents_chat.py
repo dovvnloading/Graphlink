@@ -892,6 +892,46 @@ async def _send_model_comparison(
 
 
 
+def register_chat_model_intents(
+    bus: SessionBus, document: SceneDocument, notifications: NotificationState,
+    agent_dispatcher: AgentDispatcher, composer_document: ComposerDocument,
+    token_counter: TokenCounterState, publish_scene, publish_token_counter,
+    comparison_cancelled_requests: set[str],
+) -> None:
+    """Register model-picker and comparison actions separately from chat send."""
+    def list_comparison_models():
+        from backend.context_engine.model_comparison import available_comparison_models
+        return {"models": available_comparison_models(
+            agent_dispatcher._settings_manager, agent_dispatcher._provider_runtime,
+        )}
+
+    async def compare_models(text, models, branch_from_node_id=None, use_knowledge=None):
+        return await _send_model_comparison(
+            bus=bus, document=document, notifications=notifications,
+            agent_dispatcher=agent_dispatcher, composer_document=composer_document,
+            token_counter=token_counter, publish_scene=publish_scene,
+            publish_token_counter=publish_token_counter,
+            text=text, models=models, branch_from_node_id=branch_from_node_id,
+            use_knowledge=use_knowledge,
+            cancelled_requests=comparison_cancelled_requests,
+        )
+
+    async def list_picker_models():
+        # Ollama /api/tags and /api/show perform I/O; never block the event
+        # loop or the compositor's draft keystrokes while opening the picker.
+        from backend.context_engine.model_comparison import available_picker_models
+
+        rows = await asyncio.to_thread(
+            available_picker_models, agent_dispatcher._settings_manager, agent_dispatcher._provider_runtime,
+        )
+        return {"models": rows}
+
+    bus.register_intent("scene", "listPickerModels", list_picker_models)
+    bus.register_intent("scene", "listComparisonModels", list_comparison_models)
+    bus.register_intent("scene", "compareModels", compare_models)
+
+
+
 def register_chat_knowledge_intents(
     bus: SessionBus, document: SceneDocument,
     agent_dispatcher: AgentDispatcher, publish_scene,
@@ -1209,36 +1249,10 @@ def register_chat_intents(
         )
         return node_to_regenerate.id
 
-    def list_comparison_models():
-        from backend.context_engine.model_comparison import available_comparison_models
-        return {"models": available_comparison_models(
-            agent_dispatcher._settings_manager, agent_dispatcher._provider_runtime,
-        )}
-
-    async def compare_models(text, models, branch_from_node_id=None, use_knowledge=None):
-        return await _send_model_comparison(
-            bus=bus, document=document, notifications=notifications,
-            agent_dispatcher=agent_dispatcher, composer_document=composer_document,
-            token_counter=token_counter, publish_scene=publish_scene,
-            publish_token_counter=publish_token_counter,
-            text=text, models=models, branch_from_node_id=branch_from_node_id,
-            use_knowledge=use_knowledge,
-            cancelled_requests=comparison_cancelled_requests,
-        )
-
-    async def list_picker_models():
-        # Ollama /api/tags and /api/show perform I/O; never block the event
-        # loop or the compositor's draft keystrokes while opening the picker.
-        from backend.context_engine.model_comparison import available_picker_models
-
-        rows = await asyncio.to_thread(
-            available_picker_models, agent_dispatcher._settings_manager, agent_dispatcher._provider_runtime,
-        )
-        return {"models": rows}
-
-    bus.register_intent("scene", "listPickerModels", list_picker_models)
-    bus.register_intent("scene", "listComparisonModels", list_comparison_models)
-    bus.register_intent("scene", "compareModels", compare_models)
+    register_chat_model_intents(
+        bus, document, notifications, agent_dispatcher, composer_document,
+        token_counter, publish_scene, publish_token_counter, comparison_cancelled_requests,
+    )
 
     register_chat_knowledge_intents(bus, document, agent_dispatcher, publish_scene)
     bus.register_intent("scene", "sendMessage", send_message)
