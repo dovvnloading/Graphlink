@@ -421,6 +421,10 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("knowledge", "addFolder", "B", "external-store: launches a local folder import job, not a scene undo"),
     Classified("knowledge", "cancelIngest", "B", "run-lifecycle: signals cancellation of a background knowledge job"),
     Classified("knowledge", "getIngestJobs", "B", "read-only: retrieves background knowledge job progress"),
+    Classified("knowledge", "getEmbeddingJobs", "B", "read-only: retrieves knowledge embedding job progress"),
+    Classified("knowledge", "cancelEmbedding", "B", "run-lifecycle: cancels future embedding batches"),
+    Classified("knowledge", "resumeEmbedding", "B", "run-lifecycle: resumes pending workspace embeddings"),
+    Classified("knowledge", "refreshEmbeddings", "B", "run-lifecycle: restarts embedding for a changed settings choice"),
     Classified("scene", "setChatIndexIntoKnowledge", "A", "content: branch-indexing opt-in is document state, same posture as setGroupColor"),
 
     # -- backend/api/intents_global_search.py - ADR-020 stage 20.4 --

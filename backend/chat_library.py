@@ -2507,6 +2507,36 @@ def make_load_graph_and_focus_node(
     return load_graph_and_focus_node
 
 
+async def _schedule_embeddings_after_graph_save(
+    bus: SessionBus, db_path: Path, chat_id: int, workspace_id: int | None,
+    settings_manager: "SettingsManager | None" = None,
+) -> None:
+    """Queue the graph chunks written to knowledge.db on successful save.
+
+    New untitled chats can have a None workspace hint even though the saved
+    graph was assigned the Default workspace by chats.db. Resolve that row
+    in a thread, never mistakenly send it to collection 0. An optional
+    embedding failure must not turn a successful chat save into an error.
+    """
+    jobs = getattr(bus, "knowledge_embedding_jobs", None)
+    if jobs is None:
+        return
+    if (
+        settings_manager is not None
+        and settings_manager.get_knowledge_embedding_settings()["source"] == "off"
+    ):
+        return
+    try:
+        if workspace_id is None:
+            row = await asyncio.to_thread(load_chat_row, db_path, int(chat_id))
+            if row is None:
+                return
+            workspace_id = int(row["workspace_id"])
+        jobs.schedule(workspace_id)
+    except Exception:
+        logger.exception("could not schedule knowledge embeddings after graph save")
+
+
 def make_save_chat(
     bus: SessionBus,
     resolved_path: Path,
@@ -2636,6 +2666,10 @@ def make_save_chat(
         # next autosave tick recognizes it as already-saved instead of
         # rewriting a byte-identical row 30 seconds later.
         record_saved(chat_data, notes_data, pins_data, new_chat_id, new_updated_at)
+        await _schedule_embeddings_after_graph_save(
+            bus, resolved_path, int(new_chat_id), canvas_document.current_workspace_id,
+            settings_manager,
+        )
         await bus.publish("app-chat-library")
         if notifications is not None and not checkpoint:
             notifications.show(f'Saved "{title}".', "success")

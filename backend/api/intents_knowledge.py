@@ -21,6 +21,7 @@ import asyncio
 from pathlib import Path
 from backend import native_dialogs
 from backend.knowledge_jobs import KnowledgeIngestManager
+from backend.knowledge_embedding_jobs import KnowledgeEmbeddingJobManager
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -53,6 +54,11 @@ class SetChatIndexIntoKnowledgeArgs:
 
 @dataclass
 class CancelIngestArgs:
+    jobId: str
+
+
+@dataclass
+class CancelEmbeddingArgs:
     jobId: str
 
 
@@ -149,8 +155,13 @@ def register_knowledge_intents(
     settings_manager=None,
 ) -> None:
     publish_scene = make_publish_scene(bus)
-    ingest_jobs = KnowledgeIngestManager(bus, DEFAULT_DB_PATH)
+    embedding_jobs = KnowledgeEmbeddingJobManager(bus, DEFAULT_DB_PATH, settings_manager)
+    ingest_jobs = KnowledgeIngestManager(bus, DEFAULT_DB_PATH, on_completed=embedding_jobs.schedule)
     bus.register_topic("knowledge-ingest", ingest_jobs.snapshot)
+    bus.register_topic("knowledge-embedding", embedding_jobs.snapshot)
+    # Session eviction must stop subsequent provider batches, even if an
+    # already-running synchronous embed call has not returned yet.
+    bus.knowledge_embedding_jobs = embedding_jobs
 
     async def search(query, k):
         k = min(max(int(k or _DEFAULT_K), 1), _MAX_K)
@@ -234,6 +245,7 @@ def register_knowledge_intents(
                 # Same blocking-I/O concern as search() above - this branch ingest
                 # does real SQLite writes (chunk + embedding-cache rows).
                 await asyncio.to_thread(_ingest)
+                embedding_jobs.schedule(workspace_id)
             except IngestError as exc:
                 if notifications is not None:
                     notifications.show(str(exc), "error")
@@ -283,11 +295,29 @@ def register_knowledge_intents(
     async def get_ingest_jobs():
         return ingest_jobs.snapshot()
 
+    async def get_embedding_jobs():
+        return embedding_jobs.snapshot()
+
+    async def cancel_embedding(job_id: str):
+        return embedding_jobs.cancel(job_id)
+
+    async def resume_embedding():
+        return embedding_jobs.resume(document.current_workspace_id)
+
+    async def refresh_embeddings():
+        # Called after Settings > Knowledge saves a genuinely new choice.
+        # Cancels any old provider before queuing the current workspace.
+        return embedding_jobs.refresh(document.current_workspace_id)
+
     bus.register_intent("knowledge", "search", search, args_schema=SearchArgs)
     bus.register_intent("knowledge", "addFiles", add_files)
     bus.register_intent("knowledge", "addFolder", add_folder)
     bus.register_intent("knowledge", "cancelIngest", cancel_ingest, args_schema=CancelIngestArgs)
     bus.register_intent("knowledge", "getIngestJobs", get_ingest_jobs)
+    bus.register_intent("knowledge", "getEmbeddingJobs", get_embedding_jobs)
+    bus.register_intent("knowledge", "cancelEmbedding", cancel_embedding, args_schema=CancelEmbeddingArgs)
+    bus.register_intent("knowledge", "resumeEmbedding", resume_embedding)
+    bus.register_intent("knowledge", "refreshEmbeddings", refresh_embeddings)
     bus.register_intent(
         "scene", "setChatIndexIntoKnowledge", set_chat_index_into_knowledge,
         args_schema=SetChatIndexIntoKnowledgeArgs,

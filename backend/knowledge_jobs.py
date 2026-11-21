@@ -13,6 +13,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 from uuid import uuid4
 
 from backend.attachments import AttachmentError, MAX_DOCUMENT_TEXT_CHARS
@@ -192,9 +193,13 @@ def _collect_files(path: Path | list[Path], folder: bool, job: KnowledgeIngestJo
 class KnowledgeIngestManager:
     """One active job per session; completed jobs remain queryable on reconnect."""
 
-    def __init__(self, bus: SessionBus, db_path: Path):
+    def __init__(
+        self, bus: SessionBus, db_path: Path,
+        on_completed: Callable[[int | None], object] | None = None,
+    ):
         self._bus = bus
         self._db_path = db_path
+        self._on_completed = on_completed
         self._jobs: dict[str, KnowledgeIngestJob] = {}
         self._tasks: dict[str, asyncio.Task] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -314,3 +319,16 @@ class KnowledgeIngestManager:
             logging.getLogger(__name__).exception("knowledge import job failed")
         finally:
             self._emit(force=True)
+            outcome = job.snapshot()
+            if (
+                outcome["status"] == "completed"
+                and (outcome["added"] or outcome["updated"])
+                and self._on_completed is not None and self._loop is not None
+            ):
+                # The import thread cannot launch asyncio tasks. Schedule
+                # the embedding run on its owning session loop only after
+                # committed knowledge writes have finished.
+                try:
+                    self._loop.call_soon_threadsafe(self._on_completed, job.workspace_id)
+                except RuntimeError:
+                    pass  # session loop disposed during shutdown

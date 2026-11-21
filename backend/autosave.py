@@ -91,6 +91,7 @@ from backend.chat_library import (
     _fallback_title,
     _maybe_backup_before_write,
     _resolve_seed_message,
+    _schedule_embeddings_after_graph_save,
     load_chat_row,
     save_chat_atomically_row,
 )
@@ -268,6 +269,10 @@ async def autosave_tick(
     last_saved["digest"] = digest
     last_saved["chat_id"] = int(new_chat_id)
     last_saved["updated_at"] = new_updated_at
+    await _schedule_embeddings_after_graph_save(
+        bus, db_path, int(new_chat_id), canvas_document.current_workspace_id,
+        settings_manager,
+    )
     await bus.publish("app-chat-library")
 
 

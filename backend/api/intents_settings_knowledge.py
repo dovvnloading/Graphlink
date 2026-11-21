@@ -8,6 +8,7 @@ worker thread so the settings WebSocket never blocks other sessions.
 from __future__ import annotations
 
 import asyncio
+from typing import Awaitable, Callable
 
 import api_provider
 
@@ -19,6 +20,7 @@ from graphlink_settings_store import SettingsManager
 
 def register_settings_knowledge_intents(
     bus: SessionBus, manager: SettingsManager, state: SettingsSessionState,
+    *, on_embedding_changed: Callable[[], Awaitable[object]] | None = None,
 ) -> None:
     async def scan_knowledge_ollama_models() -> None:
         if state.knowledge_scan_status == "running":
@@ -60,6 +62,7 @@ def register_settings_knowledge_intents(
         source: str, model: str = "", cloud_provider: str = "", cloud_opt_in: bool = False,
     ) -> None:
         state.knowledge_notice = ""
+        previous_choice = manager.get_knowledge_embedding_settings()
         try:
             if source == "ollama" and not await asyncio.to_thread(api_provider.ollama_supports_embedding, model):
                 raise ValueError("Select an installed Ollama model that supports embeddings.")
@@ -72,6 +75,14 @@ def register_settings_knowledge_intents(
         else:
             state.knowledge_test_status = "idle"
             state.knowledge_notice = "Knowledge embedding source saved."
+            if (
+                on_embedding_changed is not None
+                and manager.get_knowledge_embedding_settings() != previous_choice
+            ):
+                # Settings are persisted before the worker is scheduled; the
+                # current workspace is resolved by the live knowledge intent.
+                # Scheduling itself never probes or embeds on this loop.
+                await on_embedding_changed()
         await bus.publish("app-settings")
 
     async def test_knowledge_embedding(

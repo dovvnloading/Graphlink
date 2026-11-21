@@ -18,7 +18,7 @@ neighbor machinery would be solving a problem this app doesn't have.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Any, Callable, Protocol, cast
 
 import numpy as np
 
@@ -65,6 +65,9 @@ def embed_pending_chunks(
     *,
     collection_id: int | None = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
+    pending_rows: list[dict[str, Any]] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    on_batch: Callable[[int], None] | None = None,
 ) -> int:
     """Embeds every chunk with no `(chunk_id, model_id)` row yet, via
     `provider.embed()` in batches of `batch_size`. This IS the cache the
@@ -75,7 +78,10 @@ def embed_pending_chunks(
     already-`upsert_embeddings`-committed batches in place; re-running
     picks up exactly where it left off via the same pending-query).
     Returns the number of chunks newly embedded - 0 when nothing was
-    pending is a legitimate, common outcome, not an error.
+    pending is a legitimate, common outcome, not an error. The optional
+    pinned pending rows, per-batch callback, and cancellation predicate let
+    a background job report exact progress and stop between batches without
+    ever repeating already committed work on resume.
 
     Raises ValueError up front (before any provider call) if `provider`
     was not constructed for an embedding-capable model - checked here,
@@ -84,10 +90,16 @@ def embed_pending_chunks(
     handler rather than trusting every handler to re-check."""
     if not provider.capabilities.embedding:
         raise ValueError(f"Provider for model {model_id!r} does not support embeddings.")
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive.")
 
-    pending = chunks_pending_embedding(db_path, model_id, collection_id=collection_id)
+    pending = pending_rows if pending_rows is not None else chunks_pending_embedding(
+        db_path, model_id, collection_id=collection_id,
+    )
     embedded_count = 0
     for start in range(0, len(pending), batch_size):
+        if should_cancel is not None and should_cancel():
+            break
         batch = pending[start : start + batch_size]
         vectors = cast(_EmbeddingCapable, provider).embed([row["text"] for row in batch])
         # Adversarial-review finding: zip() alone silently truncates/
@@ -107,12 +119,18 @@ def embed_pending_chunks(
                 f"{len(batch)} text(s) - refusing to pair vectors to chunk_ids by "
                 "position when the counts disagree."
             )
+        # Cancellation can arrive during the provider's blocking call. Do
+        # not persist an in-flight batch after the model/consent changed.
+        if should_cancel is not None and should_cancel():
+            break
         rows = [
             (row["chunk_id"], len(vector), _pack_vector(vector))
             for row, vector in zip(batch, vectors)
         ]
         upsert_embeddings(db_path, model_id, rows)
         embedded_count += len(rows)
+        if on_batch is not None:
+            on_batch(len(rows))
     return embedded_count
 
 

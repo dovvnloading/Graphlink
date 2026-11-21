@@ -307,7 +307,11 @@ def _configure_session(
     # real banner (same load-bearing ordering precedent as register_plugins/
     # register_chat_library above - notifications_state already exists by
     # this point in every case).
-    register_settings(bus, settings_manager, notifications_state, agent_dispatcher, provider_runtime=provider_runtime)
+    register_settings(
+        bus, settings_manager, notifications_state, agent_dispatcher,
+        provider_runtime=provider_runtime,
+        on_knowledge_embedding_changed=lambda: bus.dispatch_intent("knowledge", "refreshEmbeddings", []),
+    )
     # R6.4: register_chat_library needs the same session's canvas_document
     # (built above) so loadChat can actually restore a session into it, and
     # notifications_state so a failed/empty load can surface a real banner -
@@ -360,6 +364,9 @@ def _evict_idle_session(bus: SessionBus) -> bool:
         return False
     context.agent_dispatcher.cancel_all()
     context.agent_dispatcher.cancel_all_pending_approvals()
+    embedding_jobs = getattr(bus, "knowledge_embedding_jobs", None)
+    if embedding_jobs is not None:
+        embedding_jobs.cancel_active()
     # PLAN-2026-08-24 §2.3: cancelling RUNS does not stop the harness's
     # long-lived processes - a shell.session dev server and a python.exec
     # interpreter are deliberately decoupled from any single run, so an

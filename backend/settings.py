@@ -58,7 +58,7 @@ from __future__ import annotations
 
 import json
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 import api_provider
 import graphlink_task_config as config
@@ -399,6 +399,7 @@ def register_settings(
     notifications: NotificationState | None = None,
     agent_dispatcher: "AgentDispatcher | None" = None,
     *, provider_runtime: api_provider.ProviderRuntime | None = None,
+    on_knowledge_embedding_changed: Callable[[], Awaitable[object]] | None = None,
 ) -> None:
     # notifications is optional only so the ~11 pre-R7.4a tests in
     # backend/tests/test_settings.py that call register_settings(bus,
@@ -437,5 +438,7 @@ def register_settings(
     register_settings_fal_intents(bus, manager, state)
     register_settings_api_provider_intents(bus, manager, notifications, state, provider_runtime)
     register_settings_ollama_intents(bus, manager, state)
-    register_settings_knowledge_intents(bus, manager, state)
+    register_settings_knowledge_intents(
+        bus, manager, state, on_embedding_changed=on_knowledge_embedding_changed,
+    )
     register_settings_llama_cpp_intents(bus, manager, state)

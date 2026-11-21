@@ -84,6 +84,13 @@ def register_web_research_intents(
             await bus.publish("scene")
 
         async def _on_success(result):
+            if retain_to_knowledge:
+                # The research worker has committed its retained documents.
+                # Pin the originating workspace (not whichever graph is now
+                # open) and let the embedding worker pick up those chunks.
+                jobs = getattr(bus, "knowledge_embedding_jobs", None)
+                if jobs is not None:
+                    jobs.schedule(workspace_id)
             if node_id not in document.nodes:
                 return
             document.complete_web_research_run(node_id, _research_result_wire(result))
@@ -117,6 +124,7 @@ def register_web_research_intents(
                 get_or_create_workspace_collection, KNOWLEDGE_DEFAULT_DB_PATH, workspace_id,
             )
 
+        retain_to_knowledge = bool(node.state.research_retain_to_knowledge)
         await agent_dispatcher.start_web_research(
             bus=bus,
             notifications_state=notifications,
@@ -131,7 +139,7 @@ def register_web_research_intents(
             # ADR-021 stage 21.5: the node's own opt-in. Read AFTER
             # start_web_research_run above (which never touches it), so a
             # toggle flipped between runs takes effect on the next one.
-            retain_to_knowledge=bool(node.state.research_retain_to_knowledge),
+            retain_to_knowledge=retain_to_knowledge,
         )
         return node_id
 
