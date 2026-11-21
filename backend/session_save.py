@@ -298,6 +298,8 @@ def _serialize_chat_node(raw_node: SceneNode) -> dict[str, Any]:
         "override_provider": node.state.override_provider,
         "override_model_id": node.state.override_model_id,
         "use_knowledge": node.state.use_knowledge,
+        "reply_history_fingerprint": node.state.reply_history_fingerprint,
+        "reply_knowledge_enabled": node.state.reply_knowledge_enabled,
     }
 
 

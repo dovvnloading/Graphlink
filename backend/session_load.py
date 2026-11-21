@@ -517,6 +517,18 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
             use_knowledge=(
                 payload.get("use_knowledge") if isinstance(payload.get("use_knowledge"), bool) else None
             ),
+            # No data in a pre-feature save may fabricate a fingerprint.
+            # Malformed/tampered proofs also degrade to unknown rather than
+            # incorrectly labeling a legacy response as out of date.
+            reply_history_fingerprint=(
+                value if isinstance((value := payload.get("reply_history_fingerprint")), str)
+                and len(value) == 67 and value.startswith("v1:")
+                and all(ch in "0123456789abcdef" for ch in value[3:]) else None
+            ),
+            reply_knowledge_enabled=(
+                payload.get("reply_knowledge_enabled")
+                if isinstance(payload.get("reply_knowledge_enabled"), bool) else None
+            ),
         ),
     )
 

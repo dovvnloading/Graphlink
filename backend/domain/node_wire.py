@@ -90,6 +90,7 @@ WIRE_DEFAULTS: dict[str, Any] = {
     "isBranchSynthesis": False,
     "synthesisInstructions": "",
     "branchStatus": "active",
+    "staleness": "current",
     "responseIncomplete": False,
     "promptTokens": None,
     "completionTokens": None,
@@ -731,6 +732,7 @@ def _put_non_default(wire: dict[str, Any], source: object, entries: tuple[_Entry
 
 def node_wire(
     node: SceneNode, *, is_final_deliverable: bool, plugin_state: dict[str, str], text_input_status: str = "unbound",
+    staleness: str = "current",
 ) -> dict[str, Any]:
     """One node's sparse wire row: identity keys, then every field whose
     value differs from its wire default. See the module docstring for the
@@ -749,6 +751,8 @@ def node_wire(
         _put_non_default(wire, node.state, _fields_for(type(node.state)))
     if text_input_status != "unbound":
         wire["textInputStatus"] = text_input_status
+    if staleness != "current":
+        wire["staleness"] = staleness
     if plugin_state:
         # ADR-014 stage 14.2: the Plugin SDK's generic live-wire fallback -
         # see SceneDocument._plugin_state_wire.
@@ -763,5 +767,5 @@ def wire_keys() -> frozenset[str]:
     for entries in _STATE_FIELDS.values():
         keys.update(entry[0] for entry in entries)
     keys.update(("isFinalDeliverable", "pluginState", "textInputStatus", "tableInputSourceId", "tableLabelColumn",
-                 "tableValueColumn", "tableInputStatus", "tableOutputVersion", "tableSourceHash", "tableOutputEdited", "tableHasPrevious"))
+                 "tableValueColumn", "tableInputStatus", "tableOutputVersion", "tableSourceHash", "tableOutputEdited", "tableHasPrevious", "staleness"))
     return frozenset(keys)

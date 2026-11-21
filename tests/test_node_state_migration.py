@@ -86,6 +86,7 @@ MIGRATED_KIND_FIELDS = {
     "chat": [
         "is_user", "chat_scroll_value", "content_parts", "provider", "model",
         "is_branch_synthesis", "synthesis_instructions", "branch_status",
+        "reply_history_fingerprint", "reply_knowledge_enabled",
     ],
     "gitlink": [
         "gitlink_repo", "gitlink_branch", "gitlink_scope_mode", "gitlink_local_root",
@@ -380,6 +381,7 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "responseIncomplete",
     # Discuss in chat: the result card's verified source summary.
     "scienceReference",
+    "staleness",
     "synthesisInstructions", "textInputOperation", "textInputSourceId", "textInputStatus", "title", "toolCalls", "x", "y",
     "isTableSource", "tableInputSourceId", "tableLabelColumn", "tableValueColumn",
     "tableInputStatus", "tableOutputEdited", "tableOutputVersion", "tableHasPrevious",

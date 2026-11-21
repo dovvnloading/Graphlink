@@ -74,6 +74,7 @@ from backend.domain.model import (
 from backend.domain.node_access import is_node_of, require_node
 from backend.domain.node_states import CodeState, FrameState, NodeState
 from backend.domain.node_wire import node_wire
+from backend.domain.staleness import scene_staleness
 from backend.domain.table_workflows import TableOps, TableReadCache
 from backend.domain.nodes_agent_runs import AgentRunOps
 from backend.domain.nodes_code_review import CodeReviewOps
@@ -398,7 +399,11 @@ class SceneDocument(
         express and falls back rather than being silently dropped."""
         table_reads = TableReadCache()
         source_digests: dict[str, str] = {}
-        nodes = {node_id: self._node_wire(n, source_digests, table_reads) for node_id, n in self.nodes.items()}
+        stale = scene_staleness(self)
+        nodes = {
+            node_id: self._node_wire(n, source_digests, table_reads, staleness=stale.get(node_id, "current"))
+            for node_id, n in self.nodes.items()
+        }
         edges = {edge_id: self._edge_wire(e) for edge_id, e in self.edges.items()}
         pins = self._pins_wire()
         view = self._view_wire()
@@ -1004,6 +1009,7 @@ class SceneDocument(
 
     def _node_wire(
         self, n: SceneNode, source_digests: dict[str, str] | None = None, table_reads: TableReadCache | None = None,
+        *, staleness: str = "current",
     ) -> dict[str, Any]:
         """The per-node wire row - the ONE place both the full snapshot and
         take_dirty_patch_ops's upsertNode ops build a node's payload from
@@ -1015,6 +1021,7 @@ class SceneDocument(
             is_final_deliverable=n.id == self.final_deliverable_node_id,
             text_input_status=self._text_input_status(n, source_digests),
             plugin_state=self._plugin_state_wire(n),
+            staleness=staleness,
         )
         row.update(self._table_output_wire(n, table_reads))
         return row
@@ -1106,8 +1113,12 @@ class SceneDocument(
     def scene_payload(self) -> dict[str, Any]:
         table_reads = TableReadCache()
         source_digests: dict[str, str] = {}
+        stale = scene_staleness(self)
         return {
-            "nodes": [self._node_wire(n, source_digests, table_reads) for n in self.nodes.values()],
+            "nodes": [
+                self._node_wire(n, source_digests, table_reads, staleness=stale.get(n.id, "current"))
+                for n in self.nodes.values()
+            ],
             "edges": [self._edge_wire(e) for e in self.edges.values()],
             "pins": self._pins_wire(),
             **self._meta_wire(),

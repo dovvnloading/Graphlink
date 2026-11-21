@@ -1026,6 +1026,13 @@ class ChatState(NodeState):
     # BranchesOps so sibling forks can choose independently. Unlike the
     # one-time indexing flag above, this controls retrieval on every send.
     use_knowledge: bool | None = None
+    # Generation-time context proof. None for user messages, manual replies
+    # and every graph saved before this feature. The fingerprint covers the
+    # complete canonical ancestor-message path, route and knowledge setting.
+    reply_history_fingerprint: str | None = None
+    # The request-time effective retrieval setting (workspace default or
+    # explicit override). Never inferred retrospectively on reload.
+    reply_knowledge_enabled: bool | None = None
 
 
 @dataclass
