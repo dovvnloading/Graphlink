@@ -1454,6 +1454,9 @@ describe("ChatNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
     return {
       content: "Hello",
       isUser: true,
+      versionCount: 1,
+      versionIndex: 0,
+      onSelectVersion: vi.fn(),
       isCollapsed: false,
       dockedChildren: [],
       chatScrollValue: 0,
