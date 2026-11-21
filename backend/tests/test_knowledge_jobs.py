@@ -5,12 +5,16 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import threading
+from types import SimpleNamespace
 from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
 
 from backend import knowledge_jobs, knowledge_store, native_dialogs
+from backend.attachments import StagedAttachment
+from backend.domain.graph import SceneDocument
+from backend.harness.workspace import WorkspaceError
 from backend.api import intents_knowledge
 from backend.events import SessionBus
 from backend.knowledge_chunking import chunk_text
@@ -249,3 +253,114 @@ def test_native_picker_intent_pins_workspace_before_dialog_returns(tmp_path, mon
     second = knowledge_store.get_or_create_workspace_collection(db, 16)
     assert len(knowledge_store.list_documents(db, collection_id=first)) == 1
     assert knowledge_store.list_documents(db, collection_id=second) == []
+
+
+def test_staged_chat_document_import_is_workspace_scoped_and_rejects_stale_ids(tmp_path, monkeypatch):
+    """An opaque composer attachment ID, never a browser-supplied path, grants the import."""
+    db = tmp_path / "knowledge.db"
+    monkeypatch.setattr(intents_knowledge, "DEFAULT_DB_PATH", db)
+    file = tmp_path / "chat-notes.md"
+    file.write_text("A note attached to the current conversation")
+    staged = StagedAttachment(id="staged-1", kind="document", name=file.name, path=str(file))
+    composer = SimpleNamespace(staged_attachments=[staged])
+    document = SceneDocument()
+    document.current_workspace_id = 314
+    bus = SessionBus("chat-import")
+    intents_knowledge.register_knowledge_intents(bus, document, composer_document=composer)
+
+    async def scenario():
+        with pytest.raises(IngestError, match="no longer staged"):
+            await bus.dispatch_intent("knowledge", "addChatAttachment", ["unknown-id"])
+        composer.staged_attachments = [StagedAttachment(id="image", kind="image", path=str(file))]
+        with pytest.raises(IngestError, match="Only supported"):
+            await bus.dispatch_intent("knowledge", "addChatAttachment", ["image"])
+        composer.staged_attachments = [staged]
+        result = await bus.dispatch_intent("knowledge", "addChatAttachment", ["staged-1"])
+        document.current_workspace_id = 315
+        for _ in range(500):
+            rows = (await bus.dispatch_intent("knowledge", "getIngestJobs", []))["jobs"]
+            row = next(row for row in rows if row["jobId"] == result["jobId"])
+            if row["status"] in {"completed", "cancelled", "failed"}:
+                assert row["status"] == "completed"
+                assert row["added"] == 1
+                break
+            await asyncio.sleep(0.02)
+        else:
+            pytest.fail("staged attachment import did not finish")
+
+    asyncio.run(scenario())
+    current = knowledge_store.get_or_create_workspace_collection(db, 314)
+    next_workspace = knowledge_store.get_or_create_workspace_collection(db, 315)
+    assert len(knowledge_store.list_documents(db, collection_id=current)) == 1
+    assert knowledge_store.list_documents(db, collection_id=next_workspace) == []
+
+
+def test_workspace_file_import_checks_root_trust_and_path_before_scheduling(tmp_path, monkeypatch):
+    """Files panel paths remain relative to the live grant, not an arbitrary host path."""
+    db = tmp_path / "knowledge.db"
+    monkeypatch.setattr(intents_knowledge, "DEFAULT_DB_PATH", db)
+    project = tmp_path / "project"
+    project.mkdir()
+    file = project / "file.txt"
+    file.write_text("Workspace file content added to knowledge")
+    private = tmp_path / "private.txt"
+    private.write_text("Never index this outside file")
+    (project / "binary.png").write_bytes(b"not indexable")
+    node_document = SceneDocument()
+    node_document.current_workspace_id = 81
+    agent = node_document.add_harness_node(0, 0, "Inspect project")
+    agent.state.harness_workspace_path = str(project)
+    trusted = [str(project.resolve())]
+    settings = SimpleNamespace(get_harness_trusted_dirs=lambda: trusted)
+    dispatcher = SimpleNamespace(_settings_manager=settings)
+    bus = SessionBus("agent-import")
+    intents_knowledge.register_knowledge_intents(
+        bus, node_document, agent_dispatcher=dispatcher,
+    )
+
+    async def scenario():
+        with pytest.raises(WorkspaceError, match="Workspace folder changed"):
+            await bus.dispatch_intent("knowledge", "addWorkspaceFile", [agent.id, "file.txt", str(tmp_path)])
+        with pytest.raises(WorkspaceError, match="outside"):
+            await bus.dispatch_intent("knowledge", "addWorkspaceFile", [agent.id, "../private.txt", str(project)])
+        with pytest.raises(IngestError, match="file type"):
+            await bus.dispatch_intent("knowledge", "addWorkspaceFile", [agent.id, "binary.png", str(project)])
+        with pytest.raises(WorkspaceError, match="no longer exists"):
+            await bus.dispatch_intent("knowledge", "addWorkspaceFile", ["unknown-node", "file.txt", str(project)])
+
+        response = await bus.dispatch_intent("knowledge", "addWorkspaceFile", [agent.id, "file.txt", str(project)])
+        for _ in range(500):
+            jobs = (await bus.dispatch_intent("knowledge", "getIngestJobs", []))["jobs"]
+            row = next(row for row in jobs if row["jobId"] == response["jobId"])
+            if row["status"] in {"completed", "cancelled", "failed"}:
+                assert row["status"] == "completed"
+                assert row["added"] == 1
+                break
+            await asyncio.sleep(0.02)
+        else:
+            pytest.fail("workspace import did not finish")
+        trusted.clear()
+        # Revoking a grant can also fail closed at root pinning on Windows.
+        with pytest.raises(WorkspaceError, match=r"Workspace (?:folder|root) changed"):
+            await bus.dispatch_intent("knowledge", "addWorkspaceFile", [agent.id, "file.txt", str(project)])
+
+    asyncio.run(scenario())
+    collection = knowledge_store.get_or_create_workspace_collection(db, 81)
+    records = knowledge_store.list_documents(db, collection_id=collection)
+    assert len(records) == 1
+    assert records[0]["title"] == "file.txt"
+
+
+def test_direct_file_import_rejects_symlink_escape_from_authorized_root(tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = tmp_path / "outside.md"
+    outside.write_text("Must never be imported")
+    link = root / "link.md"
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("Filesystem does not support user symlinks")
+    job = KnowledgeIngestJob("link-test", "file", 1)
+    with pytest.raises(IngestError, match="authorized workspace"):
+        _collect_files(link, folder=False, job=job, allowed_root=root)
