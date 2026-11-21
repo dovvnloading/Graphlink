@@ -79,6 +79,8 @@ export interface ChatNodeData extends Record<string, unknown> {
   versionCount: number;
   versionIndex: number;
   onSelectVersion: (index: number) => void;
+  onEditMessage: (content: string, expectedContent: string, onSettled: (success: boolean) => void) => void;
+  onEditAsNewBranch: (content: string, expectedContent: string, onSettled: (success: boolean) => void) => void;
   isCollapsed: boolean;
   dockedChildren: { id: string; label: string }[];
   // R6.3: the node's own persisted scroll position - restored into
@@ -250,6 +252,9 @@ function ChatNodeMenu({
   onDelete,
   onUndockChild,
   onRegenerate,
+  onEdit,
+  onEditAsNewBranch,
+  editDisabled,
   onGenerateImage,
   onGenerateChart,
   onGenerateKeyTakeaway,
@@ -278,6 +283,9 @@ function ChatNodeMenu({
   onDelete: () => void;
   onUndockChild: (childId: string) => void;
   onRegenerate: () => void;
+  onEdit: () => void;
+  onEditAsNewBranch: () => void;
+  editDisabled: boolean;
   onGenerateImage: () => void;
   onGenerateChart: (chartType: string) => void;
   onGenerateKeyTakeaway: () => void;
@@ -320,6 +328,18 @@ function ChatNodeMenu({
       >
         Copy Text
       </button>
+      {isUser && (
+        <>
+          <button type="button" role="menuitem" disabled={editDisabled}
+            onClick={() => { onEdit(); onClose(); }}>
+            Edit
+          </button>
+          <button type="button" role="menuitem" disabled={editDisabled}
+            onClick={() => { onEditAsNewBranch(); onClose(); }}>
+            Edit as new branch
+          </button>
+        </>
+      )}
       <button
         type="button"
         role="menuitem"
@@ -744,6 +764,8 @@ export function chatNodePropsAreEqual(prev: NodeProps<ChatFlowNode>, next: NodeP
     a.onUndockChild === b.onUndockChild &&
     a.onRegenerate === b.onRegenerate &&
     a.onSelectVersion === b.onSelectVersion &&
+    a.onEditMessage === b.onEditMessage &&
+    a.onEditAsNewBranch === b.onEditAsNewBranch &&
     a.onGenerateImage === b.onGenerateImage &&
     a.onGenerateChart === b.onGenerateChart &&
     a.onGenerateKeyTakeaway === b.onGenerateKeyTakeaway &&
@@ -772,7 +794,60 @@ export const ChatNodeView = memo(function ChatNodeView({
   selected,
 }: NodeProps<ChatFlowNode>) {
   const lodCollapsed = useLodVisibility();
-  const collapsed = data.isCollapsed || lodCollapsed;
+  const [editMode, setEditMode] = useState<"in-place" | "new-branch" | null>(null);
+  // Temporarily reveal a folded/LOD node while editing; no second undo step.
+  const collapsed = (data.isCollapsed || lodCollapsed) && editMode === null;
+  const [editDraft, setEditDraft] = useState("");
+  const [editBase, setEditBase] = useState("");
+  const [editError, setEditError] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
+  const editorRef = useRef<HTMLTextAreaElement | null>(null);
+  const staleEdit = editMode !== null && data.content !== editBase;
+
+  useEffect(() => {
+    if (editMode) editorRef.current?.focus();
+  }, [editMode]);
+
+  function beginEdit(mode: "in-place" | "new-branch") {
+    if (!data.isUser || data.pendingRequestId) return;
+    setEditBase(data.content);
+    setEditDraft(data.content);
+    setEditError("");
+    setEditMode(mode);
+  }
+
+  function cancelEdit() {
+    if (!editSaving) setEditMode(null);
+  }
+
+  function saveEdit() {
+    if (!editMode || editSaving || data.pendingRequestId) return;
+    if (staleEdit) {
+      setEditError("This message changed while editing. Reopen its latest version.");
+      return;
+    }
+    if (!editDraft.trim()) {
+      setEditError("Message cannot be empty.");
+      return;
+    }
+    if (editDraft === editBase) {
+      setEditMode(null);
+      return;
+    }
+    setEditSaving(true);
+    const settled = (success: boolean) => {
+      setEditSaving(false);
+      if (success) {
+        setEditMode(null);
+        setEditError("");
+      } else {
+        setEditError("Save failed. Your draft is still here; retry or cancel.");
+      }
+    };
+    if (editMode === "in-place") data.onEditMessage(editDraft, editBase, settled);
+    else data.onEditAsNewBranch(editDraft, editBase, settled);
+  }
+
   const [copied, setCopied] = useState(false);
 
   // Node redesign, stage 3: the header's hover-revealed quick-action Copy
@@ -907,6 +982,7 @@ export const ChatNodeView = memo(function ChatNodeView({
       selected={!!selected}
       collapsed={collapsed}
       onMenuChange={setMenuPosition}
+      onBodyDoubleClick={data.isUser && editMode === null ? () => beginEdit("in-place") : undefined}
       header={
         <NodeHeading
           className="chat-node-role"
@@ -981,6 +1057,9 @@ export const ChatNodeView = memo(function ChatNodeView({
             onDelete={data.onDelete}
             onUndockChild={data.onUndockChild}
             onRegenerate={data.onRegenerate}
+            onEdit={() => beginEdit("in-place")}
+            onEditAsNewBranch={() => beginEdit("new-branch")}
+            editDisabled={!!data.pendingRequestId}
             onGenerateImage={data.onGenerateImage}
             onGenerateChart={data.onGenerateChart}
             onGenerateKeyTakeaway={data.onGenerateKeyTakeaway}
@@ -1002,7 +1081,40 @@ export const ChatNodeView = memo(function ChatNodeView({
         )
       }
     >
-      {scienceReference ? (
+      {editMode ? (
+        <div className="chat-node-edit-panel">
+          <textarea
+            ref={editorRef}
+            className="chat-node-editor nodrag nopan nowheel"
+            aria-label={editMode === "in-place" ? "Edit message text" : "Edit new branch message"}
+            value={editDraft}
+            onChange={(event) => { setEditDraft(event.target.value); setEditError(""); }}
+            onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing) return;
+              if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
+                cancelEdit();
+              } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                event.preventDefault();
+                event.stopPropagation();
+                saveEdit();
+              }
+            }}
+            disabled={editSaving}
+            spellCheck
+          />
+          {staleEdit && <p role="alert">The message changed while editing. Reopen its latest version.</p>}
+          {editError && <p role="alert">{editError}</p>}
+          <div className="chat-node-edit-actions">
+            <button type="button" disabled={editSaving || staleEdit || !editDraft.trim()} onClick={saveEdit}>
+              {editSaving ? "Saving…" : editMode === "in-place" ? "Save changes" : "Save as new branch"}
+            </button>
+            <button type="button" disabled={editSaving} onClick={cancelEdit}>Cancel</button>
+          </div>
+          <small className="chat-node-edit-hint">Ctrl+Enter to save · Escape to cancel</small>
+        </div>
+      ) : scienceReference ? (
         <ChatScienceCard reference={scienceReference} content={data.content} />
       ) : (
         <>

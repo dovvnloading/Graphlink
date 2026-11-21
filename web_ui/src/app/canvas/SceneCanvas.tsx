@@ -676,6 +676,10 @@ function makeChatFns(id: string, liveRef: { current: DispatcherLive }) {
     onUndockChild: (childId: string) => liveRef.current.store.setNodeDocked(childId, false),
     onRegenerate: () => liveRef.current.store.regenerateResponse(id),
     onSelectVersion: (index: number) => liveRef.current.store.setChatVersion(id, index),
+    onEditMessage: (content: string, expectedContent: string, onSettled: (success: boolean) => void) =>
+      liveRef.current.store.editChatMessage(id, content, expectedContent, onSettled),
+    onEditAsNewBranch: (content: string, expectedContent: string, onSettled: (success: boolean) => void) =>
+      liveRef.current.store.editChatMessageAsNewBranch(id, content, expectedContent, onSettled),
     onGenerateImage: () => liveRef.current.store.generateImage(id),
     // R6.2: real chart generation - fires the new generateChart intent with
     // this chat node as the parent (see ChatNodeView.tsx's own Generate

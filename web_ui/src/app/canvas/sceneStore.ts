@@ -1095,6 +1095,27 @@ export class SceneStore {
     this.transport.fireIntent("scene", "regenerateResponse", [chatNodeId]);
   }
 
+  /** Message edits append versions; neither operation is safe for offline replay. */
+  editChatMessage(
+    chatNodeId: string, content: string, expectedContent: string,
+    onSettled: (success: boolean) => void,
+  ): void {
+    this.transport.fireIntent(
+      "scene", "editChatMessage", [chatNodeId, content, expectedContent],
+      undefined, false, undefined, onSettled,
+    );
+  }
+
+  editChatMessageAsNewBranch(
+    chatNodeId: string, content: string, expectedContent: string,
+    onSettled: (success: boolean) => void,
+  ): void {
+    this.transport.fireIntent(
+      "scene", "editChatMessageAsNewBranch", [chatNodeId, content, expectedContent],
+      undefined, false, undefined, onSettled,
+    );
+  }
+
   /** Select an existing chat alternative as an undoable scene command. */
   setChatVersion(chatNodeId: string, index: number): void {
     this.transport.fireIntent("scene", "setChatVersion", [chatNodeId, index], undefined, true);

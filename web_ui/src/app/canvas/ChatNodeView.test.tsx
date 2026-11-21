@@ -70,6 +70,8 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
   const onUndockChild = vi.fn();
   const onRegenerate = vi.fn();
   const onSelectVersion = vi.fn();
+  const onEditMessage = vi.fn();
+  const onEditAsNewBranch = vi.fn();
   const onGenerateImage = vi.fn();
   const onGenerateChart = vi.fn();
   const onGenerateKeyTakeaway = vi.fn();
@@ -95,6 +97,8 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
         versionCount: 1,
         versionIndex: 0,
         onSelectVersion,
+        onEditMessage,
+        onEditAsNewBranch,
         isCollapsed: false,
         dockedChildren: [],
         chatScrollValue: 0,
@@ -157,7 +161,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
     );
   }
   return {
-    onToggleCollapse, onDelete, onUndockChild, onRegenerate, onSelectVersion, onGenerateImage,
+    onToggleCollapse, onDelete, onUndockChild, onRegenerate, onSelectVersion, onEditMessage, onEditAsNewBranch, onGenerateImage,
     onGenerateChart, onGenerateKeyTakeaway, onGenerateExplainerNote,
     onOpenDocumentView, onOpenCitation, onScrollChange, onToggleBranchFocus, onBranchFromHere,
     onSetBranchStatus, onSetFinalDeliverable, onCollapseBranch, onCancelRegenerate,
@@ -1790,5 +1794,95 @@ describe("ChatNodeView throttled streaming markdown parse (ADR-011 stage 11.4)",
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("ChatNodeView sent-message editing", () => {
+  it("opens the inline editor from keyboard navigation and saves with Ctrl+Enter", async () => {
+    const user = userEvent.setup();
+    const { onEditMessage } = renderChatNode({ content: "Original" });
+    await user.click(screen.getByRole("button", { name: "Node actions" }));
+    expect(screen.getByRole("menuitem", { name: "Copy Text" })).toHaveFocus();
+    await user.keyboard("{ArrowDown}{Enter}");
+    const editor = screen.getByRole("textbox", { name: "Edit message text" });
+    expect(editor).toHaveFocus();
+    await user.clear(editor);
+    await user.type(editor, "Edited message");
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    expect(onEditMessage).toHaveBeenCalledOnce();
+    expect(onEditMessage).toHaveBeenCalledWith("Edited message", "Original", expect.any(Function));
+    expect(screen.getByRole("textbox", { name: "Edit message text" })).toBeDisabled();
+    act(() => { onEditMessage.mock.calls[0][2](true); });
+    expect(screen.queryByRole("textbox", { name: "Edit message text" })).toBeNull();
+  });
+
+  it("offers an edited sibling with Ctrl+Enter; Escape cancels without sending", async () => {
+    const user = userEvent.setup();
+    const { onEditMessage, onEditAsNewBranch } = renderChatNode({ content: "Original" });
+    await user.click(screen.getByRole("button", { name: "Node actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit as new branch" }));
+    const editor = screen.getByRole("textbox", { name: "Edit new branch message" });
+    expect(editor).toHaveFocus();
+    await user.clear(editor);
+    await user.type(editor, "Alternative");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("textbox", { name: "Edit new branch message" })).toBeNull();
+    expect(onEditAsNewBranch).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Node actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit as new branch" }));
+    await user.clear(screen.getByRole("textbox", { name: "Edit new branch message" }));
+    await user.type(screen.getByRole("textbox", { name: "Edit new branch message" }), "Alternative");
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    expect(onEditAsNewBranch).toHaveBeenCalledWith("Alternative", "Original", expect.any(Function));
+    expect(onEditMessage).not.toHaveBeenCalled();
+    act(() => { onEditAsNewBranch.mock.calls[0][2](true); });
+    expect(screen.queryByRole("textbox", { name: "Edit new branch message" })).toBeNull();
+  });
+
+  it("retains the draft on a refused save or concurrent version change", async () => {
+    const user = userEvent.setup();
+    const { onEditMessage, rerenderWithData } = renderChatNode({ content: "A" });
+    await user.click(screen.getByRole("button", { name: "Node actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
+    await user.clear(screen.getByRole("textbox", { name: "Edit message text" }));
+    await user.type(screen.getByRole("textbox", { name: "Edit message text" }), "B");
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    act(() => { onEditMessage.mock.calls[0][2](false); });
+    expect(screen.getByRole("alert")).toHaveTextContent("Save failed");
+    expect(screen.getByRole("textbox", { name: "Edit message text" })).toHaveValue("B");
+    rerenderWithData({ content: "New version" });
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "Edit message text" })).toHaveValue("B");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("textbox", { name: "Edit message text" })).toBeNull();
+    expect(onEditMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("only offers editing on user nodes, even while folded, and blocks requests in flight", async () => {
+    const user = userEvent.setup();
+    const { rerenderWithData } = renderChatNode({ isUser: false });
+    await user.click(screen.getByRole("button", { name: "Node actions" }));
+    expect(screen.queryByRole("menuitem", { name: "Edit" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Edit as new branch" })).toBeNull();
+    await user.keyboard("{Escape}");
+    rerenderWithData({ isUser: true, isCollapsed: true });
+    await user.click(screen.getByRole("button", { name: "Node actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
+    expect(screen.getByRole("textbox", { name: "Edit message text" })).toBeVisible();
+    await user.keyboard("{Escape}");
+    rerenderWithData({ isUser: true, pendingRequestId: "pending" });
+    await user.click(screen.getByRole("button", { name: "Node actions" }));
+    expect(screen.getByRole("menuitem", { name: "Edit" })).toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: "Edit as new branch" })).toBeDisabled();
+  });
+
+  it("double-clicking a message opens the editor and an unchanged save does not send", async () => {
+    const user = userEvent.setup();
+    const { container, onEditMessage } = renderChatNode({ content: "Original" });
+    fireEvent.doubleClick(container.querySelector(".chat-node-content-shell")!);
+    expect(screen.getByRole("textbox", { name: "Edit message text" })).toHaveFocus();
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    expect(onEditMessage).not.toHaveBeenCalled();
+    expect(screen.queryByRole("textbox", { name: "Edit message text" })).toBeNull();
   });
 });

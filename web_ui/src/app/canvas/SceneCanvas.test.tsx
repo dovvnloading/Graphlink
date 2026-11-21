@@ -348,6 +348,27 @@ describe("toFlowNodes (R4.3c parentChatNodeId derivation)", () => {
     expect(select).toHaveBeenCalledWith("chat-1", 0);
   });
 
+  it("routes user edits through the stable chat dispatcher without any reply run", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "user-1", kind: "chat", content: "Original", isUser: true })],
+      edges: [],
+    });
+    const store = makeStore();
+    const edit = vi.spyOn(store, "editChatMessage");
+    const branch = vi.spyOn(store, "editChatMessageAsNewBranch");
+    const regenerate = vi.spyOn(store, "regenerateResponse");
+    const data = toFlowNodes(scene, store).find((n) => n.id === "user-1")!.data as {
+      onEditMessage: (content: string, expected: string, callback: (success: boolean) => void) => void;
+      onEditAsNewBranch: (content: string, expected: string, callback: (success: boolean) => void) => void;
+    };
+    const settled = vi.fn();
+    data.onEditMessage("Changed", "Original", settled);
+    data.onEditAsNewBranch("Fork", "Original", settled);
+    expect(edit).toHaveBeenCalledWith("user-1", "Changed", "Original", settled);
+    expect(branch).toHaveBeenCalledWith("user-1", "Fork", "Original", settled);
+    expect(regenerate).not.toHaveBeenCalled();
+  });
+
   it("a chat node's onRegenerate calls regenerateResponse with its own id", () => {
     const scene = baseScene({
       nodes: [baseNode({ id: "chat-1", kind: "chat", content: "Hello", isUser: false })],
