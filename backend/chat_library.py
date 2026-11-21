@@ -56,6 +56,7 @@ from backend import knowledge_store
 from backend import native_dialogs
 from backend import workspace_archive
 from backend.canvas import SceneDocument
+from backend.domain.node_states import ChatState
 from backend.api.intents_graph_runner import register_graph_runner
 from backend.api.intents_graph_model import register_graph_model_runner
 from backend.events import SessionBus
@@ -1974,12 +1975,12 @@ def _resolve_seed_message(document: SceneDocument) -> str:
     for node in document.nodes.values():
         if node.kind == "chat":
             text = node.content.strip()
-            if not text and node.state.content_parts is not None:
+            if not text and isinstance(node.state, ChatState) and node.state.content_parts is not None:
                 text = _flatten_content_part_text(node.state.content_parts).strip()
             if text:
                 if first_content is None:
                     first_content = text
-                if node.state.is_user:
+                if isinstance(node.state, ChatState) and node.state.is_user:
                     return text
         elif node.kind == "conversation":
             for message in node.history:
@@ -2705,9 +2706,9 @@ def make_save_chat(
         else:
             existing_row = await asyncio.to_thread(load_chat_row, resolved_path, int(current_id))
             if existing_row is not None:
-                # Resaving an existing chat NEVER regenerates its title,
-                # matching SaveWorkerThread.run()'s own `title = chat["title"]`
-                # (workers.py:69) exactly.
+                # Keep existing and manually renamed titles. The sole
+                # exception is a "New Chat" placeholder saved before a
+                # graph received its first real message.
                 title = _existing_title_or_content_title(existing_row, canvas_document)
                 chat_id_for_save = int(current_id)
                 saved_workspace_id = int(existing_row["workspace_id"])
