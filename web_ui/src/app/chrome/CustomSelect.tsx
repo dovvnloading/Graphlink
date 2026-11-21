@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
 /**
@@ -91,6 +91,39 @@ export function CustomSelect({
 
   useOutsideDismiss(open, triggerRef, panelRef, () => setOpen(false));
 
+  // The options are portaled outside the Settings dialog's Tab trap. Move
+  // focus into the popup explicitly; Arrow/Home/End work without a mouse,
+  // and Escape/selection return focus to the trigger.
+  useEffect(() => {
+    if (!open) return;
+    const selectedIndex = Math.max(0, options.findIndex((option) => option.id === value));
+    panelRef.current?.querySelectorAll<HTMLButtonElement>(".reasoning-option")[selectedIndex]?.focus();
+    // The opening selection is intentional; live option updates should not
+    // steal focus from a keyboard user moving within the open popup.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const onOptionKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    const buttons = [...(panelRef.current?.querySelectorAll<HTMLButtonElement>(".reasoning-option") ?? [])];
+    if (!buttons.length) return;
+    const focused = buttons.findIndex((button) => button === document.activeElement);
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const delta = event.key === "ArrowDown" ? 1 : -1;
+      buttons[(focused + delta + buttons.length) % buttons.length].focus();
+    } else if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      buttons[event.key === "Home" ? 0 : buttons.length - 1].focus();
+    } else if (event.key === "Tab") {
+      // A portaled panel sits outside its parent modal's focus trap: native
+      // Tab would be redirected to the first Settings control instead of the
+      // next option. Exit cleanly, then Tab from the trigger to keep going.
+      event.preventDefault();
+      setOpen(false);
+      triggerRef.current?.focus();
+    }
+  };
+
   const selected = options.find((option) => option.id === value);
 
   return (
@@ -104,6 +137,12 @@ export function CustomSelect({
         aria-label={ariaLabel}
         disabled={disabled}
         onClick={() => setOpen((isOpen) => !isOpen)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            setOpen(true);
+          }
+        }}
       >
         <span className="custom-select-value">{selected ? selected.label : placeholder}</span>
         <ChevronIcon />
@@ -124,6 +163,7 @@ export function CustomSelect({
                 key={option.id}
                 type="button"
                 className={"reasoning-option" + (option.id === value ? " active" : "")}
+                onKeyDown={onOptionKeyDown}
                 onClick={() => {
                   onChange(option.id);
                   setOpen(false);
