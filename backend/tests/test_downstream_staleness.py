@@ -54,6 +54,51 @@ def test_ancestor_edit_marks_only_affected_branch_and_derived_nonchat():
     assert set(_states(doc).values()) == {"current"}
 
 
+def test_nonchat_attached_directly_to_a_message_tracks_that_message():
+    doc = SceneDocument()
+    message = doc.add_chat_node(0, 0, "first input", True)
+    code = doc.add_code_node(0, 100, "print(1)", "python", message.id)
+    assert code.id in doc.nonchat_upstream_fingerprints
+    assert scene_staleness(doc) == {}
+    doc.update_chat_node_content(message.id, "edited input")
+    assert _states(doc)[code.id] == "upstream_changed"
+    # A new derived node is based on the new content, not the old input.
+    fresh = doc.add_code_node(100, 100, "print(2)", "python", message.id)
+    assert _states(doc)[fresh.id] == "current"
+    doc.update_chat_node_content(message.id, "first input")
+    assert _states(doc)[code.id] == "current"
+    assert _states(doc)[fresh.id] == "upstream_changed"
+
+
+def test_direct_nonchat_context_round_trips_but_pre_feature_graph_has_no_baseline():
+    from backend.session_save import build_chat_data
+    from backend.session_load import restore_chat_into_document
+
+    doc = SceneDocument()
+    message = doc.add_chat_node(0, 0, "original", True)
+    code = doc.add_code_node(0, 120, "print(1)", "python", message.id)
+    saved = build_chat_data(doc)
+    assert code.id in saved["nonchat_upstream_fingerprints"]
+    notes, pins = saved.pop("notes_data"), saved.pop("pins_data")
+    restored = SceneDocument()
+    restore_chat_into_document(restored, {"data": saved}, notes, pins)
+    loaded_message = next(n for n in restored.nodes.values() if n.kind == "chat")
+    loaded_code = next(n for n in restored.nodes.values() if n.kind == "code")
+    assert loaded_code.id in restored.nonchat_upstream_fingerprints
+    assert _states(restored)[loaded_code.id] == "current"
+    restored.update_chat_node_content(loaded_message.id, "different")
+    assert _states(restored)[loaded_code.id] == "upstream_changed"
+
+    saved.pop("nonchat_upstream_fingerprints")
+    old = SceneDocument()
+    restore_chat_into_document(old, {"data": saved}, notes, pins)
+    old_message = next(n for n in old.nodes.values() if n.kind == "chat")
+    old_code = next(n for n in old.nodes.values() if n.kind == "code")
+    old.update_chat_node_content(old_message.id, "different")
+    assert scene_staleness(old) == {}
+    assert _states(old)[old_code.id] == "current"
+
+
 def test_model_knowledge_and_multimodal_content_invalidate_but_geometry_does_not():
     doc = SceneDocument()
     parent = doc.add_chat_node(
