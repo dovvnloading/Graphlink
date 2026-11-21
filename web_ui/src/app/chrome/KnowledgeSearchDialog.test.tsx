@@ -23,12 +23,20 @@ async function setup(onOpenDocumentView?: (content: string, label: string) => vo
     return {};
   });
   let importListener: ((payload: Record<string, unknown>) => void) | null = null;
+  let libraryListener: ((payload: Record<string, unknown>) => void) | null = null;
   fake.transport.subscribe = (topic, listener) => {
     if (topic === "knowledge-ingest") importListener = listener;
-    return () => { importListener = null; };
+    if (topic === "knowledge-library") libraryListener = listener;
+    return () => {
+      if (topic === "knowledge-ingest") importListener = null;
+      if (topic === "knowledge-library") libraryListener = null;
+    };
   };
   function emitImportJobs(jobs: Record<string, unknown>[]) {
     act(() => { importListener?.({ jobs }); });
+  }
+  function emitLibraryChanged() {
+    act(() => { libraryListener?.({ workspaceId: 7 }); });
   }
   render(
     <OverlayProvider>
@@ -37,7 +45,7 @@ async function setup(onOpenDocumentView?: (content: string, label: string) => vo
     </OverlayProvider>,
   );
   await user.click(screen.getByRole("button", { name: "open knowledge" }));
-  return { user, ...fake, emitImportJobs };
+  return { user, ...fake, emitImportJobs, emitLibraryChanged };
 }
 
 const RESULT_A = {
@@ -285,6 +293,20 @@ describe("KnowledgeSearchDialog", () => {
     expect(screen.getByText("4")).toBeInTheDocument();
     expect(screen.getByText("Indexed")).toBeInTheDocument();
     expect(screen.getByText("MD")).toBeInTheDocument();
+  });
+
+  it("refreshes an open Library when a branch is added", async () => {
+    const { request, emitLibraryChanged } = await setup();
+    const branch = { ...LIBRARY_DOCUMENT, documentId: 28, title: "Branch (node n1)",
+      type: "text/branch", sourceUri: "Branch (node n1)", sizeBytes: 128, canReindex: false };
+    request.mockImplementation(async (_topic, intent) =>
+      intent === "listDocuments" ? { documents: [branch] } : {},
+    );
+    emitLibraryChanged();
+    const row = (await screen.findByText("Branch (node n1)")).closest("tr");
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLElement).getByText("Chat branch")).toBeInTheDocument();
+    expect(within(row as HTMLElement).getByText("Indexed")).toBeInTheDocument();
   });
 
   it("labels indexed chats and branches readably with their stored sizes", async () => {

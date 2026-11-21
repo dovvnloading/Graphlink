@@ -960,6 +960,12 @@ export class SceneStore {
     this.transport.fireIntent("scene", "addCodeNode", args);
   }
 
+  // A user action should not replay from the offline queue after a later
+  // removal/addition. Use an explicit setter, not a client-side toggle intent.
+  setChatIndexIntoKnowledge(nodeId: string, enabled: boolean): void {
+    this.transport.fireIntent("scene", "setChatIndexIntoKnowledge", [nodeId, enabled], undefined, false);
+  }
+
   setChatCollapsed(id: string, collapsed: boolean): void {
     this.transport.fireIntent("scene", "setChatCollapsed", [id, collapsed], undefined, true);
   }

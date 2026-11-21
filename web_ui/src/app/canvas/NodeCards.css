@@ -367,6 +367,25 @@
   max-width: 120px;
 }
 
+.chat-node-knowledge-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 5px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 4px;
+  color: var(--gl-surface-text-secondary);
+  font-size: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.chat-node-knowledge-badge svg {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+}
+
 .chat-node-metadata {
   display: flex;
   align-items: baseline;

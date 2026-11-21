@@ -48,7 +48,7 @@ const VIEWPORT_MARGIN = 8;
 // Include checked menu choices and never try to focus disabled actions.
 // Native disabled buttons cannot receive focus, so leaving them in the
 // arrow-key list strands keyboard navigation on a busy chat node.
-const ENABLED_MENU_ITEMS = '[role="menuitem"]:not([disabled]), [role="menuitemradio"]:not([disabled])';
+const ENABLED_MENU_ITEMS = '[role="menuitem"]:not([disabled]), [role="menuitemcheckbox"]:not([disabled]), [role="menuitemradio"]:not([disabled])';
 
 export function NodeMenu({
   position,

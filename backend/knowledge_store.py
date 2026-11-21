@@ -815,6 +815,24 @@ def replace_branch_document_with_chunks(
 
 
 
+def remove_branch_document(
+    db_path: Path, *, source_uri: str, collection_id: int = 0,
+) -> bool:
+    """Delete one indexed chat branch, never unrelated files or graphs."""
+    if not source_uri.startswith("branch:"):
+        raise ValueError("branch removal requires a branch: source URI")
+    conn = _connect(db_path)
+    try:
+        with conn:
+            cursor = conn.execute(
+                "DELETE FROM documents WHERE collection_id = ? AND source_uri = ?",
+                (collection_id, source_uri),
+            )
+            return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
 class FileIngestOutcome(NamedTuple):
     document_id: int
     chunk_count: int

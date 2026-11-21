@@ -83,6 +83,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
   const onScrollChange = vi.fn();
   const onToggleBranchFocus = vi.fn();
   const onBranchFromHere = vi.fn();
+  const onSetIndexIntoKnowledge = vi.fn();
   const onSetBranchStatus = vi.fn();
   const onSetFinalDeliverable = vi.fn();
   const onCollapseBranch = vi.fn();
@@ -121,6 +122,8 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
         isBranchFocusActive: false,
         onToggleBranchFocus,
         onBranchFromHere,
+        indexIntoKnowledge: false,
+        onSetIndexIntoKnowledge,
         branchStatus: "active",
         isFinalDeliverable: false,
         onSetBranchStatus,
@@ -173,7 +176,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
     onToggleCollapse, onDelete, onUndockChild, onRegenerate, onRerunFromHere, onSelectVersion, onEditMessage, onEditAsNewBranch, onCompareVersions, onGenerateImage,
     onGenerateChart, onGenerateKeyTakeaway, onGenerateExplainerNote,
     onOpenDocumentView, onOpenCitation, onScrollChange, onToggleBranchFocus, onBranchFromHere,
-    onSetBranchStatus, onSetFinalDeliverable, onCollapseBranch, onCancelRegenerate,
+    onSetIndexIntoKnowledge, onSetBranchStatus, onSetFinalDeliverable, onCollapseBranch, onCancelRegenerate,
     onPinToCurrentModel, onClearModelOverride, onOpenModelSettings,
     container, rerenderWithData,
   };
@@ -211,6 +214,38 @@ describe("ChatNodeView citation navigation", () => {
 });
 
 describe("ChatNodeView", () => {
+  it("marks indexed branches with visible text and a shape, even when collapsed", () => {
+    const { container, rerenderWithData } = renderChatNode();
+    expect(screen.queryByRole("status", { name: "Indexed in Knowledge Library" })).toBeNull();
+    rerenderWithData({ indexIntoKnowledge: true, isCollapsed: true });
+    const badge = screen.getByRole("status", { name: "Indexed in Knowledge Library" });
+    expect(badge).toHaveTextContent("In Knowledge Library");
+    expect(container.querySelector(".chat-node-knowledge-badge svg")).not.toBeNull();
+    rerenderWithData({ indexIntoKnowledge: false });
+    expect(screen.queryByRole("status", { name: "Indexed in Knowledge Library" })).toBeNull();
+  });
+
+  it("exposes a keyboard-operable, screen-reader checked add/remove menu action", async () => {
+    const user = userEvent.setup();
+    const { onSetIndexIntoKnowledge, rerenderWithData } = renderChatNode();
+    const trigger = screen.getByRole("button", { name: "Node actions" });
+    await user.click(trigger);
+    const add = screen.getByRole("menuitemcheckbox", { name: "Add branch to Knowledge Library" });
+    expect(add).toHaveAttribute("aria-checked", "false");
+    add.focus();
+    await user.keyboard("{Enter}");
+    expect(onSetIndexIntoKnowledge).toHaveBeenCalledWith(true);
+    expect(screen.queryByRole("menuitemcheckbox")).toBeNull();
+    expect(trigger).toHaveFocus();
+
+    rerenderWithData({ indexIntoKnowledge: true });
+    await user.click(trigger);
+    const remove = screen.getByRole("menuitemcheckbox", { name: "Remove from Knowledge Library" });
+    expect(remove).toHaveAttribute("aria-checked", "true");
+    await user.click(remove);
+    expect(onSetIndexIntoKnowledge).toHaveBeenLastCalledWith(false);
+  });
+
   it("shows an out-of-date assistant response with a warning shape and text", () => {
     const { container } = renderChatNode({ isUser: false, staleness: "out_of_date" });
     expect(screen.getByRole("status")).toHaveTextContent("Out of date");
@@ -1573,6 +1608,8 @@ describe("ChatNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
       isBranchFocusActive: false,
       onToggleBranchFocus: vi.fn(),
       onBranchFromHere: vi.fn(),
+      indexIntoKnowledge: false,
+      onSetIndexIntoKnowledge: vi.fn(),
       branchStatus: "active",
       isFinalDeliverable: false,
       onSetBranchStatus: vi.fn(),
@@ -1638,6 +1675,7 @@ describe("ChatNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
     ["isUser", { isUser: false }],
     ["isCollapsed", { isCollapsed: true }],
     ["isBranchFocusActive", { isBranchFocusActive: true }],
+    ["indexIntoKnowledge", { indexIntoKnowledge: true }],
     ["branchStatus", { branchStatus: "accepted" }],
     ["isFinalDeliverable", { isFinalDeliverable: true }],
     ["provider", { provider: "anthropic" }],
@@ -1661,6 +1699,7 @@ describe("ChatNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
     ["onScrollChange", { onScrollChange: vi.fn() }],
     ["onToggleBranchFocus", { onToggleBranchFocus: vi.fn() }],
     ["onBranchFromHere", { onBranchFromHere: vi.fn() }],
+    ["onSetIndexIntoKnowledge", { onSetIndexIntoKnowledge: vi.fn() }],
     ["onSetBranchStatus", { onSetBranchStatus: vi.fn() }],
     ["onSetFinalDeliverable", { onSetFinalDeliverable: vi.fn() }],
     ["onCollapseBranch", { onCollapseBranch: vi.fn() }],

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { NodeMenu } from "./NodeMenu";
 
 const REPO_SRC = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -51,6 +51,25 @@ async function openMenu() {
 }
 
 describe("NodeMenu keyboard completeness (ADR-012 stage 12.3)", () => {
+  it("roves through checkbox and radio menu items and activates a checkbox with Enter", async () => {
+    const user = userEvent.setup();
+    const onToggle = vi.fn();
+    render(
+      <NodeMenu position={{ x: 10, y: 10 }} onClose={() => {}} ariaLabel="Mixed menu">
+        <button type="button" role="menuitem">First</button>
+        <button type="button" role="menuitemcheckbox" aria-checked="false" onClick={onToggle}>Indexed</button>
+        <button type="button" role="menuitemradio" aria-checked="true">Selected</button>
+      </NodeMenu>,
+    );
+    expect(screen.getByRole("menuitem", { name: "First" })).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitemcheckbox", { name: "Indexed" })).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(onToggle).toHaveBeenCalledOnce();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitemradio", { name: "Selected" })).toHaveFocus();
+  });
+
   it("moves focus to the first menuitem on open", async () => {
     await openMenu();
     expect(screen.getByRole("menuitem", { name: "First" })).toHaveFocus();

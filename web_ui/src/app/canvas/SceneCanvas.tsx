@@ -718,6 +718,7 @@ function makeChatFns(id: string, liveRef: { current: DispatcherLive }) {
     // replyTargetNodeId - the composer's next Send then reads and consumes
     // it (see sceneStore.ts's sendMessage).
     onBranchFromHere: () => liveRef.current.store.setReplyTargetNodeId(id),
+    onSetIndexIntoKnowledge: (enabled: boolean) => liveRef.current.store.setChatIndexIntoKnowledge(id, enabled),
     // ADR-002 Workstream 1 ("Branch status and lifecycle"). Fire-and-forget,
     // same posture as onBranchFromHere/onGenerateKeyTakeaway above.
     onSetBranchStatus: (status: string) => liveRef.current.store.setBranchStatus(id, status),
@@ -1307,6 +1308,7 @@ export function toFlowNodes(
           // legacy's own `"Show All Branches" if is_branch_hidden else
           // "Hide Other Branches"` regardless of which node's menu is open.
           isBranchFocusActive,
+          indexIntoKnowledge: n.indexIntoKnowledge,
           // ADR-002 Workstream 1 ("Synthesize Branches"): provenance carried
           // by the result node. provider/model are None/absent for every
           // ordinary chat node (the vast majority), rendered as no badge at

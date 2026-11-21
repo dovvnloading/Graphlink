@@ -2178,6 +2178,25 @@ function withBranchLifecycleFields(
   };
 }
 
+describe("toFlowNodes chat branch Knowledge Library toggle", () => {
+  it("maps the saved flag and dispatches the explicit node id plus requested value", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "chat-1", kind: "chat", content: "index me", indexIntoKnowledge: true })],
+      edges: [],
+    });
+    const store = makeStore();
+    const spy = vi.spyOn(store, "setChatIndexIntoKnowledge");
+    const flowNodes = toFlowNodes(scene, store);
+    const data = flowNodes.find((n) => n.id === "chat-1")!.data as {
+      indexIntoKnowledge: boolean;
+      onSetIndexIntoKnowledge: (enabled: boolean) => void;
+    };
+    expect(data.indexIntoKnowledge).toBe(true);
+    data.onSetIndexIntoKnowledge(false);
+    expect(spy).toHaveBeenCalledWith("chat-1", false);
+  });
+});
+
 describe("toFlowNodes (ADR-002 Workstream 1 - Branch status and lifecycle)", () => {
   it("maps a chat node's branchStatus/isFinalDeliverable onto the flow node's data", () => {
     const scene = baseScene({
