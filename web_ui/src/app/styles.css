@@ -2940,6 +2940,9 @@ body {
   background-color: var(--gl-neutral-button-hover);
 }
 
+.composer-knowledge-toggle { white-space: nowrap; }
+.composer-knowledge-toggle[aria-pressed="true"] .icon { stroke-width: 2; }
+
 .composer-agent-target {
   display: flex;
   align-items: center;

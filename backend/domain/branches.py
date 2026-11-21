@@ -162,6 +162,33 @@ class BranchOps(SceneDocumentParts):
         node = require_node(self.nodes, node_id, "chat", ChatState)
         node.state.index_into_knowledge = bool(enabled)
 
+    def set_use_knowledge_override(self, node_id: str, enabled: bool | None) -> None:
+        """Persist a chat branch's retrieval preference on its selected tip."""
+        node = require_node(self.nodes, node_id, "chat", ChatState)
+        if enabled is not None and not isinstance(enabled, bool):
+            raise SceneError("use_knowledge override must be a boolean or None")
+        node.state.use_knowledge = enabled
+
+    def resolve_use_knowledge_override(self, node_id: str | None) -> bool | None:
+        """Nearest chat ancestor's preference wins; None means workspace default.
+
+        Walk the same explicit-primary parent chain as chat_branch_history;
+        no sibling's setting may affect this branch.
+        """
+        visited: set[str] = set()
+        current = node_id
+        while current is not None and current not in visited:
+            visited.add(current)
+            node = self.nodes.get(current)
+            if node is None or node.kind != "chat":
+                break
+            value = node.state.use_knowledge
+            if value is not None:
+                return value
+            edge = self._branch_parent_edge(current)
+            current = edge.source if edge is not None else None
+        return None
+
     def resolve_model_for_node(
         self, node_id: str | None,
     ) -> "tuple[ModelRef | None, ModelRef | None]":

@@ -25,6 +25,7 @@ export type ContextPreview = {
   promptTokens?: number;
   leavesDevice: boolean;
   draftIncluded?: boolean;
+  useKnowledge?: boolean;
   notice?: string;
   error?: string;
   sources: ContextSource[];
@@ -76,6 +77,25 @@ export function ContextInspectorPanel({ preview, error, loading, onRefresh, onCl
               </p>
               {preview.error && <p role="alert">{preview.error}</p>}
               {preview.notice && <p className="context-inspector-note">{preview.notice}</p>}
+              <section aria-label="Included knowledge hits" className="context-inspector-citations">
+                <strong>Next send · included knowledge hits</strong>
+                <p className="context-inspector-note">
+                  {preview.useKnowledge === false
+                    ? "Use knowledge is off. No knowledge passages will be retrieved for this request."
+                    : "Only these passages fit the next request's prompt budget."}
+                </p>
+                {preview.sources.filter((source) => source.kind === "knowledge_hit" && source.included).length === 0 && (
+                  <p>No knowledge passages are included.</p>
+                )}
+                <ul>
+                  {preview.sources.filter((source) => source.kind === "knowledge_hit" && source.included).map((source) => (
+                    <li key={source.sourceId}>
+                      <strong>{source.documentTitle || "Untitled source"}</strong> · {source.section || "Unsectioned"}
+                      <div>{source.citationId} · {source.sourceFile || source.origin}</div>
+                    </li>
+                  ))}
+                </ul>
+              </section>
               <ul className="context-inspector-sources">
                 {preview.sources.map((source) => (
                   <li key={source.sourceId} className={source.included ? "included" : "excluded"}>

@@ -207,6 +207,45 @@ def format_untrusted_context(results: list[dict]) -> str:
     return _UNTRUSTED_HEADER + "\n\n" + "\n\n".join(blocks)
 
 
+def workspace_has_chat_knowledge(
+    workspace_id: str | int | None, *, db_path: Path | None = None,
+) -> bool:
+    """Whether the active workspace collection contains any indexed documents.
+
+    This is intentionally read-only: an empty workspace or a chat preview must
+    not create the knowledge DB or a collection just to determine the default.
+    """
+    from backend import knowledge_store
+
+    path = db_path if db_path is not None else knowledge_store.DEFAULT_DB_PATH
+    if not path.is_file():
+        return False
+    try:
+        connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        try:
+            if workspace_id is None:
+                return connection.execute(
+                    "SELECT 1 FROM documents WHERE collection_id = 0 LIMIT 1"
+                ).fetchone() is not None
+            return connection.execute(
+                "SELECT 1 FROM documents AS d "
+                "JOIN collections AS c ON c.id = d.collection_id "
+                "WHERE c.workspace_id = ? LIMIT 1",
+                (str(workspace_id),),
+            ).fetchone() is not None
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        # A damaged/older index should never prevent ordinary chat sending.
+        return False
+
+
+def chat_use_knowledge(document, node_id: str | None = None) -> bool:
+    """Resolve nearest branch override, falling back to workspace documents."""
+    override = document.resolve_use_knowledge_override(node_id)
+    return override if override is not None else workspace_has_chat_knowledge(document.current_workspace_id)
+
+
 def search_chat_knowledge(
     query: str, workspace_id: str | int | None = None, *,
     db_path: Path | None = None, k: int = 5,

@@ -1021,6 +1021,11 @@ class ChatState(NodeState):
     # honest snapshot, not a promise of continuous re-indexing this
     # codebase cannot make yet).
     index_into_knowledge: bool = False
+    # None follows the workspace's document-presence default. A boolean is a
+    # deliberate per-branch preference, resolved along chat ancestry by
+    # BranchesOps so sibling forks can choose independently. Unlike the
+    # one-time indexing flag above, this controls retrieval on every send.
+    use_knowledge: bool | None = None
 
 
 @dataclass

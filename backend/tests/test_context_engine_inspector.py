@@ -137,6 +137,7 @@ def test_inspector_includes_ranked_draft_passages_and_audits_last_reply(monkeypa
     }
     monkeypatch.setattr(inspector, "search_chat_knowledge", lambda *_args: [hit])
     document, _root_id, last_id = _document()
+    document.set_use_knowledge_override(last_id, True)
     apply_reply_citations(document.nodes[last_id], CitedChatReply(
         "Restore using the backup [kb:0123456789abcdef0123]", [hit],
     ))
@@ -153,3 +154,22 @@ def test_inspector_includes_ranked_draft_passages_and_audits_last_reply(monkeypa
     assert audit["sources"][0]["citationId"] == hit["citation_id"]
     assert audit["sources"][0]["cited"] is True
     assert audit["sources"][0]["section"] == "Backups"
+
+
+def test_disabled_knowledge_never_queries_or_previews_hits(monkeypatch):
+    from backend.context_engine import inspector
+
+    calls = []
+    def record_search(*args):
+        calls.append(args)
+        return []
+
+    monkeypatch.setattr(inspector, "search_chat_knowledge", record_search)
+    document, root_id, last_id = _document()
+    document.set_use_knowledge_override(root_id, False)
+    report = inspect_next_chat_send(document, last_id, _Dispatcher(), draft_text="How to restore?")
+    assert report["useKnowledge"] is False
+    assert calls == []  # disabled means no search call, not just no matches
+    assert all(s["kind"] != "knowledge_hit" for s in report["sources"])
+    with pytest.raises(ValueError, match="use_knowledge"):
+        inspect_next_chat_send(document, last_id, _Dispatcher(), use_knowledge="yes")

@@ -427,11 +427,14 @@ function App() {
                         store={composerStore}
                         sceneStore={sceneStore}
                         showTokenCounter={settingsVisibility.showTokenCounter !== false}
-                        contextInspector={
+                        contextInspector={(useKnowledge, branchNodeId) => (
                           <Suspense fallback={null}>
-                            <ContextInspectorLauncher sceneStore={sceneStore} composerStore={composerStore} transport={transport} />
+                            <ContextInspectorLauncher
+                              sceneStore={sceneStore} composerStore={composerStore} transport={transport}
+                              useKnowledge={useKnowledge} targetNodeId={branchNodeId}
+                            />
                           </Suspense>
-                        }
+                        )}
                       />
                     </footer>
                     <div className="app-canvas-hud" ref={setCanvasHud} />
