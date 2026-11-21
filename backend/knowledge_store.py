@@ -46,12 +46,11 @@ larger surface (a collection browser, assigning documents to specific
 collections, etc.) is deliberately out of scope for this stage - the exit
 criterion this stage is built around is "two workspaces' corpora are
 separate", not "users can manage arbitrarily many collections" - and is
-left for a future stage to build only if it turns out to be needed. The
-pre-20.3 `collection_id=0` global/unscoped pool is untouched by this
-stage: every document ingested before this migration, and every document
-ingested by a caller with no real workspace context of its own (see e.g.
-backend/api/intents_knowledge.py's own None-workspace fallback), keeps
-landing there exactly as it always has.
+left for a future stage to build only if it turns out to be needed. The pre-20.3 `collection_id=0` global/unscoped pool is migrated into
+the Default workspace's collection during session initialization (see
+move_unscoped_documents_to_workspace). Standalone callers with no
+workspace context may still use that sentinel; app sessions always have
+a current workspace.
 """
 
 from __future__ import annotations
@@ -1040,6 +1039,73 @@ def get_or_create_workspace_collection(db_path: Path, workspace_id: int) -> int:
                 if row is None:
                     raise  # the index rejected this INSERT for some other reason - do not mask it
                 return int(row[0])
+    finally:
+        conn.close()
+
+
+
+def move_unscoped_documents_to_workspace(db_path: Path, workspace_id: int) -> int:
+    """Adopt documents from the legacy collection 0 into the Default workspace.
+
+    Run when a session initializes its Default workspace, before it can use
+    the Knowledge Library. This is idempotent across sessions and atomic:
+    a crash cannot leave half the documents or file aliases relocated.
+    Moving a unique document in place preserves its chunk/citation IDs and
+    cached embeddings. If the destination already contains the same hash,
+    reuse that indexed copy and merge the old file aliases instead of
+    violating UNIQUE(content_hash, collection_id). Existing destination
+    aliases take priority if the same path was separately reindexed there.
+    """
+    collection_id = get_or_create_workspace_collection(db_path, workspace_id)
+    conn = _connect(db_path)
+    try:
+        if conn.execute("SELECT 1 FROM documents WHERE collection_id = 0 LIMIT 1").fetchone() is None:
+            return 0
+        # Take a recoverable snapshot before changing existing user data.
+        maybe_backup_before_write(db_path, {"last_backup_at": None})
+        # Serializes competing session startups and concurrent ingests.
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            rows = conn.execute(
+                "SELECT id, content_hash, size_bytes FROM documents WHERE collection_id = 0 ORDER BY id"
+            ).fetchall()
+            for document_id, digest, size_bytes in rows:
+                existing_id = get_document_by_hash(
+                    conn, content_hash_value=digest, collection_id=collection_id,
+                )
+                destination_id = int(existing_id) if existing_id is not None else int(document_id)
+                if existing_id is not None and size_bytes is not None:
+                    conn.execute(
+                        "UPDATE documents SET size_bytes = COALESCE(size_bytes, ?) WHERE id = ?",
+                        (size_bytes, destination_id),
+                    )
+                # Map all original paths, including aliases, to the surviving
+                # document. Keep a newer destination mapping on path conflicts.
+                conn.execute(
+                    "INSERT OR IGNORE INTO file_sources (collection_id, source_uri, document_id) "
+                    "SELECT ?, source_uri, ? FROM file_sources "
+                    "WHERE collection_id = 0 AND document_id = ?",
+                    (collection_id, destination_id, document_id),
+                )
+                conn.execute(
+                    "DELETE FROM file_sources WHERE collection_id = 0 AND document_id = ?",
+                    (document_id,),
+                )
+                if existing_id is None:
+                    conn.execute(
+                        "UPDATE documents SET collection_id = ? WHERE id = ?",
+                        (collection_id, document_id),
+                    )
+                else:
+                    # The destination already has identical content. Its chunks
+                    # and embeddings survive; deleting the duplicate cascades
+                    # only the now-redundant chunks and their FTS entries.
+                    conn.execute("DELETE FROM documents WHERE id = ?", (document_id,))
+            conn.commit()
+            return len(rows)
+        except BaseException:
+            conn.rollback()
+            raise
     finally:
         conn.close()
 
