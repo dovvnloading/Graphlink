@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 from typing import Awaitable, Callable
-import threading
 
 import ollama
 
@@ -34,12 +33,15 @@ from backend.api._settings_shared import (
 from backend.events import SessionBus
 from backend.api.intents_ollama_model_check import register_ollama_model_check_intents
 from backend.ollama_inventory import (
+    _field,
     _key,
+    _nonnegative_int,
     build_ollama_inventory,
     check_ollama_server_status,
     start_installed_ollama,
 )
 from graphlink_settings_store import SettingsManager
+from backend.ollama_model_names import valid_ollama_model_name
 
 
 def register_settings_ollama_intents(
@@ -264,122 +266,143 @@ def register_ollama_model_management_intents(
             manager.get_ollama_model_scan_locations(),
         )
 
-    active_pull_cancel: threading.Event | None = None
+    active_pull_task: asyncio.Task[None] | None = None
 
-    async def pull_ollama_model(model_name: str):
-        nonlocal active_pull_cancel
-        model_name = str(model_name).strip()
-        if not model_name:
-            state.ollama_notice = "Model name cannot be empty."
+    async def pull_ollama_model(model_name: str) -> None:
+        nonlocal active_pull_task
+        model_name = model_name.strip() if isinstance(model_name, str) else ""
+        if not valid_ollama_model_name(model_name):
+            state.ollama_notice = (
+                "Model name cannot be empty." if not model_name else
+                "Enter a valid Ollama model ID (name, namespace/name or registry/library/name:tag)."
+            )
             await bus.publish("app-settings")
             return
-        if state.ollama_pull_status in ("running", "cancelling") or state.ollama_remove_status == "running":
+        if (state.ollama_pull_status in ("running", "cancelling", "finalizing")
+                or (active_pull_task is not None and not active_pull_task.done())
+                or state.ollama_remove_status == "running"
+                or state.ollama_scan_status == "running"
+                or (state.ollama_check_task is not None and not state.ollama_check_task.done())):
             return
 
-        stop = threading.Event()
-        active_pull_cancel = stop
         state.ollama_pull_status = "running"
         state.ollama_pull_model = model_name
         state.ollama_pull_message = "Connecting to Ollama..."
         state.ollama_pull_completed = 0
         state.ollama_pull_total = 0
         state.ollama_notice = ""
-        await bus.publish("app-settings")
-
-        loop = asyncio.get_running_loop()
         last_progress: tuple[str, int] | None = None
 
-        async def _progress(update: object) -> None:
+        async def progress(update: object) -> None:
             nonlocal last_progress
-            # A cancelled job must never return to "running" when a queued
-            # progress notification arrives after cancelOllamaPull.
             if state.ollama_pull_status != "running":
                 return
-            value = lambda key, default: (
-                update.get(key, default) if isinstance(update, dict) else getattr(update, key, default)
-            )
-            status = str(value("status", "") or "")
-            total = max(0, int(value("total", 0) or 0))
-            completed = max(0, int(value("completed", 0) or 0))
+            raw_status = _field(update, "status")
+            status = raw_status[:120] if isinstance(raw_status, str) and raw_status.isprintable() else ""
+            total = _nonnegative_int(_field(update, "total")) or 0
+            completed = _nonnegative_int(_field(update, "completed")) or 0
+            completed = min(completed, total) if total else 0
             percent = min(100, 100 * completed // total) if total else -1
-            # Ollama can send many chunks per percentage point. Publish at
-            # most one state update per percentage/status change.
             key = (status, percent)
             if key == last_progress:
                 return
             last_progress = key
             state.ollama_pull_message = status
-            state.ollama_pull_completed = min(completed, total) if total else 0
+            state.ollama_pull_completed = completed
             state.ollama_pull_total = total
             await bus.publish("app-settings")
 
-        def _stream_pull() -> bool:
-            # Existing pull support remains the single download path; stream
-            # it in a worker thread to keep the WebSocket event loop live.
-            if stop.is_set():
-                return False
-            stream = ollama.pull(model_name, stream=True)
+        async def download() -> None:
+            # The old blocking ollama.pull() worker prevented its WebSocket
+            # from processing cancelOllamaPull, and a stuck next(stream) could
+            # outlive cancellation. An async stream makes both cancellable.
+            client = ollama.AsyncClient(timeout=300.0)
+            stream = None
             try:
-                for update in stream:
-                    if stop.is_set():
-                        return False
-                    asyncio.run_coroutine_threadsafe(_progress(update), loop).result()
-                return not stop.is_set()
+                stream = await client.pull(model_name, stream=True)
+                succeeded = False
+                async for update in stream:
+                    raw_status = _field(update, "status")
+                    if isinstance(raw_status, str) and raw_status.strip().casefold() == "success":
+                        succeeded = True
+                    await progress(update)
+                if not succeeded:
+                    raise RuntimeError("Ollama ended the download without confirming success.")
             finally:
-                # Closing the generator releases its HTTP streaming response.
-                close = getattr(stream, "close", None)
-                if callable(close):
-                    close()
+                try:
+                    if stream is not None:
+                        close = getattr(stream, "aclose", None)
+                        if callable(close):
+                            await close()
+                finally:
+                    await client.close()
 
-        try:
-            completed = await asyncio.to_thread(_stream_pull)
-            if not completed or stop.is_set():
+        async def run_pull() -> None:
+            nonlocal active_pull_task
+            try:
+                await download()
+                state.ollama_pull_status = "finalizing"
+                state.ollama_pull_message = "Verifying installed model..."
+                await bus.publish("app-settings")
+                # A stream that ends cleanly is not sufficient evidence that
+                # a model exists. Re-scan before ever selecting it as active.
+                await refresh_inventory()
+                if state.ollama_inventory_source != "server" or not any(
+                    _key(row.get("name", "")) == _key(model_name)
+                    for row in state.ollama_inventory
+                ):
+                    raise RuntimeError("Ollama did not report this model as installed after the download.")
+
+                def persist() -> None:
+                    _update_scan_cache(model_name)
+                    api_provider.invalidate_ollama_capability_cache(model_name)
+                    api_provider.sync_ollama_models(manager)
+                    api_provider.set_current_ollama_model(model_name)
+
+                await asyncio.to_thread(run_locked, persist)
+                state.ollama_pull_status = "done"
+                state.ollama_pull_message = "Download complete."
+                state.ollama_notice = ""
+            except asyncio.CancelledError:
                 state.ollama_pull_status = "cancelled"
                 state.ollama_pull_message = "Download cancelled."
-                return
-
-            def _persist() -> None:
-                _update_scan_cache(model_name)
-                api_provider.invalidate_ollama_capability_cache(model_name)
-                api_provider.sync_ollama_models(manager)
-                # Preserve the old pull action's immediate current-model
-                # selection, even for a freshly-downloaded embedding model.
-                api_provider.set_current_ollama_model(model_name)
-
-            await asyncio.to_thread(run_locked, _persist)
-            # Rebuild the same live inventory used by Settings and Knowledge.
-            await refresh_inventory()
-            state.ollama_pull_status = "done"
-            state.ollama_pull_message = "Download complete."
-            state.ollama_notice = ""
-        except asyncio.CancelledError:
-            stop.set()
-            raise
-        except Exception as exc:  # noqa: BLE001 - map Ollama errors to the existing user-facing notice
-            if stop.is_set():
-                state.ollama_pull_status = "cancelled"
-                state.ollama_pull_message = "Download cancelled."
-            else:
+            except Exception as exc:  # noqa: BLE001 - local daemon errors are shown to the user
                 text = str(exc).lower()
                 if "not found" in text:
                     message = f"Model '{model_name}' was not found on the Ollama hub."
                 elif "connection refused" in text:
                     message = "Could not connect to Ollama. Is Ollama running?"
                 else:
-                    message = f"An unexpected error occurred: {exc}"
+                    message = f"An unexpected error occurred: {str(exc)[:240]}"
                 state.ollama_pull_status = "error"
                 state.ollama_notice = message
-        finally:
-            active_pull_cancel = None
-            await bus.publish("app-settings")
+            finally:
+                if active_pull_task is asyncio.current_task():
+                    active_pull_task = None
+                await bus.publish("app-settings")
 
-    async def cancel_ollama_pull():
-        # The running worker notices this flag before processing its next
-        # chunk; the download cannot restart until it has actually stopped.
-        if state.ollama_pull_status == "running" and active_pull_cancel is not None:
-            active_pull_cancel.set()
+        # Do not await the download from the intent: the WebSocket reader
+        # must remain available to dispatch Cancel while the HTTP request runs.
+        task = asyncio.create_task(run_pull())
+        active_pull_task = task
+
+        def recover_prestart_cancellation(done: asyncio.Task[None]) -> None:
+            nonlocal active_pull_task
+            if done.cancelled() and active_pull_task is done:
+                state.ollama_pull_status = "cancelled"
+                state.ollama_pull_message = "Download cancelled."
+                active_pull_task = None
+                asyncio.create_task(bus.publish("app-settings"))
+
+        task.add_done_callback(recover_prestart_cancellation)
+        await bus.publish("app-settings")
+
+    async def cancel_ollama_pull() -> None:
+        task = active_pull_task
+        if state.ollama_pull_status == "running" and task is not None and not task.done():
             state.ollama_pull_status = "cancelling"
             state.ollama_pull_message = "Cancelling download..."
+            task.cancel()
             await bus.publish("app-settings")
 
     async def remove_ollama_model(model_name: str):
