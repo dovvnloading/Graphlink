@@ -20,12 +20,12 @@ function makePreview(count: number): ChatRerunPreview {
   };
 }
 
-function renderDialog(count: number) {
+function renderDialog(count: number, terminal = false) {
   const previewChatRerun = vi.fn(async () => makePreview(count));
   const startChatRerun = vi.fn(async () => ({ jobId: "job-1" }));
   const getChatRerunStatus = vi.fn(async () => ({
-    jobId: "job-1", status: "running" as const,
-    completed: 1, total: count, currentNodeId: "reply-1",
+    jobId: "job-1", status: terminal ? "completed" as const : "running" as const,
+    completed: terminal ? count : 1, total: count, currentNodeId: "reply-1",
     error: "", cancelRequested: false,
   }));
   const cancelChatRerun = vi.fn(async () => ({ ok: true }));
@@ -58,7 +58,7 @@ describe("ChatRerunDialog", () => {
       .toBeInTheDocument();
     expect(screen.getByText(/Estimated input: 100 tokens/)).toBeInTheDocument();
     expect(screen.getAllByText(/Provider \/ Model/)).toHaveLength(2);
-    const branches = screen.getByRole("radio", { name: "All branches below" });
+    const branches = screen.getByRole("radio", { name: /All branches below/ });
     branches.focus();
     await user.keyboard(" ");
     await waitFor(() => {
@@ -93,11 +93,43 @@ describe("ChatRerunDialog", () => {
     await screen.findByText("Reply 3");
     await user.click(screen.getByRole("button", { name: "Re-run replies" }));
     expect(await screen.findByRole("progressbar", { name: "Replies completed" })).toBeInTheDocument();
+    const stop = screen.getByRole("button", { name: "Cancel re-run" });
+    expect(stop).toHaveFocus();
     await waitFor(() => expect(screen.getByRole("status", { name: "" }).textContent)
       .toContain("1 of 3 replies completed"));
-    await user.click(screen.getByRole("button", { name: "Cancel re-run" }));
+    expect(screen.getByRole("status", { name: "" })).toHaveTextContent("Current reply: Reply 2.");
+    await user.click(stop);
     expect(spies.cancelChatRerun).toHaveBeenCalledWith("job-1");
-    expect(screen.getByRole("button", { name: "Cancel re-run" })).toBeDisabled();
+    expect(stop).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Close" })).toHaveFocus();
+  });
+
+  it("fetches a fresh authorization after close and offers explicit refresh", async () => {
+    const user = userEvent.setup();
+    const spies = renderDialog(2);
+    const opener = screen.getByRole("button", { name: "Open preview" });
+    await user.click(opener);
+    await screen.findByText("Reply 1");
+    expect(spies.previewChatRerun).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    expect(opener).toHaveFocus();
+    await user.click(opener);
+    await waitFor(() => expect(spies.previewChatRerun).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole("button", { name: "Refresh preview" }));
+    await waitFor(() => expect(spies.previewChatRerun).toHaveBeenCalledTimes(3));
+  });
+
+  it("re-previews after completion rather than reusing an expired token", async () => {
+    const user = userEvent.setup();
+    const spies = renderDialog(1, true);
+    await user.click(screen.getByRole("button", { name: "Open preview" }));
+    await screen.findByText("Reply 1");
+    await user.click(screen.getByRole("button", { name: "Re-run replies" }));
+    const retry = await screen.findByRole("button", { name: "Preview another re-run" });
+    expect(retry).toHaveFocus();
+    await user.click(retry);
+    await waitFor(() => expect(spies.previewChatRerun).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("button", { name: "Re-run replies" })).toBeEnabled();
   });
 
   it("uses the shared Dialog focus restoration and Escape behaviour", async () => {
