@@ -10,9 +10,8 @@ from __future__ import annotations
 import asyncio
 
 import api_provider
-from graphlink_cloud_providers import CLOUD_PROVIDERS
 
-from backend.api._settings_shared import SettingsSessionState, redact_secret, run_locked
+from backend.api._settings_shared import SettingsSessionState, run_locked
 from backend.events import SessionBus
 from backend.knowledge_embedding_config import test_embedding_choice
 from graphlink_settings_store import SettingsManager
@@ -88,16 +87,15 @@ def register_settings_knowledge_intents(
                 test_embedding_choice, manager, source, model, cloud_provider, cloud_opt_in,
             )
         except Exception as exc:
-            # Provider errors may contain the configured credential. It stays
-            # in the backend; surface only a redacted, bounded explanation.
-            secret = ""
-            if source == "cloud" and isinstance(cloud_provider, str) and cloud_provider in CLOUD_PROVIDERS:
-                try:
-                    secret = manager.get_provider_key(cloud_provider)
-                except Exception:
-                    pass  # A missing/decrypt-failed key cannot mask the test result.
             state.knowledge_test_status = "error"
-            state.knowledge_notice = "Embedding test failed: " + redact_secret(str(exc), secret)[:400]
+            if source == "cloud" and cloud_opt_in is True:
+                # SDK errors can quote environment-sourced keys as well as
+                # stored keys. Never send their raw messages to the UI.
+                state.knowledge_notice = (
+                    "Embedding test failed. Check the API endpoint, credential, and embedding model ID."
+                )
+            else:
+                state.knowledge_notice = "Embedding test failed: " + str(exc)[:400]
         else:
             state.knowledge_test_status = "done"
             state.knowledge_notice = (
