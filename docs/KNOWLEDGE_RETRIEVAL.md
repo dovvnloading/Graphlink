@@ -46,8 +46,15 @@ Cloud provider/SDK failures are logged, but the topic exposes a fixed,
 redacted error rather than exception text that might contain credentials or
 document contents. The Knowledge Library UI for this state is a follow-up.
 
-Searches **do not backfill documents on demand**: they use whichever
-embedding batches have completed and retain FTS5 for unembedded chunks.
+Searches normally use completed vector batches and FTS5 while background
+jobs fill the cache. To preserve the existing UI, chat, and agent hybrid
+search behavior for small cold workspaces, the first workspace-scoped search
+can embed **one batch of at most 32 chunks** if that entire collection has
+no cached vectors for the selected model. Larger or partially embedded
+collections are cache-only on search; their full indexing remains a
+cancellable background job. The cold-start batch runs off the event loop
+and checks for settings changes before committing vectors.
+
 If an enabled service fails at retrieval time, search falls back to local
 keyword-only results and logs the failure. Workspaces remain
 collection-scoped.
