@@ -361,6 +361,8 @@ CLASSIFICATION: tuple[Classified, ...] = (
 
     # -- backend/api/intents_settings_general.py (app-settings) -------------
     Classified("app-settings", "setActiveSection", "B", "preference: which Settings page is open"),
+    Classified("app-settings", "getPricingOverrides", "B", "read-only: locally saved per-model pricing"),
+    Classified("app-settings", "setPricingOverrides", "B", "preference: replace the per-model pricing table"),
     Classified("app-settings", "setShowTokenCounter", "B", "preference: appearance toggle"),
     Classified("app-settings", "setEnableSystemPrompt", "B", "preference: behavior toggle"),
     Classified("app-settings", "setNotificationPreference", "B", "preference: notification-type toggle"),

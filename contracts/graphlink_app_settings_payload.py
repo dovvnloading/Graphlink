@@ -135,6 +135,22 @@ class McpServerConfigPayload:
 
 
 @dataclass
+class ModelPricingOverridePayload:
+    modelId: str
+    inputPerMillion: float
+    outputPerMillion: float
+
+
+@dataclass
+class EffectiveModelPricePayload:
+    modelId: str
+    provider: str
+    inputPerMillion: float | None
+    outputPerMillion: float | None
+    source: str  # local | override | built-in | unknown
+
+
+@dataclass
 class AppSettingsStatePayload:
     schemaVersion: int
     revision: int
@@ -266,4 +282,7 @@ class AppSettingsStatePayload:
     # native folder selection and individually revocable from Settings.
     harnessTrustedDirs: list[str]
     mcpServers: list[McpServerConfigPayload]
+    # Additive optional wire fields: old settings snapshots remain readable.
+    pricingOverrides: list[ModelPricingOverridePayload] | None = None
+    effectiveModelPrices: list[EffectiveModelPricePayload] | None = None
     minCompatibleSchemaVersion: int | None = None

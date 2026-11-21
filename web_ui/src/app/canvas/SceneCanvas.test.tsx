@@ -158,6 +158,7 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
     // ADR-003 stage 3.3 (C9)
     provider: null,
     model: null,
+    modelReason: null,
     isBranchSynthesis: false,
     synthesisInstructions: "",
     branchStatus: "active",
@@ -2052,6 +2053,7 @@ function withSynthesisFields(
     ...node,
     provider: null,
     model: null,
+    modelReason: null,
     isBranchSynthesis: false,
     synthesisInstructions: "",
     itemIds: [],
@@ -2122,18 +2124,41 @@ describe("toFlowNodes (ADR-002 Workstream 1 - Synthesize Branches provenance)", 
   // legacy/partial payload (`undefined`, not `null`) must still surface as
   // `null` in the flow node's data, never leak `undefined` through to
   // ChatNodeData's required-but-nullable `provider`/`model` props.
+  it("projects the recorded reason and opens the provider's existing model settings", () => {
+    const scene = baseScene({
+      nodes: [baseNode({
+        id: "chat-1", kind: "chat", content: "A reply",
+        provider: "ollama", model: "llama3", modelReason: "node override",
+      })],
+      edges: [],
+    });
+    const onOpenModelSettings = vi.fn();
+    const flowNodes = toFlowNodes(
+      scene, makeStore(), () => {}, null, () => {}, false, createToFlowNodesCache(),
+      () => ({ provider: "", modelId: "" }), new Set(), new Set(), () => {}, () => {},
+      onOpenModelSettings,
+    );
+    const data = flowNodes.find((n) => n.id === "chat-1")!.data as {
+      modelReason: string | null; onOpenModelSettings: () => void;
+    };
+    expect(data.modelReason).toBe("node override");
+    data.onOpenModelSettings();
+    expect(onOpenModelSettings).toHaveBeenCalledWith("ollama", "node override");
+  });
+
   it("normalizes an absent (undefined) provider/model to null, not undefined", () => {
     const scene = baseScene({
-      nodes: [baseNode({ id: "chat-1", kind: "chat", content: "Hello", provider: undefined, model: undefined })],
+      nodes: [baseNode({ id: "chat-1", kind: "chat", content: "Hello", provider: undefined, model: undefined, modelReason: undefined })],
       edges: [],
     });
     const store = makeStore();
 
     const flowNodes = toFlowNodes(scene, store);
     const chatFlowNode = flowNodes.find((n) => n.id === "chat-1");
-    const data = chatFlowNode!.data as { provider: string | null; model: string | null };
+    const data = chatFlowNode!.data as { provider: string | null; model: string | null; modelReason: string | null };
     expect(data.provider).toBeNull();
     expect(data.model).toBeNull();
+    expect(data.modelReason).toBeNull();
   });
 });
 

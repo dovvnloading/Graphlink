@@ -28,8 +28,8 @@
  * installed browser instead; any Chromium build has the screencast API.
  *
  * SUBSET. Set GRAPHLINK_CAPTURE_ONLY to a comma-separated list of GIF names
- * (canvas-navigation, table-chart-report, graph-runner, scientific-workbench,
- * biology-workbench) to re-record only those.
+ * (canvas-navigation, branch-edit-rerun, table-chart-report, graph-runner,
+ * scientific-workbench, biology-workbench) to re-record only those.
  */
 
 import { spawn } from "node:child_process";
@@ -44,7 +44,7 @@ const OUT_DIR = join(REPO_ROOT, "assets", "gifs");
 const PORT = 8802;
 const BASE = `http://127.0.0.1:${PORT}`;
 const VIEWPORT = { width: 1280, height: 800 };
-const GIF_FPS = 12;
+const GIF_FPS = 15;
 const FFMPEG = process.env.FFMPEG ?? "ffmpeg";
 const PYTHON = (process.env.GRAPHLINK_PYTHON ?? "python").split(" ").filter(Boolean);
 const ONLY = new Set((process.env.GRAPHLINK_CAPTURE_ONLY ?? "").split(",").map((name) => name.trim()).filter(Boolean));
@@ -154,6 +154,8 @@ async function pan(page, from, to, ms = 900) {
   await page.mouse.down();
   await glide(page, to.x, to.y, ms);
   await page.mouse.up();
+  // A drag that starts near a card can leave its text selected; never record that.
+  await page.evaluate(() => globalThis.getSelection()?.removeAllRanges());
   await sleep(300);
 }
 
@@ -200,8 +202,13 @@ async function encode(name, frames, end, dir) {
   const list = join(dir, "frames.txt");
   writeFileSync(list, lines.join("\n"));
   const out = join(OUT_DIR, `${name}.gif`);
-  const filter = `fps=${GIF_FPS},split[a][b];[a]palettegen=max_colors=192:stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle`;
-  await run(FFMPEG, ["-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", list, "-vf", filter, "-loop", "0", out]);
+  // Two passes: a one-pass split/palettegen graph buffers every decoded
+  // frame until the palette is ready, which runs out of memory on long flows.
+  const palette = join(dir, "palette.png");
+  const input = ["-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", list];
+  await run(FFMPEG, [...input, "-vf", `fps=${GIF_FPS},palettegen=max_colors=256:stats_mode=diff`, palette]);
+  await run(FFMPEG, [...input, "-i", palette, "-lavfi",
+    `fps=${GIF_FPS}[v];[v][1:v]paletteuse=dither=none:diff_mode=rectangle`, "-loop", "0", out]);
   const seconds = (end - frames[0].t).toFixed(1);
   console.log(`captured ${name}.gif (${seconds} s, ${(statSync(out).size / 1e6).toFixed(1)} MB)`);
 }
@@ -244,6 +251,22 @@ async function newCanvas(page) {
   await sleep(500);
 }
 
+/** Open the seeded incident graph fitted to the window, discarding any edits. */
+async function openSeededGraph(page) {
+  const cancelBranch = page.getByRole("button", { name: "Cancel branching from this message" });
+  if (await cancelBranch.isVisible().catch(() => false)) await cancelBranch.click();
+  await page.getByRole("textbox", { name: "Message composer" }).fill("");
+  await page.locator('[data-overlay-trigger="library"]').click();
+  const library = page.getByRole("dialog", { name: "Chat Library" });
+  page.once("dialog", (dialog) => dialog.accept().catch(() => {}));
+  await library.getByRole("button", { name: /^Open chat/ }).first().click();
+  await library.waitFor({ state: "hidden" });
+  await page.locator(".react-flow__node").first().waitFor();
+  await dismissToasts(page);
+  await page.getByRole("button", { name: "Fit All" }).click();
+  await sleep(1200);
+}
+
 async function grantPacks(page, packs) {
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const settings = page.getByRole("dialog", { name: "Settings" });
@@ -283,6 +306,40 @@ async function canvasFlow(page) {
   await click(page, reply.getByRole("button", { name: "Branch from here" }), 900);
   await type(page, page.getByRole("textbox", { name: "Message composer" }),
     "How would I test whether a database query regressed?", 1800);
+}
+
+/** Edit the root question in place, flip between its versions, then preview
+ * Re-run from here. The preview sends nothing to a model, so none is needed. */
+async function rerunFlow(page) {
+  await sleep(600);
+  await page.keyboard.press("Control+f");
+  const search = page.getByRole("textbox", { name: "Search the canvas" });
+  await type(page, search, "jumped from 180ms", 300);
+  await search.press("Enter");
+  await sleep(1300);
+  await search.fill("");
+  await search.press("Escape");
+  const question = node(page, "jumped from 180ms");
+  const { x, y } = await centreOf(question.locator(".node-card-header").first());
+  await glide(page, x, y);
+  await sleep(400);
+  await click(page, question.getByRole("button", { name: "Node actions" }), 600);
+  await click(page, page.getByRole("menuitem", { name: "Edit", exact: true }), 600);
+  const editor = question.getByRole("textbox", { name: "Edit message text" });
+  await editor.press("Control+End");
+  await editor.pressSequentially(" The deploy also rewrote the events repository queries.", { delay: 45 });
+  await sleep(500);
+  await click(page, question.getByRole("button", { name: "Save changes" }), 1200);
+  await click(page, question.getByRole("button", { name: "Previous version" }), 1100);
+  await click(page, question.getByRole("button", { name: "Next version" }), 1000);
+  await click(page, question.getByRole("button", { name: "Re-run from here" }), 1600);
+  const dialog = page.getByRole("dialog", { name: "Re-run from here" });
+  await click(page, dialog.getByRole("radio", { name: "All branches below" }), 2200);
+  const skipped = dialog.getByRole("region", { name: "Skipped nodes" });
+  if (await skipped.isVisible().catch(() => false)) {
+    await skipped.scrollIntoViewIfNeeded();
+    await sleep(1800);
+  }
 }
 
 /** A table drives a chart and a report; editing the table marks both stale. */
@@ -445,16 +502,14 @@ async function main() {
     await grantPacks(page, ["Scientific Core", "Chemistry", "Plate Assays"]);
 
     if (wanted("canvas-navigation")) {
-      // The seeded incident graph, fitted, is the first flow's opening frame.
-      await page.locator('[data-overlay-trigger="library"]').click();
-      const library = page.getByRole("dialog", { name: "Chat Library" });
-      await library.getByRole("button", { name: /^Open chat/ }).first().click();
-      await library.waitFor({ state: "hidden" });
-      await page.locator(".react-flow__node").first().waitFor();
-      await dismissToasts(page);
-      await page.getByRole("button", { name: "Fit All" }).click();
-      await sleep(1200);
+      await openSeededGraph(page);
       await record(page, "canvas-navigation", () => canvasFlow(page));
+    }
+
+    if (wanted("branch-edit-rerun")) {
+      await openSeededGraph(page);
+      await record(page, "branch-edit-rerun", () => rerunFlow(page));
+      await page.keyboard.press("Escape");
     }
 
     // Graph Runner replays the graph the table flow builds, so they go together.

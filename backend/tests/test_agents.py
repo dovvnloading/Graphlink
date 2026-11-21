@@ -1208,6 +1208,54 @@ def test_snapshot_active_provider_model_is_best_effort_on_a_broken_dispatcher():
     assert _snapshot_active_provider_model(fake_dispatcher) == (None, None)
 
 
+def test_reply_provenance_carries_exact_resolver_rung_to_the_version():
+    from backend.api.intents_chat import _snapshot_reply_provenance, _stamp_reply_provenance
+    from graphlink_model_catalog import ModelRef, ResolvedModel
+
+    resolved = ResolvedModel(ModelRef("Ollama", "pinned:8b"), "branch override")
+    fake_dispatcher = SimpleNamespace(
+        _resolve_model_for_dispatch=lambda *args, **kwargs: resolved,
+        active_provider_model=lambda ref=None: ("ollama", ref.model_id if ref else "default"),
+    )
+    document = SceneDocument()
+    node = document.add_chat_node(0, 0, "answer", False)
+    provider, model, reason = _snapshot_reply_provenance(fake_dispatcher, document, node.id)
+    assert (provider, model, reason) == ("ollama", "pinned:8b", "branch override")
+    _stamp_reply_provenance(node, provider, model, reason)
+    assert node.state.model_reason == "branch override"
+    assert node.state.versions[0].model_reason == "branch override"
+
+
+def test_reply_provenance_uses_explicit_task_assignment_or_auto_policy():
+    from backend.api.intents_chat import _snapshot_reply_provenance
+
+    class Settings:
+        def __init__(self, mode):
+            self.mode = mode
+
+        def get_ollama_model_assignments(self):
+            return {config.TASK_CHAT: {"mode": self.mode, "model_id": "llama3"}}
+
+        def get_auto_model_policy(self):
+            return "best-quality"
+
+    def dispatcher(mode):
+        return SimpleNamespace(
+            _settings_manager=Settings(mode),
+            active_provider_model=lambda: ("ollama", "llama3"),
+        )
+
+    assert _snapshot_reply_provenance(dispatcher("explicit")) == (
+        "ollama", "llama3", "task assignment",
+    )
+    assert _snapshot_reply_provenance(dispatcher("auto")) == (
+        "ollama", "llama3", "auto: best-quality",
+    )
+    assert _snapshot_reply_provenance(dispatcher("inherit")) == (
+        "ollama", "llama3", "conversation default",
+    )
+
+
 def test_stamp_reply_provenance_sets_exactly_the_given_snapshot():
     from backend.api.intents_chat import _stamp_reply_provenance
 

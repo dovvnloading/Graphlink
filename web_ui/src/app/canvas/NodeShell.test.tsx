@@ -34,6 +34,17 @@ describe("NodeShell (ADR-012 stage 12.5)", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Upstream changed");
   });
 
+  it("announces why a reply is out of date versus why a derived node changed", () => {
+    const { rerender } = renderShell({ staleness: "out_of_date" });
+    const replyBadge = screen.getByRole("status", { name: /Out of date.*earlier upstream content/ });
+    expect(replyBadge).toHaveAttribute("title", "This reply used earlier upstream content or settings.");
+    rerender(<ReactFlowProvider><NodeShell kindClassName="widget-node"
+      selected={false} collapsed={false} header={<div>Widget</div>}
+      bodyClassName="widget-node-content" staleness="upstream_changed" /></ReactFlowProvider>);
+    const derivedBadge = screen.getByRole("status", { name: /Upstream changed.*before its upstream inputs changed/ });
+    expect(derivedBadge).toHaveAttribute("title", "This node was created before its upstream inputs changed.");
+  });
+
   it("does not show an alert on current and legacy nodes", () => {
     renderShell();
     expect(screen.queryByRole("status")).toBeNull();

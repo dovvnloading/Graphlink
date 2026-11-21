@@ -98,6 +98,7 @@ class ConversationalOps(SceneDocumentParts):
         version.content = node.content
         version.provider_name = node.state.provider
         version.model_name = node.state.model
+        version.model_reason = node.state.model_reason
         version.incomplete = node.state.response_incomplete
         version.input_tokens = node.state.prompt_tokens
         version.output_tokens = node.state.completion_tokens
@@ -125,6 +126,7 @@ class ConversationalOps(SceneDocumentParts):
         node.content = new_content
         node.state.provider = None
         node.state.model = None
+        node.state.model_reason = None
         # A new attempt must not inherit an older answer's input proof.
         node.state.reply_history_fingerprint = None
         node.state.reply_knowledge_enabled = None
@@ -158,6 +160,7 @@ class ConversationalOps(SceneDocumentParts):
         node.content = version.content
         node.state.provider = version.provider_name
         node.state.model = version.model_name
+        node.state.model_reason = version.model_reason
         node.state.response_incomplete = version.incomplete
         node.state.prompt_tokens = version.input_tokens
         node.state.completion_tokens = version.output_tokens

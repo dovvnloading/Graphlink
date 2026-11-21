@@ -134,6 +134,35 @@
     "autoModelPolicy": {
       "type": "string"
     },
+    "effectiveModelPrices": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "inputPerMillion": {
+            "type": "number"
+          },
+          "modelId": {
+            "type": "string"
+          },
+          "outputPerMillion": {
+            "type": "number"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "modelId",
+          "provider",
+          "source"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
     "enableSystemPrompt": {
       "type": "boolean"
     },
@@ -536,6 +565,29 @@
     },
     "ollamaStartStatus": {
       "type": "string"
+    },
+    "pricingOverrides": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "inputPerMillion": {
+            "type": "number"
+          },
+          "modelId": {
+            "type": "string"
+          },
+          "outputPerMillion": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "modelId",
+          "inputPerMillion",
+          "outputPerMillion"
+        ],
+        "type": "object"
+      },
+      "type": "array"
     },
     "providerMode": {
       "type": "string"

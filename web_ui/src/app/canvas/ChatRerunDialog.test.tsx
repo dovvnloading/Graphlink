@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { ChatRerunDialog } from "./ChatRerunDialog";
+import { ChatRerunDialog, sameChatRerunProgress } from "./ChatRerunDialog";
 import type { ChatRerunPreview, SceneStore } from "./sceneStore";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
 
@@ -17,17 +17,18 @@ function makePreview(count: number): ChatRerunPreview {
       provider: "Provider",
       model: "Model",
       estimatedInputTokens: 100 + index,
+      estimatedInputCostUsd: 0.000123,
     })),
   };
 }
 
-function renderDialog(count: number, skipped: ChatRerunPreview["skipped"] = []) {
+function renderDialog(count: number, skipped: ChatRerunPreview["skipped"] = [], terminal = false) {
   const previewChatRerun = vi.fn(async () => ({ ...makePreview(count), skipped }));
   const onRunBoundNodes = vi.fn();
   const startChatRerun = vi.fn(async () => ({ jobId: "job-1" }));
   const getChatRerunStatus = vi.fn(async () => ({
-    jobId: "job-1", status: "running" as const,
-    completed: 1, total: count, currentNodeId: "reply-1",
+    jobId: "job-1", status: terminal ? "completed" as const : "running" as const,
+    completed: terminal ? count : 1, total: count, currentNodeId: "reply-1",
     error: "", cancelRequested: false,
   }));
   const cancelChatRerun = vi.fn(async () => ({ ok: true }));
@@ -51,6 +52,31 @@ function renderDialog(count: number, skipped: ChatRerunPreview["skipped"] = []) 
 }
 
 describe("ChatRerunDialog", () => {
+  it("does not repaint for unchanged polls but detects real progress or cancellation", () => {
+    const state = {
+      jobId: "job-1", status: "running" as const, completed: 1, total: 3,
+      currentNodeId: "reply-1", error: "", cancelRequested: false,
+    };
+    expect(sameChatRerunProgress(null, state)).toBe(false);
+    expect(sameChatRerunProgress(state, { ...state })).toBe(true);
+    expect(sameChatRerunProgress(state, { ...state, completed: 2 })).toBe(false);
+    expect(sameChatRerunProgress(state, { ...state, cancelRequested: true })).toBe(false);
+    expect(sameChatRerunProgress(state, { ...state, status: "completed" })).toBe(false);
+  });
+
+  it("recovers from a temporary status lookup error without losing the running job", async () => {
+    const user = userEvent.setup();
+    const spies = renderDialog(1);
+    spies.getChatRerunStatus.mockRejectedValueOnce(new Error("temporary connection issue"));
+    await user.click(screen.getByRole("button", { name: "Open preview" }));
+    await screen.findByText("Reply 1");
+    await user.click(screen.getByRole("button", { name: "Re-run replies" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("temporary connection issue");
+    await waitFor(() => expect(spies.getChatRerunStatus).toHaveBeenCalledTimes(2), { timeout: 2500 });
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(screen.getByRole("button", { name: "Cancel re-run" })).toBeEnabled();
+  });
+
   it("previews ordered replies with model, input tokens and keyboard-operable scope", async () => {
     const user = userEvent.setup();
     const spies = renderDialog(2);
@@ -60,8 +86,9 @@ describe("ChatRerunDialog", () => {
     expect(screen.getByRole("list", { name: /2 replies in parent-before-child order/ }))
       .toBeInTheDocument();
     expect(screen.getByText(/Estimated input: 100 tokens/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Estimated input cost: \$0.000123/)).toHaveLength(2);
     expect(screen.getAllByText(/Provider \/ Model/)).toHaveLength(2);
-    const branches = screen.getByRole("radio", { name: "All branches below" });
+    const branches = screen.getByRole("radio", { name: /All branches below/ });
     branches.focus();
     await user.keyboard(" ");
     await waitFor(() => {
@@ -96,11 +123,43 @@ describe("ChatRerunDialog", () => {
     await screen.findByText("Reply 3");
     await user.click(screen.getByRole("button", { name: "Re-run replies" }));
     expect(await screen.findByRole("progressbar", { name: "Replies completed" })).toBeInTheDocument();
+    const stop = screen.getByRole("button", { name: "Cancel re-run" });
+    expect(stop).toHaveFocus();
     await waitFor(() => expect(screen.getByRole("status", { name: "" }).textContent)
       .toContain("1 of 3 replies completed"));
-    await user.click(screen.getByRole("button", { name: "Cancel re-run" }));
+    expect(screen.getByRole("status", { name: "" })).toHaveTextContent("Current reply: Reply 2.");
+    await user.click(stop);
     expect(spies.cancelChatRerun).toHaveBeenCalledWith("job-1");
-    expect(screen.getByRole("button", { name: "Cancel re-run" })).toBeDisabled();
+    expect(stop).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Close" })).toHaveFocus();
+  });
+
+  it("fetches a fresh authorization after close and offers explicit refresh", async () => {
+    const user = userEvent.setup();
+    const spies = renderDialog(2);
+    const opener = screen.getByRole("button", { name: "Open preview" });
+    await user.click(opener);
+    await screen.findByText("Reply 1");
+    expect(spies.previewChatRerun).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    expect(opener).toHaveFocus();
+    await user.click(opener);
+    await waitFor(() => expect(spies.previewChatRerun).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole("button", { name: "Refresh preview" }));
+    await waitFor(() => expect(spies.previewChatRerun).toHaveBeenCalledTimes(3));
+  });
+
+  it("re-previews after completion rather than reusing an expired token", async () => {
+    const user = userEvent.setup();
+    const spies = renderDialog(1, [], true);
+    await user.click(screen.getByRole("button", { name: "Open preview" }));
+    await screen.findByText("Reply 1");
+    await user.click(screen.getByRole("button", { name: "Re-run replies" }));
+    const retry = await screen.findByRole("button", { name: "Preview another re-run" });
+    expect(retry).toHaveFocus();
+    await user.click(retry);
+    await waitFor(() => expect(spies.previewChatRerun).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("button", { name: "Re-run replies" })).toBeEnabled();
   });
 
   it("lists side effects as skipped, and hands bound outputs to Graph Runner without execution", async () => {

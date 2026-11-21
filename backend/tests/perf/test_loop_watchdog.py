@@ -137,6 +137,35 @@ def test_no_representative_operation_blocks_the_loop_beyond_the_ci_ceiling():
     )
 
 
+def test_500_node_staleness_publish_respects_existing_event_loop_ceiling():
+    """Real changed-history badges must not push scene publishes over the ratchet."""
+    from backend.domain.staleness import fingerprint_for_reply
+
+    async def _run() -> float:
+        doc = build_graph(node_count=500, content_bytes=1200, chart_count=10,
+                          image_count=0, extra_edges=200)
+        reply = next(n for n in doc.nodes.values()
+                     if n.kind == "chat" and not n.state.is_user
+                     and doc._branch_parent_edge(n.id) is not None)
+        parent_id = doc._branch_parent_edge(reply.id).source
+        reply.state.provider = "test-provider"
+        reply.state.model = "test-model"
+        reply.state.reply_history_fingerprint = fingerprint_for_reply(
+            doc, parent_id, "test-provider", "test-model", False,
+        )
+        doc.update_chat_node_content(parent_id, "edited upstream history")
+        assert any(n.get("staleness") == "out_of_date" for n in doc.scene_payload()["nodes"])
+        operations = [lambda: json.dumps(doc.scene_payload()),
+                      lambda: json.dumps(doc.take_dirty_patch_ops())]
+        return min([await _max_stall_ms(operations) for _ in range(2)])
+
+    best = asyncio.run(_run())
+    assert best <= CI_STALL_CEILING_MS, (
+        f"500-node staleness scene publish blocked the loop {best:.1f} ms; "
+        f"the existing {CI_STALL_CEILING_MS:.0f} ms CI limit is unchanged."
+    )
+
+
 # -- the call-site freeze -----------------------------------------------------
 
 # module (repo-relative, posix) -> exact number of direct render_chart_png()/

@@ -149,6 +149,7 @@ export interface ChatRerunPreview {
     provider: string;
     model: string;
     estimatedInputTokens: number;
+    estimatedInputCostUsd: number | null;
   }>;
   /** All excluded nodes are server-selected, never guessed from canvas layout. */
   skipped: Array<{
@@ -1224,9 +1225,11 @@ export class SceneStore {
     );
   }
 
-  /** Select an existing chat alternative as an undoable scene command. */
+  /** Select an existing chat alternative as an undoable scene command.
+   * Version indices can be evicted by later replies; do not replay an
+   * offline selection against a different saved-history ordering. */
   setChatVersion(chatNodeId: string, index: number): void {
-    this.transport.fireIntent("scene", "setChatVersion", [chatNodeId, index], undefined, true);
+    this.transport.fireIntent("scene", "setChatVersion", [chatNodeId, index], undefined, false);
   }
 
   async compareChatVersions(
@@ -2246,6 +2249,11 @@ export class SceneStore {
 
   clearModelOverride(nodeId: string): void {
     this.transport.fireIntent("scene", "clearModelOverride", [nodeId], undefined, true);
+  }
+
+  /** Navigate to the existing provider's per-task model setting. */
+  openModelTaskSettings(section: string): void {
+    this.transport.fireIntent("app-settings", "setActiveSection", [section], undefined, true);
   }
 
   // -- R6.2: Chart node -----------------------------------------------------

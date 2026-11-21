@@ -19,6 +19,7 @@ from backend.api.intents_chat import (
     _latest_user_query,
     _make_on_usage,
     _snapshot_active_provider_model,
+    _snapshot_reply_provenance,
     _stamp_reply_provenance,
     _use_knowledge_for_node,
 )
@@ -27,8 +28,11 @@ from backend.domain.commands import _merge_commands
 from backend.domain.graph_runner import bound_dependents, is_bound_node
 from backend.domain.model import SceneError
 from backend.domain.node_states import ChatState
-from backend.domain.staleness import fingerprint_for_reply, scene_staleness
+from backend.domain.staleness import (
+    fingerprint_for_reply, fingerprint_from_history_hashes, history_hashes, scene_staleness,
+)
 from backend.domain.structure import primary_parent_edges
+from backend.token_counter import estimate_cost_usd
 
 _logger = logging.getLogger(__name__)
 _SCOPES = ("this_path", "all_branches_below")
@@ -170,6 +174,11 @@ def _preview_plan(document, dispatcher, bus, root_id: str, scope: str):
     root = document.nodes[root_id]
     proof = [root_id, scope, root.content, root.state.version_index, len(root.state.versions)]
     estimator = TokenEstimator()
+    manager = getattr(dispatcher, "_settings_manager", None)
+    overrides = manager.get_pricing_overrides() if manager is not None else None
+    # The preview token must check every selected parent, but a single
+    # 500-node lineage pass suffices for all replies (not N full passes).
+    hashes = history_hashes(document)
     for node_id in ids:
         node = document.nodes[node_id]
         parent_edge = document._branch_parent_edge(node_id)
@@ -180,18 +189,21 @@ def _preview_plan(document, dispatcher, bus, root_id: str, scope: str):
         provider, model = _snapshot_active_provider_model(dispatcher, document, parent_id, bus)
         provider = provider or node.state.provider or ""
         model = model or node.state.model or ""
-        estimate = estimator.count_tokens(_history_token_text(history)) + _history_image_tokens(history)
+        estimate = max(0, int(estimator.count_tokens(_history_token_text(history)) + _history_image_tokens(history)))
+        input_cost = estimate_cost_usd(provider, model, estimate, 0, overrides=overrides)
         rows.append({
             "nodeId": node_id,
             "title": node.title or "Assistant reply",
             "provider": provider,
             "model": model,
-            "estimatedInputTokens": max(0, int(estimate)),
+            "estimatedInputTokens": estimate,
+            "estimatedInputCostUsd": input_cost,
         })
         proof.append((
             node_id, parent_id, node.content, node.state.version_index,
             node.state.reply_history_fingerprint,
-            fingerprint_for_reply(document, parent_id, provider, model, bool(node.state.reply_knowledge_enabled)),
+            fingerprint_from_history_hashes(hashes, parent_id, provider, model, bool(node.state.reply_knowledge_enabled)),
+            input_cost,  # Invalidate authorization when the displayed estimate changes.
         ))
     # Skipped-node classification is part of the approval token: it must not
     # silently change between the read-only preview and the batch start.
@@ -207,11 +219,11 @@ def _preview_plan(document, dispatcher, bus, root_id: str, scope: str):
     }
 
 
-def _apply_reply(document, node_id: str, answer: str, provider, model, fingerprint, knowledge_enabled):
+def _apply_reply(document, node_id: str, answer: str, provider, model, fingerprint, knowledge_enabled, reason=None):
     """Only the chat node changes; content children and other kinds survive."""
     node = document.nodes[node_id]
     document.update_chat_node_content(node_id, answer)
-    _stamp_reply_provenance(node, provider, model)
+    _stamp_reply_provenance(node, provider, model, reason)
     node.state.reply_history_fingerprint = fingerprint
     node.state.reply_knowledge_enabled = knowledge_enabled
     apply_reply_citations(node, answer)
@@ -229,7 +241,9 @@ def register_chat_rerun_intents(
     active: set[str] = set()
 
     async def preview_chat_rerun(node_id, scope="this_path"):
-        return _preview_plan(document, agent_dispatcher, bus, node_id, scope)
+        # Tokenizing each selected history can exceed a single event-loop tick
+        # on a large graph. The result is still validated at start.
+        return await asyncio.to_thread(_preview_plan, document, agent_dispatcher, bus, node_id, scope)
 
     async def get_chat_rerun_status(job_id):
         if job_id not in jobs:
@@ -255,7 +269,10 @@ def register_chat_rerun_intents(
     async def start_chat_rerun(node_id, scope, preview_token, confirm_large=False):
         if active:
             raise SceneError("A chat re-run is already in progress.")
-        plan = _preview_plan(document, agent_dispatcher, bus, node_id, scope)
+        plan = await asyncio.to_thread(_preview_plan, document, agent_dispatcher, bus, node_id, scope)
+        # A second start may have won while the tokenization was off-thread.
+        if active:
+            raise SceneError("A chat re-run is already in progress.")
         if not isinstance(preview_token, str) or plan["previewToken"] != preview_token:
             raise SceneError("The chat changed since the preview. Preview it again.")
         if not plan["count"]:
@@ -300,7 +317,7 @@ def register_chat_rerun_intents(
                     if job["cancelRequested"]:
                         break
                     history = document.chat_branch_history(parent_id)
-                    provider, model = _snapshot_active_provider_model(
+                    provider, model, reason = _snapshot_reply_provenance(
                         agent_dispatcher, document, parent_id, bus,
                     )
                     fingerprint = fingerprint_for_reply(document, parent_id, provider, model, knowledge)
@@ -333,6 +350,7 @@ def register_chat_rerun_intents(
                             "rerunFromHere", "agent",
                             lambda: _apply_reply(
                                 document, node_id_to_run, answer, provider, model, fingerprint, knowledge,
+                                reason,
                             ),
                             node_ids=[node_id_to_run],
                         )

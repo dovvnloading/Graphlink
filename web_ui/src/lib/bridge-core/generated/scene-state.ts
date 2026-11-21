@@ -101,6 +101,7 @@ export interface SceneNodeRow {
   codeSandboxError: string;
   provider?: string | null;
   model?: string | null;
+  modelReason?: string | null;
   isBranchSynthesis: boolean;
   synthesisInstructions: string;
   branchStatus: string;
@@ -735,6 +736,7 @@ const SCENE_NODE_ROW_FIELDS: WireFields = [
   ["codeSandboxError", "s", 0, ""],
   ["provider", "s", 1, null],
   ["model", "s", 1, null],
+  ["modelReason", "s", 1, null],
   ["isBranchSynthesis", "b", 0, false],
   ["synthesisInstructions", "s", 0, ""],
   ["branchStatus", "s", 0, "active"],
