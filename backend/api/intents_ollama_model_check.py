@@ -7,6 +7,7 @@ import asyncio
 from backend.api._settings_shared import SettingsSessionState
 from backend.events import SessionBus
 from backend.ollama_model_check import probe_ollama_model
+from backend.ollama_inventory import refresh_ollama_loaded_state
 from backend.ollama_model_names import valid_ollama_model_name
 
 
@@ -59,10 +60,21 @@ def register_ollama_model_check_intents(bus: SessionBus, state: SettingsSessionS
                     "Check Ollama status, then retry."
                 )
             finally:
-                if state.ollama_check_task is asyncio.current_task():
-                    state.ollama_check_task = None
-                    state.ollama_check_name = ""
-                await bus.publish("app-settings")
+                # The probe can change Ollama's residency. Refresh /api/ps
+                # after success, error or cancellation; do not re-scan /api/show
+                # or mistake a failed /api/ps query for an unloaded model.
+                try:
+                    if state.ollama_inventory_source == "server":
+                        state.ollama_inventory = await asyncio.to_thread(
+                            refresh_ollama_loaded_state, state.ollama_inventory,
+                        )
+                except Exception:
+                    pass  # A transient /api/ps failure must not hide the Check report.
+                finally:
+                    if state.ollama_check_task is asyncio.current_task():
+                        state.ollama_check_task = None
+                        state.ollama_check_name = ""
+                    await bus.publish("app-settings")
 
         # Return from the intent immediately: cancellation arrives through
         # another intent while the async Ollama request is still pending.
