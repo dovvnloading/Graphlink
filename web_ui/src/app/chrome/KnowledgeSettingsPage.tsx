@@ -174,7 +174,7 @@ export function KnowledgeSettingsPage({
           )}
           {state.ollamaInventorySource === "folder" && (
             <p className="settings-field-hint">
-              The Ollama server is unavailable. Disk scanning cannot verify embedding support.
+              Folder-scanned models cannot verify embedding support. Refresh from the running server.
             </p>
           )}
           <div className="settings-button-row">
@@ -189,7 +189,7 @@ export function KnowledgeSettingsPage({
           </div>
           {state.knowledgeScanStatus === "done" && state.ollamaServerReachable === true && capable.length === 0 && (
             <p className="settings-update-status">
-              No embedding-capable model installed. You can pull nomic-embed-text
+              No embedding-capable model confirmed. You can pull nomic-embed-text
               on the Ollama (Local) page.
             </p>
           )}

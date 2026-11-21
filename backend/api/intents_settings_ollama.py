@@ -181,7 +181,10 @@ def register_settings_ollama_intents(
                 "to verify embedding capabilities."
             )
         elif not capable:
-            state.knowledge_notice = "No embedding-capable Ollama models installed. Try pulling nomic-embed-text."
+            state.knowledge_notice = (
+                "No embedding-capable Ollama models confirmed. "
+                "Try refreshing or pulling nomic-embed-text."
+            )
         await bus.publish("app-settings")
 
     async def scan_ollama_system():

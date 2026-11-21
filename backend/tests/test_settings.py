@@ -2698,7 +2698,12 @@ def test_knowledge_scan_lists_embedding_models_first_and_suggests_nomic(manager,
             "models": list(models), "scan_mode": "server", "source": "server",
             "server_reachable": True,
             "inventory": [
-                {"name": name, "capabilities": ["chat"] if name == "llama3:8b" else ["embeddings"]}
+                {
+                    "name": name, "capabilities": ["chat"] if name == "llama3:8b" else ["embeddings"],
+                    "family": "", "parameterSize": "", "quantization": "",
+                    "sizeBytes": None, "trainedContextLength": None, "loaded": False,
+                    "memoryBytes": None, "vramBytes": None, "source": "server",
+                }
                 for name in models
             ],
         },
