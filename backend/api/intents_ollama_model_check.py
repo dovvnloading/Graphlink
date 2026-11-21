@@ -44,18 +44,23 @@ def register_ollama_model_check_intents(bus: SessionBus, state: SettingsSessionS
         state.ollama_check_name = model_name
 
         async def run_probe() -> None:
+            # Published snapshots contain references to their Check rows.
+            # Keep the running row untouched until /api/ps is refreshed and
+            # the active-task gate is released. Otherwise a recorder or
+            # buffered send can observe "complete"/"cancelled" too early.
+            final_report = dict(report)
             try:
                 result = await probe_ollama_model(model_name)
                 for key in ("loadSeconds", "tokensPerSecond", "toolCallingWorks", "message"):
-                    report[key] = result.get(key)
-                report["status"] = "complete"
+                    final_report[key] = result.get(key)
+                final_report["status"] = "complete"
             except asyncio.CancelledError:
-                report["status"] = "cancelled"
-                report["message"] = "Check cancelled."
+                final_report["status"] = "cancelled"
+                final_report["message"] = "Check cancelled."
             except Exception as exc:  # noqa: BLE001 - report daemon failures to the user
-                report["status"] = "error"
+                final_report["status"] = "error"
                 detail = str(exc).strip()[:240] or "Ollama did not respond"
-                report["message"] = (
+                final_report["message"] = (
                     f"Could not check {model_name}: {detail}. "
                     "Check Ollama status, then retry."
                 )
@@ -68,12 +73,20 @@ def register_ollama_model_check_intents(bus: SessionBus, state: SettingsSessionS
                         state.ollama_inventory = await asyncio.to_thread(
                             refresh_ollama_loaded_state, state.ollama_inventory,
                         )
+                except asyncio.CancelledError:
+                    # Cancellation may also arrive during the off-loop refresh.
+                    final_report["status"] = "cancelled"
+                    final_report["message"] = "Check cancelled."
                 except Exception:
                     pass  # A transient /api/ps failure must not hide the Check report.
                 finally:
                     if state.ollama_check_task is asyncio.current_task():
                         state.ollama_check_task = None
                         state.ollama_check_name = ""
+                    # Replace, never mutate, the previously published row.
+                    # A terminal status is observable only once residency
+                    # and the cancellation/restart gate are both settled.
+                    state.ollama_model_checks[model_name] = final_report
                     await bus.publish("app-settings")
 
         # Return from the intent immediately: cancellation arrives through
@@ -84,8 +97,9 @@ def register_ollama_model_check_intents(bus: SessionBus, state: SettingsSessionS
             # A task cancelled before its first instruction never reaches
             # run_probe's try/finally. Restore the session gate in that case.
             if done.cancelled() and state.ollama_check_task is done:
-                report["status"] = "cancelled"
-                report["message"] = "Check cancelled."
+                state.ollama_model_checks[model_name] = {
+                    **report, "status": "cancelled", "message": "Check cancelled.",
+                }
                 state.ollama_check_task = None
                 state.ollama_check_name = ""
                 asyncio.create_task(bus.publish("app-settings"))
