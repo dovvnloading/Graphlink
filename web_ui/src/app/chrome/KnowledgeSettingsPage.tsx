@@ -24,25 +24,21 @@ export function KnowledgeSettingsPage({
   state: AppSettingsState;
   transport: WsTransport;
 }) {
-  const [source, setSource] = useState<EmbeddingSource>("off");
-  const [ollamaModel, setOllamaModel] = useState("");
-  const [cloudModel, setCloudModel] = useState("");
-  const [cloudProvider, setCloudProvider] = useState("OpenAI");
-  const [consent, setConsent] = useState(false);
-
-  // Sync only when persisted preferences change, not on model-scan or test
-  // status publishes. Those must not erase a model name someone is typing.
-  useEffect(() => {
-    const savedSource = state.knowledgeEmbeddingSource as EmbeddingSource;
-    setSource(["off", "ollama", "cloud"].includes(savedSource) ? savedSource : "off");
-    if (savedSource === "ollama") setOllamaModel(state.knowledgeEmbeddingModel);
-    if (savedSource === "cloud") setCloudModel(state.knowledgeEmbeddingModel);
-    setCloudProvider(state.knowledgeCloudProvider || "OpenAI");
-    setConsent(state.knowledgeCloudOptIn);
-  }, [
-    state.knowledgeEmbeddingSource, state.knowledgeEmbeddingModel,
-    state.knowledgeCloudProvider, state.knowledgeCloudOptIn,
-  ]);
+  // The parent keys this page by its *persisted* settings tuple: saving
+  // or changing preferences in another window remounts this draft, while
+  // a scan/test status publish never erases partially typed input.
+  const savedSource = state.knowledgeEmbeddingSource;
+  const [source, setSource] = useState<EmbeddingSource>(
+    savedSource === "ollama" || savedSource === "cloud" ? savedSource : "off",
+  );
+  const [ollamaModel, setOllamaModel] = useState(
+    savedSource === "ollama" ? state.knowledgeEmbeddingModel : "",
+  );
+  const [cloudModel, setCloudModel] = useState(
+    savedSource === "cloud" ? state.knowledgeEmbeddingModel : "",
+  );
+  const [cloudProvider, setCloudProvider] = useState(state.knowledgeCloudProvider || "OpenAI");
+  const [consent, setConsent] = useState(state.knowledgeCloudOptIn);
 
   // Show the models *installed in the running Ollama server*, rather than
   // guessing based on a local manifest or offering non-installed suggestions.
