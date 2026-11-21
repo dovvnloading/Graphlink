@@ -2189,9 +2189,13 @@ def restore_chat_into_document(
     build_chat_data's own new `settings_manager` parameter. `None` (this
     parameter's own default) preserves the exact prior ungated behavior."""
     token = _ACTIVE_ASSET_STORE.set(asset_store)
+    # Saved graph edges are attached during this call. Do not manufacture a
+    # "creation time" dependency baseline for any of those older nodes.
+    document._restoring_staleness = True
     try:
         _restore_chat_into_document(document, chat, notes_data, pins_data, plugin_registry, settings_manager)
     finally:
+        document.__dict__.pop("_restoring_staleness", None)
         _ACTIVE_ASSET_STORE.reset(token)
 
 
@@ -2320,7 +2324,7 @@ def _restore_chat_into_document(
     for frame_index, frame_new_id in frames_map.items():
         all_items_map[node_slot_count + note_slot_count + chart_slot_count + frame_index] = frame_new_id
     container_base_index = node_slot_count + note_slot_count + chart_slot_count + frame_slot_count
-    _restore_containers(
+    containers_map = _restore_containers(
         document,
         chat_data.get("containers", []),
         all_items_map,
@@ -2347,6 +2351,16 @@ def _restore_chat_into_document(
             if note_payload_id:
                 by_payload_id[str(note_payload_id)] = mapped_note_id
     by_payload_id.update(charts_by_id)
+    # The generic scene can connect to frames/containers too. Remap their
+    # saved IDs alongside ordinary nodes, notes and charts for provenance.
+    for collection, mapping in (("frames", frames_map), ("containers", containers_map)):
+        payloads = chat_data.get(collection)
+        if isinstance(payloads, list):
+            for index, restored_id in mapping.items():
+                if index < len(payloads) and isinstance(payloads[index], dict):
+                    saved_id = payloads[index].get("id")
+                    if isinstance(saved_id, str) and saved_id:
+                        by_payload_id[saved_id] = restored_id
     document.graph_runs = restore_graph_runs(chat_data.get("graph_runs"), by_payload_id)
 
     restore_table_data(document.nodes, by_payload_id, chat_data.get("table_sources"), chat_data.get("table_outputs"))
@@ -2360,6 +2374,20 @@ def _restore_chat_into_document(
         _restore_system_prompt_and_summary_connections(
             document, chat_data, notes_map, chat_nodes_map, nodes_by_id
         )
+
+    # Restore ONLY explicit, well-shaped baselines. Old saves (no mapping)
+    # never acquire any out-of-date status merely from being loaded.
+    saved_baselines = chat_data.get("nonchat_upstream_fingerprints")
+    if isinstance(saved_baselines, dict):
+        for saved_id, value in saved_baselines.items():
+            if not isinstance(saved_id, str) or not isinstance(value, str):
+                continue
+            if (len(value) != 67 or not value.startswith("v1:")
+                    or any(ch not in "0123456789abcdef" for ch in value[3:])):
+                continue
+            new_id = by_payload_id.get(saved_id)
+            if new_id in document.nodes and document.nodes[new_id].kind != "chat":
+                document.nonchat_upstream_fingerprints[new_id] = value
 
     _restore_verified_science_references(document, node_payloads, all_nodes_map)
     _restore_pins(document, pins_data)
