@@ -104,6 +104,7 @@ export function NodeShell({
           )}
         </div>
         <StalenessBadge status={visibleStaleness} manualRerun={manualRerun}
+          nodeKind={kindClassName === "thinking-node" ? "thinking" : undefined}
           onRunBoundNodes={isBoundForRunner && nodeId && openBoundNodes
             ? () => openBoundNodes([nodeId]) : undefined} />
         {!collapsed && (

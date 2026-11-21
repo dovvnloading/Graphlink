@@ -23,6 +23,13 @@ describe("StalenessBadge", () => {
     expect(runBound).toHaveBeenCalledTimes(2);
   });
 
+  it("never badges a Thinking trace as a manual step, even with legacy stale statuses", () => {
+    const { rerender } = render(<StalenessBadge nodeKind="thinking" status="upstream_changed" />);
+    expect(screen.queryByRole("status")).toBeNull();
+    rerender(<StalenessBadge nodeKind="thinking" status="out_of_date" manualRerun />);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
   it("requires manual re-run for an outdated tool reply, without a bound action", () => {
     const { container } = render(<StalenessBadge status="out_of_date" manualRerun />);
     expect(screen.getByRole("status")).toHaveTextContent("Upstream changed - re-run manually");

@@ -51,12 +51,13 @@ class _Runs:
 class _Dispatcher:
     _settings_manager = None
 
-    def __init__(self, *, hold_call=0, fail_call=0):
+    def __init__(self, *, hold_call=0, fail_call=0, replies=None):
         self._runs = _Runs()
         self.calls = []
         self.cancelled = set()
         self.hold_call = hold_call
         self.fail_call = fail_call
+        self.replies = replies
         self.release = asyncio.Event()
 
     def active_provider_model(self, model_ref=None):
@@ -81,7 +82,8 @@ class _Dispatcher:
                 if number == self.hold_call:
                     await self.release.wait()
                 if request_id not in self.cancelled and number != self.fail_call:
-                    await kwargs["on_reply"](f"new reply {number}")
+                    answer = self.replies[number - 1] if self.replies is not None else f"new reply {number}"
+                    await kwargs["on_reply"](answer)
             finally:
                 kwargs["on_end"]()
 
@@ -164,6 +166,147 @@ def test_preview_canonical_scopes_order_models_tokens_and_nonchat_isolation():
     document.last_chat_node_id = branch.id
     other_path = _preview_plan(document, dispatcher, None, user.id, "this_path")
     assert [row["nodeId"] for row in other_path["replies"]] == [branch.id]
+
+
+def test_thinking_traces_are_passive_and_do_not_block_reply_paths():
+    document = SceneDocument()
+    user = document.add_chat_node(0, 0, "original", True)
+    first = document.add_chat_node(0, 200, "first", False, parent_id=user.id)
+    trace = document.add_thinking_node(0, 300, "reasoning one", first.id)
+    continuation = document.add_chat_node(0, 400, "follow up", True, parent_id=trace.id)
+    second = document.add_chat_node(0, 600, "second", False, parent_id=continuation.id)
+    other = document.add_chat_node(200, 200, "other", False, parent_id=user.id)
+    other_trace = document.add_thinking_node(300, 300, "other reasoning", other.id)
+    for reply, parent in ((first, user), (second, continuation), (other, user)):
+        reply.state.provider = "test-provider"
+        reply.state.model = "test-model"
+        reply.state.reply_history_fingerprint = fingerprint_for_reply(
+            document, parent.id, "test-provider", "test-model", False,
+        )
+        reply.state.reply_knowledge_enabled = False
+        document.sync_chat_version(reply.id)
+    document.last_chat_node_id = second.id
+    document.edit_chat_message(user.id, "edited", "original")
+
+    # A Thinking trace can be an ancestor in an older graph. It is neither
+    # a skipped side effect nor a manual-staleness warning.
+    dispatcher = _Dispatcher()
+    path = _preview_plan(document, dispatcher, None, user.id, "this_path")
+    all_branches = _preview_plan(document, dispatcher, None, user.id, "all_branches_below")
+    assert [row["nodeId"] for row in path["replies"]] == [first.id, second.id]
+    assert [row["nodeId"] for row in all_branches["replies"]] == [first.id, second.id, other.id]
+    assert {trace.id, other_trace.id}.isdisjoint({row["nodeId"] for row in all_branches["skipped"]})
+    statuses = scene_staleness(document)
+    assert statuses[first.id] == "out_of_date"
+    assert statuses[second.id] == "out_of_date"
+    assert statuses.get(trace.id) is None
+    assert statuses.get(other_trace.id) is None
+
+
+def test_rerun_parses_reasoning_into_reply_thinking_children_with_atomic_undo():
+    async def exercise():
+        document, user, first, deep, branch, _, code = _thread()
+        old_first = document.add_thinking_node(0, 200, "first prior thoughts", first.id)
+        old_deep = document.add_thinking_node(0, 700, "deep prior thoughts", deep.id)
+        dispatcher = _Dispatcher(replies=[
+            "<think>fresh first thoughts</think>\nVisible first answer",
+            "<think>fresh second thoughts</think>\nVisible second answer",
+            "<think>fresh branch thoughts</think>\nVisible branch answer",
+        ])
+        intents, _ = _register(document, dispatcher)
+        preview = await intents["previewChatRerun"](user.id, "all_branches_below")
+        assert {old_first.id, old_deep.id}.isdisjoint({r["nodeId"] for r in preview["skipped"]})
+        started = await intents["startChatRerun"](
+            user.id, "all_branches_below", preview["previewToken"], False,
+        )
+        done = await _status(intents, started["jobId"])
+        assert (done["status"], done["completed"]) == ("completed", 3)
+        for reply, text in ((first, "Visible first answer"), (deep, "Visible second answer"),
+                            (branch, "Visible branch answer")):
+            assert document.nodes[reply.id].content == text
+            assert document.nodes[reply.id].state.versions[-1].content == text
+            assert "<think>" not in document.nodes[reply.id].content
+        assert document.nodes[old_first.id].content == "fresh first thoughts"
+        assert document.nodes[old_deep.id].content == "fresh second thoughts"
+        branch_thoughts = intents_chat_rerun._reply_thinking_ids(document, branch.id)
+        assert len(branch_thoughts) == 1
+        branch_thought = branch_thoughts[0]
+        assert document.nodes[branch_thought].content == "fresh branch thoughts"
+        assert scene_staleness(document).get(old_first.id) is None
+        assert scene_staleness(document).get(old_deep.id) is None
+        assert document.nodes[code.id].state.code == "print(1)"
+        assert len(document.command_log) == 1
+        document.undo()
+        assert document.nodes[first.id].content == "first answer"
+        assert document.nodes[old_first.id].content == "first prior thoughts"
+        assert document.nodes[old_deep.id].content == "deep prior thoughts"
+        assert branch_thought not in document.nodes
+        document.redo()
+        assert document.nodes[first.id].content == "Visible first answer"
+        assert document.nodes[old_first.id].content == "fresh first thoughts"
+        assert document.nodes[branch_thought].content == "fresh branch thoughts"
+
+    asyncio.run(exercise())
+
+
+def test_rerun_without_reasoning_preserves_thinking_continuation():
+    async def exercise():
+        document = SceneDocument()
+        user = document.add_chat_node(0, 0, "before edit", True)
+        first = document.add_chat_node(0, 100, "old first", False, parent_id=user.id)
+        thought = document.add_thinking_node(0, 200, "old private reasoning", first.id)
+        follow_up = document.add_chat_node(0, 300, "next question", True, parent_id=thought.id)
+        second = document.add_chat_node(0, 400, "old second", False, parent_id=follow_up.id)
+        for reply, parent in ((first, user), (second, follow_up)):
+            reply.state.provider = "test-provider"
+            reply.state.model = "test-model"
+            reply.state.reply_history_fingerprint = fingerprint_for_reply(
+                document, parent.id, "test-provider", "test-model", False,
+            )
+            reply.state.reply_knowledge_enabled = False
+            document.sync_chat_version(reply.id)
+        document.last_chat_node_id = second.id
+        document.edit_chat_message(user.id, "after edit", "before edit")
+        dispatcher = _Dispatcher(replies=["new first without thinking", "new second without thinking"])
+        intents, _ = _register(document, dispatcher)
+        preview = await intents["previewChatRerun"](user.id, "this_path")
+        assert [row["nodeId"] for row in preview["replies"]] == [first.id, second.id]
+        result = await intents["startChatRerun"](user.id, "this_path", preview["previewToken"], False)
+        done = await _status(intents, result["jobId"])
+        assert (done["status"], done["completed"]) == ("completed", 2)
+        assert document.nodes[thought.id].content == ""
+        assert document._branch_parent_edge(follow_up.id).source == thought.id
+        assert document.nodes[second.id].content == "new second without thinking"
+        fresh_derived = document.add_code_node(200, 500, "print(42)", "python", second.id)
+        assert scene_staleness(document).get(fresh_derived.id) is None
+        document.undo()
+        assert document.nodes[thought.id].content == "old private reasoning"
+        document.redo()
+        assert document.nodes[thought.id].content == ""
+
+    asyncio.run(exercise())
+
+
+
+def test_rerun_status_replays_each_completion_after_job_finishes():
+    async def exercise():
+        document, user, _, deep, branch, _, _ = _thread()
+        intents, bus = _register(document, _Dispatcher())
+        preview = await intents["previewChatRerun"](user.id, "all_branches_below")
+        started = await intents["startChatRerun"](
+            user.id, "all_branches_below", preview["previewToken"], False,
+        )
+        job_id = started["jobId"]
+        assert (await _status(intents, job_id))["completed"] == 3
+        states = [await intents["getChatRerunStatus"](job_id, index) for index in range(3)]
+        assert [(state["completed"], state["currentNodeId"]) for state in states] == [
+            (1, deep.id), (2, branch.id), (3, None),
+        ]
+        assert all(state["status"] == "running" for state in states)
+        assert (await intents["getChatRerunStatus"](job_id, 3))["status"] == "completed"
+        assert bus.published.count("scene") >= 4
+
+    asyncio.run(exercise())
 
 
 def test_preview_input_cost_reprices_with_current_exact_model_override():

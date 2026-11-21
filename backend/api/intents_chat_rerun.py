@@ -13,6 +13,7 @@ import logging
 import time
 import uuid
 
+from api_provider import split_reasoning_and_content
 from graphlink_token_estimator import TokenEstimator
 
 from backend.api.intents_chat import (
@@ -29,6 +30,8 @@ from backend.domain.commands import _merge_commands
 from backend.domain.graph_runner import bound_dependents, is_bound_node
 from backend.domain.model import SceneError
 from backend.domain.node_states import ChatState
+from backend.domain.model import THINKING_TITLE_PREVIEW_LENGTH
+from backend.response_parsing import PLACEHOLDER_ASSISTANT_REASONING, PLACEHOLDER_GENERATED_CONTENT
 from backend.domain.staleness import (
     _message_input, fingerprint_for_reply, fingerprint_from_history_hashes,
     history_hashes, scene_staleness,
@@ -46,6 +49,16 @@ def _has_executed_tools(node) -> bool:
         not isinstance(call, dict) or call.get("name") != CITATION_RECORD_NAME
         for call in node.state.tool_invocations
     )
+
+
+def _reply_thinking_ids(document, reply_id: str) -> list[str]:
+    """Direct Thinking traces are passive content owned by an assistant reply."""
+    return [
+        edge.target for edge in document.edges.values()
+        if edge.source == reply_id and edge.target in document.nodes
+        and document.nodes[edge.target].kind == "thinking"
+        and document._branch_parent_edge(edge.target) is edge
+    ]
 
 
 def _rerun_selection(document, root_id: str, scope: str) -> tuple[list[str], list[dict]]:
@@ -115,6 +128,10 @@ def _rerun_selection(document, root_id: str, scope: str) -> tuple[list[str], lis
                     blocked = True
                 else:
                     replies.append(item)
+        elif node.kind == "thinking":
+            # A reasoning trace is part of its reply, not a side-effect
+            # boundary. Traverse through it if an older graph continues there.
+            pass
         elif item != root_id:
             bound = is_bound_node(node)
             if bound:
@@ -205,6 +222,8 @@ def _preview_plan(document, dispatcher, bus, root_id: str, scope: str):
             node.state.reply_history_fingerprint,
             fingerprint_from_history_hashes(hashes, parent_id, provider, model, bool(node.state.reply_knowledge_enabled)),
             input_cost,  # Invalidate approval if the displayed input price changes.
+            tuple((thought_id, document.nodes[thought_id].content)
+                  for thought_id in _reply_thinking_ids(document, node_id)),
         ))
     # Skipped-node classification is part of the approval token: it must not
     # silently change between the read-only preview and the batch start.
@@ -221,9 +240,36 @@ def _preview_plan(document, dispatcher, bus, root_id: str, scope: str):
 
 
 def _apply_reply(document, node_id: str, answer: str, provider, model, fingerprint, knowledge_enabled, reason=None):
-    """Only the chat node changes; content children and other kinds survive."""
+    """Version the visible answer and refresh its Thinking trace in one undo step."""
     node = document.nodes[node_id]
-    document.update_chat_node_content(node_id, answer)
+    reasoning, visible_answer = split_reasoning_and_content(answer)
+    visible_answer = visible_answer.strip() or (
+        PLACEHOLDER_ASSISTANT_REASONING if reasoning else PLACEHOLDER_GENERATED_CONTENT
+    )
+    document.update_chat_node_content(node_id, visible_answer)
+    thinking_ids = _reply_thinking_ids(document, node_id)
+    if reasoning:
+        if thinking_ids:
+            thought = document.nodes[thinking_ids[0]]
+            thought.content = reasoning
+            thought.title = reasoning[:THINKING_TITLE_PREVIEW_LENGTH] or "Thinking"
+        else:
+            x, y = document.place_child(node_id, "thinking", prefer="left")
+            document.add_thinking_node(x, y, reasoning, parent_id=node_id)
+    # Older graphs can have several traces, or even a continuation connected
+    # through a Thinking card. Clear redundant traces without orphaning their
+    # downstream chat messages; ordinary leaf traces can be removed.
+    retired = thinking_ids[1:] if reasoning else thinking_ids
+    for thought_id in retired:
+        has_children = any(
+            edge.source == thought_id and document._branch_parent_edge(edge.target) is edge
+            for edge in document.edges.values() if edge.target in document.nodes
+        )
+        if has_children:
+            document.nodes[thought_id].content = ""
+            document.nodes[thought_id].title = "Thinking"
+        else:
+            document.remove_nodes([thought_id])
     _stamp_reply_provenance(node, provider, model, reason)
     node.state.reply_history_fingerprint = fingerprint
     node.state.reply_knowledge_enabled = knowledge_enabled
@@ -293,6 +339,30 @@ def _rerun_path_unchanged(document, reply_id: str, snapshots: dict[str, tuple]) 
     return cursor is None
 
 
+def _rerun_undo_stack_is_current(document, batch: dict) -> bool:
+    """A concurrent edit/undo must not be merged into the active re-run."""
+    if batch["command"] is not None:
+        # Even an intervening command later undone leaves redo entries that
+        # would replay over the batch. Never merge into that stack.
+        return (
+            bool(document.command_log)
+            and document.command_log[-1] is batch["command"]
+            and not document.redo_stack
+        )
+    return (
+        len(document.command_log) == batch["priorLength"]
+        and (document.command_log[-1] if document.command_log else None) is batch["priorHead"]
+    )
+
+
+def _job_status(job: dict) -> dict:
+    return {
+        key: job[key] for key in (
+            "jobId", "status", "completed", "total", "currentNodeId", "error", "cancelRequested",
+        )
+    }
+
+
 def register_chat_rerun_intents(
     bus, document, notifications, agent_dispatcher, composer_document,
     token_counter, publish_scene, publish_token_counter,
@@ -313,15 +383,15 @@ def register_chat_rerun_intents(
         previews[token] = (node_id, scope, plan["previewToken"], time.monotonic() + 600)
         return {**plan, "previewToken": token}
 
-    async def get_chat_rerun_status(job_id):
+    async def get_chat_rerun_status(job_id, after_completed=None):
         if not isinstance(job_id, str) or job_id not in jobs:
             raise SceneError("Unknown chat re-run job.")
         job = jobs[job_id]
-        return {
-            key: job[key] for key in (
-                "jobId", "status", "completed", "total", "currentNodeId", "error", "cancelRequested",
-            )
-        }
+        # A fast batch can finish between UI polls. Deliver every committed
+        # milestone to cursor-based readers; legacy callers still get live state.
+        if type(after_completed) is int and 0 <= after_completed < len(job["milestones"]):
+            return dict(job["milestones"][after_completed])
+        return _job_status(job)
 
     async def cancel_chat_rerun(job_id):
         job = jobs.get(job_id) if isinstance(job_id, str) else None
@@ -364,7 +434,7 @@ def register_chat_rerun_intents(
         job = {
             "jobId": job_id, "status": "running", "completed": 0,
             "total": plan["count"], "currentNodeId": None, "error": "",
-            "cancelRequested": False, "requestId": None,
+            "cancelRequested": False, "requestId": None, "milestones": [],
         }
         if len(jobs) >= 128:
             finished = next((key for key, value in jobs.items() if value["status"] != "running"), None)
@@ -380,23 +450,11 @@ def register_chat_rerun_intents(
         }
 
         def stack_unchanged():
-            if batch["command"] is not None:
-                # A user command that was added and then undone is still a
-                # conflicting edit. Never merge a new reply while its redo
-                # entry could later replay over the batch.
-                return (
-                    bool(document.command_log)
-                    and document.command_log[-1] is batch["command"]
-                    and not document.redo_stack
-                )
-            return (
-                len(document.command_log) == batch["priorLength"]
-                and (document.command_log[-1] if document.command_log else None) is batch["priorHead"]
-            )
+            return _rerun_undo_stack_is_current(document, batch)
 
         async def _execute():
             try:
-                for row in plan["replies"]:
+                for row_index, row in enumerate(plan["replies"]):
                     if job["cancelRequested"]:
                         break
                     node_id_to_run = row["nodeId"]
@@ -464,7 +522,7 @@ def register_chat_rerun_intents(
                             lambda: _apply_reply(
                                 document, node_id_to_run, answer, provider, model, fingerprint, knowledge, reason,
                             ),
-                            node_ids=[node_id_to_run], push=False,
+                            node_ids=[node_id_to_run, *_reply_thinking_ids(document, node_id_to_run)], push=False,
                         )
                         if command.is_noop:
                             return
@@ -478,6 +536,8 @@ def register_chat_rerun_intents(
                             document.command_log[-1] = merged
                             batch["command"] = merged
                         snapshots[node_id_to_run] = _rerun_snapshot(document, node_id_to_run)
+                        for thought_id in _reply_thinking_ids(document, node_id_to_run):
+                            snapshots[thought_id] = _rerun_snapshot(document, thought_id)
                         committed["version"] = node.state.versions[node.state.version_index]
                         committed["index"] = node.state.version_index
                         succeeded["value"] = True
@@ -528,6 +588,11 @@ def register_chat_rerun_intents(
                     await stopped.wait()
                     if succeeded["value"]:
                         job["completed"] += 1
+                        job["currentNodeId"] = (
+                            plan["replies"][row_index + 1]["nodeId"]
+                            if row_index + 1 < len(plan["replies"]) else None
+                        )
+                        job["milestones"].append(_job_status(job))
                         await publish_scene()
                     if job["error"]:
                         raise SceneError(job["error"])

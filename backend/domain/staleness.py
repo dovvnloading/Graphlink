@@ -153,11 +153,15 @@ def _lineage(document: SceneDocument) -> tuple[dict[str, bytes], dict[str, str]]
                 # live upstream history. A stored baseline alone must not
                 # mark an otherwise unchanged orphan as stale.
                 if (
-                    baseline is not None and item in parents
+                    node.kind != "thinking"
+                    and baseline is not None and item in parents
                     and baseline != "v1:" + prior.hex()
                 ):
                     upstream_changed = True
-                if upstream_changed:
+                # Thinking is passive content belonging to a reply. A
+                # changed input invalidates the reply, not its reasoning card
+                # as a separate action requiring manual re-execution.
+                if upstream_changed and node.kind != "thinking":
                     statuses[item] = "upstream_changed"
 
             # A full snapshot and the patch differ both traverse this lineage.

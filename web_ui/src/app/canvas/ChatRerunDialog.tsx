@@ -31,6 +31,7 @@ export function ChatRerunDialog({
   const [confirmedToken, setConfirmedToken] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [progress, setProgress] = useState<ChatRerunStatus | null>(null);
+  const completedCursorRef = useRef(0);
   const [starting, setStarting] = useState(false);
   const [previewRevision, setPreviewRevision] = useState(0);
   const cancelButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -56,8 +57,10 @@ export function ChatRerunDialog({
   const previewError = loaded?.key === previewKey ? loaded.error ?? "" : "";
   const busyPreview = isOpen && !!nodeId && !jobId && loaded?.key !== previewKey;
   const confirmedLarge = !!preview && confirmedToken === preview.previewToken;
-  const boundNodeIds = preview?.skipped.filter((row) => row.category === "bound")
-    .map((row) => row.nodeId) ?? [];
+  // Thinking is reply-owned content, not a skipped executable step.
+  const skipped = preview?.skipped.filter((row) => row.kind !== "thinking") ?? [];
+  const boundNodeIds = skipped.filter((row) => row.category === "bound")
+    .map((row) => row.nodeId);
 
   useEffect(() => {
     if (!isOpen || !nodeId || jobId) return;
@@ -79,18 +82,26 @@ export function ChatRerunDialog({
     if (!isOpen || !jobId) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // Replaying completed milestones prevents a fast job from skipping
+    // intermediate progress numbers when multiple replies finish per poll.
+    let seenCompleted = completedCursorRef.current;
     const poll = async () => {
       try {
-        const next = await store.getChatRerunStatus(jobId);
+        const next = await store.getChatRerunStatus(jobId, seenCompleted);
         if (!active) return;
         setError("");
+        const advanced = next.completed > seenCompleted;
+        if (advanced) {
+          seenCompleted = next.completed;
+          completedCursorRef.current = seenCompleted;
+        }
         setProgress((current) => {
           // Preserve acknowledged cancellation against an older in-flight poll.
           const updated = current?.jobId === next.jobId && current.cancelRequested
             ? { ...next, cancelRequested: true } : next;
           return sameChatRerunProgress(current, updated) ? current : updated;
         });
-        if (next.status === "running") timer = setTimeout(() => { void poll(); }, 250);
+        if (next.status === "running") timer = setTimeout(() => { void poll(); }, advanced ? 50 : 250);
       } catch (cause) {
         if (active) {
           setError(cause instanceof Error ? cause.message : "Could not read re-run progress.");
@@ -123,6 +134,7 @@ export function ChatRerunDialog({
     setError("");
     try {
       const result = await store.startChatRerun(nodeId, scope, preview.previewToken, confirmedLarge);
+      completedCursorRef.current = 0;
       setJobId(result.jobId);
       setProgress({
         jobId: result.jobId, status: "running", completed: 0,
@@ -158,6 +170,7 @@ export function ChatRerunDialog({
   }
 
   function reset() {
+    completedCursorRef.current = 0;
     setJobId(null);
     setProgress(null);
     setScope("this_path");
@@ -174,7 +187,8 @@ export function ChatRerunDialog({
     <Dialog name={DIALOG} title="Re-run from here" className="chat-rerun-dialog">
       <p>Only ordinary tool-free chat replies are re-run automatically. Workspace agents, Builder,
         code sandboxes, tool-executing replies, plugin actions and data-bound outputs are skipped.
-        Skipped nodes and their downstream replies require manual review.</p>
+        Skipped nodes and their downstream replies require manual review. Thinking traces
+        refresh with their replies and are never skipped actions.</p>
       <fieldset className="chat-rerun-scopes" disabled={!!jobId || starting}>
         <legend>Replies to re-run</legend>
         <label>
@@ -214,13 +228,13 @@ export function ChatRerunDialog({
               </li>
             ))}
           </ol>
-          {preview.skipped.length > 0 && (
+          {skipped.length > 0 && (
             <section aria-label="Skipped nodes">
               <h3 className="chat-rerun-skipped-title" id="chat-rerun-skipped-title">
-                Skipped — never executed by this re-run ({preview.skipped.length})
+                Skipped — never executed by this re-run ({skipped.length})
               </h3>
               <ol className="chat-rerun-replies" aria-labelledby="chat-rerun-skipped-title">
-                {preview.skipped.map((item) => (
+                {skipped.map((item) => (
                   <li key={item.nodeId}>
                     <strong>{item.title}</strong>
                     <span className="chat-rerun-meta">{item.reason}</span>

@@ -2,12 +2,16 @@
 import "./NodeCards.css";
 
 export function StalenessBadge({
-  status, manualRerun = false, onRunBoundNodes,
+  status, manualRerun = false, onRunBoundNodes, nodeKind,
 }: {
   status?: unknown;
   manualRerun?: boolean;
   onRunBoundNodes?: () => void;
+  nodeKind?: string;
 }) {
+  // Thinking traces are refreshed with their assistant reply, never a manual
+  // re-run action. Guard legacy scene payloads as well as new publications.
+  if (nodeKind === "thinking") return null;
   const label = status === "out_of_date"
     ? (manualRerun ? "Upstream changed - re-run manually" : "Out of date")
     : status === "upstream_changed" ? "Upstream changed - re-run manually" : null;
