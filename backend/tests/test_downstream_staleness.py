@@ -55,6 +55,20 @@ def test_ancestor_edit_marks_only_affected_branch_and_derived_nonchat():
     assert set(_states(doc).values()) == {"current"}
 
 
+def test_thinking_is_reply_owned_not_a_manual_staleness_step():
+    doc = SceneDocument()
+    user = doc.add_chat_node(0, 0, "Question", True)
+    reply = _answer(doc, user)
+    thought = doc.add_thinking_node(0, 200, "reasoning before edit", reply.id)
+    derived = doc.add_code_node(200, 200, "print(1)", "python", reply.id)
+    doc.update_chat_node_content(user.id, "Question revised")
+    status = _states(doc)
+    assert status[reply.id] == "out_of_date"
+    assert status[thought.id] == "current"
+    assert status[derived.id] == "upstream_changed"
+    assert scene_staleness(doc).get(thought.id) is None
+
+
 def test_nonchat_attached_directly_to_a_message_tracks_that_message():
     doc = SceneDocument()
     message = doc.add_chat_node(0, 0, "first input", True)
