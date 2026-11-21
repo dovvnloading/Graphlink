@@ -187,6 +187,130 @@ def _format_search_results(results: list[dict]) -> list[dict]:
     return [format_search_result_row(r) for r in results]
 
 
+def register_knowledge_watched_folder_intents(
+    bus: SessionBus,
+    document: SceneDocument,
+    watcher: WatchedFolderService,
+) -> None:
+    """Register workspace-scoped, opt-in watched-folder operations."""
+
+    def _watched_workspace_id() -> int:
+        workspace_id = document.current_workspace_id
+        if workspace_id is None:
+            raise IngestError("Select a workspace before managing watched folders.")
+        return workspace_id
+
+    async def add_watched_folder():
+        # The native picker is the only way a path may become watched.
+        # Capture workspace before the dialog (which may outlive a switch).
+        workspace_id = _watched_workspace_id()
+        selected = await native_dialogs.pick_folder()
+        if not selected:
+            return {"cancelled": True}
+        return await watcher.add(workspace_id, selected)
+
+    async def remove_watched_folder(folder_id: int):
+        return await watcher.remove(_watched_workspace_id(), folder_id)
+
+    async def list_watched_folders():
+        return await watcher.list(_watched_workspace_id())
+
+    async def sync_watched_folders(folder_id: int | None = None):
+        return await watcher.sync(_watched_workspace_id(), folder_id)
+
+    bus.register_intent("knowledge", "addWatchedFolder", add_watched_folder)
+    bus.register_intent(
+        "knowledge", "removeWatchedFolder", remove_watched_folder, args_schema=RemoveWatchedFolderArgs,
+    )
+    bus.register_intent("knowledge", "listWatchedFolders", list_watched_folders)
+    bus.register_intent(
+        "knowledge", "syncWatchedFolders", sync_watched_folders, args_schema=SyncWatchedFoldersArgs,
+    )
+
+
+def register_knowledge_document_intents(
+    bus: SessionBus,
+    document: SceneDocument,
+    ingest_jobs: KnowledgeIngestManager,
+    uploads: KnowledgeDropUploads,
+) -> None:
+    """Register workspace-scoped Knowledge Library document operations."""
+
+    async def list_documents():
+        workspace_id = document.current_workspace_id
+
+        def load():
+            collection_id = (
+                get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+                if workspace_id is not None else 0
+            )
+            return list_library_documents(DEFAULT_DB_PATH, collection_id=collection_id)
+
+        return {"documents": await asyncio.to_thread(load)}
+
+    async def open_document(document_id):
+        workspace_id = document.current_workspace_id
+
+        def load():
+            collection_id = (
+                get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+                if workspace_id is not None else 0
+            )
+            return library_document_text(
+                DEFAULT_DB_PATH, collection_id=collection_id, document_id=document_id,
+            )
+
+        result = await asyncio.to_thread(load)
+        if result is None:
+            raise IngestError("Document is not in the current workspace.")
+        return result
+
+    async def remove_document(document_id):
+        workspace_id = document.current_workspace_id
+
+        def remove():
+            collection_id = (
+                get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+                if workspace_id is not None else 0
+            )
+            paths = file_sources_for_document(
+                DEFAULT_DB_PATH, collection_id=collection_id, document_id=document_id,
+            )
+            deleted = remove_library_document(
+                DEFAULT_DB_PATH, collection_id=collection_id, document_id=document_id,
+            )
+            if deleted:
+                for path in paths:
+                    uploads.cleanup_source(path)
+            return {"removed": deleted}
+
+        return await asyncio.to_thread(remove)
+
+    async def reindex_document(document_id):
+        # The client provides only an ID. Paths come exclusively from
+        # previously indexed file_sources in this workspace, never from JSON.
+        workspace_id = document.current_workspace_id
+
+        def sources():
+            collection_id = (
+                get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+                if workspace_id is not None else 0
+            )
+            return file_sources_for_document(
+                DEFAULT_DB_PATH, collection_id=collection_id, document_id=document_id,
+            )
+
+        paths = await asyncio.to_thread(sources)
+        if not paths:
+            raise IngestError("This document has no file source to re-index.")
+        return ingest_jobs.start(paths, folder=False, workspace_id=workspace_id)
+
+    bus.register_intent("knowledge", "listDocuments", list_documents)
+    bus.register_intent("knowledge", "openDocument", open_document, args_schema=DocumentIdArgs)
+    bus.register_intent("knowledge", "removeDocument", remove_document, args_schema=DocumentIdArgs)
+    bus.register_intent("knowledge", "reindexDocument", reindex_document, args_schema=DocumentIdArgs)
+
+
 def register_knowledge_intents(
     bus: SessionBus,
     document: SceneDocument,
@@ -351,31 +475,6 @@ def register_knowledge_intents(
             return {"cancelled": True}
         return ingest_jobs.start(selected, folder=True, workspace_id=workspace_id)
 
-    def _watched_workspace_id() -> int:
-        workspace_id = document.current_workspace_id
-        if workspace_id is None:
-            raise IngestError("Select a workspace before managing watched folders.")
-        return workspace_id
-
-    async def add_watched_folder():
-        # The native picker is the only way a path may become watched.
-        # Capture workspace before the dialog (which may outlive a switch).
-        workspace_id = _watched_workspace_id()
-        selected = await native_dialogs.pick_folder()
-        if not selected:
-            return {"cancelled": True}
-        return await watcher.add(workspace_id, selected)
-
-    async def remove_watched_folder(folder_id: int):
-        return await watcher.remove(_watched_workspace_id(), folder_id)
-
-    async def list_watched_folders():
-        return await watcher.list(_watched_workspace_id())
-
-    async def sync_watched_folders(folder_id: int | None = None):
-        return await watcher.sync(_watched_workspace_id(), folder_id)
-
-
     async def add_chat_attachment(attachment_id):
         """An attachment ID is a native-picker grant in this session, not a path from the browser."""
         if composer_document is None:
@@ -420,75 +519,6 @@ def register_knowledge_intents(
     async def get_ingest_jobs():
         return ingest_jobs.snapshot()
 
-    async def list_documents():
-        workspace_id = document.current_workspace_id
-
-        def load():
-            collection_id = (
-                get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
-                if workspace_id is not None else 0
-            )
-            return list_library_documents(DEFAULT_DB_PATH, collection_id=collection_id)
-
-        return {"documents": await asyncio.to_thread(load)}
-
-    async def open_document(document_id):
-        workspace_id = document.current_workspace_id
-
-        def load():
-            collection_id = (
-                get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
-                if workspace_id is not None else 0
-            )
-            return library_document_text(
-                DEFAULT_DB_PATH, collection_id=collection_id, document_id=document_id,
-            )
-
-        result = await asyncio.to_thread(load)
-        if result is None:
-            raise IngestError("Document is not in the current workspace.")
-        return result
-
-    async def remove_document(document_id):
-        workspace_id = document.current_workspace_id
-
-        def remove():
-            collection_id = (
-                get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
-                if workspace_id is not None else 0
-            )
-            paths = file_sources_for_document(
-                DEFAULT_DB_PATH, collection_id=collection_id, document_id=document_id,
-            )
-            deleted = remove_library_document(
-                DEFAULT_DB_PATH, collection_id=collection_id, document_id=document_id,
-            )
-            if deleted:
-                for path in paths:
-                    uploads.cleanup_source(path)
-            return {"removed": deleted}
-
-        return await asyncio.to_thread(remove)
-
-    async def reindex_document(document_id):
-        # The client provides only an ID. Paths come exclusively from
-        # previously indexed file_sources in this workspace, never from JSON.
-        workspace_id = document.current_workspace_id
-
-        def sources():
-            collection_id = (
-                get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
-                if workspace_id is not None else 0
-            )
-            return file_sources_for_document(
-                DEFAULT_DB_PATH, collection_id=collection_id, document_id=document_id,
-            )
-
-        paths = await asyncio.to_thread(sources)
-        if not paths:
-            raise IngestError("This document has no file source to re-index.")
-        return ingest_jobs.start(paths, folder=False, workspace_id=workspace_id)
-
     async def begin_upload(files):
         if any(job["status"] in {"queued", "scanning", "running"} for job in ingest_jobs.snapshot()["jobs"]):
             raise IngestError("An import is already running in this window.")
@@ -510,24 +540,13 @@ def register_knowledge_intents(
     bus.register_intent("knowledge", "openCitation", open_citation, args_schema=OpenCitationArgs)
     bus.register_intent("knowledge", "addFiles", add_files)
     bus.register_intent("knowledge", "addFolder", add_folder)
-    bus.register_intent("knowledge", "addWatchedFolder", add_watched_folder)
-    bus.register_intent(
-        "knowledge", "removeWatchedFolder", remove_watched_folder, args_schema=RemoveWatchedFolderArgs,
-    )
-    bus.register_intent("knowledge", "listWatchedFolders", list_watched_folders)
-    bus.register_intent(
-        "knowledge", "syncWatchedFolders", sync_watched_folders, args_schema=SyncWatchedFoldersArgs,
-    )
-
+    register_knowledge_watched_folder_intents(bus, document, watcher)
 
     bus.register_intent("knowledge", "addChatAttachment", add_chat_attachment)
     bus.register_intent("knowledge", "addWorkspaceFile", add_workspace_file)
     bus.register_intent("knowledge", "cancelIngest", cancel_ingest, args_schema=CancelIngestArgs)
     bus.register_intent("knowledge", "getIngestJobs", get_ingest_jobs)
-    bus.register_intent("knowledge", "listDocuments", list_documents)
-    bus.register_intent("knowledge", "openDocument", open_document, args_schema=DocumentIdArgs)
-    bus.register_intent("knowledge", "removeDocument", remove_document, args_schema=DocumentIdArgs)
-    bus.register_intent("knowledge", "reindexDocument", reindex_document, args_schema=DocumentIdArgs)
+    register_knowledge_document_intents(bus, document, ingest_jobs, uploads)
     bus.register_intent("knowledge", "beginUpload", begin_upload, args_schema=BeginUploadArgs)
     bus.register_intent("knowledge", "appendUpload", append_upload, args_schema=AppendUploadArgs)
     bus.register_intent("knowledge", "finishUpload", finish_upload, args_schema=UploadIdArgs)
