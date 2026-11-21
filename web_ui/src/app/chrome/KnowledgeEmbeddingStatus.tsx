@@ -125,7 +125,8 @@ export function KnowledgeEmbeddingStatus({
 
   const matchingJobs = snapshot?.jobs.filter((job) =>
     job.workspaceId === snapshot.workspaceId &&
-    job.source === choice?.source &&
+    choice !== null &&
+    job.source === choice.source &&
     job.model === choice.model
   ) ?? [];
   const job = matchingJobs.at(-1);
