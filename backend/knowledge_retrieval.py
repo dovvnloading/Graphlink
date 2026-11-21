@@ -16,6 +16,9 @@ from backend.knowledge_embeddings import vector_search
 from backend.knowledge_store import display_source_label, provenance_for_hits, search_chunks
 
 DEFAULT_RRF_K = 60
+# A nearest vector neighbor may still be unrelated to the query.
+# This cosine cutoff applies only to hits with no keyword match.
+MIN_SEMANTIC_COSINE_SIMILARITY = 0.55
 # Set to 'reranked' only after backend.evals.knowledge_retrieval demonstrated
 # an improvement over the previous RRF pipeline on the checked-in fixtures.
 DEFAULT_RANKING = "reranked"
@@ -105,6 +108,20 @@ def remove_near_duplicates(results: list[dict], *, k: int) -> list[dict]:
     return chosen
 
 
+def _filter_weak_semantic_only(lexical_results: list[dict], vector_results: list[dict]) -> list[dict]:
+    """Reject weak vector-only hits before rank fusion, preserving FTS5 matches.
+
+    RRF alone cannot distinguish a good semantic match from the nearest of
+    several irrelevant vectors. The raw cosine threshold is used only within
+    the vector list, never to compare against FTS5's BM25 scores.
+    """
+    lexical_ids = {row["chunk_id"] for row in lexical_results}
+    return [
+        row for row in vector_results
+        if row["chunk_id"] in lexical_ids or row["score"] >= MIN_SEMANTIC_COSINE_SIMILARITY
+    ]
+
+
 def rerank_results(
     lexical_results: list[dict], vector_results: list[dict], *, k: int
 ) -> list[dict]:
@@ -163,6 +180,9 @@ def hybrid_search(
             db_path, embedding_provider, query,
             model_id=embedding_model_id, collection_id=collection_id, k=limit,
         )
+    # Shared by the Knowledge panel, chat grounding, and knowledge.search,
+    # in both legacy and reranked modes.
+    vector_results = _filter_weak_semantic_only(lexical_results, vector_results)
     if ranking == "legacy":
         ranked = (
             reciprocal_rank_fusion([lexical_results, vector_results])[:k]

@@ -50,7 +50,7 @@ Open **Settings → Knowledge** to choose a retrieval mode. This setting is inde
 
 Under **Search indexed sources**, enter a question or phrase and select **Search** (or press Enter). The dialog requests up to **10 results** from the current workspace.
 
-Graphlink always searches keyword matches (FTS5/BM25). When a configured embedding model and cached vectors are available, it also searches semantic matches. It combines the separately ranked lists with reciprocal rank fusion, removes exact/near-duplicate passages and returns the strongest distinct excerpts. It does **not** compare raw BM25 and cosine values as if they used the same scale.
+Graphlink always searches keyword matches (FTS5/BM25). When a configured embedding model and cached vectors are available, it also searches semantic matches. It combines the separately ranked lists with reciprocal rank fusion, removes exact/near-duplicate passages and returns the strongest distinct excerpts. It does **not** compare raw BM25 and cosine values as if they used the same scale. Semantic-only candidates need cosine similarity of at least **0.55**; keyword hits remain eligible regardless of vector similarity. A search may return fewer than 10 results (or none) rather than padding with unrelated documents. The Knowledge panel labels these as **search results**, not sources used by a chat response.
 
 Each collapsed result shows its title, source and any available match signals:
 
