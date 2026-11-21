@@ -3944,9 +3944,10 @@ body {
    content, scrollable" dialogs), reusing that dialog's own 11-13px text
    scale and neutral-button language rather than inventing a third one. */
 .knowledge-search-dialog {
-  min-width: 480px;
-  max-width: min(640px, calc(100vw - 64px));
-  max-height: min(600px, calc(100vh - 96px));
+  min-width: min(720px, calc(100vw - 64px));
+  width: min(1000px, calc(100vw - 64px));
+  max-width: calc(100vw - 64px);
+  max-height: min(760px, calc(100vh - 96px));
   overflow-y: auto;
 }
 
@@ -4112,6 +4113,100 @@ body {
 .knowledge-result-open-link {
   color: var(--gl-surface-text-primary);
 }
+
+/* Knowledge Library follows the neutral Settings page/table vocabulary. */
+.knowledge-library-intro {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--gl-surface-text-muted);
+}
+
+.knowledge-drop-zone {
+  border: 1px dashed var(--gl-surface-border);
+  border-radius: 6px;
+  padding: 14px;
+  margin-bottom: 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--gl-surface-text-muted);
+  background: var(--gl-surface-node-body);
+}
+
+.knowledge-drop-active {
+  border-color: var(--gl-surface-text-primary);
+  background: var(--gl-neutral-button-hover);
+  color: var(--gl-surface-text-primary);
+}
+
+.knowledge-library-section {
+  margin: 14px 0 18px;
+  border-top: 1px solid var(--gl-surface-border);
+  padding-top: 4px;
+}
+
+.knowledge-library-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.knowledge-library-heading .knowledge-section-title {
+  margin-bottom: 0;
+}
+
+.knowledge-library-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+.knowledge-library-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  color: var(--gl-surface-text-primary);
+}
+
+.knowledge-library-table th,
+.knowledge-library-table td {
+  text-align: left;
+  padding: 9px 8px;
+  border-bottom: 1px solid var(--gl-surface-border);
+  vertical-align: middle;
+}
+
+.knowledge-library-table th {
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gl-surface-text-muted);
+}
+
+.knowledge-library-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.knowledge-library-title {
+  max-width: 230px;
+  min-width: 130px;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.knowledge-library-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.knowledge-library-actions .knowledge-search-button {
+  padding: 5px 7px;
+  white-space: nowrap;
+}
+
 
 /* -- Global search dialog (ADR-020 stage 20.4) ------------------------------
    A sibling of .knowledge-search-dialog just above, same rules renamed to
