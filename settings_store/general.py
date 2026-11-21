@@ -86,6 +86,56 @@ class GeneralSettingsOps(SettingsManagerParts):
             self.state["theme"] = theme
             self._save_state()
 
+
+    def get_knowledge_embedding_settings(self) -> dict:
+        """The knowledge index is keyword-only unless explicitly configured."""
+        source = self.state.get("knowledge_embedding_source", "off")
+        if source not in ("off", "ollama", "cloud"):
+            source = "off"
+        consent = source == "cloud" and self.state.get("knowledge_cloud_opt_in") is True
+        # An old or hand-edited state file must never bypass cloud consent.
+        if source == "cloud" and not consent:
+            source = "off"
+        return {
+            "source": source,
+            "model": str(self.state.get("knowledge_embedding_model") or ""),
+            "cloud_provider": str(self.state.get("knowledge_cloud_provider") or "OpenAI"),
+            "cloud_opt_in": consent,
+        }
+
+    def set_knowledge_embedding_settings(
+        self, source: str, model: str = "", cloud_provider: str = "", cloud_opt_in: bool = False,
+    ) -> None:
+        """Save a fully validated choice atomically; cloud is deny-by-default."""
+        from graphlink_cloud_providers import CLOUD_PROVIDERS
+
+        if source not in ("off", "ollama", "cloud"):
+            raise ValueError("Unknown knowledge embedding source.")
+        model = str(model).strip()
+        cloud_provider = str(cloud_provider or "").strip()
+        if source != "off" and (not model or len(model) > 200):
+            raise ValueError("Choose a knowledge embedding model (up to 200 characters).")
+        if source == "cloud":
+            profile = CLOUD_PROVIDERS.get(cloud_provider)
+            if profile is None or profile.protocol != "openai":
+                raise ValueError("Choose an OpenAI-compatible API provider.")
+            if cloud_opt_in is not True:
+                raise ValueError("Cloud embeddings require explicit consent: document text leaves the machine.")
+        else:
+            cloud_provider = ""
+            cloud_opt_in = False
+        if source == "off":
+            model = ""
+        new_state = dict(self.state)
+        new_state.update(
+            knowledge_embedding_source=source,
+            knowledge_embedding_model=model,
+            knowledge_cloud_provider=cloud_provider,
+            knowledge_cloud_opt_in=cloud_opt_in,
+        )
+        self._save_state(new_state, raise_on_error=True)
+        self.state = new_state
+
     def get_notification_preferences(self):
         saved_preferences = self.state.get("notification_preferences", {}) or {}
         return {

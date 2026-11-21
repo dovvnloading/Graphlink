@@ -43,6 +43,10 @@ def test_settings_payload_shape_matches_generated_validator_shape(manager):
         "autoModelPolicy",
         "theme",
         "hasCompletedOnboarding",
+        "knowledgeEmbeddingSource",
+        "knowledgeEmbeddingModel",
+        "knowledgeCloudProvider",
+        "knowledgeCloudOptIn",
     }
 
 
@@ -2626,3 +2630,107 @@ def test_keyless_local_endpoint_drops_a_previous_remote_key(manager, monkeypatch
     reloaded = SettingsManager(manager.state_file)
     assert reloaded.get_openai_key() == ""
     assert reloaded.get_api_base_url() == "http://127.0.0.1:8000/v1"
+
+
+# -- Knowledge source settings: persistence, capability discovery, consent --
+
+
+def test_knowledge_settings_intent_persists_ollama_and_off(manager, monkeypatch):
+    bus = SessionBus("settings-knowledge-persist")
+    register_settings(bus, manager)
+    monkeypatch.setattr(api_provider, "ollama_supports_embedding", lambda model: model == "nomic-embed-text:latest")
+
+    asyncio.run(bus.dispatch_intent(
+        "app-settings", "setKnowledgeEmbedding", ["ollama", "nomic-embed-text:latest", "", False],
+    ))
+    assert manager.get_knowledge_embedding_settings()["model"] == "nomic-embed-text:latest"
+    assert SettingsManager(manager.state_file).get_knowledge_embedding_settings()["source"] == "ollama"
+
+    asyncio.run(bus.dispatch_intent(
+        "app-settings", "setKnowledgeEmbedding", ["ollama", "llama3:latest", "", False],
+    ))
+    assert manager.get_knowledge_embedding_settings()["model"] == "nomic-embed-text:latest"
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setKnowledgeEmbedding", ["off", "", "", False]))
+    assert manager.get_knowledge_embedding_settings()["source"] == "off"
+
+
+def test_knowledge_settings_cloud_requires_explicit_consent(manager, monkeypatch):
+    bus = SessionBus("settings-knowledge-cloud-consent")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent(
+        "app-settings", "setKnowledgeEmbedding", ["cloud", "text-embedding-3-small", "OpenAI", False],
+    ))
+    assert manager.get_knowledge_embedding_settings()["source"] == "off"
+    assert "explicit consent" in recorder.messages[-1]["payload"]["knowledgeNotice"]
+
+    asyncio.run(bus.dispatch_intent(
+        "app-settings", "setKnowledgeEmbedding", ["cloud", "text-embedding-3-small", "OpenAI", True],
+    ))
+    assert manager.get_knowledge_embedding_settings()["source"] == "cloud"
+    assert recorder.messages[-1]["payload"]["knowledgeCloudOptIn"] is True
+
+    # Testing a cloud source without consent must not construct a client.
+    def forbidden(*_args):
+        raise AssertionError("No cloud client without consent")
+
+    monkeypatch.setattr(api_provider, "_build_api_client", forbidden)
+    asyncio.run(bus.dispatch_intent(
+        "app-settings", "testKnowledgeEmbedding", ["cloud", "text-embedding-3-small", "OpenAI", False],
+    ))
+    payload = recorder.messages[-1]["payload"]
+    assert payload["knowledgeTestStatus"] == "error"
+    assert "consent" in payload["knowledgeNotice"]
+
+
+def test_knowledge_scan_lists_embedding_models_first_and_suggests_nomic(manager, monkeypatch):
+    from types import SimpleNamespace
+
+    bus = SessionBus("settings-knowledge-model-scan")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+    monkeypatch.setattr(
+        api_provider, "_list_model_descriptors_from_running_ollama",
+        lambda: (
+            [SimpleNamespace(model_id=name) for name in (
+                "llama3:8b", "mxbai-embed-large:latest", "nomic-embed-text:latest",
+            )],
+            True, "",
+        ),
+    )
+    monkeypatch.setattr(api_provider, "ollama_supports_embedding", lambda model: model != "llama3:8b")
+
+    asyncio.run(bus.dispatch_intent("app-settings", "scanKnowledgeOllamaModels", []))
+    payload = recorder.messages[-1]["payload"]
+    assert payload["knowledgeScanStatus"] == "done"
+    assert payload["knowledgeOllamaModels"] == [
+        "nomic-embed-text:latest", "mxbai-embed-large:latest", "llama3:8b",
+    ]
+    assert payload["knowledgeOllamaCapableModels"] == [
+        "nomic-embed-text:latest", "mxbai-embed-large:latest",
+    ]
+
+
+def test_knowledge_test_status_reports_synthetic_model_response(manager, monkeypatch):
+    from backend.api import intents_settings_knowledge
+
+    bus = SessionBus("settings-knowledge-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+    inputs = []
+    monkeypatch.setattr(
+        intents_settings_knowledge, "test_embedding_choice",
+        lambda *_args: inputs.append(_args) or 768,
+    )
+
+    asyncio.run(bus.dispatch_intent(
+        "app-settings", "testKnowledgeEmbedding", ["ollama", "nomic-embed-text:latest", "", False],
+    ))
+    assert inputs
+    assert recorder.messages[-1]["payload"]["knowledgeTestStatus"] == "done"
+    assert "768 dimensions" in recorder.messages[-1]["payload"]["knowledgeNotice"]

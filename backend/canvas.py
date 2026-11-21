@@ -391,15 +391,21 @@ def register_canvas(
     # ADR-012 stage 12.6: the bundled sample workspace - see that module's
     # own docstring.
     register_onboarding_intents(bus, document)
+    # Shared per-app settings control keyword vs. locally/cloud-embedded search.
+    # Test dispatchers may not expose a settings manager, keeping them lexical.
+    knowledge_settings = getattr(agent_dispatcher, "_settings_manager", None)
     register_knowledge_intents(
-        bus, document, notifications, composer_document=composer_document, agent_dispatcher=agent_dispatcher,
+        bus, document, notifications,
+        settings_manager=knowledge_settings,
+        composer_document=composer_document,
+        agent_dispatcher=agent_dispatcher,
     )
     # ADR-020 stage 20.4: global cross-workspace search - deliberately takes
     # no `document` (unlike register_knowledge_intents immediately above,
     # which scopes to the CALLING session's current workspace) - global
     # search is workspace-agnostic by design (collection_id=None searches
     # every workspace's corpus at once - see that module's own docstring).
-    register_global_search_intents(bus)
+    register_global_search_intents(bus, settings_manager=knowledge_settings)
     register_model_routing_intents(bus, document)
     register_pins_intents(bus, document)
     register_view_intents(bus, document)

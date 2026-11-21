@@ -81,6 +81,7 @@ from backend.api.intents_settings_api_provider import register_settings_api_prov
 from backend.api.intents_settings_general import register_settings_general_intents
 from backend.api.intents_settings_fal import register_settings_fal_intents
 from backend.api.intents_settings_llama_cpp import register_settings_llama_cpp_intents
+from backend.api.intents_settings_knowledge import register_settings_knowledge_intents
 from backend.api.intents_settings_ollama import register_settings_ollama_intents
 from backend.events import SessionBus
 from backend.notifications import NotificationState
@@ -213,7 +214,12 @@ def _llama_cpp_scan_summary(manager: SettingsManager) -> str:
 
 
 def settings_payload(manager: SettingsManager) -> dict[str, Any]:
+    knowledge = manager.get_knowledge_embedding_settings()
     return {
+        "knowledgeEmbeddingSource": knowledge["source"],
+        "knowledgeEmbeddingModel": knowledge["model"],
+        "knowledgeCloudProvider": knowledge["cloud_provider"],
+        "knowledgeCloudOptIn": knowledge["cloud_opt_in"],
         "showTokenCounter": manager.get_show_token_counter(),
         "enableSystemPrompt": manager.get_enable_system_prompt(),
         "notificationPreferences": manager.get_notification_preferences(),
@@ -354,6 +360,11 @@ def _build_settings_payload(
     payload["ollamaScanStatus"] = state.ollama_scan_status
     payload["ollamaPullStatus"] = state.ollama_pull_status
     payload["ollamaNotice"] = state.ollama_notice
+    payload["knowledgeOllamaModels"] = state.knowledge_ollama_models
+    payload["knowledgeOllamaCapableModels"] = state.knowledge_ollama_capable_models
+    payload["knowledgeScanStatus"] = state.knowledge_scan_status
+    payload["knowledgeTestStatus"] = state.knowledge_test_status
+    payload["knowledgeNotice"] = state.knowledge_notice
 
     payload["llamaCppReasoningLevel"] = manager.get_llama_cpp_reasoning_level()
     # Staged (session-local), NOT manager.get_llama_cpp_chat_model_path()
@@ -426,4 +437,5 @@ def register_settings(
     register_settings_fal_intents(bus, manager, state)
     register_settings_api_provider_intents(bus, manager, notifications, state, provider_runtime)
     register_settings_ollama_intents(bus, manager, state)
+    register_settings_knowledge_intents(bus, manager, state)
     register_settings_llama_cpp_intents(bus, manager, state)

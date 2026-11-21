@@ -350,6 +350,11 @@ class SettingsSessionState:
     ollama_scan_status: str = "idle"
     ollama_pull_status: str = "idle"
     ollama_notice: str = ""
+    knowledge_ollama_models: list[str] = field(default_factory=list)
+    knowledge_ollama_capable_models: list[str] = field(default_factory=list)
+    knowledge_scan_status: str = "idle"
+    knowledge_test_status: str = "idle"
+    knowledge_notice: str = ""
     llama_scan_status: str = "idle"
     llama_notice: str = ""
     llama_staged_chat_path: str = ""
