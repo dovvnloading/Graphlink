@@ -153,8 +153,8 @@ def test_autosave_tick_writes_again_after_a_real_change(db_path):
 
 def test_autosave_tick_never_regenerates_an_existing_chats_title(db_path):
     # Audit fix - this test used to be unable to fail. Its only inter-tick
-    # change was add_code_node, but _resolve_seed_message reads chat-kind
-    # nodes ONLY, so the regenerated title would have been byte-identical to
+    # change was add_code_node, which adds no user message, so even if the
+    # title were regenerated the result would have been byte-identical to
     # the original and the assertion held whether or not the implementation
     # preserved the row's title (verified by mutation: swapping the
     # preserve-title line for the regeneration it exists to prevent still
