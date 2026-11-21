@@ -964,6 +964,10 @@ function makeHarnessFns(id: string, liveRef: { current: DispatcherLive }) {
     onPickWorkspace: () => liveRef.current.store.pickHarnessWorkspace(id),
     onUseScratch: () => liveRef.current.store.useHarnessScratch(id),
     onListWorkspaceFiles: (path: string, cursor?: string) => liveRef.current.store.listHarnessWorkspaceFiles(id, path, cursor),
+    onAddWorkspaceFileToKnowledge: (path: string, expectedRoot: string) =>
+      liveRef.current.store.addHarnessWorkspaceFileToKnowledge(id, path, expectedRoot),
+    onSubscribeKnowledgeIngest: (listener: (payload: Record<string, unknown>) => void) =>
+      liveRef.current.store.subscribeKnowledgeIngest(listener),
     onOpenWorkspaceFile: async (path: string, expectedRoot: string) => {
       const { store, onOpenDocumentView, n } = liveRef.current;
       const workspacePath = n.harnessWorkspacePath;
