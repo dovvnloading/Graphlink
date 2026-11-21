@@ -349,7 +349,7 @@ describe("SettingsDialog", () => {
     const { user, push } = setup();
     await goToOllama(user, push, { ollamaCurrentModel: "llama3.2:3b" });
 
-    expect(screen.getByText("llama3.2:3b")).toBeInTheDocument();
+    expect(within(screen.getByText(/^Current Active Model:/)).getByText("llama3.2:3b")).toBeInTheDocument();
   });
 
   it("falls back to an Auto message when no current model is set", async () => {
