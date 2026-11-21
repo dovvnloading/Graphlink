@@ -419,7 +419,8 @@ describe("SettingsDialog", () => {
     const intervalSpy = vi.spyOn(window, "setInterval").mockImplementation((handler, delay, ...args) => {
       if (delay === 30_000 && typeof handler === "function") {
         poll = handler;
-        return 2026;
+        // The test uses a numeric window timer ID; Node's typings expect Timeout.
+        return 2026 as unknown as ReturnType<typeof setInterval>;
       }
       return realSetInterval(handler, delay, ...args);
     });
