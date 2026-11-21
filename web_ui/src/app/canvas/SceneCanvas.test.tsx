@@ -70,6 +70,8 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
     kind: "placeholder",
     content: "",
     isUser: false,
+    versionCount: 0,
+    versionIndex: 0,
     isCollapsed: false,
     code: "",
     language: "",
@@ -322,6 +324,28 @@ describe("toFlowNodes (R4.3c parentChatNodeId derivation)", () => {
 
     (codeFlowNode!.data as { onRegenerate: () => void }).onRegenerate();
     expect(intentSpy).not.toHaveBeenCalled();
+  });
+
+  it("a chat node exposes version metadata and dispatches selection through the store", () => {
+    const scene = baseScene({
+      nodes: [baseNode({
+        id: "chat-1", kind: "chat", content: "Second", isUser: false,
+        versionCount: 2, versionIndex: 1,
+      })],
+      edges: [],
+    });
+    const store = makeStore();
+    const select = vi.spyOn(store, "setChatVersion");
+    const chat = toFlowNodes(scene, store).find((n) => n.id === "chat-1");
+    expect(chat).toBeDefined();
+    const data = chat!.data as {
+      versionCount: number;
+      versionIndex: number;
+      onSelectVersion: (index: number) => void;
+    };
+    expect([data.versionCount, data.versionIndex]).toEqual([2, 1]);
+    data.onSelectVersion(0);
+    expect(select).toHaveBeenCalledWith("chat-1", 0);
   });
 
   it("a chat node's onRegenerate calls regenerateResponse with its own id", () => {

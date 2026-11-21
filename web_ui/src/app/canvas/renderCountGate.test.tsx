@@ -154,6 +154,7 @@ function chatRow(id: string, x: number): SceneNodeRow {
     ...(Object.fromEntries(
       Object.entries({
         id, x, y: 0, title: id, kind: "chat", content: "hello", isUser: false,
+        versionCount: 1, versionIndex: 0,
         isCollapsed: false, code: "", language: "", attachmentKind: "", filePath: "",
         mimeType: "", durationSeconds: null, byteSize: null, previewLabel: "",
         isDocked: false, imageAssetId: "", history: [], pendingRequestId: null,

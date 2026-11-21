@@ -300,6 +300,8 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
         kind: "placeholder",
         content: "",
         isUser: false,
+        versionCount: 0,
+        versionIndex: 0,
         isCollapsed: false,
         code: "",
         language: "",
