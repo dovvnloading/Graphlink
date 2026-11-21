@@ -1599,10 +1599,10 @@ class TestSmallLocalContext:
         fixed = "Small model rules"
         window_limit = context_module.prompt_token_limit(8_192)
         history_room = window_limit - context_module.request_tokens(fixed, [], (spec,))
-        old_text = self._sized_text("earlier observations ", int(history_room * 0.52))
+        old_text = self._sized_text("old ", int(history_room * 0.52))
         passage = (
             "Citation [report:12]. The reported figure is 47.3 million. "
-            + self._sized_text("supporting passage text ", int(history_room * 0.57))
+            + self._sized_text("q ", int(history_room * 0.57))
         )
         ws = ensure_workspace(node.state.harness_workspace_id)
         append_message(ws, {"role": "user", "content": old_text})
@@ -1660,11 +1660,8 @@ class TestSmallLocalContext:
     ):
         document = SceneDocument()
         node = document.add_harness_node(0, 0, "Read the evidence")
-        registry = ToolRegistry()
         spec = ToolSpec("knowledge.search", "Search.", {"type": "object"})
-        registry.register(
-            spec, lambda *_: None, scopes={KNOWLEDGE_READ}, approval="auto",
-        )
+
         async def huge_result(_call, _ctx):
             return ToolResult("critical figure 47.3 " * 10_000)
 
@@ -1706,7 +1703,7 @@ class TestSmallLocalContext:
         )
         registry.register(
             ToolSpec("fal.result", "Get the completed media result", {"type": "object"}),
-            get_value, scopes={CODE_EXECUTE if False else FS_READ}, approval="auto",
+            get_value, scopes={FS_READ}, approval="auto",
         )
         monkeypatch.setattr(context_module, "served_context_window", lambda **_k: 8_192)
         monkeypatch.setattr(api_provider, "describe_active_model", lambda *_a, **_k: ("ollama", "qwen3:8b"))
