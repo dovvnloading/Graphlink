@@ -79,6 +79,7 @@ export interface ChatNodeData extends Record<string, unknown> {
   versionCount: number;
   versionIndex: number;
   onSelectVersion: (index: number) => void;
+  onCompareVersions: () => void;
   isCollapsed: boolean;
   dockedChildren: { id: string; label: string }[];
   // R6.3: the node's own persisted scroll position - restored into
@@ -744,6 +745,7 @@ export function chatNodePropsAreEqual(prev: NodeProps<ChatFlowNode>, next: NodeP
     a.onUndockChild === b.onUndockChild &&
     a.onRegenerate === b.onRegenerate &&
     a.onSelectVersion === b.onSelectVersion &&
+    a.onCompareVersions === b.onCompareVersions &&
     a.onGenerateImage === b.onGenerateImage &&
     a.onGenerateChart === b.onGenerateChart &&
     a.onGenerateKeyTakeaway === b.onGenerateKeyTakeaway &&
@@ -925,6 +927,9 @@ export const ChatNodeView = memo(function ChatNodeView({
                   aria-label="Next version" title="Next version"
                   disabled={data.versionIndex >= data.versionCount - 1 || !!data.pendingRequestId}
                   onClick={() => data.onSelectVersion(data.versionIndex + 1)}>›</button>
+                <button type="button" className="chat-node-version-compare-button nodrag"
+                  aria-label="Compare message versions" title="Compare message versions"
+                  disabled={!!data.pendingRequestId} onClick={data.onCompareVersions}>Compare</button>
               </span>
             )}
             <span
