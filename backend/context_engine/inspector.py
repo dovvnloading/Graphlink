@@ -91,7 +91,10 @@ def inspect_next_chat_send(document, node_id: str, dispatcher, *, bus=None, draf
         knowledge_hits = (
             search_chat_knowledge(
                 draft_text[:1500], document.current_workspace_id,
-                settings_manager=getattr(dispatcher, "_settings_manager", None),
+                **(
+                    {"settings_manager": dispatcher._settings_manager}
+                    if getattr(dispatcher, "_settings_manager", None) is not None else {}
+                ),
             )
             if draft_text.strip() else []
         )
