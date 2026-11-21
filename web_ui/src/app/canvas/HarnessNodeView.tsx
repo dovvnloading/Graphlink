@@ -103,6 +103,8 @@ export interface HarnessNodeData extends Record<string, unknown> {
   onUseScratch: () => void;
   onListWorkspaceFiles: (path: string, cursor?: string) => Promise<HarnessWorkspaceListing>;
   onOpenWorkspaceFile: (path: string, expectedRoot: string) => Promise<void>;
+  onAddWorkspaceFileToKnowledge: (path: string, expectedRoot: string) => Promise<unknown>;
+  onSubscribeKnowledgeIngest: (listener: (payload: Record<string, unknown>) => void) => () => void;
   onWorkspaceTrustChanged: (listener: () => void) => () => void;
   onRevealWorkspace: () => void;
   onSetShell: (shell: string) => void;
@@ -715,6 +717,8 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
         key={data.harnessWorkspacePath}
         onList={data.onListWorkspaceFiles}
         onOpen={data.onOpenWorkspaceFile}
+        onAddToKnowledge={data.onAddWorkspaceFileToKnowledge}
+        onSubscribeKnowledgeIngest={data.onSubscribeKnowledgeIngest}
         onTrustChanged={data.onWorkspaceTrustChanged}
         onReveal={data.onRevealWorkspace}
       />
