@@ -2674,8 +2674,6 @@ def test_knowledge_settings_cloud_requires_explicit_consent(manager, monkeypatch
     assert recorder.messages[-1]["payload"]["knowledgeCloudOptIn"] is True
 
     # Testing a cloud source without consent must not construct a client.
-    from backend.api import intents_settings_knowledge
-
     def forbidden(*_args):
         raise AssertionError("No cloud client without consent")
 
