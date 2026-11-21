@@ -156,7 +156,8 @@ export function KnowledgeSettingsPage({
                   {model}
                   {capable.includes(model)
                     ? (/^nomic-embed-text(?::|$)/i.test(model) ? " (recommended)" : " (embeddings)")
-                    : " (does not support embeddings)"}
+                    : state.ollamaInventory.find((entry) => entry.name === model)?.capabilities.length
+                      ? " (does not support embeddings)" : " (embedding support unverified)"}
                 </option>
               ))}
             </select>

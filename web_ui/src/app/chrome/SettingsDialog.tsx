@@ -861,7 +861,7 @@ function OllamaPage({ state, transport }: { state: AppSettingsState; transport: 
       <p className="settings-update-status">{state.ollamaScanSummary}</p>
       {state.ollamaInventorySource === "folder" && (
         <p className="settings-field-hint">
-          Models were found on disk. Start Ollama and run System Scan to inspect capabilities and memory usage.
+          Models were found on disk. Run System Scan with Ollama running to inspect capabilities and memory usage.
         </p>
       )}
 
