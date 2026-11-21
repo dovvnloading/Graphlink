@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type R
 import { createPortal } from "react-dom";
 import { useReactFlow, type Node, type NodeProps } from "@xyflow/react";
 import { motionDuration } from "../reducedMotion";
+import { useModelCapabilityPreview } from "../context/ModelCapabilityContext";
 import { CollapseToggleButton } from "./CollapseToggleButton";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMenu } from "./NodeMenu";
@@ -441,6 +442,7 @@ function renderApprovalSummary(summary: string, toolName: string) {
 function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   const collapsed = useLodVisibility() || data.isCollapsed;
   const running = data.harnessStatus === "running";
+  const modelCapabilities = useModelCapabilityPreview();
   const [draft, setDraft] = useState("");
   const [draftError, setDraftError] = useState("");
   const [sending, setSending] = useState(false);
@@ -659,6 +661,14 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
       }
     >
       <div className={`plan-node-status ${statusClass(data)}`}>{statusLabel(data)}</div>
+      {!running && !data.pendingRequestId && modelCapabilities?.tools === false && (
+        <p className="harness-node-model-warning" role="status">
+          {modelCapabilities.modelId} does not support tool calling.{" "}
+          {modelCapabilities.suggestedToolModel
+            ? `Try installed Ollama model ${modelCapabilities.suggestedToolModel.modelId} for the next task.`
+            : "Choose an installed tool-capable model before the next task."}
+        </p>
+      )}
       {data.harnessRunId && (
         <p className="plan-node-detail">Task permission: {data.harnessTaskPermissionMode === "auto_edit" ? "Auto-edit" : data.harnessTaskPermissionMode === "autonomous" ? "Autonomous" : "Ask"}</p>
       )}

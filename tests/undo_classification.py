@@ -317,6 +317,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("harness", "start", "A", "content: creates the harness node (the run it then starts is separate lifecycle; history lives in the workspace transcript, not the document)"),
     Classified("harness", "composerSend", "A", "content: creates an undoable harness node if none is selected; dispatch to an existing agent is run-lifecycle only"),
     Classified("harness", "send", "B", "run-lifecycle: start a follow-up task against the existing node's transcript"),
+    Classified("harness", "modelCapabilityPreview", "B", "read-only: checks known model capabilities and installed alternatives"),
     Classified("harness", "cancel", "B", "run-lifecycle: cancel"),
     Classified("harness", "approveTool", "B", "security: harness tool-call approval gate"),
     Classified("harness", "approveNetworkOnce", "B", "security: token-bound authorization for one Isolated shell command; no document mutation"),
