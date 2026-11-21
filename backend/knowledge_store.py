@@ -1322,3 +1322,66 @@ def provenance_for_hits(db_path: Path, results: list[dict]) -> dict[int, dict[st
             "citation_id": _stable_chunk_citation(result),
         }
     return metadata
+
+
+def open_cited_document(
+    db_path: Path, *, document_id: int, chunk_id: int,
+    citation_id: str, collection_id: int,
+) -> dict[str, Any] | None:
+    """Read an indexed source and its cited span, strictly scoped to a workspace.
+
+    The caller-supplied IDs are only selectors: recompute the stable citation
+    from the stored chunk before returning any text. The knowledge index stores
+    offset-exact overlapping chunks, not the original file bytes; reconstruct
+    the indexed text, filling paragraph separators with newlines so original
+    character offsets still identify the passage. Graph-indexed chunks have
+    per-node offsets, so reconstruct only the cited source node's text.
+    """
+    if not db_path.exists() or not isinstance(citation_id, str):
+        return None
+    conn = _connect(db_path)
+    try:
+        cited = conn.execute(
+            "SELECT d.title, d.source_uri, c.text, c.offset_start, c.offset_end, c.source_node_id "
+            "FROM chunks c JOIN documents d ON d.id = c.document_id "
+            "WHERE d.id = ? AND c.id = ? AND d.collection_id = ?",
+            (document_id, chunk_id, collection_id),
+        ).fetchone()
+        if cited is None:
+            return None
+        title, source_uri, excerpt, start, end, source_node_id = cited
+        expected = _stable_chunk_citation({
+            "source_uri": source_uri, "source_node_id": source_node_id,
+            "offset_start": start, "offset_end": end, "text": excerpt,
+        })
+        if citation_id != expected:
+            return None
+
+        rows = conn.execute(
+            "SELECT text, offset_start, offset_end FROM chunks "
+            "WHERE document_id = ? AND source_node_id IS ? "
+            "ORDER BY offset_start, ordinal",
+            (document_id, source_node_id),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    parts: list[str] = []
+    position = 0
+    for text, offset_start, offset_end in rows:
+        first, last = int(offset_start), int(offset_end)
+        if first < 0 or last < first or len(text) != last - first:
+            return None
+        if first > position:
+            parts.append("\n" * (first - position))
+            position = first
+        if last > position:
+            parts.append(text[position - first:])
+            position = last
+    content = "".join(parts)
+    if content[int(start):int(end)] != excerpt:
+        return None
+    return {
+        "title": title, "sourceUri": source_uri, "content": content,
+        "offsetStart": int(start), "offsetEnd": int(end), "excerpt": excerpt,
+    }
