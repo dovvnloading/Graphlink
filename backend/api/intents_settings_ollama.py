@@ -152,11 +152,19 @@ def register_settings_ollama_intents(
             return
 
         def _persist() -> None:
+            inventory = results.get("inventory", [])
+            verified = {
+                str(row["name"]): row.get("capabilities", [])
+                for row in inventory
+                if isinstance(row, dict) and row.get("source") == "server"
+                and row.get("name") and isinstance(row.get("capabilities"), list)
+            }
             manager.set_ollama_model_scan_cache(
                 results.get("models", []),
                 results.get("scan_mode", ""),
                 results.get("scan_path", ""),
                 results.get("locations", []),
+                verified_capabilities=verified if results.get("source") == "server" else None,
             )
             api_provider.sync_ollama_models(manager)
 
@@ -254,7 +262,7 @@ def register_settings_ollama_intents(
 
     bus.register_intent("app-settings", "setOllamaReasoningLevel", set_ollama_reasoning_level)
     bus.register_intent("app-settings", "setOllamaModelAssignment", set_ollama_model_assignment)
-    register_ollama_server_intents(bus, state)
+    register_ollama_server_intents(bus, state, refresh_inventory=scan_ollama_system)
     bus.register_intent("app-settings", "scanOllamaSystem", scan_ollama_system)
     bus.register_intent("app-settings", "pickOllamaScanFolder", pick_ollama_scan_folder)
     # An intentional internal post-pull/delete refresh must run while its
@@ -358,6 +366,7 @@ def register_ollama_model_management_intents(
 
         async def run_pull() -> None:
             nonlocal active_pull_task
+            download_finished = False
             try:
                 await download()
                 state.ollama_pull_status = "finalizing"
@@ -371,12 +380,13 @@ def register_ollama_model_management_intents(
                     for row in state.ollama_inventory
                 ):
                     raise RuntimeError("Ollama did not report this model as installed after the download.")
+                download_finished = True
 
                 def persist() -> None:
                     _update_scan_cache(model_name)
                     api_provider.invalidate_ollama_capability_cache(model_name)
                     api_provider.sync_ollama_models(manager)
-                    api_provider.set_current_ollama_model(model_name)
+                    # A downloaded model is not a user selection: preserve the chat route.
 
                 await asyncio.to_thread(run_locked, persist)
                 state.ollama_pull_status = "done"
@@ -389,10 +399,18 @@ def register_ollama_model_management_intents(
                 text = str(exc).lower()
                 if "not found" in text:
                     message = f"Model '{model_name}' was not found on the Ollama hub."
+                elif download_finished:
+                    message = (
+                        f"Downloaded '{model_name}', but Graphlink could not update its model list: {exc}. "
+                        "Refresh installed models to check the result."
+                    )
                 elif "connection refused" in text:
-                    message = "Could not connect to Ollama. Is Ollama running?"
+                    message = "Could not connect to Ollama. Check Ollama status, then retry the download."
                 else:
-                    message = f"An unexpected error occurred: {str(exc)[:240]}"
+                    message = (
+                        f"Could not download '{model_name}': {str(exc)[:240]}. "
+                        "Check the model ID, network connection and available disk space, then retry."
+                    )
                 state.ollama_pull_status = "error"
                 state.ollama_notice = message
             finally:
@@ -485,7 +503,8 @@ def register_ollama_model_management_intents(
 
 
 def register_ollama_server_intents(
-    bus: SessionBus, state: SettingsSessionState
+    bus: SessionBus, state: SettingsSessionState,
+    *, refresh_inventory: Callable[[], Awaitable[None]],
 ) -> None:
     """Register lightweight Ollama server-status and installed-app launch intents."""
 
@@ -498,9 +517,15 @@ def register_ollama_server_intents(
         state.ollama_status_checking = True
         try:
             status = await asyncio.to_thread(check_ollama_server_status)
-            if status != state.ollama_server_status:
-                state.ollama_server_status = status
-                state.ollama_server_reachable = status == "running"
+            changed = status != state.ollama_server_status
+            state.ollama_server_status = status
+            state.ollama_server_reachable = status == "running"
+            if status == "running" and state.ollama_start_error:
+                # A manual start after a previous launch failure succeeded.
+                # Do not leave a stale "Could not start" alert beside Connected.
+                state.ollama_start_error = ""
+                changed = True
+            if changed:
                 await bus.publish("app-settings")
         finally:
             state.ollama_status_checking = False
@@ -525,6 +550,12 @@ def register_ollama_server_intents(
                 status = await asyncio.to_thread(check_ollama_server_status)
             state.ollama_server_status = status
             state.ollama_server_reachable = status == "running"
+            if status == "running":
+                # Start is a first-run action: the models must appear as soon
+                # as the server becomes reachable, without a second manual
+                # system scan. Only a fresh Start triggers this heavier scan;
+                # the 30-second health poll remains lightweight.
+                await refresh_inventory()
             if launched and status != "running":
                 state.ollama_start_error = (
                     "Ollama was launched but its server is not responding yet. "
@@ -533,9 +564,15 @@ def register_ollama_server_intents(
         except FileNotFoundError:
             state.ollama_server_status = "not_found"
             state.ollama_server_reachable = False
-            state.ollama_start_error = "Ollama is not installed on this computer."
+            state.ollama_start_error = (
+                "Graphlink could not find an Ollama installation. "
+                "Install Ollama and check its status again."
+            )
         except Exception as exc:  # noqa: BLE001 - surface an OS launch failure without crashing the intent
-            state.ollama_start_error = f"Could not start Ollama: {exc}"
+            state.ollama_start_error = (
+                f"Could not start Ollama: {exc}. "
+                "Try launching Ollama manually, then select Check Ollama status."
+            )
         finally:
             state.ollama_start_status = "idle"
             await bus.publish("app-settings")
@@ -618,7 +655,10 @@ def register_ollama_context_intents(
         except Exception as exc:  # noqa: BLE001 - inspection failures must not disable Settings
             if inspection_generation == generation:
                 state.ollama_context_status = "error"
-                state.ollama_context_notice = f"Could not inspect this model: {exc}"
+                state.ollama_context_notice = (
+                    f"Could not inspect {model}: {exc}. "
+                    "Refresh installed models and retry."
+                )
                 await bus.publish("app-settings")
             return
         # A slow show()/list() for A must not replace B's selected metadata.

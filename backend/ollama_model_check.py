@@ -67,7 +67,7 @@ async def probe_ollama_model(model_name: str) -> dict[str, float | bool | str | 
             "loadSeconds": round(load_ns / 1_000_000_000, 2)
             if load_ns is not None and load_ns <= 1e18 else None,
             "tokensPerSecond": round(speed, 1) if speed is not None and math.isfinite(speed) else None,
-            "toolCallingWorks": False,
+            "toolCallingWorks": None,
             "message": "",
         }
         try:
@@ -85,8 +85,11 @@ async def probe_ollama_model(model_name: str) -> dict[str, float | bool | str | 
             report["toolCallingWorks"] = works
             if not works:
                 report["message"] = "The model did not return the requested tool call."
-        except Exception as exc:  # noqa: BLE001 - unsupported tool APIs are negative probes
-            report["message"] = f"Tool probe failed: {str(exc)[:240]}"
+        except Exception as exc:  # noqa: BLE001 - a failed tool request is not a negative result
+            # A rejected request does not prove the model lacks tool-calling support.
+            report["toolCallingWorks"] = None
+            detail = str(exc).strip()[:240] or "Ollama did not respond to the tool request"
+            report["message"] = f"Could not run tool probe: {detail}"
         return report
     finally:
         # AsyncClient owns an httpx connection pool. Cancellation must close

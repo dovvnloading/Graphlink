@@ -58,7 +58,8 @@ def test_probe_preserves_timings_if_tools_unsupported_and_handles_missing_counte
     result = asyncio.run(ollama_model_check.probe_ollama_model("older:latest"))
     assert result["loadSeconds"] == 0
     assert result["tokensPerSecond"] is None
-    assert result["toolCallingWorks"] is False
+    assert result["toolCallingWorks"] is None
+    assert "Could not run tool probe" in result["message"]
     assert "does not support tools" in result["message"]
     assert closed == [True]
 
@@ -289,3 +290,79 @@ def test_check_rejects_disk_only_models_even_if_the_name_is_in_the_inventory(tmp
 
     asyncio.run(scenario())
     assert calls == []
+
+
+def test_check_refuses_disk_only_or_unreachable_models(tmp_path, monkeypatch):
+    bus, _manager = _registered_bus(tmp_path, monkeypatch)
+    calls = []
+
+    async def fake_probe(model):
+        calls.append(model)
+        return {"loadSeconds": 0.5, "tokensPerSecond": 20.0,
+                "toolCallingWorks": True, "message": ""}
+
+    monkeypatch.setattr(intents_ollama_model_check, "probe_ollama_model", fake_probe)
+
+    class Recorder:
+        messages = []
+
+        async def send_json(self, data):
+            self.messages.append(data)
+
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    async def exercise():
+        await bus.dispatch_intent("app-settings", "scanOllamaSystem", [])
+        # A stale server inventory cannot be used for Check after Ollama stops.
+        monkeypatch.setattr(intents_settings_ollama, "check_ollama_server_status", lambda: "installed")
+        await bus.dispatch_intent("app-settings", "checkOllamaStatus", [])
+        await bus.dispatch_intent("app-settings", "checkOllamaModel", ["first:latest"])
+        assert recorder.messages[-1]["payload"]["ollamaModelChecks"] == []
+
+        # Even with a reachable flag, folder-only records are not verified
+        # installed models and must never issue a network check.
+        monkeypatch.setattr(intents_settings_ollama, "build_ollama_inventory", lambda _: {
+            "models": ["first:latest"],
+            "inventory": [{
+                "name": "first:latest", "source": "folder", "capabilities": [],
+                "sizeBytes": None, "trainedContextLength": None,
+            }],
+            "source": "folder", "server_reachable": False, "scan_mode": "folder",
+            "scan_path": "", "locations": [],
+        })
+        await bus.dispatch_intent("app-settings", "scanOllamaSystem", [])
+        await bus.dispatch_intent("app-settings", "checkOllamaModel", ["first:latest"])
+        assert recorder.messages[-1]["payload"]["ollamaModelChecks"] == []
+
+    asyncio.run(exercise())
+    assert calls == []
+
+
+def test_check_error_with_empty_exception_text_has_actionable_message(tmp_path, monkeypatch):
+    bus, _manager = _registered_bus(tmp_path, monkeypatch)
+
+    class Recorder:
+        messages = []
+
+        async def send_json(self, data):
+            self.messages.append(data)
+
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    async def no_response(_model):
+        raise TimeoutError()
+
+    async def exercise():
+        await bus.dispatch_intent("app-settings", "scanOllamaSystem", [])
+        monkeypatch.setattr(intents_ollama_model_check, "probe_ollama_model", no_response)
+        await bus.dispatch_intent("app-settings", "checkOllamaModel", ["first:latest"])
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    asyncio.run(exercise())
+    row = recorder.messages[-1]["payload"]["ollamaModelChecks"][0]
+    assert row["status"] == "error"
+    assert "Ollama did not respond" in row["message"]
+    assert "Check Ollama status" in row["message"]

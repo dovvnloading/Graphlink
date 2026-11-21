@@ -183,15 +183,37 @@ describe("queueable intent classification (ADR-003 stage 3.6)", () => {
       expect(calls.length).toBeGreaterThan(0);
       expect(calls.every((s) => s.queueable === false)).toBe(true);
     }
+    // The Settings dialog polls health on entry; the Ollama page also has a
+    // manual Check button. Both are live, session-only requests, not setters.
+    // Keep both occurrences pinned; a stale health check must never replay.
     expect(sites.filter((s) => ["checkOllamaStatus", "startOllama"].includes(s.intent))
       .map(({ intent, queueable }) => [intent, queueable]).sort()).toEqual([
-      ["checkOllamaStatus", false], ["startOllama", false],
+      ["checkOllamaStatus", false], ["checkOllamaStatus", false], ["startOllama", false],
     ]);
     const cloud = sites.filter((s) => s.file.endsWith("CloudProviderSettings.tsx"));
     expect(cloud.map(({ intent, queueable }) => [intent, queueable]).sort()).toEqual([
       ["loadApiModels", false], ["resetApiSettings", false], ["saveApiConfiguration", false],
       ["setProviderMode", false], ["setViewingApiProvider", true],
     ]);
+    // Server scans, status probes, model checks, downloads, cancellation,
+    // deletion, provider activation and live cloud actions are not safe to
+    // replay after a dropped WebSocket, even when their arguments look stable.
+    for (const intent of [
+      "scanOllamaSystem", "pickOllamaScanFolder", "inspectOllamaContextModel",
+      "checkOllamaStatus", "startOllama", "checkOllamaModel",
+      "cancelOllamaModelCheck", "pullOllamaModel", "cancelOllamaPull",
+      "removeOllamaModel", "setProviderMode", "submitFalJob", "cancelFalJob",
+      "uploadFalFile", "runFalSync",
+    ]) {
+      const calls = sites.filter((s) => s.intent === intent);
+      expect(calls.length, `Missing settings call site: ${intent}`).toBeGreaterThan(0);
+      expect(calls.every((s) => !s.queueable), `Offline replay unsafe: ${intent}`).toBe(true);
+    }
+    // These are genuine idempotent assignments, so keep their queued delivery.
+    expect(sites.filter((s) => s.intent === "setOllamaModelAssignment")
+      .map((s) => s.queueable)).toEqual([true, true]);
+    expect(sites.filter((s) => s.intent === "setOllamaReasoningLevel")
+      .map((s) => s.queueable)).toEqual([true]);
     // Spot-check a few of the specific call sites that were among the 22
     // previously hidden by the `)}` JSX-arrow-body gap.
     for (const intent of ["setTheme", "setLlamaCppNCtx", "pullOllamaModel", "setActiveSection", "submitFalJob", "cancelFalJob", "uploadFalFile", "searchFalModels", "inspectFalModel", "getFalModelPricing", "estimateFalModelCost"]) {

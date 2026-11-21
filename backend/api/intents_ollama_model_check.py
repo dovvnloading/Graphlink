@@ -17,7 +17,9 @@ def register_ollama_model_check_intents(bus: SessionBus, state: SettingsSessionS
         model_name = model_name.strip()
         # A disk manifest, stale snapshot, or forged WS argument is not
         # authorization to load a model (and potentially allocate gigabytes).
-        if not valid_ollama_model_name(model_name) or state.ollama_inventory_source != "server":
+        if (not valid_ollama_model_name(model_name)
+                or state.ollama_server_reachable is not True
+                or state.ollama_inventory_source != "server"):
             return
         if not any(row.get("name") == model_name and row.get("source") == "server"
                    for row in state.ollama_inventory):
@@ -51,7 +53,11 @@ def register_ollama_model_check_intents(bus: SessionBus, state: SettingsSessionS
                 report["message"] = "Check cancelled."
             except Exception as exc:  # noqa: BLE001 - report daemon failures to the user
                 report["status"] = "error"
-                report["message"] = f"Check failed: {str(exc)[:240]}"
+                detail = str(exc).strip()[:240] or "Ollama did not respond"
+                report["message"] = (
+                    f"Could not check {model_name}: {detail}. "
+                    "Check Ollama status, then retry."
+                )
             finally:
                 if state.ollama_check_task is asyncio.current_task():
                     state.ollama_check_task = None

@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 import { Popover, useOverlays } from "../overlays/overlays";
 import type { ComposerStore, PickerModel } from "./composerStore";
 
@@ -20,22 +20,39 @@ function canChat(model: PickerModel): boolean {
 export function ModelPicker({ store, name = "model" }: { store: ComposerStore; name?: string }) {
   const composer = useSyncExternalStore(store.subscribe, store.getComposer);
   const overlays = useOverlays();
-  const [models, setModels] = useState<PickerModel[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [loadResult, setLoadResult] = useState<{
+    store: ComposerStore;
+    retryCount: number;
+    models: PickerModel[];
+    error: string;
+  } | null>(null);
   const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
     let live = true;
     void store.loadPickerModels().then((rows) => {
-      if (live) setModels(rows);
+      if (live) setLoadResult({ store, retryCount, models: rows, error: "" });
     }).catch(() => {
-      if (live) setError("Unable to load models. Open Settings to check your connection.");
-    }).finally(() => {
-      if (live) setLoading(false);
+      if (live) {
+        setLoadResult({
+          store,
+          retryCount,
+          models: [],
+          error: "Could not load available models. Check the Ollama server or cloud connection, then retry.",
+        });
+      }
     });
     return () => { live = false; };
-  }, [store]);
+  }, [store, retryCount]);
+
+  // Derive pending/error from the current request, rather than resetting
+  // state synchronously in the effect. Retry keeps search text and focus.
+  const current = loadResult?.store === store && loadResult.retryCount === retryCount ? loadResult : null;
+  const models = current?.models ?? [];
+  const loading = current === null;
+  const error = current?.error ?? "";
 
   const search = query.trim().toLocaleLowerCase();
   const matches = models.filter((model) =>
@@ -75,6 +92,7 @@ export function ModelPicker({ store, name = "model" }: { store: ComposerStore; n
   return (
     <Popover anchored name={name} label="Choose a model" className="reasoning-popover model-picker-popover">
       <input
+        ref={searchRef}
         type="search"
         className="model-picker-search"
         aria-label="Search models"
@@ -92,8 +110,17 @@ export function ModelPicker({ store, name = "model" }: { store: ComposerStore; n
           }
         }}
       />
-      {loading && <p className="model-picker-empty" role="status">Loading installed models…</p>}
-      {!!error && <p className="model-picker-empty" role="alert">{error}</p>}
+      {loading && <p className="model-picker-empty" role="status">Loading local and cloud models…</p>}
+      {!!error && (
+        <>
+          <p className="model-picker-empty" role="alert">{error}</p>
+          <button type="button" className="model-picker-setup"
+            onClick={() => {
+              searchRef.current?.focus();
+              setRetryCount((count) => count + 1);
+            }}>Retry model list</button>
+        </>
+      )}
       <div className="model-picker-results" aria-label="Model choices">
         {matches.map((model) => {
           const selected = activeProvider === model.provider && model.modelId === composer.route.modelId;
@@ -118,6 +145,11 @@ export function ModelPicker({ store, name = "model" }: { store: ComposerStore; n
                   {model.sizeBytes !== null && (
                     <span className="model-picker-size">{formatSize(model.sizeBytes)}</span>
                   )}
+                  {!canChat(model) && (
+                    <span className="model-picker-badge">
+                      Embedding-only · unavailable for chat or agent tasks
+                    </span>
+                  )}
                 </span>
               </span>
               {selected && <span aria-hidden="true">✓</span>}
@@ -126,7 +158,13 @@ export function ModelPicker({ store, name = "model" }: { store: ComposerStore; n
         })}
         {!loading && !error && matches.length === 0 && (
           <p className="model-picker-empty" role="status">
-            {search ? "No matching models." : "No models configured yet."}
+            {search ? "No matching models. Try another search." :
+              "No models available. Start Ollama and download a chat model, or configure a cloud provider in Settings."}
+          </p>
+        )}
+        {!loading && !error && matches.length > 0 && selectable.length === 0 && (
+          <p className="model-picker-empty" role="status">
+            None of these models supports chat. Download a chat-capable model to use the composer or agent.
           </p>
         )}
       </div>
