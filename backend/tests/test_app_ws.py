@@ -432,8 +432,11 @@ def test_args_schema_is_scoped_to_the_known_intents():
     # added 2 more (("knowledge", "search") and ("scene",
     # "setChatIndexIntoKnowledge")); the archive repair adds a schema for
     # app-chat-library/importWorkspace, then knowledge/cancelIngest for the
-    # required jobId. The other ingestion intents (addFiles, addFolder,
-    # getIngestJobs) have no args_schema and are intentionally excluded.
+    # required jobId. Watched folders add schemas for removeWatchedFolder
+    # (folderId) and syncWatchedFolders (optional folderId); their
+    # addWatchedFolder/listWatchedFolders counterparts, like the other
+    # ingestion intents (addFiles, addFolder, getIngestJobs), have no
+    # args_schema and are intentionally excluded.
     # Knowledge Library document and upload actions add seven more schemas.
     # Each intentional schema addition updates this set explicitly, not as drift;
     # the same discipline this test itself exists to enforce.
@@ -475,6 +478,8 @@ def test_args_schema_is_scoped_to_the_known_intents():
             ("knowledge", "appendUpload"),
             ("knowledge", "finishUpload"),
             ("knowledge", "cancelUpload"),
+            ("knowledge", "removeWatchedFolder"),
+            ("knowledge", "syncWatchedFolders"),
             ("scene", "setChatIndexIntoKnowledge"),
             ("scene", "bindNoteTextInput"),
             ("scene", "runNoteTextInput"),

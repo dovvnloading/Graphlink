@@ -20,7 +20,10 @@ from backend.attachments import AttachmentError, MAX_DOCUMENT_TEXT_CHARS
 from backend.events import SessionBus
 from backend.knowledge_chunking import chunk_text
 from backend.knowledge_ingest import IngestError, extract_text, is_supported_knowledge_file
-from backend.knowledge_store import get_or_create_workspace_collection, upsert_file_with_chunks
+from backend.knowledge_store import (
+    get_or_create_workspace_collection, known_watched_files, reconcile_watched_files,
+    set_watched_folder_sync_result, track_watched_file, upsert_file_with_chunks,
+)
 
 MAX_FILE_BYTES = 25 * 1024 * 1024
 MAX_JOB_BYTES = 500 * 1024 * 1024
@@ -46,6 +49,7 @@ class KnowledgeIngestJob:
     job_id: str
     kind: str
     workspace_id: int | None
+    watched_folder_id: int | None = None
     status: str = "queued"
     files_total: int = 0
     files_processed: int = 0
@@ -53,6 +57,7 @@ class KnowledgeIngestJob:
     bytes_processed: int = 0
     added: int = 0
     updated: int = 0
+    removed: int = 0
     duplicates: int = 0
     unchanged: int = 0
     skipped: int = 0
@@ -60,6 +65,10 @@ class KnowledgeIngestJob:
     last_file: str = ""
     error: str = ""
     warnings: list[str] = field(default_factory=list)
+    # Worker-only scan observations include oversized files, which must not
+    # be mistaken for deletions. scan_complete is false for unreadable paths.
+    observed_paths: set[str] = field(default_factory=set, repr=False)
+    scan_complete: bool = True
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -82,10 +91,11 @@ class KnowledgeIngestJob:
         with self.lock:
             return {
                 "jobId": self.job_id, "kind": self.kind, "workspaceId": self.workspace_id,
-                "status": self.status, "filesTotal": self.files_total,
+                "watchedFolderId": self.watched_folder_id, "status": self.status, "filesTotal": self.files_total,
                 "filesProcessed": self.files_processed,
                 "bytesTotal": self.bytes_total, "bytesProcessed": self.bytes_processed,
-                "added": self.added, "updated": self.updated, "duplicates": self.duplicates,
+                "added": self.added, "updated": self.updated, "removed": self.removed,
+                "duplicates": self.duplicates,
                 "unchanged": self.unchanged, "skipped": self.skipped,
                 "failedFiles": self.failed_files, "lastFile": self.last_file,
                 "error": self.error, "warnings": list(self.warnings),
@@ -135,6 +145,7 @@ def _collect_files(
         if real in seen_files:
             return
         seen_files.add(real)
+        job.observed_paths.add(str(real))
         size = real.stat().st_size
         if size > MAX_FILE_BYTES:
             job.increment(skipped=1)
@@ -167,6 +178,7 @@ def _collect_files(
                 with os.scandir(current) as iterator:
                     entries = sorted(iterator, key=lambda entry: entry.name.casefold())
             except OSError as exc:
+                job.change(scan_complete=False)
                 job.increment(skipped=1)
                 job.warn(f"Skipped unreadable directory {current.name}: {exc}")
                 continue
@@ -189,6 +201,7 @@ def _collect_files(
                     if entry.is_file(follow_symlinks=True):
                         add_file(candidate)
                 except (OSError, RuntimeError) as exc:
+                    job.change(scan_complete=False)
                     job.increment(skipped=1)
                     job.warn(f"Skipped unreadable item {entry.name}: {exc}")
 
@@ -216,6 +229,7 @@ class KnowledgeIngestManager:
 
     def start(
         self, path: str | list[str], *, folder: bool, workspace_id: int | None,
+        watched_folder_id: int | None = None,
         allowed_root: Path | None = None,
     ) -> dict:
         if any(job.snapshot()["status"] not in _FINAL for job in self._jobs.values()):
@@ -227,7 +241,10 @@ class KnowledgeIngestManager:
                 break
             if old.snapshot()["status"] in _FINAL:
                 del self._jobs[job_id]
-        job = KnowledgeIngestJob(uuid4().hex, "folder" if folder else "file", workspace_id)
+        job = KnowledgeIngestJob(
+            uuid4().hex, "watched-folder" if watched_folder_id is not None else ("folder" if folder else "file"),
+            workspace_id, watched_folder_id=watched_folder_id,
+        )
         self._jobs[job.job_id] = job
         self._loop = asyncio.get_running_loop()
         selected = [Path(value) for value in path] if isinstance(path, list) else Path(path)
@@ -279,6 +296,9 @@ class KnowledgeIngestManager:
                 get_or_create_workspace_collection(self._db_path, job.workspace_id)
                 if job.workspace_id is not None else 0
             )
+            watch_id = job.watched_folder_id
+            known = known_watched_files(self._db_path, watch_id, collection_id) if watch_id is not None else {}
+            present = set(job.observed_paths)
             for file, planned_size in files:
                 if job.cancel_event.is_set():
                     break
@@ -301,34 +321,53 @@ class KnowledgeIngestManager:
                         raise IngestError("File changed since the import was scanned; retry the import.")
                     if before.st_size > MAX_FILE_BYTES:
                         raise IngestError("File exceeds the 25 MiB limit.")
-                    text, mime = extract_text(actual)
-                    if actual.stat().st_size != before.st_size or actual.stat().st_mtime_ns != before.st_mtime_ns:
-                        raise IngestError("File changed while being read; retry the import.")
-                    if len(text) > MAX_DOCUMENT_TEXT_CHARS:
-                        raise IngestError("Extracted text exceeds the indexing limit.")
-                    if not text.strip():
-                        raise IngestError("File contains no indexable text.")
-                    chunks = chunk_text(text)
-                    if not chunks:
-                        raise IngestError("File contains no indexable text.")
-                    if job.cancel_event.is_set():
-                        break
-                    result = upsert_file_with_chunks(
-                        self._db_path, source_uri=str(actual), title=actual.name,
-                        mime=mime, text=text, chunks=chunks, collection_id=collection_id,
-                        size_bytes=planned_size,
-                    )
-                    key = {
-                        "added": "added", "updated": "updated", "duplicate": "duplicates",
-                        "unchanged": "unchanged",
-                    }[result.action]
-                    job.increment(**{key: 1})
+                    if watch_id is not None and known.get(str(actual)) == (before.st_size, before.st_mtime_ns):
+                        # No parser work for unchanged watched files. The cache is
+                        # trusted only while its file_sources mapping still exists.
+                        job.increment(unchanged=1)
+                    else:
+                        text, mime = extract_text(actual)
+                        if actual.stat().st_size != before.st_size or actual.stat().st_mtime_ns != before.st_mtime_ns:
+                            raise IngestError("File changed while being read; retry the import.")
+                        if len(text) > MAX_DOCUMENT_TEXT_CHARS:
+                            raise IngestError("Extracted text exceeds the indexing limit.")
+                        if not text.strip():
+                            raise IngestError("File contains no indexable text.")
+                        chunks = chunk_text(text)
+                        if not chunks:
+                            raise IngestError("File contains no indexable text.")
+                        if job.cancel_event.is_set():
+                            break
+                        result = upsert_file_with_chunks(
+                            self._db_path, source_uri=str(actual), title=actual.name,
+                            mime=mime, text=text, chunks=chunks, collection_id=collection_id,
+                            size_bytes=planned_size,
+                        )
+                        if watch_id is not None:
+                            track_watched_file(
+                                self._db_path, watch_id, str(actual),
+                                size_bytes=before.st_size, mtime_ns=before.st_mtime_ns,
+                            )
+                        key = {
+                            "added": "added", "updated": "updated", "duplicate": "duplicates",
+                            "unchanged": "unchanged",
+                        }[result.action]
+                        job.increment(**{key: 1})
                 except (OSError, AttachmentError, IngestError, RuntimeError, ValueError) as exc:
                     job.increment(failed_files=1)
                     job.warn(f"{file.name}: {exc}")
                 job.increment(files_processed=1, bytes_processed=planned_size)
                 job.change(last_file=file.name)
                 self._emit()
+            if not job.cancel_event.is_set() and watch_id is not None:
+                # Only unreadable entries make a scan incomplete. Oversized
+                # and deliberately excluded items do not hide other deletions;
+                # observed_paths also retains the names of oversized files.
+                removed = reconcile_watched_files(
+                    self._db_path, watch_id, collection_id, present,
+                    prune=job.scan_complete,
+                )
+                job.increment(removed=removed)
             job.change(status="cancelled" if job.cancel_event.is_set() else "completed")
         except (OSError, IngestError, RuntimeError) as exc:
             job.change(status="cancelled" if job.cancel_event.is_set() else "failed", error=str(exc))
@@ -338,6 +377,24 @@ class KnowledgeIngestManager:
             import logging
             logging.getLogger(__name__).exception("knowledge import job failed")
         finally:
+            if job.watched_folder_id is not None:
+                row = job.snapshot()
+                if row["status"] != "cancelled":
+                    error = row["error"]
+                    if row["failedFiles"]:
+                        error = (
+                            f'{row["failedFiles"]} file(s) failed: ' + "; ".join(row["warnings"][:3])
+                        )
+                    elif row["skipped"] and not error:
+                        error = f'{row["skipped"]} item(s) skipped during watched folder scan.'
+                    try:
+                        set_watched_folder_sync_result(
+                            self._db_path, job.watched_folder_id,
+                            completed=row["status"] == "completed", error=error,
+                        )
+                    except Exception:
+                        import logging
+                        logging.getLogger(__name__).exception("could not persist watched folder sync result")
             self._emit(force=True)
             outcome = job.snapshot()
             if (
