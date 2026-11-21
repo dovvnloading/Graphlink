@@ -1355,6 +1355,45 @@ def set_graph_tags(db_path: Path, graph_id: int, tags: list[str]) -> None:
             )
 
 
+def get_default_workspace_id(db_path: Path) -> int:
+    """Return the workspace seeded first by migration 2.
+
+    The original Default row has the smallest id; unlike its display name,
+    that identity survives rename and archive operations. The migration
+    always creates this row, even for an empty database.
+    """
+    with contextlib.closing(_connect(db_path)) as conn:
+        row = conn.execute("SELECT id FROM workspaces ORDER BY id LIMIT 1").fetchone()
+    if row is None:
+        raise RuntimeError("The chat database has no Default workspace")
+    return int(row[0])
+
+
+def _peek_default_workspace_id(db_path: Path) -> int:
+    """Find Default without creating or migrating chats.db on a read-only preview.
+
+    Migration 2 will seed workspace id 1 for a new or legacy database. For an
+    already-migrated database, read the oldest persisted workspace id instead:
+    Default can be renamed, and its id need not still be 1. Unlike _connect,
+    this read-only connection cannot initialize or change the database.
+    """
+    if not db_path.is_file():
+        return 1
+    try:
+        with contextlib.closing(
+            sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+        ) as conn:
+            row = conn.execute("SELECT id FROM workspaces ORDER BY id LIMIT 1").fetchone()
+        if row is not None:
+            return int(row[0])
+    except sqlite3.DatabaseError:
+        # No workspaces table yet (legacy DB), or an unreadable store.
+        # Real load/save operations use _connect to migrate/rescue/report it;
+        # preview registration must not write in order to discover Default.
+        pass
+    return 1
+
+
 def get_all_workspaces(db_path: Path) -> list[dict[str, Any]]:
     """Every workspace row (including archived ones - the same "backend
     always sends everything, filtering is client-side" design this whole
@@ -2599,6 +2638,7 @@ def make_save_chat(
         # expected_updated_at=None falls back to a blind UPDATE, matching
         # this function's pre-9.2 behavior exactly for that case.
         expected_updated_at: str | None = None
+        saved_workspace_id: int | None = None
         current_id = canvas_document.current_chat_id
         if not current_id:
             title = _fallback_title(_resolve_seed_message(canvas_document))
@@ -2610,6 +2650,7 @@ def make_save_chat(
                 # (workers.py:69) exactly.
                 title = str(existing_row.get("title") or "Untitled")
                 chat_id_for_save = int(current_id)
+                saved_workspace_id = int(existing_row["workspace_id"])
                 if last_saved.get("chat_id") == int(current_id):
                     expected_updated_at = last_saved.get("updated_at")
             elif checkpoint:
@@ -2624,6 +2665,15 @@ def make_save_chat(
                 title = _fallback_title(_resolve_seed_message(canvas_document))
 
         try:
+            # An existing graph's persisted workspace wins. A fresh canvas
+            # inherits the live workspace (Default at session startup); also
+            # repair any older/standalone caller that still supplied None.
+            workspace_id_for_save = (
+                saved_workspace_id if saved_workspace_id is not None
+                else canvas_document.current_workspace_id
+            )
+            if workspace_id_for_save is None:
+                workspace_id_for_save = await asyncio.to_thread(get_default_workspace_id, resolved_path)
             # ADR-009 stage 9.2: backup-before-write - see
             # _maybe_backup_before_write's own docstring for why this ONE
             # call covers both "before the first mutating write of a
@@ -2634,12 +2684,9 @@ def make_save_chat(
             new_chat_id, new_updated_at = await asyncio.to_thread(
                 save_chat_atomically_row, resolved_path, chat_id_for_save, title, chat_data, notes_data, pins_data,
                 expected_updated_at=expected_updated_at,
-                # ADR-020 stage 20.2: only meaningful on the INSERT branch
-                # (chat_id_for_save falsy) - see save_chat_atomically_row's
-                # own workspace_id docstring. canvas_document.current_
-                # workspace_id was already validated against a real
-                # workspace by new_chat() before it was ever set.
-                workspace_id=canvas_document.current_workspace_id,
+                # An INSERT uses the active (or Default) workspace; an UPDATE
+                # keeps the graph's persisted workspace unchanged.
+                workspace_id=workspace_id_for_save,
             )
         except ConcurrentSaveConflict:
             # ADR-009 stage 9.2 exit criterion: a lost write race is
@@ -2662,12 +2709,13 @@ def make_save_chat(
             return False
 
         canvas_document.current_chat_id = int(new_chat_id)
+        canvas_document.current_workspace_id = workspace_id_for_save
         # Audit fix: record what this manual Save just put on disk, so the
         # next autosave tick recognizes it as already-saved instead of
         # rewriting a byte-identical row 30 seconds later.
         record_saved(chat_data, notes_data, pins_data, new_chat_id, new_updated_at)
         await _schedule_embeddings_after_graph_save(
-            bus, resolved_path, int(new_chat_id), canvas_document.current_workspace_id,
+            bus, resolved_path, int(new_chat_id), workspace_id_for_save,
             settings_manager,
         )
         await bus.publish("app-chat-library")
@@ -3270,20 +3318,11 @@ def make_new_chat(
         if canvas_document is None:
             return
 
-        # ADR-020 stage 20.2: resolve/validate the caller's requested
-        # workspace BEFORE clear_for_load() below (which itself resets
-        # current_workspace_id to None) - an invalid/unknown workspaceId
-        # (never existed, or since deleted - there is no deleteWorkspace
-        # intent yet, but a caller could still send a stale/bogus id) falls
-        # back to None here. None is exactly what save_chat_atomically_row's
-        # own workspace_id=None default already resolves to the Default
-        # workspace for, via graphs.workspace_id's own schema DEFAULT (see
-        # that function's own docstring) - so "omitted or invalid ->
-        # Default" is satisfied by ONE fallback path, not two. Every OTHER
-        # caller of newChat in the codebase (e.g. commands.ts's palette "new
-        # chat" command) keeps calling this with zero args, which is
-        # `workspace_id=None` here - byte-identical pre-20.2 behavior.
-        resolved_workspace_id: int | None = None
+        # Resolve the destination BEFORE clearing the current graph. Both
+        # an omitted ID (palette New Chat) and an unknown ID select Default;
+        # only a known explicit workspace can override it. Never leave a
+        # newly cleared document with no current workspace.
+        resolved_workspace_id = await asyncio.to_thread(get_default_workspace_id, resolved_path)
         if workspace_id is not None:
             try:
                 candidate_workspace_id = int(workspace_id)
@@ -3357,6 +3396,93 @@ def make_import_workspace(
     return import_workspace
 
 
+def register_chat_library_metadata_intents(
+    bus: SessionBus, resolved_path: Path, notifications: NotificationState | None,
+) -> None:
+    """Register graph and workspace metadata operations, separate from canvas mutations."""
+    # -- ADR-020 stage 20.2: the 6 new intents -------------------------------
+    #
+    # Mirror rename/delete's own shape immediately above: a single
+    # asyncio.to_thread call into the matching CRUD function, then republish
+    # "app-chat-library" so every attached window's list/switcher picks up
+    # the change - the same pattern every existing intent on this topic
+    # already uses. None of these six go through _serialize_mutating_intent:
+    # they mutate workspace/list metadata only. renameChat is deliberately
+    # different from these metadata helpers because renaming the open graph
+    # advances and refreshes its shared optimistic-save token.
+
+    async def set_favorite(graph_id: int, favorite: bool):
+        await asyncio.to_thread(set_graph_favorite, resolved_path, int(graph_id), bool(favorite))
+        await bus.publish("app-chat-library")
+
+    async def set_archived(graph_id: int, archived: bool):
+        await asyncio.to_thread(set_graph_archived, resolved_path, int(graph_id), bool(archived))
+        await bus.publish("app-chat-library")
+
+    async def set_tags(graph_id: int, tags: list[str]):
+        # Server-side trim/dedupe/case-collapse happens inside
+        # set_graph_tags itself (_normalize_tags) - never trusting the
+        # client's own list, matching this stage's own wire-contract
+        # requirement.
+        await asyncio.to_thread(set_graph_tags, resolved_path, int(graph_id), list(tags))
+        await bus.publish("app-chat-library")
+
+    async def create_ws(name: str):
+        # create_workspace's own empty/whitespace-only guard returns None
+        # without mutating anything - branching on that return value (rather
+        # than re-checking `name` here too) keeps the single source of
+        # truth for "what counts as a valid workspace name" in one place.
+        created = await asyncio.to_thread(create_workspace, resolved_path, name)
+        if created is None:
+            if notifications is not None:
+                notifications.show("Workspace name cannot be empty.", "warning")
+                await bus.publish("notification")
+            return
+        await bus.publish("app-chat-library")
+
+    async def rename_ws(workspace_id: int, name: str):
+        # Same non-empty guard as rename (renameChat) immediately above -
+        # an empty/whitespace name is ignored, no mutation, no error, no
+        # republish.
+        title = str(name or "").strip()
+        if not title:
+            return
+        await asyncio.to_thread(rename_workspace, resolved_path, int(workspace_id), title)
+        await bus.publish("app-chat-library")
+
+    async def archive_ws(workspace_id: int, archived: bool):
+        await asyncio.to_thread(archive_workspace, resolved_path, int(workspace_id), bool(archived))
+        await bus.publish("app-chat-library")
+
+    async def set_workspace_default_model_intent(workspace_id: int, provider: str, model_id: str):
+        # ADR-020 stage 20.3: same shape as every other single-field
+        # workspace mutation above - one asyncio.to_thread call into the
+        # matching CRUD function, then republish so the switcher's own
+        # settings affordance picks up the new value. Never touches
+        # canvas_document (only a chats.db row), so - like createWorkspace/
+        # renameWorkspace/archiveWorkspace above - it does not go through
+        # _serialize_mutating_intent.
+        await asyncio.to_thread(
+            set_workspace_default_model, resolved_path, int(workspace_id), str(provider), str(model_id),
+        )
+        await bus.publish("app-chat-library")
+
+    bus.register_intent(
+        "app-chat-library", "setGraphFavorite", set_favorite, args_schema=SetGraphFavoriteArgs,
+    )
+    bus.register_intent(
+        "app-chat-library", "setGraphArchived", set_archived, args_schema=SetGraphArchivedArgs,
+    )
+    bus.register_intent("app-chat-library", "setGraphTags", set_tags, args_schema=SetGraphTagsArgs)
+    bus.register_intent("app-chat-library", "createWorkspace", create_ws, args_schema=CreateWorkspaceArgs)
+    bus.register_intent("app-chat-library", "renameWorkspace", rename_ws, args_schema=RenameWorkspaceArgs)
+    bus.register_intent("app-chat-library", "archiveWorkspace", archive_ws, args_schema=ArchiveWorkspaceArgs)
+    bus.register_intent(
+        "app-chat-library", "setWorkspaceDefaultModel", set_workspace_default_model_intent,
+        args_schema=SetWorkspaceDefaultModelArgs,
+    )
+
+
 def register_chat_library(
     bus: SessionBus,
     db_path: Path | None = None,
@@ -3366,6 +3492,7 @@ def register_chat_library(
     autosave_interval_seconds: float | None = 30.0,
     settings_manager: "SettingsManager | None" = None,
     agent_dispatcher=None,
+    knowledge_db_path: Path | None = None,
 ) -> None:
     # ADR-014 review-fix: threaded through to build_chat_data/
     # restore_chat_into_document (via make_load_chat/make_save_chat/
@@ -3385,6 +3512,24 @@ def register_chat_library(
     # own docstring), and a closure-local is unreachable to anything else,
     # including the tests that prove the sharing actually works.
     bus.chat_db_path = resolved_path
+
+    if canvas_document is not None:
+        # Every session needs an active workspace, including standalone
+        # registrars used by load/save/autosave/export. Only the live app
+        # (which passes a knowledge store) may create/migrate chats.db here.
+        # Standalone previews merely peek at an existing Default row, or
+        # reserve migration 2's future id 1 for a fresh/legacy database.
+        default_workspace_id = (
+            get_default_workspace_id(resolved_path)
+            if knowledge_db_path is not None
+            else _peek_default_workspace_id(resolved_path)
+        )
+        if canvas_document.current_workspace_id is None:
+            canvas_document.current_workspace_id = default_workspace_id
+        if knowledge_db_path is not None:
+            knowledge_store.move_unscoped_documents_to_workspace(
+                knowledge_db_path, default_workspace_id,
+            )
 
     bus.register_topic("app-chat-library", lambda: chat_library_payload(resolved_path, notifications))
 
@@ -3494,73 +3639,6 @@ def register_chat_library(
         agent_dispatcher=agent_dispatcher,
     )
 
-    # -- ADR-020 stage 20.2: the 6 new intents -------------------------------
-    #
-    # Mirror rename/delete's own shape immediately above: a single
-    # asyncio.to_thread call into the matching CRUD function, then republish
-    # "app-chat-library" so every attached window's list/switcher picks up
-    # the change - the same pattern every existing intent on this topic
-    # already uses. None of these six go through _serialize_mutating_intent:
-    # they mutate workspace/list metadata only. renameChat is deliberately
-    # different from these metadata helpers because renaming the open graph
-    # advances and refreshes its shared optimistic-save token.
-
-    async def set_favorite(graph_id: int, favorite: bool):
-        await asyncio.to_thread(set_graph_favorite, resolved_path, int(graph_id), bool(favorite))
-        await bus.publish("app-chat-library")
-
-    async def set_archived(graph_id: int, archived: bool):
-        await asyncio.to_thread(set_graph_archived, resolved_path, int(graph_id), bool(archived))
-        await bus.publish("app-chat-library")
-
-    async def set_tags(graph_id: int, tags: list[str]):
-        # Server-side trim/dedupe/case-collapse happens inside
-        # set_graph_tags itself (_normalize_tags) - never trusting the
-        # client's own list, matching this stage's own wire-contract
-        # requirement.
-        await asyncio.to_thread(set_graph_tags, resolved_path, int(graph_id), list(tags))
-        await bus.publish("app-chat-library")
-
-    async def create_ws(name: str):
-        # create_workspace's own empty/whitespace-only guard returns None
-        # without mutating anything - branching on that return value (rather
-        # than re-checking `name` here too) keeps the single source of
-        # truth for "what counts as a valid workspace name" in one place.
-        created = await asyncio.to_thread(create_workspace, resolved_path, name)
-        if created is None:
-            if notifications is not None:
-                notifications.show("Workspace name cannot be empty.", "warning")
-                await bus.publish("notification")
-            return
-        await bus.publish("app-chat-library")
-
-    async def rename_ws(workspace_id: int, name: str):
-        # Same non-empty guard as rename (renameChat) immediately above -
-        # an empty/whitespace name is ignored, no mutation, no error, no
-        # republish.
-        title = str(name or "").strip()
-        if not title:
-            return
-        await asyncio.to_thread(rename_workspace, resolved_path, int(workspace_id), title)
-        await bus.publish("app-chat-library")
-
-    async def archive_ws(workspace_id: int, archived: bool):
-        await asyncio.to_thread(archive_workspace, resolved_path, int(workspace_id), bool(archived))
-        await bus.publish("app-chat-library")
-
-    async def set_workspace_default_model_intent(workspace_id: int, provider: str, model_id: str):
-        # ADR-020 stage 20.3: same shape as every other single-field
-        # workspace mutation above - one asyncio.to_thread call into the
-        # matching CRUD function, then republish so the switcher's own
-        # settings affordance picks up the new value. Never touches
-        # canvas_document (only a chats.db row), so - like createWorkspace/
-        # renameWorkspace/archiveWorkspace above - it does not go through
-        # _serialize_mutating_intent.
-        await asyncio.to_thread(
-            set_workspace_default_model, resolved_path, int(workspace_id), str(provider), str(model_id),
-        )
-        await bus.publish("app-chat-library")
-
     export_workspace = make_export_workspace(
         bus, resolved_path, notifications, canvas_document,
         _serialize_mutating_intent(save_chat),
@@ -3596,20 +3674,7 @@ def register_chat_library(
         _serialize_mutating_intent(load_graph_and_focus_node),
         args_schema=LoadGraphAndFocusNodeArgs,
     )
-    bus.register_intent(
-        "app-chat-library", "setGraphFavorite", set_favorite, args_schema=SetGraphFavoriteArgs,
-    )
-    bus.register_intent(
-        "app-chat-library", "setGraphArchived", set_archived, args_schema=SetGraphArchivedArgs,
-    )
-    bus.register_intent("app-chat-library", "setGraphTags", set_tags, args_schema=SetGraphTagsArgs)
-    bus.register_intent("app-chat-library", "createWorkspace", create_ws, args_schema=CreateWorkspaceArgs)
-    bus.register_intent("app-chat-library", "renameWorkspace", rename_ws, args_schema=RenameWorkspaceArgs)
-    bus.register_intent("app-chat-library", "archiveWorkspace", archive_ws, args_schema=ArchiveWorkspaceArgs)
-    bus.register_intent(
-        "app-chat-library", "setWorkspaceDefaultModel", set_workspace_default_model_intent,
-        args_schema=SetWorkspaceDefaultModelArgs,
-    )
+    register_chat_library_metadata_intents(bus, resolved_path, notifications)
     bus.register_intent("app-chat-library", "exportWorkspace", export_workspace, args_schema=ExportWorkspaceArgs)
     bus.register_intent("app-chat-library", "importWorkspace", import_workspace, args_schema=ImportWorkspaceArgs)
 

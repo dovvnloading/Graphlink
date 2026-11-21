@@ -92,6 +92,8 @@ from backend.chat_library import (
     _maybe_backup_before_write,
     _resolve_seed_message,
     _schedule_embeddings_after_graph_save,
+    get_default_workspace_id,
+    _peek_default_workspace_id,
     load_chat_row,
     save_chat_atomically_row,
 )
@@ -190,6 +192,7 @@ async def autosave_tick(
     # save_chat_atomically_row falls back to a blind UPDATE, matching this
     # function's pre-9.2 behavior for that case).
     expected_updated_at: str | None = None
+    saved_workspace_id: int | None = None
     current_id = canvas_document.current_chat_id
     if current_id:
         try:
@@ -216,6 +219,7 @@ async def autosave_tick(
             # saveChat's own resave path follows.
             title = str(existing_row.get("title") or "Untitled")
             chat_id_for_save = int(current_id)
+            saved_workspace_id = int(existing_row["workspace_id"])
             if last_saved.get("chat_id") == int(current_id):
                 expected_updated_at = last_saved.get("updated_at")
         else:
@@ -224,6 +228,12 @@ async def autosave_tick(
         title = _fallback_title(_resolve_seed_message(canvas_document))
 
     try:
+        workspace_id_for_save = (
+            saved_workspace_id if saved_workspace_id is not None
+            else canvas_document.current_workspace_id
+        )
+        if workspace_id_for_save is None:
+            workspace_id_for_save = await asyncio.to_thread(get_default_workspace_id, db_path)
         # ADR-009 stage 9.2: backup-before-write, the SAME call
         # backend/chat_library.py's own saveChat closure makes - see
         # _maybe_backup_before_write's own docstring for why this one call
@@ -235,14 +245,9 @@ async def autosave_tick(
         new_chat_id, new_updated_at = await asyncio.to_thread(
             save_chat_atomically_row, db_path, chat_id_for_save, title, chat_data, notes_data, pins_data,
             expected_updated_at=expected_updated_at,
-            # ADR-020 stage 20.2: an autosave tick can be the FIRST write of
-            # a session that started with an explicit New Chat -> pick-a-
-            # workspace, then never got around to a manual Save - see
-            # backend/chat_library.py's own save_chat closure for the
-            # identical reasoning (only consulted on save_chat_atomically_
-            # row's own INSERT branch; a resave of an existing graph ignores
-            # this value entirely).
-            workspace_id=canvas_document.current_workspace_id,
+            # An INSERT uses the active (or Default) workspace; resaving
+            # an existing graph preserves its persisted workspace.
+            workspace_id=workspace_id_for_save,
         )
     except ConcurrentSaveConflict:
         # ADR-009 stage 9.2 exit criterion: a lost autosave race must
@@ -266,11 +271,12 @@ async def autosave_tick(
         return
 
     canvas_document.current_chat_id = int(new_chat_id)
+    canvas_document.current_workspace_id = workspace_id_for_save
     last_saved["digest"] = digest
     last_saved["chat_id"] = int(new_chat_id)
     last_saved["updated_at"] = new_updated_at
     await _schedule_embeddings_after_graph_save(
-        bus, db_path, int(new_chat_id), canvas_document.current_workspace_id,
+        bus, db_path, int(new_chat_id), workspace_id_for_save,
         settings_manager,
     )
     await bus.publish("app-chat-library")
@@ -304,6 +310,11 @@ def register_autosave(
     ADR-014 review-fix: `settings_manager` is threaded straight through to
     autosave_tick - see that function's own docstring."""
 
+    # Standalone autosave callers may not register the chat library first.
+    # Seed the workspace hint without creating chats.db until a real write.
+    if canvas_document.current_workspace_id is None:
+        canvas_document.current_workspace_id = _peek_default_workspace_id(db_path)
+
     async def _guarded_tick() -> None:
         if mutation_guard["active"]:
             # A manual load/save/new-chat is already in flight - skip this
@@ -330,8 +341,19 @@ def register_autosave(
     async def _loop() -> None:
         while True:
             await asyncio.sleep(interval_seconds)
+            # Cancellation while a tick awaits asyncio.to_thread does not
+            # stop the underlying SQLite writer. Let that write finish before
+            # teardown, so the session cannot disappear with its last row
+            # still in flight (especially on slower Windows disks).
+            tick_task = asyncio.create_task(_guarded_tick())
             try:
-                await _guarded_tick()
+                await asyncio.shield(tick_task)
+            except asyncio.CancelledError:
+                try:
+                    await tick_task
+                except Exception:
+                    logger.exception("autosave: final in-flight tick failed for session %r", bus.session_id)
+                raise
             except Exception:
                 # Defence in depth, not a fix for a known escape: an audit
                 # walked every unguarded line in autosave_tick and found no

@@ -20,6 +20,7 @@ from backend.chat_library import (
     chat_library_payload,
     delete_chat,
     get_all_chats,
+    get_all_workspaces,
     load_chat_row,
     rename_chat,
 )
@@ -79,6 +80,8 @@ def test_autosave_tick_inserts_a_new_row_for_a_fresh_canvas_with_content(db_path
     rows = get_all_chats(db_path)
     assert len(rows) == 1
     assert document.current_chat_id == rows[0]["id"]
+    assert document.current_workspace_id == get_all_workspaces(db_path)[0]["id"]
+    assert rows[0]["workspaceId"] == document.current_workspace_id
     assert last_saved["digest"] is not None
     # Silent on success - autosave must never show a "Saved" toast the way
     # the explicit Save button does (see this module's own docstring).

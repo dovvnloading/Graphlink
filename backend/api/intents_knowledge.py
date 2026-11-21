@@ -113,14 +113,12 @@ def _resolve_workspace_collection_id(document: SceneDocument, db_path=None) -> i
     scopes to the CALLING SESSION's current workspace - see backend.
     knowledge_store.get_or_create_workspace_collection's own docstring for
     the one-collection-per-workspace, auto-created, invisible scoping
-    decision this implements. `document.current_workspace_id` is None for
-    a session that has not yet loaded/created any chat with a real
-    workspace context (see backend/domain/graph.py's own docstring on that
-    field) - falls back to `0`, the pre-20.3 "no collection assigned"
-    global sentinel (backend.knowledge_store's own module docstring), so a
-    fresh, never-loaded session keeps searching/ingesting into the same
-    undifferentiated pool every pre-20.3 build already used, rather than
-    raising or guessing at some arbitrary workspace.
+    decision this implements. Live app sessions start in Default before
+    any chat is loaded (backend/chat_library.py's registrar), so a fresh
+    Knowledge Library never writes to the old unscoped pool. Standalone
+    document callers that have not registered a chat library can still have
+    `current_workspace_id=None`; keep their legacy collection-0 fallback
+    rather than changing this independent helper's contract.
 
     `db_path` defaults to this module's own DEFAULT_DB_PATH (every call
     site in THIS file omits it, unchanged from before this parameter
