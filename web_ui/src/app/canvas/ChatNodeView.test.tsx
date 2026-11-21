@@ -1228,7 +1228,6 @@ describe("ChatNodeView live streaming survives virtualization unmount/remount (A
         onGenerateKeyTakeaway: vi.fn(),
         onGenerateExplainerNote: vi.fn(),
         onOpenDocumentView: vi.fn(),
-      onOpenCitation: vi.fn(),
         onOpenCitation: vi.fn(),
         onScrollChange: vi.fn(),
         isBranchFocusActive: false,
