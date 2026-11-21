@@ -45,6 +45,7 @@ const OLLAMA_TASK_LABELS: Record<(typeof OLLAMA_TASKS)[number], string> = {
   task_web_summarize: "Web Content Summarization Model",
 };
 const OLLAMA_MODELS_DATALIST_ID = "settings-ollama-scanned-models";
+const LLAMA_CPP_MODELS_DATALIST_ID = "settings-llama-cpp-scanned-models";
 
 // R8a: reasoning went from a 2-value Mode (Thinking/Quick) to a graded
 // 4-value Level shared by both local providers here and the composer's own
@@ -80,6 +81,14 @@ const OLLAMA_RECOMMENDED_MODELS = [
   { id: "nomic-embed-text:latest", purpose: "Embeddings", size: "274 MB" },
   { id: "gemma3:4b", purpose: "Vision and image understanding", size: "3.4 GB" },
 ] as const;
+
+// Llama.cpp has no per-task assignment concept like Ollama's OLLAMA_TASKS -
+// just one global chat model path plus an optional title/naming override
+// (api_provider.py's _get_llama_cpp_model_path: chart/web-validate/web-
+// summarize all silently fall back to the chat model path).
+function basename(path: string): string {
+  return path.split(/[\\/]/).pop() || path;
+}
 
 const NOTIFICATION_TYPE_LABELS: Record<string, string> = {
   info: "Info",
