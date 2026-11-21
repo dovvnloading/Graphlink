@@ -1,5 +1,7 @@
 # Local knowledge retrieval: ranking, citations and offline evaluation
 
+For the shipped user-facing workflows, see the [Knowledge Library guide](KNOWLEDGE_LIBRARY.md). This page describes the retrieval implementation, citation metadata and reproducible evaluation.
+
 ## Settings > Knowledge
 
 The Knowledge page chooses embedding retrieval independently of the chat
@@ -44,7 +46,9 @@ chunksEmbedded, chunksRemaining, cancelRequested, error}]}`. Statuses are
 workspace. `knowledge/refreshEmbeddings()` handles a saved settings change.
 Cloud provider/SDK failures are logged, but the topic exposes a fixed,
 redacted error rather than exception text that might contain credentials or
-document contents. The Knowledge Library UI for this state is a follow-up.
+document contents. The shipped Knowledge Library dialog shows **file-import**
+progress and **watched-folder** sync status, but does not yet expose this
+separate embedding-job topic or its cancel/resume controls.
 
 Searches normally use completed vector batches and FTS5 while background
 jobs fill the cache. To preserve the existing UI, chat, and agent hybrid
@@ -58,6 +62,50 @@ and checks for settings changes before committing vectors.
 If an enabled service fails at retrieval time, search falls back to local
 keyword-only results and logs the failure. Workspaces remain
 collection-scoped.
+
+## Shipped entry points and scope
+
+The top-bar **Knowledge** button opens the **Knowledge Library** dialog for
+the current workspace. **Add files** and **Add folder** use native pickers;
+drag-and-drop files are staged as private local upload copies. These are
+one-time imports, not folder subscriptions. Session-owned `knowledge-ingest`
+jobs report progress, per-file outcomes and cancellation, and trigger a
+background embedding run after successful new/updated content. The
+**Documents** table offers **Open** (indexed text reconstructed from stored
+chunks in the docked Document View), **Re-index** (recorded file sources
+only) and confirmed **Remove** (deletes indexed data, not the original file).
+Document View is not an OS-level file opener, and source formatting or
+separators lost during chunking are not guaranteed to be reproduced.
+
+**Add watched folder** is a separate, explicit opt-in via the native picker.
+The app-lifetime watcher scans on startup and roughly every ten minutes;
+**Sync now** and **Sync all now** schedule additional scans. A successful,
+complete scan reconciles disappeared tracked files, preserving content
+still backed by another watched folder/source; unreadable or cancelled
+scans do not prune missing files. Removing a watch leaves existing indexed
+documents intact. Watch synchronization uses its **own** ingestion manager
+and status, not the session's `knowledge-ingest` topic, and currently does
+**not** itself enqueue an embedding job. Its keyword index is searchable
+immediately; semantic vectors may be populated later by a settings refresh
+or eligible cold-start search. See the user guide for the folder exclusions,
+limits and status shown in the dialog.
+
+The chat composer has a separate **Use knowledge** switch. Without a branch
+override, it follows whether the current workspace has documents; explicit
+branch choices inherit along descendants, not across sibling branches. When
+on, ordinary chat Send, Regenerate and model comparisons search only that
+workspace and budget retrieved passages into the outgoing model context.
+Turning it off does not affect explicit Library searches. A hosted chat model
+can still receive selected knowledge passages even with local-only keyword
+or Ollama embedding search.
+
+Both Builder and the workspace Agent can call read-only, automatically
+permitted `knowledge.search` (`query`, optional `k` default 5 / max 25).
+It requires an existing current workspace collection and returns cited,
+untrusted excerpts without accepting a model-supplied collection ID. Only
+the workspace Agent can call `knowledge.add` (`path` within its bound
+workspace); each write requires fresh human approval, including in modes
+that auto-approve ordinary file edits. The source file is not modified.
 
 ## Pipeline
 
@@ -122,11 +170,27 @@ reingestion is necessary. Chunks containing content from multiple sections
 are attributed to the section active at their *start*; formats without
 Markdown headings report `Unsectioned` rather than guessing. The knowledge
 WebSocket result formatter adds `sourceFile`, `section`, `citationId`,
-`rankSignals` and `rrfScore` while preserving all existing keys. The Knowledge panel displays the
+`rankSignals` and `rrfScore` while preserving all existing keys. The Knowledge Library's search results display the
 per-hit signals as **Keyword #rank** (FTS5), **Semantic #rank** (vector),
 or both, including on collapsed result cards; an absent signal is never
-shown as a match. Global search reuses this same formatter. Existing `[kN]` untrusted-context markers
-remain for compatibility; the stable `kb:` id is included alongside them.
+shown as a match. These are per-index candidate **ranks**, not comparable
+raw scores or confidence measures. Expanding a Library result shows the
+exact indexed passage and its character offsets; only an HTTP(S) source
+gets an external **Open source** link. Global search reuses the same
+result formatter. Existing `[kN]` untrusted-context markers remain for
+compatibility; the stable `kb:` id is included alongside them.
+
+For ordinary chat, the backend promotes only model-written `[kb:...]`
+citations that match passages **actually selected for that reply's prompt**.
+A server-authored provenance ledger (stored separately from the model's
+text) supplies the trusted source identity. Verified entries appear as
+**Sources** chips on the assistant card and call `knowledge/openCitation`
+with the document ID, chunk ID and citation ID, verified again against the
+current workspace. Document View opens the reconstructed indexed text and
+highlights the cited passage. Invented, missing or stale citation IDs cannot
+create clickable sources; they are shown as unverified instead. The Library
+**Documents → Open** action does not require a citation and opens the same
+reader without a citation highlight.
 
 ## Reproducible offline evaluation
 
