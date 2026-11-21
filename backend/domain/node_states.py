@@ -887,6 +887,9 @@ class ChatVersion:
     # A message can include image/audio parts. Keep the selected version's
     # original media when alternatives are created, not only its text mirror.
     parts: list[dict[str, Any]] | None = None
+    # Provenance belongs to each alternative, not to the entire node.
+    history_fingerprint: str | None = None
+    knowledge_enabled: bool | None = None
 
 
 MAX_CHAT_VERSIONS = 20
@@ -1057,6 +1060,13 @@ class ChatState(NodeState):
     # BranchesOps so sibling forks can choose independently. Unlike the
     # one-time indexing flag above, this controls retrieval on every send.
     use_knowledge: bool | None = None
+    # Generation-time context proof. None for user messages, manual replies
+    # and every graph saved before this feature. The fingerprint covers the
+    # complete canonical ancestor-message path, route and knowledge setting.
+    reply_history_fingerprint: str | None = None
+    # The request-time effective retrieval setting (workspace default or
+    # explicit override). Never inferred retrospectively on reload.
+    reply_knowledge_enabled: bool | None = None
 
 
 @dataclass

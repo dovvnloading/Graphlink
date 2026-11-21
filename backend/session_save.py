@@ -252,12 +252,11 @@ def _serialize_chat_versions(node: SceneNode) -> tuple[list[dict[str, Any]], int
     The current SceneNode fields remain authoritative even if an asynchronous
     callback has not explicitly synchronized its ChatVersion yet.
     """
-    state = node.state
-    saved = state.versions[-MAX_CHAT_VERSIONS:] if state.versions else [
+    saved = node.state.versions[-MAX_CHAT_VERSIONS:] if node.state.versions else [
         ChatVersion(content=node.content),
     ]
-    offset = max(0, len(state.versions) - MAX_CHAT_VERSIONS)
-    index = max(0, min(len(saved) - 1, state.version_index - offset))
+    offset = max(0, len(node.state.versions) - MAX_CHAT_VERSIONS)
+    index = max(0, min(len(saved) - 1, node.state.version_index - offset))
     rows = [
         {
             "content": version.content,
@@ -269,6 +268,8 @@ def _serialize_chat_versions(node: SceneNode) -> tuple[list[dict[str, Any]], int
             "completion_tokens": version.output_tokens,
             "estimated_cost_usd": version.cost_usd,
             "tool_invocations": [dict(call) for call in version.calls],
+            "reply_history_fingerprint": version.history_fingerprint,
+            "reply_knowledge_enabled": version.knowledge_enabled,
         }
         for version in saved
     ]
@@ -281,11 +282,13 @@ def _serialize_chat_versions(node: SceneNode) -> tuple[list[dict[str, Any]], int
         "content": node.content,
         "provider": node.state.provider,
         "model": node.state.model,
-        "incomplete": state.response_incomplete,
-        "prompt_tokens": state.prompt_tokens,
-        "completion_tokens": state.completion_tokens,
-        "estimated_cost_usd": state.estimated_cost_usd,
-        "tool_invocations": [dict(call) for call in state.tool_invocations],
+        "incomplete": node.state.response_incomplete,
+        "prompt_tokens": node.state.prompt_tokens,
+        "completion_tokens": node.state.completion_tokens,
+        "estimated_cost_usd": node.state.estimated_cost_usd,
+        "tool_invocations": [dict(call) for call in node.state.tool_invocations],
+        "reply_history_fingerprint": node.state.reply_history_fingerprint,
+        "reply_knowledge_enabled": node.state.reply_knowledge_enabled,
     })
     return rows, index
 
@@ -348,6 +351,8 @@ def _serialize_chat_node(raw_node: SceneNode) -> dict[str, Any]:
         "override_provider": node.state.override_provider,
         "override_model_id": node.state.override_model_id,
         "use_knowledge": node.state.use_knowledge,
+        "reply_history_fingerprint": node.state.reply_history_fingerprint,
+        "reply_knowledge_enabled": node.state.reply_knowledge_enabled,
     }
 
 
@@ -1244,6 +1249,14 @@ def _build_chat_data(
         # without rewriting anyone's saved graph until their next save.
         "schema_version": 2,
         "nodes": node_payloads,
+        # Only non-chat nodes CREATED with dependency capture get a
+        # baseline; old graphs' derived nodes have no entry and remain
+        # unbadged until a new node is attached. Persist by stable saved
+        # id; session_load remaps to its new in-memory ids on restore.
+        "nonchat_upstream_fingerprints": {
+            node_id: value for node_id, value in document.nonchat_upstream_fingerprints.items()
+            if node_id in document.nodes and document.nodes[node_id].kind != "chat"
+        },
         # ADR-009 stage 9.6: the AUTHORITATIVE edge list. Every edge in the
         # document, written flat, by persistent node id - exactly the shape
         # the document itself holds. session_load.py prefers this key and

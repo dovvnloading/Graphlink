@@ -442,6 +442,14 @@ def _position(payload: dict[str, Any]) -> tuple[float, float]:
 # _restore_node below, NOT by these functions - clean separation between
 # "build this node's own fields" and "does it have a valid parent".
 
+def _valid_reply_fingerprint(value: Any) -> str | None:
+    """Reject malformed saved proofs without inventing legacy staleness."""
+    if (isinstance(value, str) and len(value) == 67 and value.startswith("v1:")
+            and all(ch in "0123456789abcdef" for ch in value[3:])):
+        return value
+    return None
+
+
 def _migrate_chat_versions(
     payload: dict[str, Any], current_content: str,
 ) -> tuple[list[ChatVersion], int]:
@@ -466,6 +474,9 @@ def _migrate_chat_versions(
             cost_usd=payload.get("estimated_cost_usd"),
             calls=[dict(call) for call in (payload.get("tool_invocations") or [])
                    if isinstance(call, dict)],
+            history_fingerprint=_valid_reply_fingerprint(payload.get("reply_history_fingerprint")),
+            knowledge_enabled=(payload.get("reply_knowledge_enabled")
+                                     if isinstance(payload.get("reply_knowledge_enabled"), bool) else None),
         )], 0
 
     start = max(0, len(raw) - MAX_CHAT_VERSIONS)
@@ -488,6 +499,9 @@ def _migrate_chat_versions(
                    if isinstance(call, dict)] if isinstance(row.get("tool_invocations", []), list) else [],
             parts=_content_codec.process_content_for_deserialization(row["parts"])
                   if isinstance(row.get("parts"), list) else None,
+            history_fingerprint=_valid_reply_fingerprint(row.get("reply_history_fingerprint")),
+            knowledge_enabled=(row.get("reply_knowledge_enabled")
+                                     if isinstance(row.get("reply_knowledge_enabled"), bool) else None),
         )
         for row in kept
     ]
@@ -509,6 +523,14 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
         content_text = str(raw_content or "")
     versions, version_index = _migrate_chat_versions(payload, content_text)
     selected = versions[version_index]
+    # Compatibility with saves that have a top-level proof but no per-version
+    # proof, including saves written before the two features were combined.
+    if selected.history_fingerprint is None:
+        selected.history_fingerprint = _valid_reply_fingerprint(
+            payload.get("reply_history_fingerprint"),
+        )
+        if isinstance(payload.get("reply_knowledge_enabled"), bool):
+            selected.knowledge_enabled = payload["reply_knowledge_enabled"]
     # raw_content is the live projection in both save formats. Honor it even
     # if a legacy import has updated it but retained an older versions array.
     if "raw_content" in payload or "text" in payload:
@@ -582,6 +604,11 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
             use_knowledge=(
                 payload.get("use_knowledge") if isinstance(payload.get("use_knowledge"), bool) else None
             ),
+            # No data in a pre-feature save may fabricate a fingerprint.
+            # Malformed/tampered proofs also degrade to unknown rather than
+            # incorrectly labeling a legacy response as out of date.
+            reply_history_fingerprint=selected.history_fingerprint,
+            reply_knowledge_enabled=selected.knowledge_enabled,
         ),
     )
 
@@ -2245,9 +2272,13 @@ def restore_chat_into_document(
     build_chat_data's own new `settings_manager` parameter. `None` (this
     parameter's own default) preserves the exact prior ungated behavior."""
     token = _ACTIVE_ASSET_STORE.set(asset_store)
+    # Saved graph edges are attached during this call. Do not manufacture a
+    # "creation time" dependency baseline for any of those older nodes.
+    document._restoring_staleness = True
     try:
         _restore_chat_into_document(document, chat, notes_data, pins_data, plugin_registry, settings_manager)
     finally:
+        document.__dict__.pop("_restoring_staleness", None)
         _ACTIVE_ASSET_STORE.reset(token)
 
 
@@ -2376,7 +2407,7 @@ def _restore_chat_into_document(
     for frame_index, frame_new_id in frames_map.items():
         all_items_map[node_slot_count + note_slot_count + chart_slot_count + frame_index] = frame_new_id
     container_base_index = node_slot_count + note_slot_count + chart_slot_count + frame_slot_count
-    _restore_containers(
+    containers_map = _restore_containers(
         document,
         chat_data.get("containers", []),
         all_items_map,
@@ -2403,6 +2434,16 @@ def _restore_chat_into_document(
             if note_payload_id:
                 by_payload_id[str(note_payload_id)] = mapped_note_id
     by_payload_id.update(charts_by_id)
+    # The generic scene can connect to frames/containers too. Remap their
+    # saved IDs alongside ordinary nodes, notes and charts for provenance.
+    for collection, mapping in (("frames", frames_map), ("containers", containers_map)):
+        payloads = chat_data.get(collection)
+        if isinstance(payloads, list):
+            for index, restored_id in mapping.items():
+                if index < len(payloads) and isinstance(payloads[index], dict):
+                    saved_id = payloads[index].get("id")
+                    if isinstance(saved_id, str) and saved_id:
+                        by_payload_id[saved_id] = restored_id
     document.graph_runs = restore_graph_runs(chat_data.get("graph_runs"), by_payload_id)
 
     restore_table_data(document.nodes, by_payload_id, chat_data.get("table_sources"), chat_data.get("table_outputs"))
@@ -2416,6 +2457,20 @@ def _restore_chat_into_document(
         _restore_system_prompt_and_summary_connections(
             document, chat_data, notes_map, chat_nodes_map, nodes_by_id
         )
+
+    # Restore ONLY explicit, well-shaped baselines. Old saves (no mapping)
+    # never acquire any out-of-date status merely from being loaded.
+    saved_baselines = chat_data.get("nonchat_upstream_fingerprints")
+    if isinstance(saved_baselines, dict):
+        for saved_id, value in saved_baselines.items():
+            if not isinstance(saved_id, str) or not isinstance(value, str):
+                continue
+            if (len(value) != 67 or not value.startswith("v1:")
+                    or any(ch not in "0123456789abcdef" for ch in value[3:])):
+                continue
+            new_id = by_payload_id.get(saved_id)
+            if new_id in document.nodes and document.nodes[new_id].kind != "chat":
+                document.nonchat_upstream_fingerprints[new_id] = value
 
     _restore_verified_science_references(document, node_payloads, all_nodes_map)
     _restore_pins(document, pins_data)

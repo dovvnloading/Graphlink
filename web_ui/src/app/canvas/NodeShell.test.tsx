@@ -21,6 +21,24 @@ function renderShell(props: Partial<React.ComponentProps<typeof NodeShell>> = {}
 }
 
 describe("NodeShell (ADR-012 stage 12.5)", () => {
+  it("shows outlined warning shape and explicit status text, even when collapsed", () => {
+    const { container, rerender } = renderShell({ staleness: "out_of_date", collapsed: true });
+    expect(screen.getByRole("status")).toHaveTextContent("Out of date");
+    expect(container.querySelector(".node-staleness-badge svg")).not.toBeNull();
+    rerender(
+      <ReactFlowProvider>
+        <NodeShell kindClassName="widget-node" selected={false} collapsed={false}
+          header={<div>Widget</div>} bodyClassName="widget-node-content" staleness="upstream_changed" />
+      </ReactFlowProvider>,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Upstream changed");
+  });
+
+  it("does not show an alert on current and legacy nodes", () => {
+    renderShell();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
   it("renders the scene-node wrapper with the kind class", () => {
     const { container } = renderShell();
     const wrapper = container.querySelector(".scene-node");

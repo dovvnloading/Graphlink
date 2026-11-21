@@ -1,9 +1,10 @@
-import { Handle, Position, useNodeId, useUpdateNodeInternals } from "@xyflow/react";
+import { Handle, Position, useNodeId, useStore, useUpdateNodeInternals } from "@xyflow/react";
 import { useEffect, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 
 import type { MenuPosition } from "./menuPosition";
 import { TEXT_INPUT_HANDLE, TEXT_OUTPUT_HANDLE } from "./textInputs";
 import "./NodeCards.css";
+import { StalenessBadge } from "./StalenessBadge";
 
 // Size-reporting alone misses a port when a lazy node view replaces an
 // equal-sized placeholder. Register the new handle after it enters the DOM.
@@ -30,6 +31,8 @@ interface NodeShellProps {
   textInput?: boolean;
   tablePort?: "source" | "target" | "both";
   modelPort?: boolean;
+  /** Direct-render override; live canvas status is subscribed from React Flow. */
+  staleness?: "current" | "out_of_date" | "upstream_changed";
   footer?: ReactNode;
   onBodyDoubleClick?: (event: MouseEvent<HTMLDivElement>) => void;
 }
@@ -49,9 +52,17 @@ export function NodeShell({
   textInput,
   tablePort,
   modelPort,
+  staleness,
   footer,
   onBodyDoubleClick,
 }: NodeShellProps) {
+  // One O(1) lookup per node, and a primitive-selector subscription: only
+  // the affected card re-renders when a different branch becomes stale.
+  const nodeId = useNodeId();
+  const liveStaleness = useStore((state) => (
+    nodeId ? state.nodeLookup.get(nodeId)?.data.staleness : undefined
+  ));
+  const visibleStaleness = staleness ?? liveStaleness;
   return (
     <div
       className={`scene-node scene-node-card ${kindClassName}${selected ? " selected" : ""}${collapsed ? " collapsed" : ""}`}
@@ -82,6 +93,7 @@ export function NodeShell({
             </button>
           )}
         </div>
+        <StalenessBadge status={visibleStaleness} />
         {!collapsed && (
           <div className={`scene-node-body ${bodyClassName}`} onDoubleClick={onBodyDoubleClick}>
             {children}

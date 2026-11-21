@@ -679,6 +679,10 @@ function makeChatFns(id: string, liveRef: { current: DispatcherLive }) {
     onUndockChild: (childId: string) => liveRef.current.store.setNodeDocked(childId, false),
     onRegenerate: () => liveRef.current.store.regenerateResponse(id),
     onSelectVersion: (index: number) => liveRef.current.store.setChatVersion(id, index),
+    onEditMessage: (content: string, expectedContent: string, onSettled: (success: boolean) => void) =>
+      liveRef.current.store.editChatMessage(id, content, expectedContent, onSettled),
+    onEditAsNewBranch: (content: string, expectedContent: string, onSettled: (success: boolean) => void) =>
+      liveRef.current.store.editChatMessageAsNewBranch(id, content, expectedContent, onSettled),
     onCompareVersions: () => {
       const { n, onCompareChatVersions } = liveRef.current;
       onCompareChatVersions?.(id, n.versionCount, n.versionIndex);
@@ -2161,6 +2165,21 @@ export function toFlowNodes(
     };
     cache.flowNodes.set(n, { extraSig: "", flowNode: placeholderFlowNode });
     flowNodes.push(placeholderFlowNode);
+  }
+
+  // Only non-current nodes get new flow data. Keep unchanged view objects
+  // and callbacks cached so the one-node render-count budget still holds.
+  for (let i = 0; i < flowNodes.length; i++) {
+    const flow = flowNodes[i];
+    const row = nodesById.get(flow.id);
+    const staleness = row?.staleness ?? "current";
+    if (staleness === "current" || (flow.data as Record<string, unknown>).staleness === staleness) continue;
+    const updated = { ...flow, data: { ...flow.data, staleness } } as SceneFlowNode;
+    flowNodes[i] = updated;
+    if (row) {
+      const cached = cache.flowNodes.get(row);
+      if (cached) cache.flowNodes.set(row, { ...cached, flowNode: updated });
+    }
   }
 
   pruneDispatcherCache(cache, nodesById);

@@ -88,8 +88,8 @@ describe("read-only Document View comparison dialog", () => {
     expect(rightPane.querySelector("ins")).toHaveTextContent("green");
     expect(leftPane.querySelector("del")).toHaveClass("chat-version-compare-deleted");
     expect(rightPane.querySelector("ins")).toHaveClass("chat-version-compare-inserted");
-    expect(within(dialog).getByText(/Deleted: /)).toBeVisible();
-    expect(within(dialog).getByText(/Inserted: /)).toBeVisible();
+    expect(within(dialog).getByText(/Deleted:/)).toBeVisible();
+    expect(within(dialog).getByText(/Inserted:/)).toBeVisible();
     expect(setChatVersion).not.toHaveBeenCalled();
   });
 

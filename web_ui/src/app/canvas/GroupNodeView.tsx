@@ -3,6 +3,7 @@ import { memo, useEffect, useRef, useState, type CSSProperties, type ReactNode }
 import { swatchStyle } from "./nodeSwatch";
 import { NodeGlyph } from "./NodeHeading";
 import { GroupColorPicker } from "./GroupColorPicker";
+import { StalenessBadge } from "./StalenessBadge";
 import { GROUP_RESIZE_MIN_HEIGHT, GROUP_RESIZE_MIN_WIDTH } from "./canvasConstants";
 
 /**
@@ -75,6 +76,7 @@ export interface GroupNodeData extends Record<string, unknown> {
   color: string | null;
   headerColor: string | null;
   isCollapsed: boolean;
+  staleness?: "current" | "out_of_date" | "upstream_changed";
   isLocked: boolean;
   itemIds: string[];
   memberKinds: string[];
@@ -241,6 +243,9 @@ function GroupNodeViewImpl({ id, data, selected }: NodeProps<GroupFlowNode>) {
       onMouseLeave={() => setHovered(false)}
     >
       {showGhostPreview && <GhostPreview memberKinds={data.memberKinds} />}
+      {data.staleness && <div className="group-node-staleness">
+        <StalenessBadge status={data.staleness} />
+      </div>}
       <NodeResizer
         nodeId={id}
         isVisible={isFrame && !data.isCollapsed && (hovered || selected)}
@@ -393,6 +398,7 @@ function groupNodeDataAreEqual(prev: GroupNodeData, next: GroupNodeData): boolea
     prev.color === next.color &&
     prev.headerColor === next.headerColor &&
     prev.isCollapsed === next.isCollapsed &&
+    prev.staleness === next.staleness &&
     prev.isLocked === next.isLocked &&
     stringArraysEqual(prev.memberKinds, next.memberKinds) &&
     prev.onSetLabel === next.onSetLabel &&

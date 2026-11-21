@@ -161,6 +161,7 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
     isBranchSynthesis: false,
     synthesisInstructions: "",
     branchStatus: "active",
+    staleness: "current",
     // ADR-006 stage 6.4
     responseIncomplete: false,
     isFinalDeliverable: false,
@@ -259,6 +260,24 @@ function baseScene(overrides: Partial<SceneState> = {}): SceneState {
   };
 }
 
+describe("published staleness on every canvas kind", () => {
+  it("annotates stale chat and non-chat cards without touching current ones", () => {
+    const scene = baseScene({ nodes: [
+      baseNode({ id: "reply", kind: "chat", isUser: false, staleness: "out_of_date" }),
+      baseNode({ id: "code", kind: "code", staleness: "upstream_changed" }),
+      baseNode({ id: "note", kind: "note", staleness: "upstream_changed" }),
+      baseNode({ id: "fresh", kind: "chat", isUser: true }),
+    ] });
+    const data = new Map(toFlowNodes(scene, makeStore()).map((node) => [
+      node.id, node.data as Record<string, unknown>,
+    ]));
+    expect(data.get("reply")?.staleness).toBe("out_of_date");
+    expect(data.get("code")?.staleness).toBe("upstream_changed");
+    expect(data.get("note")?.staleness).toBe("upstream_changed");
+    expect(data.get("fresh")?.staleness).toBeUndefined();
+  });
+});
+
 describe("first-class Model canvas ports", () => {
   it("renders a real Model card with a typed input and a distinct execution edge", () => {
     const scene = baseScene({
@@ -346,6 +365,27 @@ describe("toFlowNodes (R4.3c parentChatNodeId derivation)", () => {
     expect([data.versionCount, data.versionIndex]).toEqual([2, 1]);
     data.onSelectVersion(0);
     expect(select).toHaveBeenCalledWith("chat-1", 0);
+  });
+
+  it("routes user edits through the stable chat dispatcher without any reply run", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "user-1", kind: "chat", content: "Original", isUser: true })],
+      edges: [],
+    });
+    const store = makeStore();
+    const edit = vi.spyOn(store, "editChatMessage");
+    const branch = vi.spyOn(store, "editChatMessageAsNewBranch");
+    const regenerate = vi.spyOn(store, "regenerateResponse");
+    const data = toFlowNodes(scene, store).find((n) => n.id === "user-1")!.data as {
+      onEditMessage: (content: string, expected: string, callback: (success: boolean) => void) => void;
+      onEditAsNewBranch: (content: string, expected: string, callback: (success: boolean) => void) => void;
+    };
+    const settled = vi.fn();
+    data.onEditMessage("Changed", "Original", settled);
+    data.onEditAsNewBranch("Fork", "Original", settled);
+    expect(edit).toHaveBeenCalledWith("user-1", "Changed", "Original", settled);
+    expect(branch).toHaveBeenCalledWith("user-1", "Fork", "Original", settled);
+    expect(regenerate).not.toHaveBeenCalled();
   });
 
   it("chat comparison uses a stable read-only callback and current version metadata", () => {

@@ -378,6 +378,7 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
         isBranchSynthesis: false,
         synthesisInstructions: "",
         branchStatus: "active",
+        staleness: "current",
         // ADR-006 stage 6.4
         responseIncomplete: false,
         isFinalDeliverable: false,
@@ -2127,5 +2128,28 @@ describe("Virtual Environment Runner manual Python edit transport", () => {
     );
     fake.fireIntentSettlers[0](false);
     expect(onSettled).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("Sent chat message edits", () => {
+  it("forwards both edits with their expected text and never queues a version append or branch create", () => {
+    const fake = makeFakeTransport({ autoSettleFireIntent: false });
+    const store = new SceneStore(fake.transport);
+    const editSettled = vi.fn();
+    const branchSettled = vi.fn();
+    store.editChatMessage("n4", "revision", "original", editSettled);
+    store.editChatMessageAsNewBranch("n4", "other route", "original", branchSettled);
+    expect(fake.transport.fireIntent).toHaveBeenNthCalledWith(
+      1, "scene", "editChatMessage", ["n4", "revision", "original"],
+      undefined, false, undefined, editSettled,
+    );
+    expect(fake.transport.fireIntent).toHaveBeenNthCalledWith(
+      2, "scene", "editChatMessageAsNewBranch", ["n4", "other route", "original"],
+      undefined, false, undefined, branchSettled,
+    );
+    fake.fireIntentSettlers[0](true);
+    fake.fireIntentSettlers[1](false);
+    expect(editSettled).toHaveBeenCalledWith(true);
+    expect(branchSettled).toHaveBeenCalledWith(false);
   });
 });
