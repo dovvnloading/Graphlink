@@ -3373,3 +3373,22 @@ def test_start_ollama_refuses_uninstalled_app_and_surfaces_spawn_failures(manage
     payload = recorder.messages[-1]["payload"]
     assert payload["ollamaStartStatus"] == "idle"
     assert "permission denied" in payload["ollamaStartError"]
+
+
+def test_saved_ollama_assignments_reject_legacy_path_tricks(manager):
+    from backend.api._settings_shared import apply_ollama_chat_model
+
+    manager.state["ollama_model_assignments"] = {
+        "task_chat": {"mode": "explicit", "model_id": "../outside:latest"},
+        "task_title": {"mode": "explicit", "model_id": "bad\\model"},
+        "task_chart": {"mode": "explicit", "model_id": "safe:latest"},
+    }
+    cleaned = manager.get_ollama_model_assignments()
+    assert cleaned["task_chat"]["mode"] == "auto"
+    assert cleaned["task_title"]["mode"] == "inherit"
+    assert cleaned["task_chart"]["model_id"] == "safe:latest"
+
+    manager.set_ollama_model_assignments(manager.state["ollama_model_assignments"])
+    assert manager.state["ollama_model_assignments"] == cleaned
+    asyncio.run(apply_ollama_chat_model(manager, "../outside:latest"))
+    assert manager.get_ollama_model_assignments() == cleaned
