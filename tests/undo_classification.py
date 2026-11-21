@@ -415,6 +415,8 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("knowledge", "search", "B", "read-only: queries the local knowledge store, no document mutation"),
     Classified("knowledge", "addFiles", "B", "external-store: launches a local knowledge import job, not a scene undo"),
     Classified("knowledge", "addFolder", "B", "external-store: launches a local folder import job, not a scene undo"),
+    Classified("knowledge", "addChatAttachment", "B", "external-store: imports a staged chat attachment into workspace knowledge"),
+    Classified("knowledge", "addWorkspaceFile", "B", "external-store: imports an authorized agent workspace file"),
     Classified("knowledge", "cancelIngest", "B", "run-lifecycle: signals cancellation of a background knowledge job"),
     Classified("knowledge", "getIngestJobs", "B", "read-only: retrieves background knowledge job progress"),
     Classified("scene", "setChatIndexIntoKnowledge", "A", "content: branch-indexing opt-in is document state, same posture as setGroupColor"),
