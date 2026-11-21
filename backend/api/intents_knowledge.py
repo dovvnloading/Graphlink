@@ -39,6 +39,7 @@ from backend.knowledge_embedding_config import configured_hybrid_search
 from backend.knowledge_store import (
     DEFAULT_DB_PATH, get_or_create_workspace_collection, open_cited_document, replace_branch_document_with_chunks,
     list_library_documents, file_sources_for_document, remove_library_document, library_document_text,
+    display_source_label,
 )
 from backend.notifications import NotificationState
 
@@ -177,12 +178,12 @@ def format_search_result_row(result: dict) -> dict:
         "chunkId": result["chunk_id"],
         "documentId": result["document_id"],
         "documentTitle": result["document_title"],
-        "sourceUri": result["source_uri"],
+        "sourceUri": display_source_label(str(result["source_uri"]), str(result["document_title"])),
         "text": result["text"],
         "trustLabel": "untrusted data",
         "offsetStart": result["offset_start"],
         "offsetEnd": result["offset_end"],
-        "sourceFile": result["source_file"],
+        "sourceFile": display_source_label(str(result["source_file"]), str(result["document_title"])),
         "section": result["section"],
         "citationId": result["citation_id"],
         "rankSignals": result.get("rank_signals", {}),
