@@ -76,6 +76,18 @@ class OllamaModelCheckPayload:
 
 
 @dataclass
+class LlamaCppModelPayload:
+    """Read-only GGUF header information for staged chat/naming selections."""
+
+    path: str
+    name: str
+    sizeBytes: int | None
+    quantization: str
+    trainedContextLength: int | None
+    capabilities: list[str]
+
+
+@dataclass
 class McpServerConfigPayload:
     """One configured MCP server - the wire counterpart of backend/
     mcp_client.py's McpServerConfig, sourced from SettingsManager.
@@ -241,6 +253,7 @@ class AppSettingsStatePayload:
     llamaCppNGpuLayers: int
     llamaCppNThreads: int
     llamaCppScannedModels: list[str]
+    llamaCppModels: list[LlamaCppModelPayload]
     llamaCppScanSummary: str
     llamaCppScanStatus: str
     llamaCppNotice: str

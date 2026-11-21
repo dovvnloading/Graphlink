@@ -221,6 +221,42 @@
     "llamaCppChatModelPath": {
       "type": "string"
     },
+    "llamaCppModels": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "quantization": {
+            "type": "string"
+          },
+          "sizeBytes": {
+            "type": "integer"
+          },
+          "trainedContextLength": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "name",
+          "quantization",
+          "capabilities"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
     "llamaCppNCtx": {
       "type": "integer"
     },
@@ -602,6 +638,7 @@
     "llamaCppNGpuLayers",
     "llamaCppNThreads",
     "llamaCppScannedModels",
+    "llamaCppModels",
     "llamaCppScanSummary",
     "llamaCppScanStatus",
     "llamaCppNotice",

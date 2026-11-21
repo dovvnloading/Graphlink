@@ -84,6 +84,7 @@ from backend.api.intents_settings_llama_cpp import register_settings_llama_cpp_i
 from backend.api.intents_settings_knowledge import register_settings_knowledge_intents
 from backend.api.intents_settings_ollama import register_settings_ollama_intents
 from backend.events import SessionBus
+from backend.gguf_model_cards import llama_cpp_model_cards
 from backend.notifications import NotificationState
 
 if TYPE_CHECKING:
@@ -407,6 +408,9 @@ def _build_settings_payload(
     payload["llamaCppNGpuLayers"] = manager.get_llama_cpp_n_gpu_layers()
     payload["llamaCppNThreads"] = manager.get_llama_cpp_n_threads()
     payload["llamaCppScannedModels"] = manager.get_llama_cpp_scanned_models()
+    payload["llamaCppModels"] = llama_cpp_model_cards([
+        state.llama_staged_chat_path, state.llama_staged_title_path,
+    ])
     payload["llamaCppScanSummary"] = _llama_cpp_scan_summary(manager)
     payload["llamaCppScanStatus"] = state.llama_scan_status
     payload["llamaCppNotice"] = state.llama_notice

@@ -95,6 +95,7 @@ const settingsSnapshot: AppSettingsState = {
   llamaCppNGpuLayers: 0,
   llamaCppNThreads: 0,
   llamaCppScannedModels: [],
+  llamaCppModels: [],
   llamaCppScanSummary: "",
   llamaCppScanStatus: "idle",
   llamaCppNotice: "",
