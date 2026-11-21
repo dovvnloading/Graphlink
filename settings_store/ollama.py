@@ -30,14 +30,26 @@ from graphlink_model_catalog import (
 
 class OllamaSettingsOps(SettingsManagerParts):
 
+    @staticmethod
+    def _safe_assignments(values: dict) -> dict:
+        """Scrub stale/legacy explicit IDs before they reach runtime selection."""
+        normalized = assignment_values(values)
+        for task, entry in normalized.items():
+            if entry.get("mode") == "explicit" and not valid_ollama_model_name(entry.get("model_id")):
+                normalized[task] = {
+                    "mode": AUTO_MODEL if task == "task_chat" else INHERIT_MODEL,
+                    "model_id": "",
+                }
+        return normalized
+
     def get_ollama_model_assignments(self):
         assignments = self.state.get("ollama_model_assignments", {})
         if not isinstance(assignments, dict):
             return {}
-        return assignment_values(assignments)
+        return self._safe_assignments(assignments)
 
     def set_ollama_model_assignments(self, assignments: dict):
-        normalized = assignment_values(assignments)
+        normalized = self._safe_assignments(assignments)
         self.state["ollama_model_assignments"] = normalized
         for task, key in {
             "task_title": "ollama_title_model",
@@ -58,6 +70,8 @@ class OllamaSettingsOps(SettingsManagerParts):
 
     def _set_ollama_model(self, task: str, legacy_key: str, model_name: str):
         model_id = normalize_model_id(model_name)
+        if not valid_ollama_model_name(model_id):
+            model_id = ""
         assignments = self.get_ollama_model_assignments()
         if model_id and model_id.lower() not in self.LEGACY_PRODUCT_MODEL_IDS:
             assignments[task] = ModelAssignment("explicit", model_id).to_dict()
