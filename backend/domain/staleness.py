@@ -86,14 +86,16 @@ def _immutable_message_signature(node) -> tuple[Any, ...] | None:
     """
     if type(node.content) is not str:
         return None
-    state = node.state
-    if isinstance(state, ChatState):
-        if type(state) is not ChatState:
+    if isinstance(node.state, ChatState):
+        if type(node.state) is not ChatState:
             return None
-        parts = state.content_parts
+        parts = node.state.content_parts
         if parts is not None and (type(parts) is not list or parts):
             return None
-        settings = (state.is_user, state.override_provider, state.override_model_id, state.use_knowledge)
+        settings = (
+            node.state.is_user, node.state.override_provider,
+            node.state.override_model_id, node.state.use_knowledge,
+        )
         if any(type(value) not in (str, bool, type(None)) for value in settings):
             return None
         return (True, node.content, *settings)
