@@ -308,6 +308,8 @@ def register_ollama_model_management_intents(
         def _stream_pull() -> bool:
             # Existing pull support remains the single download path; stream
             # it in a worker thread to keep the WebSocket event loop live.
+            if stop.is_set():
+                return False
             stream = ollama.pull(model_name, stream=True)
             try:
                 for update in stream:
@@ -323,7 +325,7 @@ def register_ollama_model_management_intents(
 
         try:
             completed = await asyncio.to_thread(_stream_pull)
-            if not completed:
+            if not completed or stop.is_set():
                 state.ollama_pull_status = "cancelled"
                 state.ollama_pull_message = "Download cancelled."
                 return
