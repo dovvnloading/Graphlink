@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { Composer } from "./Composer";
@@ -7,6 +7,7 @@ import { NotificationBanner, TRANSIENT_NOTIFICATION_MS } from "./NotificationBan
 import { initialComposerState, initialNotificationState, initialTokenCounterState } from "./composerStore";
 import { initialSceneState } from "../canvas/sceneStore";
 import { OverlayProvider } from "../overlays/overlays";
+import type { StateListener } from "../../lib/ws/transport";
 
 function makeStore(
   overrides: { composer?: object; tokenCounter?: object; notification?: object; streamText?: string } = {},
@@ -23,6 +24,15 @@ function makeStore(
   const selectModel = vi.fn();
   const attachFile = vi.fn();
   const removeAttachment = vi.fn();
+  const addAttachmentToKnowledge = vi.fn().mockResolvedValue({ jobId: "import-1" });
+  const knowledgeListeners = new Set<StateListener>();
+  const subscribeKnowledgeIngest = (listener: StateListener) => {
+    knowledgeListeners.add(listener);
+    return () => { knowledgeListeners.delete(listener); };
+  };
+  const emitKnowledgeJobs = (jobs: unknown[]) => {
+    for (const listener of knowledgeListeners) listener({ jobs });
+  };
   const cancelChatRequest = vi.fn();
   const dismissNotification = vi.fn();
   const loadComparisonModels = vi.fn().mockResolvedValue(
@@ -46,6 +56,8 @@ function makeStore(
     selectModel,
     attachFile,
     removeAttachment,
+    addAttachmentToKnowledge,
+    subscribeKnowledgeIngest,
     cancelChatRequest,
     dismissNotification,
     loadComparisonModels,
@@ -53,6 +65,7 @@ function makeStore(
   };
   return {
     store, updateDraft, setReasoningLevel, selectModel, attachFile, removeAttachment,
+    addAttachmentToKnowledge, emitKnowledgeJobs,
     cancelChatRequest, dismissNotification, loadComparisonModels, sendModelComparison,
   };
 }
@@ -809,6 +822,71 @@ describe("Composer", () => {
     expect(removeAttachment).toHaveBeenCalledWith("att-1");
     // the OTHER chip must not have been touched
     expect(removeAttachment).not.toHaveBeenCalledWith("att-2");
+  });
+
+  it("adds only document attachments to knowledge and reports job progress and success", async () => {
+    const user = userEvent.setup();
+    const { store, addAttachmentToKnowledge, emitKnowledgeJobs } = makeStore({
+      composer: {
+        context: {
+          ...initialComposerState.context,
+          items: [
+            { id: "image", name: "image.png", kind: "image", byteSize: 100, contextLabel: "Vision", tokenCount: 0 },
+            { id: "doc", name: "research.md", kind: "document", byteSize: 100, contextLabel: "Text", tokenCount: 10 },
+          ],
+        },
+      },
+    });
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+
+    expect(screen.queryByRole("button", { name: "Add image.png to knowledge" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Add research.md to knowledge" }));
+    expect(addAttachmentToKnowledge).toHaveBeenCalledWith("doc");
+
+    act(() => emitKnowledgeJobs([{
+      jobId: "import-1", status: "running", filesTotal: 1, filesProcessed: 0,
+      added: 0, updated: 0, duplicates: 0, unchanged: 0, skipped: 0,
+      failedFiles: 0, error: "", warnings: [],
+    }]));
+    expect(await screen.findByLabelText("Knowledge import progress")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add research.md to knowledge" })).toBeDisabled();
+
+    act(() => emitKnowledgeJobs([{
+      jobId: "import-1", status: "completed", filesTotal: 1, filesProcessed: 1,
+      added: 1, updated: 0, duplicates: 0, unchanged: 0, skipped: 0,
+      failedFiles: 0, error: "", warnings: [],
+    }]));
+    expect(await screen.findByText("Added research.md to this workspace's knowledge.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add research.md to knowledge" })).toBeEnabled();
+  });
+
+  it("surfaces a failed attachment import instead of claiming it succeeded", async () => {
+    const user = userEvent.setup();
+    const { store, addAttachmentToKnowledge } = makeStore({
+      composer: {
+        context: {
+          ...initialComposerState.context,
+          items: [{ id: "doc", name: "notes.txt", kind: "document",
+            byteSize: 16, contextLabel: "Text", tokenCount: 3 }],
+        },
+      },
+    });
+    addAttachmentToKnowledge.mockRejectedValueOnce(new Error("Import is already running"));
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Add notes.txt to knowledge" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not add notes.txt to knowledge: Import is already running",
+    );
   });
 });
 
