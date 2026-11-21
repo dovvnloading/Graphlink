@@ -79,6 +79,14 @@ export interface AppSettingsState {
   ollamaReasoningLevel: string;
   ollamaCurrentModel: string;
   ollamaModelAssignments: Record<string, string>;
+  ollamaContextWindows: Record<string, number>;
+  ollamaContextModel: string;
+  ollamaContextStatus: string;
+  ollamaContextNotice: string;
+  ollamaContextTrainedLength: number;
+  ollamaContextModelSizeBytes: number;
+  ollamaContextKvBytesPerToken: number;
+  ollamaContextAvailableMemoryBytes: number;
   ollamaScannedModels: string[];
   ollamaScanSummary: string;
   ollamaScanStatus: string;
@@ -182,6 +190,14 @@ const APP_SETTINGS_STATE_FIELDS: WireFields = [
   ["ollamaReasoningLevel", "s", 0],
   ["ollamaCurrentModel", "s", 0],
   ["ollamaModelAssignments", { d: "s" }, 0],
+  ["ollamaContextWindows", { d: "n" }, 0],
+  ["ollamaContextModel", "s", 0],
+  ["ollamaContextStatus", "s", 0],
+  ["ollamaContextNotice", "s", 0],
+  ["ollamaContextTrainedLength", "n", 0],
+  ["ollamaContextModelSizeBytes", "n", 0],
+  ["ollamaContextKvBytesPerToken", "n", 0],
+  ["ollamaContextAvailableMemoryBytes", "n", 0],
   ["ollamaScannedModels", { a: "s" }, 0],
   ["ollamaScanSummary", "s", 0],
   ["ollamaScanStatus", "s", 0],
