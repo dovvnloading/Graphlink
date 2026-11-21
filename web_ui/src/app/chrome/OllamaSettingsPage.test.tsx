@@ -558,7 +558,7 @@ describe("Settings > Ollama", () => {
     });
     const embedding = within(screen.getByRole("group", { name: "nomic-embed-text:latest" }));
     const chat = within(screen.getByRole("group", { name: "chat:latest" }));
-    expect(embedding.getByText(/274/)).toBeInTheDocument();
+    expect(embedding.getByText(/261.3 MiB on disk/)).toBeInTheDocument();
     expect(embedding.queryByRole("button", { name: /Context window/ })).toBeNull();
     expect(embedding.queryByText(/supported presets/)).toBeNull();
     expect(embedding.queryByText(/Estimated model weights/)).toBeNull();
