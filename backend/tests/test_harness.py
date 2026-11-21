@@ -416,7 +416,7 @@ class TestLoop:
     def test_think_block_is_not_visible_or_persisted(self, workspace_root, monkeypatch):
         document, dispatcher, registry, bus, node = self._make(workspace_root)
         scripted_turns(monkeypatch, [
-            {"content": "<think>private working notes</think>\\nThe answer is 42."},
+            {"content": "<think>private working notes</think>\nThe answer is 42."},
         ])
         asyncio.run(drive(document, dispatcher, registry, bus, node, "find the answer"))
         assert node.state.harness_status == "done"
@@ -460,7 +460,7 @@ class TestLoop:
                     "usage": None,
                 }
             return {
-                "message": {"role": "assistant", "content": "<think>hidden conclusion</think>\\nFinished."},
+                "message": {"role": "assistant", "content": "<think>hidden conclusion</think>\nFinished."},
                 "tool_calls": [], "usage": None,
             }
 
