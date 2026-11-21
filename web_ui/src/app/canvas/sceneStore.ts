@@ -139,6 +139,31 @@ function isIdList(value: unknown): boolean {
 
 
 /** A backend-computed preview; positions are display-only, never trusted writes. */
+export type ChatRerunScope = "this_path" | "all_branches_below";
+
+export interface ChatRerunPreview {
+  previewToken: string;
+  replies: Array<{
+    nodeId: string;
+    title: string;
+    provider: string;
+    model: string;
+    estimatedInputTokens: number;
+  }>;
+  count: number;
+  requiresConfirmation: boolean;
+}
+
+export interface ChatRerunStatus {
+  jobId: string;
+  status: "running" | "completed" | "cancelled" | "failed";
+  completed: number;
+  total: number;
+  currentNodeId: string | null;
+  error: string;
+  cancelRequested: boolean;
+}
+
 export interface OrganizationPreview {
   fingerprint: string;
   planId: string;
@@ -1123,6 +1148,27 @@ export class SceneStore {
   // calling this - see toFlowNodes below; the backend never kind-sniffs).
   regenerateResponse(chatNodeId: string): void {
     this.transport.fireIntent("scene", "regenerateResponse", [chatNodeId]);
+  }
+
+  /** Server-validated preview; these requests are never offline-replayed. */
+  previewChatRerun(nodeId: string, scope: ChatRerunScope): Promise<ChatRerunPreview> {
+    return this.transport.request("scene", "previewChatRerun", [nodeId, scope]) as Promise<ChatRerunPreview>;
+  }
+
+  startChatRerun(
+    nodeId: string, scope: ChatRerunScope, previewToken: string, confirmLarge: boolean,
+  ): Promise<{ jobId: string }> {
+    return this.transport.request(
+      "scene", "startChatRerun", [nodeId, scope, previewToken, confirmLarge],
+    ) as Promise<{ jobId: string }>;
+  }
+
+  getChatRerunStatus(jobId: string): Promise<ChatRerunStatus> {
+    return this.transport.request("scene", "getChatRerunStatus", [jobId]) as Promise<ChatRerunStatus>;
+  }
+
+  cancelChatRerun(jobId: string): Promise<{ ok: boolean }> {
+    return this.transport.request("scene", "cancelChatRerun", [jobId]) as Promise<{ ok: boolean }>;
   }
 
   /** Message edits append versions; neither operation is safe for offline replay. */

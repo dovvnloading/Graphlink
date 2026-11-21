@@ -93,6 +93,8 @@ export interface ChatNodeData extends Record<string, unknown> {
   onDelete: () => void;
   onUndockChild: (childId: string) => void;
   onRegenerate: () => void;
+  /** Opens the server-validated preview; no replay until explicit confirmation. */
+  onRerunFromHere?: () => void;
   onGenerateImage: () => void;
   onGenerateChart: (chartType: string) => void;
   onGenerateKeyTakeaway: () => void;
@@ -254,6 +256,8 @@ function ChatNodeMenu({
   onDelete,
   onUndockChild,
   onRegenerate,
+  onRerunFromHere,
+  canRerun,
   onEdit,
   onEditAsNewBranch,
   editDisabled,
@@ -285,6 +289,8 @@ function ChatNodeMenu({
   onDelete: () => void;
   onUndockChild: (childId: string) => void;
   onRegenerate: () => void;
+  onRerunFromHere?: () => void;
+  canRerun: boolean;
   onEdit: () => void;
   onEditAsNewBranch: () => void;
   editDisabled: boolean;
@@ -590,6 +596,20 @@ function ChatNodeMenu({
       >
         Delete Node
       </button>
+      {canRerun && onRerunFromHere && (
+        <button type="button" role="menuitem" disabled={editDisabled}
+          onClick={() => {
+            // Preserve a connected focus target when the context menu unmounts.
+            const trigger = document.getElementById("chat-rerun-trigger-" + nodeId)
+              ?? Array.from(document.querySelectorAll<HTMLElement>(".react-flow__node"))
+                .find((element) => element.dataset.id === nodeId);
+            trigger?.focus();
+            onRerunFromHere();
+            onClose();
+          }}>
+          Re-run from here
+        </button>
+      )}
       {!isUser && (
         <button
           type="button"
@@ -766,6 +786,7 @@ export function chatNodePropsAreEqual(prev: NodeProps<ChatFlowNode>, next: NodeP
     a.onDelete === b.onDelete &&
     a.onUndockChild === b.onUndockChild &&
     a.onRegenerate === b.onRegenerate &&
+    a.onRerunFromHere === b.onRerunFromHere &&
     a.onSelectVersion === b.onSelectVersion &&
     a.onEditMessage === b.onEditMessage &&
     a.onEditAsNewBranch === b.onEditAsNewBranch &&
@@ -1041,6 +1062,15 @@ export const ChatNodeView = memo(function ChatNodeView({
                   title="Branch from here" aria-label="Branch from here">
                   <ChatNodeIcon name="branch" />
                 </button>
+                {(data.isUser ? data.versionCount > 1 : data.staleness === "out_of_date")
+                  && data.onRerunFromHere && (
+                  <button type="button" className="chat-node-quick-action nodrag"
+                    id={"chat-rerun-trigger-" + id}
+                    disabled={!!data.pendingRequestId} onClick={data.onRerunFromHere}
+                    title="Re-run from here" aria-label="Re-run from here">
+                    ↻
+                  </button>
+                )}
                 <button type="button" className="chat-node-quick-action nodrag" onClick={data.onOpenDocumentView}
                   title="Open Document View" aria-label="Open Document View">
                   <ChatNodeIcon name="document" />
@@ -1065,6 +1095,8 @@ export const ChatNodeView = memo(function ChatNodeView({
             onDelete={data.onDelete}
             onUndockChild={data.onUndockChild}
             onRegenerate={data.onRegenerate}
+            onRerunFromHere={data.onRerunFromHere}
+            canRerun={data.isUser ? data.versionCount > 1 : data.staleness === "out_of_date"}
             onEdit={() => beginEdit("in-place")}
             onEditAsNewBranch={() => beginEdit("new-branch")}
             editDisabled={!!data.pendingRequestId}

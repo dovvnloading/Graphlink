@@ -69,6 +69,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
   const onDelete = vi.fn();
   const onUndockChild = vi.fn();
   const onRegenerate = vi.fn();
+  const onRerunFromHere = vi.fn();
   const onSelectVersion = vi.fn();
   const onEditMessage = vi.fn();
   const onEditAsNewBranch = vi.fn();
@@ -108,6 +109,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
         onDelete,
         onUndockChild,
         onRegenerate,
+        onRerunFromHere,
         onGenerateImage,
         onGenerateChart,
         onGenerateKeyTakeaway,
@@ -163,7 +165,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
     );
   }
   return {
-    onToggleCollapse, onDelete, onUndockChild, onRegenerate, onSelectVersion, onEditMessage, onEditAsNewBranch, onCompareVersions, onGenerateImage,
+    onToggleCollapse, onDelete, onUndockChild, onRegenerate, onRerunFromHere, onSelectVersion, onEditMessage, onEditAsNewBranch, onCompareVersions, onGenerateImage,
     onGenerateChart, onGenerateKeyTakeaway, onGenerateExplainerNote,
     onOpenDocumentView, onOpenCitation, onScrollChange, onToggleBranchFocus, onBranchFromHere,
     onSetBranchStatus, onSetFinalDeliverable, onCollapseBranch, onCancelRegenerate,
@@ -1901,5 +1903,40 @@ describe("ChatNodeView sent-message editing", () => {
     await user.keyboard("{Control>}{Enter}{/Control}");
     expect(onEditMessage).not.toHaveBeenCalled();
     expect(screen.queryByRole("textbox", { name: "Edit message text" })).toBeNull();
+  });
+});
+
+describe("ChatNodeView re-run from here", () => {
+  it("exposes a keyboard-labelled header shortcut on edited messages", async () => {
+    const user = userEvent.setup();
+    const { onRerunFromHere } = renderChatNode({ versionCount: 2, versionIndex: 1 });
+    const action = screen.getByRole("button", { name: "Re-run from here" });
+    await user.click(action);
+    expect(onRerunFromHere).toHaveBeenCalledOnce();
+  });
+
+  it("offers the action for an edited user version and dispatches it from the keyboard menu", async () => {
+    const user = userEvent.setup();
+    const { onRerunFromHere } = renderChatNode({ isUser: true, versionCount: 2, versionIndex: 1 });
+    fireEvent.contextMenu(screen.getByText("You"));
+    const item = screen.getByRole("menuitem", { name: "Re-run from here" });
+    item.focus();
+    await user.keyboard("{Enter}");
+    expect(onRerunFromHere).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menuitem", { name: "Re-run from here" })).toBeNull();
+  });
+
+  it("offers the action on an out-of-date reply, not a current reply or an unedited user", () => {
+    const { rerenderWithData } = renderChatNode({ isUser: false, staleness: "out_of_date" });
+    fireEvent.contextMenu(screen.getByText("Assistant"));
+    expect(screen.getByRole("menuitem", { name: "Re-run from here" })).toBeInTheDocument();
+    rerenderWithData({ isUser: false, staleness: "current" });
+    expect(screen.queryByRole("menuitem", { name: "Re-run from here" })).toBeNull();
+  });
+
+  it("disables the action while this reply is generating", () => {
+    renderChatNode({ isUser: false, staleness: "out_of_date", pendingRequestId: "request-1" });
+    fireEvent.contextMenu(screen.getByText("Assistant"));
+    expect(screen.getByRole("menuitem", { name: "Re-run from here" })).toBeDisabled();
   });
 });
