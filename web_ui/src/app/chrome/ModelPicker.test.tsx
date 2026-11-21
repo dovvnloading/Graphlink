@@ -100,6 +100,7 @@ describe("shared local/cloud model picker", () => {
     expect(selectPickerModel).toHaveBeenCalledExactlyOnceWith("Anthropic Claude", "claude-test");
 
     await user.click(screen.getByRole("button", { name: "Choose a model" }));
+    await screen.findByRole("button", { name: /Ollama · qwen3:8b/ });
     await user.keyboard("{ArrowDown}");
     expect(screen.getByRole("button", { name: /Ollama · qwen3:8b/ })).toHaveFocus();
     await user.keyboard("{Enter}");
