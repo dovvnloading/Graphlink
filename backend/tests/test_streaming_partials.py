@@ -300,6 +300,10 @@ def test_regenerate_streams_with_node_scoped_identity_never_the_composer(monkeyp
 
         assert assistant_reply.pending_request_id is None, "cleared once the reply lands"
         assert assistant_reply.content == "regenerated reply"
+        assert [version.content for version in assistant_reply.state.versions] == [
+            "old reply", "regenerated reply",
+        ]
+        assert assistant_reply.state.version_index == 1
         assert assistant_reply.state.response_incomplete is False, (
             "a COMPLETE regenerate never sets the interrupted marker"
         )
@@ -334,6 +338,9 @@ def test_regenerate_killed_mid_stream_preserves_partial_and_is_retryable(monkeyp
         await entry["task"]
 
         assert assistant_reply.content == "half a regen", "the partial landed in place"
+        assert [version.content for version in assistant_reply.state.versions] == [
+            "old reply", "half a regen",
+        ]
         assert assistant_reply.state.response_incomplete is True
         assert code_child.id not in document.nodes, (
             "old content children annotated content that no longer exists"
@@ -351,6 +358,9 @@ def test_regenerate_killed_mid_stream_preserves_partial_and_is_retryable(monkeyp
         await entry["task"]
 
         assert assistant_reply.content == "a full regenerated reply"
+        assert [version.content for version in assistant_reply.state.versions] == [
+            "old reply", "half a regen", "a full regenerated reply",
+        ]
         assert assistant_reply.state.response_incomplete is False, (
             "retry succeeded - the interrupted marker is gone"
         )
@@ -576,6 +586,7 @@ def test_cancelled_regenerate_keeps_the_original_response_intact(monkeypatch):
         await entry["task"]
 
         assert assistant_reply.content == "old reply", "cancel keeps what the user had"
+        assert len(assistant_reply.state.versions) == 1, "cancel adds no version"
         assert assistant_reply.state.response_incomplete is False
         assert code_child.id in document.nodes, "original children survive a cancel"
 
