@@ -68,6 +68,14 @@ const snapshot = {
   ollamaReasoningLevel: "high",
   ollamaCurrentModel: "",
   ollamaModelAssignments: {},
+  ollamaContextWindows: {},
+  ollamaContextModel: "",
+  ollamaContextStatus: "idle",
+  ollamaContextNotice: "",
+  ollamaContextTrainedLength: 0,
+  ollamaContextModelSizeBytes: 0,
+  ollamaContextKvBytesPerToken: 0,
+  ollamaContextAvailableMemoryBytes: 0,
   ollamaScannedModels: [],
   ollamaInventory: [],
   ollamaInventorySource: "",
@@ -347,7 +355,7 @@ describe("SettingsDialog", () => {
     const { user, push } = setup();
     await goToOllama(user, push, { ollamaCurrentModel: "llama3.2:3b" });
 
-    expect(screen.getByText("llama3.2:3b")).toBeInTheDocument();
+    expect(within(screen.getByText(/^Current Active Model:/)).getByText("llama3.2:3b")).toBeInTheDocument();
   });
 
   it("falls back to an Auto message when no current model is set", async () => {
@@ -370,11 +378,12 @@ describe("SettingsDialog", () => {
       ollamaServerReachable: true,
     });
 
-    expect(screen.getByText("vision:latest")).toBeInTheDocument();
-    expect(screen.getByText(/5.0 GiB memory in use/)).toBeInTheDocument();
-    expect(screen.getByText(/4.0 GiB on disk/)).toBeInTheDocument();
-    expect(screen.getByText(/Trained context: 131,072 tokens/)).toBeInTheDocument();
-    expect(screen.getByText(/chat, tools, vision, thinking/)).toBeInTheDocument();
+    const inventory = within(screen.getByRole("group", { name: "Local model inventory" }));
+    expect(inventory.getByText("vision:latest")).toBeInTheDocument();
+    expect(inventory.getByText(/5.0 GiB memory in use/)).toBeInTheDocument();
+    expect(inventory.getByText(/4.0 GiB on disk/)).toBeInTheDocument();
+    expect(inventory.getByText(/Trained context: 131,072 tokens/)).toBeInTheDocument();
+    expect(inventory.getByText(/chat, tools, vision, thinking/)).toBeInTheDocument();
   });
 
   it("shows Running, Installed but not running, and Not found with a conditional start action", async () => {
@@ -534,6 +543,90 @@ describe("SettingsDialog", () => {
     await user.type(screen.getByPlaceholderText("Advanced model ID entry"), "llama3.2:3b");
 
     expect(screen.getByRole("button", { name: "Validating..." })).toBeDisabled();
+  });
+
+  const inventoryRecord = (name: string, trainedContextLength: number, sizeBytes = 0, source = "server") => ({
+    name, sizeBytes, trainedContextLength, source, family: "", parameterSize: "",
+    quantization: "", capabilities: [], loaded: null, memoryBytes: null, vramBytes: null,
+  });
+
+  it("selects an Ollama context window per model and defaults to 8k", async () => {
+    const { user, push, intents } = setup();
+    await goToOllama(user, push, {
+      ollamaCurrentModel: "llama:7b",
+      ollamaScannedModels: ["llama:7b", "qwen:8b"],
+      ollamaInventory: [inventoryRecord("llama:7b", 131072), inventoryRecord("qwen:8b", 16384)],
+      ollamaContextModel: "llama:7b",
+      ollamaContextStatus: "ready",
+      ollamaContextTrainedLength: 131072,
+      ollamaContextKvBytesPerToken: 131072,
+      ollamaContextAvailableMemoryBytes: 64 * 1024 ** 3,
+    });
+    expect(screen.getByRole("button", { name: "Ollama context window" })).toHaveTextContent("8k");
+    await chooseCustomOption(user, "Ollama context window", "32k");
+    expect(intents).toContainEqual(["app-settings", "setOllamaContextWindow", ["llama:7b", 32768]]);
+    await chooseCustomOption(user, "Ollama context model", "qwen:8b");
+    expect(intents).toContainEqual(["app-settings", "inspectOllamaContextModel", ["qwen:8b"]]);
+  });
+
+  it("does not offer context sizes beyond the selected model's trained length", async () => {
+    const { user, push } = setup();
+    await goToOllama(user, push, {
+      ollamaCurrentModel: "small:3b",
+      ollamaInventory: [inventoryRecord("small:3b", 16384)],
+      ollamaContextModel: "small:3b",
+      ollamaContextStatus: "ready",
+      ollamaContextTrainedLength: 16384,
+      ollamaContextKvBytesPerToken: 131072,
+    });
+    await user.click(screen.getByRole("button", { name: "Ollama context window" }));
+    expect(screen.getByRole("button", { name: "16k" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "32k" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "128k" })).toBeNull();
+  });
+
+  it("shows an estimated memory figure and warns when it exceeds available system RAM", async () => {
+    const { user, push } = setup();
+    await goToOllama(user, push, {
+      ollamaCurrentModel: "large:7b",
+      ollamaInventory: [inventoryRecord("large:7b", 131072, 4 * 1024 ** 3)],
+      ollamaContextWindows: { "large:7b": 32768 },
+      ollamaContextModel: "large:7b",
+      ollamaContextStatus: "ready",
+      ollamaContextTrainedLength: 131072,
+      ollamaContextModelSizeBytes: 4 * 1024 ** 3,
+      ollamaContextKvBytesPerToken: 131072,
+      ollamaContextAvailableMemoryBytes: 5 * 1024 ** 3,
+    });
+    expect(screen.getByText(/Estimated model weights \+ KV cache:/)).toHaveTextContent("8.0 GiB");
+    expect(screen.getByRole("alert")).toHaveTextContent(/exceeds available system RAM/i);
+  });
+
+  it("does not claim a memory warning when available RAM is unknown", async () => {
+    const { user, push } = setup();
+    await goToOllama(user, push, {
+      ollamaCurrentModel: "offline:7b",
+      ollamaInventory: [inventoryRecord("offline:7b", 131072, 4 * 1024 ** 3)],
+      ollamaContextModel: "offline:7b",
+      ollamaContextStatus: "ready",
+      ollamaContextTrainedLength: 131072,
+      ollamaContextModelSizeBytes: 4 * 1024 ** 3,
+      ollamaContextKvBytesPerToken: 131072,
+      ollamaContextAvailableMemoryBytes: 0,
+    });
+    expect(screen.getByText(/Available system RAM:/)).toHaveTextContent("unavailable");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("does not trust offline folder metadata for larger context windows", async () => {
+    const { user, push } = setup();
+    await goToOllama(user, push, {
+      ollamaCurrentModel: "offline:7b",
+      ollamaInventory: [inventoryRecord("offline:7b", 131072, 0, "folder")],
+    });
+    await user.click(screen.getByRole("button", { name: "Ollama context window" }));
+    expect(screen.getByRole("button", { name: "8k" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "16k" })).toBeNull();
   });
 
   it("an ollamaNotice renders as an inline error", async () => {

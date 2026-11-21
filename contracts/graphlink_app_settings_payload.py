@@ -179,6 +179,16 @@ class AppSettingsStatePayload:
     ollamaReasoningLevel: str
     ollamaCurrentModel: str
     ollamaModelAssignments: dict[str, str]
+    # Per-model Ollama served window; metadata and memory are session-local
+    # inspection results. Zero memory indicates unavailable system metrics.
+    ollamaContextWindows: dict[str, int]
+    ollamaContextModel: str
+    ollamaContextStatus: str
+    ollamaContextNotice: str
+    ollamaContextTrainedLength: int
+    ollamaContextModelSizeBytes: int
+    ollamaContextKvBytesPerToken: int
+    ollamaContextAvailableMemoryBytes: int
     ollamaScannedModels: list[str]
     ollamaInventory: list[OllamaInventoryModelPayload]
     ollamaInventorySource: str

@@ -16,6 +16,10 @@ import ollama
 import api_provider
 import graphlink_task_config as config
 from graphlink_model_catalog import AUTO_MODEL, INHERIT_MODEL
+from backend.ollama_context import (
+    CONTEXT_CHOICES, DEFAULT_CONTEXT_WINDOW, available_memory_bytes,
+    kv_bytes_per_token,
+)
 
 from backend.api._settings_shared import (
     OLLAMA_TASK_KEYS,
@@ -28,6 +32,7 @@ from backend.api._settings_shared import (
 )
 from backend.events import SessionBus
 from backend.ollama_inventory import (
+    _key,
     build_ollama_inventory,
     check_ollama_server_status,
     start_installed_ollama,
@@ -336,4 +341,118 @@ def register_settings_ollama_intents(
     bus.register_intent("app-settings", "scanOllamaSystem", scan_ollama_system)
     bus.register_intent("app-settings", "pullOllamaModel", pull_ollama_model)
     bus.register_intent("app-settings", "pickOllamaScanFolder", pick_ollama_scan_folder)
+    register_ollama_context_intents(bus, manager, state)
     return scan_ollama_system
+
+
+def _inventory_context_model(state: SettingsSessionState, model: str) -> dict | None:
+    """Match a model against the shared Ollama inventory, including :latest."""
+    return next(
+        (row for row in state.ollama_inventory if _key(str(row.get("name", ""))) == _key(model)),
+        None,
+    )
+
+
+def _verified_inventory_context_limit(row: dict | None) -> int | None:
+    """Only server-verified trained limits permit windows above 8k."""
+    if not row or row.get("source") != "server":
+        return None
+    length = row.get("trainedContextLength")
+    return length if type(length) is int and length > 0 else None
+
+
+def _inspect_ollama_context(model: str) -> tuple[int, int]:
+    """Get KV geometry and RAM; trained length and weights come from inventory."""
+    try:
+        try:
+            response = ollama.show(model)
+        except TypeError:
+            response = ollama.show(model=model)
+        info = api_provider._extract_response_field(response, "model_info")
+        if info is None:
+            info = api_provider._extract_response_field(response, "modelinfo")
+        kv_bytes = kv_bytes_per_token(info)
+    except Exception:
+        # Missing metadata can only change this approximate memory estimate.
+        kv_bytes = kv_bytes_per_token({})
+    return kv_bytes, available_memory_bytes()
+
+
+def register_ollama_context_intents(
+    bus: SessionBus, manager: SettingsManager, state: SettingsSessionState
+) -> None:
+    """Per-model context inspection and persistence, separate to stay under
+    the repository's 300-line register-function ratchet.
+    """
+
+    async def inspect_ollama_context_model(model_name: str) -> None:
+        model = str(model_name or "").strip()
+        if not model or len(model) > 255:
+            return
+        state.ollama_context_model = model
+        state.ollama_context_status = "loading"
+        state.ollama_context_notice = ""
+        state.ollama_context_trained_length = 0
+        state.ollama_context_model_size_bytes = 0
+        state.ollama_context_kv_bytes_per_token = 0
+        state.ollama_context_available_memory_bytes = 0
+        await bus.publish("app-settings")
+        try:
+            kv_bytes, available = await asyncio.to_thread(_inspect_ollama_context, model)
+        except Exception as exc:  # noqa: BLE001 - inspection failures must not disable Settings
+            if state.ollama_context_model == model:
+                state.ollama_context_status = "error"
+                state.ollama_context_notice = f"Could not inspect this model: {exc}"
+                await bus.publish("app-settings")
+            return
+        # A slow show()/list() for A must not replace B's selected metadata.
+        if state.ollama_context_model != model:
+            return
+        # Source trained length and model weight size from PR 917's shared inventory.
+        row = _inventory_context_model(state, model)
+        trained = _verified_inventory_context_limit(row)
+        size = row.get("sizeBytes") if row else None
+        state.ollama_context_trained_length = trained or 0
+        state.ollama_context_model_size_bytes = size if type(size) is int and size > 0 else 0
+        state.ollama_context_kv_bytes_per_token = kv_bytes
+        state.ollama_context_available_memory_bytes = available
+        state.ollama_context_status = "ready" if trained else "error"
+        state.ollama_context_notice = (
+            "" if trained else "Refresh the shared Ollama inventory to verify this model's trained context limit."
+        )
+        await bus.publish("app-settings")
+
+    async def set_ollama_context_window(model_name: str, value: int) -> None:
+        model = str(model_name or "").strip()
+        # Do not coerce strings, booleans, floats or arbitrary integers from
+        # the WebSocket into a serving allocation.
+        if not model or len(model) > 255 or type(value) is not int or value not in CONTEXT_CHOICES:
+            state.ollama_context_notice = "Choose a valid Ollama model and context window."
+            await bus.publish("app-settings")
+            return
+
+        def persist() -> None:
+            # Use the shared inventory's trained limit and retain the serving
+            # path's additional conservative ceiling if metadata goes stale.
+            inventory_trained = _verified_inventory_context_limit(_inventory_context_model(state, model))
+            api_provider._get_ollama_context_window(model)
+            runtime_trained = api_provider._OLLAMA_TRAINED_CONTEXT_WINDOW_CACHE.get(model.casefold())
+            ceiling = min(inventory_trained or DEFAULT_CONTEXT_WINDOW, runtime_trained or DEFAULT_CONTEXT_WINDOW)
+            if value > ceiling:
+                raise ValueError(
+                    f"{model} supports at most {ceiling:,} verified context tokens."
+                )
+            manager.set_ollama_context_window(model, value)
+            api_provider.sync_ollama_models(manager)
+
+        try:
+            await asyncio.to_thread(run_locked, persist)
+        except ValueError as exc:
+            state.ollama_context_notice = str(exc)
+            await bus.publish("app-settings")
+            return
+        state.ollama_context_notice = ""
+        await bus.publish("app-settings")
+
+    bus.register_intent("app-settings", "inspectOllamaContextModel", inspect_ollama_context_model)
+    bus.register_intent("app-settings", "setOllamaContextWindow", set_ollama_context_window)

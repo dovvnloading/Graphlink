@@ -168,7 +168,10 @@ describe("queueable intent classification (ADR-003 stage 3.6)", () => {
     // Workspace Agent adds one queueable, idempotent per-folder revoke action.
     // Ollama health checks are ephemeral, and starting a daemon is a one-shot
     // side effect; neither may be replayed after reconnecting from offline.
-    expect(sites).toHaveLength(49);
+    // Per-model Ollama metadata inspection and its idempotent setter.
+    expect(sites).toHaveLength(51);
+    expect(sites.filter((s) => s.intent === "setOllamaContextWindow").map((s) => s.queueable)).toEqual([true]);
+    expect(sites.filter((s) => s.intent === "inspectOllamaContextModel").map((s) => s.queueable)).toEqual([false]);
     expect(sites.filter((s) => s.intent === "revokeHarnessTrustedDir").map((s) => s.queueable)).toEqual([true]);
     expect(sites.filter((s) => ["checkOllamaStatus", "startOllama"].includes(s.intent))
       .map(({ intent, queueable }) => [intent, queueable]).sort()).toEqual([
