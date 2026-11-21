@@ -864,6 +864,76 @@ async def _send_model_comparison(
     return user.id
 
 
+
+def register_chat_knowledge_intents(
+    bus: SessionBus, document: SceneDocument,
+    agent_dispatcher: AgentDispatcher, publish_scene,
+) -> None:
+    """Register read-only inspection and per-branch knowledge preferences."""
+    # C3 preview is read-only: no graph command, provider call or publication.
+    async def inspect_chat_context(node_id, draft_text="", use_knowledge=None):
+        from backend.context_engine.inspector import inspect_next_chat_send
+        return await asyncio.to_thread(
+            inspect_next_chat_send, document, node_id, agent_dispatcher,
+            bus=bus, draft_text=draft_text, use_knowledge=use_knowledge,
+        )
+
+    async def get_chat_knowledge_preference(node_id=None):
+        target_id = node_id if node_id is not None else document.last_chat_node_id
+        if target_id is not None:
+            node = document.nodes.get(target_id)
+            if node is None or node.kind != "chat":
+                raise SceneError(f"node is not a chat node: {target_id}")
+        override = document.resolve_use_knowledge_override(target_id)
+        workspace_id = document.current_workspace_id
+        has_documents = await asyncio.to_thread(workspace_has_chat_knowledge, workspace_id)
+        return {
+            "nodeId": target_id,
+            "hasDocuments": has_documents,
+            "enabled": override if override is not None else has_documents,
+            "override": override,
+        }
+
+    async def set_chat_use_knowledge(node_id, enabled):
+        if not isinstance(enabled, bool):
+            raise SceneError("use_knowledge must be a boolean")
+        document.record_command(
+            "setChatUseKnowledge", "user",
+            lambda: document.set_use_knowledge_override(node_id, enabled),
+            node_ids=[node_id],
+        )
+        await publish_scene()
+
+    bus.register_intent("scene", "inspectChatContext", inspect_chat_context)
+    bus.register_intent("scene", "getChatKnowledgePreference", get_chat_knowledge_preference)
+    bus.register_intent("scene", "setChatUseKnowledge", set_chat_use_knowledge)
+
+
+def register_chat_cancel_intent(
+    bus: SessionBus, agent_dispatcher: AgentDispatcher,
+    comparison_cancelled_requests: set[str],
+) -> None:
+    """Register node-scoped cancellation for chat and model comparisons."""
+    # R4.3: per-node cancel for a ConversationNode's in-flight reply. Reuses
+    # the exact intent NAME "cancelChatRequest" already registered on the
+    # "app-composer" topic by R4.2 - SessionBus keys handlers by the
+    # (topic, intent) tuple (see backend/events.py), so this is a second,
+    # independent registration on a different topic, not a collision. It
+    # points at the same underlying agent_dispatcher.cancel, which is purely
+    # request_id-keyed and does not care which topic invoked it.
+    def cancel_chat_request(request_id):
+        registry = getattr(agent_dispatcher, "_runs", None)
+        handle = registry.get(request_id) if registry is not None else None
+        if handle is not None and handle.kind.startswith("chat_comparison:"):
+            # The node-scoped Stop button already sends this intent. Mark
+            # exactly its own run cancelled; do not touch sibling handles.
+            comparison_cancelled_requests.add(request_id)
+            return agent_dispatcher._runs.cancel(request_id, kind=handle.kind)
+        return agent_dispatcher.cancel(request_id)
+
+    bus.register_intent("scene", "cancelChatRequest", cancel_chat_request)
+
+
 def register_chat_intents(
     bus: SessionBus,
     document: SceneDocument,
@@ -1093,40 +1163,6 @@ def register_chat_intents(
         )
         return node_to_regenerate.id
 
-    # C3 preview is read-only: no graph command, provider call or publication.
-    async def inspect_chat_context(node_id, draft_text="", use_knowledge=None):
-        from backend.context_engine.inspector import inspect_next_chat_send
-        return await asyncio.to_thread(
-            inspect_next_chat_send, document, node_id, agent_dispatcher,
-            bus=bus, draft_text=draft_text, use_knowledge=use_knowledge,
-        )
-
-    async def get_chat_knowledge_preference(node_id=None):
-        target_id = node_id if node_id is not None else document.last_chat_node_id
-        if target_id is not None:
-            node = document.nodes.get(target_id)
-            if node is None or node.kind != "chat":
-                raise SceneError(f"node is not a chat node: {target_id}")
-        override = document.resolve_use_knowledge_override(target_id)
-        workspace_id = document.current_workspace_id
-        has_documents = await asyncio.to_thread(workspace_has_chat_knowledge, workspace_id)
-        return {
-            "nodeId": target_id,
-            "hasDocuments": has_documents,
-            "enabled": override if override is not None else has_documents,
-            "override": override,
-        }
-
-    async def set_chat_use_knowledge(node_id, enabled):
-        if not isinstance(enabled, bool):
-            raise SceneError("use_knowledge must be a boolean")
-        document.record_command(
-            "setChatUseKnowledge", "user",
-            lambda: document.set_use_knowledge_override(node_id, enabled),
-            node_ids=[node_id],
-        )
-        await publish_scene()
-
     def list_comparison_models():
         from backend.context_engine.model_comparison import available_comparison_models
         return {"models": available_comparison_models(
@@ -1147,26 +1183,7 @@ def register_chat_intents(
     bus.register_intent("scene", "listComparisonModels", list_comparison_models)
     bus.register_intent("scene", "compareModels", compare_models)
 
-    bus.register_intent("scene", "inspectChatContext", inspect_chat_context)
-    bus.register_intent("scene", "getChatKnowledgePreference", get_chat_knowledge_preference)
-    bus.register_intent("scene", "setChatUseKnowledge", set_chat_use_knowledge)
+    register_chat_knowledge_intents(bus, document, agent_dispatcher, publish_scene)
     bus.register_intent("scene", "sendMessage", send_message)
     bus.register_intent("scene", "regenerateResponse", regenerate_response)
-    # R4.3: per-node cancel for a ConversationNode's in-flight reply. Reuses
-    # the exact intent NAME "cancelChatRequest" already registered on the
-    # "app-composer" topic by R4.2 - SessionBus keys handlers by the
-    # (topic, intent) tuple (see backend/events.py), so this is a second,
-    # independent registration on a different topic, not a collision. It
-    # points at the same underlying agent_dispatcher.cancel, which is purely
-    # request_id-keyed and does not care which topic invoked it.
-    def cancel_chat_request(request_id):
-        registry = getattr(agent_dispatcher, "_runs", None)
-        handle = registry.get(request_id) if registry is not None else None
-        if handle is not None and handle.kind.startswith("chat_comparison:"):
-            # The node-scoped Stop button already sends this intent. Mark
-            # exactly its own run cancelled; do not touch sibling handles.
-            comparison_cancelled_requests.add(request_id)
-            return agent_dispatcher._runs.cancel(request_id, kind=handle.kind)
-        return agent_dispatcher.cancel(request_id)
-
-    bus.register_intent("scene", "cancelChatRequest", cancel_chat_request)
+    register_chat_cancel_intent(bus, agent_dispatcher, comparison_cancelled_requests)
