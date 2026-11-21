@@ -118,8 +118,8 @@ function Runner({ store }: { store: SceneStore }) {
   );
   const modelTargetId = eligibleTargets.some((node) => node.id === modelTargetSelection)
     ? modelTargetSelection : (eligibleTargets[0]?.id ?? "");
-  const noteModelBindings = modelBindings.filter((binding) => binding.nodeKind !== "model");
-  const modelNodes = modelBindings.filter((binding) => binding.nodeKind === "model");
+  const noteModelBindings = (modelBindings ?? []).filter((binding) => binding.nodeKind !== "model");
+  const modelNodes = (modelBindings ?? []).filter((binding) => binding.nodeKind === "model");
   const savedModelBinding = noteModelBindings.find((binding) => binding.targetId === modelTargetId);
   const [preview, setPreview] = useState<(GraphRunPreview & { nodeIds: string[]; operationId: string }) | null>(null);
   const [latest, setLatest] = useState<LatestGraphRun | null>(null);
@@ -138,27 +138,6 @@ function Runner({ store }: { store: SceneStore }) {
       setError("");
     }
   }, [overlays, requestedIds, store]);
-  // Saved Model→Note bindings have their OWN existing Graph Runner model
-  // preview/approval panel. Selecting the note in a graph-run preview would
-  // otherwise show no steps, since it is not a first-class Model node.
-  useEffect(() => {
-    if (!modelNoteHandoff || !requestedIds) return;
-    let active = true;
-    void store.getGraphModelBindings().then((rows) => {
-      if (!active) return;
-      setModelBindings(rows);
-      const bound = rows.find((row) =>
-        row.nodeKind !== "model" && requestedIds.includes(row.targetId));
-      if (bound) {
-        setModelSourceSelection(bound.sourceId);
-        setModelTargetSelection(bound.targetId);
-        setModelId(bound.modelId);
-      }
-    }).catch((err: unknown) => {
-      if (active) setError(err instanceof Error ? err.message : String(err));
-    });
-    return () => { active = false; };
-  }, [store, modelNoteHandoff, requestedIds]);
   const running = latest?.status === "running" || latest?.history?.some((run) => run.status === "running");
 
   // Opening the panel always re-reads the active graph, including after
@@ -175,6 +154,27 @@ function Runner({ store }: { store: SceneStore }) {
     return () => { active = false; };
   }, [store]);
 
+  // Saved Model→Note bindings have their OWN existing Graph Runner model
+  // preview/approval panel. Selecting the note in a graph-run preview would
+  // otherwise show no steps, since it is not a first-class Model node.
+  useEffect(() => {
+    if (!modelNoteHandoff || !requestedIds) return;
+    let active = true;
+    void store.getGraphModelBindings().then((rows) => {
+      if (!active) return;
+      setModelBindings(rows ?? []);
+      const bound = (rows ?? []).find((row) =>
+        row.nodeKind !== "model" && requestedIds.includes(row.targetId));
+      if (bound) {
+        setModelSourceSelection(bound.sourceId);
+        setModelTargetSelection(bound.targetId);
+        setModelId(bound.modelId);
+      }
+    }).catch((err: unknown) => {
+      if (active) setError(err instanceof Error ? err.message : String(err));
+    });
+    return () => { active = false; };
+  }, [store, modelNoteHandoff, requestedIds]);
   // Poll in-flight requests to expose the backend's cancellable running state.
   // Do not invent a local run: a lost reply must remain retryable by operation ID.
   useEffect(() => {
@@ -245,8 +245,8 @@ function Runner({ store }: { store: SceneStore }) {
 
   function loadModelBindings() {
     void store.getGraphModelBindings().then((rows) => {
-      setModelBindings(rows);
-      const noteRows = rows.filter((row) => row.nodeKind !== "model");
+      setModelBindings(rows ?? []);
+      const noteRows = (rows ?? []).filter((row) => row.nodeKind !== "model");
       if (!modelTargetSelection && noteRows.length) {
         // Reopening the dialog should make a saved connection reusable, not
         // require the user to re-enter the original source/model identity.
@@ -349,17 +349,17 @@ function Runner({ store }: { store: SceneStore }) {
         <button type="button" className="appbar-btn" disabled={!!busy || !modelSourceId || !modelId.trim()}
           onClick={() => void perform("Creating Model node…", async () => {
             await store.addModelNode(modelSourceId, "Ollama", modelId.trim());
-            setModelBindings(await store.getGraphModelBindings());
+            setModelBindings((await store.getGraphModelBindings()) ?? []);
             setModelPreview(null);
           })}>Create Model node</button>
         <button type="button" className="appbar-btn" disabled={!!busy || !modelSourceId || !modelTargetId || !modelId.trim()}
           onClick={() => void perform("Saving model connection…", async () => {
-            setModelBindings(await store.bindGraphModel(modelSourceId, modelTargetId, "Ollama", modelId.trim()));
+            setModelBindings((await store.bindGraphModel(modelSourceId, modelTargetId, "Ollama", modelId.trim())) ?? []);
             setModelPreview(null);
           })}>Save model connection</button>
         {savedModelBinding && <button type="button" className="appbar-btn" disabled={!!busy} onClick={() =>
           void perform("Disconnecting model…", async () => {
-            setModelBindings(await store.unbindGraphModel(modelTargetId));
+            setModelBindings((await store.unbindGraphModel(modelTargetId)) ?? []);
             setModelPreview(null);
           })
         }>Disconnect model connection</button>}
@@ -382,7 +382,7 @@ function Runner({ store }: { store: SceneStore }) {
                 modelPreview.previewToken, modelPreview.operationId,
               ));
               setModelPreview(null);
-              setModelBindings(await store.getGraphModelBindings());
+              setModelBindings((await store.getGraphModelBindings()) ?? []);
             })
           }>Run local model</button>
         </div>
