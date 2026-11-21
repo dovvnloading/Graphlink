@@ -417,6 +417,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
 
     # -- backend/api/intents_knowledge.py (knowledge, scene) - ADR-017 stage 17.5 --
     Classified("knowledge", "search", "B", "read-only: queries the local knowledge store, no document mutation"),
+    Classified("knowledge", "openCitation", "B", "read-only: verifies and reads a workspace-scoped indexed source"),
     Classified("knowledge", "addFiles", "B", "external-store: launches a local knowledge import job, not a scene undo"),
     Classified("knowledge", "addFolder", "B", "external-store: launches a local folder import job, not a scene undo"),
     Classified("knowledge", "cancelIngest", "B", "run-lifecycle: signals cancellation of a background knowledge job"),

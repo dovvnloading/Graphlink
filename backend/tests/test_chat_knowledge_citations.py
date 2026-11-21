@@ -29,6 +29,8 @@ INVENTED_ID = "kb:aaaaaaaaaaaaaaaaaaaa"
 def _hit(citation_id=REAL_ID, text="Restore the latest verified snapshot."):
     return {
         "citation_id": citation_id,
+        "document_id": 14,
+        "chunk_id": 29,
         "document_title": "Restore handbook",
         "source_uri": "https://example.com/restore.md",
         "source_file": "https://example.com/restore.md",
@@ -130,6 +132,8 @@ def test_unverified_ids_do_not_inherit_other_source_metadata():
     ]
     assert payload["unverifiedIds"] == [INVENTED_ID]
     assert payload["sources"][0]["section"] == "Recovery"
+    assert payload["sources"][0]["documentId"] == 14
+    assert payload["sources"][0]["chunkId"] == 29
     assert not any(s["citationId"] == INVENTED_ID for s in payload["sources"])
     assert inline_citation_ids(str(answer)) == [REAL_ID, INVENTED_ID]
 

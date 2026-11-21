@@ -1,19 +1,32 @@
-.chat-citations { margin: 10px 0 4px; padding: 0 10px; font-size: 12px; }
-.chat-citations-heading { font-weight: 600; opacity: .8; margin-bottom: 6px; }
-.chat-citations-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.chat-citation-chip, .chat-citation-unverified {
-  border-radius: 999px; padding: 4px 9px; font: inherit; line-height: 1.4;
-  max-width: 100%; overflow-wrap: anywhere;
+.chat-citations {
+  margin: 10px 0 4px;
+  padding: 8px 10px 0;
+  border-top: 1px solid var(--gl-surface-border);
+  font-size: 12px;
 }
-.chat-citation-chip {
-  border: 1px solid var(--border-color, currentColor);
-  color: inherit; background: var(--surface-color, transparent); cursor: pointer;
+.chat-citations-heading { font-weight: 600; margin-bottom: 6px; }
+.chat-citations-list { margin: 0; padding: 0; list-style: none; }
+.chat-citations-list li { margin: 5px 0 8px; }
+.chat-citation-source {
+  display: inline-flex; align-items: baseline; gap: 7px; max-width: 100%;
+  font: inherit; text-align: left; color: var(--gl-surface-text-primary);
+  background: transparent; border: 0; padding: 2px 0; cursor: pointer;
+  overflow-wrap: anywhere;
 }
-.chat-citation-chip:hover, .chat-citation-chip:focus-visible { text-decoration: underline; }
-.chat-citation-unverified { border: 1px dashed currentColor; opacity: .75; }
-.chat-citation-excerpt { border: 1px solid var(--border-color, currentColor); border-radius: 8px;
-  padding: 10px; margin-top: 8px; overflow-wrap: anywhere; }
-.chat-citation-origin { opacity: .75; margin-top: 4px; }
-.chat-citation-excerpt pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit;
-  max-height: 240px; overflow-y: auto; margin: 8px 0; }
-.chat-citation-excerpt a { color: inherit; text-decoration: underline; }
+.chat-citation-source:hover { text-decoration: underline; }
+.chat-citation-source:focus-visible, .chat-citation-inline:focus-visible {
+  outline: 2px solid var(--gl-focus-ring); outline-offset: 2px;
+}
+.chat-citation-number { font-weight: 700; white-space: nowrap; }
+.chat-citation-origin, .chat-citations-trust { color: var(--gl-surface-text-muted); overflow-wrap: anywhere; }
+.chat-citation-origin { margin-left: 25px; font-size: 11px; }
+.chat-citations-trust { margin: 6px 0 0; font-size: 11px; }
+.chat-citation-inline {
+  display: inline; margin: 0 2px; padding: 0 4px;
+  border: 1px solid var(--gl-surface-border-strong); border-radius: 5px;
+  font: inherit; font-size: .82em; line-height: inherit;
+  color: var(--gl-surface-text-primary); background: var(--gl-surface-inset);
+  cursor: pointer; vertical-align: baseline;
+}
+.chat-citation-inline:hover { text-decoration: underline; }
+.chat-citation-unverified { font-size: .85em; color: var(--gl-surface-text-muted); }

@@ -304,3 +304,116 @@ class TestWorkspaceScopedKnowledgeCorpus:
 
         results = _run(bus.dispatch_intent("knowledge", "search", ["unscoped content", 5]))
         assert len(results["results"]) == 1
+
+
+class TestOpenKnowledgeCitationIntent:
+    def test_missing_database_never_creates_a_document_or_index(self, _isolated_knowledge_db):
+        bus, _, _ = make_bus()
+        result = _run(bus.dispatch_intent(
+            "knowledge", "openCitation", [1, 1, "kb:" + "a" * 20],
+        ))
+        assert result == {"document": None}
+        assert not _isolated_knowledge_db.exists()
+
+    def test_opens_the_indexed_source_at_verified_exact_offsets(self, _isolated_knowledge_db):
+        text = "# Restore steps\n\nStop writes before restoring.\n\n" + (
+            "Use the cobalt restore protocol on the recovery host."
+        )
+        knowledge_ingest.ingest_text(
+            text, source_uri="runbooks/restore.md", title="Restore runbook",
+            db_path=_isolated_knowledge_db,
+        )
+        bus, _, recorder = make_bus()
+        [hit] = _run(bus.dispatch_intent(
+            "knowledge", "search", ["cobalt restore protocol", 5],
+        ))["results"]
+        recorder.messages.clear()
+        opened = _run(bus.dispatch_intent(
+            "knowledge", "openCitation",
+            [hit["documentId"], hit["chunkId"], hit["citationId"]],
+        ))
+        source = opened["document"]
+        assert source["title"] == "Restore runbook"
+        assert source["sourceUri"] == "runbooks/restore.md"
+        assert source["content"] == text
+        assert source["content"][source["offsetStart"]:source["offsetEnd"]] == hit["text"]
+        assert (source["offsetStart"], source["offsetEnd"]) == (
+            hit["offsetStart"], hit["offsetEnd"],
+        )
+        assert recorder.topics_seen() == []  # read-only
+
+        for arguments in (
+            [hit["documentId"], hit["chunkId"], "kb:" + "f" * 20],
+            [hit["documentId"], hit["chunkId"] + 999, hit["citationId"]],
+            [hit["documentId"] + 999, hit["chunkId"], hit["citationId"]],
+        ):
+            assert _run(bus.dispatch_intent(
+                "knowledge", "openCitation", arguments,
+            )) == {"document": None}
+
+    def test_does_not_read_a_chunk_outside_the_active_workspace(self, _isolated_knowledge_db):
+        workspace = 17
+        collection = knowledge_store.get_or_create_workspace_collection(
+            _isolated_knowledge_db, workspace,
+        )
+        knowledge_ingest.ingest_text(
+            "The citrine sentinel keyword is private to workspace seventeen.",
+            source_uri="team17.md", title="Team 17",
+            collection_id=collection, db_path=_isolated_knowledge_db,
+        )
+        bus, document, _ = make_bus()
+        document.current_workspace_id = workspace
+        [hit] = _run(bus.dispatch_intent(
+            "knowledge", "search", ["citrine sentinel", 5],
+        ))["results"]
+        args = [hit["documentId"], hit["chunkId"], hit["citationId"]]
+        assert _run(bus.dispatch_intent("knowledge", "openCitation", args))["document"]
+
+        document.current_workspace_id = 18
+        assert _run(bus.dispatch_intent("knowledge", "openCitation", args)) == {"document": None}
+        document.current_workspace_id = None
+        assert _run(bus.dispatch_intent("knowledge", "openCitation", args)) == {"document": None}
+
+    def test_workspace_switch_during_read_discards_in_flight_document(
+        self, _isolated_knowledge_db, monkeypatch,
+    ):
+        import threading
+
+        workspace = 23
+        collection = knowledge_store.get_or_create_workspace_collection(
+            _isolated_knowledge_db, workspace,
+        )
+        knowledge_ingest.ingest_text(
+            "The violet harbor citation is only available to workspace twenty-three.",
+            source_uri="team23.md", title="Team 23",
+            collection_id=collection, db_path=_isolated_knowledge_db,
+        )
+        bus, document, _ = make_bus()
+        document.current_workspace_id = workspace
+        [hit] = _run(bus.dispatch_intent(
+            "knowledge", "search", ["violet harbor", 5],
+        ))["results"]
+        entered, release = threading.Event(), threading.Event()
+        actual = intents_knowledge.open_cited_document
+
+        def held_read(*args, **kwargs):
+            entered.set()
+            if not release.wait(timeout=3):
+                raise RuntimeError("citation-read barrier timed out")
+            return actual(*args, **kwargs)
+
+        monkeypatch.setattr(intents_knowledge, "open_cited_document", held_read)
+
+        async def switch_while_reading():
+            pending = asyncio.create_task(bus.dispatch_intent(
+                "knowledge", "openCitation",
+                [hit["documentId"], hit["chunkId"], hit["citationId"]],
+            ))
+            try:
+                assert await asyncio.to_thread(entered.wait, 3)
+                document.current_workspace_id = 24
+            finally:
+                release.set()
+            return await pending
+
+        assert _run(switch_while_reading()) == {"document": None}
