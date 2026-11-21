@@ -55,7 +55,7 @@ describe("Document View knowledge citation focus", () => {
     const start = raw.indexOf("Restore the");
     const end = start + "Restore the **encrypted snapshot** carefully.".length;
     const originalRect = HTMLElement.prototype.getBoundingClientRect;
-    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function () {
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
       const top = this.classList.contains("document-view-cited-passage") ? 260
         : this.classList.contains("document-view-panel-scroll") ? 40 : 0;
       return { ...originalRect.call(this), top, bottom: top + 100 } as DOMRect;
