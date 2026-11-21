@@ -31,12 +31,11 @@ def _bytes_as_json(value: Any) -> dict[str, str]:
 
 def _message_input(node) -> bytes:
     """Only model-visible content and branch settings, never layout or IDs."""
-    state = node.state
-    if isinstance(state, ChatState):
-        content = state.content_parts if state.content_parts is not None else node.content
+    if isinstance(node.state, ChatState):
+        content = node.state.content_parts if node.state.content_parts is not None else node.content
         fields = (
-            "user" if state.is_user else "assistant", content,
-            state.override_provider, state.override_model_id, state.use_knowledge,
+            "user" if node.state.is_user else "assistant", content,
+            node.state.override_provider, node.state.override_model_id, node.state.use_knowledge,
         )
     else:
         fields = (node.kind, node.content)
@@ -96,10 +95,14 @@ def _lineage(document: SceneDocument) -> tuple[dict[str, bytes], dict[str, str]]
         upstream_changed = affected.get(cursor, False) if cursor is not None else False
         for item in reversed(trail):
             node = document.nodes[item]
-            state = node.state
-            if isinstance(state, ChatState) and not state.is_user and state.reply_history_fingerprint:
-                expected = _reply_digest(prior, state.provider, state.model, state.reply_knowledge_enabled)
-                if expected != state.reply_history_fingerprint:
+            if (
+                isinstance(node.state, ChatState) and not node.state.is_user
+                and node.state.reply_history_fingerprint
+            ):
+                expected = _reply_digest(
+                    prior, node.state.provider, node.state.model, node.state.reply_knowledge_enabled,
+                )
+                if expected != node.state.reply_history_fingerprint:
                     statuses[item] = "out_of_date"
                     upstream_changed = True
             elif node.kind != "chat" and upstream_changed:
