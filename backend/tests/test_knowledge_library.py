@@ -74,15 +74,17 @@ def test_open_and_remove_cannot_cross_workspace(db, tmp_path):
     b = _stored_file(db, beta, 14)
 
     async def scenario():
-        bus, document, _ = make_bus()
+        bus, document, recorder = make_bus()
         document.current_workspace_id = 13
         with pytest.raises(IngestError, match="current workspace"):
             await bus.dispatch_intent("knowledge", "openDocument", [b.document_id])
         assert (await bus.dispatch_intent("knowledge", "removeDocument", [b.document_id])) == {"removed": False}
+        assert recorder.topics_seen().count("knowledge-library") == 0
         opened = await bus.dispatch_intent("knowledge", "openDocument", [a.document_id])
         assert opened["title"] == "alpha.md"
         assert opened["content"] == "secret alpha content"
         assert (await bus.dispatch_intent("knowledge", "removeDocument", [a.document_id])) == {"removed": True}
+        assert recorder.topics_seen().count("knowledge-library") == 1
 
     asyncio.run(scenario())
     assert knowledge_store.get_document(db, a.document_id) is None
@@ -96,7 +98,7 @@ def test_reindex_rereads_an_existing_mapped_source(db, tmp_path):
     path.write_text("revised knowledge", encoding="utf-8")
 
     async def scenario():
-        bus, document, _ = make_bus()
+        bus, document, recorder = make_bus()
         document.current_workspace_id = 7
         rows = (await bus.dispatch_intent("knowledge", "listDocuments", []))["documents"]
         result = await bus.dispatch_intent("knowledge", "reindexDocument", [rows[0]["documentId"]])
@@ -106,6 +108,13 @@ def test_reindex_rereads_an_existing_mapped_source(db, tmp_path):
         assert new["sizeBytes"] == path.stat().st_size
         opened = await bus.dispatch_intent("knowledge", "openDocument", [new["documentId"]])
         assert "revised knowledge" in opened["content"]
+        # The import runs off-loop; the completed-job notification is
+        # scheduled back onto the loop after the database write commits.
+        for _ in range(100):
+            if "knowledge-library" in recorder.topics_seen():
+                break
+            await asyncio.sleep(0.01)
+        assert recorder.topics_seen().count("knowledge-library") == 1
 
     asyncio.run(scenario())
 

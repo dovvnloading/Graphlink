@@ -165,8 +165,8 @@ def test_subscribe_without_topics_sends_every_registered_topic():
         # R2 surface: canvas + View-popover + composer/counter/notification +
         # R2.5 about/plugins/settings/chat-library topics + ADR-005 stage 5.4's
         # execution-limits topic + ADR-016 stage 16.3's diagnostics topic,
-        # plus knowledge-ingest and knowledge-embedding progress snapshots, sorted.
-        topics = [ws.receive_json()["topic"] for _ in range(16)]
+        # plus knowledge-ingest/embedding progress and library invalidations, sorted.
+        topics = [ws.receive_json()["topic"] for _ in range(17)]
         assert topics == [
             "app-about",
             "app-chat-library",
@@ -180,6 +180,7 @@ def test_subscribe_without_topics_sends_every_registered_topic():
             "grid-control",
             "knowledge-embedding",
             "knowledge-ingest",
+            "knowledge-library",
             "notification",
             "scene",
             "system",

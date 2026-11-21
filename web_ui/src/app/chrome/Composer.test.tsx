@@ -91,7 +91,17 @@ function makeSceneStore(
     overrides.knowledgePreference ?? { nodeId: null, hasDocuments: false, enabled: false, override: null },
   );
   const setChatUseKnowledge = vi.fn().mockResolvedValue(undefined);
-  const scene = { ...initialSceneState, ...overrides.scene };
+  let scene = { ...initialSceneState, ...overrides.scene };
+  const sceneListeners = new Set<() => void>();
+  const libraryListeners = new Set<StateListener>();
+  const emitScene = (changes: object = {}) => {
+    // A first real snapshot can still have revision 0, just like the placeholder.
+    scene = { ...scene, ...changes };
+    for (const listener of sceneListeners) listener();
+  };
+  const emitLibraryRevision = (revision: number) => {
+    for (const listener of libraryListeners) listener({ revision });
+  };
   const replyTargetNodeId = overrides.replyTargetNodeId ?? null;
   const synthesizeTargetNodeIds = overrides.synthesizeTargetNodeIds ?? null;
   const sceneStore = {
@@ -102,14 +112,22 @@ function makeSceneStore(
     setSynthesizeTargetNodeIds,
     getChatKnowledgePreference,
     setChatUseKnowledge,
-    subscribe: () => () => {},
+    subscribe: (listener: () => void) => {
+      sceneListeners.add(listener);
+      return () => { sceneListeners.delete(listener); };
+    },
+    subscribeKnowledgeLibrary: (listener: StateListener) => {
+      libraryListeners.add(listener);
+      return () => { libraryListeners.delete(listener); };
+    },
     getScene: () => scene,
     getSelectedNodeId: () => overrides.selectedNodeId ?? null,
     getReplyTargetNodeId: () => replyTargetNodeId,
     getSynthesizeTargetNodeIds: () => synthesizeTargetNodeIds,
   };
   return { sceneStore, sendMessage, sendComposerAgentMessage, getHarnessIsolationEngine,
-    setReplyTargetNodeId, setSynthesizeTargetNodeIds, getChatKnowledgePreference, setChatUseKnowledge };
+    setReplyTargetNodeId, setSynthesizeTargetNodeIds, getChatKnowledgePreference, setChatUseKnowledge,
+    emitScene, emitLibraryRevision };
 }
 
 describe("Composer", () => {
@@ -154,6 +172,107 @@ describe("Composer", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Send message" })).not.toBeDisabled());
     await user.click(screen.getByRole("button", { name: "Send message" }));
     expect(sendMessage).toHaveBeenCalledWith("Ask without retrieval");
+  });
+
+
+  it("retries a pre-connection knowledge check on the first scene snapshot even at revision zero", async () => {
+    const { store } = makeStore({ composer: {
+      request: { ...initialComposerState.request, canSend: true },
+    } });
+    const { sceneStore, getChatKnowledgePreference, emitScene } = makeSceneStore({
+      knowledgePreference: { nodeId: null, hasDocuments: true, enabled: true, override: null },
+    });
+    getChatKnowledgePreference.mockRejectedValueOnce(new Error("not connected"));
+    render(<OverlayProvider>
+      {/* @ts-expect-error - minimal test store */}
+      <Composer store={store} sceneStore={sceneStore} />
+    </OverlayProvider>);
+
+    const toggle = screen.getByRole("button", { name: "Use knowledge" });
+    await waitFor(() => expect(toggle).toHaveAttribute("title", "Could not check workspace knowledge"));
+    expect(toggle).toBeDisabled();
+    act(() => emitScene({ revision: 0 }));
+    await waitFor(() => expect(getChatKnowledgePreference).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(toggle).not.toBeDisabled());
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("rechecks the same empty scene as documents enter and leave the Knowledge Library", async () => {
+    const { store } = makeStore({ composer: {
+      request: { ...initialComposerState.request, canSend: true },
+    } });
+    const empty = { nodeId: null, hasDocuments: false, enabled: false, override: null };
+    const populated = { nodeId: null, hasDocuments: true, enabled: true, override: null };
+    const { sceneStore, getChatKnowledgePreference, emitLibraryRevision } = makeSceneStore();
+    getChatKnowledgePreference
+      .mockResolvedValueOnce(empty)
+      .mockResolvedValueOnce(populated)
+      .mockResolvedValueOnce(empty);
+    render(<OverlayProvider>
+      {/* @ts-expect-error - minimal test store */}
+      <Composer store={store} sceneStore={sceneStore} />
+    </OverlayProvider>);
+
+    const toggle = screen.getByRole("button", { name: "Use knowledge" });
+    await waitFor(() => expect(toggle).not.toBeDisabled());
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+    act(() => emitLibraryRevision(1)); // an import completed
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-pressed", "true"));
+    act(() => emitLibraryRevision(2)); // the last document was removed
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-pressed", "false"));
+    expect(getChatKnowledgePreference).toHaveBeenCalledTimes(3);
+    expect(getChatKnowledgePreference).toHaveBeenCalledWith(null);
+  });
+
+  it("keeps an unsent first-root override across library notifications", async () => {
+    const user = userEvent.setup();
+    const { store } = makeStore({ composer: {
+      draft: { ...initialComposerState.draft, text: "Ask with retrieval" },
+      request: { ...initialComposerState.request, canSend: true },
+    } });
+    const { sceneStore, sendMessage, getChatKnowledgePreference, emitLibraryRevision } =
+      makeSceneStore();
+    render(<OverlayProvider>
+      {/* @ts-expect-error - minimal test store */}
+      <Composer store={store} sceneStore={sceneStore} />
+    </OverlayProvider>);
+    const toggle = screen.getByRole("button", { name: "Use knowledge" });
+    await waitFor(() => expect(toggle).not.toBeDisabled());
+    await user.click(toggle); // locally enabled until the first Send
+    act(() => emitLibraryRevision(1));
+    await waitFor(() => expect(getChatKnowledgePreference).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(toggle).not.toBeDisabled());
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(sendMessage).toHaveBeenCalledWith("Ask with retrieval", true);
+  });
+
+  it("ignores an obsolete library lookup completing after a newer revision", async () => {
+    const { store } = makeStore({ composer: {
+      request: { ...initialComposerState.request, canSend: true },
+    } });
+    const empty = { nodeId: null, hasDocuments: false, enabled: false, override: null };
+    const populated = { nodeId: null, hasDocuments: true, enabled: true, override: null };
+    const { sceneStore, getChatKnowledgePreference, emitLibraryRevision } = makeSceneStore();
+    let finishOld: (preference: typeof empty) => void = () => {};
+    getChatKnowledgePreference.mockResolvedValueOnce(empty)
+      .mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
+      .mockResolvedValueOnce(populated);
+    render(<OverlayProvider>
+      {/* @ts-expect-error - minimal test store */}
+      <Composer store={store} sceneStore={sceneStore} />
+    </OverlayProvider>);
+    await waitFor(() => expect(getChatKnowledgePreference).toHaveBeenCalledTimes(1));
+    act(() => emitLibraryRevision(1));
+    await waitFor(() => expect(getChatKnowledgePreference).toHaveBeenCalledTimes(2));
+    act(() => emitLibraryRevision(2));
+    const toggle = screen.getByRole("button", { name: "Use knowledge" });
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-pressed", "true"));
+    act(() => finishOld(empty));
+    await waitFor(() => expect(getChatKnowledgePreference).toHaveBeenCalledTimes(3));
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(toggle).not.toBeDisabled();
   });
 
 

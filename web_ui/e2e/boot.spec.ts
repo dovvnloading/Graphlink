@@ -40,3 +40,37 @@ test("boots against the real backend and renders the canvas shell", async ({ pag
   // this line was always about; the overlay was only ever a proxy for it.
   await expect(page.locator(".react-flow__node")).toHaveCount(0);
 });
+
+test("knowledge and Agent mode buttons keep their labels inside separate hit targets", async ({ page }) => {
+  await gotoApp(page);
+  const knowledge = page.getByRole("button", { name: "Use knowledge" });
+  await expect(knowledge).not.toHaveAttribute("title", "Checking workspace knowledge…");
+
+  const boxes = await page.evaluate(() => {
+    const knowledgeButton = document.querySelector<HTMLButtonElement>(".composer-knowledge-toggle");
+    const agentButton = document.querySelector<HTMLButtonElement>(
+      ".composer-agent-toggle:not(.composer-knowledge-toggle)",
+    );
+    const knowledgeLabel = knowledgeButton?.querySelector("span");
+    const agentLabel = agentButton?.querySelector("span");
+    if (!knowledgeButton || !agentButton || !knowledgeLabel || !agentLabel) return null;
+    const kb = knowledgeButton.getBoundingClientRect();
+    const ab = agentButton.getBoundingClientRect();
+    const kl = knowledgeLabel.getBoundingClientRect();
+    const al = agentLabel.getBoundingClientRect();
+    return {
+      knowledge: { left: kb.left, right: kb.right, width: kb.width },
+      agent: { left: ab.left, right: ab.right },
+      knowledgeText: { left: kl.left, right: kl.right },
+      agentText: { left: al.left, right: al.right },
+    };
+  });
+  expect(boxes).not.toBeNull();
+  if (!boxes) return;
+  expect(boxes.knowledge.width).toBeGreaterThan(70); // not the rail's 30px icon width
+  expect(boxes.knowledgeText.left).toBeGreaterThanOrEqual(boxes.knowledge.left);
+  expect(boxes.knowledgeText.right).toBeLessThanOrEqual(boxes.knowledge.right);
+  expect(boxes.knowledge.right).toBeLessThanOrEqual(boxes.agent.left);
+  expect(boxes.agentText.left).toBeGreaterThanOrEqual(boxes.agent.left);
+  expect(boxes.agentText.right).toBeLessThanOrEqual(boxes.agent.right);
+});

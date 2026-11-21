@@ -315,6 +315,38 @@ def test_settings_change_and_file_ingestion_start_real_intent_jobs(tmp_path, mon
     assert len(knowledge_store.list_embeddings_for_search(db, "ollama:model-a", collection_id=collection)) == 2
     assert [len(texts) for texts, _ in provider.calls] == [1, 1]
 
+
+def test_ingest_reports_completion_only_after_its_follow_up_is_scheduled(tmp_path):
+    """A completed import must not race the embedding callback on the event loop."""
+    from backend.knowledge_jobs import KnowledgeIngestManager
+
+    source = tmp_path / "note.md"
+    source.write_text("This is new knowledge to import.", encoding="utf-8")
+    observed = []
+
+    async def scenario():
+        bus = SessionBus("ingest-completion-order")
+        jobs = KnowledgeIngestManager(
+            bus, tmp_path / "knowledge.db",
+            on_completed=lambda workspace: observed.append(
+                (workspace, jobs.snapshot()["jobs"][0]["status"])
+            ),
+        )
+        bus.register_topic("knowledge-ingest", jobs.snapshot)
+        jobs.start([str(source)], folder=False, workspace_id=17)
+        for _ in range(500):
+            [row] = jobs.snapshot()["jobs"]
+            if row["status"] in {"completed", "failed"}:
+                return row
+            await asyncio.sleep(0.01)
+        raise AssertionError("Import never completed")
+
+    completed = asyncio.run(scenario())
+    assert completed["status"] == "completed"
+    assert completed["added"] == 1
+    assert observed == [(17, "running")]
+
+
 def test_saved_graph_uses_persisted_default_workspace_not_global_pool(tmp_path, monkeypatch):
     db, settings = _prepare(tmp_path, monkeypatch)
     chats_db = tmp_path / "chats.db"

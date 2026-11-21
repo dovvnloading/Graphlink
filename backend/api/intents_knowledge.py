@@ -295,7 +295,12 @@ def register_knowledge_document_intents(
                     uploads.cleanup_source(path)
             return {"removed": deleted}
 
-        return await asyncio.to_thread(remove)
+        result = await asyncio.to_thread(remove)
+        if result["removed"]:
+            # A Library removal changes the workspace's default chat retrieval
+            # even when the canvas itself has not changed.
+            await bus.publish("knowledge-library")
+        return result
 
     async def reindex_document(document_id):
         # The client provides only an ID. Paths come exclusively from
@@ -530,7 +535,18 @@ def register_knowledge_intents(
     db_path = watch_service.db_path if watch_service is not None else DEFAULT_DB_PATH
     watcher = watch_service if watch_service is not None else WatchedFolderService(db_path)
     embedding_jobs = KnowledgeEmbeddingJobManager(bus, db_path, settings_manager)
-    ingest_jobs = KnowledgeIngestManager(bus, db_path, on_completed=embedding_jobs.schedule)
+    # A separate, tiny topic invalidates workspace knowledge preferences
+    # without forcing a large scene publish or polling the document list.
+    # SessionBus stamps a monotonically increasing revision on every publish.
+    bus.register_topic("knowledge-library", lambda: {"workspaceId": document.current_workspace_id})
+
+    def on_ingest_completed(workspace_id):
+        embedding_jobs.schedule(workspace_id)
+        # Called on this session's event loop after the ingest worker commits.
+        # Re-indexing and newly imported documents both change library state.
+        asyncio.create_task(bus.publish("knowledge-library"))
+
+    ingest_jobs = KnowledgeIngestManager(bus, db_path, on_completed=on_ingest_completed)
     uploads = KnowledgeDropUploads(db_path)
     bus.register_topic("knowledge-ingest", ingest_jobs.snapshot)
     # Session eviction must stop subsequent provider batches, even if an

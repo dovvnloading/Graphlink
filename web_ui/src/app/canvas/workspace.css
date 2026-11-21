@@ -217,6 +217,13 @@
 }
 
 .composer-icon-button { flex: none; width: 30px; height: 30px; border-radius: 8px; }
+/* The workspace rail's 30px icon rule must not squeeze labeled mode toggles
+   into icon-sized hit targets (their text would paint over the next button). */
+.composer-icon-button.composer-agent-toggle {
+  width: auto;
+  min-width: max-content;
+  padding-inline: 8px;
+}
 .composer-icon-button .icon { width: 16px; height: 16px; }
 
 .composer-control {
