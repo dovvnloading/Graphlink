@@ -825,14 +825,15 @@ _GGUF_SCAN_MAX_SECONDS = 30
 
 
 def _normalize_ollama_capabilities(capabilities) -> set[str]:
-    if not capabilities:
-        return set()
     if isinstance(capabilities, str):
-        return {capabilities.lower()}
+        capabilities = [capabilities]
+    if not isinstance(capabilities, (list, tuple, set, frozenset)):
+        return set()
     return {
-        str(capability).strip().lower()
-        for capability in capabilities
-        if str(capability).strip()
+        capability.strip().lower()
+        for capability in list(capabilities)[:32]
+        if isinstance(capability, str) and capability.isprintable()
+        and 0 < len(capability) <= 64 and capability.strip()
     }
 
 
