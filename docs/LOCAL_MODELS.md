@@ -57,17 +57,17 @@ When **Agent** is enabled in the main composer, a task uses the selected compose
 
 ## Configure an Ollama context window per model
 
-On an Ollama model card, choose **Context window (num_ctx)**. Graphlink stores the value **per model**, and uses the served window for request options and context budgeting. **8k (8,192 tokens) is the default**, not a fixed Ollama limit.
+On a chat-capable Ollama model card, choose **Context window (num_ctx)**. Embedding-only model cards do not have a chat context-window control. Graphlink stores the value **per model**, and uses the served window for request options and context budgeting. **8k (8,192 tokens) is the default**, not a fixed Ollama limit.
 
 Available choices are **4k, 8k, 16k, 32k, 64k and 128k**, limited by that model's **server-verified trained context length**. If the server cannot verify the length, choices above 8k are not available; a disk scan alone cannot establish a larger safe limit. Higher trained capacity does not mean you should always allocate it: a larger KV cache can consume substantially more memory.
 
-When a card is inspected, Graphlink estimates **model weights + KV cache** for the selected context window and compares that estimate with **available system RAM**. The estimate uses the model size and attention metadata when available (and a conservative KV fallback otherwise). It is **not** a guarantee of actual memory usage: GPU VRAM and other Ollama allocations are not included in the RAM comparison. If the estimate exceeds available system RAM, a warning says the window may run out of memory. Reduce the window or choose a smaller model if you encounter memory pressure. See [Context Engine](CONTEXT_ENGINE.md) for how a served window affects chat prompts.
+When a card is inspected, Graphlink estimates **model weights + KV cache** for the selected context window and compares that estimate with **available system RAM**. The estimate uses Ollama's reported model size and attention metadata when available, including grouped-query heads and sliding-window layers, and falls back to a conservative KV approximation when metadata is incomplete. It is **not** a guarantee of actual memory usage: GPU VRAM and other Ollama allocations are not included in the RAM comparison. A model-footprint warning requires a known weight size and an estimate exceeding available system RAM; without a reported size, the KV-only estimate is not enough to assess fit. Reduce the window or choose a smaller model if you encounter memory pressure. See [Context Engine](CONTEXT_ENGINE.md) for how a served window affects chat prompts.
 
 ## Run a model Check
 
 Select **Check** on a model card to run a short, cancellable diagnostic. It asks the model to generate a brief reply and requests a harmless tool call. The card reports **load time**, **generation speed (tokens/s)** and whether **tool calling worked**; unavailable counters are reported as unavailable rather than invented. **Cancel** stops an in-progress check.
 
-**Check is a report only.** It may load or run the model, but it does **not** change saved settings or model assignments, and **never executes** the requested tool call. It is a small probe, not a guarantee of performance on your own workloads. A negative native-tool result does not by itself rule out the Agent's JSON-tool fallback.
+**Check is a report only.** It loads the model for its short prompts and requests a five-minute keep-alive so the card can show its updated **Loaded** status and memory after a successful check. Ollama may unload it later or independently of Graphlink. A check does **not** change saved settings or model assignments, and **never executes** the requested tool call. It is a small probe, not a guarantee of performance on your own workloads. A negative native-tool result does not by itself rule out the Agent's JSON-tool fallback.
 
 ## Understand capability warnings
 
