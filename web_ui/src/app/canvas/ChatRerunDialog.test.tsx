@@ -57,7 +57,7 @@ describe("ChatRerunDialog", () => {
     expect(screen.getByRole("list", { name: /2 replies in parent-before-child order/ }))
       .toBeInTheDocument();
     expect(screen.getByText(/Estimated input: 100 tokens/)).toBeInTheDocument();
-    expect(screen.getByText(/Provider \/ Model/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Provider \/ Model/)).toHaveLength(2);
     const branches = screen.getByRole("radio", { name: "All branches below" });
     branches.focus();
     await user.keyboard(" ");

@@ -236,7 +236,7 @@ def test_cancel_during_second_reply_preserves_second_answer_and_single_undo():
         assert document.nodes[first.id].content == "new reply 1"
         assert document.nodes[deep.id].content == "deep answer"
         assert document.nodes[branch.id].content == "branch answer"
-        assert document.nodes[code.id].content == "print(1)"
+        assert document.nodes[code.id].state.code == "print(1)"
         assert len(document.command_log) == 1
         document.undo()
         assert document.nodes[first.id].content == "first answer"
@@ -305,4 +305,4 @@ def test_reply_re_run_respects_twenty_version_cap_without_touching_other_kinds()
     assert result.state.versions[-1].content == "fresh answer"
     assert result.state.version_index == 19
     assert result.state.reply_history_fingerprint == "v1:proof"
-    assert document.nodes[code.id].content == "print(1)"
+    assert document.nodes[code.id].state.code == "print(1)"
