@@ -45,3 +45,31 @@ def test_memory_estimate_adds_weights_and_served_kv_cache():
     weights = 4 * 1024 ** 3
     assert estimated_memory_bytes(weights, 32768, 131072) == weights + 4 * 1024 ** 3
     assert estimated_memory_bytes(-1, -100, -100) == 0
+
+
+def test_untrusted_context_geometry_uses_safe_fallback():
+    # Ollama's /api/show metadata is untrusted: fractional, infinite,
+    # negative or enormous fields cannot become oversized memory estimates.
+    base = {
+        "general.architecture": "llama",
+        "llama.block_count": 32,
+        "llama.attention.head_count": 32,
+        "llama.attention.head_count_kv": 8,
+        "llama.embedding_length": 4096,
+    }
+    for key, bad in [
+        ("llama.block_count", 10**100),
+        ("llama.block_count", 3.5),
+        ("llama.block_count", float("inf")),
+        ("llama.block_count", True),
+        ("llama.attention.head_count", 3),  # embedding cannot divide evenly
+        ("llama.attention.head_count_kv", 64),  # more KV heads than heads
+        ("llama.attention.key_length", 10**100),
+    ]:
+        assert kv_bytes_per_token({**base, key: bad}) == FALLBACK_KV_BYTES_PER_TOKEN
+
+
+def test_metadata_trained_length_rejects_nonintegral_or_unbounded_numbers():
+    for value in [3.5, 1e308, 10**99, False, "nan", "-1", "1000000000"]:
+        assert trained_context_length({"llama.context_length": value}) is None
+    assert trained_context_length({"llama.context_length": "131072"}) == 131072
