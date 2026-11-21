@@ -422,7 +422,7 @@ describe("SettingsDialog", () => {
         // The test uses a numeric window timer ID; Node's typings expect Timeout.
         return 2026 as unknown as ReturnType<typeof setInterval>;
       }
-      return realSetInterval(handler, delay, ...args);
+      return realSetInterval(handler, delay, ...args) as unknown as ReturnType<typeof setInterval>;
     });
     const clearSpy = vi.spyOn(window, "clearInterval");
     try {
