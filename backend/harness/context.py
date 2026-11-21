@@ -146,10 +146,17 @@ def served_context_window(*, model_ref=None, runtime=None) -> int:
     provider, model = api_provider.describe_active_model(
         config.TASK_CHAT, runtime=runtime, model_ref=model_ref,
     )
-    if provider == config.LOCAL_PROVIDER_OLLAMA:
+    # describe_active_model returns display provenance ("ollama",
+    # "llama.cpp") rather than config's capitalized provider IDs.
+    if provider.casefold() == config.LOCAL_PROVIDER_OLLAMA.casefold():
         return api_provider._ollama_effective_context_window(model)
-    if provider == config.LOCAL_PROVIDER_LLAMACPP:
-        return (runtime or api_provider.DEFAULT_RUNTIME).context_window(config.TASK_CHAT)
+    if provider.casefold() == config.LOCAL_PROVIDER_LLAMACPP.casefold():
+        settings = (runtime or api_provider.DEFAULT_RUNTIME).snapshot().llama_cpp_settings
+        try:
+            n_ctx = int(settings.get("n_ctx") or 0)
+        except (TypeError, ValueError):
+            n_ctx = 0
+        return n_ctx if n_ctx > 0 else api_provider.known_context_window(None)
     return api_provider.known_context_window(model)
 
 
