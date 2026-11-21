@@ -17,7 +17,7 @@ from backend.domain.graph import SceneDocument
 from backend.events import SessionBus
 from backend.harness import tools_shared
 from backend.knowledge_chunking import chunk_text
-from backend.knowledge_retrieval import search_chat_knowledge
+from backend.knowledge_retrieval import format_untrusted_context, search_chat_knowledge
 from backend.knowledge_store import add_document_with_chunks, get_or_create_workspace_collection
 from backend.providers.base import ProviderCapabilities, ToolCall
 from backend.tools import KNOWLEDGE_READ, RunContext, ToolRegistry
@@ -97,6 +97,19 @@ def test_ui_chat_and_tool_use_scoped_hybrid_search_and_expose_match_signals(tmp_
     assert len(result) == 1 and result[0]["source_uri"] == "own.md"
     assert result[0]["rank_signals"] == {"vector": 1}
 
+    # Increasing k to include every chunk must not pad results with a
+    # vector-only neighbor whose cosine similarity is zero.
+    all_ui = asyncio.run(bus.dispatch_intent("knowledge", "search", ["wetland bird", 10]))["results"]
+    assert [hit["sourceUri"] for hit in all_ui] == ["own.md"]
+    all_chat = search_chat_knowledge("wetland bird", 71, db_path=db, k=10, settings_manager=manager)
+    assert [hit["source_uri"] for hit in all_chat] == ["own.md"]
+    all_tool = asyncio.run(registry.invoke(
+        ToolCall("search-all", "knowledge.search", {"query": "wetland bird", "k": 10}),
+        context,
+    ))
+    assert not all_tool.is_error
+    assert [hit["source_uri"] for hit in json.loads(all_tool.content)["results"]] == ["own.md"]
+
     # An active embedding choice cannot cross the current collection.
     document.current_workspace_id = 72
     other_ui = asyncio.run(bus.dispatch_intent("knowledge", "search", ["wetland bird", 1]))["results"]
@@ -112,6 +125,21 @@ def test_ui_chat_and_tool_use_scoped_hybrid_search_and_expose_match_signals(tmp_
         "The blue heron keeps watch over the marshland.",
         "A pressure valve opens in the boiler room.",
     ]) == 1
+
+    # A workspace with only irrelevant vectors returns no citations anywhere.
+    only_noise = get_or_create_workspace_collection(db, 73)
+    _ingest(db, only_noise, "Steam engine calibration instructions.", "noise-only.md")
+    document.current_workspace_id = 73
+    assert asyncio.run(bus.dispatch_intent("knowledge", "search", ["wetland heron", 10])) == {"results": []}
+    no_chat_hits = search_chat_knowledge("wetland heron", 73, db_path=db, k=10, settings_manager=manager)
+    assert no_chat_hits == []
+    assert format_untrusted_context(no_chat_hits) == ""
+    no_tool_hits = asyncio.run(registry.invoke(
+        ToolCall("no-matches", "knowledge.search", {"query": "wetland heron", "k": 10}),
+        context,
+    ))
+    assert not no_tool_hits.is_error
+    assert json.loads(no_tool_hits.content)["results"] == []
 
 
 def test_workspace_agent_fallback_passes_embedding_settings_to_read_only_search(monkeypatch):

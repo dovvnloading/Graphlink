@@ -119,14 +119,15 @@ describe("KnowledgeSearchDialog", () => {
     expect(intents).toContainEqual(["knowledge", "search", ["brown fox", 10]]);
   });
 
-  it('renders "N sources used" with N matching the real result count', async () => {
+  it('labels retrieved hits as search results rather than sources used', async () => {
     const { user, request } = await setup();
     request.mockResolvedValueOnce({ results: [RESULT_A, RESULT_B] });
 
     await user.type(screen.getByPlaceholderText(/search your ingested knowledge base/i), "query");
     await user.click(screen.getByRole("button", { name: "Search" }));
 
-    expect(await screen.findByText("2 sources used")).toBeInTheDocument();
+    expect(await screen.findByText("2 search results")).toBeInTheDocument();
+    expect(screen.queryByText(/sources used/)).not.toBeInTheDocument();
   });
 
   it("singular phrasing for exactly one result", async () => {
@@ -136,7 +137,7 @@ describe("KnowledgeSearchDialog", () => {
     await user.type(screen.getByPlaceholderText(/search your ingested knowledge base/i), "query");
     await user.click(screen.getByRole("button", { name: "Search" }));
 
-    expect(await screen.findByText("1 source used")).toBeInTheDocument();
+    expect(await screen.findByText("1 search result")).toBeInTheDocument();
   });
 
   it("shows an explicit empty state instead of a false zero-sources count", async () => {
@@ -146,7 +147,7 @@ describe("KnowledgeSearchDialog", () => {
     await user.type(screen.getByPlaceholderText(/search your ingested knowledge base/i), "nothing here");
     await user.click(screen.getByRole("button", { name: "Search" }));
 
-    expect(await screen.findByText("No sources found")).toBeInTheDocument();
+    expect(await screen.findByText("No search results")).toBeInTheDocument();
   });
 
   it("shows each hit's keyword and semantic matches, including their retrieval ranks", async () => {

@@ -116,28 +116,33 @@ model id; the reranker itself makes **no embedding, LLM, network or cloud
 calls**. Offline evaluation uses only an in-process, deterministic embedding
 stub and a temporary SQLite database.
 
-The previous behavior is reproducible with `ranking="legacy"`: request the
-first `k` FTS5 hits and first `k` vector hits, perform reciprocal rank fusion
-(RRF, `k_rrf=60`), and return the first `k` fused chunks. Without embeddings,
-the previous behavior returns FTS5 results alone. No previous citation fields
-or offsets are removed.
+The legacy ranking order remains available with `ranking="legacy"`: request
+the first `k` FTS5 hits and first `k` vector hits, apply the semantic-only
+relevance floor, perform reciprocal rank fusion (RRF, `k_rrf=60`), and return
+the first `k` fused chunks. Without embeddings, FTS5 results are returned
+alone. No previous citation fields or offsets are removed.
 
 The new default (`ranking="reranked"`) proceeds as follows:
 
 1. Ask each available index for `min(4*k, 100)` candidates, but never fewer
    than `k`. Keep the independently ranked results; BM25 and cosine scores
    have incompatible units and are **not** compared.
-2. Fuse lists using `RRF_score = Σ 1/(60 + rank)`, with 1-based ranks and
+2. Remove vector-only candidates with cosine similarity below **0.55**
+   (`MIN_SEMANTIC_COSINE_SIMILARITY`). FTS5 hits survive irrespective of their
+   vector score, while strong paraphrase matches without keyword overlap
+   remain eligible. This is an absolute floor within the vector index, not
+   a comparison between BM25 and cosine values; it applies to both rankings.
+3. Fuse lists using `RRF_score = Σ 1/(60 + rank)`, with 1-based ranks and
    per-list `chunk_id` deduplication. Agreement between indexes boosts a
    hit. Stable first-seen order breaks score ties.
-3. Walk the fused ranking, keeping its highest-ranked representative and
+4. Walk the fused ranking, keeping its highest-ranked representative and
    discarding subsequent exact or near-duplicate chunks. Unicode word tokens
    are case-folded; substantially overlapping ordered three-token shingles
    trigger a more conservative ordered sequence-similarity comparison. Very
    short passages are removed only when exactly equal. This is a lexical
    similarity filter, **not** a claim of semantic equivalence. Continue
    examining the over-fetched pool to fill up to `k` unique passages.
-4. Read provenance in one local SQLite query and attach it to every surviving
+5. Read provenance in one local SQLite query and attach it to every surviving
    hit. With no vector index, FTS5-only results are still deduplicated and
    citeable. `rank_signals` identifies the first-stage FTS5/vector ranks;
    `rrf_score` is available when both lists are present.

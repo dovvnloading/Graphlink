@@ -12,6 +12,8 @@ from __future__ import annotations
 from backend.knowledge_chunking import chunk_text
 from backend.knowledge_embeddings import embed_pending_chunks
 from backend.knowledge_retrieval import (
+    MIN_SEMANTIC_COSINE_SIMILARITY,
+    _filter_weak_semantic_only,
     format_untrusted_context,
     hybrid_search,
     reciprocal_rank_fusion,
@@ -84,6 +86,19 @@ class TestReciprocalRankFusion:
 
 
 # -- hybrid_search: the fixture-set exit criterion ----------------------------
+
+
+def test_cosine_floor_only_excludes_weak_semantic_only_candidates():
+    lexical = [_result(1)]
+    vector = [
+        _result(2, score=MIN_SEMANTIC_COSINE_SIMILARITY - 0.01),
+        _result(1, score=-0.5),  # Keyword evidence wins even with a poor vector score.
+        _result(3, score=MIN_SEMANTIC_COSINE_SIMILARITY),  # Inclusive floor.
+        _result(4, score=0.9),
+    ]
+    assert [
+        row["chunk_id"] for row in _filter_weak_semantic_only(lexical, vector)
+    ] == [1, 3, 4]
 
 
 class TestHybridSearchBeatsEitherIndexAlone:
@@ -167,6 +182,40 @@ class TestHybridSearchBeatsEitherIndexAlone:
             db_path, "query", embedding_provider=provider, embedding_model_id="fake-model", k=2,
         )
         assert len(results) == 2
+
+    def test_hybrid_filters_off_topic_documents_in_both_ranking_modes(self, tmp_path):
+        db_path = tmp_path / "knowledge.db"
+        keyword = _ingest(
+            db_path, text="Volcanic eruption warnings have been issued.", source_uri="keyword.md",
+        )
+        semantic = _ingest(
+            db_path, text="Lava and ash clouds rise from the mountain.", source_uri="semantic.md",
+        )
+        _ingest(
+            db_path, text="Pancake batter needs butter and milk.", source_uri="unrelated.md",
+        )
+        vectors = {
+            "Volcanic eruption warnings have been issued.": [0.0, 1.0],
+            "Lava and ash clouds rise from the mountain.": [1.0, 0.0],
+            "Pancake batter needs butter and milk.": [0.2, 0.98],
+            "volcanic eruption": [1.0, 0.0],
+            "glacier": [-1.0, 0.0],
+        }
+        provider = FakeEmbeddingProvider(vectors)
+        embed_pending_chunks(db_path, provider, "fake-model")
+
+        for ranking in ("legacy", "reranked"):
+            hits = hybrid_search(
+                db_path, "volcanic eruption", embedding_provider=provider,
+                embedding_model_id="fake-model", k=10, ranking=ranking,
+            )
+            assert {hit["source_uri"] for hit in hits} == {"keyword.md", "semantic.md"}
+            assert {hit["document_id"] for hit in hits} == {keyword.document_id, semantic.document_id}
+            assert not any(hit["source_uri"] == "unrelated.md" for hit in hits)
+            assert hybrid_search(
+                db_path, "glacier", embedding_provider=provider,
+                embedding_model_id="fake-model", k=10, ranking=ranking,
+            ) == []
 
 
 # -- select_within_budget ------------------------------------------------------

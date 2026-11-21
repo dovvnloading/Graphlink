@@ -18,8 +18,8 @@ import { KnowledgeEmbeddingStatus } from "./KnowledgeEmbeddingStatus";
  * "I need the actual return value" pattern (not fireIntent, which is
  * `: void`).
  *
- * "N sources used" (the ADR's own stage-17.5 exit criterion phrasing):
- * the result count heading below. Server-derived citation identifiers
+ * "N search results" labels the retrieved hits rather than implying that
+ * the sources were used in a chat response. Server-derived citation identifiers
  * open the existing Document View through knowledge/openCitation, whose
  * workspace and chunk identity checks precede highlighting. The card
  * reveals the exact passage, and a genuine http(s) source also has its
@@ -817,7 +817,7 @@ export function KnowledgeSearchDialog({
         <>
           <div role="status" aria-live="polite" aria-atomic="true">
             <h2 className="knowledge-section-title">
-              {results.length === 0 ? "No sources found" : `${results.length} source${results.length === 1 ? "" : "s"} used`}
+              {results.length === 0 ? "No search results" : `${results.length} search result${results.length === 1 ? "" : "s"}`}
             </h2>
           </div>
           <ul className="knowledge-result-list">
