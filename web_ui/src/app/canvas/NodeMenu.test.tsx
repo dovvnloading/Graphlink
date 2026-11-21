@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
@@ -97,6 +98,15 @@ describe("NodeMenu keyboard completeness (ADR-012 stage 12.3)", () => {
     // menuRef's subtree, so the roving-focus branch must no-op entirely.
     await user.keyboard("{ArrowDown}");
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+});
+
+describe("Portaled menu keyboard focus styling", () => {
+  it("uses a visible token outline rather than relying on hover color", () => {
+    const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+    expect(css).toMatch(
+      /\.chat-node-menu button:focus-visible\s*\{\s*outline: 2px solid var\(--gl-focus-ring\)/,
+    );
   });
 });
 
