@@ -350,6 +350,9 @@ class SettingsSessionState:
     ollama_scan_status: str = "idle"
     ollama_pull_status: str = "idle"
     ollama_notice: str = ""
+    ollama_inventory: list[dict] = field(default_factory=list)
+    ollama_inventory_source: str = ""
+    ollama_server_reachable: bool | None = None
     ollama_context_model: str = ""
     ollama_context_status: str = "idle"
     ollama_context_notice: str = ""
@@ -357,8 +360,6 @@ class SettingsSessionState:
     ollama_context_model_size_bytes: int = 0
     ollama_context_kv_bytes_per_token: int = 0
     ollama_context_available_memory_bytes: int = 0
-    knowledge_ollama_models: list[str] = field(default_factory=list)
-    knowledge_ollama_capable_models: list[str] = field(default_factory=list)
     knowledge_scan_status: str = "idle"
     knowledge_test_status: str = "idle"
     knowledge_notice: str = ""

@@ -7,6 +7,8 @@ import { NotificationBanner, TRANSIENT_NOTIFICATION_MS } from "./NotificationBan
 import { initialComposerState, initialNotificationState, initialTokenCounterState } from "./composerStore";
 import { initialSceneState } from "../canvas/sceneStore";
 import { OverlayProvider } from "../overlays/overlays";
+import { ModelCapabilityContext } from "../context/ModelCapabilityContext";
+import type { ModelCapabilityPreview } from "./composerStore";
 import type { StateListener } from "../../lib/ws/transport";
 
 function makeStore(
@@ -131,6 +133,91 @@ function makeSceneStore(
 }
 
 describe("Composer", () => {
+  it("warns for image attachments only when the chosen model is confirmed not to support vision", () => {
+    const image = { id: "img-1", name: "image.png", kind: "image", byteSize: 123, contextLabel: "Image", tokenCount: 0 };
+    const route = { ...initialComposerState.route, modelId: "text-only", modelLabel: "Text only" };
+    const { store } = makeStore({ composer: {
+      route,
+      context: { ...initialComposerState.context, items: [image] },
+    } });
+    const preview: ModelCapabilityPreview = {
+      provider: route.provider, modelId: route.modelId,
+      tools: null, vision: false, suggestedToolModel: null,
+    };
+    const { unmount } = render(
+      <ModelCapabilityContext.Provider value={preview}>
+        <OverlayProvider>
+          {/* @ts-expect-error - minimal test store */}
+          <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+        </OverlayProvider>
+      </ModelCapabilityContext.Provider>,
+    );
+    expect(screen.getByText(/Text only does not support image input/)).toBeInTheDocument();
+    unmount();
+
+    for (const vision of [null, true]) {
+      const result = render(
+        <ModelCapabilityContext.Provider value={{ ...preview, vision }}>
+          <OverlayProvider>
+            {/* @ts-expect-error - minimal test store */}
+            <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+          </OverlayProvider>
+        </ModelCapabilityContext.Provider>,
+      );
+      expect(screen.queryByText(/does not support image input/)).toBeNull();
+      result.unmount();
+    }
+  });
+
+  it("does not warn for documents, a different model, or agent mode", () => {
+    const item = { id: "file-1", name: "notes.txt", kind: "document", byteSize: 123, contextLabel: "Document", tokenCount: 2 };
+    const route = { ...initialComposerState.route, modelId: "chosen" };
+    const preview: ModelCapabilityPreview = {
+      provider: route.provider, modelId: route.modelId, tools: false, vision: false, suggestedToolModel: null,
+    };
+    const documentStore = makeStore({ composer: {
+      route,
+      context: { ...initialComposerState.context, items: [item] },
+    } });
+    const docResult = render(
+      <ModelCapabilityContext.Provider value={preview}>
+        <OverlayProvider>
+          {/* @ts-expect-error - minimal test store */}
+          <Composer store={documentStore.store} sceneStore={makeSceneStore().sceneStore} />
+        </OverlayProvider>
+      </ModelCapabilityContext.Provider>,
+    );
+    expect(screen.queryByText(/does not support image input/)).toBeNull();
+    docResult.unmount();
+
+    const withImage = makeStore({ composer: {
+      route,
+      request: { ...initialComposerState.request, canSend: true },
+      context: { ...initialComposerState.context, items: [{ ...item, kind: "image" }] },
+    } });
+    const otherModel = render(
+      <ModelCapabilityContext.Provider value={{ ...preview, modelId: "different" }}>
+        <OverlayProvider>
+          {/* @ts-expect-error - minimal test store */}
+          <Composer store={withImage.store} sceneStore={makeSceneStore().sceneStore} />
+        </OverlayProvider>
+      </ModelCapabilityContext.Provider>,
+    );
+    expect(screen.queryByText(/does not support image input/)).toBeNull();
+    otherModel.unmount();
+
+    render(
+      <ModelCapabilityContext.Provider value={preview}>
+        <OverlayProvider>
+          {/* @ts-expect-error - minimal test store */}
+          <Composer store={withImage.store} sceneStore={makeSceneStore().sceneStore} />
+        </OverlayProvider>
+      </ModelCapabilityContext.Provider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Send to workspace agent" }));
+    expect(screen.queryByText(/does not support image input/)).toBeNull();
+  });
+
   it("defaults Use knowledge on for a workspace with documents and can turn it off before first Send", async () => {
     const user = userEvent.setup();
     const { store } = makeStore({ composer: {

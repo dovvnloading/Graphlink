@@ -9,6 +9,7 @@ change.
 from __future__ import annotations
 
 import asyncio
+from typing import Awaitable, Callable
 
 import ollama
 
@@ -17,7 +18,7 @@ import graphlink_task_config as config
 from graphlink_model_catalog import AUTO_MODEL, INHERIT_MODEL
 from backend.ollama_context import (
     CONTEXT_CHOICES, DEFAULT_CONTEXT_WINDOW, available_memory_bytes,
-    kv_bytes_per_token, trained_context_length,
+    kv_bytes_per_token,
 )
 
 from backend.api._settings_shared import (
@@ -30,12 +31,13 @@ from backend.api._settings_shared import (
     run_locked,
 )
 from backend.events import SessionBus
+from backend.ollama_inventory import _key, build_ollama_inventory
 from graphlink_settings_store import SettingsManager
 
 
 def register_settings_ollama_intents(
     bus: SessionBus, manager: SettingsManager, state: SettingsSessionState
-) -> None:
+) -> Callable[[], Awaitable[None]]:
     async def set_ollama_reasoning_level(level: str):
         # Checked and applied inside the SAME to_thread hop, not split across
         # an await boundary: a concurrent mode switch (the toolbar's provider
@@ -122,20 +124,20 @@ def register_settings_ollama_intents(
         # pick_ollama_scan_folder (below) can share it with a real path
         # instead of duplicating the scan/persist/report sequence.
         state.ollama_scan_status = "running"
+        state.knowledge_scan_status = "running"
         state.ollama_notice = ""
+        state.knowledge_notice = ""
         await bus.publish("app-settings")
 
         try:
-            # scan_local_ollama_models never raises for "Ollama not
-            # running" - that's reported via the returned server_reachable/
-            # server_error fields (which legacy's own worker/bridge never
-            # surfaced either; matched here, not newly dropped). Only a
-            # genuine, unexpected exception (e.g. a filesystem error
-            # walking a manifest folder) reaches this except.
-            results = await asyncio.to_thread(api_provider.scan_local_ollama_models, scan_path)
+            # /api/tags is authoritative when running; disk manifests are
+            # scanned only while offline or when a folder is explicitly chosen.
+            results = await asyncio.to_thread(build_ollama_inventory, scan_path)
         except Exception as exc:  # noqa: BLE001 - no secret in this path to redact
             state.ollama_scan_status = "error"
+            state.knowledge_scan_status = "error"
             state.ollama_notice = f"Scan failed: {exc}"
+            state.knowledge_notice = f"Could not refresh Ollama models: {exc}"
             await bus.publish("app-settings")
             return
 
@@ -164,10 +166,29 @@ def register_settings_ollama_intents(
             await asyncio.to_thread(run_locked, _persist)
         except Exception as exc:  # noqa: BLE001 - no secret in this path to redact
             state.ollama_scan_status = "error"
+            state.knowledge_scan_status = "error"
             state.ollama_notice = f"Scan failed: {exc}"
+            state.knowledge_notice = f"Could not refresh Ollama models: {exc}"
             await bus.publish("app-settings")
             return
+        # The completed snapshot is shared by both Settings pages and only
+        # published after the scan cache has been persisted successfully.
+        state.ollama_inventory = list(results.get("inventory", []))
+        state.ollama_inventory_source = str(results.get("source", ""))
+        state.ollama_server_reachable = results.get("server_reachable")
         state.ollama_scan_status = "done"
+        state.knowledge_scan_status = "done"
+        capable = any("embeddings" in row["capabilities"] for row in state.ollama_inventory)
+        if state.ollama_inventory_source == "folder":
+            state.knowledge_notice = (
+                "Ollama model names were read from disk; start the server and refresh "
+                "to verify embedding capabilities."
+            )
+        elif not capable:
+            state.knowledge_notice = (
+                "No embedding-capable Ollama models confirmed. "
+                "Try refreshing or pulling nomic-embed-text."
+            )
         await bus.publish("app-settings")
 
     async def scan_ollama_system():
@@ -258,40 +279,40 @@ def register_settings_ollama_intents(
     bus.register_intent("app-settings", "pullOllamaModel", pull_ollama_model)
     bus.register_intent("app-settings", "pickOllamaScanFolder", pick_ollama_scan_folder)
     register_ollama_context_intents(bus, manager, state)
+    return scan_ollama_system
 
 
-def _inspect_ollama_context(model: str) -> tuple[int, int, int, int]:
-    """Read trained limit, model weights, KV size and available system RAM.
+def _inventory_context_model(state: SettingsSessionState, model: str) -> dict | None:
+    """Match a model against the shared Ollama inventory, including :latest."""
+    return next(
+        (row for row in state.ollama_inventory if _key(str(row.get("name", ""))) == _key(model)),
+        None,
+    )
 
-    The settings publication path is never allowed to block on Ollama; this
-    helper is called only from the explicit background inspection intent.
-    """
+
+def _verified_inventory_context_limit(row: dict | None) -> int | None:
+    """Only server-verified trained limits permit windows above 8k."""
+    if not row or row.get("source") != "server":
+        return None
+    length = row.get("trainedContextLength")
+    return length if type(length) is int and length > 0 else None
+
+
+def _inspect_ollama_context(model: str) -> tuple[int, int]:
+    """Get KV geometry and RAM; trained length and weights come from inventory."""
     try:
-        response = ollama.show(model)
-    except TypeError:
-        response = ollama.show(model=model)
-
-    info = api_provider._extract_response_field(response, "model_info")
-    if info is None:
-        info = api_provider._extract_response_field(response, "modelinfo")
-    trained = trained_context_length(info) or 0
-    kv_bytes = kv_bytes_per_token(info)
-    size = 0
-    try:
-        listing = ollama.list()
-        for item in api_provider._extract_response_field(listing, "models") or ():
-            name = (api_provider._extract_response_field(item, "model")
-                    or api_provider._extract_response_field(item, "name") or "")
-            if str(name).casefold() != model.casefold():
-                continue
-            raw_size = api_provider._extract_response_field(item, "size")
-            size = max(0, int(raw_size or 0))
-            break
-    except (AttributeError, TypeError, ValueError, OverflowError, OSError):
-        # A model can still be inspected even when listing is unavailable;
-        # the UI reports KV-only rather than claiming to know weight bytes.
-        pass
-    return trained, size, kv_bytes, available_memory_bytes()
+        try:
+            response = ollama.show(model)
+        except TypeError:
+            response = ollama.show(model=model)
+        info = api_provider._extract_response_field(response, "model_info")
+        if info is None:
+            info = api_provider._extract_response_field(response, "modelinfo")
+        kv_bytes = kv_bytes_per_token(info)
+    except Exception:
+        # Missing metadata can only change this approximate memory estimate.
+        kv_bytes = kv_bytes_per_token({})
+    return kv_bytes, available_memory_bytes()
 
 
 def register_ollama_context_intents(
@@ -314,7 +335,7 @@ def register_ollama_context_intents(
         state.ollama_context_available_memory_bytes = 0
         await bus.publish("app-settings")
         try:
-            trained, size, kv_bytes, available = await asyncio.to_thread(_inspect_ollama_context, model)
+            kv_bytes, available = await asyncio.to_thread(_inspect_ollama_context, model)
         except Exception as exc:  # noqa: BLE001 - inspection failures must not disable Settings
             if state.ollama_context_model == model:
                 state.ollama_context_status = "error"
@@ -324,13 +345,17 @@ def register_ollama_context_intents(
         # A slow show()/list() for A must not replace B's selected metadata.
         if state.ollama_context_model != model:
             return
-        state.ollama_context_trained_length = trained
-        state.ollama_context_model_size_bytes = size
+        # Source trained length and model weight size from PR 917's shared inventory.
+        row = _inventory_context_model(state, model)
+        trained = _verified_inventory_context_limit(row)
+        size = row.get("sizeBytes") if row else None
+        state.ollama_context_trained_length = trained or 0
+        state.ollama_context_model_size_bytes = size if type(size) is int and size > 0 else 0
         state.ollama_context_kv_bytes_per_token = kv_bytes
         state.ollama_context_available_memory_bytes = available
         state.ollama_context_status = "ready" if trained else "error"
         state.ollama_context_notice = (
-            "" if trained else "Ollama did not report the model's trained context limit."
+            "" if trained else "Refresh the shared Ollama inventory to verify this model's trained context limit."
         )
         await bus.publish("app-settings")
 
@@ -344,12 +369,12 @@ def register_ollama_context_intents(
             return
 
         def persist() -> None:
-            # The same cached Ollama show() metadata used by the request path
-            # ensures malicious/stale clients cannot persist an over-trained
-            # allocation, even if they bypass the UI's option filtering.
+            # Use the shared inventory's trained limit and retain the serving
+            # path's additional conservative ceiling if metadata goes stale.
+            inventory_trained = _verified_inventory_context_limit(_inventory_context_model(state, model))
             api_provider._get_ollama_context_window(model)
-            trained = api_provider._OLLAMA_TRAINED_CONTEXT_WINDOW_CACHE.get(model.casefold())
-            ceiling = trained if trained else DEFAULT_CONTEXT_WINDOW
+            runtime_trained = api_provider._OLLAMA_TRAINED_CONTEXT_WINDOW_CACHE.get(model.casefold())
+            ceiling = min(inventory_trained or DEFAULT_CONTEXT_WINDOW, runtime_trained or DEFAULT_CONTEXT_WINDOW)
             if value > ceiling:
                 raise ValueError(
                     f"{model} supports at most {ceiling:,} verified context tokens."

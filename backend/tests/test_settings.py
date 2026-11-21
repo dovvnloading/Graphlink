@@ -1518,6 +1518,15 @@ def test_ollama_context_intent_rejects_over_trained_window_and_publishes_prefere
     recorder = Recorder()
     bus.attach(recorder)
 
+    monkeypatch.setattr(
+        intents_settings_ollama_module, "build_ollama_inventory",
+        lambda _: {"models": ["local:7b"], "inventory": [{
+            "name": "local:7b", "trainedContextLength": 16_384, "sizeBytes": 1024,
+            "source": "server", "capabilities": [],
+        }], "source": "server", "server_reachable": True, "scan_mode": "server"},
+    )
+    asyncio.run(bus.dispatch_intent("app-settings", "scanOllamaSystem", []))
+
     asyncio.run(bus.dispatch_intent("app-settings", "setOllamaContextWindow", ["local:7b", 32768]))
     assert manager.get_ollama_context_windows() == {}
     assert "16,384" in recorder.messages[-1]["payload"]["ollamaContextNotice"]
@@ -1540,13 +1549,13 @@ def test_ollama_context_inspection_reports_trained_and_memory_metadata(manager, 
         types.SimpleNamespace(
             show=lambda _: {"model_info": {
                 "general.architecture": "llama",
-                "llama.context_length": 131_072,
+                "llama.context_length": 8_192,  # Inspector must not override the inventory\'s 131k cap.
                 "llama.block_count": 32,
                 "llama.attention.head_count_kv": 8,
                 "llama.attention.key_length": 128,
                 "llama.attention.value_length": 128,
             }},
-            list=lambda: {"models": [{"model": model, "size": 4 * 1024 ** 3}]},
+            list=lambda: (_ for _ in ()).throw(AssertionError("duplicate listing")),
         ),
     )
     monkeypatch.setattr(intents_settings_ollama_module, "available_memory_bytes", lambda: 8 * 1024 ** 3)
@@ -1554,6 +1563,15 @@ def test_ollama_context_inspection_reports_trained_and_memory_metadata(manager, 
     register_settings(bus, manager)
     recorder = Recorder()
     bus.attach(recorder)
+
+    monkeypatch.setattr(
+        intents_settings_ollama_module, "build_ollama_inventory",
+        lambda _: {"models": [model], "inventory": [{
+            "name": model, "trainedContextLength": 131_072,
+            "sizeBytes": 4 * 1024 ** 3, "source": "server", "capabilities": [],
+        }], "source": "server", "server_reachable": True, "scan_mode": "server"},
+    )
+    asyncio.run(bus.dispatch_intent("app-settings", "scanOllamaSystem", []))
 
     asyncio.run(bus.dispatch_intent("app-settings", "inspectOllamaContextModel", [model]))
     result = recorder.messages[-1]["payload"]
@@ -1568,8 +1586,8 @@ def test_ollama_context_inspection_reports_trained_and_memory_metadata(manager, 
 def test_scan_ollama_system_persists_results_and_reports_done(manager, monkeypatch):
     _isolate_ollama_task_config(monkeypatch)
     monkeypatch.setattr(
-        api_provider,
-        "scan_local_ollama_models",
+        intents_settings_ollama_module,
+        "build_ollama_inventory",
         lambda scan_path: {"models": ["llama3.2:3b"], "scan_mode": "system", "scan_path": "", "locations": ["~/.ollama"]},
     )
     bus = SessionBus("settings-ollama-scan-test")
@@ -1589,7 +1607,7 @@ def test_scan_ollama_system_reports_error_on_a_genuine_exception(manager, monkey
     def _boom(scan_path):
         raise OSError("permission denied walking manifest folder")
 
-    monkeypatch.setattr(api_provider, "scan_local_ollama_models", _boom)
+    monkeypatch.setattr(intents_settings_ollama_module, "build_ollama_inventory", _boom)
     bus = SessionBus("settings-ollama-scan-error-test")
     register_settings(bus, manager)
     recorder = Recorder()
@@ -1605,7 +1623,7 @@ def test_scan_ollama_system_reports_error_on_a_genuine_exception(manager, monkey
 
 def test_scan_ollama_system_is_a_no_op_while_already_running(manager, monkeypatch):
     calls = []
-    monkeypatch.setattr(api_provider, "scan_local_ollama_models", lambda scan_path: calls.append(1) or {"models": []})
+    monkeypatch.setattr(intents_settings_ollama_module, "build_ollama_inventory", lambda scan_path: calls.append(1) or {"models": []})
     bus = SessionBus("settings-ollama-scan-no-op-test")
     register_settings(bus, manager)
 
@@ -1629,7 +1647,7 @@ def test_scan_ollama_system_persist_failure_reports_error_and_does_not_strand_th
     # running" guard, with no way to recover short of restarting the app.
     _isolate_ollama_task_config(monkeypatch)
     monkeypatch.setattr(
-        api_provider, "scan_local_ollama_models", lambda scan_path: {"models": ["llama3.2:3b"], "scan_mode": "system"}
+        intents_settings_ollama_module, "build_ollama_inventory", lambda scan_path: {"models": ["llama3.2:3b"], "scan_mode": "system"}
     )
 
     def _boom(*a, **k):
@@ -1725,8 +1743,8 @@ def test_pick_ollama_scan_folder_scans_the_picked_folder(manager, monkeypatch):
 
     monkeypatch.setattr(native_dialogs, "pick_folder", _fake_pick_folder)
     monkeypatch.setattr(
-        api_provider,
-        "scan_local_ollama_models",
+        intents_settings_ollama_module,
+        "build_ollama_inventory",
         lambda scan_path: {"models": ["llama3.2:3b"], "scan_mode": "folder", "scan_path": scan_path, "locations": [scan_path]},
     )
     bus = SessionBus("settings-pick-ollama-scan-folder-test")
@@ -1747,7 +1765,7 @@ def test_pick_ollama_scan_folder_is_a_no_op_when_cancelled(manager, monkeypatch)
 
     calls = []
     monkeypatch.setattr(native_dialogs, "pick_folder", _fake_pick_folder)
-    monkeypatch.setattr(api_provider, "scan_local_ollama_models", lambda scan_path: calls.append(1) or {"models": []})
+    monkeypatch.setattr(intents_settings_ollama_module, "build_ollama_inventory", lambda scan_path: calls.append(1) or {"models": []})
     bus = SessionBus("settings-pick-ollama-scan-folder-cancel-test")
     register_settings(bus, manager)
     recorder = Recorder()
@@ -2764,22 +2782,27 @@ def test_knowledge_settings_cloud_requires_explicit_consent(manager, monkeypatch
 
 
 def test_knowledge_scan_lists_embedding_models_first_and_suggests_nomic(manager, monkeypatch):
-    from types import SimpleNamespace
-
     bus = SessionBus("settings-knowledge-model-scan")
     register_settings(bus, manager)
     recorder = Recorder()
     bus.attach(recorder)
+    models = ("llama3:8b", "mxbai-embed-large:latest", "nomic-embed-text:latest")
     monkeypatch.setattr(
-        api_provider, "_list_model_descriptors_from_running_ollama",
-        lambda: (
-            [SimpleNamespace(model_id=name) for name in (
-                "llama3:8b", "mxbai-embed-large:latest", "nomic-embed-text:latest",
-            )],
-            True, "",
-        ),
+        intents_settings_ollama_module, "build_ollama_inventory",
+        lambda _scan_path: {
+            "models": list(models), "scan_mode": "server", "source": "server",
+            "server_reachable": True,
+            "inventory": [
+                {
+                    "name": name, "capabilities": ["chat"] if name == "llama3:8b" else ["embeddings"],
+                    "family": "", "parameterSize": "", "quantization": "",
+                    "sizeBytes": None, "trainedContextLength": None, "loaded": False,
+                    "memoryBytes": None, "vramBytes": None, "source": "server",
+                }
+                for name in models
+            ],
+        },
     )
-    monkeypatch.setattr(api_provider, "ollama_supports_embedding", lambda model: model != "llama3:8b")
 
     asyncio.run(bus.dispatch_intent("app-settings", "scanKnowledgeOllamaModels", []))
     payload = recorder.messages[-1]["payload"]
@@ -2790,6 +2813,48 @@ def test_knowledge_scan_lists_embedding_models_first_and_suggests_nomic(manager,
     assert payload["knowledgeOllamaCapableModels"] == [
         "nomic-embed-text:latest", "mxbai-embed-large:latest",
     ]
+    assert payload["ollamaScanStatus"] == "done"
+    assert payload["ollamaInventorySource"] == "server"
+    assert payload["ollamaServerReachable"] is True
+    assert [item["name"] for item in payload["ollamaInventory"]] == list(models)
+    assert manager.get_ollama_scanned_models() == sorted(models, key=str.lower)
+
+
+def test_shared_ollama_inventory_refresh_is_visible_to_both_settings_pages(manager, monkeypatch):
+    calls = []
+    inventory = [{
+        "name": "nomic-embed-text:latest", "sizeBytes": 900000000,
+        "family": "bert", "parameterSize": "137M", "quantization": "F16",
+        "capabilities": ["embeddings"], "trainedContextLength": 8192,
+        "loaded": True, "memoryBytes": 1500000000, "vramBytes": 750000000,
+        "source": "server",
+    }]
+
+    def fake_scan(_scan_path):
+        calls.append(1)
+        return {
+            "models": ["nomic-embed-text:latest"], "inventory": inventory,
+            "source": "server", "scan_mode": "server", "server_reachable": True,
+        }
+
+    monkeypatch.setattr(intents_settings_ollama_module, "build_ollama_inventory", fake_scan)
+    bus = SessionBus("shared-ollama-inventory")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "scanOllamaSystem", []))
+    first = recorder.messages[-1]["payload"]
+    assert first["ollamaInventory"] == inventory
+    assert first["knowledgeOllamaModels"] == ["nomic-embed-text:latest"]
+    assert first["knowledgeOllamaCapableModels"] == ["nomic-embed-text:latest"]
+    assert first["ollamaScanStatus"] == first["knowledgeScanStatus"] == "done"
+
+    asyncio.run(bus.dispatch_intent("app-settings", "scanKnowledgeOllamaModels", []))
+    second_payload = recorder.messages[-1]["payload"]
+    assert len(calls) == 2
+    assert second_payload["ollamaInventory"] == first["ollamaInventory"]
+    assert second_payload["ollamaServerReachable"] is True
 
 
 def test_knowledge_test_status_reports_synthetic_model_response(manager, monkeypatch):

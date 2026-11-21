@@ -165,6 +165,9 @@ const initialState: AppSettingsState = {
   ollamaContextKvBytesPerToken: 0,
   ollamaContextAvailableMemoryBytes: 0,
   ollamaScannedModels: [],
+  ollamaInventory: [],
+  ollamaInventorySource: "",
+  ollamaServerReachable: null,
   ollamaScanSummary: "",
   ollamaScanStatus: "idle",
   ollamaPullStatus: "idle",
@@ -824,11 +827,19 @@ function OllamaTaskField({
   );
 }
 
+function formatOllamaBytes(value: number | null | undefined): string {
+  if (value == null) return "Unknown";
+  if (value === 0) return "0 B";
+  const unit = Math.min(Math.floor(Math.log(value) / Math.log(1024)), 4);
+  return `${(value / (1024 ** unit)).toFixed(1)} ${["B", "KiB", "MiB", "GiB", "TiB"][unit]}`;
+}
+
 function OllamaPage({ state, transport }: { state: AppSettingsState; transport: WsTransport }) {
   const [draftPullModel, setDraftPullModel] = useState("");
   const [selectedContextModel, setSelectedContextModel] = useState("");
   const contextModels = Array.from(new Set([
     ...state.ollamaScannedModels,
+    ...state.ollamaInventory.map((model) => model.name),
     state.ollamaCurrentModel,
     ...Object.values(state.ollamaModelAssignments),
     ...Object.keys(state.ollamaContextWindows),
@@ -836,7 +847,16 @@ function OllamaPage({ state, transport }: { state: AppSettingsState; transport: 
   const contextModel = contextModels.includes(selectedContextModel)
     ? selectedContextModel : (state.ollamaCurrentModel || contextModels[0] || "");
   const contextReady = state.ollamaContextModel === contextModel && state.ollamaContextStatus === "ready";
-  const trainedLimit = contextReady ? state.ollamaContextTrainedLength : 0;
+  // Use PR 917's shared /api/tags + /api/show snapshot as the source
+  // of trained context limits. Disk-only metadata is not verified.
+  const contextKey = (name: string) => {
+    const normalized = name.trim().toLowerCase();
+    return normalized.includes(":") ? normalized : `${normalized}:latest`;
+  };
+  const inventoryModel = state.ollamaInventory.find((model) => contextKey(model.name) === contextKey(contextModel));
+  const trainedLimit = inventoryModel?.source === "server"
+    && typeof inventoryModel.trainedContextLength === "number"
+    && inventoryModel.trainedContextLength > 0 ? inventoryModel.trainedContextLength : 0;
   const optionLimit = trainedLimit || 8192;
   const savedWindow = state.ollamaContextWindows[contextModel.toLowerCase()] ?? 8192;
   const activeWindow = Math.min(savedWindow, optionLimit);
@@ -850,7 +870,7 @@ function OllamaPage({ state, transport }: { state: AppSettingsState; transport: 
     if (contextModel) {
       transport.fireIntent("app-settings", "inspectOllamaContextModel", [contextModel]);
     }
-  }, [contextModel, transport]);
+  }, [contextModel, transport, state.ollamaScanStatus]);
 
   return (
     <div className="settings-general-page">
@@ -894,6 +914,36 @@ function OllamaPage({ state, transport }: { state: AppSettingsState; transport: 
         </button>
       </div>
       <p className="settings-update-status">{state.ollamaScanSummary}</p>
+      {state.ollamaInventorySource === "folder" && (
+        <p className="settings-field-hint">
+          Models were found on disk. Run System Scan with Ollama running to inspect capabilities and memory usage.
+        </p>
+      )}
+
+      <fieldset className="settings-fieldset">
+        <legend>Local model inventory</legend>
+        {state.ollamaInventory.length === 0 && (
+          <p className="settings-field-hint">Run a system scan to inspect installed models.</p>
+        )}
+        {state.ollamaInventory.map((model) => (
+          <div className="settings-field" key={model.name}>
+            <strong>{model.name}</strong>
+            <span className="settings-field-hint">
+              {model.loaded === true
+                ? `Loaded · ${formatOllamaBytes(model.memoryBytes)} memory in use · ${formatOllamaBytes(model.vramBytes)} VRAM`
+                : model.loaded === false ? "Not loaded" : "Load state unavailable"}
+            </span>
+            <span className="settings-field-hint">
+              {formatOllamaBytes(model.sizeBytes)} on disk · {model.family || "Unknown family"} ·
+              {" "}{model.parameterSize || "Unknown parameter size"} · {model.quantization || "Unknown quantization"}
+              {" "}· Trained context: {model.trainedContextLength?.toLocaleString() ?? "Unknown"} tokens
+            </span>
+            <span className="settings-field-hint">
+              Capabilities: {model.capabilities.join(", ") || "Unavailable"}
+            </span>
+          </div>
+        ))}
+      </fieldset>
 
       <datalist id={OLLAMA_MODELS_DATALIST_ID}>
         {state.ollamaScannedModels.map((model) => (
@@ -934,7 +984,7 @@ function OllamaPage({ state, transport }: { state: AppSettingsState; transport: 
           <CustomSelect
             ariaLabel="Ollama context window"
             value={String(activeWindow)}
-            disabled={!contextReady || optionLimit < 4096}
+            disabled={!contextModel || optionLimit < 4096}
             options={OLLAMA_CONTEXT_CHOICES
               .filter((choice) => choice.tokens <= optionLimit)
               .map((choice) => ({ id: String(choice.tokens), label: choice.label }))}
@@ -947,13 +997,13 @@ function OllamaPage({ state, transport }: { state: AppSettingsState; transport: 
           <p className="settings-update-status">
             {state.ollamaContextModel === contextModel && state.ollamaContextStatus === "loading"
               ? "Inspecting model context and memory..."
-              : "Context options above 8k require the model's trained length from Ollama."}
+              : "Context options above 8k require a verified trained length from the shared Ollama inventory. Run System Scan."}
           </p>
         )}
         {contextReady && (
           <>
             <p className="settings-update-status">
-              Trained model limit: {trainedLimit.toLocaleString()} tokens.
+              Trained model limit (shared inventory): {trainedLimit.toLocaleString()} tokens.
               Estimated {state.ollamaContextModelSizeBytes > 0 ? "model weights + KV cache" : "KV cache (weights unavailable)"}:
               {" "}{gib(memoryEstimate)} at {activeWindow.toLocaleString()} tokens.
             </p>

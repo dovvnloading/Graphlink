@@ -47,6 +47,23 @@ class ApiModelDescriptorPayload:
 
 
 @dataclass
+class OllamaInventoryModelPayload:
+    """One installed model; unavailable daemon metadata is null."""
+
+    name: str
+    sizeBytes: int | None
+    family: str
+    parameterSize: str
+    quantization: str
+    capabilities: list[str]
+    trainedContextLength: int | None
+    loaded: bool | None
+    memoryBytes: int | None
+    vramBytes: int | None
+    source: str
+
+
+@dataclass
 class McpServerConfigPayload:
     """One configured MCP server - the wire counterpart of backend/
     mcp_client.py's McpServerConfig, sourced from SettingsManager.
@@ -173,6 +190,9 @@ class AppSettingsStatePayload:
     ollamaContextKvBytesPerToken: int
     ollamaContextAvailableMemoryBytes: int
     ollamaScannedModels: list[str]
+    ollamaInventory: list[OllamaInventoryModelPayload]
+    ollamaInventorySource: str
+    ollamaServerReachable: bool | None
     ollamaScanSummary: str
     ollamaScanStatus: str
     ollamaPullStatus: str

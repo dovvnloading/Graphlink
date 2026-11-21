@@ -105,6 +105,39 @@ function validComposerPayload(overrides: Record<string, unknown> = {}) {
 }
 
 describe("ComposerStore", () => {
+  it("reads a tri-state capability preview without accepting stale or malformed responses", async () => {
+    const { transport } = makeFakeTransport();
+    const store = new ComposerStore(transport);
+    const complete = {
+      provider: "Ollama (Local)", modelId: "plain",
+      tools: false, vision: null,
+      suggestedToolModel: { provider: "Ollama (Local)", modelId: "tool-model" },
+    };
+    vi.mocked(transport.request).mockResolvedValueOnce(complete);
+    expect(await store.loadModelCapabilityPreview("Ollama (Local)", "plain")).toEqual(complete);
+    expect(transport.request).toHaveBeenCalledWith(
+      "harness", "modelCapabilityPreview", ["Ollama (Local)", "plain"],
+    );
+
+    vi.mocked(transport.request).mockResolvedValueOnce({
+      ...complete, tools: null, vision: null, suggestedToolModel: null,
+    });
+    expect(await store.loadModelCapabilityPreview("Ollama (Local)", "plain")).toEqual({
+      ...complete, tools: null, vision: null, suggestedToolModel: null,
+    });
+
+    for (const invalid of [
+      { ...complete, modelId: "stale" },
+      { ...complete, tools: "false" },
+      { ...complete, vision: undefined },
+      { ...complete, suggestedToolModel: { provider: "", modelId: "unknown" } },
+      null,
+    ]) {
+      vi.mocked(transport.request).mockResolvedValueOnce(invalid);
+      expect(await store.loadModelCapabilityPreview("Ollama (Local)", "plain")).toBeNull();
+    }
+  });
+
   it("fetches configured comparison models and fires a non-queueable fan-out intent", async () => {
     const { transport, intents } = makeFakeTransport();
     const store = new ComposerStore(transport);

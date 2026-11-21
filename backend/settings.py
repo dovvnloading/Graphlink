@@ -192,6 +192,8 @@ def _ollama_scan_summary(manager: SettingsManager) -> str:
         return "The last scan is saved, but it did not find any Ollama models."
     if scan_mode == "folder" and scan_path:
         return f"Using saved scan from folder: {scan_path}"
+    if scan_mode == "server":
+        return "Using the last Ollama server inventory."
     if scan_mode == "system":
         return "Using saved system scan results from local Ollama locations."
     return "Using saved scanned model list."
@@ -364,12 +366,21 @@ def _build_settings_payload(
     payload["ollamaContextKvBytesPerToken"] = state.ollama_context_kv_bytes_per_token
     payload["ollamaContextAvailableMemoryBytes"] = state.ollama_context_available_memory_bytes
     payload["ollamaScannedModels"] = manager.get_ollama_scanned_models()
+    payload["ollamaInventory"] = state.ollama_inventory
+    payload["ollamaInventorySource"] = state.ollama_inventory_source
+    payload["ollamaServerReachable"] = state.ollama_server_reachable
     payload["ollamaScanSummary"] = _ollama_scan_summary(manager)
     payload["ollamaScanStatus"] = state.ollama_scan_status
     payload["ollamaPullStatus"] = state.ollama_pull_status
     payload["ollamaNotice"] = state.ollama_notice
-    payload["knowledgeOllamaModels"] = state.knowledge_ollama_models
-    payload["knowledgeOllamaCapableModels"] = state.knowledge_ollama_capable_models
+    # Legacy picker fields are projections of the inventory, not another
+    # model discovery path or an additional capability probe.
+    capable = {row["name"] for row in state.ollama_inventory if "embeddings" in row["capabilities"]}
+    names = [row["name"] for row in state.ollama_inventory]
+    payload["knowledgeOllamaModels"] = sorted(names, key=lambda name: (
+        name not in capable, not name.casefold().startswith("nomic-embed-text"), name.casefold(),
+    ))
+    payload["knowledgeOllamaCapableModels"] = [name for name in payload["knowledgeOllamaModels"] if name in capable]
     payload["knowledgeScanStatus"] = state.knowledge_scan_status
     payload["knowledgeTestStatus"] = state.knowledge_test_status
     payload["knowledgeNotice"] = state.knowledge_notice
@@ -445,8 +456,9 @@ def register_settings(
     register_settings_general_intents(bus, manager, state, notifications, agent_dispatcher, provider_runtime=provider_runtime)
     register_settings_fal_intents(bus, manager, state)
     register_settings_api_provider_intents(bus, manager, notifications, state, provider_runtime)
-    register_settings_ollama_intents(bus, manager, state)
+    refresh_ollama_inventory = register_settings_ollama_intents(bus, manager, state)
     register_settings_knowledge_intents(
-        bus, manager, state, on_embedding_changed=on_knowledge_embedding_changed,
+        bus, manager, state, refresh_inventory=refresh_ollama_inventory,
+        on_embedding_changed=on_knowledge_embedding_changed,
     )
     register_settings_llama_cpp_intents(bus, manager, state)

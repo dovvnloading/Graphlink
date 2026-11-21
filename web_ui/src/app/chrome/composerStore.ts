@@ -85,6 +85,15 @@ export interface ComparisonModel {
   label: string;
 }
 
+/** null means capability metadata is unavailable, never "unsupported". */
+export interface ModelCapabilityPreview {
+  provider: string;
+  modelId: string;
+  tools: boolean | null;
+  vision: boolean | null;
+  suggestedToolModel: { provider: string; modelId: string } | null;
+}
+
 type Listener = () => void;
 
 export class ComposerStore {
@@ -267,6 +276,22 @@ export class ComposerStore {
       () => this.onDraftSettled(generation),
       () => this.onDraftCoalesced(generation),
     );
+  }
+
+  async loadModelCapabilityPreview(provider: string, modelId: string): Promise<ModelCapabilityPreview | null> {
+    const raw = await this.transport.request("harness", "modelCapabilityPreview", [provider, modelId]);
+    if (!raw || typeof raw !== "object") return null;
+    const value = raw as Partial<ModelCapabilityPreview>;
+    const knownOrUnknown = (item: unknown): item is boolean | null => item === null || typeof item === "boolean";
+    if (value.provider !== provider || value.modelId !== modelId ||
+        !knownOrUnknown(value.tools) || !knownOrUnknown(value.vision)) return null;
+    const suggestion = value.suggestedToolModel;
+    if (suggestion === undefined) return null;
+    if (suggestion !== null && (
+      typeof suggestion.provider !== "string" || !suggestion.provider ||
+      typeof suggestion.modelId !== "string" || !suggestion.modelId
+    )) return null;
+    return { provider, modelId, tools: value.tools, vision: value.vision, suggestedToolModel: suggestion };
   }
 
   async loadComparisonModels(): Promise<ComparisonModel[]> {

@@ -356,6 +356,62 @@
     "ollamaCurrentModel": {
       "type": "string"
     },
+    "ollamaInventory": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "family": {
+            "type": "string"
+          },
+          "loaded": {
+            "type": "boolean"
+          },
+          "memoryBytes": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "parameterSize": {
+            "type": "string"
+          },
+          "quantization": {
+            "type": "string"
+          },
+          "sizeBytes": {
+            "type": "integer"
+          },
+          "source": {
+            "type": "string"
+          },
+          "trainedContextLength": {
+            "type": "integer"
+          },
+          "vramBytes": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "family",
+          "parameterSize",
+          "quantization",
+          "capabilities",
+          "source"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "ollamaInventorySource": {
+      "type": "string"
+    },
     "ollamaModelAssignments": {
       "additionalProperties": {
         "type": "string"
@@ -382,6 +438,9 @@
         "type": "string"
       },
       "type": "array"
+    },
+    "ollamaServerReachable": {
+      "type": "boolean"
     },
     "providerMode": {
       "type": "string"
@@ -451,6 +510,8 @@
     "ollamaContextKvBytesPerToken",
     "ollamaContextAvailableMemoryBytes",
     "ollamaScannedModels",
+    "ollamaInventory",
+    "ollamaInventorySource",
     "ollamaScanSummary",
     "ollamaScanStatus",
     "ollamaPullStatus",
