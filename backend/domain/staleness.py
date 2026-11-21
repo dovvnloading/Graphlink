@@ -32,13 +32,17 @@ def _bytes_as_json(value: Any) -> dict[str, str]:
 def _message_input(node) -> bytes:
     """Only model-visible content and branch settings, never layout or IDs."""
     if isinstance(node.state, ChatState):
-        content = node.state.content_parts if node.state.content_parts is not None else node.content
+        # chat_branch_history also falls back to the text mirror when the
+        # parts list is empty; the fingerprint must follow that exact input.
+        content = node.state.content_parts or node.content
         fields = (
             "user" if node.state.is_user else "assistant", content,
             node.state.override_provider, node.state.override_model_id, node.state.use_knowledge,
         )
     else:
-        fields = (node.kind, node.content)
+        # Stray non-chat ancestors appear as assistant messages in
+        # chat_branch_history. Preserve the same role/content semantics.
+        fields = ("assistant", node.content)
     return json.dumps(fields, sort_keys=True, separators=(",", ":"), default=_bytes_as_json).encode("utf-8")
 
 
