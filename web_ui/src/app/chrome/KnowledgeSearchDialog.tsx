@@ -190,9 +190,10 @@ export function KnowledgeSearchDialog({
     }
   }, [transport]);
 
+  const knowledgeOpen = overlays.isOpen("knowledge");
   useEffect(() => {
-    if (overlays.isOpen("knowledge")) void refreshDocuments();
-  }, [overlays, refreshDocuments]);
+    if (knowledgeOpen) void refreshDocuments();
+  }, [knowledgeOpen, refreshDocuments]);
 
   async function documentIntent(documentId: number, action: "openDocument" | "removeDocument" | "reindexDocument") {
     if (documentAction !== null) return;
