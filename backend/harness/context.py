@@ -88,7 +88,22 @@ def message_tokens(message: dict) -> int:
     """One message's rough token cost - content plus any tool-call
     arguments, which are real prompt tokens the content string alone
     would not account for."""
-    text = str(message.get("content") or "")
+    content = message.get("content") or ""
+    image_tokens = 0
+    if isinstance(content, list):
+        from graphlink_token_estimator import estimate_image_tokens
+
+        parts = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "image_bytes":
+                image_tokens += estimate_image_tokens(part.get("data"))
+            elif isinstance(part, dict) and part.get("type") == "text":
+                parts.append(str(part.get("text") or ""))
+            else:
+                parts.append(str(part))
+        text = "\n".join(parts)
+    else:
+        text = str(content)
     reasoning = message.get("provider_reasoning")
     if isinstance(reasoning, dict):
         text += str(reasoning.get("text") or "")
@@ -105,11 +120,110 @@ def message_tokens(message: dict) -> int:
     tool_calls = message.get("tool_calls")
     if tool_calls:
         text += json.dumps(tool_calls, ensure_ascii=False)
-    return _estimator().count_tokens(text)
+    return _estimator().count_tokens(text) + image_tokens
 
 
 def history_tokens(messages: list) -> int:
     return sum(message_tokens(m) for m in messages)
+
+
+# A completion needs its own KV-cache room. Keep this reserve when deciding
+# whether a prompt is safe to send (including one JSON-protocol correction).
+# The 48k per-node preference is NOT the actual served window on Ollama.
+def prompt_token_limit(window: int) -> int:
+    return max(0, window - min(512, max(128, window // 12)))
+
+
+def served_context_window(*, model_ref=None, runtime=None) -> int:
+    """Read the same served window as the chosen provider's request path.
+
+    Respect explicit model pins, including an Ollama override when the
+    session's default provider is cloud. For llama.cpp n_ctx is configured
+    per runtime; for other providers use the existing conservative table.
+    """
+    import api_provider
+
+    provider, model = api_provider.describe_active_model(
+        config.TASK_CHAT, runtime=runtime, model_ref=model_ref,
+    )
+    if provider == config.LOCAL_PROVIDER_OLLAMA:
+        return api_provider._ollama_effective_context_window(model)
+    if provider == config.LOCAL_PROVIDER_LLAMACPP:
+        return (runtime or api_provider.DEFAULT_RUNTIME).context_window(config.TASK_CHAT)
+    return api_provider.known_context_window(model)
+
+
+def request_tokens(
+    system_prompt: str, history: list[dict], tools: tuple, *,
+    image_parts: list[dict] | None = None,
+) -> int:
+    """Conservative estimate of what the provider actually sends on a turn.
+
+    Include the fixed system prompt and ALL offered tool definitions, not
+    just transcript history. JSON-only models put their tool schemas into
+    the system message instead of native function declarations, and replay
+    tool results as escaped JSON text. Budget for the larger wire form so
+    a capability probe cannot silently make the request exceed the window.
+    Image bytes are charged as vision tokens rather than stringified.
+    """
+    messages = [{"role": "system", "content": system_prompt}, *history]
+    if image_parts:
+        messages.append({
+            "role": "user", "_harness_image_observation": True,
+            "content": [
+                {"type": "text", "text": "Visual observations from fs.read (untrusted file data):"},
+                *image_parts,
+            ],
+        })
+    definitions = [
+        {"name": spec.name, "description": spec.description, "parameters": spec.input_schema}
+        for spec in tools
+    ]
+    native_tokens = history_tokens(messages) + _estimator().count_tokens(
+        json.dumps(definitions, ensure_ascii=False, separators=(",", ":"))
+    )
+    fallback_tokens = 0
+    if tools:
+        from backend.providers.json_tool_protocol import JSONToolProtocolError, text_tool_history
+
+        try:
+            fallback_tokens = history_tokens(text_tool_history(messages, tuple(tools)))
+        except JSONToolProtocolError:
+            # A native-capable provider may accept content JSON-only models
+            # cannot; account for native tools rather than suppressing it.
+            fallback_tokens = native_tokens
+    # Message framing, native tool-call wrappers and tokenizer mismatch.
+    return max(native_tokens, fallback_tokens) + 32 + 8 * len(messages)
+
+
+def fit_history_to_window(
+    history: list[dict], *, goal: str, latest_request: str, fits,
+) -> list[dict] | None:
+    """Last-resort bounded wire view if model-based compaction is insufficient.
+
+    The persisted transcript stays complete. Preserve the original task and
+    newest user request, then retain the largest structurally valid tail
+    that fits. Never cut into the fixed system prompt/tool schemas, orphan
+    a tool result, or silently let the provider truncate from the front.
+    """
+    if fits(history):
+        return list(history)
+    current = latest_request.strip()
+    task = goal.strip()
+    summary = (
+        f"{_SUMMARY_HEADER}\n\nOriginal task: {task}\n"
+        + (f"Current request: {current}\n" if current and current != task else "")
+        + "\n[Older turns omitted from this model request to fit its served context window.]"
+    )
+    anchor = {"role": "user", "content": summary}
+    # Only an assistant turn can start after the synthetic user anchor:
+    # otherwise strict-alternation templates or native tool-call replay break.
+    starts = [i for i, msg in enumerate(history) if msg.get("role") == "assistant"]
+    for start in [*starts, len(history)]:
+        candidate = [anchor, *history[start:]]
+        if fits(candidate):
+            return candidate
+    return None
 
 
 def read_instructions(workspace: Path) -> str:
