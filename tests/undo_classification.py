@@ -392,6 +392,9 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("app-settings", "setOllamaModelAssignment", "B", "preference: per-task model assignment"),
     Classified("app-settings", "scanOllamaSystem", "B", "run-lifecycle: scans/caches locally installed models"),
     Classified("app-settings", "pullOllamaModel", "B", "run-lifecycle: downloads a model"),
+    Classified("app-settings", "cancelOllamaPull", "B", "run-lifecycle: cancels an active model download"),
+    Classified("app-settings", "refreshOllamaInstalledModels", "B", "read-only: lists installed Ollama models"),
+    Classified("app-settings", "removeOllamaModel", "B", "external-store: removes a local Ollama model"),
     Classified("app-settings", "pickOllamaScanFolder", "B", "run-lifecycle: native folder pick + scan"),
     # -- backend/api/intents_settings_knowledge.py (app-settings) ------------
     Classified("app-settings", "scanKnowledgeOllamaModels", "B", "read-only: list installed local embedding models"),

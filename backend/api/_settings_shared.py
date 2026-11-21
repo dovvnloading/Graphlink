@@ -349,6 +349,15 @@ class SettingsSessionState:
     api_catalog_state: dict[str, dict[str, str]] = field(default_factory=dict)
     ollama_scan_status: str = "idle"
     ollama_pull_status: str = "idle"
+    ollama_pull_model: str = ""
+    ollama_pull_message: str = ""
+    ollama_pull_completed: int = 0
+    ollama_pull_total: int = 0
+    ollama_installed_models: list[str] = field(default_factory=list)
+    ollama_installed_status: str = "idle"
+    ollama_installed_error: str = ""
+    ollama_remove_status: str = "idle"
+    ollama_remove_model: str = ""
     ollama_notice: str = ""
     knowledge_ollama_models: list[str] = field(default_factory=list)
     knowledge_ollama_capable_models: list[str] = field(default_factory=list)

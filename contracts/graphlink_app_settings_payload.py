@@ -166,6 +166,18 @@ class AppSettingsStatePayload:
     ollamaScanSummary: str
     ollamaScanStatus: str
     ollamaPullStatus: str
+    # Live, session-local download progress. Ollama reports bytes per blob,
+    # so the progress bar is for the current blob rather than an aggregate.
+    ollamaPullModel: str
+    ollamaPullMessage: str
+    ollamaPullCompleted: int
+    ollamaPullTotal: int
+    # Ollama's live /api/tags list, distinct from filesystem scan results.
+    ollamaInstalledModels: list[str]
+    ollamaInstalledStatus: str
+    ollamaInstalledError: str
+    ollamaRemoveStatus: str
+    ollamaRemoveModel: str
     ollamaNotice: str
     # Knowledge embeddings are independent of the active chat model.
     # Remote document upload is gated by the explicit persisted consent bit.

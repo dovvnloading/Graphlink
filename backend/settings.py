@@ -359,6 +359,15 @@ def _build_settings_payload(
     payload["ollamaScanSummary"] = _ollama_scan_summary(manager)
     payload["ollamaScanStatus"] = state.ollama_scan_status
     payload["ollamaPullStatus"] = state.ollama_pull_status
+    payload["ollamaPullModel"] = state.ollama_pull_model
+    payload["ollamaPullMessage"] = state.ollama_pull_message
+    payload["ollamaPullCompleted"] = state.ollama_pull_completed
+    payload["ollamaPullTotal"] = state.ollama_pull_total
+    payload["ollamaInstalledModels"] = state.ollama_installed_models
+    payload["ollamaInstalledStatus"] = state.ollama_installed_status
+    payload["ollamaInstalledError"] = state.ollama_installed_error
+    payload["ollamaRemoveStatus"] = state.ollama_remove_status
+    payload["ollamaRemoveModel"] = state.ollama_remove_model
     payload["ollamaNotice"] = state.ollama_notice
     payload["knowledgeOllamaModels"] = state.knowledge_ollama_models
     payload["knowledgeOllamaCapableModels"] = state.knowledge_ollama_capable_models
