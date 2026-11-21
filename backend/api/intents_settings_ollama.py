@@ -88,9 +88,12 @@ def register_settings_ollama_intents(
         # R7.4a audit: task ends up as a dict key below, and a client can
         # send any JSON type over the wire with zero validation anywhere
         # in the dispatch path.
-        task = str(task)
-        value = str(value).strip()
-        if task not in OLLAMA_TASK_KEYS:
+        if not isinstance(task, str) or task not in OLLAMA_TASK_KEYS or not isinstance(value, str):
+            return
+        value = value.strip()
+        if value and value not in (INHERIT_MODEL, AUTO_MODEL) and not valid_ollama_model_name(value):
+            state.ollama_notice = "Enter a valid Ollama model ID."
+            await bus.publish("app-settings")
             return
         if task == config.TASK_CHAT and value == INHERIT_MODEL:
             # Adversarial-review finding: task_chat has no "inherit"
@@ -184,6 +187,13 @@ def register_settings_ollama_intents(
         # published after the scan cache has been persisted successfully.
         state.ollama_inventory = list(results.get("inventory", []))
         state.ollama_inventory_source = str(results.get("source", ""))
+        # Results from an earlier daemon snapshot are not current after a
+        # refresh; never leave a stale model's Check result in the inventory.
+        installed = {row.get("name") for row in state.ollama_inventory}
+        state.ollama_model_checks = {
+            name: report for name, report in state.ollama_model_checks.items()
+            if name in installed
+        }
         # A manual folder scan does not probe the daemon and must not
         # overwrite the live health result; the shared system inventory does.
         if results.get("server_reachable") is not None:
@@ -209,7 +219,10 @@ def register_settings_ollama_intents(
         # Check-then-set with no await between them - safe under asyncio's
         # single-threaded event loop (unlike the two genuinely async-gapped
         # races above), matching legacy's own isRunning()-guarded no-op.
-        if state.ollama_scan_status == "running":
+        if (state.ollama_scan_status == "running"
+                or state.ollama_pull_status in ("running", "cancelling", "finalizing")
+                or state.ollama_remove_status == "running"
+                or (state.ollama_check_task is not None and not state.ollama_check_task.done())):
             return
         await _run_ollama_scan(None)
 
@@ -230,6 +243,10 @@ def register_settings_ollama_intents(
         # can raise - a per-platform GTK/COM/file-type-parsing failure
         # inside pywebview's create_file_dialog, confirmed reachable via its
         # own source, not theoretical) now lives in that shared function.
+        if (state.ollama_pull_status in ("running", "cancelling", "finalizing")
+                or state.ollama_remove_status == "running"
+                or (state.ollama_check_task is not None and not state.ollama_check_task.done())):
+            return
         await pick_scan_folder_and_run(
             bus, state,
             status_field="ollama_scan_status", notice_field="ollama_notice",
@@ -242,7 +259,9 @@ def register_settings_ollama_intents(
     register_ollama_server_intents(bus, state)
     bus.register_intent("app-settings", "scanOllamaSystem", scan_ollama_system)
     bus.register_intent("app-settings", "pickOllamaScanFolder", pick_ollama_scan_folder)
-    register_ollama_model_management_intents(bus, manager, state, refresh_inventory=scan_ollama_system)
+    # An intentional internal post-pull/delete refresh must run while its
+    # own mutation is finalizing; manual scans remain blocked during writes.
+    register_ollama_model_management_intents(bus, manager, state, refresh_inventory=lambda: _run_ollama_scan(None))
     register_ollama_model_check_intents(bus, state)
     register_ollama_context_intents(bus, manager, state)
     return scan_ollama_system
@@ -406,15 +425,18 @@ def register_ollama_model_management_intents(
             await bus.publish("app-settings")
 
     async def remove_ollama_model(model_name: str):
-        model_name = str(model_name).strip()
-        if not model_name:
-            state.ollama_notice = "Model name cannot be empty."
+        model_name = model_name.strip() if isinstance(model_name, str) else ""
+        if not valid_ollama_model_name(model_name):
+            state.ollama_notice = "Enter a valid Ollama model ID before removing it."
             await bus.publish("app-settings")
             return
-        if state.ollama_remove_status == "running" or state.ollama_pull_status in ("running", "cancelling") or state.ollama_scan_status == "running":
+        if (state.ollama_remove_status == "running"
+                or state.ollama_pull_status in ("running", "cancelling", "finalizing")
+                or state.ollama_scan_status == "running"
+                or (state.ollama_check_task is not None and not state.ollama_check_task.done())):
             return
         if state.ollama_inventory_source != "server" or not any(
-            row["name"] == model_name for row in state.ollama_inventory
+            row.get("name") == model_name and row.get("source") == "server" for row in state.ollama_inventory
         ):
             state.ollama_notice = "Refresh the Ollama server inventory before removing this model."
             await bus.publish("app-settings")
@@ -452,7 +474,7 @@ def register_ollama_model_management_intents(
             state.ollama_remove_status = "done"
         except Exception as exc:  # noqa: BLE001 - report filesystem/server/settings errors
             state.ollama_remove_status = "error"
-            state.ollama_notice = f"Could not remove '{model_name}': {exc}"
+            state.ollama_notice = f"Could not remove '{model_name}': {str(exc)[:240]}"
         finally:
             state.ollama_remove_model = ""
             await bus.publish("app-settings")
