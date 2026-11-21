@@ -3234,6 +3234,39 @@ body {
   color: var(--gl-surface-text-muted);
 }
 
+.model-picker-choice { display: grid; gap: 5px; min-width: 0; }
+.model-picker-option:disabled { cursor: not-allowed; opacity: 0.6; }
+.model-picker-meta { display: flex; flex-wrap: wrap; gap: 4px; }
+.model-picker-badge,
+.model-picker-origin,
+.model-picker-size {
+  padding: 2px 5px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 5px;
+  background: var(--gl-neutral-button-background);
+  color: var(--gl-surface-text-secondary);
+  font-size: 10px;
+  font-weight: 500;
+}
+.model-picker-setup {
+  flex: none;
+  padding: 9px 10px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 7px;
+  background: var(--gl-neutral-button-background);
+  color: var(--gl-surface-text-primary);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.model-picker-setup:hover { background: var(--gl-neutral-button-hover); }
+.model-picker-setup:focus-visible,
+.model-picker-search:focus-visible,
+.model-picker-option:focus-visible {
+  outline: 2px solid var(--gl-graph-selection);
+  outline-offset: 2px;
+}
+
 .reasoning-option {
   display: flex;
   flex-direction: column;

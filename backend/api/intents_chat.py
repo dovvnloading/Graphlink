@@ -1185,6 +1185,17 @@ def register_chat_intents(
             cancelled_requests=comparison_cancelled_requests,
         )
 
+    async def list_picker_models():
+        # Ollama /api/tags and /api/show perform I/O; never block the event
+        # loop or the compositor's draft keystrokes while opening the picker.
+        from backend.context_engine.model_comparison import available_picker_models
+
+        rows = await asyncio.to_thread(
+            available_picker_models, agent_dispatcher._settings_manager, agent_dispatcher._provider_runtime,
+        )
+        return {"models": rows}
+
+    bus.register_intent("scene", "listPickerModels", list_picker_models)
     bus.register_intent("scene", "listComparisonModels", list_comparison_models)
     bus.register_intent("scene", "compareModels", compare_models)
 

@@ -105,6 +105,26 @@ function validComposerPayload(overrides: Record<string, unknown> = {}) {
 }
 
 describe("ComposerStore", () => {
+  it("loads only valid picker inventory rows and sends provider-qualified selections", async () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new ComposerStore(transport);
+    const installed = {
+      provider: "Ollama", modelId: "tool-chat:8b", label: "Ollama · tool-chat:8b",
+      source: "local", capabilities: ["chat", "tools", "thinking"], sizeBytes: 123456,
+    };
+    vi.mocked(transport.request).mockResolvedValueOnce({
+      models: [installed, { ...installed, sizeBytes: -1 }, { ...installed, capabilities: "tools" }],
+    });
+    expect(await store.loadPickerModels()).toEqual([installed]);
+    expect(transport.request).toHaveBeenCalledWith("scene", "listPickerModels", []);
+    store.selectPickerModel("Ollama", "tool-chat:8b");
+    store.openOllamaSettings();
+    expect(intents).toEqual([
+      { topic: "app-composer", intent: "selectPickerModel", args: ["Ollama", "tool-chat:8b"] },
+      { topic: "app-settings", intent: "setActiveSection", args: ["ollama (local)"] },
+    ]);
+  });
+
   it("reads a tri-state capability preview without accepting stale or malformed responses", async () => {
     const { transport } = makeFakeTransport();
     const store = new ComposerStore(transport);

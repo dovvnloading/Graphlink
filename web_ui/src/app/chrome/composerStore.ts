@@ -41,7 +41,7 @@ export const initialComposerState: AppComposerState = {
     attachments: false,
     contextReview: false,
     routeSelection: false,
-    modelSelection: false,
+    modelSelection: true,
     reasoningSelection: true,
     settingsShortcut: true,
     cancellation: false,
@@ -83,6 +83,13 @@ export interface ComparisonModel {
   provider: string;
   modelId: string;
   label: string;
+}
+
+/** Live local inventory (unknown capability metadata stays an empty list). */
+export interface PickerModel extends ComparisonModel {
+  source: "local" | "cloud";
+  capabilities: string[];
+  sizeBytes: number | null;
 }
 
 /** null means capability metadata is unavailable, never "unsupported". */
@@ -292,6 +299,33 @@ export class ComposerStore {
       typeof suggestion.modelId !== "string" || !suggestion.modelId
     )) return null;
     return { provider, modelId, tools: value.tools, vision: value.vision, suggestedToolModel: suggestion };
+  }
+
+  async loadPickerModels(): Promise<PickerModel[]> {
+    // A fresh read of the server's shared Ollama inventory, not the cached
+    // Settings scan. Also includes usable models from saved cloud profiles.
+    const result = await this.transport.request("scene", "listPickerModels", []);
+    const rows = (result as { models?: unknown } | null)?.models;
+    if (!Array.isArray(rows)) throw new Error("The model list is unavailable.");
+    return rows.filter((row): row is PickerModel =>
+      !!row && typeof row === "object" &&
+      typeof row.provider === "string" && !!row.provider &&
+      typeof row.modelId === "string" && !!row.modelId &&
+      typeof row.label === "string" &&
+      (row.source === "local" || row.source === "cloud") &&
+      Array.isArray(row.capabilities) &&
+      row.capabilities.every((capability: unknown) => typeof capability === "string") &&
+      (row.sizeBytes === null || (typeof row.sizeBytes === "number" &&
+        Number.isFinite(row.sizeBytes) && row.sizeBytes >= 0))
+    );
+  }
+
+  selectPickerModel(provider: string, modelId: string): void {
+    this.transport.fireIntent("app-composer", "selectPickerModel", [provider, modelId], undefined, true);
+  }
+
+  openOllamaSettings(): void {
+    this.transport.fireIntent("app-settings", "setActiveSection", ["ollama (local)"], undefined, true);
   }
 
   async loadComparisonModels(): Promise<ComparisonModel[]> {
