@@ -71,12 +71,16 @@ PROVIDER_CALL = "provider.call"
 # tool that only ever reads FROM the already-ingested store, never an
 # arbitrary path on disk.
 KNOWLEDGE_READ = "knowledge.read"
+# Approved ingestion into this run's current workspace collection. Never
+# conflate a read-only knowledge grant with permission to retain new files.
+KNOWLEDGE_WRITE = "knowledge.write"
 
 # The ADR's own closed vocabulary (§2) - register() rejects anything outside
 # it immediately, the same fail-fast posture EVENT_TYPES/ProviderEvent.type
 # already take for their own closed vocabularies (backend/providers/base.py).
 KNOWN_SCOPES = frozenset({
-    GRAPH_READ, GRAPH_MUTATE, FS_READ, FS_WRITE, CODE_EXECUTE, NET_FETCH, PROVIDER_CALL, KNOWLEDGE_READ,
+    GRAPH_READ, GRAPH_MUTATE, FS_READ, FS_WRITE, CODE_EXECUTE, NET_FETCH, PROVIDER_CALL,
+    KNOWLEDGE_READ, KNOWLEDGE_WRITE,
 })
 
 ApprovalPolicy = Literal["auto", "once", "always"]
@@ -85,7 +89,7 @@ _KNOWN_APPROVAL_POLICIES = frozenset({"auto", "once", "always"})
 # approval callback returns a forged or stale "session" decision.
 _NON_SESSION_GRANT_TOOLS = frozenset({
     "graph.delete_node", "python.exec", "python.install", "shell.exec",
-    "shell.session", "web.fetch", "web.search",
+    "shell.session", "web.fetch", "web.search", "knowledge.add",
 })
 
 
@@ -235,7 +239,7 @@ class ToolRegistry:
                 f"must be a subset of {sorted(KNOWN_SCOPES)}."
             )
         if parallel_safe and (
-            approval != "auto" or scope_set & {GRAPH_MUTATE, FS_WRITE, CODE_EXECUTE}
+            approval != "auto" or scope_set & {GRAPH_MUTATE, FS_WRITE, KNOWLEDGE_WRITE, CODE_EXECUTE}
         ):
             raise ValueError(
                 "Parallel-safe tools must be auto-approved and may not have "
@@ -353,9 +357,10 @@ class ToolRegistry:
             call = ToolCall(id=call.id, name=call.name, arguments=deepcopy(call.arguments))
 
         # File paths and content are untrusted mutable dict entries too.
+        # knowledge.add is also an approved path-to-persistent-data mutation.
         # Freeze them before policy evaluation and preview so neither a
         # pending approval nor Auto-edit can execute a changed request.
-        original_file_call = call if call.name in ("fs.write", "fs.edit") else None
+        original_file_call = call if call.name in ("fs.write", "fs.edit", "knowledge.add") else None
         if original_file_call is not None:
             # A provider may reuse a call id. Never inherit a precondition
             # from a prior denied/stale approval or an Auto-edit invocation.
