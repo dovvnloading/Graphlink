@@ -30,7 +30,7 @@ import graphlink_task_config as config
 from graphlink_audio import guess_audio_mime_type
 from graphlink_cloud_providers import CLOUD_PROVIDERS
 from graphlink_model_catalog import FALLBACK_ENABLED_TASKS, ModelDescriptor, ModelRef, ollama_descriptor, sort_descriptors
-from backend.ollama_context import CONTEXT_CHOICES, trained_context_length
+from backend.ollama_context import CONTEXT_CHOICES, DEFAULT_CONTEXT_WINDOW, trained_context_length
 from backend.ollama_model_names import valid_ollama_model_name
 
 # Phase 4d god-file decomposition (provider_runtime/): module-top re-exports
@@ -617,9 +617,9 @@ class ProviderRuntime:
 
         - llama.cpp mode: the configured n_ctx - exact truth, it IS the
           allocated context.
-        - Ollama mode: "<arch>.context_length" from a cached ollama.show()
-          lookup (_get_ollama_context_window); falls back to the
-          conservative default when the server/metadata is unavailable.
+        - Ollama mode: the saved per-model Settings choice, or 8,192 by
+          default, capped by the trained limit from cached ollama.show()
+          metadata. Unavailable metadata limits serving to at most 8,192.
         - API mode: the documented per-family table (_KNOWN_CONTEXT_WINDOWS,
           matched by model-id prefix - same name-heuristic posture as
           anthropic_supports_reasoning); unknown ids get the conservative
@@ -725,9 +725,10 @@ ANTHROPIC_DEFAULT_MAX_TOKENS = {
 # for a model the daemon does not know. A failed PROBE is deliberately not
 # cached - see _get_ollama_capabilities.
 _OLLAMA_CAPABILITY_CACHE: dict[str, set[str] | None] = {}
-# ADR-006 stage 6.6: context windows extracted from the same `ollama.show()`
-# call the capability cache uses, cached under the same key discipline and
-# invalidated by the same invalidate_ollama_capability_cache() entry point.
+# ADR-006 stage 6.6: Ollama's reported Modelfile/default context metadata,
+# probed via the same ollama.show() as capabilities and cached/invalidated
+# together. This value is NOT the window Graphlink requests; see
+# _ollama_effective_context_window and its separately cached trained limit.
 _OLLAMA_CONTEXT_WINDOW_CACHE: dict[str, int | None] = {}
 _OLLAMA_TRAINED_CONTEXT_WINDOW_CACHE: dict[str, int | None] = {}
 _OLLAMA_CONFIGURED_CONTEXT_WINDOWS: dict[str, int] = {}
@@ -749,32 +750,29 @@ _KNOWN_CONTEXT_WINDOWS = (
     ("o3", 128_000),
     ("o4", 128_000),
 )
-_DEFAULT_CONTEXT_WINDOW = 8_192
-# ADR-006 stage 6.8 review fix (HIGH): what we ask the Ollama daemon to
-# SERVE (options.num_ctx) when the Modelfile has no explicit num_ctx. The
-# trained max from model_info is NOT a safe default to request - a 131k
-# num_ctx on llama3.1 allocates a KV cache that OOMs typical consumer GPUs,
-# and the daemon's own default (~4k) silently truncates prompts front-first
-# instead. 8192 is the KV-cache-safe middle ground; users who want more set
-# num_ctx in their Modelfile and we honor it exactly.
-_OLLAMA_SERVED_CONTEXT_CAP = 8_192
+_DEFAULT_CONTEXT_WINDOW = DEFAULT_CONTEXT_WINDOW
+# The Settings default also caps serving when trained metadata is unavailable.
+# A Modelfile's num_ctx is not a saved per-model Settings choice.
+_OLLAMA_SERVED_CONTEXT_CAP = DEFAULT_CONTEXT_WINDOW
 
 
 def _ollama_effective_context_window(model: str | None) -> int:
-    """One served window for requests, chat, knowledge and agent budgets.
+    """One served window for Ollama requests, chat, knowledge and agent budgets.
 
-    A saved per-model preference wins over Modelfile num_ctx and the legacy
-    8192 fallback, but never exceeds the model's trained limit. When show()
-    is unavailable we retain the conservative 8192 ceiling instead of
-    assuming a model can safely accept a larger window.
+    Use the saved per-model Settings choice, or the 8,192-token Settings
+    default when none is saved; ignore the Modelfile's num_ctx for selection.
+    Never exceed the model's trained limit. If show() cannot verify that
+    limit, conservatively cap the choice at 8,192 tokens.
     """
     normalized = str(model or "").strip().casefold()
-    window = _get_ollama_context_window(model)
+    _get_ollama_context_window(model)  # Populate the cached trained limit.
     configured = _OLLAMA_CONFIGURED_CONTEXT_WINDOWS.get(normalized)
-    if type(configured) is int and configured in CONTEXT_CHOICES:
-        trained = _OLLAMA_TRAINED_CONTEXT_WINDOW_CACHE.get(normalized)
-        return min(configured, trained if trained else _OLLAMA_SERVED_CONTEXT_CAP)
-    return window if window else _DEFAULT_CONTEXT_WINDOW
+    selected = (
+        configured if type(configured) is int and configured in CONTEXT_CHOICES
+        else _DEFAULT_CONTEXT_WINDOW
+    )
+    trained = _OLLAMA_TRAINED_CONTEXT_WINDOW_CACHE.get(normalized)
+    return min(selected, trained if trained else _OLLAMA_SERVED_CONTEXT_CAP)
 
 
 def known_context_window(model_id: str | None) -> int:
@@ -881,23 +879,15 @@ def _get_ollama_capabilities(model_name: str | None) -> set[str] | None:
 
 
 def _get_ollama_context_window(model_name: str | None) -> int | None:
-    """ADR-006 stage 6.6/6.8 review fix: the context window Ollama will
-    actually SERVE for this model, cached like the capability cache above
-    (including negative results). Returns None when the server, the model,
-    or the metadata is unavailable - callers fall back to
-    _DEFAULT_CONTEXT_WINDOW.
+    """Probe and cache Ollama's reported Modelfile/default context metadata.
 
-    Resolution order (see _extract_context_window_from_show):
-    1. An explicit `num_ctx` in the Modelfile parameters - the daemon
-       serves exactly that.
-    2. Otherwise the TRAINED max ("<arch>.context_length") capped at
-       _OLLAMA_SERVED_CONTEXT_CAP - the trained max is NOT what the daemon
-       serves by default (it serves its own small default and truncates
-       prompts front-first), and requesting the full trained max as num_ctx
-       would balloon the KV cache (131k for llama3.1 can OOM a typical GPU).
-       The request path passes this same value back as options.num_ctx
-       (OllamaProvider), so the budget and the served context are the SAME
-       number."""
+    An explicit Modelfile num_ctx may be larger than the Settings selection.
+    This return value is NOT a serving or budgeting decision: callers use
+    _ollama_effective_context_window, which reads the separately cached
+    trained limit and chooses the saved per-model preference or 8,192.
+    Cache misses too; return None when the model, server or metadata is
+    unavailable.
+    """
     normalized_model = model_name.strip() if isinstance(model_name, str) else ""
     if not valid_ollama_model_name(normalized_model):
         return None
@@ -930,10 +920,11 @@ def _get_ollama_context_window(model_name: str | None) -> int | None:
 
 
 def _extract_context_window_from_show(show_response) -> int | None:
-    """The SERVED window from a show() response - explicit Modelfile num_ctx
-    when present, else the trained "<arch>.context_length" capped at
-    _OLLAMA_SERVED_CONTEXT_CAP (see _get_ollama_context_window's docstring
-    for the rationale)."""
+    """Read a Modelfile num_ctx if provided, else min(trained limit, 8,192).
+
+    This is reported metadata, not the served window. Only
+    _ollama_effective_context_window determines the request and budgets.
+    """
     explicit_num_ctx = _extract_modelfile_num_ctx(show_response)
     if explicit_num_ctx:
         return explicit_num_ctx
@@ -962,8 +953,8 @@ def _extract_modelfile_num_ctx(show_response) -> int | None:
             if not raw.isascii() or not raw.isdecimal() or len(raw) > 6:
                 return None
             value = int(raw)
-            # Never turn unbounded daemon-reported num_ctx into a request
-            # allocation, even without a saved user preference.
+            # Bound untrusted Modelfile metadata, even though it cannot
+            # determine a serving allocation without a Settings choice.
             return value if 0 < value <= max(CONTEXT_CHOICES) else None
     return None
 

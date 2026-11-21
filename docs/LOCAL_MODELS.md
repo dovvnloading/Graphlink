@@ -57,7 +57,7 @@ When **Agent** is enabled in the main composer, a task uses the selected compose
 
 ## Configure an Ollama context window per model
 
-On a chat-capable Ollama model card, choose **Context window (num_ctx)**. Embedding-only model cards do not have a chat context-window control. Graphlink stores the value **per model**, and uses the served window for request options and context budgeting. **8k (8,192 tokens) is the default**, not a fixed Ollama limit.
+On a chat-capable Ollama model card, choose **Context window (num_ctx)**. Embedding-only model cards do not have a chat context-window control. Graphlink stores the value **per model**, and uses the served window for request options and context budgeting. **8k (8,192 tokens) is the default**, not a fixed Ollama limit. A Modelfile `num_ctx` does not override this default, even when it specifies 128k: requests use a larger window only when you save a larger per-model choice in Settings, within the trained limit.
 
 Available choices are **4k, 8k, 16k, 32k, 64k and 128k**, limited by that model's **server-verified trained context length**. If the server cannot verify the length, choices above 8k are not available; a disk scan alone cannot establish a larger safe limit. Higher trained capacity does not mean you should always allocate it: a larger KV cache can consume substantially more memory.
 
