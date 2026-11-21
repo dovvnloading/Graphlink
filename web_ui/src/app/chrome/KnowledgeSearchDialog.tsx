@@ -172,23 +172,26 @@ export function KnowledgeSearchDialog({
   const latestLibraryRequest = useRef(0);
   const completedJobsRef = useRef(new Set<string>());
 
-  const refreshDocuments = useCallback(async () => {
+  const refreshDocuments = useCallback(() => {
     const requestId = ++latestLibraryRequest.current;
-    try {
-      const result = await transport.request("knowledge", "listDocuments", []) as {
-        documents: KnowledgeLibraryDocument[];
-      };
-      if (requestId !== latestLibraryRequest.current) return;
-      if (!result || !Array.isArray(result.documents)) throw new Error("Invalid document list response.");
-      setDocuments(result.documents);
-      setLibraryError(null);
-    } catch (cause) {
-      if (requestId === latestLibraryRequest.current) {
-        setLibraryError(cause instanceof Error ? cause.message : "Could not load documents.");
-      }
-    } finally {
-      if (requestId === latestLibraryRequest.current) setLoadingDocuments(false);
-    }
+    // Handle the response asynchronously so an effect that starts a refresh
+    // never causes a synchronous state update during its execution.
+    return transport.request("knowledge", "listDocuments", [])
+      .then((value) => {
+        const result = value as { documents: KnowledgeLibraryDocument[] } | null;
+        if (requestId !== latestLibraryRequest.current) return;
+        if (!result || !Array.isArray(result.documents)) throw new Error("Invalid document list response.");
+        setDocuments(result.documents);
+        setLibraryError(null);
+      })
+      .catch((cause: unknown) => {
+        if (requestId === latestLibraryRequest.current) {
+          setLibraryError(cause instanceof Error ? cause.message : "Could not load documents.");
+        }
+      })
+      .finally(() => {
+        if (requestId === latestLibraryRequest.current) setLoadingDocuments(false);
+      });
   }, [transport]);
 
   const knowledgeOpen = overlays.isOpen("knowledge");
