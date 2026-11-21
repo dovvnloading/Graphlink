@@ -27,7 +27,9 @@ from backend.domain.commands import _merge_commands
 from backend.domain.graph_runner import bound_dependents, is_bound_node
 from backend.domain.model import SceneError
 from backend.domain.node_states import ChatState
-from backend.domain.staleness import fingerprint_for_reply, scene_staleness
+from backend.domain.staleness import (
+    fingerprint_for_reply, fingerprint_from_history_hashes, history_hashes, scene_staleness,
+)
 from backend.domain.structure import primary_parent_edges
 
 _logger = logging.getLogger(__name__)
@@ -170,6 +172,9 @@ def _preview_plan(document, dispatcher, bus, root_id: str, scope: str):
     root = document.nodes[root_id]
     proof = [root_id, scope, root.content, root.state.version_index, len(root.state.versions)]
     estimator = TokenEstimator()
+    # The preview token must check every selected parent, but a single
+    # 500-node lineage pass suffices for all replies (not N full passes).
+    hashes = history_hashes(document)
     for node_id in ids:
         node = document.nodes[node_id]
         parent_edge = document._branch_parent_edge(node_id)
@@ -191,7 +196,7 @@ def _preview_plan(document, dispatcher, bus, root_id: str, scope: str):
         proof.append((
             node_id, parent_id, node.content, node.state.version_index,
             node.state.reply_history_fingerprint,
-            fingerprint_for_reply(document, parent_id, provider, model, bool(node.state.reply_knowledge_enabled)),
+            fingerprint_from_history_hashes(hashes, parent_id, provider, model, bool(node.state.reply_knowledge_enabled)),
         ))
     # Skipped-node classification is part of the approval token: it must not
     # silently change between the read-only preview and the batch start.
@@ -229,7 +234,9 @@ def register_chat_rerun_intents(
     active: set[str] = set()
 
     async def preview_chat_rerun(node_id, scope="this_path"):
-        return _preview_plan(document, agent_dispatcher, bus, node_id, scope)
+        # Tokenizing each selected history can exceed a single event-loop tick
+        # on a large graph. The result is still validated at start.
+        return await asyncio.to_thread(_preview_plan, document, agent_dispatcher, bus, node_id, scope)
 
     async def get_chat_rerun_status(job_id):
         if job_id not in jobs:
@@ -255,7 +262,10 @@ def register_chat_rerun_intents(
     async def start_chat_rerun(node_id, scope, preview_token, confirm_large=False):
         if active:
             raise SceneError("A chat re-run is already in progress.")
-        plan = _preview_plan(document, agent_dispatcher, bus, node_id, scope)
+        plan = await asyncio.to_thread(_preview_plan, document, agent_dispatcher, bus, node_id, scope)
+        # A second start may have won while the tokenization was off-thread.
+        if active:
+            raise SceneError("A chat re-run is already in progress.")
         if not isinstance(preview_token, str) or plan["previewToken"] != preview_token:
             raise SceneError("The chat changed since the preview. Preview it again.")
         if not plan["count"]:
