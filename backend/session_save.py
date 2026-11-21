@@ -1196,6 +1196,14 @@ def _build_chat_data(
         # shape in a way that would warrant bumping it.
         "schema_version": 1,
         "nodes": node_payloads,
+        # Only non-chat nodes CREATED with dependency capture get a
+        # baseline; old graphs' derived nodes have no entry and remain
+        # unbadged until a new node is attached. Persist by stable saved
+        # id; session_load remaps to its new in-memory ids on restore.
+        "nonchat_upstream_fingerprints": {
+            node_id: value for node_id, value in document.nonchat_upstream_fingerprints.items()
+            if node_id in document.nodes and document.nodes[node_id].kind != "chat"
+        },
         # ADR-009 stage 9.6: the AUTHORITATIVE edge list. Every edge in the
         # document, written flat, by persistent node id - exactly the shape
         # the document itself holds. session_load.py prefers this key and
