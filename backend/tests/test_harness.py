@@ -1616,7 +1616,11 @@ class TestCompaction:
         # than replaying the dropped turns.
         reloaded = load_messages(ws)
         assert "the earlier work, summarized" in reloaded[0]["content"]
-        assert not any("filler" in str(m.get("content")) for m in reloaded)
+        # Reload must reconstruct the complete post-compaction tail as the
+        # live model saw it, including recent filler/tool messages, rather
+        # than incorrectly losing everything except the summary.
+        assert reloaded[:-1] == sent[1:]
+        assert reloaded[-1]["content"] == "final answer"
 
     def test_a_failed_summarizer_does_not_kill_the_run(self, workspace_root, monkeypatch):
         document = SceneDocument()
