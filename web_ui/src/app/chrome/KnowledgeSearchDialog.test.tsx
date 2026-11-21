@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { KnowledgeSearchDialog } from "./KnowledgeSearchDialog";
@@ -17,6 +17,14 @@ function OpenKnowledgeButton() {
 async function setup() {
   const user = userEvent.setup();
   const fake = makeTransport();
+  let importListener: ((payload: Record<string, unknown>) => void) | null = null;
+  fake.transport.subscribe = (topic, listener) => {
+    if (topic === "knowledge-ingest") importListener = listener;
+    return () => { importListener = null; };
+  };
+  function emitImportJobs(jobs: Record<string, unknown>[]) {
+    act(() => { importListener?.({ jobs }); });
+  }
   render(
     <OverlayProvider>
       <OpenKnowledgeButton />
@@ -24,7 +32,7 @@ async function setup() {
     </OverlayProvider>,
   );
   await user.click(screen.getByRole("button", { name: "open knowledge" }));
-  return { user, ...fake };
+  return { user, ...fake, emitImportJobs };
 }
 
 const RESULT_A = {
@@ -48,6 +56,54 @@ const RESULT_B = {
 };
 
 describe("KnowledgeSearchDialog", () => {
+
+  it("opens the native multiple-file picker through the knowledge intent", async () => {
+    const { user, intents, request } = await setup();
+    request.mockResolvedValueOnce({ jobId: "first", status: "queued" });
+
+    await user.click(screen.getByRole("button", { name: "Add files" }));
+
+    expect(intents).toContainEqual(["knowledge", "addFiles", []]);
+  });
+
+  it("opens the native folder picker through the knowledge intent", async () => {
+    const { user, intents, request } = await setup();
+    request.mockResolvedValueOnce({ jobId: "second", status: "queued" });
+
+    await user.click(screen.getByRole("button", { name: "Add folder" }));
+
+    expect(intents).toContainEqual(["knowledge", "addFolder", []]);
+  });
+
+  it("renders progress events, disables concurrent imports, and cancels the correct job", async () => {
+    const { user, intents, request, emitImportJobs } = await setup();
+    emitImportJobs([{
+      jobId: "running-job", kind: "folder", workspaceId: 12, status: "running",
+      filesTotal: 4, filesProcessed: 2, bytesTotal: 200, bytesProcessed: 100,
+      added: 1, updated: 1, duplicates: 0, unchanged: 0, skipped: 1,
+      failedFiles: 0, lastFile: "notes.md", error: "", warnings: [],
+      cancelRequested: false,
+    }]);
+
+    expect(screen.getByText(/2\/4 files/)).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "Files processed" })).toHaveAttribute("value", "2");
+    expect(screen.getByRole("button", { name: "Add files" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add folder" })).toBeDisabled();
+    request.mockResolvedValueOnce({ cancelRequested: true });
+    await user.click(screen.getByRole("button", { name: "Cancel import" }));
+    expect(intents).toContainEqual(["knowledge", "cancelIngest", ["running-job"]]);
+
+    emitImportJobs([{
+      jobId: "running-job", kind: "folder", workspaceId: 12, status: "cancelled",
+      filesTotal: 4, filesProcessed: 2, bytesTotal: 200, bytesProcessed: 100,
+      added: 1, updated: 1, duplicates: 0, unchanged: 0, skipped: 1,
+      failedFiles: 0, lastFile: "notes.md", error: "", warnings: [],
+      cancelRequested: true,
+    }]);
+    expect(screen.queryByRole("button", { name: "Cancel import" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add files" })).toBeEnabled();
+  });
+
   it("submitting a query requests knowledge/search with the typed text and a default k", async () => {
     const { user, intents, request } = await setup();
     request.mockResolvedValueOnce({ results: [] });

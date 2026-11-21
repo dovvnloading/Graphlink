@@ -89,7 +89,7 @@ BACKUP_FILENAME_PREFIX = "knowledge-"
 # a mid-batch crash without re-snapshotting on every single document.
 BACKUP_CADENCE_SECONDS = 600.0
 
-KNOWLEDGE_DB_SCHEMA_VERSION = 6
+KNOWLEDGE_DB_SCHEMA_VERSION = 7
 
 
 def content_hash(text: str) -> str:
@@ -374,6 +374,27 @@ def _migration_006_unique_workspace_collections(conn: sqlite3.Connection) -> Non
     )
 
 
+
+def _migration_007_file_sources(conn: sqlite3.Connection) -> None:
+    """Track every imported file path, even when several paths share one document.
+
+    The documents table deduplicates extracted content. This mapping makes a
+    change to one aliased path independent of the other files that still refer
+    to the old content, without duplicating chunks or their FTS entries.
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS file_sources (
+            collection_id INTEGER NOT NULL,
+            source_uri TEXT NOT NULL,
+            document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            PRIMARY KEY (collection_id, source_uri)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_file_sources_document ON file_sources(document_id)")
+
+
 _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     1: _migration_001_initial_schema,
     2: _migration_002_fts5_lexical_index,
@@ -381,6 +402,7 @@ _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     4: _migration_004_workspace_scoped_collections,
     5: _migration_005_graph_node_chunks,
     6: _migration_006_unique_workspace_collections,
+    7: _migration_007_file_sources,
 }
 
 
@@ -682,6 +704,120 @@ def replace_branch_document_with_chunks(
             )
             conn.commit()
             return IngestOutcome(document_id=new_doc_id, chunk_count=len(chunks), was_new=True)
+        except BaseException:
+            conn.rollback()
+            raise
+    finally:
+        conn.close()
+
+
+
+class FileIngestOutcome(NamedTuple):
+    document_id: int
+    chunk_count: int
+    action: str  # added | updated | duplicate | unchanged
+
+
+def upsert_file_with_chunks(
+    db_path: Path, *, source_uri: str, title: str, mime: str, text: str,
+    chunks: list, collection_id: int = 0,
+) -> FileIngestOutcome:
+    """Ingest a real file by path, atomically replacing its old content.
+
+    Identical text is stored once per collection; file_sources records all
+    paths sharing that document. On a changed path, drop only its old mapping,
+    retaining the old document while any other file still uses it. Keep
+    canonical citation paths up to date when the first alias moves away.
+    BEGIN IMMEDIATE serializes competing jobs on the same source.
+    """
+    digest = content_hash(text)
+    conn = _connect(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            old = conn.execute(
+                "SELECT d.id, d.content_hash, d.source_uri FROM file_sources f "
+                "JOIN documents d ON d.id = f.document_id "
+                "WHERE f.collection_id = ? AND f.source_uri = ?",
+                (collection_id, source_uri),
+            ).fetchone()
+            if old is not None and old[1] == digest:
+                count = conn.execute(
+                    "SELECT COUNT(*) FROM chunks WHERE document_id = ?", (old[0],),
+                ).fetchone()[0]
+                conn.commit()
+                return FileIngestOutcome(int(old[0]), int(count), "unchanged")
+
+            existing = get_document_by_hash(
+                conn, content_hash_value=digest, collection_id=collection_id,
+            )
+            created = existing is None
+            if created:
+                cursor = conn.execute(
+                    "INSERT INTO documents (collection_id, source_uri, title, mime, content_hash, added_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (collection_id, source_uri, title, mime, digest, _now_iso()),
+                )
+                if cursor.lastrowid is None:
+                    raise RuntimeError("SQLite did not return the ingested document id")
+                existing = int(cursor.lastrowid)
+                conn.executemany(
+                    "INSERT INTO chunks (document_id, ordinal, text, token_count, offset_start, offset_end) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    [
+                        (existing, part.ordinal, part.text, part.token_count, part.offset_start, part.offset_end)
+                        for part in chunks
+                    ],
+                )
+
+            # A document indexed by the old ingest_file API predates the
+            # mapping table. Adopt its source on identical content and clean
+            # up its stale chunks when that path now carries different text.
+            if old is None:
+                legacy = conn.execute(
+                    "SELECT id FROM documents WHERE collection_id = ? AND source_uri = ? AND id != ?",
+                    (collection_id, source_uri, existing),
+                ).fetchall()
+                for (legacy_id,) in legacy:
+                    references = conn.execute(
+                        "SELECT COUNT(*) FROM file_sources WHERE document_id = ?", (legacy_id,),
+                    ).fetchone()[0]
+                    if not references:
+                        conn.execute("DELETE FROM documents WHERE id = ?", (legacy_id,))
+
+            if old is not None:
+                old_id = int(old[0])
+                conn.execute(
+                    "DELETE FROM file_sources WHERE collection_id = ? AND source_uri = ?",
+                    (collection_id, source_uri),
+                )
+                if old_id != existing:
+                    survivor = conn.execute(
+                        "SELECT source_uri FROM file_sources WHERE document_id = ? ORDER BY source_uri LIMIT 1",
+                        (old_id,),
+                    ).fetchone()
+                    if survivor is None:
+                        # Never delete a non-file document that happened to
+                        # share content with a file (e.g. a retained URL).
+                        if old[2] == source_uri:
+                            conn.execute("DELETE FROM documents WHERE id = ?", (old_id,))
+                    elif old[2] == source_uri:
+                        alternate = str(survivor[0])
+                        conn.execute(
+                            "UPDATE documents SET source_uri = ?, title = ? WHERE id = ?",
+                            (alternate, Path(alternate).name, old_id),
+                        )
+
+            conn.execute(
+                "INSERT INTO file_sources (collection_id, source_uri, document_id) VALUES (?, ?, ?)",
+                (collection_id, source_uri, existing),
+            )
+            count = conn.execute(
+                "SELECT COUNT(*) FROM chunks WHERE document_id = ?", (existing,),
+            ).fetchone()[0]
+            conn.commit()
+            action = "updated" if old is not None else ("added" if created else "duplicate")
+            return FileIngestOutcome(int(existing), int(count), action)
         except BaseException:
             conn.rollback()
             raise
