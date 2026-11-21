@@ -256,10 +256,20 @@ def _apply_reply(document, node_id: str, answer: str, provider, model, fingerpri
         else:
             x, y = document.place_child(node_id, "thinking", prefer="left")
             document.add_thinking_node(x, y, reasoning, parent_id=node_id)
-    elif thinking_ids:
-        # A new answer without reasoning must not leave the prior version's
-        # trace attached. Other content children are intentionally untouched.
-        document.remove_nodes(thinking_ids)
+    # Older graphs can have several traces, or even a continuation connected
+    # through a Thinking card. Clear redundant traces without orphaning their
+    # downstream chat messages; ordinary leaf traces can be removed.
+    retired = thinking_ids[1:] if reasoning else thinking_ids
+    for thought_id in retired:
+        has_children = any(
+            edge.source == thought_id and document._branch_parent_edge(edge.target) is edge
+            for edge in document.edges.values() if edge.target in document.nodes
+        )
+        if has_children:
+            document.nodes[thought_id].content = ""
+            document.nodes[thought_id].title = "Thinking"
+        else:
+            document.remove_nodes([thought_id])
     _stamp_reply_provenance(node, provider, model, reason)
     node.state.reply_history_fingerprint = fingerprint
     node.state.reply_knowledge_enabled = knowledge_enabled
