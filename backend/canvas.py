@@ -36,6 +36,7 @@ from backend.agents import AgentDispatcher
 from backend.composer import ComposerDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
+from backend.knowledge_watches import WatchedFolderService
 from backend.token_counter import TokenCounterState
 
 # ADR-002 stage 2.2: the scene data model + content codec were relocated
@@ -299,6 +300,7 @@ def register_canvas(
     agent_dispatcher: AgentDispatcher,
     composer_document: ComposerDocument,
     token_counter: TokenCounterState | None = None,
+    watch_service: WatchedFolderService | None = None,
 ) -> SceneDocument:
     """Give a session its canvas document + the scene/grid topics and every
     R1 intent. Intent names for grid mirror GridControlBridge's @Slot names
@@ -391,7 +393,7 @@ def register_canvas(
     # ADR-012 stage 12.6: the bundled sample workspace - see that module's
     # own docstring.
     register_onboarding_intents(bus, document)
-    register_knowledge_intents(bus, document, notifications)
+    register_knowledge_intents(bus, document, notifications, watch_service=watch_service)
     # ADR-020 stage 20.4: global cross-workspace search - deliberately takes
     # no `document` (unlike register_knowledge_intents immediately above,
     # which scopes to the CALLING session's current workspace) - global

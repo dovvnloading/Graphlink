@@ -21,6 +21,7 @@ import asyncio
 from pathlib import Path
 from backend import native_dialogs
 from backend.knowledge_jobs import KnowledgeIngestManager
+from backend.knowledge_watches import WatchedFolderService
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -54,6 +55,16 @@ class SetChatIndexIntoKnowledgeArgs:
 @dataclass
 class CancelIngestArgs:
     jobId: str
+
+
+@dataclass
+class RemoveWatchedFolderArgs:
+    folderId: int
+
+
+@dataclass
+class SyncWatchedFoldersArgs:
+    folderId: int | None = None
 
 
 def _resolve_workspace_collection_id(document: SceneDocument, db_path=None) -> int:
@@ -146,9 +157,12 @@ def register_knowledge_intents(
     bus: SessionBus,
     document: SceneDocument,
     notifications: NotificationState | None = None,
+    watch_service: WatchedFolderService | None = None,
 ) -> None:
     publish_scene = make_publish_scene(bus)
-    ingest_jobs = KnowledgeIngestManager(bus, DEFAULT_DB_PATH)
+    db_path = watch_service.db_path if watch_service is not None else DEFAULT_DB_PATH
+    watcher = watch_service if watch_service is not None else WatchedFolderService(db_path)
+    ingest_jobs = KnowledgeIngestManager(bus, db_path)
     bus.register_topic("knowledge-ingest", ingest_jobs.snapshot)
 
     async def search(query, k):
@@ -160,8 +174,8 @@ def register_knowledge_intents(
         # (one thread-pool round trip, not two) since both are real
         # blocking SQLite I/O against the SAME underlying database file.
         def _search():
-            collection_id = _resolve_workspace_collection_id(document)
-            return hybrid_search(DEFAULT_DB_PATH, query, k=k, collection_id=collection_id)
+            collection_id = _resolve_workspace_collection_id(document, db_path)
+            return hybrid_search(db_path, query, k=k, collection_id=collection_id)
 
         # Adversarial-review finding: hybrid_search() does real blocking
         # SQLite I/O (and, when an embedding provider is wired, a network
@@ -218,11 +232,11 @@ def register_knowledge_intents(
                 if not chunks:
                     raise IngestError(f"'{title}' contained no indexable text.")
                 collection_id = (
-                    get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+                    get_or_create_workspace_collection(db_path, workspace_id)
                     if workspace_id is not None else 0
                 )
                 return replace_branch_document_with_chunks(
-                    DEFAULT_DB_PATH, source_uri=source_uri, title=title,
+                    db_path, source_uri=source_uri, title=title,
                     text=text, chunks=chunks, collection_id=collection_id,
                 )
 
@@ -273,6 +287,30 @@ def register_knowledge_intents(
             return {"cancelled": True}
         return ingest_jobs.start(selected, folder=True, workspace_id=workspace_id)
 
+    def _watched_workspace_id() -> int:
+        workspace_id = document.current_workspace_id
+        if workspace_id is None:
+            raise IngestError("Select a workspace before managing watched folders.")
+        return workspace_id
+
+    async def add_watched_folder():
+        # The native picker is the only way a path may become watched.
+        # Capture workspace before the dialog (which may outlive a switch).
+        workspace_id = _watched_workspace_id()
+        selected = await native_dialogs.pick_folder()
+        if not selected:
+            return {"cancelled": True}
+        return await watcher.add(workspace_id, selected)
+
+    async def remove_watched_folder(folder_id: int):
+        return await watcher.remove(_watched_workspace_id(), folder_id)
+
+    async def list_watched_folders():
+        return await watcher.list(_watched_workspace_id())
+
+    async def sync_watched_folders(folder_id: int | None = None):
+        return await watcher.sync(_watched_workspace_id(), folder_id)
+
     async def cancel_ingest(job_id):
         return ingest_jobs.cancel(job_id)
 
@@ -282,6 +320,14 @@ def register_knowledge_intents(
     bus.register_intent("knowledge", "search", search, args_schema=SearchArgs)
     bus.register_intent("knowledge", "addFiles", add_files)
     bus.register_intent("knowledge", "addFolder", add_folder)
+    bus.register_intent("knowledge", "addWatchedFolder", add_watched_folder)
+    bus.register_intent(
+        "knowledge", "removeWatchedFolder", remove_watched_folder, args_schema=RemoveWatchedFolderArgs,
+    )
+    bus.register_intent("knowledge", "listWatchedFolders", list_watched_folders)
+    bus.register_intent(
+        "knowledge", "syncWatchedFolders", sync_watched_folders, args_schema=SyncWatchedFoldersArgs,
+    )
     bus.register_intent("knowledge", "cancelIngest", cancel_ingest, args_schema=CancelIngestArgs)
     bus.register_intent("knowledge", "getIngestJobs", get_ingest_jobs)
     bus.register_intent(
