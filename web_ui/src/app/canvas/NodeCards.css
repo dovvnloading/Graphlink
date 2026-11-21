@@ -1,3 +1,30 @@
+.harness-node-model-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  max-width: 140px;
+  margin-left: auto;
+  padding: 4px 6px;
+  border: 1px solid var(--gl-graph-border);
+  border-radius: 5px;
+  background: var(--gl-neutral-button-background);
+  color: var(--gl-surface-text-primary);
+  font: 11px var(--gl-font-family);
+  cursor: pointer;
+}
+.harness-node-model-trigger span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.harness-node-model-trigger:hover { background: var(--gl-neutral-button-hover); }
+.harness-node-model-trigger:focus-visible {
+  outline: 2px solid var(--gl-graph-selection);
+  outline-offset: 2px;
+}
+.harness-node-model-trigger + .harness-node-settings-trigger { margin-left: 4px; }
+
 .harness-node-settings-trigger {
   flex: none;
   display: grid;
