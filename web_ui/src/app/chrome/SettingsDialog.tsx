@@ -1622,7 +1622,14 @@ export function SettingsDialog({ transport }: { transport: WsTransport }) {
           {activeSection === "General" ? (
             <GeneralPage state={state} transport={transport} />
           ) : activeSection === "Knowledge" ? (
-            <KnowledgeSettingsPage state={state} transport={transport} />
+            <KnowledgeSettingsPage
+              key={JSON.stringify([
+                state.knowledgeEmbeddingSource, state.knowledgeEmbeddingModel,
+                state.knowledgeCloudProvider, state.knowledgeCloudOptIn,
+              ])}
+              state={state}
+              transport={transport}
+            />
           ) : activeSection === "Integrations" ? (
             <IntegrationsPage state={state} transport={transport} />
           ) : activeSection === "API Endpoint" ? (
