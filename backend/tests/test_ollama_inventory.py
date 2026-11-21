@@ -257,3 +257,75 @@ def test_macos_installed_app_is_detected_without_path_entry(tmp_path, monkeypatc
     monkeypatch.setattr(ollama_inventory.Path, "home", classmethod(lambda _cls: tmp_path))
     monkeypatch.setattr(ollama_inventory.shutil, "which", lambda _name: None)
     assert ollama_inventory._installed_ollama_command() == ["/usr/bin/open", str(app)]
+
+
+@pytest.mark.parametrize("invalid", [
+    "", " ", "../outside:latest", "dir/../outside:latest",
+    "/tmp/escape", "C:\\\\Windows\\\\system32", "https://example.com/model",
+    "model\u000a:latest", "--insecure", "name:tag with spaces", "name:" + "x" * 256,
+    None, {"name": "model"}, True,
+])
+def test_model_name_validator_blocks_paths_commands_and_non_strings(invalid):
+    from backend.ollama_model_names import valid_ollama_model_name
+
+    assert not valid_ollama_model_name(invalid)
+
+
+@pytest.mark.parametrize("valid", [
+    "llama3", "qwen3:4b", "namespace/my-model:Q4_K_M",
+    "registry.ollama.ai/library/gemma3:latest", "namespace/subproject/model:tag",
+])
+def test_model_name_validator_accepts_supported_ollama_identifiers(valid):
+    from backend.ollama_model_names import valid_ollama_model_name
+
+    assert valid_ollama_model_name(valid)
+
+
+def test_daemon_inventory_ignores_unsafe_names_and_untrusted_metadata(monkeypatch):
+    names = ["safe:latest", "../bad:latest", "bad\\\\name", "--option", "evil:latest\u000a"]
+    monkeypatch.setattr(ollama_inventory.ollama, "list", lambda: {"models": [
+        {"name": name, "size": float("inf"), "details": {
+            "family": "\u0000" if name == "safe:latest" else "unknown",
+            "parameter_size": {"nested": "data"},
+        }} for name in names
+    ]})
+    shown = Mock(return_value={
+        "capabilities": {"tools": True}, "model_info": {"general.architecture": "llama",
+        "llama.context_length": float("inf")},
+    })
+    monkeypatch.setattr(ollama_inventory.ollama, "show", shown)
+    monkeypatch.setattr(ollama_inventory.ollama, "ps", lambda: {"models": {"bad": "value"}})
+
+    result = ollama_inventory.build_ollama_inventory()
+    assert result["models"] == ["safe:latest"]
+    shown.assert_called_once_with("safe:latest")
+    row = result["inventory"][0]
+    assert row["sizeBytes"] is None
+    assert row["parameterSize"] == ""
+    assert row["family"] == ""
+    assert row["loaded"] is None
+    assert row["capabilities"] == []
+    assert row["trainedContextLength"] is None
+
+
+def test_bad_tags_response_is_not_marked_as_running(monkeypatch):
+    monkeypatch.setattr(ollama_inventory.ollama, "list", lambda: {"models": "not an array"})
+    monkeypatch.setattr(ollama_inventory, "_installed_ollama_command", lambda: None)
+    monkeypatch.setattr(api_provider, "scan_local_ollama_models", lambda _path: {
+        "models": [], "scan_mode": "system", "locations": [],
+    })
+    assert ollama_inventory.check_ollama_server_status() == "not_found"
+    assert ollama_inventory.build_ollama_inventory()["source"] == "folder"
+
+
+def test_relative_path_ollama_cli_is_not_executed_from_working_directory(monkeypatch, tmp_path):
+    executable = tmp_path / "ollama"
+    executable.write_text("#!/bin/sh\\n")
+    executable.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ollama_inventory.sys, "platform", "linux")
+    monkeypatch.setattr(ollama_inventory.shutil, "which", lambda _: "ollama")
+    monkeypatch.setattr(ollama_inventory.Path, "home", classmethod(lambda _cls: tmp_path / "no-home"))
+    # CI machines may themselves have /usr/bin/ollama installed.
+    monkeypatch.setattr(ollama_inventory.Path, "is_file", lambda self: self == executable)
+    assert ollama_inventory._installed_ollama_command() is None

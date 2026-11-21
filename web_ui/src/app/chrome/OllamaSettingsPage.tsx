@@ -18,6 +18,8 @@ const OLLAMA_TASK_LABELS: Record<(typeof OLLAMA_TASKS)[number], string> = {
   task_web_summarize: "Web Content Summarization Model",
 };
 const OLLAMA_MODELS_DATALIST_ID = "settings-ollama-scanned-models";
+// Mirror the backend strict model-ID grammar; server validation is authoritative.
+const VALID_OLLAMA_MODEL = /^[A-Za-z0-9][A-Za-z0-9_.-]*(?:\/[A-Za-z0-9][A-Za-z0-9_.-]*){0,2}(?::[A-Za-z0-9][A-Za-z0-9_.-]*)?$/;
 const OLLAMA_CONTEXT_CHOICES = [
   { tokens: 4096, label: "4k" },
   { tokens: 8192, label: "8k" },
@@ -126,6 +128,8 @@ function OllamaTaskField({
 }
 
 
+
+
 type InventoryModel = AppSettingsState["ollamaInventory"][number];
 type ModelCheck = AppSettingsState["ollamaModelChecks"][number];
 
@@ -165,12 +169,19 @@ function OllamaModelCard({
   const activeWindow = Math.min(savedWindow, optionLimit);
   const contextReady = state.ollamaContextModel.toLowerCase() === model.name.toLowerCase()
     && state.ollamaContextStatus === "ready";
-  const memoryEstimate = contextReady
-    ? state.ollamaContextModelSizeBytes + activeWindow * state.ollamaContextKvBytesPerToken
+  const weightsKnown = contextReady && Number.isFinite(state.ollamaContextModelSizeBytes)
+    && state.ollamaContextModelSizeBytes > 0;
+  const estimateValid = contextReady && Number.isFinite(state.ollamaContextKvBytesPerToken)
+    && state.ollamaContextKvBytesPerToken > 0;
+  const memoryEstimate = estimateValid
+    ? (weightsKnown ? state.ollamaContextModelSizeBytes : 0)
+      + activeWindow * state.ollamaContextKvBytesPerToken
     : 0;
   const availableMemory = state.ollamaContextAvailableMemoryBytes;
-  const exceedsMemory = contextReady && availableMemory > 0 && memoryEstimate > availableMemory;
-  const canRemove = model.source === "server" && state.ollamaServerReachable !== false;
+  const exceedsMemory = estimateValid && Number.isFinite(memoryEstimate)
+    && availableMemory > 0 && memoryEstimate > availableMemory;
+  const canRemove = model.source === "server" && state.ollamaInventorySource === "server"
+    && state.ollamaServerReachable !== false;
 
   return (
     <article className="settings-ollama-model-card" role="group" aria-labelledby={headingId}
@@ -217,16 +228,24 @@ function OllamaModelCard({
       {contextReady && (
         <div className="settings-ollama-memory-details">
           <p className="settings-update-status">
-            Estimated {state.ollamaContextModelSizeBytes > 0 ? "model weights + KV cache" : "KV cache (weights unavailable)"}:
-            {" "}{gib(memoryEstimate)} at {activeWindow.toLocaleString()} tokens.
+            Estimated {weightsKnown ? "model weights + KV cache" : "KV cache (weights unavailable)"}:
+            {" "}{estimateValid && Number.isFinite(memoryEstimate) ? gib(memoryEstimate) : "unavailable"}
+            {" "}at {activeWindow.toLocaleString()} tokens.
           </p>
           <p className="settings-update-status">
             Available system RAM: {availableMemory > 0 ? gib(availableMemory) : "unavailable"}.
-            GPU VRAM and other Ollama allocations are not included in this comparison.
+            This estimate is not a measurement of system RAM use: GPU offload can reduce RAM usage;
+            parallel requests, KV-cache precision and runtime overhead can change the total.
           </p>
+          {!weightsKnown && (
+            <p className="settings-field-hint">
+              Model weight size is unavailable; the KV-only estimate cannot establish whether the model will fit.
+            </p>
+          )}
           {exceedsMemory && (
             <p className="settings-update-status" data-level="error" role="alert">
-              Estimated Ollama memory exceeds available system RAM. This window may run out of memory.
+              Estimated model footprint exceeds available system RAM. This window may run out of memory
+              depending on GPU offload and other allocations.
             </p>
           )}
         </div>
@@ -245,7 +264,7 @@ function OllamaModelCard({
       )}
       <div className="settings-button-row settings-ollama-card-actions">
         <button type="button" className="settings-button" aria-label={"Check " + model.name}
-          disabled={checkInProgress || busy}
+          disabled={checkInProgress || busy || model.source !== "server" || state.ollamaInventorySource !== "server"}
           onClick={() => transport.fireIntent("app-settings", "checkOllamaModel", [model.name])}>
           {report?.status === "running" ? "Checking..." : "Check"}
         </button>
@@ -301,7 +320,7 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
   const [draftPullModel, setDraftPullModel] = useState("");
   const [inspectedModel, setInspectedModel] = useState("");
   const checkInProgress = state.ollamaModelChecks.some((check) => check.status === "running");
-  const pulling = state.ollamaPullStatus === "running" || state.ollamaPullStatus === "cancelling";
+  const pulling = ["running", "cancelling", "finalizing"].includes(state.ollamaPullStatus);
   const busy = pulling || state.ollamaRemoveStatus === "running" || state.ollamaScanStatus === "running";
   const installedModels = state.ollamaInventorySource === "server"
     ? state.ollamaInventory.filter((model) => model.source === "server").map((model) => model.name)
@@ -503,7 +522,8 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
         <button
           type="button"
           className="settings-button settings-button-primary"
-          disabled={draftPullModel.trim().length === 0 || busy}
+          disabled={!VALID_OLLAMA_MODEL.test(draftPullModel.trim())
+            || draftPullModel.trim().length > 255 || busy}
           onClick={() => transport.fireIntent("app-settings", "pullOllamaModel", [draftPullModel.trim()])}
         >
           {pulling ? "Downloading..." : "Validate and Pull Model"}
@@ -523,16 +543,18 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
             max={state.ollamaPullTotal > 0 ? state.ollamaPullTotal : 1}
             value={state.ollamaPullTotal > 0 ? state.ollamaPullCompleted : undefined}
           />
-          <div className="settings-button-row">
-            <button
-              type="button"
-              className="settings-button"
-              disabled={state.ollamaPullStatus === "cancelling"}
-              onClick={() => transport.fireIntent("app-settings", "cancelOllamaPull", [])}
-            >
-              {state.ollamaPullStatus === "cancelling" ? "Cancelling..." : "Cancel download"}
-            </button>
-          </div>
+          {state.ollamaPullStatus !== "finalizing" && (
+            <div className="settings-button-row">
+              <button
+                type="button"
+                className="settings-button"
+                disabled={state.ollamaPullStatus === "cancelling"}
+                onClick={() => transport.fireIntent("app-settings", "cancelOllamaPull", [])}
+              >
+                {state.ollamaPullStatus === "cancelling" ? "Cancelling..." : "Cancel download"}
+              </button>
+            </div>
+          )}
         </div>
       )}
       {state.ollamaPullStatus === "done" && (

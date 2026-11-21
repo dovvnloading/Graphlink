@@ -22,6 +22,8 @@ import os
 
 from typing import TYPE_CHECKING
 
+from backend.ollama_model_names import valid_ollama_model_name
+
 if TYPE_CHECKING:
     from graphlink_model_catalog import ModelDescriptor
 
@@ -146,7 +148,8 @@ def _extract_model_name_from_manifest_path(manifest_path: Path, manifests_root: 
     if not repository_name:
         return None
 
-    return f"{repository_name}:{tag}"
+    name = f"{repository_name}:{tag}"
+    return name if valid_ollama_model_name(name) else None
 
 
 def _collect_models_from_manifest_root(manifests_root: Path) -> list[str]:
@@ -174,7 +177,7 @@ def _list_model_descriptors_from_running_ollama() -> tuple[list[ModelDescriptor]
     descriptors = []
     for raw_model in raw_models or []:
         descriptor = _mod.ollama_descriptor(raw_model)
-        if descriptor.model_id:
+        if valid_ollama_model_name(descriptor.model_id):
             descriptors.append(descriptor)
     return _mod.sort_descriptors(descriptors), True, ""
 

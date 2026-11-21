@@ -65,6 +65,7 @@ import graphlink_task_config as config
 from graphlink_settings_store import SettingsManager
 
 from backend import native_dialogs
+from backend.ollama_model_names import valid_ollama_model_name
 from backend.events import SessionBus
 
 # The six per-task model-assignment slots the API-provider page exposes,
@@ -186,8 +187,8 @@ async def apply_ollama_chat_model(
     assignment change for a different task gets silently reverted by this
     call's stale pre-read of the whole assignments dict.
     """
-    chosen = str(model_id or "").strip()
-    if not chosen:
+    chosen = model_id.strip() if isinstance(model_id, str) else ""
+    if not valid_ollama_model_name(chosen):
         return
     assignment = {"mode": "explicit", "model_id": chosen}
 
