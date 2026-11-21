@@ -89,7 +89,7 @@ BACKUP_FILENAME_PREFIX = "knowledge-"
 # a mid-batch crash without re-snapshotting on every single document.
 BACKUP_CADENCE_SECONDS = 600.0
 
-KNOWLEDGE_DB_SCHEMA_VERSION = 8
+KNOWLEDGE_DB_SCHEMA_VERSION = 9
 
 
 def content_hash(text: str) -> str:
@@ -402,6 +402,38 @@ def _migration_008_document_size(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE documents ADD COLUMN size_bytes INTEGER")
 
 
+def _migration_009_watched_folders(conn: sqlite3.Connection) -> None:
+    """Opt-in, persistent folder subscriptions and successfully indexed file stamps.
+
+    Membership is separate from file_sources so deleting a watched path cannot
+    remove another watched folder's alias or a non-file document sharing its text.
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS watched_folders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id INTEGER NOT NULL,
+            path TEXT NOT NULL,
+            last_sync_at TEXT,
+            last_error TEXT NOT NULL DEFAULT '',
+            UNIQUE (workspace_id, path)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS watched_folder_files (
+            folder_id INTEGER NOT NULL REFERENCES watched_folders(id) ON DELETE CASCADE,
+            source_uri TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            mtime_ns INTEGER NOT NULL,
+            PRIMARY KEY (folder_id, source_uri)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_watched_folder_files_uri ON watched_folder_files (source_uri)")
+
+
 _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     1: _migration_001_initial_schema,
     2: _migration_002_fts5_lexical_index,
@@ -411,6 +443,7 @@ _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     6: _migration_006_unique_workspace_collections,
     7: _migration_007_file_sources,
     8: _migration_008_document_size,
+    9: _migration_009_watched_folders,
 }
 
 
@@ -1077,6 +1110,204 @@ def library_document_text(db_path: Path, *, collection_id: int, document_id: int
         if length >= limit:
             content += "\n\n[Document View truncated to 2,000,000 characters]"
         return {"title": doc[0], "content": content}
+    finally:
+        conn.close()
+
+
+# -- opt-in workspace folder subscriptions ----------------------------------
+
+def _watched_folder_row(row: tuple) -> dict[str, Any]:
+    return {
+        "id": int(row[0]), "workspaceId": int(row[1]), "path": str(row[2]),
+        "lastSyncAt": row[3], "lastError": str(row[4]),
+    }
+
+
+def list_watched_folders(db_path: Path, workspace_id: int | None = None) -> list[dict[str, Any]]:
+    """Return only explicitly configured subscriptions; never discover folders."""
+    conn = _connect(db_path)
+    try:
+        sql = "SELECT id, workspace_id, path, last_sync_at, last_error FROM watched_folders"
+        if workspace_id is None:
+            rows = conn.execute(sql + " ORDER BY id").fetchall()
+        else:
+            rows = conn.execute(sql + " WHERE workspace_id = ? ORDER BY id", (workspace_id,)).fetchall()
+        return [_watched_folder_row(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def add_watched_folder(db_path: Path, workspace_id: int, path: str) -> dict[str, Any]:
+    """Native-picker paths are canonicalized; adding the same watch is idempotent."""
+    if workspace_id <= 0:
+        raise ValueError("Select a workspace before watching a folder.")
+    resolved = Path(path).expanduser().resolve(strict=True)
+    if not resolved.is_dir():
+        raise ValueError("The selected path is not a directory.")
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO watched_folders (workspace_id, path) VALUES (?, ?) "
+                "ON CONFLICT (workspace_id, path) DO NOTHING",
+                (workspace_id, str(resolved)),
+            )
+            row = conn.execute(
+                "SELECT id, workspace_id, path, last_sync_at, last_error FROM watched_folders "
+                "WHERE workspace_id = ? AND path = ?",
+                (workspace_id, str(resolved)),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("Failed to read back the watched folder.")
+            return _watched_folder_row(row)
+    finally:
+        conn.close()
+
+
+def remove_watched_folder(db_path: Path, workspace_id: int, folder_id: int) -> bool:
+    """Stop watching without deleting previously imported knowledge."""
+    conn = _connect(db_path)
+    try:
+        with conn:
+            result = conn.execute(
+                "DELETE FROM watched_folders WHERE id = ? AND workspace_id = ?",
+                (folder_id, workspace_id),
+            )
+            return result.rowcount > 0
+    finally:
+        conn.close()
+
+
+def known_watched_files(db_path: Path, folder_id: int, collection_id: int) -> dict[str, tuple[int, int]]:
+    """Only trust cached stamps for paths still indexed in this collection."""
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT w.source_uri, w.size_bytes, w.mtime_ns "
+            "FROM watched_folder_files w JOIN file_sources f "
+            "ON f.source_uri = w.source_uri AND f.collection_id = ? "
+            "WHERE w.folder_id = ?",
+            (collection_id, folder_id),
+        ).fetchall()
+        return {str(uri): (int(size), int(mtime)) for uri, size, mtime in rows}
+    finally:
+        conn.close()
+
+
+def track_watched_file(
+    db_path: Path, folder_id: int, source_uri: str, *, size_bytes: int, mtime_ns: int,
+) -> None:
+    """Record a successfully ingested source; a removed watch cannot be revived."""
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO watched_folder_files (folder_id, source_uri, size_bytes, mtime_ns) "
+                "SELECT id, ?, ?, ? FROM watched_folders WHERE id = ? "
+                "ON CONFLICT (folder_id, source_uri) DO UPDATE SET "
+                "size_bytes = excluded.size_bytes, mtime_ns = excluded.mtime_ns",
+                (source_uri, size_bytes, mtime_ns, folder_id),
+            )
+    finally:
+        conn.close()
+
+
+def _unlink_file_source(conn: sqlite3.Connection, collection_id: int, source_uri: str) -> None:
+    """Unlink one disappeared path while retaining shared-content documents."""
+    row = conn.execute(
+        "SELECT d.id, d.source_uri FROM file_sources f "
+        "JOIN documents d ON d.id = f.document_id "
+        "WHERE f.collection_id = ? AND f.source_uri = ?",
+        (collection_id, source_uri),
+    ).fetchone()
+    if row is None:
+        return
+    document_id, canonical_uri = int(row[0]), str(row[1])
+    conn.execute(
+        "DELETE FROM file_sources WHERE collection_id = ? AND source_uri = ?",
+        (collection_id, source_uri),
+    )
+    if canonical_uri != source_uri:
+        return  # a retained web/branch/other document owns this content
+    other = conn.execute(
+        "SELECT source_uri FROM file_sources WHERE document_id = ? ORDER BY source_uri LIMIT 1",
+        (document_id,),
+    ).fetchone()
+    if other is None:
+        conn.execute("DELETE FROM documents WHERE id = ?", (document_id,))
+    else:
+        replacement = str(other[0])
+        conn.execute(
+            "UPDATE documents SET source_uri = ?, title = ? WHERE id = ?",
+            (replacement, Path(replacement).name, document_id),
+        )
+
+
+def reconcile_watched_files(
+    db_path: Path, folder_id: int, collection_id: int, present: set[str],
+    *, prune: bool,
+) -> int:
+    """Unindex vanished *tracked* files only after a complete, safe scan.
+
+    A missing/unreadable folder, a cancelled scan or an excluded/oversized
+    entry must never masquerade as an empty folder. Concurrent removals of a
+    subscription are harmless. Overlapping watches keep shared file sources.
+    """
+    if not prune:
+        return 0
+    conn = _connect(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            folder = conn.execute(
+                "SELECT workspace_id FROM watched_folders WHERE id = ?", (folder_id,),
+            ).fetchone()
+            if folder is None:
+                conn.commit()
+                return 0
+            workspace_id = int(folder[0])
+            tracked = conn.execute(
+                "SELECT source_uri FROM watched_folder_files WHERE folder_id = ?", (folder_id,),
+            ).fetchall()
+            deleted = 0
+            for (source_uri,) in tracked:
+                if source_uri in present:
+                    continue
+                conn.execute(
+                    "DELETE FROM watched_folder_files WHERE folder_id = ? AND source_uri = ?",
+                    (folder_id, source_uri),
+                )
+                other = conn.execute(
+                    "SELECT 1 FROM watched_folder_files wf "
+                    "JOIN watched_folders w ON w.id = wf.folder_id "
+                    "WHERE w.workspace_id = ? AND wf.source_uri = ? LIMIT 1",
+                    (workspace_id, source_uri),
+                ).fetchone()
+                if other is None:
+                    _unlink_file_source(conn, collection_id, str(source_uri))
+                deleted += 1
+            conn.commit()
+            return deleted
+        except BaseException:
+            conn.rollback()
+            raise
+    finally:
+        conn.close()
+
+
+def set_watched_folder_sync_result(
+    db_path: Path, folder_id: int, *, completed: bool, error: str,
+) -> None:
+    """Record the latest completed scan time, leaving it unchanged on failure."""
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "UPDATE watched_folders SET "
+                "last_sync_at = CASE WHEN ? THEN ? ELSE last_sync_at END, last_error = ? "
+                "WHERE id = ?",
+                (int(completed), _now_iso(), error[:2048], folder_id),
+            )
     finally:
         conn.close()
 
