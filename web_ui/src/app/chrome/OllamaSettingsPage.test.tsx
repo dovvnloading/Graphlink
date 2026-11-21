@@ -541,6 +541,62 @@ describe("Settings > Ollama", () => {
     expect(screen.queryByText(/embedding-only model and cannot generate text/)).not.toBeInTheDocument();
   });
 
+  it("hides chat context controls and preset errors on embedding-only model cards", () => {
+    const { intents } = setup({
+      ollamaInventorySource: "server", ollamaServerReachable: true, ollamaServerStatus: "running",
+      ollamaInventory: [
+        inventoryModel("nomic-embed-text:latest", {
+          capabilities: ["embeddings"], trainedContextLength: 6000, sizeBytes: 274_000_000,
+        }),
+        inventoryModel("chat:latest", { trainedContextLength: 16384 }),
+      ],
+      ollamaContextWindows: { "nomic-embed-text:latest": 8192 },
+      ollamaContextModel: "nomic-embed-text:latest", ollamaContextStatus: "ready",
+      ollamaContextModelSizeBytes: 274_000_000,
+      ollamaContextKvBytesPerToken: 131072,
+      ollamaContextAvailableMemoryBytes: 128 * 1024 ** 3,
+    });
+    const embedding = within(screen.getByRole("group", { name: "nomic-embed-text:latest" }));
+    const chat = within(screen.getByRole("group", { name: "chat:latest" }));
+    expect(embedding.getByText(/274/)).toBeInTheDocument();
+    expect(embedding.queryByRole("button", { name: /Context window/ })).toBeNull();
+    expect(embedding.queryByText(/supported presets/)).toBeNull();
+    expect(embedding.queryByText(/Estimated model weights/)).toBeNull();
+    expect(embedding.queryByText(/Context options above 8k/)).toBeNull();
+    expect(chat.getByRole("button", { name: "Context window for chat:latest" })).toBeInTheDocument();
+    expect(intents).not.toContainEqual(["app-settings", "inspectOllamaContextModel", ["nomic-embed-text:latest"]]);
+  });
+
+  it("shows freshly loaded state and resident memory after a Check report arrives", () => {
+    const model = inventoryModel("gemma4:12b", { sizeBytes: 7_400_000_000, loaded: false });
+    const { update } = setup({
+      ollamaInventorySource: "server", ollamaServerReachable: true,
+      ollamaInventory: [model],
+    });
+    const card = within(screen.getByRole("group", { name: "gemma4:12b" }));
+    expect(card.getByText("Not loaded")).toBeInTheDocument();
+    expect(card.getByText(/6.9 GiB on disk/)).toBeInTheDocument();
+    update({ ollamaInventory: [{ ...model, loaded: true,
+      memoryBytes: 8_000_000_000, vramBytes: 6_000_000_000 }],
+    });
+    expect(card.queryByText("Not loaded")).toBeNull();
+    expect(card.getByText("Loaded")).toBeInTheDocument();
+    expect(card.getByText(/7.5 GiB memory in use/)).toHaveTextContent("5.6 GiB VRAM");
+  });
+
+  it("re-inspects the context estimate when a saved context window changes", () => {
+    const { intents, update } = setup({
+      ollamaInventorySource: "server", ollamaServerReachable: true, ollamaServerStatus: "running",
+      ollamaInventory: [inventoryModel("gemma4:12b", { sizeBytes: 7_400_000_000 })],
+      ollamaCurrentModel: "gemma4:12b",
+    });
+    const inspections = () => intents.filter(([, name]) => name === "inspectOllamaContextModel");
+    expect(inspections()).toHaveLength(1);
+    update({ ollamaContextWindows: { "gemma4:12b": 16384 } });
+    expect(inspections()).toHaveLength(2);
+    expect(inspections()[1]).toEqual(["app-settings", "inspectOllamaContextModel", ["gemma4:12b"]]);
+  });
+
   it("does not misrepresent a saved context larger than a model's trained limit", async () => {
     const { user, intents } = setup({
       ollamaInventorySource: "server", ollamaServerReachable: true, ollamaServerStatus: "running",
