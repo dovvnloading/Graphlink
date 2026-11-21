@@ -43,40 +43,52 @@ def _nonnegative_number(value: object) -> float | None:
 
 
 async def probe_ollama_model(model_name: str) -> dict[str, float | bool | str | None]:
-    """Load, generate a short answer, then observe (but never run) a tool call.
+    """Time a short chat, observe but never execute a tool call, then release HTTP resources.
 
-    Ollama reports load_duration, eval_count, and eval_duration in nanoseconds
-    and tokens. Missing/zero-duration counters are unknown, not fabricated
-    timings. The asynchronous HTTP requests can be interrupted by task.cancel().
+    keep_alive=0 also tells Ollama to unload the model after each probe,
+    rather than leaving a benchmark-loaded model using the user's VRAM.
     """
     client = ollama.AsyncClient(timeout=180.0)
-    response = await client.chat(
-        model=model_name,
-        messages=[{"role": "user", "content": "In one short sentence, what is two plus two?"}],
-        options={"num_predict": 32, "temperature": 0},
-    )
-    load_ns = _nonnegative_number(_field(response, "load_duration"))
-    eval_ns = _nonnegative_number(_field(response, "eval_duration"))
-    eval_count = _nonnegative_number(_field(response, "eval_count"))
-    report: dict[str, float | bool | str | None] = {
-        "loadSeconds": round(load_ns / 1_000_000_000, 2) if load_ns is not None else None,
-        "tokensPerSecond": round(eval_count * 1_000_000_000 / eval_ns, 1)
-        if eval_count is not None and eval_ns is not None and eval_ns > 0 else None,
-        "toolCallingWorks": False,
-        "message": "",
-    }
     try:
-        probe = await client.chat(
+        response = await client.chat(
             model=model_name,
-            messages=[{"role": "user", "content": "Call graphlink_model_check with value 'ok'."}],
-            tools=[_TOOL],
-            options={"num_predict": 64, "temperature": 0},
+            messages=[{"role": "user", "content": "In one short sentence, what is two plus two?"}],
+            options={"num_predict": 32, "temperature": 0},
+            keep_alive=0,
         )
-        calls = _field(_field(probe, "message"), "tool_calls") or []
-        works = any(_field(_field(call, "function"), "name") == _TOOL_NAME for call in calls)
-        report["toolCallingWorks"] = works
-        if not works:
-            report["message"] = "The model did not return the requested tool call."
-    except Exception as exc:  # noqa: BLE001 - an unsupported tools API is a negative probe, not a failed timing run
-        report["message"] = f"Tool probe failed: {str(exc)[:240]}"
-    return report
+        load_ns = _nonnegative_number(_field(response, "load_duration"))
+        eval_ns = _nonnegative_number(_field(response, "eval_duration"))
+        eval_count = _nonnegative_number(_field(response, "eval_count"))
+        speed = (
+            eval_count * 1_000_000_000 / eval_ns
+            if eval_count is not None and eval_ns is not None and eval_ns > 0 else None
+        )
+        report: dict[str, float | bool | str | None] = {
+            "loadSeconds": round(load_ns / 1_000_000_000, 2)
+            if load_ns is not None and load_ns <= 1e18 else None,
+            "tokensPerSecond": round(speed, 1) if speed is not None and math.isfinite(speed) else None,
+            "toolCallingWorks": False,
+            "message": "",
+        }
+        try:
+            probe = await client.chat(
+                model=model_name,
+                messages=[{"role": "user", "content": "Call graphlink_model_check with value 'ok'."}],
+                tools=[_TOOL],
+                options={"num_predict": 64, "temperature": 0},
+                keep_alive=0,
+            )
+            calls = _field(_field(probe, "message"), "tool_calls")
+            if not isinstance(calls, (list, tuple)):
+                calls = []
+            works = any(_field(_field(call, "function"), "name") == _TOOL_NAME for call in calls[:32])
+            report["toolCallingWorks"] = works
+            if not works:
+                report["message"] = "The model did not return the requested tool call."
+        except Exception as exc:  # noqa: BLE001 - unsupported tool APIs are negative probes
+            report["message"] = f"Tool probe failed: {str(exc)[:240]}"
+        return report
+    finally:
+        # AsyncClient owns an httpx connection pool. Cancellation must close
+        # it even when the first request or the tool probe is still pending.
+        await client.close()
