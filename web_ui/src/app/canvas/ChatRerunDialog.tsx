@@ -18,6 +18,7 @@ export function ChatRerunDialog({ store, nodeId }: { store: SceneStore; nodeId: 
   const [jobId, setJobId] = useState<string | null>(null);
   const [progress, setProgress] = useState<ChatRerunStatus | null>(null);
   const [starting, setStarting] = useState(false);
+  const [previewRevision, setPreviewRevision] = useState(0);
   const previewKey = nodeId + ":" + scope;
   const preview = loaded?.key === previewKey ? loaded.data ?? null : null;
   const previewError = loaded?.key === previewKey ? loaded.error ?? "" : "";
@@ -36,7 +37,7 @@ export function ChatRerunDialog({ store, nodeId }: { store: SceneStore; nodeId: 
         });
       });
     return () => { active = false; };
-  }, [store, isOpen, nodeId, scope, jobId, previewKey]);
+  }, [store, isOpen, nodeId, scope, jobId, previewKey, previewRevision]);
 
   // Progress is deliberately not part of the persistent scene schema.
   // Poll only this open dialog; the backend job continues if it is dismissed.
@@ -74,6 +75,11 @@ export function ChatRerunDialog({ store, nodeId }: { store: SceneStore; nodeId: 
         total: preview.count, currentNodeId: null, error: "", cancelRequested: false,
       });
     } catch (cause) {
+      // Failed admission invalidates the preview grant; fetch a fresh server
+      // decision rather than keeping a stale, potentially consumed token.
+      setLoaded(null);
+      setPreviewRevision((revision) => revision + 1);
+      setConfirmedToken(null);
       setError(cause instanceof Error ? cause.message : "Could not start re-run.");
     } finally {
       setStarting(false);
@@ -95,6 +101,8 @@ export function ChatRerunDialog({ store, nodeId }: { store: SceneStore; nodeId: 
   function reset() {
     setJobId(null);
     setProgress(null);
+    setLoaded(null); // A completed job consumed the previous one-use preview.
+    setError("");
     setConfirmedToken(null);
     setScope("this_path");
   }

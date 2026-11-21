@@ -20,11 +20,11 @@ function makePreview(count: number): ChatRerunPreview {
   };
 }
 
-function renderDialog(count: number) {
+function renderDialog(count: number, status: "running" | "completed" = "running") {
   const previewChatRerun = vi.fn(async () => makePreview(count));
   const startChatRerun = vi.fn(async () => ({ jobId: "job-1" }));
   const getChatRerunStatus = vi.fn(async () => ({
-    jobId: "job-1", status: "running" as const,
+    jobId: "job-1", status,
     completed: 1, total: count, currentNodeId: "reply-1",
     error: "", cancelRequested: false,
   }));
@@ -111,4 +111,42 @@ describe("ChatRerunDialog", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Re-run from here" })).toBeNull());
     expect(trigger).toHaveFocus();
   });
+  it("fetches a fresh preview grant after completing a batch", async () => {
+    const user = userEvent.setup();
+    const spies = renderDialog(1, "completed");
+    spies.previewChatRerun
+      .mockResolvedValueOnce(makePreview(1))
+      .mockResolvedValueOnce({ ...makePreview(1), previewToken: "second-grant" });
+    await user.click(screen.getByRole("button", { name: "Open preview" }));
+    await screen.findByText("Reply 1");
+    await user.click(screen.getByRole("button", { name: "Re-run replies" }));
+    await screen.findByRole("button", { name: "Preview another re-run" });
+    await user.click(screen.getByRole("button", { name: "Preview another re-run" }));
+    await waitFor(() => expect(spies.previewChatRerun).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Re-run replies" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Re-run replies" }));
+    expect(spies.startChatRerun).toHaveBeenLastCalledWith(
+      "edited-user", "this_path", "second-grant", false,
+    );
+  });
+
+  it("refreshes a rejected preview grant instead of trapping the retry action", async () => {
+    const user = userEvent.setup();
+    const spies = renderDialog(1);
+    spies.startChatRerun.mockRejectedValueOnce(new Error("The plan changed."));
+    spies.previewChatRerun
+      .mockResolvedValueOnce(makePreview(1))
+      .mockResolvedValueOnce({ ...makePreview(1), previewToken: "refreshed-grant" });
+    await user.click(screen.getByRole("button", { name: "Open preview" }));
+    await screen.findByText("Reply 1");
+    await user.click(screen.getByRole("button", { name: "Re-run replies" }));
+    await screen.findByText("The plan changed.");
+    await waitFor(() => expect(spies.previewChatRerun).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Re-run replies" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Re-run replies" }));
+    expect(spies.startChatRerun).toHaveBeenLastCalledWith(
+      "edited-user", "this_path", "refreshed-grant", false,
+    );
+  });
+
 });

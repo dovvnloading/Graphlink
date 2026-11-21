@@ -36,6 +36,12 @@ class _Counter:
     def set_output_text(self, _text):
         pass
 
+    def set_real_usage(self, *_args, **_kwargs):
+        pass
+
+    def estimate_cost_for(self, *_args, **_kwargs):
+        return 0.02
+
 
 class _Runs:
     def is_busy(self, kind):
@@ -306,3 +312,289 @@ def test_reply_re_run_respects_twenty_version_cap_without_touching_other_kinds()
     assert result.state.version_index == 19
     assert result.state.reply_history_fingerprint == "v1:proof"
     assert document.nodes[code.id].state.code == "print(1)"
+
+
+async def _second_reply_started(intents, job_id, node_id):
+    for _ in range(200):
+        state = await intents["getChatRerunStatus"](job_id)
+        if state["completed"] == 1 and state["currentNodeId"] == node_id:
+            return
+        await asyncio.sleep(0.001)
+    raise AssertionError("the second reply never started")
+
+
+def test_partial_batch_is_undoable_while_cancel_is_pending_and_redo_is_atomic():
+    async def exercise():
+        document, user, first, deep, branch, _, _ = _thread()
+        dispatcher = _Dispatcher(hold_call=2)
+        intents, _ = _register(document, dispatcher)
+        plan = await intents["previewChatRerun"](user.id, "all_branches_below")
+        job = await intents["startChatRerun"](user.id, "all_branches_below", plan["previewToken"])
+        await _second_reply_started(intents, job["jobId"], deep.id)
+
+        # Completed work must NEVER be absent from the undo stack while the
+        # provider is working on the next reply.
+        assert len(document.command_log) == 1
+        assert document.command_log[-1].command_type == "rerunFromHere"
+        document.undo()
+        assert document.nodes[first.id].content == "first answer"
+        dispatcher.release.set()
+        ended = await _status(intents, job["jobId"])
+        assert ended["status"] == "failed"  # in-flight result cannot overwrite undone context
+        assert document.nodes[deep.id].content == "deep answer"
+        assert document.nodes[branch.id].content == "branch answer"
+        assert not document.command_log
+        assert len(document.redo_stack) == 1
+        document.redo()
+        assert document.nodes[first.id].content == "new reply 1"
+        assert document.nodes[deep.id].content == "deep answer"
+        assert len(document.command_log) == 1
+
+    asyncio.run(exercise())
+
+
+def test_concurrent_user_edit_preserves_both_commands_and_rejects_stale_reply():
+    async def exercise():
+        document, user, first, deep, branch, _, _ = _thread()
+        dispatcher = _Dispatcher(hold_call=2)
+        intents, _ = _register(document, dispatcher)
+        plan = await intents["previewChatRerun"](user.id, "all_branches_below")
+        job = await intents["startChatRerun"](user.id, "all_branches_below", plan["previewToken"])
+        await _second_reply_started(intents, job["jobId"], deep.id)
+        document.record_command(
+            "editChatMessage", "user",
+            lambda: document.edit_chat_message(user.id, "concurrent edit", "edited prompt"),
+            node_ids=[user.id],
+        )
+        dispatcher.release.set()
+        assert (await _status(intents, job["jobId"]))["status"] == "failed"
+        assert document.nodes[first.id].content == "new reply 1"
+        assert document.nodes[deep.id].content == "deep answer"
+        assert document.nodes[branch.id].content == "branch answer"
+        assert document.nodes[user.id].content == "concurrent edit"
+        assert [command.command_type for command in document.command_log] == [
+            "rerunFromHere", "editChatMessage",
+        ]
+        document.undo()
+        assert document.nodes[user.id].content == "edited prompt"
+        document.undo()
+        assert document.nodes[first.id].content == "first answer"
+        document.redo()
+        document.redo()
+        assert document.nodes[first.id].content == "new reply 1"
+        assert document.nodes[user.id].content == "concurrent edit"
+
+    asyncio.run(exercise())
+
+
+def test_concurrent_delete_does_not_resurrect_reply_or_break_undo_redo():
+    async def exercise():
+        document, user, first, deep, _, _, _ = _thread()
+        dispatcher = _Dispatcher(hold_call=2)
+        intents, _ = _register(document, dispatcher)
+        plan = await intents["previewChatRerun"](user.id, "this_path")
+        job = await intents["startChatRerun"](user.id, "this_path", plan["previewToken"])
+        await _second_reply_started(intents, job["jobId"], deep.id)
+        document.record_command(
+            "removeNodes", "user", lambda: document.remove_nodes([deep.id]),
+            node_ids=[deep.id],
+        )
+        dispatcher.release.set()
+        assert (await _status(intents, job["jobId"]))["status"] == "failed"
+        assert deep.id not in document.nodes
+        assert [command.command_type for command in document.command_log] == [
+            "rerunFromHere", "removeNodes",
+        ]
+        document.undo()
+        assert document.nodes[deep.id].content == "deep answer"
+        document.undo()
+        assert document.nodes[first.id].content == "first answer"
+        document.redo()
+        assert document.nodes[first.id].content == "new reply 1"
+        document.redo()
+        assert deep.id not in document.nodes
+
+    asyncio.run(exercise())
+
+
+def test_concurrent_version_switch_does_not_rerun_against_older_answer():
+    async def exercise():
+        document, user, first, deep, _, _, _ = _thread()
+        dispatcher = _Dispatcher(hold_call=2)
+        intents, _ = _register(document, dispatcher)
+        plan = await intents["previewChatRerun"](user.id, "this_path")
+        job = await intents["startChatRerun"](user.id, "this_path", plan["previewToken"])
+        await _second_reply_started(intents, job["jobId"], deep.id)
+        document.record_command(
+            "setChatVersion", "user", lambda: document.set_chat_version(first.id, 0),
+            node_ids=[first.id],
+        )
+        dispatcher.release.set()
+        assert (await _status(intents, job["jobId"]))["status"] == "failed"
+        assert document.nodes[first.id].content == "first answer"
+        assert document.nodes[deep.id].content == "deep answer"
+        document.undo()
+        assert document.nodes[first.id].content == "new reply 1"
+        document.undo()
+        assert document.nodes[first.id].content == "first answer"
+        document.redo()
+        document.redo()
+        assert document.nodes[first.id].state.version_index == 0
+
+    asyncio.run(exercise())
+
+
+def test_preview_is_unforgeable_single_use_and_ten_replies_need_no_large_consent():
+    async def exercise():
+        document, user, _, _, _, _, _ = _thread()
+        dispatcher = _Dispatcher()
+        intents, _ = _register(document, dispatcher)
+        # The deterministic digest is a plan checksum, NOT a consent token.
+        digest = _preview_plan(document, dispatcher, None, user.id, "this_path")["previewToken"]
+        with pytest.raises(SceneError, match="Preview"):
+            await intents["startChatRerun"](user.id, "this_path", digest)
+        assert dispatcher.calls == []
+        preview = await intents["previewChatRerun"](user.id, "this_path")
+        assert preview["previewToken"] != digest
+        job = await intents["startChatRerun"](user.id, "this_path", preview["previewToken"])
+        assert (await _status(intents, job["jobId"]))["status"] == "completed"
+        with pytest.raises(SceneError, match="Preview"):
+            await intents["startChatRerun"](user.id, "this_path", preview["previewToken"])
+
+        ten = SceneDocument()
+        root = ten.add_chat_node(0, 0, "initial", True)
+        for index in range(10):
+            ten.add_chat_node(index * 70, 120, f"answer {index}", False, parent_id=root.id)
+        ten.edit_chat_message(root.id, "edited", "initial")
+        held = _Dispatcher(hold_call=1)
+        ten_intents, _ = _register(ten, held)
+        ten_preview = await ten_intents["previewChatRerun"](root.id, "all_branches_below")
+        assert ten_preview["count"] == 10
+        assert ten_preview["requiresConfirmation"] is False
+        admitted = await ten_intents["startChatRerun"](
+            root.id, "all_branches_below", ten_preview["previewToken"], False,
+        )
+        for _ in range(200):
+            if held.calls:
+                break
+            await asyncio.sleep(0.001)
+        assert len(held.calls) == 1
+        assert (await ten_intents["cancelChatRerun"](admitted["jobId"]))["ok"]
+        assert (await _status(ten_intents, admitted["jobId"]))["status"] == "cancelled"
+        assert len(held.calls) == 1
+
+    asyncio.run(exercise())
+
+
+def test_many_reply_batch_uses_only_one_bounded_undo_slot():
+    async def exercise():
+        document, user, first, deep, branch, _, _ = _thread()
+        for index in range(101):
+            document.record_command(
+                "setChatCollapsed", "user",
+                lambda index=index: document.set_chat_collapsed(user.id, index % 2 == 0),
+                node_ids=[user.id],
+            )
+        assert len(document.command_log) == 100
+        dispatcher = _Dispatcher()
+        intents, _ = _register(document, dispatcher)
+        plan = await intents["previewChatRerun"](user.id, "all_branches_below")
+        job = await intents["startChatRerun"](user.id, "all_branches_below", plan["previewToken"])
+        assert (await _status(intents, job["jobId"]))["status"] == "completed"
+        assert len(document.command_log) == 100
+        assert document.command_log[-1].command_type == "rerunFromHere"
+        document.undo()
+        assert [document.nodes[n.id].content for n in (first, deep, branch)] == [
+            "first answer", "deep answer", "branch answer",
+        ]
+        document.redo()
+        assert [document.nodes[n.id].content for n in (first, deep, branch)] == [
+            "new reply 1", "new reply 2", "new reply 3",
+        ]
+
+    asyncio.run(exercise())
+
+
+def test_usage_of_each_reply_survives_undo_redo_of_the_merged_batch():
+    async def exercise():
+        document, user, first, deep, branch, _, _ = _thread()
+        dispatcher = _Dispatcher()
+
+        async def with_usage(**kwargs):
+            number = len(dispatcher.calls) + 1
+            dispatcher.calls.append(kwargs["conversation_history"])
+
+            async def finish():
+                kwargs["on_begin"](f"usage-request-{number}")
+                try:
+                    await kwargs["on_reply"](f"new reply {number}")
+                    await kwargs["on_usage"]({
+                        "prompt_tokens": 20 + number, "completion_tokens": number,
+                    })
+                finally:
+                    kwargs["on_end"]()
+
+            asyncio.create_task(finish())
+
+        dispatcher.start_chat_reply = with_usage
+        intents, _ = _register(document, dispatcher)
+        preview = await intents["previewChatRerun"](user.id, "all_branches_below")
+        job = await intents["startChatRerun"](user.id, "all_branches_below", preview["previewToken"])
+        assert (await _status(intents, job["jobId"]))["status"] == "completed"
+        assert [document.nodes[n.id].state.prompt_tokens for n in (first, deep, branch)] == [21, 22, 23]
+        document.undo()
+        assert document.nodes[first.id].state.prompt_tokens is None
+        document.redo()
+        assert [document.nodes[n.id].state.prompt_tokens for n in (first, deep, branch)] == [21, 22, 23]
+        assert [document.nodes[n.id].state.estimated_cost_usd for n in (first, deep, branch)] == [
+            0.02, 0.02, 0.02,
+        ]
+
+    asyncio.run(exercise())
+
+
+def test_late_usage_cannot_rewrite_batch_snapshot_after_a_concurrent_edit():
+    async def exercise():
+        document, user, first, deep, _, _, _ = _thread()
+        dispatcher = _Dispatcher()
+        replied = asyncio.Event()
+        usage_release = asyncio.Event()
+
+        async def with_delayed_usage(**kwargs):
+            dispatcher.calls.append(kwargs["conversation_history"])
+
+            async def finish():
+                kwargs["on_begin"]("usage-delayed")
+                try:
+                    await kwargs["on_reply"]("new reply 1")
+                    replied.set()
+                    await usage_release.wait()
+                    await kwargs["on_usage"]({
+                        "prompt_tokens": 90, "completion_tokens": 12,
+                    })
+                finally:
+                    kwargs["on_end"]()
+
+            asyncio.create_task(finish())
+
+        dispatcher.start_chat_reply = with_delayed_usage
+        intents, _ = _register(document, dispatcher)
+        preview = await intents["previewChatRerun"](user.id, "this_path")
+        job = await intents["startChatRerun"](user.id, "this_path", preview["previewToken"])
+        await asyncio.wait_for(replied.wait(), timeout=1)
+        document.record_command(
+            "editChatMessage", "user",
+            lambda: document.edit_chat_message(user.id, "concurrent edit", "edited prompt"),
+            node_ids=[user.id],
+        )
+        usage_release.set()
+        assert (await _status(intents, job["jobId"]))["status"] == "failed"
+        assert document.nodes[first.id].content == "new reply 1"
+        assert document.nodes[deep.id].content == "deep answer"
+        assert document.nodes[first.id].state.prompt_tokens is None
+        assert document.command_log[0].node_after[first.id].state.prompt_tokens is None
+        document.undo()
+        document.undo()
+        assert document.nodes[first.id].content == "first answer"
+
+    asyncio.run(exercise())
