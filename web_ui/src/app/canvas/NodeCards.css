@@ -277,6 +277,38 @@
   font-weight: 600;
 }
 
+/* Compact ‹ n/m › control lives by the author name on either chat kind. */
+.chat-node-version-switcher {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 3px;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--gl-surface-text-secondary);
+}
+.chat-node-version-button {
+  border: 0;
+  border-radius: 3px;
+  padding: 0 3px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.chat-node-version-button:hover:not(:disabled) {
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-neutral-button-hover);
+}
+.chat-node-version-button:disabled { opacity: 0.35; cursor: default; }
+.chat-node-version-button:focus-visible {
+  outline: 2px solid var(--gl-graph-selection);
+  outline-offset: 1px;
+}
+
 .chat-node .scene-node-surface > .chat-node-content-shell {
   padding-block: 2px 15px;
 }
