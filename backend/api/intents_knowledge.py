@@ -161,6 +161,7 @@ def register_knowledge_intents(
 
     async def search(query, k):
         k = min(max(int(k or _DEFAULT_K), 1), _MAX_K)
+        workspace_id = document.current_workspace_id
 
         # ADR-020 stage 20.3: scoped to the calling session's current
         # workspace - see _resolve_workspace_collection_id's own docstring.
@@ -180,6 +181,10 @@ def register_knowledge_intents(
         # for every other connection, unlike every other blocking-I/O
         # intent handler in this codebase (e.g. intents_settings_*.py).
         results = await asyncio.to_thread(_search)
+        # A slow vector request must not display the previous workspace\u0027s
+        # passages after the session switches workspaces mid-search.
+        if document.current_workspace_id != workspace_id:
+            return {"results": []}
         return {"results": _format_search_results(results)}
 
     async def open_citation(document_id, chunk_id, citation_id):

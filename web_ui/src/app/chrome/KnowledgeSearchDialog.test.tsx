@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { KnowledgeSearchDialog } from "./KnowledgeSearchDialog";
@@ -142,6 +142,36 @@ describe("KnowledgeSearchDialog", () => {
     await user.click(screen.getByRole("button", { name: "Search" }));
 
     expect(await screen.findByText("No sources found")).toBeInTheDocument();
+  });
+
+  it("shows each hit's keyword and semantic matches, including their retrieval ranks", async () => {
+    const { user, request } = await setup();
+    request.mockResolvedValueOnce({ results: [
+      { ...RESULT_A, rankSignals: { fts5: 2, vector: 1 } },
+      { ...RESULT_B, rankSignals: { fts5: 1 } },
+      { ...RESULT_B, chunkId: 3, documentTitle: "Semantic Only", rankSignals: { vector: 3 } },
+    ] });
+
+    await user.type(screen.getByPlaceholderText(/search your ingested knowledge base/i), "wetland bird");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+
+    const groups = await screen.findAllByRole("group", { name: "Match signals" });
+    expect(groups).toHaveLength(3);
+    expect(within(groups[0]).getByText("Keyword #2")).toBeInTheDocument();
+    expect(within(groups[0]).getByText("Semantic #1")).toBeInTheDocument();
+    expect(within(groups[1]).getByText("Keyword #1")).toBeInTheDocument();
+    expect(within(groups[1]).queryByText(/Semantic/)).not.toBeInTheDocument();
+    expect(within(groups[2]).getByText("Semantic #3")).toBeInTheDocument();
+    expect(within(groups[2]).queryByText(/Keyword/)).not.toBeInTheDocument();
+  });
+
+  it("does not invent match signals for older search responses", async () => {
+    const { user, request } = await setup();
+    request.mockResolvedValueOnce({ results: [RESULT_A] });
+    await user.type(screen.getByPlaceholderText(/search your ingested knowledge base/i), "query");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText("Fox Story");
+    expect(screen.queryByRole("group", { name: "Match signals" })).not.toBeInTheDocument();
   });
 
   it("expanding a result reveals the exact cited excerpt and its offset range", async () => {
