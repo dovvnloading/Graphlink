@@ -915,7 +915,7 @@ export const ChatNodeView = memo(function ChatNodeView({
           <span className="chat-node-role-group">
             <span>{data.isUser ? "You" : "Assistant"}</span>
             {data.versionCount > 1 && (
-              <span className="chat-node-version-switcher nodrag" aria-label="Message versions">
+              <span className="chat-node-version-switcher nodrag" role="group" aria-label="Message versions">
                 <button type="button" className="chat-node-version-button nodrag"
                   aria-label="Previous version" title="Previous version"
                   disabled={data.versionIndex <= 0 || !!data.pendingRequestId}
