@@ -252,12 +252,11 @@ def _serialize_chat_versions(node: SceneNode) -> tuple[list[dict[str, Any]], int
     The current SceneNode fields remain authoritative even if an asynchronous
     callback has not explicitly synchronized its ChatVersion yet.
     """
-    state = node.state
-    saved = state.versions[-MAX_CHAT_VERSIONS:] if state.versions else [
+    saved = node.state.versions[-MAX_CHAT_VERSIONS:] if node.state.versions else [
         ChatVersion(content=node.content),
     ]
-    offset = max(0, len(state.versions) - MAX_CHAT_VERSIONS)
-    index = max(0, min(len(saved) - 1, state.version_index - offset))
+    offset = max(0, len(node.state.versions) - MAX_CHAT_VERSIONS)
+    index = max(0, min(len(saved) - 1, node.state.version_index - offset))
     rows = [
         {
             "content": version.content,
@@ -283,13 +282,13 @@ def _serialize_chat_versions(node: SceneNode) -> tuple[list[dict[str, Any]], int
         "content": node.content,
         "provider": node.state.provider,
         "model": node.state.model,
-        "incomplete": state.response_incomplete,
-        "prompt_tokens": state.prompt_tokens,
-        "completion_tokens": state.completion_tokens,
-        "estimated_cost_usd": state.estimated_cost_usd,
-        "tool_invocations": [dict(call) for call in state.tool_invocations],
-        "reply_history_fingerprint": state.reply_history_fingerprint,
-        "reply_knowledge_enabled": state.reply_knowledge_enabled,
+        "incomplete": node.state.response_incomplete,
+        "prompt_tokens": node.state.prompt_tokens,
+        "completion_tokens": node.state.completion_tokens,
+        "estimated_cost_usd": node.state.estimated_cost_usd,
+        "tool_invocations": [dict(call) for call in node.state.tool_invocations],
+        "reply_history_fingerprint": node.state.reply_history_fingerprint,
+        "reply_knowledge_enabled": node.state.reply_knowledge_enabled,
     })
     return rows, index
 
