@@ -5,6 +5,14 @@ import "./ChatRerunDialog.css";
 
 const DIALOG = "chat-rerun";
 
+/** A repeated poll is not a UI state change; don't re-render the dialog. */
+export function sameChatRerunProgress(a: ChatRerunStatus | null, b: ChatRerunStatus): boolean {
+  return a !== null && a.jobId === b.jobId && a.status === b.status
+    && a.completed === b.completed && a.total === b.total
+    && a.currentNodeId === b.currentNodeId && a.error === b.error
+    && a.cancelRequested === b.cancelRequested;
+}
+
 /** A server-owned preview: no client guess about canonical ancestry or cost. */
 export function ChatRerunDialog({ store, nodeId }: { store: SceneStore; nodeId: string | null }) {
   const overlays = useOverlays();
@@ -67,10 +75,21 @@ export function ChatRerunDialog({ store, nodeId }: { store: SceneStore; nodeId: 
       try {
         const next = await store.getChatRerunStatus(jobId);
         if (!active) return;
-        setProgress(next);
+        setError("");
+        setProgress((current) => {
+          // Preserve acknowledged cancellation against an older in-flight poll.
+          const updated = current?.jobId === next.jobId && current.cancelRequested
+            ? { ...next, cancelRequested: true } : next;
+          return sameChatRerunProgress(current, updated) ? current : updated;
+        });
         if (next.status === "running") timer = setTimeout(() => { void poll(); }, 250);
       } catch (cause) {
-        if (active) setError(cause instanceof Error ? cause.message : "Could not read re-run progress.");
+        if (active) {
+          setError(cause instanceof Error ? cause.message : "Could not read re-run progress.");
+          // An intermittent connection must not strand a running job in an
+          // indefinitely frozen status. Retry until close/unmount.
+          timer = setTimeout(() => { void poll(); }, 1000);
+        }
       }
     };
     void poll();
