@@ -610,6 +610,20 @@ describe("SettingsDialog", () => {
     expect(intents).toContainEqual(["app-settings", "pullOllamaModel", ["llama3.2:3b"]]);
   });
 
+  it("rejects path tricks and oversized custom model identifiers before dispatch", async () => {
+    const { user, push, intents } = setup();
+    await goToOllama(user, push);
+    const input = screen.getByRole("combobox", { name: "Validate and Pull Model" });
+    const pull = screen.getByRole("button", { name: "Validate and Pull Model" });
+
+    await user.type(input, "../outside:latest");
+    expect(pull).toBeDisabled();
+    await user.clear(input);
+    await user.type(input, "registry.ollama.ai/library/gemma3:latest");
+    expect(pull).toBeEnabled();
+    expect(intents.some(([, intent]) => intent === "pullOllamaModel")).toBe(false);
+  });
+
   it("Validate and Pull Model is disabled and relabeled while a pull is running", async () => {
     const { user, push } = setup();
     await goToOllama(user, push, { ollamaPullStatus: "running" });
@@ -674,6 +688,22 @@ describe("SettingsDialog", () => {
     });
     expect(screen.getByText(/Estimated model weights \+ KV cache:/)).toHaveTextContent("8.0 GiB");
     expect(screen.getByRole("alert")).toHaveTextContent(/exceeds available system RAM/i);
+  });
+
+  it("labels an estimate with unknown model weights as insufficient to assess fit", async () => {
+    const { user, push } = setup();
+    await goToOllama(user, push, {
+      ollamaCurrentModel: "unknown:7b",
+      ollamaInventory: [inventoryRecord("unknown:7b", 32768, 0)],
+      ollamaContextModel: "unknown:7b",
+      ollamaContextStatus: "ready",
+      ollamaContextTrainedLength: 32768,
+      ollamaContextModelSizeBytes: 0,
+      ollamaContextKvBytesPerToken: 131072,
+      ollamaContextAvailableMemoryBytes: 64 * 1024 ** 3,
+    });
+    expect(screen.getByText(/KV cache \(weights unavailable\)/)).toBeInTheDocument();
+    expect(screen.getByText(/cannot establish whether the model will fit/)).toBeInTheDocument();
   });
 
   it("does not claim a memory warning when available RAM is unknown", async () => {
@@ -756,6 +786,18 @@ describe("SettingsDialog", () => {
     expect(screen.getByRole("button", { name: "Pull qwen3:4b" })).toBeDisabled();
   });
 
+  it("keeps model operations disabled during post-download verification", async () => {
+    const { user, push } = setup();
+    await goToOllama(user, push, {
+      ollamaPullStatus: "finalizing",
+      ollamaPullModel: "gemma3:4b",
+      ollamaPullMessage: "Verifying installed model...",
+    });
+    expect(screen.getByText(/Verifying installed model/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel download" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Pull qwen3:4b" })).toBeDisabled();
+  });
+
   it("requires explicit confirmation before removing any installed model", async () => {
     const { user, push, intents } = setup();
     await goToOllama(user, push, { ollamaInventory: [makeServerInventoryRow("gemma3:4b")], ollamaInventorySource: "server" });
@@ -783,6 +825,7 @@ describe("SettingsDialog", () => {
     });
     expect(screen.getByRole("alert")).toHaveTextContent("Ollama is unavailable");
     expect(screen.queryByRole("button", { name: "Remove stale:model" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Check stale:model" })).toBeDisabled();
     const before = intents.filter(([, action]) => action === "scanOllamaSystem").length;
     await user.click(screen.getByRole("button", { name: "Refresh installed models" }));
     expect(intents.filter(([, action]) => action === "scanOllamaSystem")).toHaveLength(before + 1);
