@@ -440,21 +440,26 @@ describe("toFlowNodes (R8a Open Document View wiring)", () => {
       path: "docs/readme.md", content: "# Hello", truncated: false,
     });
     const reveal = vi.spyOn(store, "revealHarnessWorkspace").mockImplementation(() => {});
+    const addKnowledge = vi.spyOn(store, "addHarnessWorkspaceFileToKnowledge")
+      .mockResolvedValue({ jobId: "import" });
     const onOpenDocumentView = vi.fn();
     const node = toFlowNodes(scene, store, onOpenDocumentView).find((entry) => entry.id === "agent-1");
     expect(node).toBeDefined();
     const actions = node!.data as {
       onListWorkspaceFiles: (path: string, cursor?: string) => Promise<unknown>;
       onOpenWorkspaceFile: (path: string, expectedRoot: string) => Promise<void>;
+      onAddWorkspaceFileToKnowledge: (path: string, expectedRoot: string) => Promise<unknown>;
       onRevealWorkspace: () => void;
     };
     await actions.onListWorkspaceFiles("docs");
     await actions.onListWorkspaceFiles("docs", "page-two");
     await actions.onOpenWorkspaceFile("docs/readme.md", "/project");
+    await actions.onAddWorkspaceFileToKnowledge("docs/readme.md", "/project");
     actions.onRevealWorkspace();
     expect(list).toHaveBeenNthCalledWith(1, "agent-1", "docs", undefined);
     expect(list).toHaveBeenNthCalledWith(2, "agent-1", "docs", "page-two");
     expect(read).toHaveBeenCalledWith("agent-1", "docs/readme.md", "/project");
+    expect(addKnowledge).toHaveBeenCalledWith("agent-1", "docs/readme.md", "/project");
     expect(onOpenDocumentView).toHaveBeenCalledWith("# Hello", "Workspace: docs/readme.md");
     expect(reveal).toHaveBeenCalledWith("agent-1");
   });

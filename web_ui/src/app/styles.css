@@ -2700,7 +2700,7 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  max-width: 220px;
+  max-width: min(100%, 380px);
   padding: 4px 8px 4px 10px;
   border-radius: 999px;
   background-color: var(--gl-surface-inset, var(--gl-surface-window));
@@ -2722,6 +2722,22 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Explicit file-level import affordance for staged text documents. */
+.composer-attachment-chip-add,
+.harness-files-add-knowledge {
+  flex-shrink: 0;
+  padding: 3px 5px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 4px;
+  background: var(--gl-surface-window);
+  color: var(--gl-surface-text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+}
+.composer-attachment-chip-add:disabled,
+.harness-files-add-knowledge:disabled { opacity: 0.6; cursor: wait; }
 
 .composer-attachment-chip-remove {
   flex-shrink: 0;
@@ -3954,6 +3970,19 @@ body {
   overflow-y: auto;
 }
 
+
+/* File-specific import updates shared by the chat composer and workspace Files. */
+.knowledge-file-import-message {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 5px 0;
+  font-size: 11px;
+  color: var(--gl-surface-text-primary);
+  overflow-wrap: anywhere;
+}
+.knowledge-file-import-message[role="alert"] { color: var(--gl-semantic-status-error); }
+.knowledge-file-import-message progress { width: 100%; }
 
 .knowledge-import-row {
   display: flex;
@@ -9844,7 +9873,11 @@ mark.document-view-search-match-current {
   max-height: 200px;
   overflow-y: auto;
 }
+/* Leave room for each file's knowledge action next to its open control. */
+.harness-files-entry { display: flex; align-items: center; gap: 4px; }
+.harness-files-add-knowledge { white-space: nowrap; }
 .harness-files-entry-button {
+  flex: 1;
   display: flex;
   align-items: center;
   gap: 6px;

@@ -39,6 +39,17 @@ needed. `--live` does not change Builder scoring, since live agent execution
 would involve permission and side-effect risks. There is no LLM-as-judge;
 all dimensions compare observed results against exact expectations.
 
+## Opt-in knowledge retrieval quality (configured model)
+
+Use `python -m backend.evals.knowledge_model_benchmark --run` from the
+repo root to report recall@5 and MRR@5 for keyword-only versus hybrid
+retrieval on the fixed knowledge fixture with the configured embedding model.
+Unlike the scripted eval harness and the deterministic reranker quality gate,
+this is a manual, report-only model benchmark. It refuses to run in CI.
+Cloud embedding choices use the existing explicit cloud consent, and will
+send fixture text and questions to the configured service. See
+`docs/KNOWLEDGE_RETRIEVAL.md` for details.
+
 ## Fixture shape
 
 Each fixture is one JSON file under `backend/evals/fixtures/<kind>/`, where

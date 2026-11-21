@@ -27,6 +27,9 @@ from uuid import uuid4
 
 from backend.api._shared import make_publish_scene
 from backend.domain.graph import SceneDocument, SceneError
+from backend.domain.node_states import HarnessState
+from backend.harness.workspace import WorkspaceError, bound_root
+from backend.harness.workspace_files import _inside
 from backend.events import SessionBus
 from backend.knowledge_chunking import chunk_text
 from backend.knowledge_ingest import IngestError, is_supported_knowledge_file
@@ -348,6 +351,44 @@ def register_knowledge_intents(
             return {"cancelled": True}
         return ingest_jobs.start(selected, folder=True, workspace_id=workspace_id)
 
+    async def add_chat_attachment(attachment_id):
+        """An attachment ID is a native-picker grant in this session, not a path from the browser."""
+        if composer_document is None:
+            raise IngestError("Chat attachments are unavailable.")
+        attachment = next(
+            (item for item in composer_document.staged_attachments if item.id == attachment_id), None,
+        )
+        if attachment is None:
+            raise IngestError("This attachment is no longer staged. Attach the file again.")
+        if attachment.kind != "document" or not is_supported_knowledge_file(Path(attachment.path)):
+            raise IngestError("Only supported text and document attachments can be added to knowledge.")
+        return ingest_jobs.start(attachment.path, folder=False, workspace_id=document.current_workspace_id)
+
+    async def add_workspace_file(node_id, relative_path, expected_root):
+        """Resolve a Files-view selection through the CURRENT agent grant, never client-supplied roots."""
+        if agent_dispatcher is None:
+            raise WorkspaceError("Workspace file imports are unavailable.")
+        node = document.nodes.get(node_id)
+        if node is None or not isinstance(node.state, HarnessState):
+            raise WorkspaceError("This agent node no longer exists.")
+        root, _ = bound_root(
+            node.state.harness_workspace_id,
+            node.state.harness_workspace_path,
+            settings_manager=agent_dispatcher._settings_manager,
+        )
+        if expected_root != str(root):
+            raise WorkspaceError("Workspace folder changed. Refresh the Files list and choose a file again.")
+        if not relative_path:
+            raise WorkspaceError("Select a workspace file to add.")
+        file = _inside(root, relative_path)
+        if not file.is_file():
+            raise WorkspaceError("Not a workspace file.")
+        if not is_supported_knowledge_file(file):
+            raise IngestError("This file type cannot be added to knowledge.")
+        return ingest_jobs.start(
+            str(file), folder=False, workspace_id=document.current_workspace_id, allowed_root=root,
+        )
+
     async def cancel_ingest(job_id):
         return ingest_jobs.cancel(job_id)
 
@@ -443,6 +484,8 @@ def register_knowledge_intents(
     register_knowledge_search_intents(bus, document, settings_manager=settings_manager)
     bus.register_intent("knowledge", "addFiles", add_files)
     bus.register_intent("knowledge", "addFolder", add_folder)
+    bus.register_intent("knowledge", "addChatAttachment", add_chat_attachment)
+    bus.register_intent("knowledge", "addWorkspaceFile", add_workspace_file)
     bus.register_intent("knowledge", "cancelIngest", cancel_ingest, args_schema=CancelIngestArgs)
     bus.register_intent("knowledge", "getIngestJobs", get_ingest_jobs)
     bus.register_intent("knowledge", "listDocuments", list_documents)

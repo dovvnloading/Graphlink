@@ -141,6 +141,58 @@ describe("HarnessWorkspaceFiles", () => {
     expect(screen.queryByRole("button", { name: "Open main.py in Document View" })).not.toBeInTheDocument();
   });
 
+  it("adds agent workspace files using the listed root and shows import progress", async () => {
+    const user = userEvent.setup();
+    const onAddToKnowledge = vi.fn().mockResolvedValue({ jobId: "file-job" });
+    let emit!: (payload: Record<string, unknown>) => void;
+    const onSubscribeKnowledgeIngest = (listener: (payload: Record<string, unknown>) => void) => {
+      emit = listener;
+      return () => {};
+    };
+    render(<HarnessWorkspaceFiles onList={async (path) => listing(path)}
+      onOpen={vi.fn()} onReveal={vi.fn()} onAddToKnowledge={onAddToKnowledge}
+      onSubscribeKnowledgeIngest={onSubscribeKnowledgeIngest} />);
+    await user.click(screen.getByRole("button", { name: "Browse files" }));
+    expect(screen.queryByRole("button", { name: "Add docs to knowledge" })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "Add main.py to knowledge" }));
+    expect(onAddToKnowledge).toHaveBeenCalledWith("main.py", "/work/project");
+
+    act(() => emit({ jobs: [{
+      jobId: "file-job", status: "running", filesTotal: 1, filesProcessed: 0,
+      added: 0, updated: 0, duplicates: 0, unchanged: 0, skipped: 0,
+      failedFiles: 0, error: "", warnings: [],
+    }] }));
+    expect(await screen.findByLabelText("Knowledge import progress")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add main.py to knowledge" })).toBeDisabled();
+
+    act(() => emit({ jobs: [{
+      jobId: "file-job", status: "completed", filesTotal: 1, filesProcessed: 1,
+      added: 0, updated: 0, duplicates: 1, unchanged: 0, skipped: 0,
+      failedFiles: 0, error: "", warnings: [],
+    }] }));
+    expect(await screen.findByText("main.py is already in this workspace's knowledge.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add main.py to knowledge" })).toBeEnabled();
+  });
+
+  it("reports a file import failure without misreporting a successful ingestion", async () => {
+    const user = userEvent.setup();
+    const onAddToKnowledge = vi.fn().mockResolvedValue({ jobId: "file-job" });
+    let emit!: (payload: Record<string, unknown>) => void;
+    render(<HarnessWorkspaceFiles onList={async (path) => listing(path)}
+      onOpen={vi.fn()} onReveal={vi.fn()} onAddToKnowledge={onAddToKnowledge}
+      onSubscribeKnowledgeIngest={(listener) => { emit = listener; return () => {}; }} />);
+    await user.click(screen.getByRole("button", { name: "Browse files" }));
+    await user.click(await screen.findByRole("button", { name: "Add main.py to knowledge" }));
+    act(() => emit({ jobs: [{
+      jobId: "file-job", status: "completed", filesTotal: 1, filesProcessed: 1,
+      added: 0, updated: 0, duplicates: 0, unchanged: 0, skipped: 0,
+      failedFiles: 1, error: "", warnings: ["main.py: File changed during import"],
+    }] }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not add main.py to knowledge: main.py: File changed during import",
+    );
+  });
+
   it("shows an empty-folder state", async () => {
     const user = userEvent.setup();
     const onList = vi.fn(async () => ({ ...listing(""), entries: [], truncated: false }));
