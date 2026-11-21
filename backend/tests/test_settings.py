@@ -1488,6 +1488,101 @@ def test_set_ollama_model_assignment_reads_and_writes_atomically_across_concurre
     assert manager.get_ollama_model_assignments()[config.TASK_CHART]["model_id"] == "concurrent-chart-model"
 
 
+
+def test_ollama_per_model_context_persists_validated_choices_and_defaults(manager):
+    assert manager.get_ollama_context_windows() == {}
+    manager.set_ollama_context_window("Llama:7B", 32_768)
+    manager.set_ollama_context_window("Qwen:8B", 131_072)
+    assert manager.get_ollama_context_windows() == {
+        "llama:7b": 32_768, "qwen:8b": 131_072,
+    }
+    with pytest.raises(ValueError):
+        manager.set_ollama_context_window("llama:7b", 12345)
+    with pytest.raises(ValueError):
+        manager.set_ollama_context_window("llama:7b", True)
+    with pytest.raises(ValueError):
+        manager.set_ollama_context_window("", 8192)
+    restored = SettingsManager(manager.state_file)
+    assert restored.get_ollama_context_windows() == manager.get_ollama_context_windows()
+
+
+def test_ollama_context_intent_rejects_over_trained_window_and_publishes_preference(manager, monkeypatch):
+    _isolate_ollama_task_config(monkeypatch)
+    monkeypatch.setattr(
+        api_provider, "_OLLAMA_TRAINED_CONTEXT_WINDOW_CACHE", {"local:7b": 16_384},
+    )
+    monkeypatch.setattr(api_provider, "_get_ollama_context_window", lambda model: 8192)
+    monkeypatch.setattr(api_provider, "_OLLAMA_CONFIGURED_CONTEXT_WINDOWS", {})
+    bus = SessionBus("settings-ollama-context-intent-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    monkeypatch.setattr(
+        intents_settings_ollama_module, "build_ollama_inventory",
+        lambda _: {"models": ["local:7b"], "inventory": [{
+            "name": "local:7b", "trainedContextLength": 16_384, "sizeBytes": 1024,
+            "source": "server", "capabilities": [],
+        }], "source": "server", "server_reachable": True, "scan_mode": "server"},
+    )
+    asyncio.run(bus.dispatch_intent("app-settings", "scanOllamaSystem", []))
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setOllamaContextWindow", ["local:7b", 32768]))
+    assert manager.get_ollama_context_windows() == {}
+    assert "16,384" in recorder.messages[-1]["payload"]["ollamaContextNotice"]
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setOllamaContextWindow", ["local:7b", "16384"]))
+    assert manager.get_ollama_context_windows() == {}
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setOllamaContextWindow", ["local:7b", 16384]))
+    assert manager.get_ollama_context_windows() == {"local:7b": 16384}
+    assert recorder.messages[-1]["payload"]["ollamaContextWindows"] == {"local:7b": 16384}
+    assert api_provider._OLLAMA_CONFIGURED_CONTEXT_WINDOWS == {"local:7b": 16384}
+
+
+def test_ollama_context_inspection_reports_trained_and_memory_metadata(manager, monkeypatch):
+    import types
+
+    model = "llama:7b"
+    monkeypatch.setattr(
+        intents_settings_ollama_module, "ollama",
+        types.SimpleNamespace(
+            show=lambda _: {"model_info": {
+                "general.architecture": "llama",
+                "llama.context_length": 8_192,  # Inspector must not override the inventory\'s 131k cap.
+                "llama.block_count": 32,
+                "llama.attention.head_count_kv": 8,
+                "llama.attention.key_length": 128,
+                "llama.attention.value_length": 128,
+            }},
+            list=lambda: (_ for _ in ()).throw(AssertionError("duplicate listing")),
+        ),
+    )
+    monkeypatch.setattr(intents_settings_ollama_module, "available_memory_bytes", lambda: 8 * 1024 ** 3)
+    bus = SessionBus("settings-ollama-context-inspect-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    monkeypatch.setattr(
+        intents_settings_ollama_module, "build_ollama_inventory",
+        lambda _: {"models": [model], "inventory": [{
+            "name": model, "trainedContextLength": 131_072,
+            "sizeBytes": 4 * 1024 ** 3, "source": "server", "capabilities": [],
+        }], "source": "server", "server_reachable": True, "scan_mode": "server"},
+    )
+    asyncio.run(bus.dispatch_intent("app-settings", "scanOllamaSystem", []))
+
+    asyncio.run(bus.dispatch_intent("app-settings", "inspectOllamaContextModel", [model]))
+    result = recorder.messages[-1]["payload"]
+    assert result["ollamaContextModel"] == model
+    assert result["ollamaContextStatus"] == "ready"
+    assert result["ollamaContextTrainedLength"] == 131_072
+    assert result["ollamaContextModelSizeBytes"] == 4 * 1024 ** 3
+    assert result["ollamaContextKvBytesPerToken"] == 131_072
+    assert result["ollamaContextAvailableMemoryBytes"] == 8 * 1024 ** 3
+
+
 def test_scan_ollama_system_persists_results_and_reports_done(manager, monkeypatch):
     _isolate_ollama_task_config(monkeypatch)
     monkeypatch.setattr(

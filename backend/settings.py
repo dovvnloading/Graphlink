@@ -357,6 +357,14 @@ def _build_settings_payload(
     payload["ollamaReasoningLevel"] = manager.get_ollama_reasoning_level()
     payload["ollamaCurrentModel"] = config.OLLAMA_MODELS.get(config.TASK_CHAT, "")
     payload["ollamaModelAssignments"] = _ollama_model_assignments_for_wire(manager)
+    payload["ollamaContextWindows"] = manager.get_ollama_context_windows()
+    payload["ollamaContextModel"] = state.ollama_context_model
+    payload["ollamaContextStatus"] = state.ollama_context_status
+    payload["ollamaContextNotice"] = state.ollama_context_notice
+    payload["ollamaContextTrainedLength"] = state.ollama_context_trained_length
+    payload["ollamaContextModelSizeBytes"] = state.ollama_context_model_size_bytes
+    payload["ollamaContextKvBytesPerToken"] = state.ollama_context_kv_bytes_per_token
+    payload["ollamaContextAvailableMemoryBytes"] = state.ollama_context_available_memory_bytes
     payload["ollamaScannedModels"] = manager.get_ollama_scanned_models()
     payload["ollamaInventory"] = state.ollama_inventory
     payload["ollamaInventorySource"] = state.ollama_inventory_source

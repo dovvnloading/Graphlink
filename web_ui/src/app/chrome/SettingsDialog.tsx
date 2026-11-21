@@ -45,6 +45,18 @@ const OLLAMA_TASK_LABELS: Record<(typeof OLLAMA_TASKS)[number], string> = {
   task_web_summarize: "Web Content Summarization Model",
 };
 const OLLAMA_MODELS_DATALIST_ID = "settings-ollama-scanned-models";
+const OLLAMA_CONTEXT_CHOICES = [
+  { tokens: 4096, label: "4k" },
+  { tokens: 8192, label: "8k" },
+  { tokens: 16384, label: "16k" },
+  { tokens: 32768, label: "32k" },
+  { tokens: 65536, label: "64k" },
+  { tokens: 131072, label: "128k" },
+] as const;
+
+function gib(bytes: number): string {
+  return (bytes / (1024 ** 3)).toFixed(1) + " GiB";
+}
 const LLAMA_CPP_MODELS_DATALIST_ID = "settings-llama-cpp-scanned-models";
 
 // R8a: reasoning went from a 2-value Mode (Thinking/Quick) to a graded
@@ -144,6 +156,14 @@ const initialState: AppSettingsState = {
   ollamaReasoningLevel: "high",
   ollamaCurrentModel: "",
   ollamaModelAssignments: {},
+  ollamaContextWindows: {},
+  ollamaContextModel: "",
+  ollamaContextStatus: "idle",
+  ollamaContextNotice: "",
+  ollamaContextTrainedLength: 0,
+  ollamaContextModelSizeBytes: 0,
+  ollamaContextKvBytesPerToken: 0,
+  ollamaContextAvailableMemoryBytes: 0,
   ollamaScannedModels: [],
   ollamaInventory: [],
   ollamaInventorySource: "",
@@ -816,6 +836,41 @@ function formatOllamaBytes(value: number | null | undefined): string {
 
 function OllamaPage({ state, transport }: { state: AppSettingsState; transport: WsTransport }) {
   const [draftPullModel, setDraftPullModel] = useState("");
+  const [selectedContextModel, setSelectedContextModel] = useState("");
+  const contextModels = Array.from(new Set([
+    ...state.ollamaScannedModels,
+    ...state.ollamaInventory.map((model) => model.name),
+    state.ollamaCurrentModel,
+    ...Object.values(state.ollamaModelAssignments),
+    ...Object.keys(state.ollamaContextWindows),
+  ].map((model) => model.trim()).filter((model) => model && model !== "auto" && model !== "inherit")));
+  const contextModel = contextModels.includes(selectedContextModel)
+    ? selectedContextModel : (state.ollamaCurrentModel || contextModels[0] || "");
+  const contextReady = state.ollamaContextModel === contextModel && state.ollamaContextStatus === "ready";
+  // Use PR 917's shared /api/tags + /api/show snapshot as the source
+  // of trained context limits. Disk-only metadata is not verified.
+  const contextKey = (name: string) => {
+    const normalized = name.trim().toLowerCase();
+    return normalized.includes(":") ? normalized : `${normalized}:latest`;
+  };
+  const inventoryModel = state.ollamaInventory.find((model) => contextKey(model.name) === contextKey(contextModel));
+  const trainedLimit = inventoryModel?.source === "server"
+    && typeof inventoryModel.trainedContextLength === "number"
+    && inventoryModel.trainedContextLength > 0 ? inventoryModel.trainedContextLength : 0;
+  const optionLimit = trainedLimit || 8192;
+  const savedWindow = state.ollamaContextWindows[contextModel.toLowerCase()] ?? 8192;
+  const activeWindow = Math.min(savedWindow, optionLimit);
+  const memoryEstimate = contextReady
+    ? state.ollamaContextModelSizeBytes + activeWindow * state.ollamaContextKvBytesPerToken
+    : 0;
+  const availableMemory = state.ollamaContextAvailableMemoryBytes;
+  const exceedsMemory = contextReady && availableMemory > 0 && memoryEstimate > availableMemory;
+
+  useEffect(() => {
+    if (contextModel) {
+      transport.fireIntent("app-settings", "inspectOllamaContextModel", [contextModel]);
+    }
+  }, [contextModel, transport, state.ollamaScanStatus]);
 
   return (
     <div className="settings-general-page">
@@ -906,6 +961,68 @@ function OllamaPage({ state, transport }: { state: AppSettingsState; transport: 
             transport={transport}
           />
         ))}
+      </fieldset>
+
+      <fieldset className="settings-fieldset">
+        <legend>Context Window (per model)</legend>
+        <p className="settings-update-status">
+          Choose how many tokens Ollama serves for each model. The default is 8k; larger windows consume more memory.
+        </p>
+        <div className="settings-field">
+          <span className="settings-field-label">Context model</span>
+          <CustomSelect
+            ariaLabel="Ollama context model"
+            value={contextModel}
+            placeholder="Scan or configure a model"
+            disabled={contextModels.length === 0}
+            options={contextModels.map((model) => ({ id: model, label: model }))}
+            onChange={setSelectedContextModel}
+          />
+        </div>
+        <div className="settings-field">
+          <span className="settings-field-label">Context window (num_ctx)</span>
+          <CustomSelect
+            ariaLabel="Ollama context window"
+            value={String(activeWindow)}
+            disabled={!contextModel || optionLimit < 4096}
+            options={OLLAMA_CONTEXT_CHOICES
+              .filter((choice) => choice.tokens <= optionLimit)
+              .map((choice) => ({ id: String(choice.tokens), label: choice.label }))}
+            onChange={(value) => transport.fireIntent(
+              "app-settings", "setOllamaContextWindow", [contextModel, Number(value)], undefined, true,
+            )}
+          />
+        </div>
+        {contextModel && !contextReady && (
+          <p className="settings-update-status">
+            {state.ollamaContextModel === contextModel && state.ollamaContextStatus === "loading"
+              ? "Inspecting model context and memory..."
+              : "Context options above 8k require a verified trained length from the shared Ollama inventory. Run System Scan."}
+          </p>
+        )}
+        {contextReady && (
+          <>
+            <p className="settings-update-status">
+              Trained model limit (shared inventory): {trainedLimit.toLocaleString()} tokens.
+              Estimated {state.ollamaContextModelSizeBytes > 0 ? "model weights + KV cache" : "KV cache (weights unavailable)"}:
+              {" "}{gib(memoryEstimate)} at {activeWindow.toLocaleString()} tokens.
+            </p>
+            <p className="settings-update-status">
+              Available system RAM: {availableMemory > 0 ? gib(availableMemory) : "unavailable"}.
+              GPU VRAM and other Ollama allocations are not included in this comparison.
+            </p>
+            {exceedsMemory && (
+              <p className="settings-update-status" data-level="error" role="alert">
+                Estimated Ollama memory exceeds available system RAM. This window may run out of memory.
+              </p>
+            )}
+          </>
+        )}
+        {state.ollamaContextModel === contextModel && state.ollamaContextNotice && (
+          <p className="settings-update-status" data-level="error">
+            {state.ollamaContextNotice}
+          </p>
+        )}
       </fieldset>
 
       <label className="settings-field">

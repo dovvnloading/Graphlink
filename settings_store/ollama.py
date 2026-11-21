@@ -66,6 +66,32 @@ class OllamaSettingsOps(SettingsManagerParts):
         self.state["ollama_model_assignments"] = assignment_values(assignments)
         self._save_state()
 
+    def get_ollama_context_windows(self) -> dict[str, int]:
+        """Saved per-model num_ctx overrides, indexed by case-insensitive model ID."""
+        from backend.ollama_context import CONTEXT_CHOICES
+
+        raw = self.state.get("ollama_context_windows", {})
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            str(model).strip().casefold(): value
+            for model, value in raw.items()
+            if isinstance(model, str) and model.strip()
+            and type(value) is int and value in CONTEXT_CHOICES
+        }
+
+    def set_ollama_context_window(self, model_name: str, num_ctx: int) -> None:
+        """Save one model's served window; reject malformed or unbounded writes."""
+        from backend.ollama_context import CONTEXT_CHOICES
+
+        model = str(model_name or "").strip().casefold()
+        if not model or len(model) > 255 or type(num_ctx) is not int or num_ctx not in CONTEXT_CHOICES:
+            raise ValueError("Invalid Ollama model or context window.")
+        windows = self.get_ollama_context_windows()
+        windows[model] = num_ctx
+        self.state["ollama_context_windows"] = windows
+        self._save_state()
+
     def get_ollama_chat_model(self):
         return self._get_ollama_model("task_chat")
 
