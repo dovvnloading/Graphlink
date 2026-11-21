@@ -76,6 +76,7 @@ export interface ChatNodeData extends Record<string, unknown> {
   content: string;
   isUser: boolean;
   isCollapsed: boolean;
+  staleness?: "current" | "out_of_date" | "upstream_changed";
   dockedChildren: { id: string; label: string }[];
   // R6.3: the node's own persisted scroll position - restored into
   // .chat-node-content's scrollTop once on mount, then kept live-updated
@@ -717,6 +718,7 @@ export function chatNodePropsAreEqual(prev: NodeProps<ChatFlowNode>, next: NodeP
     a.content === b.content &&
     a.isUser === b.isUser &&
     a.isCollapsed === b.isCollapsed &&
+    a.staleness === b.staleness &&
     a.isBranchFocusActive === b.isBranchFocusActive &&
     a.branchStatus === b.branchStatus &&
     a.isFinalDeliverable === b.isFinalDeliverable &&
@@ -899,6 +901,7 @@ export const ChatNodeView = memo(function ChatNodeView({
       kindClassName={`chat-node${data.isUser ? " user" : " assistant"}`}
       selected={!!selected}
       collapsed={collapsed}
+      staleness={data.staleness}
       onMenuChange={setMenuPosition}
       header={
         <NodeHeading
