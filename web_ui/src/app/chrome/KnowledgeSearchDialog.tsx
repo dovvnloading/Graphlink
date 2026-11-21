@@ -155,6 +155,7 @@ function KnowledgeResultCard({
   onOpenCitation?: (source: KnowledgeCitationSource) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const sourceLabel = knowledgeSourceLabel(result.sourceFile ?? result.sourceUri, result.documentTitle);
   const canOpenCitation = Boolean(onOpenCitation && /^kb:[0-9a-f]{20}$/.test(result.citationId ?? "") &&
     Number.isSafeInteger(result.documentId) && Number.isSafeInteger(result.chunkId) &&
     result.offsetStart >= 0 && result.offsetEnd >= result.offsetStart);
@@ -169,7 +170,9 @@ function KnowledgeResultCard({
         onClick={() => setExpanded((value) => !value)}
       >
         <span className="knowledge-result-title">{result.documentTitle}</span>
-        <span className="knowledge-result-source">{knowledgeSourceLabel(result.sourceFile ?? result.sourceUri, result.documentTitle)}</span>
+        {sourceLabel !== result.documentTitle && (
+          <span className="knowledge-result-source">{sourceLabel}</span>
+        )}
         {(typeof result.rankSignals?.fts5 === "number" || typeof result.rankSignals?.vector === "number") && (
           <span className="knowledge-result-signals" role="group" aria-label="Match signals">
             {typeof result.rankSignals?.fts5 === "number" && (
@@ -199,8 +202,8 @@ function KnowledgeResultCard({
                 onClick={() => onOpenCitation?.({
                   citationId: result.citationId ?? "", documentId: result.documentId,
                   chunkId: result.chunkId, documentTitle: result.documentTitle,
-                  sourceUri: knowledgeSourceLabel(result.sourceUri, result.documentTitle),
-                  sourceFile: knowledgeSourceLabel(result.sourceFile ?? result.sourceUri, result.documentTitle),
+                  sourceUri: result.sourceUri,
+                  sourceFile: result.sourceFile ?? result.sourceUri,
                   section: result.section ?? "Unsectioned", offsetStart: result.offsetStart,
                   offsetEnd: result.offsetEnd, excerpt: result.text, cited: true,
                 })}
