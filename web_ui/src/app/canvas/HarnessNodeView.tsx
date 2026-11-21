@@ -676,7 +676,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
             title={
               data.harnessCompactions > 0
                 ? `History summarized ${data.harnessCompactions} time${data.harnessCompactions === 1 ? "" : "s"} to stay within the context budget`
-                : "How much of the context budget this agent's history currently fills"
+                : "System prompt, tool schemas and retained history within the model's served context window"
             }
           >
             Context {Math.min(100, Math.round((data.harnessContextTokens / data.harnessMaxContextTokens) * 100))}%
