@@ -229,7 +229,7 @@ describe("KnowledgeSearchDialog", () => {
 
     await user.type(screen.getByPlaceholderText(/search your ingested knowledge base/i), "query");
     await user.click(screen.getByRole("button", { name: "Search" }));
-    expect(await screen.findByText("2 sources used")).toBeInTheDocument();
+    expect(await screen.findByText("2 search results")).toBeInTheDocument();
     expect(screen.getByText("lighthouse.md")).toBeInTheDocument();
     expect(screen.getByText("notes.md")).toBeInTheDocument();
     expect(screen.queryByText(windowsPath)).not.toBeInTheDocument();
