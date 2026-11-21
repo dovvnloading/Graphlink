@@ -284,6 +284,7 @@ def _land_partial_reply_node(document, parent_node, partial_text):
         ax, ay = document.place_child(parent_node.id, "chat")
         ai = document.add_chat_node(ax, ay, partial_text, False, parent_id=parent_node.id)
         ai.state.response_incomplete = True
+        document.sync_chat_version(ai.id)
         # Inside the mutator so the command's after-snapshot of the chat
         # pointers names this node - see _make_send_on_reply's _commit.
         document.last_chat_node_id = ai.id
@@ -325,6 +326,10 @@ def _stamp_reply_provenance(node, provider, model) -> None:
     _snapshot_active_provider_model, not re-resolved here."""
     node.state.provider = provider or None
     node.state.model = model or None
+    if node.state.versions:
+        selected = node.state.versions[node.state.version_index]
+        selected.provider_name = node.state.provider
+        selected.model_name = node.state.model
 
 
 def _make_on_usage(
@@ -364,6 +369,7 @@ def _make_on_usage(
                 usage.get("prompt_tokens"), usage.get("completion_tokens"),
                 provider=provider, model=model,
             )
+            document.sync_chat_version(node_id)
             # Real usage arrives after record_command() deep-copies the
             # reply. Amend only these run-owned metadata fields in that
             # command's redo snapshot; otherwise Undo -> Redo resurrects
@@ -376,6 +382,9 @@ def _make_on_usage(
                 snapshot.state.prompt_tokens = target.state.prompt_tokens
                 snapshot.state.completion_tokens = target.state.completion_tokens
                 snapshot.state.estimated_cost_usd = target.state.estimated_cost_usd
+                # The redo snapshot also owns the per-version usage receipt.
+                snapshot.state.versions = copy.deepcopy(target.state.versions)
+                snapshot.state.version_index = target.state.version_index
             await publish_scene()
 
     return _on_usage
@@ -481,6 +490,7 @@ def _make_send_on_reply(
             # provider/model, not an unstamped copy of this reply.
             _stamp_reply_provenance(ai, provenance_provider, provenance_model)
             apply_reply_citations(ai, reply_text)
+            document.sync_chat_version(ai.id)
             return ai
 
         ai_node, command = document.record_command(
@@ -571,6 +581,7 @@ def _make_regenerate_on_reply(
             # Stamp inside record_command so Undo/Redo retains the model.
             _stamp_reply_provenance(node_to_regenerate, provenance_provider, provenance_model)
             apply_reply_citations(node_to_regenerate, reply_text)
+            document.sync_chat_version(node_to_regenerate.id)
 
         _, command = document.record_command(
             "regenerateResponse", "agent", _commit,
@@ -584,7 +595,7 @@ def _make_regenerate_on_reply(
     return _on_reply
 
 
-def _land_partial_regenerate(document, node_to_regenerate, partial_text):
+def _land_partial_regenerate(document, node_to_regenerate, partial_text, provider=None, model=None):
     """ADR-006 stage 6.4 (H5): a regenerate's stream died - preserve the
     accumulated text instead of silently keeping the old content with the
     new text lost. The old content children are torn down (they annotated
@@ -601,10 +612,12 @@ def _land_partial_regenerate(document, node_to_regenerate, partial_text):
         document.update_chat_node_content(
             node_to_regenerate.id, partial_text, incomplete=True
         )
+        _stamp_reply_provenance(node_to_regenerate, provider, model)
         # A failed stream has no trusted included-passage snapshot. Drop
         # the previous reply's ledger within this same undoable mutation,
         # preserving real tool-call rows.
         apply_reply_citations(node_to_regenerate, str(partial_text))
+        document.sync_chat_version(node_to_regenerate.id)
 
     document.record_command(
         "regenerateResponse", "agent", _commit,
@@ -757,6 +770,9 @@ async def _send_model_comparison(
     await publish_scene()
 
     def persist_reply(node):
+        # Comparison siblings replace a pending placeholder, not an answer
+        # the user has already seen. Keep their one initial version in sync.
+        document.sync_chat_version(node.id)
         # The initial placeholder's undo/redo snapshot must be updated when
         # its asynchronously generated content and usage arrive.
         if node.id in command.node_after:
@@ -1132,7 +1148,10 @@ def register_chat_intents(
             # See _land_partial_regenerate; same liveness check as _on_reply.
             if node_to_regenerate.id not in document.nodes:
                 return
-            _land_partial_regenerate(document, node_to_regenerate, partial_text)
+            _land_partial_regenerate(
+                document, node_to_regenerate, partial_text,
+                request_provider, request_model,
+            )
 
         _on_usage = _make_on_usage(
             document, token_counter, publish_token_counter, publish_scene,

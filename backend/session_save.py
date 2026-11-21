@@ -112,6 +112,8 @@ from backend.domain.node_states import (
     ArtifactState,
     ChartState,
     ChatState,
+    ChatVersion,
+    MAX_CHAT_VERSIONS,
     CodeReviewState,
     CodeSandboxState,
     CodeState,
@@ -243,8 +245,49 @@ def _serialize_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # _classify_edges) - these functions never reference `document` or other
 # nodes at all, mirroring session_load.py's equivalent restorers.
 
+def _serialize_chat_versions(node: SceneNode) -> tuple[list[dict[str, Any]], int]:
+    """Save bounded alternatives, taking the selected one's LIVE projection.
+
+    Callers may have just stamped a model/cost or edited content directly.
+    The current SceneNode fields remain authoritative even if an asynchronous
+    callback has not explicitly synchronized its ChatVersion yet.
+    """
+    state = node.state
+    saved = state.versions[-MAX_CHAT_VERSIONS:] if state.versions else [
+        ChatVersion(content=node.content),
+    ]
+    offset = max(0, len(state.versions) - MAX_CHAT_VERSIONS)
+    index = max(0, min(len(saved) - 1, state.version_index - offset))
+    rows = [
+        {
+            "content": version.content,
+            "provider": version.provider_name,
+            "model": version.model_name,
+            "created_at": version.created_at,
+            "incomplete": version.incomplete,
+            "prompt_tokens": version.input_tokens,
+            "completion_tokens": version.output_tokens,
+            "estimated_cost_usd": version.cost_usd,
+            "tool_invocations": [dict(call) for call in version.calls],
+        }
+        for version in saved
+    ]
+    rows[index].update({
+        "content": node.content,
+        "provider": state.provider,
+        "model": state.model,
+        "incomplete": state.response_incomplete,
+        "prompt_tokens": state.prompt_tokens,
+        "completion_tokens": state.completion_tokens,
+        "estimated_cost_usd": state.estimated_cost_usd,
+        "tool_invocations": [dict(call) for call in state.tool_invocations],
+    })
+    return rows, index
+
+
 def _serialize_chat_node(raw_node: SceneNode) -> dict[str, Any]:
     node = with_state(raw_node, ChatState)
+    versions, version_index = _serialize_chat_versions(node)
     if node.state.content_parts is not None:
         raw_content = _content_codec.process_content_for_serialization(node.state.content_parts)
     else:
@@ -253,6 +296,8 @@ def _serialize_chat_node(raw_node: SceneNode) -> dict[str, Any]:
         "node_type": "chat",
         "raw_content": raw_content,
         "is_user": bool(node.state.is_user),
+        "versions": versions,
+        "version_index": version_index,
         "conversation_history": _serialize_history(node.history),
         "scroll_value": node.state.chat_scroll_value,
         "is_collapsed": bool(node.is_collapsed),
@@ -1189,10 +1234,10 @@ def _build_chat_data(
         })
 
     return {
-        # Matches scene_index.py's own CURRENT_CHAT_SCHEMA_VERSION exactly
-        # (confirmed directly, not assumed) - this format has not changed
-        # shape in a way that would warrant bumping it.
-        "schema_version": 1,
+        # Version 2 adds bounded per-chat-node alternatives. The loader's
+        # _migrate_chat_versions backfills version-1/legacy nodes in memory,
+        # without rewriting anyone's saved graph until their next save.
+        "schema_version": 2,
         "nodes": node_payloads,
         # ADR-009 stage 9.6: the AUTHORITATIVE edge list. Every edge in the
         # document, written flat, by persistent node id - exactly the shape

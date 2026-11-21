@@ -81,6 +81,7 @@ class BranchOps(SceneDocumentParts):
         node.state.synthesis_instructions = str(instructions)
         node.state.provider = provider
         node.state.model = model
+        self.sync_chat_version(node_id)
 
     #: ADR-002 Workstream 1 ("Branch status and lifecycle"): the exactly-4
     #: legal values for ChatState's own branch_status (backend/domain/
