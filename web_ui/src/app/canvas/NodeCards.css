@@ -645,3 +645,11 @@
   font: 600 11px/1.35 var(--gl-font-family);
 }
 .node-staleness-badge svg { width: 15px; height: 15px; flex: none; }
+.group-node-staleness {
+  position: absolute;
+  top: 35px;
+  left: 6px;
+  z-index: 2;
+  pointer-events: none;
+}
+.group-node-staleness .node-staleness-badge { margin: 0; }

@@ -66,6 +66,13 @@ function renderGroupNode(overrides: Partial<GroupFlowNode["data"]> = {}) {
 }
 
 describe("GroupNodeView (frame)", () => {
+  it("shows upstream-changed text and warning shape for a derived group", () => {
+    const { container } = renderGroupNode({ staleness: "upstream_changed" });
+    expect(screen.getByRole("status")).toHaveTextContent("Upstream changed");
+    expect(container.querySelector(".node-staleness-badge svg")).not.toBeNull();
+  });
+
+
   it("renders the label and a Lock/Unlock toggle for kind=frame", () => {
     renderGroupNode();
     expect(screen.getByText("My Frame")).toBeInTheDocument();

@@ -4,6 +4,7 @@ import { useEffect, type CSSProperties, type MouseEvent, type ReactNode } from "
 import type { MenuPosition } from "./menuPosition";
 import { TEXT_INPUT_HANDLE, TEXT_OUTPUT_HANDLE } from "./textInputs";
 import "./NodeCards.css";
+import { StalenessBadge } from "./StalenessBadge";
 
 // Size-reporting alone misses a port when a lazy node view replaces an
 // equal-sized placeholder. Register the new handle after it enters the DOM.
@@ -62,8 +63,6 @@ export function NodeShell({
     nodeId ? state.nodeLookup.get(nodeId)?.data.staleness : undefined
   ));
   const visibleStaleness = staleness ?? liveStaleness;
-  const label = visibleStaleness === "out_of_date" ? "Out of date"
-    : visibleStaleness === "upstream_changed" ? "Upstream changed" : null;
   return (
     <div
       className={`scene-node scene-node-card ${kindClassName}${selected ? " selected" : ""}${collapsed ? " collapsed" : ""}`}
@@ -94,16 +93,7 @@ export function NodeShell({
             </button>
           )}
         </div>
-        {label && (
-          <div className="node-staleness-badge" role="status">
-            <svg aria-hidden="true" viewBox="0 0 20 20" fill="none"
-              stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round">
-              <path d="M10 2.5 18 17H2L10 2.5Z" />
-              <path d="M10 7v4.5M10 14.5h.01" strokeLinecap="round" />
-            </svg>
-            <span>{label}</span>
-          </div>
-        )}
+        <StalenessBadge status={visibleStaleness} />
         {!collapsed && (
           <div className={`scene-node-body ${bodyClassName}`} onDoubleClick={onBodyDoubleClick}>
             {children}
