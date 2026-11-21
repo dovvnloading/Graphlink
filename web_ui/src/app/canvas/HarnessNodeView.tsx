@@ -514,6 +514,22 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
     }
   }, [data.harnessAwaitingApproval, data.harnessApprovalId, collapsed, revealApprovalActions]);
 
+  // The composer can grow after the tool has already parked, shrinking the
+  // actual graph stage. An open activity log or file preview can likewise
+  // grow the card. Keep the decision within the newly measured bounds,
+  // without reacting to ordinary user-initiated panning.
+  useEffect(() => {
+    if (!data.harnessAwaitingApproval || collapsed || typeof ResizeObserver === "undefined") return;
+    const actions = approvalActionsRef.current;
+    const stage = actions?.closest(".react-flow");
+    const card = actions?.closest(".scene-node-card");
+    if (!stage || !card) return;
+    const observer = new ResizeObserver(() => revealApprovalActions());
+    observer.observe(stage);
+    observer.observe(card);
+    return () => observer.disconnect();
+  }, [data.harnessAwaitingApproval, data.harnessApprovalId, collapsed, revealApprovalActions]);
+
   // "What is it doing?" is the question a running agent raises, and the
   // answer was one click away behind a closed <details>. Opened once, on
   // the first activity of a run - once only, so a deliberate collapse
