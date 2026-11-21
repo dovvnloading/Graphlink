@@ -1,5 +1,5 @@
 import type { Node, NodeProps } from "@xyflow/react";
-import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { StreamListener } from "../../lib/ws/transport";
 import { CHAT_SCROLL_REPORT_DEBOUNCE_MS } from "./canvasConstants";
 import { CollapseToggleButton } from "./CollapseToggleButton";
@@ -273,7 +273,7 @@ function ChatNodeMenu({
   onUndockChild: (childId: string) => void;
   onRegenerate: () => void;
   onRerunFromHere?: () => void;
-  menuTriggerRef: React.RefObject<HTMLButtonElement | null>;
+  menuTriggerRef: RefObject<HTMLButtonElement | null>;
   canRerun: boolean;
   onEdit: () => void;
   onEditAsNewBranch: () => void;
