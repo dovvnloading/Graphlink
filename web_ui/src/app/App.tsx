@@ -252,9 +252,9 @@ function AppShell() {
   const [isDocumentViewOpen, setIsDocumentViewOpen] = useState(false);
   const [compareTarget, setCompareTarget] = useState<ChatVersionCompareTarget | null>(null);
   const nextCompareRequestId = useRef(0);
-  const onCompareChatVersions = useCallback((nodeId: string, count: number, selectedIndex: number) => {
+  const onCompareChatVersions = useCallback((nodeId: string, count: number, selectedIndex: number, isUser: boolean) => {
     if (count < 2) return;
-    setCompareTarget({ nodeId, versionCount: count, selectedIndex, requestId: ++nextCompareRequestId.current });
+    setCompareTarget({ nodeId, versionCount: count, selectedIndex, isUser, requestId: ++nextCompareRequestId.current });
     overlays.open("chat-version-compare", "dialog");
   }, [overlays]);
   // The composer row's HUD slot: the canvas portals its zoom dock and minimap

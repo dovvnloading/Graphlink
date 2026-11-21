@@ -35,17 +35,17 @@ const versions = [
 ];
 
 const target: ChatVersionCompareTarget = {
-  nodeId: "reply-1", versionCount: 3, selectedIndex: 2, requestId: 1,
+  nodeId: "reply-1", isUser: false, versionCount: 3, selectedIndex: 2, requestId: 1,
 };
 
-function Launcher({ store }: { store: SceneStore }) {
+function Launcher({ store, compareTarget = target }: { store: SceneStore; compareTarget?: ChatVersionCompareTarget }) {
   const overlays = useOverlays();
   return (
     <>
       <button type="button" onClick={() => overlays.open("chat-version-compare", "dialog")}>
         Open comparison
       </button>
-      <ChatVersionCompareDialog store={store} target={target} />
+      <ChatVersionCompareDialog store={store} target={compareTarget} />
     </>
   );
 }
@@ -76,6 +76,8 @@ describe("read-only Document View comparison dialog", () => {
 
     const dialog = screen.getByRole("dialog", { name: "Document View · Compare reply versions" });
     expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(within(dialog).getByText(/Choose two saved replies\./)).toBeVisible();
+    expect(within(dialog).getByText("Raw reply text, including Markdown syntax")).toBeVisible();
     const left = within(dialog).getByRole("combobox", { name: "Left version" });
     const right = within(dialog).getByRole("combobox", { name: "Right version" });
     expect(left).toHaveValue("1");
@@ -95,6 +97,37 @@ describe("read-only Document View comparison dialog", () => {
     expect(rightPane.querySelector("ins")).toHaveClass("chat-version-compare-inserted");
     expect(within(dialog).getByText(/Deleted:/)).toBeVisible();
     expect(within(dialog).getByText(/Inserted:/)).toBeVisible();
+    expect(setChatVersion).not.toHaveBeenCalled();
+  });
+
+  it("uses message wording and time-only metadata for versions of a user message", async () => {
+    const user = userEvent.setup();
+    const { store, compareChatVersions, setChatVersion } = setupStore();
+    const messageVersions = versions.map((version) => ({ ...version, provider: null, model: null }));
+    vi.mocked(store.compareChatVersions).mockImplementation(async (_nodeId, left, right) => ({
+      left: messageVersions[left], right: messageVersions[right], versionCount: messageVersions.length,
+    }));
+    render(
+      <OverlayProvider>
+        <Launcher store={store} compareTarget={{ ...target, nodeId: "user-1", isUser: true }} />
+      </OverlayProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Open comparison" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Document View · Compare message versions" });
+    expect(within(dialog).getByText(/Choose two saved versions\./)).toBeVisible();
+    expect(within(dialog).getByText("Raw message text, including Markdown syntax")).toBeVisible();
+    await within(dialog).findByText("Word comparison ready.");
+    expect(compareChatVersions).toHaveBeenCalledWith("user-1", 1, 2);
+
+    const leftPane = within(dialog).getByRole("region", { name: "Left comparison pane, version 2" });
+    const rightPane = within(dialog).getByRole("region", { name: "Right comparison pane, version 3" });
+    expect(leftPane.querySelector(".document-view-panel-subtitle")?.textContent)
+      .toBe(new Date(messageVersions[1].createdAt).toLocaleString());
+    expect(rightPane.querySelector(".document-view-panel-subtitle")?.textContent)
+      .toBe(new Date(messageVersions[2].createdAt).toLocaleString());
+    expect(dialog).not.toHaveTextContent("Provider not recorded");
+    expect(dialog).not.toHaveTextContent("Model not recorded");
     expect(setChatVersion).not.toHaveBeenCalled();
   });
 

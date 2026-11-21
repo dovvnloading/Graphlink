@@ -2024,6 +2024,41 @@ describe("ChatNodeView sent-message editing", () => {
 });
 
 describe("ChatNodeView re-run from here", () => {
+  it.each([
+    { isUser: true, staleness: "current", label: "You", beforeDelete: "Generate Image" },
+    { isUser: false, staleness: "out_of_date", label: "Assistant", beforeDelete: "Regenerate Response" },
+  ] as const)("groups branch actions and keeps Delete Node last for $label", async ({ isUser, staleness, label, beforeDelete }) => {
+    const user = userEvent.setup();
+    renderChatNode({ isUser, staleness, versionCount: 2 });
+    fireEvent.contextMenu(screen.getByText(label));
+
+    const menu = screen.getByRole("menu", { name: "Chat message actions" });
+    const items = Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"], [role="menuitemcheckbox"]'));
+    const labels = items.map((item) => item.textContent?.trim());
+    const branchIndex = labels.indexOf("Branch from Here");
+    expect(branchIndex).toBeGreaterThan(0);
+    expect(labels[branchIndex + 1]).toBe("Re-run from here");
+    if (isUser) {
+      expect(labels.slice(branchIndex - 2, branchIndex)).toEqual(["Edit", "Edit as new branch"]);
+    }
+
+    const deleteItem = screen.getByRole("menuitem", { name: "Delete Node" });
+    expect(labels[labels.length - 1]).toBe("Delete Node");
+    expect(deleteItem).toHaveClass("chat-node-menu-danger");
+    const separator = menu.querySelector('[role="separator"]');
+    expect(separator?.nextElementSibling).toBe(deleteItem);
+    expect(separator?.previousElementSibling).toHaveTextContent(beforeDelete);
+
+    await user.keyboard("{End}");
+    expect(deleteItem).toHaveFocus();
+    await user.keyboard("{ArrowUp}");
+    expect(screen.getByRole("menuitem", { name: beforeDelete })).toHaveFocus();
+    if (isUser) {
+      await user.keyboard("{Home}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}");
+      expect(screen.getByRole("menuitem", { name: "Re-run from here" })).toHaveFocus();
+    }
+  });
+
   it("exposes a keyboard-labelled header shortcut on edited messages", async () => {
     const user = userEvent.setup();
     const { onRerunFromHere } = renderChatNode({ versionCount: 2, versionIndex: 1 });

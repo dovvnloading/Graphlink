@@ -889,8 +889,13 @@ body {
   cursor: default;
 }
 
-.chat-node-menu-danger {
-  color: var(--gl-semantic-status-error, currentColor);
+.chat-node-menu-separator {
+  border-top: 1px solid var(--gl-surface-border);
+  margin: 6px 2px 4px;
+}
+
+.chat-node-menu button.chat-node-menu-danger {
+  color: var(--gl-semantic-status-error);
 }
 
 /* -- R3.5/R3.6 code node --------------------------------------------------- */
