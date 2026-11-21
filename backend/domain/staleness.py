@@ -157,7 +157,10 @@ def _lineage(document: SceneDocument) -> tuple[dict[str, bytes], dict[str, str]]
                     and baseline != "v1:" + prior.hex()
                 ):
                     upstream_changed = True
-                if upstream_changed:
+                # Thinking is passive content belonging to a reply. A
+                # changed input invalidates the reply, not its reasoning card
+                # as a separate action requiring manual re-execution.
+                if upstream_changed and node.kind != "thinking":
                     statuses[item] = "upstream_changed"
 
             # A full snapshot and the patch differ both traverse this lineage.
