@@ -252,11 +252,19 @@ def _serialize_chat_versions(node: SceneNode) -> tuple[list[dict[str, Any]], int
     The current SceneNode fields remain authoritative even if an asynchronous
     callback has not explicitly synchronized its ChatVersion yet.
     """
-    saved = node.state.versions[-MAX_CHAT_VERSIONS:] if node.state.versions else [
-        ChatVersion(content=node.content),
-    ]
-    offset = max(0, len(node.state.versions) - MAX_CHAT_VERSIONS)
-    index = max(0, min(len(saved) - 1, node.state.version_index - offset))
+    all_versions = node.state.versions or [ChatVersion(content=node.content)]
+    selected = node.state.version_index
+    if type(selected) is not int or not 0 <= selected < len(all_versions):
+        selected = len(all_versions) - 1
+    offset = max(0, len(all_versions) - MAX_CHAT_VERSIONS)
+    if selected < offset:
+        # A hand-edited or pre-cap save can select an older alternative.
+        # Keep that alternative plus the latest 19, in chronological order.
+        saved = [all_versions[selected], *all_versions[-(MAX_CHAT_VERSIONS - 1):]]
+        index = 0
+    else:
+        saved = all_versions[offset:]
+        index = selected - offset
     rows = [
         {
             "content": version.content,

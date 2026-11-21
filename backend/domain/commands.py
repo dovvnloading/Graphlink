@@ -556,6 +556,7 @@ class CommandOps(SceneDocumentParts):
         node_ids: Iterable[str] = (),
         edge_ids: Iterable[str] = (),
         run_id: "str | None" = None,
+        push: bool = True,
     ) -> "tuple[T, Command]":
         """Runs `mutator` (a zero-arg closure wrapping exactly one call into
         an existing SceneDocument mutator, e.g. `lambda:
@@ -608,7 +609,11 @@ class CommandOps(SceneDocumentParts):
         the relevant edges to discover from (connect's freshly-minted edge
         is caught by the id-set diff below either way; removeEdges' targets
         have no other discovery path since the node(s) they touch are not
-        being deleted)."""
+        being deleted).
+
+        push=False builds an otherwise identical command without mutating the
+        undo/redo stacks. Long-running chat batches fold each completed reply
+        into a single visible command atomically."""
         named_node_ids = set(node_ids)
         # Removing a text source also clears its surviving readers' bindings.
         watch_node_ids = named_node_ids | {
@@ -752,7 +757,7 @@ class CommandOps(SceneDocumentParts):
         # undoing it would do nothing, so it would only ever consume one of
         # the bounded log's slots and make Ctrl+Z appear to "do nothing
         # once" before reaching the operation the user actually meant.
-        if not command.is_noop:
+        if not command.is_noop and push:
             self._push_command(command)
         return result, command
 

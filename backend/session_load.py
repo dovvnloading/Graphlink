@@ -480,8 +480,18 @@ def _migrate_chat_versions(
                                      if isinstance(payload.get("reply_knowledge_enabled"), bool) else None),
         )], 0
 
+    saved_index = payload.get("version_index")
+    if type(saved_index) is not int or not 0 <= saved_index < len(raw):
+        saved_index = len(raw) - 1
     start = max(0, len(raw) - MAX_CHAT_VERSIONS)
-    kept = raw[start:]
+    if saved_index < start:
+        # The selected alternative is older than the newest 20. Keep it
+        # instead of silently projecting raw_content onto the wrong version.
+        kept = [raw[saved_index], *raw[-(MAX_CHAT_VERSIONS - 1):]]
+        selected_index = 0
+    else:
+        kept = raw[start:]
+        selected_index = saved_index - start
     if not all(isinstance(row, dict) and isinstance(row.get("content"), str) for row in kept):
         # A broken versions field must never erase the older raw_content.
         return _migrate_chat_versions({k: v for k, v in payload.items() if k != "versions"}, current_content)
@@ -507,10 +517,7 @@ def _migrate_chat_versions(
         )
         for row in kept
     ]
-    saved_index = payload.get("version_index")
-    if type(saved_index) is not int:
-        saved_index = len(raw) - 1
-    return versions, max(0, min(len(versions) - 1, saved_index - start))
+    return versions, selected_index
 
 
 def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
@@ -537,9 +544,9 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
     # if a legacy import has updated it but retained an older versions array.
     if "raw_content" in payload or "text" in payload:
         selected.content = content_text
-    # The active version's media lives in raw_content for compatibility and
-    # to avoid duplicating large attachments in the versions array on disk.
-    selected.parts = content_parts
+        # When the legacy live mirror exists, it remains authoritative for
+        # media too. Without it, retain the selected version's saved parts.
+        selected.parts = content_parts
     return SceneNode(
         id="", x=x, y=y, title="Chat", kind="chat",
         content=selected.content,
@@ -559,7 +566,7 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
         # rather than crashing the load, the same defensive posture this
         # function already uses for every other field.
         state=ChatState(
-            content_parts=content_parts,
+            content_parts=selected.parts,
             # Legacy's own restore-time default is True (data.get("is_user",
             # True)) - deliberately NOT False, unlike every other bool field
             # on this dataclass. Getting this backwards would silently

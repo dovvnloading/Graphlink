@@ -129,6 +129,8 @@ export function ChatRerunDialog({
         total: preview.count, currentNodeId: null, error: "", cancelRequested: false,
       });
     } catch (cause) {
+      // Admission may consume a one-use grant; fetch fresh approval on retry.
+      refreshPreview();
       setError(cause instanceof Error ? cause.message : "Could not start re-run.");
     } finally {
       setStarting(false);

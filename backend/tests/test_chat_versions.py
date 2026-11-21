@@ -12,7 +12,7 @@ from backend.canvas import SceneDocument
 from backend.api.intents_chat import register_chat_version_intents
 from backend.events import SessionBus
 from backend.domain.model import SceneError
-from backend.domain.node_states import MAX_CHAT_VERSIONS
+from backend.domain.node_states import ChatVersion, MAX_CHAT_VERSIONS
 from backend.session_load import _restore_chat_payload, restore_chat_into_document
 from backend.session_save import build_chat_data
 
@@ -291,3 +291,64 @@ def test_compare_chat_versions_intent_is_read_only_and_returns_provenance():
     with pytest.raises(SceneError, match="at least two"):
         asyncio.run(bus.dispatch_intent("scene", "compareChatVersions", [single.id, 0, 1]))
     assert document.nodes[single.id].content == "only version"
+
+
+def test_oversized_saved_versions_keep_an_older_selected_alternative():
+    """Truncating to the latest 20 must not relabel a different answer as selected."""
+    payload = {
+        "node_type": "chat", "position": {"x": 0, "y": 0},
+        "is_user": False, "raw_content": "answer 2", "version_index": 2,
+        "versions": [
+            {"content": f"answer {i}", "provider": f"provider {i}", "model": f"model {i}"}
+            for i in range(25)
+        ],
+    }
+    restored = _restore_chat_payload(payload)
+    assert len(restored.state.versions) == MAX_CHAT_VERSIONS == 20
+    assert restored.state.version_index == 0
+    assert [item.content for item in restored.state.versions] == [
+        "answer 2", *[f"answer {i}" for i in range(6, 25)],
+    ]
+    assert restored.content == "answer 2"
+    assert (restored.state.provider, restored.state.model) == ("provider 2", "model 2")
+    document = SceneDocument()
+    node = document.add_chat_node(0, 0, "answer 2", False)
+    node.state.versions = [
+        ChatVersion(content=f"answer {i}", provider_name=f"provider {i}", model_name=f"model {i}")
+        for i in range(25)
+    ]
+    node.state.version_index = 2
+    node.state.provider, node.state.model = "provider 2", "model 2"
+    row = next(value for value in build_chat_data(document)["nodes"] if value["node_type"] == "chat")
+    assert row["version_index"] == 0
+    assert [entry["content"] for entry in row["versions"]] == [
+        "answer 2", *[f"answer {i}" for i in range(6, 25)],
+    ]
+    assert row["versions"][0]["provider"] == "provider 2"
+    assert row["raw_content"] == "answer 2"
+
+
+def test_version_only_multimodal_save_restores_selected_parts_without_raw_content():
+    """A v2-only save must not zero out a selected version's saved media."""
+    node = _restore_chat_payload({
+        "node_type": "chat", "position": {"x": 0, "y": 0}, "is_user": True,
+        "version_index": 0,
+        "versions": [{
+            "content": "question with image",
+            "parts": [
+                {"type": "text", "text": "question with image"},
+                {"type": "image_bytes", "data": "dGVzdA==", "mime_type": "image/png"},
+            ],
+        }],
+    })
+    assert node.content == "question with image"
+    assert node.state.content_parts[1]["data"] == b"test"
+    assert node.state.versions[0].parts[1]["data"] == b"test"
+    document = SceneDocument()
+    live = document.add_chat_node(0, 0, "first", True)
+    live.state.versions = node.state.versions
+    live.state.content_parts = node.state.content_parts
+    live.content = node.content
+    document.update_chat_node_content(live.id, "without image")
+    document.set_chat_version(live.id, 0)
+    assert document.chat_branch_history(live.id)[0]["content"][1]["data"] == b"test"
