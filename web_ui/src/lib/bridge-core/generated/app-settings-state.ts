@@ -83,6 +83,15 @@ export interface AppSettingsState {
   ollamaScanSummary: string;
   ollamaScanStatus: string;
   ollamaPullStatus: string;
+  ollamaPullModel: string;
+  ollamaPullMessage: string;
+  ollamaPullCompleted: number;
+  ollamaPullTotal: number;
+  ollamaInstalledModels: string[];
+  ollamaInstalledStatus: string;
+  ollamaInstalledError: string;
+  ollamaRemoveStatus: string;
+  ollamaRemoveModel: string;
   ollamaNotice: string;
   knowledgeEmbeddingSource: string;
   knowledgeEmbeddingModel: string;
@@ -186,6 +195,15 @@ const APP_SETTINGS_STATE_FIELDS: WireFields = [
   ["ollamaScanSummary", "s", 0],
   ["ollamaScanStatus", "s", 0],
   ["ollamaPullStatus", "s", 0],
+  ["ollamaPullModel", "s", 0],
+  ["ollamaPullMessage", "s", 0],
+  ["ollamaPullCompleted", "n", 0],
+  ["ollamaPullTotal", "n", 0],
+  ["ollamaInstalledModels", { a: "s" }, 0],
+  ["ollamaInstalledStatus", "s", 0],
+  ["ollamaInstalledError", "s", 0],
+  ["ollamaRemoveStatus", "s", 0],
+  ["ollamaRemoveModel", "s", 0],
   ["ollamaNotice", "s", 0],
   ["knowledgeEmbeddingSource", "s", 0],
   ["knowledgeEmbeddingModel", "s", 0],
