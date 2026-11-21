@@ -31,6 +31,7 @@ from graphlink_audio import guess_audio_mime_type
 from graphlink_cloud_providers import CLOUD_PROVIDERS
 from graphlink_model_catalog import FALLBACK_ENABLED_TASKS, ModelDescriptor, ModelRef, ollama_descriptor, sort_descriptors
 from backend.ollama_context import CONTEXT_CHOICES, trained_context_length
+from backend.ollama_model_names import valid_ollama_model_name
 
 # Phase 4d god-file decomposition (provider_runtime/): module-top re-exports
 # of every relocated name. NOT circular: the submodules never import
@@ -824,20 +825,21 @@ _GGUF_SCAN_MAX_SECONDS = 30
 
 
 def _normalize_ollama_capabilities(capabilities) -> set[str]:
-    if not capabilities:
-        return set()
     if isinstance(capabilities, str):
-        return {capabilities.lower()}
+        capabilities = [capabilities]
+    if not isinstance(capabilities, (list, tuple, set, frozenset)):
+        return set()
     return {
-        str(capability).strip().lower()
-        for capability in capabilities
-        if str(capability).strip()
+        capability.strip().lower()
+        for capability in list(capabilities)[:32]
+        if isinstance(capability, str) and capability.isprintable()
+        and 0 < len(capability) <= 64 and capability.strip()
     }
 
 
 def _get_ollama_capabilities(model_name: str | None) -> set[str] | None:
-    normalized_model = (model_name or "").strip()
-    if not normalized_model:
+    normalized_model = model_name.strip() if isinstance(model_name, str) else ""
+    if not valid_ollama_model_name(normalized_model):
         return None
 
     cache_key = normalized_model.lower()
@@ -896,8 +898,8 @@ def _get_ollama_context_window(model_name: str | None) -> int | None:
        The request path passes this same value back as options.num_ctx
        (OllamaProvider), so the budget and the served context are the SAME
        number."""
-    normalized_model = (model_name or "").strip()
-    if not normalized_model:
+    normalized_model = model_name.strip() if isinstance(model_name, str) else ""
+    if not valid_ollama_model_name(normalized_model):
         return None
 
     cache_key = normalized_model.lower()
@@ -949,16 +951,20 @@ def _extract_modelfile_num_ctx(show_response) -> int | None:
     newline-separated "name value" string on both the REST wire and the SDK
     object). None when absent or unparseable."""
     parameters = _extract_response_field(show_response, "parameters")
-    if not isinstance(parameters, str):
+    if not isinstance(parameters, str) or len(parameters) > 32_768:
         return None
     for line in parameters.splitlines():
+        if len(line) > 256:
+            continue
         parts = line.strip().split()
-        if len(parts) >= 2 and parts[0] == "num_ctx":
-            try:
-                value = int(parts[1])
-            except (TypeError, ValueError):
+        if len(parts) == 2 and parts[0] == "num_ctx":
+            raw = parts[1]
+            if not raw.isascii() or not raw.isdecimal() or len(raw) > 6:
                 return None
-            return value if value > 0 else None
+            value = int(raw)
+            # Never turn unbounded daemon-reported num_ctx into a request
+            # allocation, even without a saved user preference.
+            return value if 0 < value <= max(CONTEXT_CHOICES) else None
     return None
 
 

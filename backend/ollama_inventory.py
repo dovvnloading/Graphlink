@@ -18,6 +18,9 @@ import sys
 
 import ollama
 
+from backend.ollama_context import trained_context_length
+from backend.ollama_model_names import valid_ollama_model_name
+
 
 _CAPABILITIES = {
     "completion": "chat",
@@ -52,20 +55,26 @@ def _installed_ollama_command() -> list[str] | None:
                 if executable.is_file():
                     return [str(executable)] if name == "ollama app.exe" else [str(executable), "serve"]
 
+    # Never pass a relative or non-executable PATH hit to Popen: an
+    # attacker-controlled working directory must not become an app install.
     cli = shutil.which("ollama.exe" if sys.platform == "win32" else "ollama")
-    if cli and Path(cli).is_file():
-        return [cli, "serve"]
+    if cli:
+        executable = Path(cli)
+        if executable.is_absolute() and executable.is_file() and (
+            sys.platform == "win32" or os.access(executable, os.X_OK)
+        ):
+            return [str(executable.resolve()), "serve"]
     if sys.platform != "win32":
         for executable in (Path("/usr/local/bin/ollama"), Path("/usr/bin/ollama"), Path.home() / ".local/bin/ollama"):
-            if executable.is_file():
-                return [str(executable), "serve"]
+            if executable.is_file() and os.access(executable, os.X_OK):
+                return [str(executable.resolve()), "serve"]
     return None
 
 
 def check_ollama_server_status() -> str:
-    """Lightweight live status; the full model inventory is a separate scan."""
+    """Lightweight live status; reject malformed /api/tags as unhealthy."""
     try:
-        ollama.list()  # The same /api/tags reachability signal as the shared inventory.
+        _tag_models(ollama.list())
     except Exception:
         return "installed" if _installed_ollama_command() is not None else "not_found"
     return "running"
@@ -104,17 +113,31 @@ def _field(value: object, name: str, default=None):
 
 
 def _nonnegative_int(value: object) -> int | None:
-    if isinstance(value, bool):
+    # Preserve only precise, JSON-safe byte counts. A float, infinity or
+    # giant numeric string from a daemon must not reach the JS memory UI.
+    if type(value) is int:
+        number = value
+    elif isinstance(value, str) and value.isascii() and value.isdecimal() and len(value) <= 16:
+        number = int(value)
+    else:
         return None
-    try:
-        number = int(value) if value is not None else None
-    except (TypeError, ValueError, OverflowError):
-        return None
-    return number if number is not None and number >= 0 else None
+    return number if 0 <= number <= 2**53 - 1 else None
 
 
 def _name(value: object) -> str:
-    return str(_field(value, "model") or _field(value, "name") or "").strip()
+    name = _field(value, "model") or _field(value, "name")
+    return name if valid_ollama_model_name(name) else ""
+
+
+def _tag_models(tags: object) -> list | tuple:
+    models = _field(tags, "models")
+    if not isinstance(models, (list, tuple)) or len(models) > 2048:
+        raise ValueError("Ollama returned a malformed or oversized /api/tags inventory.")
+    return models
+
+
+def _label(value: object) -> str:
+    return value[:120] if isinstance(value, str) and value.isprintable() else ""
 
 
 def _key(name: str) -> str:
@@ -123,26 +146,19 @@ def _key(name: str) -> str:
 
 
 def _capabilities(show: object) -> list[str]:
-    raw = _field(show, "capabilities") or []
+    raw = _field(show, "capabilities")
     if isinstance(raw, str):
         raw = [raw]
-    return sorted({_CAPABILITIES[str(value).lower().strip()] for value in raw
-                   if str(value).lower().strip() in _CAPABILITIES})
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return sorted({_CAPABILITIES[value.lower().strip()] for value in raw[:32]
+                   if isinstance(value, str) and value.lower().strip() in _CAPABILITIES})
 
 
 def _trained_context_length(show: object) -> int | None:
-    """Read the model's trained limit, never the separately configured num_ctx."""
-    info = _field(show, "model_info") or _field(show, "modelinfo") or {}
-    if not isinstance(info, Mapping):
-        return None
-    architecture = str(info.get("general.architecture") or "").strip()
-    keys = ([f"{architecture}.context_length"] if architecture else [])
-    keys.extend(str(key) for key in info if str(key).endswith(".context_length"))
-    for key in keys:
-        value = _nonnegative_int(info.get(key))
-        if value is not None and value > 0:
-            return value
-    return None
+    """Read a bounded trained limit, never the served Modelfile num_ctx."""
+    info = _field(show, "model_info") or _field(show, "modelinfo")
+    return trained_context_length(info)
 
 
 def _inventory_record(
@@ -155,9 +171,9 @@ def _inventory_record(
     return {
         "name": name,
         "sizeBytes": _nonnegative_int(size),
-        "family": str(_field(show_details, "family") or _field(details, "family") or ""),
-        "parameterSize": str(_field(show_details, "parameter_size") or _field(details, "parameter_size") or ""),
-        "quantization": str(_field(show_details, "quantization_level") or _field(details, "quantization_level") or ""),
+        "family": _label(_field(show_details, "family") or _field(details, "family")),
+        "parameterSize": _label(_field(show_details, "parameter_size") or _field(details, "parameter_size")),
+        "quantization": _label(_field(show_details, "quantization_level") or _field(details, "quantization_level")),
         "capabilities": _capabilities(show) if show is not None else [],
         "trainedContextLength": _trained_context_length(show) if show is not None else None,
         "loaded": loaded,
@@ -175,14 +191,15 @@ def _folder_inventory(scan_path: str | None, *, server_error: str = "") -> dict:
     scan = api_provider.scan_local_ollama_models(scan_path)
     descriptors = {
         str(item.get("model_id", "")).casefold(): item
-        for item in scan.get("descriptors", []) if isinstance(item, dict)
+        for item in scan.get("descriptors", [])
+        if isinstance(item, dict) and valid_ollama_model_name(item.get("model_id"))
     }
-    names = sorted({str(name).strip() for name in scan.get("models", []) if str(name).strip()}, key=str.casefold)
+    names = sorted({name for name in scan.get("models", []) if valid_ollama_model_name(name)}, key=str.casefold)
     records = []
     for name in names:
         descriptor = descriptors.get(name.casefold(), {})
         record = _inventory_record(name, size=descriptor.get("size_bytes"), source="folder")
-        record["quantization"] = str(descriptor.get("quantization") or "")
+        record["quantization"] = _label(descriptor.get("quantization"))
         record["trainedContextLength"] = _nonnegative_int(descriptor.get("context_length"))
         records.append(record)
     return {
@@ -210,20 +227,22 @@ def build_ollama_inventory(scan_path: str | None = None) -> dict:
         return _folder_inventory(scan_path)
 
     try:
-        tags = ollama.list()  # /api/tags
+        tags = _tag_models(ollama.list())  # /api/tags must be a real bounded model list
     except Exception as exc:
         return _folder_inventory(None, server_error=str(exc))
 
     try:
-        running = _field(ollama.ps(), "models", []) or []  # /api/ps
+        running = _field(ollama.ps(), "models")  # /api/ps
+        if not isinstance(running, (list, tuple)) or len(running) > 2048:
+            running = None
     except Exception:
         running = None  # Unknown, rather than claiming everything is unloaded.
 
     loaded_by_name = {_key(_name(item)): item for item in running if _name(item)} if running is not None else {}
     records_by_name: dict[str, dict] = {}
-    for item in _field(tags, "models", []) or []:
+    for item in tags:
         name = _name(item)
-        if not name:
+        if not name or _key(name) in records_by_name:
             continue
         try:
             show = ollama.show(name)  # /api/show

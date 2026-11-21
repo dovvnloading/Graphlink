@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from settings_store._composed import SettingsManagerParts
 
+from backend.ollama_model_names import valid_ollama_model_name
+
 from graphlink_model_catalog import (
     AUTO_MODEL,
     INHERIT_MODEL,
@@ -28,14 +30,26 @@ from graphlink_model_catalog import (
 
 class OllamaSettingsOps(SettingsManagerParts):
 
+    @staticmethod
+    def _safe_assignments(values: dict) -> dict:
+        """Scrub stale/legacy explicit IDs before they reach runtime selection."""
+        normalized = assignment_values(values)
+        for task, entry in normalized.items():
+            if entry.get("mode") == "explicit" and not valid_ollama_model_name(entry.get("model_id")):
+                normalized[task] = {
+                    "mode": AUTO_MODEL if task == "task_chat" else INHERIT_MODEL,
+                    "model_id": "",
+                }
+        return normalized
+
     def get_ollama_model_assignments(self):
         assignments = self.state.get("ollama_model_assignments", {})
         if not isinstance(assignments, dict):
             return {}
-        return assignment_values(assignments)
+        return self._safe_assignments(assignments)
 
     def set_ollama_model_assignments(self, assignments: dict):
-        normalized = assignment_values(assignments)
+        normalized = self._safe_assignments(assignments)
         self.state["ollama_model_assignments"] = normalized
         for task, key in {
             "task_title": "ollama_title_model",
@@ -56,6 +70,8 @@ class OllamaSettingsOps(SettingsManagerParts):
 
     def _set_ollama_model(self, task: str, legacy_key: str, model_name: str):
         model_id = normalize_model_id(model_name)
+        if not valid_ollama_model_name(model_id):
+            model_id = ""
         assignments = self.get_ollama_model_assignments()
         if model_id and model_id.lower() not in self.LEGACY_PRODUCT_MODEL_IDS:
             assignments[task] = ModelAssignment("explicit", model_id).to_dict()
@@ -76,7 +92,7 @@ class OllamaSettingsOps(SettingsManagerParts):
         return {
             str(model).strip().casefold(): value
             for model, value in raw.items()
-            if isinstance(model, str) and model.strip()
+            if isinstance(model, str) and valid_ollama_model_name(model.strip())
             and type(value) is int and value in CONTEXT_CHOICES
         }
 
@@ -84,8 +100,8 @@ class OllamaSettingsOps(SettingsManagerParts):
         """Save one model's served window; reject malformed or unbounded writes."""
         from backend.ollama_context import CONTEXT_CHOICES
 
-        model = str(model_name or "").strip().casefold()
-        if not model or len(model) > 255 or type(num_ctx) is not int or num_ctx not in CONTEXT_CHOICES:
+        model = model_name.strip().casefold() if isinstance(model_name, str) else ""
+        if not valid_ollama_model_name(model) or type(num_ctx) is not int or num_ctx not in CONTEXT_CHOICES:
             raise ValueError("Invalid Ollama model or context window.")
         windows = self.get_ollama_context_windows()
         windows[model] = num_ctx
@@ -134,7 +150,8 @@ class OllamaSettingsOps(SettingsManagerParts):
         models = self.state.get("ollama_scanned_models", [])
         if not isinstance(models, list):
             return []
-        return [str(model).strip() for model in models if str(model).strip()]
+        return [model.strip() for model in models
+                if isinstance(model, str) and valid_ollama_model_name(model.strip())]
 
     def get_ollama_verified_capabilities(self) -> dict[str, list[str]]:
         """Last verified /api/show capabilities, not inferred from folder names."""
@@ -167,7 +184,8 @@ class OllamaSettingsOps(SettingsManagerParts):
         verified_capabilities: dict[str, list[str]] | None = None,
     ):
         self.state["ollama_scanned_models"] = sorted(
-            {str(model).strip() for model in (models or []) if str(model).strip()},
+            {model.strip() for model in (models or [])
+             if isinstance(model, str) and valid_ollama_model_name(model.strip())},
             key=str.lower,
         )
         self.state["ollama_model_scan_mode"] = str(scan_mode or "").strip()

@@ -1,9 +1,10 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { AppSettingsState } from "../../lib/bridge-core/generated/app-settings-state";
 import type { WsTransport } from "../../lib/ws/transport";
 import { OllamaSettingsPage } from "./OllamaSettingsPage";
+import { formatLocalModelBytes } from "./LocalProviderSettings";
 
 // A standalone page fixture. Navigation/subscription wiring remains covered
 // by SettingsDialog.test.tsx; this file exercises the actual Ollama controls.
@@ -105,6 +106,7 @@ const baseState: AppSettingsState = {
   llamaCppNGpuLayers: 0,
   llamaCppNThreads: 0,
   llamaCppScannedModels: [],
+  llamaCppModels: [],
   llamaCppScanSummary: "No saved GGUF scan yet. Run a system scan or choose a folder to build the local model list.",
   llamaCppScanStatus: "idle",
   llamaCppNotice: "",
@@ -211,6 +213,7 @@ describe("Settings > Ollama", () => {
     expect(screen.getByRole("group", { name: "Capabilities for disk:latest" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Check disk:latest" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Remove disk:latest" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Check disk:latest" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Context window for disk:latest" }));
     expect(screen.getByRole("button", { name: "8k" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "16k" })).toBeNull();
@@ -255,6 +258,20 @@ describe("Settings > Ollama", () => {
     expect(large.getByText(/Estimated model weights \+ KV cache/)).toHaveTextContent("8.0 GiB");
     expect(large.getByRole("alert")).toHaveTextContent(/exceeds available system RAM/i);
     expect(small.queryByText(/Estimated model weights/)).toBeNull();
+  });
+
+  it("labels KV-only estimates with unknown weights as insufficient to assess memory fit", () => {
+    setup({
+      ollamaInventorySource: "server",
+      ollamaInventory: [inventoryModel("unknown:7b", { sizeBytes: 0 })],
+      ollamaContextModel: "unknown:7b", ollamaContextStatus: "ready",
+      ollamaContextModelSizeBytes: 0,
+      ollamaContextKvBytesPerToken: 131072,
+      ollamaContextAvailableMemoryBytes: 64 * 1024 ** 3,
+    });
+    const card = within(screen.getByRole("group", { name: "unknown:7b" }));
+    expect(card.getByText(/KV cache \(weights unavailable\)/)).toBeInTheDocument();
+    expect(card.getByText(/cannot establish whether the model will fit/)).toBeInTheDocument();
   });
 
   it("does not warn about available memory when RAM is unavailable", () => {
@@ -398,6 +415,32 @@ describe("Settings > Ollama", () => {
     expect(intents).toContainEqual(["app-settings", "removeOllamaModel", ["gemma3:4b"]]);
   });
 
+  it("rejects path tricks and oversized custom model IDs before dispatch", async () => {
+    const { user, intents } = setup();
+    const input = screen.getByRole("combobox", { name: "Validate and Pull Model" });
+    const pull = screen.getByRole("button", { name: "Validate and Pull Model" });
+    await user.type(input, "../outside:latest");
+    expect(pull).toBeDisabled();
+    await user.clear(input);
+    await user.type(input, "registry.ollama.ai/library/gemma3:latest");
+    expect(pull).toBeEnabled();
+    fireEvent.change(input, { target: { value: "x".repeat(256) } });
+    expect(pull).toBeDisabled();
+    expect(intents.some(([, intent]) => intent === "pullOllamaModel")).toBe(false);
+  });
+
+  it("keeps model operations disabled during post-download verification", () => {
+    const { update } = setup();
+    update({
+      ollamaPullStatus: "finalizing", ollamaPullModel: "gemma3:4b",
+      ollamaPullMessage: "Verifying installed model...",
+    });
+    expect(screen.getByText(/Verifying installed model/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel download" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Pull qwen3:4b" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "System Scan" })).toBeDisabled();
+  });
+
   it("scans and refreshes, supports manual pull, and cancels running downloads", async () => {
     const { user, intents, update } = setup({ ollamaServerStatus: "running", ollamaServerReachable: true });
     await user.click(screen.getByRole("button", { name: "Refresh installed models" }));
@@ -432,6 +475,16 @@ describe("Settings > Ollama", () => {
     await user.click(screen.getByRole("button", { name: "Scan model folder…" }));
     expect(intents).toContainEqual(["app-settings", "pickOllamaScanFolder", []]);
   });
+  it("keeps the shared model byte labels conservative for untrusted values", () => {
+    expect(formatLocalModelBytes(null)).toBe("Unknown");
+    expect(formatLocalModelBytes(Number.NaN)).toBe("Unknown");
+    expect(formatLocalModelBytes(Number.POSITIVE_INFINITY)).toBe("Unknown");
+    expect(formatLocalModelBytes(-10)).toBe("Unknown");
+    expect(formatLocalModelBytes(0)).toBe("0 B");
+    expect(formatLocalModelBytes(1024)).toBe("1.0 KiB");
+  });
+
+
 
   it("explains first-time installation and offers keyboard-operable recovery without attempting downloads", async () => {
     const { user, intents, update } = setup({

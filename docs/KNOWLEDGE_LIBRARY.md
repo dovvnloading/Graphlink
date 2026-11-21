@@ -42,6 +42,13 @@ Open **Settings → Knowledge** to choose a retrieval mode. This setting is inde
 | **Ollama (local)** | Uses an installed, embedding-capable Ollama model to add semantic matches. **Refresh installed models** scans the running Ollama server; `nomic-embed-text` is recommended only when installed. |
 | **Cloud (OpenAI-compatible)** | Uses a configured **Settings → API Endpoint** connection and an embedding-model ID you enter. You must check **I understand that document text leaves the machine** before saving. Document passages **and search queries** go to the selected endpoint; provider charges may apply. |
 
+To install a local embedding model, use **Settings → Ollama (Local) →
+Download recommended models → Pull** for `nomic-embed-text:latest` (or
+**Validate and Pull Model** for another Ollama tag). The server must be
+running for the Knowledge setting to confirm embedding capability. See
+[Local models](LOCAL_MODELS.md) for server status, downloads, and the distinction
+between server-verified models and disk-only scans.
+
 **Test** embeds a fixed sample phrase, never one of your stored documents. **Save choice** persists the setting. When enabled, Graphlink builds and caches vectors in background batches; completed batches can contribute to search while indexing continues. Changing the model starts a separate cache for its embedding space. Retrieval falls back to local keyword results if the embedding service fails. The Library dialog shows **file import** and **watched-folder sync** status, not a separate embedding-job progress/control panel.
 
 **Important privacy distinction:** Keeping the index and embeddings local does not necessarily keep a chat offline. With **Use knowledge** enabled, selected retrieved passages may be included in the prompt sent to your **chat model**. If that chat model is hosted, those passages leave your machine even when embedding source is **Off** or **Ollama (local)**. Turning off cloud embeddings stops future *embedding* requests; use a local chat model as well when you want local-only inference.

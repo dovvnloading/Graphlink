@@ -15,16 +15,20 @@ DEFAULT_CONTEXT_WINDOW = 8_192
 # Conservative fallback for a typical 7-8B GQA model when Ollama metadata
 # lacks the attention geometry. The UI identifies the figure as an estimate.
 FALLBACK_KV_BYTES_PER_TOKEN = 128 * 1024
+# Ollama's metadata comes from an HTTP response, not a trusted allocator.
+# Avoid accepting malformed/fractional/unreasonably large geometry as RAM advice.
+MAX_METADATA_DIMENSION = 1_000_000
+MAX_KV_BYTES_PER_TOKEN = 16 * 1024 * 1024
 
 
 def _positive_int(value: object) -> int | None:
-    if isinstance(value, bool):
-        return None
-    try:
+    if type(value) is int:
+        number = value
+    elif isinstance(value, str) and value.isascii() and value.isdecimal() and len(value) <= 7:
         number = int(value)
-    except (TypeError, ValueError, OverflowError):
+    else:
         return None
-    return number if number > 0 else None
+    return number if 0 < number <= MAX_METADATA_DIMENSION else None
 
 
 def trained_context_length(model_info: object) -> int | None:
@@ -59,12 +63,16 @@ def kv_bytes_per_token(model_info: object) -> int:
     embedding = _positive_int(model_info.get(prefix + "embedding_length"))
     key_length = _positive_int(model_info.get(prefix + "attention.key_length"))
     value_length = _positive_int(model_info.get(prefix + "attention.value_length"))
-    if not key_length and heads and embedding:
+    if not key_length and heads and embedding and embedding % heads == 0:
         key_length = embedding // heads
     if not value_length:
         value_length = key_length
+    if kv_heads and heads and kv_heads > heads:
+        return FALLBACK_KV_BYTES_PER_TOKEN
     if layers and (kv_heads or heads) and key_length and value_length:
-        return layers * (kv_heads or heads) * (key_length + value_length) * 2
+        estimate = layers * (kv_heads or heads) * (key_length + value_length) * 2
+        if estimate <= MAX_KV_BYTES_PER_TOKEN:
+            return estimate
     return FALLBACK_KV_BYTES_PER_TOKEN
 
 

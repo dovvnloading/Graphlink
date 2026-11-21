@@ -1688,20 +1688,41 @@ def test_pull_ollama_model_rejects_an_empty_model_name(manager, monkeypatch):
     assert recorder.messages[-1]["payload"]["ollamaNotice"] == "Model name cannot be empty."
 
 
+async def _await_pull_terminal(recorder):
+    """A pull intent returns immediately; its background job must settle."""
+    for _ in range(100):
+        if recorder.messages and recorder.messages[-1]["payload"]["ollamaPullStatus"] in {
+            "done", "error", "cancelled",
+        }:
+            return
+        await asyncio.sleep(0.01)
+    pytest.fail("The asynchronous Ollama pull never reached a terminal state.")
+
+
 def test_pull_ollama_model_success_invalidates_cache_and_refreshes_auto_route(manager, monkeypatch):
     _isolate_ollama_task_config(monkeypatch)
     calls = []
+    closed = []
 
-    def _pull(name, *, stream=False):
-        calls.append((name, stream))
-        return iter([
-            {"status": "pulling manifest"},
-            {"status": "downloading", "completed": 25, "total": 100},
-            {"status": "downloading", "completed": 100, "total": 100},
-            {"status": "success"},
-        ])
+    class FakeClient:
+        def __init__(self, *, timeout):
+            assert timeout > 0
 
-    monkeypatch.setattr(ollama, "pull", _pull)
+        async def pull(self, name, *, stream=False):
+            calls.append((name, stream))
+
+            async def progress():
+                yield {"status": "pulling manifest"}
+                yield {"status": "downloading", "completed": 25, "total": 100}
+                yield {"status": "downloading", "completed": 100, "total": 100}
+                yield {"status": "success"}
+
+            return progress()
+
+        async def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(ollama, "AsyncClient", FakeClient)
     monkeypatch.setattr(ollama, "list", lambda: {"models": [{"model": "qwen3:8b"}]})
     monkeypatch.setattr(ollama, "show", lambda name: {"capabilities": ["completion"]})
     monkeypatch.setattr(ollama, "ps", lambda: {"models": []})
@@ -1712,9 +1733,14 @@ def test_pull_ollama_model_success_invalidates_cache_and_refreshes_auto_route(ma
     recorder = Recorder()
     bus.attach(recorder)
 
-    asyncio.run(bus.dispatch_intent("app-settings", "pullOllamaModel", ["qwen3:8b"]))
+    async def scenario():
+        await bus.dispatch_intent("app-settings", "pullOllamaModel", ["qwen3:8b"])
+        await _await_pull_terminal(recorder)
+
+    asyncio.run(scenario())
 
     assert calls == [("qwen3:8b", True)]
+    assert closed == [True]
     assert invalidated == ["qwen3:8b"]
     assert config.OLLAMA_MODELS[config.TASK_CHAT] == "qwen3:8b"
     assert manager.get_ollama_scanned_models() == ["qwen3:8b"]
@@ -1739,22 +1765,183 @@ def test_pull_ollama_model_success_invalidates_cache_and_refreshes_auto_route(ma
     ],
 )
 def test_pull_ollama_model_maps_errors_to_friendly_messages(manager, monkeypatch, raw_error, expected_fragment):
-    def _boom(name, *, stream=False):
-        assert stream is True
-        raise RuntimeError(raw_error)
+    closed = []
 
-    monkeypatch.setattr(ollama, "pull", _boom)
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def pull(self, name, *, stream=False):
+            assert stream is True
+            raise RuntimeError(raw_error)
+
+        async def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(ollama, "AsyncClient", FakeClient)
     bus = SessionBus("settings-ollama-pull-error-test")
     register_settings(bus, manager)
     recorder = Recorder()
     bus.attach(recorder)
 
-    asyncio.run(bus.dispatch_intent("app-settings", "pullOllamaModel", ["some-model"]))
+    async def scenario():
+        await bus.dispatch_intent("app-settings", "pullOllamaModel", ["some-model"])
+        await _await_pull_terminal(recorder)
+
+    asyncio.run(scenario())
 
     payload = recorder.messages[-1]["payload"]
     assert payload["ollamaPullStatus"] == "error"
     assert expected_fragment in payload["ollamaNotice"]
+    assert closed == [True]
 
+
+@pytest.mark.parametrize("statuses", [
+    [{"status": "downloading", "completed": float("inf"), "total": -1}],
+    [{"status": "successfully finished"}],
+    [{"status": "success"}, {"status": "downloading"}],
+    [],
+])
+def test_pull_does_not_install_without_ollama_success_event(manager, monkeypatch, statuses):
+    _isolate_ollama_task_config(monkeypatch)
+    clients_closed = []
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def pull(self, model_name, *, stream=False):
+            async def progress():
+                for status in statuses:
+                    yield status
+            return progress()
+
+        async def close(self):
+            clients_closed.append(True)
+
+    monkeypatch.setattr(ollama, "AsyncClient", FakeClient)
+    monkeypatch.setattr(api_provider, "set_current_ollama_model",
+                        lambda _: pytest.fail("Incomplete pull selected a model"))
+    bus = SessionBus("incomplete-pull-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    async def scenario():
+        await bus.dispatch_intent("app-settings", "pullOllamaModel", ["gemma3:4b"])
+        await _await_pull_terminal(recorder)
+
+    asyncio.run(scenario())
+    assert clients_closed == [True]
+    assert recorder.messages[-1]["payload"]["ollamaPullStatus"] == "error"
+    assert "without confirming success" in recorder.messages[-1]["payload"]["ollamaNotice"]
+    assert manager.get_ollama_scanned_models() == []
+
+
+def test_pull_success_event_without_verified_inventory_does_not_select_model(manager, monkeypatch):
+    _isolate_ollama_task_config(monkeypatch)
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def pull(self, _name, *, stream=True):
+            async def progress():
+                yield {"status": "downloading", "total": {}, "completed": "NaN"}
+                yield {"status": "success"}
+            return progress()
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(ollama, "AsyncClient", FakeClient)
+    monkeypatch.setattr(ollama, "list", lambda: {"models": []})
+    monkeypatch.setattr(ollama, "ps", lambda: {"models": []})
+    monkeypatch.setattr(api_provider, "set_current_ollama_model",
+                        lambda _: pytest.fail("Unverified model was selected"))
+    bus = SessionBus("unverified-pull-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    async def scenario():
+        await bus.dispatch_intent("app-settings", "pullOllamaModel", ["gemma3:4b"])
+        await _await_pull_terminal(recorder)
+
+    asyncio.run(scenario())
+    assert recorder.messages[-1]["payload"]["ollamaPullStatus"] == "error"
+    assert "did not report this model" in recorder.messages[-1]["payload"]["ollamaNotice"]
+    assert manager.get_ollama_scanned_models() == []
+
+
+def test_pull_cancelled_immediately_recovers_running_gate(manager, monkeypatch):
+    calls = []
+    second_attempt = []
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            calls.append("client")
+
+        async def pull(self, _name, *, stream=True):
+            if not second_attempt:
+                await asyncio.Future()
+            raise RuntimeError("simulated second attempt")
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(ollama, "AsyncClient", FakeClient)
+    bus = SessionBus("cancel-before-start-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    async def scenario():
+        await bus.dispatch_intent("app-settings", "pullOllamaModel", ["gemma3:4b"])
+        await bus.dispatch_intent("app-settings", "cancelOllamaPull", [])
+        await _await_pull_terminal(recorder)
+        assert recorder.messages[-1]["payload"]["ollamaPullStatus"] == "cancelled"
+        # A subsequent attempt is not held behind a stale "running" gate.
+        second_attempt.append(True)
+        await bus.dispatch_intent("app-settings", "pullOllamaModel", ["gemma3:4b"])
+        await _await_pull_terminal(recorder)
+        assert recorder.messages[-1]["payload"]["ollamaPullStatus"] == "error"
+
+    asyncio.run(scenario())
+    assert calls == ["client"] or calls == ["client", "client"]
+
+
+def test_studio_model_actions_do_not_forward_path_or_control_names(manager, monkeypatch):
+    malicious = ["../outside:latest", "model:tag\nother", "--insecure", "C:\\escape", "x" * 256]
+    calls = []
+    monkeypatch.setattr(ollama, "delete", lambda name: calls.append(("delete", name)))
+    monkeypatch.setattr(ollama, "show", lambda name: calls.append(("show", name)))
+    monkeypatch.setattr(ollama, "AsyncClient",
+                        lambda **kwargs: pytest.fail("Unsafe pull/check created HTTP client"))
+    monkeypatch.setattr(intents_settings_ollama_module, "build_ollama_inventory",
+                        lambda _: {"models": ["safe:latest"], "inventory": [{
+                            "name": "safe:latest", "trainedContextLength": 16384,
+                            "sizeBytes": 1, "source": "server", "capabilities": [],
+                        }], "source": "server", "server_reachable": True, "scan_mode": "server"})
+    bus = SessionBus("reject-invalid-ollama-models-test")
+    register_settings(bus, manager)
+
+    async def scenario():
+        await bus.dispatch_intent("app-settings", "scanOllamaSystem", [])
+        for name in malicious:
+            await bus.dispatch_intent("app-settings", "pullOllamaModel", [name])
+            await bus.dispatch_intent("app-settings", "removeOllamaModel", [name])
+            await bus.dispatch_intent("app-settings", "inspectOllamaContextModel", [name])
+            await bus.dispatch_intent("app-settings", "setOllamaContextWindow", [name, 8192])
+            await bus.dispatch_intent("app-settings", "checkOllamaModel", [name])
+            await bus.dispatch_intent("app-settings", "setOllamaModelAssignment", ["task_chat", name])
+        await bus.dispatch_intent("app-settings", "inspectOllamaContextModel", ["not-installed:latest"])
+        await bus.dispatch_intent("app-settings", "setOllamaContextWindow", ["not-installed:latest", 8192])
+
+    asyncio.run(scenario())
+    assert calls == []
+    assert manager.get_ollama_context_windows() == {}
+    assert manager.get_ollama_model_assignments().get("task_chat", {}).get("model_id", "") == ""
 
 
 def test_scan_ollama_system_shares_installed_inventory_with_knowledge(manager, monkeypatch):
@@ -1811,43 +1998,52 @@ def test_shared_inventory_uses_disk_fallback_when_ollama_is_offline(manager, mon
 
 def test_cancel_ollama_pull_stops_stream_and_never_installs_or_selects_the_model(manager, monkeypatch):
     _isolate_ollama_task_config(monkeypatch)
-    started = threading.Event()
-    release = threading.Event()
     closed = []
     calls = []
 
-    def _pull(model_name, *, stream=False):
-        calls.append((model_name, stream))
-        try:
-            yield {"status": "downloading", "total": 100, "completed": 20}
-            started.set()
-            release.wait(timeout=3)
-            yield {"status": "downloading", "total": 100, "completed": 40}
-            yield {"status": "success"}
-        finally:
-            closed.append(model_name)
+    async def exercise():
+        started = asyncio.Event()
 
-    monkeypatch.setattr(ollama, "pull", _pull)
-    bus = SessionBus("settings-ollama-cancel-test")
-    register_settings(bus, manager)
-    recorder = Recorder()
-    bus.attach(recorder)
+        class FakeClient:
+            def __init__(self, **_kwargs):
+                pass
 
-    async def _exercise():
-        job = asyncio.create_task(bus.dispatch_intent("app-settings", "pullOllamaModel", ["qwen3:4b"]))
-        try:
-            assert await asyncio.to_thread(started.wait, 2)
-            await bus.dispatch_intent("app-settings", "cancelOllamaPull", [])
-            assert recorder.messages[-1]["payload"]["ollamaPullStatus"] == "cancelling"
-            # A second pull while cancellation is draining is ignored.
-            await bus.dispatch_intent("app-settings", "pullOllamaModel", ["gemma3:4b"])
-        finally:
-            release.set()
-        await job
+            async def pull(self, model_name, *, stream=False):
+                calls.append((model_name, stream))
 
-    asyncio.run(_exercise())
+                async def progress():
+                    try:
+                        yield {"status": "downloading", "total": 100, "completed": 20}
+                        started.set()
+                        await asyncio.Future()  # A hanging HTTP stream must be interruptible.
+                        yield {"status": "success"}
+                    finally:
+                        closed.append(model_name)
+
+                return progress()
+
+            async def close(self):
+                closed.append("client")
+
+        monkeypatch.setattr(ollama, "AsyncClient", FakeClient)
+        bus = SessionBus("settings-ollama-cancel-test")
+        register_settings(bus, manager)
+        recorder = Recorder()
+        bus.attach(recorder)
+
+        # In production these two intents arrive on the SAME WebSocket.
+        await bus.dispatch_intent("app-settings", "pullOllamaModel", ["qwen3:4b"])
+        await asyncio.wait_for(started.wait(), 1)
+        await bus.dispatch_intent("app-settings", "cancelOllamaPull", [])
+        assert any(message["payload"]["ollamaPullStatus"] == "cancelling" for message in recorder.messages)
+        # A second pull while cancellation is draining must be ignored.
+        await bus.dispatch_intent("app-settings", "pullOllamaModel", ["gemma3:4b"])
+        await _await_pull_terminal(recorder)
+        return recorder
+
+    recorder = asyncio.run(exercise())
     assert calls == [("qwen3:4b", True)]
-    assert closed == ["qwen3:4b"]
+    assert closed == ["qwen3:4b", "client"]
     assert manager.get_ollama_scanned_models() == []
     assert recorder.messages[-1]["payload"]["ollamaPullStatus"] == "cancelled"
     assert recorder.messages[-1]["payload"]["ollamaInventory"] == []
@@ -2078,6 +2274,30 @@ def test_set_llama_cpp_chat_model_path_stages_without_persisting(manager):
     asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppChatModelPath", ["C:/models/scanned.gguf"]))
 
     assert recorder.messages[-1]["payload"]["llamaCppChatModelPath"] == "C:/models/scanned.gguf"
+    assert manager.get_llama_cpp_chat_model_path() == ""
+
+
+def test_llama_cpp_cards_follow_staged_paths_not_unselected_scan_results(manager, tmp_path):
+    gguf = tmp_path / "selected.gguf"
+    gguf.write_bytes(b"unreadable header")
+    manager.set_llama_cpp_model_scan_cache(["C:/models/unselected.gguf"], "system", "", [])
+    bus = SessionBus("settings-llama-cpp-card-snapshot-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppChatModelPath", [str(gguf)]))
+
+    payload = recorder.messages[-1]["payload"]
+    assert payload["llamaCppChatModelPath"] == str(gguf)
+    assert payload["llamaCppModels"] == [{
+        "path": str(gguf),
+        "name": "selected.gguf",
+        "sizeBytes": len(b"unreadable header"),
+        "quantization": "",
+        "trainedContextLength": None,
+        "capabilities": [],
+    }]
     assert manager.get_llama_cpp_chat_model_path() == ""
 
 
@@ -2859,7 +3079,6 @@ def test_failed_cloud_settings_write_preserves_saved_and_live_profile(manager, m
 
 
 def test_reset_discards_inflight_catalog_even_when_another_session_requested_it(manager, monkeypatch):
-    import threading
 
     started, resume = threading.Event(), threading.Event()
     def list_models(*_args):
@@ -3071,7 +3290,6 @@ def test_knowledge_test_status_reports_synthetic_model_response(manager, monkeyp
 
 
 def test_knowledge_test_publishes_running_during_cold_ollama_load(manager, monkeypatch):
-    import threading
 
     from backend.api import intents_settings_knowledge
 
@@ -3196,6 +3414,25 @@ def test_start_ollama_refuses_uninstalled_app_and_surfaces_spawn_failures(manage
     assert "permission denied" in payload["ollamaStartError"]
 
 
+def test_saved_ollama_assignments_reject_legacy_path_tricks(manager):
+    from backend.api._settings_shared import apply_ollama_chat_model
+
+    manager.state["ollama_model_assignments"] = {
+        "task_chat": {"mode": "explicit", "model_id": "../outside:latest"},
+        "task_title": {"mode": "explicit", "model_id": "bad\\model"},
+        "task_chart": {"mode": "explicit", "model_id": "safe:latest"},
+    }
+    cleaned = manager.get_ollama_model_assignments()
+    assert cleaned["task_chat"]["mode"] == "auto"
+    assert cleaned["task_title"]["mode"] == "inherit"
+    assert cleaned["task_chart"]["model_id"] == "safe:latest"
+
+    manager.set_ollama_model_assignments(manager.state["ollama_model_assignments"])
+    assert manager.state["ollama_model_assignments"] == cleaned
+    asyncio.run(apply_ollama_chat_model(manager, "../outside:latest"))
+    assert manager.get_ollama_model_assignments() == cleaned
+
+
 def test_verified_embedding_only_model_is_not_an_auto_chat_route_even_after_restart(manager, monkeypatch):
     _isolate_ollama_task_config(monkeypatch)
     monkeypatch.setattr(ollama, "list", lambda: {"models": [
@@ -3233,7 +3470,22 @@ def test_verified_embedding_only_model_is_not_an_auto_chat_route_even_after_rest
 def test_pulling_embedding_model_does_not_replace_explicit_chat_route(manager, monkeypatch):
     _isolate_ollama_task_config(monkeypatch)
     manager.set_ollama_chat_model("qwen3:4b")
-    monkeypatch.setattr(ollama, "pull", lambda _name, *, stream=False: iter([{"status": "success"}]))
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def pull(self, _name, *, stream=False):
+            assert stream is True
+
+            async def progress():
+                yield {"status": "success"}
+
+            return progress()
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(ollama, "AsyncClient", FakeClient)
     monkeypatch.setattr(ollama, "list", lambda: {"models": [
         {"model": "nomic-embed-text:latest"}, {"model": "qwen3:4b"},
     ]})
@@ -3248,9 +3500,17 @@ def test_pulling_embedding_model_does_not_replace_explicit_chat_route(manager, m
     bus = SessionBus("settings-pull-embedding-retains-chat-test")
     register_settings(bus, manager)
 
-    asyncio.run(bus.dispatch_intent(
-        "app-settings", "pullOllamaModel", ["nomic-embed-text:latest"],
-    ))
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    async def scenario():
+        await bus.dispatch_intent(
+            "app-settings", "pullOllamaModel", ["nomic-embed-text:latest"],
+        )
+        await _await_pull_terminal(recorder)
+
+    asyncio.run(scenario())
+    assert recorder.messages[-1]["payload"]["ollamaPullStatus"] == "done"
     assert manager.get_ollama_model_assignments()["task_chat"] == {
         "mode": "explicit", "model_id": "qwen3:4b",
     }
