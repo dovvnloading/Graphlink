@@ -685,3 +685,28 @@ def test_context_meter_prices_branch_images_like_the_budget_does():
 
     assert _history_image_tokens(history) == estimate_image_tokens(image) > 100
     assert state.context_tokens == estimate_tokens(_history_token_text(history)) + estimate_image_tokens(image)
+
+
+def test_untrusted_modelfile_num_ctx_cannot_request_unbounded_context(monkeypatch):
+    api_provider.invalidate_ollama_capability_cache()
+    for parameter in [
+        "num_ctx 999999999999999999999999",
+        "num_ctx 131073",
+        "num_ctx -1",
+        "num_ctx 4096.5",
+        "num_ctx 65536 garbage",
+        "num_ctx " + "1" * 100_000,
+    ]:
+        assert api_provider._extract_modelfile_num_ctx({"parameters": parameter}) is None
+
+    # Deliberately configured values in the supported range remain valid.
+    assert api_provider._extract_modelfile_num_ctx({"parameters": "num_ctx 32768"}) == 32768
+    shown = []
+    monkeypatch.setattr(api_provider, "ollama", types.SimpleNamespace(
+        show=lambda name: shown.append(name) or {"parameters": "num_ctx 999999999999999999999999"},
+    ))
+    assert api_provider._get_ollama_context_window("../unsafe:tag") is None
+    assert shown == []
+    assert api_provider._ollama_effective_context_window("safe:tag") == 8192
+    assert shown == ["safe:tag"]
+    api_provider.invalidate_ollama_capability_cache()
