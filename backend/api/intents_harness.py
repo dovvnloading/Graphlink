@@ -39,6 +39,66 @@ _PATH_CAP = 4_000
 _MAX_SEND_RECEIPTS = 2_048
 
 
+
+def _model_capability_preview(settings_manager, provider: str, model_id: str) -> dict[str, object]:
+    """Read explicit per-model support without guessing from provider names.
+
+    Ollama's /api/show probe returns None when unavailable (unknown, not
+    unsupported). Cloud catalogs may contain only IDs; an empty capability
+    list is likewise unknown. Suggestions are limited to scanned, installed
+    Ollama models with confirmed tool support.
+    """
+    import api_provider
+
+    provider = str(provider or "").strip()
+    model_id = str(model_id or "").strip()
+    preview: dict[str, object] = {
+        "provider": provider, "modelId": model_id,
+        "tools": None, "vision": None, "suggestedToolModel": None,
+    }
+    if not provider or not model_id:
+        return preview
+
+    def names(raw: object) -> set[str]:
+        if isinstance(raw, str):
+            raw = [raw]
+        if not isinstance(raw, (list, tuple, set, frozenset)):
+            return set()
+        return {str(value).strip().casefold().replace("-", "_") for value in raw if str(value).strip()}
+
+    def apply(known: set[str]) -> None:
+        preview["tools"] = bool(known & {"tools", "tool", "tool_calling", "function_calling"})
+        preview["vision"] = bool(known & {"vision", "image"})
+
+    is_ollama = provider.casefold() in {config.LOCAL_PROVIDER_OLLAMA.casefold(), "ollama (local)"}
+    if is_ollama:
+        # Reuse the same cached /api/show result as runtime tool dispatch.
+        # In particular, do not call ollama_supports_tools(): it collapses
+        # probe failures into False, which would manufacture a UI warning.
+        reported = api_provider._get_ollama_capabilities(model_id)
+        if reported:
+            apply(names(reported))
+    elif settings_manager is not None and provider in CLOUD_PROVIDERS:
+        for entry in settings_manager.get_api_model_catalog(provider) or ():
+            if not isinstance(entry, dict) or entry.get("model_id") != model_id:
+                continue
+            known = names(entry.get("capabilities"))
+            if known:
+                apply(known)
+            break
+
+    if preview["tools"] is False and settings_manager is not None:
+        installed = settings_manager.get_ollama_scanned_models() or ()
+        for candidate in sorted({str(name).strip() for name in installed if str(name).strip()}, key=str.casefold):
+            if is_ollama and candidate.casefold() == model_id.casefold():
+                continue
+            reported = api_provider._get_ollama_capabilities(candidate)
+            if reported is not None and "tools" in names(reported):
+                preview["suggestedToolModel"] = {"provider": "Ollama (Local)", "modelId": candidate}
+                break
+    return preview
+
+
 def _place_harness_node(document: SceneDocument) -> tuple[float, float]:
     """Right of the current scene's real extent - the builder-plan
     placement exactly (no canvas anchor exists for a fresh agent either).
@@ -219,6 +279,13 @@ def register_harness_intents(
 ) -> None:
     publish_scene = make_publish_scene(bus)
 
+    async def model_capability_preview(provider, model_id):
+        # /api/show can perform I/O on first access. Never block the event
+        # loop (or a draft edit's synchronous composer topic publication).
+        return await asyncio.to_thread(
+            _model_capability_preview, getattr(agent_dispatcher, "_settings_manager", None), provider, model_id,
+        )
+
     async def start(goal, max_turns=None, workspace_path=None, execution_profile="host", *, model_ref=None):
         goal_text = str(goal or "").strip()
         if not goal_text:
@@ -381,6 +448,7 @@ def register_harness_intents(
         model as "declined to answer" rather than as an error."""
         agent_dispatcher.answer_harness_question(request_id, answer)
 
+    bus.register_intent("harness", "modelCapabilityPreview", model_capability_preview)
     bus.register_intent("harness", "start", start)
     bus.register_intent("harness", "send", send)
     register_harness_composer_intent(

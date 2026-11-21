@@ -5,6 +5,7 @@ import type { StateListener } from "../../lib/ws/transport";
 import { Popover, useOverlays } from "../overlays/overlays";
 import type { ComparisonModel, ComposerStore } from "./composerStore";
 import { TokenCounter } from "./TokenCounter";
+import { useModelCapabilityPreview } from "../context/ModelCapabilityContext";
 import {
   HarnessExecutionProfileSelect, MAX_HARNESS_TASK_LENGTH, exceedsHarnessTaskLimit, type HarnessExecutionProfile,
 } from "./HarnessLaunchOptions";
@@ -77,6 +78,7 @@ export function Composer({
   contextInspector?: ReactNode | ((useKnowledge: boolean | null, targetNodeId: string | null | undefined) => ReactNode);
 }) {
   const composer = useSyncExternalStore(store.subscribe, store.getComposer);
+  const modelCapabilities = useModelCapabilityPreview();
   const streamText = useSyncExternalStore(store.subscribe, store.getStreamText);
   const overlays = useOverlays();
   const subscribeKnowledge = useCallback(
@@ -393,6 +395,14 @@ export function Composer({
           ))}
         </div>
       )}
+      {!agentMode && composer.context.items.some((item) => item.kind === "image") &&
+        modelCapabilities?.provider === composer.route.provider &&
+        modelCapabilities.modelId === composer.route.modelId &&
+        modelCapabilities.vision === false && (
+          <p className="composer-model-capability-warning" role="status">
+            {modelLabel} does not support image input. Choose a vision-capable model before sending these image attachments.
+          </p>
+        )}
       <KnowledgeFileImportStatus state={knowledgeImport} />
       {agentError && <p className="composer-agent-error" role="alert">{agentError}</p>}
       <div className="composer-input-wrap">
