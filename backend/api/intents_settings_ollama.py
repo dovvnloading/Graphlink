@@ -546,8 +546,11 @@ def register_ollama_server_intents(
 
 def _inventory_context_model(state: SettingsSessionState, model: str) -> dict | None:
     """Match a model against the shared Ollama inventory, including :latest."""
+    if state.ollama_inventory_source != "server" or not valid_ollama_model_name(model):
+        return None
     return next(
-        (row for row in state.ollama_inventory if _key(str(row.get("name", ""))) == _key(model)),
+        (row for row in state.ollama_inventory
+         if row.get("source") == "server" and _key(row.get("name", "")) == _key(model)),
         None,
     )
 
@@ -557,7 +560,7 @@ def _verified_inventory_context_limit(row: dict | None) -> int | None:
     if not row or row.get("source") != "server":
         return None
     length = row.get("trainedContextLength")
-    return length if type(length) is int and length > 0 else None
+    return length if type(length) is int and 0 < length <= 1_000_000 else None
 
 
 def _inspect_ollama_context(model: str) -> tuple[int, int]:
@@ -584,9 +587,17 @@ def register_ollama_context_intents(
     the repository's 300-line register-function ratchet.
     """
 
+    inspection_generation = 0
+
     async def inspect_ollama_context_model(model_name: str) -> None:
-        model = str(model_name or "").strip()
-        if not model or len(model) > 255:
+        nonlocal inspection_generation
+        model = model_name.strip() if isinstance(model_name, str) else ""
+        inspection_generation += 1
+        generation = inspection_generation
+        if not valid_ollama_model_name(model):
+            state.ollama_context_notice = "Enter a valid Ollama model ID."
+            state.ollama_context_status = "error"
+            await bus.publish("app-settings")
             return
         state.ollama_context_model = model
         state.ollama_context_status = "loading"
@@ -596,16 +607,22 @@ def register_ollama_context_intents(
         state.ollama_context_kv_bytes_per_token = 0
         state.ollama_context_available_memory_bytes = 0
         await bus.publish("app-settings")
+        # Never issue /api/show for an arbitrary name supplied via WebSocket.
+        if _inventory_context_model(state, model) is None:
+            state.ollama_context_status = "error"
+            state.ollama_context_notice = "Refresh the Ollama server inventory before inspecting this model."
+            await bus.publish("app-settings")
+            return
         try:
             kv_bytes, available = await asyncio.to_thread(_inspect_ollama_context, model)
         except Exception as exc:  # noqa: BLE001 - inspection failures must not disable Settings
-            if state.ollama_context_model == model:
+            if inspection_generation == generation:
                 state.ollama_context_status = "error"
                 state.ollama_context_notice = f"Could not inspect this model: {exc}"
                 await bus.publish("app-settings")
             return
         # A slow show()/list() for A must not replace B's selected metadata.
-        if state.ollama_context_model != model:
+        if inspection_generation != generation:
             return
         # Source trained length and model weight size from PR 917's shared inventory.
         row = _inventory_context_model(state, model)
@@ -622,11 +639,13 @@ def register_ollama_context_intents(
         await bus.publish("app-settings")
 
     async def set_ollama_context_window(model_name: str, value: int) -> None:
-        model = str(model_name or "").strip()
+        model = model_name.strip() if isinstance(model_name, str) else ""
         # Do not coerce strings, booleans, floats or arbitrary integers from
-        # the WebSocket into a serving allocation.
-        if not model or len(model) > 255 or type(value) is not int or value not in CONTEXT_CHOICES:
-            state.ollama_context_notice = "Choose a valid Ollama model and context window."
+        # the WebSocket into a serving allocation. Only verified installed
+        # models may trigger /api/show or accept a new override.
+        if (not valid_ollama_model_name(model) or type(value) is not int
+                or value not in CONTEXT_CHOICES or _inventory_context_model(state, model) is None):
+            state.ollama_context_notice = "Choose a verified installed Ollama model and context window."
             await bus.publish("app-settings")
             return
 
