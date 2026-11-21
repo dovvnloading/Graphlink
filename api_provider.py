@@ -897,8 +897,8 @@ def _get_ollama_context_window(model_name: str | None) -> int | None:
        The request path passes this same value back as options.num_ctx
        (OllamaProvider), so the budget and the served context are the SAME
        number."""
-    normalized_model = (model_name or "").strip()
-    if not normalized_model:
+    normalized_model = model_name.strip() if isinstance(model_name, str) else ""
+    if not valid_ollama_model_name(normalized_model):
         return None
 
     cache_key = normalized_model.lower()
