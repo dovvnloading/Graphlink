@@ -105,6 +105,13 @@ const NOTIFICATION_TYPE_LABELS: Record<string, string> = {
 const MODE_OLLAMA_LOCAL = "Ollama (Local)";
 const MODE_LLAMACPP_LOCAL = "Llama.cpp (Local)";
 
+const OLLAMA_SERVER_STATUS_LABELS: Record<string, string> = {
+  checking: "Checking...",
+  running: "Running",
+  installed: "Installed but not running",
+  not_found: "Not found",
+};
+
 const initialState: AppSettingsState = {
   schemaVersion: 1,
   minCompatibleSchemaVersion: 1,
@@ -169,6 +176,9 @@ const initialState: AppSettingsState = {
   ollamaModelChecks: [],
   ollamaInventorySource: "",
   ollamaServerReachable: null,
+  ollamaServerStatus: "checking",
+  ollamaStartStatus: "idle",
+  ollamaStartError: "",
   ollamaScanSummary: "",
   ollamaScanStatus: "idle",
   ollamaPullStatus: "idle",
@@ -877,6 +887,30 @@ function OllamaPage({ state, transport }: { state: AppSettingsState; transport: 
   return (
     <div className="settings-general-page">
       <ProviderModeSwitch mode={MODE_OLLAMA_LOCAL} state={state} transport={transport} />
+
+      <p className="settings-update-status" role="status" aria-label="Ollama server status">
+        Ollama server: {OLLAMA_SERVER_STATUS_LABELS[state.ollamaServerStatus] ?? "Checking..."}
+      </p>
+      {state.ollamaServerStatus === "installed" && (
+        <div className="settings-button-row">
+          <button
+            type="button"
+            className="settings-button settings-button-primary"
+            disabled={state.ollamaStartStatus === "starting"}
+            onClick={() => transport.fireIntent("app-settings", "startOllama", [])}
+          >
+            Start Ollama
+          </button>
+        </div>
+      )}
+      {state.ollamaStartStatus === "starting" && (
+        <p className="settings-update-status">Starting Ollama...</p>
+      )}
+      {state.ollamaStartError && (
+        <p className="settings-update-status" role="alert" data-level="error">
+          {state.ollamaStartError}
+        </p>
+      )}
 
       <fieldset className="settings-fieldset">
         <legend>Reasoning Level</legend>
@@ -1759,6 +1793,28 @@ export function SettingsDialog({ transport }: { transport: WsTransport }) {
   // part of "app-settings" (which this dialog otherwise reads exclusively),
   // so this is a sibling subscription, not a repurposing of `state` above.
   const [pluginsState, setPluginsState] = useState<AppPluginsState>(initialPluginsState);
+  const overlays = useOverlays();
+  const settingsOpen = overlays.isOpen("settings");
+
+  // The dialog stays mounted after closing. Poll only while visible, including
+  // when a non-Ollama Settings section is selected. Focus/reopen refreshes
+  // immediately without re-scanning every installed model.
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const checkStatus = () => transport.fireIntent("app-settings", "checkOllamaStatus", []);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") checkStatus();
+    };
+    checkStatus();
+    const interval = window.setInterval(checkStatus, 30_000);
+    window.addEventListener("focus", checkStatus);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", checkStatus);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [settingsOpen, transport]);
 
   useEffect(() => {
     return transport.subscribe("app-settings", (payload) => {

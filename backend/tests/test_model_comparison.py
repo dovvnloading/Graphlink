@@ -17,7 +17,7 @@ from backend.agents import AgentDispatcher
 from backend.canvas import register_canvas
 from backend.composer import ComposerDocument
 from backend.context_engine.model_comparison import (
-    available_comparison_models, validate_comparison_models,
+    available_comparison_models, available_picker_models, validate_comparison_models,
 )
 from backend.events import SessionBus
 from backend.notifications import NotificationState
@@ -247,3 +247,35 @@ def test_ordinary_single_send_still_uses_original_chat_slot(monkeypatch):
         assert user_id in document.nodes
 
     asyncio.run(run())
+
+
+def test_picker_reads_live_shared_inventory_and_configured_cloud_without_stale_scan(monkeypatch):
+    settings = ComparisonSettings()
+    settings.cloud_models["Anthropic Claude"] = ["claude-test"]
+    records = [
+        {"name": "tool-vision:latest", "capabilities": ["chat", "tools", "vision", "thinking"],
+         "sizeBytes": 3_221_225_472},
+        {"name": "embed:latest", "capabilities": ["embeddings"], "sizeBytes": 12345},
+        {"name": "unknown:latest", "capabilities": [], "sizeBytes": None},
+    ]
+    calls = []
+    def inventory():
+        calls.append(True)
+        return {"inventory": records}
+    monkeypatch.setattr("backend.ollama_inventory.build_ollama_inventory", inventory)
+
+    runtime = api_provider.ProviderRuntime()
+    runtime.initialize_local_provider(config.LOCAL_PROVIDER_OLLAMA)
+    options = available_picker_models(settings, runtime)
+    assert len(calls) == 1
+    assert {(row["provider"], row["modelId"]) for row in options} == {
+        ("Ollama", row["name"]) for row in records
+    } | {("Anthropic Claude", "claude-test")}
+    local = next(row for row in options if row["modelId"] == "tool-vision:latest")
+    assert local["source"] == "local"
+    assert local["sizeBytes"] == 3_221_225_472
+    assert local["capabilities"] == ["chat", "tools", "vision", "thinking"]
+    assert next(row for row in options if row["modelId"] == "embed:latest")["capabilities"] == ["embeddings"]
+    assert next(row for row in options if row["modelId"] == "unknown:latest")["sizeBytes"] is None
+    assert next(row for row in options if row["provider"] == "Anthropic Claude")["source"] == "cloud"
+    assert not any(row["provider"] == "Google Gemini" for row in options)

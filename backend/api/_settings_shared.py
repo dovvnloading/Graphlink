@@ -353,6 +353,10 @@ class SettingsSessionState:
     ollama_inventory: list[dict] = field(default_factory=list)
     ollama_inventory_source: str = ""
     ollama_server_reachable: bool | None = None
+    ollama_server_status: str = "checking"
+    ollama_start_status: str = "idle"
+    ollama_start_error: str = ""
+    ollama_status_checking: bool = False
     ollama_model_checks: dict[str, dict] = field(default_factory=dict)
     ollama_check_task: asyncio.Task[None] | None = None
     ollama_check_name: str = ""

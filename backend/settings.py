@@ -370,6 +370,9 @@ def _build_settings_payload(
     payload["ollamaModelChecks"] = list(state.ollama_model_checks.values())
     payload["ollamaInventorySource"] = state.ollama_inventory_source
     payload["ollamaServerReachable"] = state.ollama_server_reachable
+    payload["ollamaServerStatus"] = state.ollama_server_status
+    payload["ollamaStartStatus"] = state.ollama_start_status
+    payload["ollamaStartError"] = state.ollama_start_error
     payload["ollamaScanSummary"] = _ollama_scan_summary(manager)
     payload["ollamaScanStatus"] = state.ollama_scan_status
     payload["ollamaPullStatus"] = state.ollama_pull_status

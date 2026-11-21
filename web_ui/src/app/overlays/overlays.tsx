@@ -167,6 +167,16 @@ export function OverlayProvider({ children }: { children: ReactNode }) {
   return <OverlayContext.Provider value={value}>{children}</OverlayContext.Provider>;
 }
 
+/**
+ * Standalone canvas nodes can be mounted outside the app shell (for example,
+ * in a focused renderer or on a test rerender). Reuse the app's shared overlay
+ * stack whenever it exists; only create a local one when no provider exists.
+ */
+export function OverlayProviderIfMissing({ children }: { children: ReactNode }) {
+  const parent = useContext(OverlayContext);
+  return parent ? <>{children}</> : <OverlayProvider>{children}</OverlayProvider>;
+}
+
 const ANCHOR_MARGIN = 8;
 const ANCHOR_GAP = 6;
 

@@ -69,6 +69,7 @@ def test_default_payload_matches_generated_validator_shape(monkeypatch):
     # what it used to - the old assertion was itself the encoded-as-correct
     # deferral, which is exactly the shape of bug this feature exists to fix.
     assert payload["capabilities"]["attachments"] is True
+    assert payload["capabilities"]["modelSelection"] is True, "empty model inventory must not lock the picker"
     assert payload["context"]["items"] == [], "no attachment staged yet on a fresh document"
     assert payload["request"]["canSend"] is True, "idle state can send now that R4 agent dispatch has landed"
 
@@ -788,3 +789,50 @@ def test_attach_file_types_are_valid_pywebview_filters():
 
     for file_type in ATTACH_FILE_TYPES:
         util.parse_file_type(file_type)  # raises ValueError if invalid
+
+
+def test_provider_qualified_picker_selection_persists_local_and_cloud(tmp_path, monkeypatch):
+    manager = SettingsManager(tmp_path / "picker.dat")
+    runtime = api_provider.ProviderRuntime()
+    runtime.initialize_local_provider(config.LOCAL_PROVIDER_OLLAMA)
+    manager.save_cloud_profile(
+        config.API_PROVIDER_ANTHROPIC, "https://api.anthropic.com", "picker-test-key",
+        {config.TASK_CHAT: "claude-original"},
+    )
+    manager.set_current_mode(config.MODE_OLLAMA_LOCAL)
+    monkeypatch.setattr(api_provider, "_build_api_client",
+                        lambda provider, key, endpoint=None: (object(), key, endpoint))
+    choices = [
+        {"provider": "Ollama", "modelId": "tool-chat:8b",
+         "capabilities": ["chat", "tools"]},
+        {"provider": "Ollama", "modelId": "embed-only",
+         "capabilities": ["embeddings"]},
+        {"provider": config.API_PROVIDER_ANTHROPIC, "modelId": "claude-next",
+         "capabilities": []},
+    ]
+    monkeypatch.setattr("backend.context_engine.model_comparison.available_picker_models",
+                        lambda settings, live: choices)
+
+    async def run():
+        bus = SessionBus("picker-persistence-test")
+        counter = register_token_counter(bus)
+        notifications = register_notifications(bus)
+        composer = register_composer(bus, counter, manager, notifications, runtime)
+
+        await bus.dispatch_intent("app-composer", "selectPickerModel", ["Ollama", "embed-only"])
+        await bus.dispatch_intent("app-composer", "selectPickerModel", ["Ollama", "not-installed"])
+        assert manager.get_ollama_model_assignments().get(config.TASK_CHAT, {}).get("model_id") != "embed-only"
+
+        await bus.dispatch_intent("app-composer", "selectPickerModel", ["Ollama", "tool-chat:8b"])
+        assert manager.get_ollama_model_assignments()[config.TASK_CHAT]["model_id"] == "tool-chat:8b"
+        assert composer.route()["modelId"] == "tool-chat:8b"
+        assert manager.get_current_mode() == config.MODE_OLLAMA_LOCAL
+
+        await bus.dispatch_intent("app-composer", "selectPickerModel", [
+            config.API_PROVIDER_ANTHROPIC, "claude-next",
+        ])
+        assert manager.get_current_mode() == config.MODE_API_ENDPOINT
+        assert manager.get_api_models(config.API_PROVIDER_ANTHROPIC)[config.TASK_CHAT] == "claude-next"
+        assert composer.route()["modelId"] == "claude-next"
+
+    asyncio.run(run())

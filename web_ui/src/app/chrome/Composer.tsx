@@ -5,6 +5,7 @@ import type { StateListener } from "../../lib/ws/transport";
 import { Popover, useOverlays } from "../overlays/overlays";
 import type { ComparisonModel, ComposerStore } from "./composerStore";
 import { TokenCounter } from "./TokenCounter";
+import { ModelPicker } from "./ModelPicker";
 import { useModelCapabilityPreview } from "../context/ModelCapabilityContext";
 import {
   HarnessExecutionProfileSelect, MAX_HARNESS_TASK_LENGTH, exceedsHarnessTaskLimit, type HarnessExecutionProfile,
@@ -534,12 +535,8 @@ export function Composer({
             aria-haspopup="dialog"
             aria-pressed={overlays.isOpen("model")}
             aria-label={`${composer.route.provider} model: ${modelLabel}`}
-            disabled={!composer.capabilities.modelSelection || !composer.request.canSend}
-            title={
-              composer.capabilities.modelSelection
-                ? `Choose the ${composer.route.provider} model for chat`
-                : "Choose a model in Settings for this provider"
-            }
+            disabled={!composer.request.canSend}
+            title="Choose a local or configured cloud model"
             onClick={() => overlays.toggle("model", "popover")}
           >
             <span className="composer-control-value composer-control-value-model">{modelLabel}</span>
@@ -625,62 +622,6 @@ export function Composer({
       <Reasoning store={store} />
       {overlays.isOpen("model") && <ModelPicker key={composer.route.provider} store={store} />}
     </div>
-  );
-}
-
-function ModelPicker({ store }: { store: ComposerStore }) {
-  const composer = useSyncExternalStore(store.subscribe, store.getComposer);
-  const overlays = useOverlays();
-  const [query, setQuery] = useState("");
-  const search = query.trim().toLowerCase();
-  const options = composer.route.modelOptions;
-  const matches = options.filter(({ id, label }) =>
-    id.toLowerCase().includes(search) || label.toLowerCase().includes(search),
-  );
-
-  return (
-    <Popover anchored name="model" label="Choose a model" className="reasoning-popover model-picker-popover">
-      {options.length > 8 && (
-        <input
-          type="search"
-          className="model-picker-search"
-          aria-label="Search models"
-          placeholder={`Search ${options.length} models…`}
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={(event) => {
-            // Search is the keyboard's active focus target. When there is
-            // exactly one match, Enter chooses it without a separate Tab.
-            // IME composition's Enter must still commit the composition.
-            if (event.key === "Enter" && !event.nativeEvent.isComposing && matches.length === 1) {
-              event.preventDefault();
-              store.selectModel(matches[0].id);
-              overlays.close();
-            }
-          }}
-        />
-      )}
-      <div className="model-picker-results">
-        {matches.map((option) => (
-          <button
-            key={option.id}
-            type="button"
-            aria-pressed={option.id === composer.route.modelId}
-            className={"reasoning-option" + (option.id === composer.route.modelId ? " active" : "")}
-            onClick={() => {
-              store.selectModel(option.id);
-              overlays.close();
-            }}
-          >
-            <span className="reasoning-option-label">{option.label}</span>
-            {option.id === composer.route.modelId && <span aria-hidden="true">✓</span>}
-          </button>
-        ))}
-        {matches.length === 0 && <p className="model-picker-empty" role="status">
-          {search ? "No matching models." : "Choose a model in provider settings."}
-        </p>}
-      </div>
-    </Popover>
   );
 }
 

@@ -474,6 +474,15 @@
     "ollamaServerReachable": {
       "type": "boolean"
     },
+    "ollamaServerStatus": {
+      "type": "string"
+    },
+    "ollamaStartError": {
+      "type": "string"
+    },
+    "ollamaStartStatus": {
+      "type": "string"
+    },
     "providerMode": {
       "type": "string"
     },
@@ -545,6 +554,9 @@
     "ollamaInventory",
     "ollamaModelChecks",
     "ollamaInventorySource",
+    "ollamaServerStatus",
+    "ollamaStartStatus",
+    "ollamaStartError",
     "ollamaScanSummary",
     "ollamaScanStatus",
     "ollamaPullStatus",

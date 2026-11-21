@@ -10,6 +10,11 @@ not evidence that a model lacks a capability or is unloaded.
 from __future__ import annotations
 
 from collections.abc import Mapping
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
 
 import ollama
 
@@ -23,6 +28,73 @@ _CAPABILITIES = {
     "embeddings": "embeddings",
     "thinking": "thinking",
 }
+
+
+def _installed_ollama_command() -> list[str] | None:
+    """Resolve only a local, already-installed Ollama app or executable.
+
+    A model manifest is not evidence that the application is installed.
+    Prefer desktop apps where they exist; otherwise use the installed CLI
+    to serve requests. Never run an installer, downloader or shell command.
+    """
+    if sys.platform == "darwin":
+        for app in (Path("/Applications/Ollama.app"), Path.home() / "Applications" / "Ollama.app"):
+            if app.is_dir():
+                return ["/usr/bin/open", str(app)]
+    elif sys.platform == "win32":
+        for variable in ("LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)"):
+            root = os.environ.get(variable)
+            if not root:
+                continue
+            folder = Path(root) / ("Programs/Ollama" if variable == "LOCALAPPDATA" else "Ollama")
+            for name in ("ollama app.exe", "Ollama.exe", "ollama.exe"):
+                executable = folder / name
+                if executable.is_file():
+                    return [str(executable)] if name == "ollama app.exe" else [str(executable), "serve"]
+
+    cli = shutil.which("ollama.exe" if sys.platform == "win32" else "ollama")
+    if cli and Path(cli).is_file():
+        return [cli, "serve"]
+    if sys.platform != "win32":
+        for executable in (Path("/usr/local/bin/ollama"), Path("/usr/bin/ollama"), Path.home() / ".local/bin/ollama"):
+            if executable.is_file():
+                return [str(executable), "serve"]
+    return None
+
+
+def check_ollama_server_status() -> str:
+    """Lightweight live status; the full model inventory is a separate scan."""
+    try:
+        ollama.list()  # The same /api/tags reachability signal as the shared inventory.
+    except Exception:
+        return "installed" if _installed_ollama_command() is not None else "not_found"
+    return "running"
+
+
+def start_installed_ollama() -> bool:
+    """Start the installed application, never downloading or installing it.
+
+    Returns False if the daemon was already running. A failed spawn propagates
+    to the Settings intent so it can report an actionable error.
+    """
+    if check_ollama_server_status() == "running":
+        return False
+    command = _installed_ollama_command()
+    if command is None:
+        raise FileNotFoundError("Ollama is not installed on this computer.")
+
+    options = dict(
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        close_fds=True, shell=False,
+    )
+    if sys.platform == "win32":
+        # Only a CLI server needs its console hidden; a GUI app stays a GUI app.
+        if command[-1] == "serve":
+            options["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    else:
+        options["start_new_session"] = True
+    subprocess.Popen(command, **options)
+    return True
 
 
 def _field(value: object, name: str, default=None):
@@ -122,6 +194,9 @@ def _folder_inventory(scan_path: str | None, *, server_error: str = "") -> dict:
         "locations": scan.get("locations", []),
         "server_reachable": False if not scan_path else None,
         "server_error": server_error,
+        "server_status": None if scan_path else (
+            "installed" if _installed_ollama_command() is not None else "not_found"
+        ),
     }
 
 
@@ -176,4 +251,5 @@ def build_ollama_inventory(scan_path: str | None = None) -> dict:
         "locations": [],
         "server_reachable": True,
         "server_error": "",
+        "server_status": "running",
     }
