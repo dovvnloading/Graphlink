@@ -2481,7 +2481,7 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                             if isinstance(content, list):
                                 last["content"] = [*content, {"type": "text", "text": correction}]
                             else:
-                                last["content"] = f"{content}\\n\\n{correction}"
+                                last["content"] = f"{content}\n\n{correction}"
                             json_messages = [*json_messages[:-1], last]
                         else:
                             json_messages = [*json_messages, {"role": "user", "content": correction}]
