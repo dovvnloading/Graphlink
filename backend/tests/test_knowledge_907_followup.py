@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import os
 import stat
-from pathlib import Path
 from types import SimpleNamespace
 from zipfile import ZIP_DEFLATED, ZipFile
 
