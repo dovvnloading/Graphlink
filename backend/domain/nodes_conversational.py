@@ -162,6 +162,45 @@ class ConversationalOps(SceneDocumentParts):
         # A scientific source card is only valid for its original snapshot.
         node.state.science_reference = None
 
+    def _require_editable_user_message(
+        self, node_id: str, content: str, expected_content: str,
+    ) -> SceneNode:
+        """Validate before any graph write, including before branch placement."""
+        node = require_node(self.nodes, node_id, "chat", ChatState)
+        if not node.state.is_user:
+            raise SceneError("Only user chat messages can be edited.")
+        if node.pending_request_id:
+            raise SceneError("Cannot edit a message while a request is running.")
+        if not isinstance(content, str) or not content.strip():
+            raise SceneError("Edited message must contain nonempty text.")
+        if not isinstance(expected_content, str) or node.content != expected_content:
+            raise SceneError("The message changed while you were editing; reopen the latest version.")
+        return node
+
+    def edit_chat_message(
+        self, node_id: str, content: str, expected_content: str,
+    ) -> SceneNode:
+        """Edit the selected user turn in place; retain the prior text as a version."""
+        node = self._require_editable_user_message(node_id, content, expected_content)
+        if content == node.content:
+            return node  # A no-change save must not consume a version or undo slot.
+        return self.update_chat_node_content(node_id, content)
+
+    def branch_edited_chat_message(
+        self, node_id: str, content: str, expected_content: str,
+    ) -> SceneNode:
+        """Fork a new user turn beside the original, without touching its replies.
+
+        Resolve the canonical structural parent, not an arbitrary reference
+        edge: history, regeneration and organizing all use this same ancestry.
+        A parentless message forks as another root.
+        """
+        original = self._require_editable_user_message(node_id, content, expected_content)
+        parent_edge = self._branch_parent_edge(original.id)
+        parent_id = parent_edge.source if parent_edge is not None else None
+        x, y = self.place_child(parent_id, "chat") if parent_id else self.place_root("chat")
+        return self.add_chat_node(x, y, content, True, parent_id=parent_id)
+
     def set_chat_collapsed(self, node_id: str, collapsed: bool) -> None:
         node = self.nodes.get(node_id)
         if node is None:

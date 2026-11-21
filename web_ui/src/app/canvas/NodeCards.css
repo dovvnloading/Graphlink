@@ -313,6 +313,37 @@
   padding-block: 2px 15px;
 }
 
+/* Reuse NodeShell and the established multiline edit controls. */
+.chat-node-edit-panel { display: grid; gap: 8px; }
+.chat-node-editor {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 132px;
+  padding: 8px 10px;
+  border: 1px solid var(--gl-graph-border);
+  border-radius: 5px;
+  background: var(--gl-surface-inset, var(--gl-graph-surface));
+  color: var(--gl-surface-text-primary);
+  font: inherit;
+  line-height: 1.5;
+  resize: vertical;
+}
+.chat-node-editor:focus-visible { outline: 2px solid var(--gl-focus-ring); outline-offset: 1px; }
+.chat-node-edit-actions { display: flex; gap: 8px; }
+.chat-node-edit-actions button {
+  padding: 4px 9px;
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 5px;
+  background: var(--gl-neutral-button-background);
+  color: var(--gl-surface-text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+.chat-node-edit-actions button:hover:not(:disabled) { background: var(--gl-neutral-button-hover); }
+.chat-node-edit-actions button:disabled { opacity: 0.5; cursor: default; }
+.chat-node-edit-hint { color: var(--gl-surface-text-secondary); }
+.chat-node-edit-panel p[role="alert"] { margin: 0; color: var(--gl-semantic-status-error); }
+
 .node-heading-row .chat-node-status-badge {
   width: 5px;
   height: 5px;

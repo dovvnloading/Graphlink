@@ -1075,6 +1075,32 @@ def register_chat_version_intents(
     bus.register_intent("scene", "setChatVersion", set_chat_version)
 
 
+def register_chat_edit_intents(
+    bus: SessionBus, document: SceneDocument, publish_scene,
+) -> None:
+    """User-authored edits only: neither action dispatches or re-runs replies."""
+
+    async def edit_chat_message(node_id, content, expected_content):
+        document.record_command(
+            "editChatMessage", "user",
+            lambda: document.edit_chat_message(node_id, content, expected_content),
+            node_ids=[node_id],
+        )
+        await publish_scene()
+
+    async def edit_chat_message_as_new_branch(node_id, content, expected_content):
+        node, _command = document.record_command(
+            "editChatMessageAsNewBranch", "user",
+            lambda: document.branch_edited_chat_message(node_id, content, expected_content),
+            node_ids=[node_id],
+        )
+        await publish_scene()
+        return node.id
+
+    bus.register_intent("scene", "editChatMessage", edit_chat_message)
+    bus.register_intent("scene", "editChatMessageAsNewBranch", edit_chat_message_as_new_branch)
+
+
 def register_chat_intents(
     bus: SessionBus,
     document: SceneDocument,
@@ -1255,4 +1281,5 @@ def register_chat_intents(
         bus, document, notifications, agent_dispatcher, composer_document,
         token_counter, publish_scene, publish_token_counter,
     )
+    register_chat_edit_intents(bus, document, publish_scene)
     register_chat_cancel_intent(bus, agent_dispatcher, comparison_cancelled_requests)
