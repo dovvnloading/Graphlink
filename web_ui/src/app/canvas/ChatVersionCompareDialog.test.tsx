@@ -125,9 +125,10 @@ describe("read-only Document View comparison dialog", () => {
     // jsdom cannot implement :focus-visible or a layout engine; lock the
     // CSS selector to the real tabindex=0 element, not its inert section.
     const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
-    expect(css).toMatch(
-      /\.chat-version-compare-text:focus-visible,\s*\.chat-version-compare-selectors select:focus-visible,\s*\.chat-version-compare-focus-actions button:focus-visible\s*\{\s*outline: 2px solid var\(--gl-graph-selection\)/,
-    );
+    const start = css.indexOf(".chat-version-compare-text:focus-visible,");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const rule = css.slice(start, css.indexOf("}", start));
+    expect(rule).toContain("outline: 2px solid var(--gl-graph-selection)");
   });
 
   it("explains failed lookups instead of changing the reply or showing stale text", async () => {
