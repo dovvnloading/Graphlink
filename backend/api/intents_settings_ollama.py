@@ -340,8 +340,10 @@ def register_ollama_model_management_intents(
                 succeeded = False
                 async for update in stream:
                     raw_status = _field(update, "status")
-                    if isinstance(raw_status, str) and raw_status.strip().casefold() == "success":
-                        succeeded = True
+                    # Only the *terminal* event can confirm success.
+                    # A forged early "success" followed by more transfer
+                    # events must not cause a partial model to be selected.
+                    succeeded = isinstance(raw_status, str) and raw_status.strip().casefold() == "success"
                     await progress(update)
                 if not succeeded:
                     raise RuntimeError("Ollama ended the download without confirming success.")
