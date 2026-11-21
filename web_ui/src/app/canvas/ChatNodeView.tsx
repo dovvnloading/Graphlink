@@ -75,6 +75,10 @@ import { useStreamBuffer } from "./useStreamBuffer";
 export interface ChatNodeData extends Record<string, unknown> {
   content: string;
   isUser: boolean;
+  // Full alternatives stay in the saved graph, not every scene snapshot.
+  versionCount: number;
+  versionIndex: number;
+  onSelectVersion: (index: number) => void;
   isCollapsed: boolean;
   staleness?: "current" | "out_of_date" | "upstream_changed";
   dockedChildren: { id: string; label: string }[];
@@ -717,6 +721,8 @@ export function chatNodePropsAreEqual(prev: NodeProps<ChatFlowNode>, next: NodeP
   return (
     a.content === b.content &&
     a.isUser === b.isUser &&
+    a.versionCount === b.versionCount &&
+    a.versionIndex === b.versionIndex &&
     a.isCollapsed === b.isCollapsed &&
     a.staleness === b.staleness &&
     a.isBranchFocusActive === b.isBranchFocusActive &&
@@ -739,6 +745,7 @@ export function chatNodePropsAreEqual(prev: NodeProps<ChatFlowNode>, next: NodeP
     a.onDelete === b.onDelete &&
     a.onUndockChild === b.onUndockChild &&
     a.onRegenerate === b.onRegenerate &&
+    a.onSelectVersion === b.onSelectVersion &&
     a.onGenerateImage === b.onGenerateImage &&
     a.onGenerateChart === b.onGenerateChart &&
     a.onGenerateKeyTakeaway === b.onGenerateKeyTakeaway &&
@@ -910,6 +917,19 @@ export const ChatNodeView = memo(function ChatNodeView({
         >
           <span className="chat-node-role-group">
             <span>{data.isUser ? "You" : "Assistant"}</span>
+            {data.versionCount > 1 && (
+              <span className="chat-node-version-switcher nodrag" role="group" aria-label="Message versions">
+                <button type="button" className="chat-node-version-button nodrag"
+                  aria-label="Previous version" title="Previous version"
+                  disabled={data.versionIndex <= 0 || !!data.pendingRequestId}
+                  onClick={() => data.onSelectVersion(data.versionIndex - 1)}>‹</button>
+                <span aria-live="polite">{data.versionIndex + 1}/{data.versionCount}</span>
+                <button type="button" className="chat-node-version-button nodrag"
+                  aria-label="Next version" title="Next version"
+                  disabled={data.versionIndex >= data.versionCount - 1 || !!data.pendingRequestId}
+                  onClick={() => data.onSelectVersion(data.versionIndex + 1)}>›</button>
+              </span>
+            )}
             <span
               className="chat-node-status-badge"
               data-status={data.branchStatus}

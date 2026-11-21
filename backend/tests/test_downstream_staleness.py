@@ -213,3 +213,63 @@ def test_publish_hashes_each_message_once_even_on_a_deep_branch():
     # The existing 500-node event-loop watchdog additionally guards wall time.
     doc.update_chat_node_content(parent.id, "Different")
     assert _states(doc)[reply.id] == "out_of_date"
+
+
+def test_only_selected_version_changes_downstream_staleness():
+    doc = SceneDocument()
+    question = doc.add_chat_node(0, 0, "first question", True)
+    answer = _answer(doc, question, text="first answer")
+    downstream = _answer(doc, answer, text="dependent")
+    assert _states(doc)[downstream.id] == "current"
+
+    # Regeneration appends a new current version, leaving a hidden original.
+    doc.update_chat_node_content(answer.id, "second answer")
+    answer.state.provider = "Test"
+    answer.state.model = "model-a"
+    answer.state.reply_history_fingerprint = fingerprint_for_reply(
+        doc, question.id, "Test", "model-a", False,
+    )
+    answer.state.reply_knowledge_enabled = False
+    doc.sync_chat_version(answer.id)
+    assert _states(doc)[downstream.id] == "out_of_date"
+
+    doc.set_chat_version(answer.id, 0)
+    assert _states(doc)[downstream.id] == "current"
+    # The unselected stored answer's text must not enter the hash.
+    answer.state.versions[1].content = "hidden history changed"
+    assert _states(doc)[downstream.id] == "current"
+    doc.set_chat_version(answer.id, 1)
+    assert _states(doc)[downstream.id] == "out_of_date"
+
+
+def test_reply_versions_restore_their_own_fingerprint_after_switch_and_reload():
+    doc = SceneDocument()
+    question = doc.add_chat_node(0, 0, "original question", True)
+    answer = _answer(doc, question, text="old answer")
+    old_proof = answer.state.reply_history_fingerprint
+    doc.sync_chat_version(answer.id)
+    doc.update_chat_node_content(question.id, "edited question")
+    doc.update_chat_node_content(answer.id, "new answer")
+    new_proof = fingerprint_for_reply(doc, question.id, "Test", "model-b", True)
+    answer.state.provider = "Test"
+    answer.state.model = "model-b"
+    answer.state.reply_history_fingerprint = new_proof
+    answer.state.reply_knowledge_enabled = True
+    doc.sync_chat_version(answer.id)
+    assert _states(doc)[answer.id] == "current"
+
+    doc.set_chat_version(answer.id, 0)
+    assert answer.state.reply_history_fingerprint == old_proof
+    assert _states(doc)[answer.id] == "out_of_date"
+    doc.set_chat_version(answer.id, 1)
+    assert answer.state.reply_history_fingerprint == new_proof
+    assert _states(doc)[answer.id] == "current"
+
+    saved = _serialize_chat_node(answer)
+    assert [row["reply_history_fingerprint"] for row in saved["versions"]] == [
+        old_proof, new_proof,
+    ]
+    restored = _restore_chat_payload(saved)
+    assert restored.state.reply_history_fingerprint == new_proof
+    assert restored.state.versions[0].reply_history_fingerprint == old_proof
+    assert restored.state.versions[1].reply_knowledge_enabled is True

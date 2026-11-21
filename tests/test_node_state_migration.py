@@ -84,7 +84,7 @@ MIGRATED_KIND_FIELDS = {
     ],
     "container": ["group_width", "group_height"],
     "chat": [
-        "is_user", "chat_scroll_value", "content_parts", "provider", "model",
+        "is_user", "versions", "version_index", "chat_scroll_value", "content_parts", "provider", "model",
         "is_branch_synthesis", "synthesis_instructions", "branch_status",
         "reply_history_fingerprint", "reply_knowledge_enabled",
     ],
@@ -353,7 +353,7 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "artifactContent", "artifactError", "artifactProposalId", "attachmentKind", "branchStatus", "byteSize",
     "chartAspectLocked", "chartData",
     "chartError", "chartHeight", "chartSourceNodeId", "chartType", "chartWidth",
-    "chatScrollValue", "code", "codeSandboxAnalysis",
+    "chatScrollValue", "versionCount", "versionIndex", "code", "codeSandboxAnalysis",
     "codeSandboxApprovalAllowSourceBuilds", "codeSandboxApprovalIsRepair",
     "codeSandboxApprovalRequirements",
     "codeSandboxAwaitingApproval", "codeSandboxCode", "codeSandboxError",

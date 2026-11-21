@@ -130,6 +130,11 @@ function setup(overrides: Partial<AppSettingsState> = {}) {
     fireIntent: (topic: string, intent: string, args: unknown[] = []) => {
       intents.push([topic, intent, args]);
     },
+    // Health checks are untracked: only the published snapshot matters, not
+    // a request acknowledgement that could time out after Connected.
+    intent: (topic: string, intent: string, args: unknown[] = []) => {
+      intents.push([topic, intent, args]);
+    },
   } as unknown as WsTransport;
   const user = userEvent.setup();
   let state = { ...baseState, ...overrides };
@@ -386,8 +391,15 @@ describe("Settings > Ollama", () => {
     }] });
     const card = within(screen.getByRole("group", { name: "first:latest" }));
     expect(card.getByText(/Sample load time: 2.25 s/)).toHaveTextContent("42.5 tokens/s");
-    expect(card.getByText(/Tool probe: No tool call returned/)).toHaveAttribute("data-level", "warning");
+    expect(card.getByText(/Tool probe: No tool call observed/)).toHaveAttribute("data-level", "warning");
     expect(card.getByText(/Tool probe not supported/)).toBeInTheDocument();
+    update({ ollamaModelChecks: [{
+      name: "first:latest", status: "complete", loadSeconds: 2.25,
+      tokensPerSecond: 42.5, toolCallingWorks: null,
+      message: "Tool probe inconclusive: reasoning output without a matching tool call.",
+    }] });
+    expect(card.getByText(/Tool probe: Inconclusive/)).toHaveAttribute("data-level", "warning");
+    expect(card.getByText(/Tool probe inconclusive: reasoning output/)).toBeInTheDocument();
     update({ ollamaModelChecks: [{
       name: "first:latest", status: "error", loadSeconds: null,
       tokensPerSecond: null, toolCallingWorks: null, message: "Check failed: daemon offline",
@@ -539,6 +551,62 @@ describe("Settings > Ollama", () => {
     await user.click(screen.getByRole("button", { name: "chat:latest" }));
     update({ ollamaModelAssignments: { task_chat: "chat:latest" } });
     expect(screen.queryByText(/embedding-only model and cannot generate text/)).not.toBeInTheDocument();
+  });
+
+  it("hides chat context controls and preset errors on embedding-only model cards", () => {
+    const { intents } = setup({
+      ollamaInventorySource: "server", ollamaServerReachable: true, ollamaServerStatus: "running",
+      ollamaInventory: [
+        inventoryModel("nomic-embed-text:latest", {
+          capabilities: ["embeddings"], trainedContextLength: 6000, sizeBytes: 274_000_000,
+        }),
+        inventoryModel("chat:latest", { trainedContextLength: 16384 }),
+      ],
+      ollamaContextWindows: { "nomic-embed-text:latest": 8192 },
+      ollamaContextModel: "nomic-embed-text:latest", ollamaContextStatus: "ready",
+      ollamaContextModelSizeBytes: 274_000_000,
+      ollamaContextKvBytesPerToken: 131072,
+      ollamaContextAvailableMemoryBytes: 128 * 1024 ** 3,
+    });
+    const embedding = within(screen.getByRole("group", { name: "nomic-embed-text:latest" }));
+    const chat = within(screen.getByRole("group", { name: "chat:latest" }));
+    expect(embedding.getByText(/261.3 MiB on disk/)).toBeInTheDocument();
+    expect(embedding.queryByRole("button", { name: /Context window/ })).toBeNull();
+    expect(embedding.queryByText(/supported presets/)).toBeNull();
+    expect(embedding.queryByText(/Estimated model weights/)).toBeNull();
+    expect(embedding.queryByText(/Context options above 8k/)).toBeNull();
+    expect(chat.getByRole("button", { name: "Context window for chat:latest" })).toBeInTheDocument();
+    expect(intents).not.toContainEqual(["app-settings", "inspectOllamaContextModel", ["nomic-embed-text:latest"]]);
+  });
+
+  it("shows freshly loaded state and resident memory after a Check report arrives", () => {
+    const model = inventoryModel("gemma4:12b", { sizeBytes: 7_400_000_000, loaded: false });
+    const { update } = setup({
+      ollamaInventorySource: "server", ollamaServerReachable: true,
+      ollamaInventory: [model],
+    });
+    const card = within(screen.getByRole("group", { name: "gemma4:12b" }));
+    expect(card.getByText("Not loaded")).toBeInTheDocument();
+    expect(card.getByText(/6.9 GiB on disk/)).toBeInTheDocument();
+    update({ ollamaInventory: [{ ...model, loaded: true,
+      memoryBytes: 8_000_000_000, vramBytes: 6_000_000_000 }],
+    });
+    expect(card.queryByText("Not loaded")).toBeNull();
+    expect(card.getByText("Loaded")).toBeInTheDocument();
+    expect(card.getByText(/7.5 GiB memory in use/)).toHaveTextContent("5.6 GiB VRAM");
+  });
+
+  it("re-inspects the context estimate when a saved context window changes", () => {
+    const { intents, update } = setup({
+      ollamaInventorySource: "server", ollamaServerReachable: true, ollamaServerStatus: "running",
+      ollamaInventory: [inventoryModel("gemma4:12b", { sizeBytes: 7_400_000_000 })],
+      ollamaCurrentModel: "gemma4:12b",
+    });
+    const inspections = () => intents.filter(([, name]) => name === "inspectOllamaContextModel");
+    expect(inspections()).toHaveLength(1);
+    update({ ollamaContextWindows: { "gemma4:12b": 16384 } });
+    expect(inspections()).toHaveLength(2);
+    expect(inspections()[1]).toEqual(["app-settings", "inspectOllamaContextModel", ["gemma4:12b"]]);
   });
 
   it("does not misrepresent a saved context larger than a model's trained limit", async () => {

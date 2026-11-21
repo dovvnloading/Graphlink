@@ -675,6 +675,7 @@ function makeChatFns(id: string, liveRef: { current: DispatcherLive }) {
     onDelete: () => liveRef.current.store.deleteChatNode(id),
     onUndockChild: (childId: string) => liveRef.current.store.setNodeDocked(childId, false),
     onRegenerate: () => liveRef.current.store.regenerateResponse(id),
+    onSelectVersion: (index: number) => liveRef.current.store.setChatVersion(id, index),
     onGenerateImage: () => liveRef.current.store.generateImage(id),
     // R6.2: real chart generation - fires the new generateChart intent with
     // this chat node as the parent (see ChatNodeView.tsx's own Generate
@@ -1264,6 +1265,8 @@ export function toFlowNodes(
         data: {
           content: n.content,
           isUser: n.isUser,
+          versionCount: n.versionCount,
+          versionIndex: n.versionIndex,
           isCollapsed: n.isCollapsed,
           dockedChildren,
           // ADR-011 stage 11.1: the ~17 onXxx/subscribeStream callbacks that

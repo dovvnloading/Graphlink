@@ -70,11 +70,8 @@ function OllamaTaskField({
   // Known embedding-only models cannot complete chat, naming, or other text
   // tasks. Unknown capabilities remain selectable rather than being guessed
   // incompatible when /api/show is unavailable.
-  const chatModels = installedModels.filter(
-    (model) => !(model.capabilities.includes("embeddings") && !model.capabilities.includes("chat")),
-  ).map((model) => model.name);
-  const incompatible = installedModels.find((model) =>
-    model.name === value && model.capabilities.includes("embeddings") && !model.capabilities.includes("chat"));
+  const chatModels = installedModels.filter((model) => !isEmbeddingOnly(model)).map((model) => model.name);
+  const incompatible = installedModels.find((model) => model.name === value && isEmbeddingOnly(model));
   const resolvedMode = assignmentMode(value, chatModels);
   const [localMode, setLocalMode] = useState<string | null>(null);
   const [lastValue, setLastValue] = useState(value);
@@ -166,6 +163,10 @@ function OllamaTaskField({
 type InventoryModel = AppSettingsState["ollamaInventory"][number];
 type ModelCheck = AppSettingsState["ollamaModelChecks"][number];
 
+function isEmbeddingOnly(model: InventoryModel): boolean {
+  return model.capabilities.includes("embeddings") && !model.capabilities.includes("chat");
+}
+
 function OllamaModelCard({
   model, report, state, transport, busy, checkInProgress, onInspect, onRemoveRequest,
 }: {
@@ -196,6 +197,7 @@ function OllamaModelCard({
 
   // Never trust folder-only metadata to unlock >8k windows. The server
   // inventory is the same verified /api/show snapshot Knowledge uses.
+  const supportsContext = !isEmbeddingOnly(model);
   const trainedLimit = model.source === "server" && typeof model.trainedContextLength === "number"
     && model.trainedContextLength > 0 ? model.trainedContextLength : 0;
   const optionLimit = trainedLimit || 8192;
@@ -218,7 +220,7 @@ function OllamaModelCard({
       + activeWindow * state.ollamaContextKvBytesPerToken
     : 0;
   const availableMemory = state.ollamaContextAvailableMemoryBytes;
-  const exceedsMemory = estimateValid && Number.isFinite(memoryEstimate)
+  const exceedsMemory = weightsKnown && estimateValid && Number.isFinite(memoryEstimate)
     && availableMemory > 0 && memoryEstimate > availableMemory;
   const canRemove = model.source === "server" && state.ollamaInventorySource === "server"
     && state.ollamaServerReachable === true;
@@ -226,7 +228,7 @@ function OllamaModelCard({
 
   return (
     <article className="settings-ollama-model-card" role="group" aria-labelledby={headingId}
-      onFocusCapture={() => { if (canCheck) onInspect(model.name); }}>
+      onFocusCapture={() => { if (canCheck && supportsContext) onInspect(model.name); }}>
       <div className="settings-ollama-card-header">
         <h3 id={headingId} className="settings-ollama-model-name">{model.name}</h3>
         <span className="settings-ollama-state">
@@ -251,7 +253,7 @@ function OllamaModelCard({
       {model.source !== "server" && (
         <p className="settings-field-hint">Disk scan only. Start Ollama and scan to verify capabilities and memory.</p>
       )}
-      <div className="settings-field">
+      {supportsContext && <div className="settings-field">
         <span className="settings-field-label">Context window (num_ctx)</span>
         <CustomSelect
           ariaLabel={"Context window for " + model.name}
@@ -263,8 +265,8 @@ function OllamaModelCard({
             transport.fireIntent("app-settings", "setOllamaContextWindow", [model.name, Number(choice)], undefined, true);
           }}
         />
-      </div>
-      {windowNeedsSaving && (
+      </div>}
+      {supportsContext && windowNeedsSaving && (
         <p className="settings-field-hint" role="status">
           The saved {savedWindow.toLocaleString()}-token window is not one of this model's
           supported presets. {activeWindow
@@ -272,7 +274,7 @@ function OllamaModelCard({
             : "No preset fits the trained limit (below 4,096 tokens)."}
         </p>
       )}
-      {contextReady && activeWindow > 0 && (
+      {supportsContext && contextReady && activeWindow > 0 && (
         <div className="settings-ollama-memory-details">
           <p className="settings-update-status">
             Estimated {weightsKnown ? "model weights + KV cache" : "KV cache (weights unavailable)"}:
@@ -297,16 +299,16 @@ function OllamaModelCard({
           )}
         </div>
       )}
-      {state.ollamaContextModel.toLowerCase() === model.name.toLowerCase()
+      {supportsContext && state.ollamaContextModel.toLowerCase() === model.name.toLowerCase()
         && state.ollamaContextStatus === "loading" && (
         <p className="settings-update-status">Inspecting model context and memory...</p>
       )}
-      {!trainedLimit && (
+      {supportsContext && !trainedLimit && (
         <p className="settings-field-hint">
           Context options above 8k require a verified trained length from the shared Ollama inventory.
         </p>
       )}
-      {state.ollamaContextModel.toLowerCase() === model.name.toLowerCase() && state.ollamaContextNotice && (
+      {supportsContext && state.ollamaContextModel.toLowerCase() === model.name.toLowerCase() && state.ollamaContextNotice && (
         <p className="settings-update-status" role="alert" data-level="error">{state.ollamaContextNotice}</p>
       )}
       <div className="settings-button-row settings-ollama-card-actions">
@@ -340,7 +342,7 @@ function OllamaModelCard({
             "Sample load time: " + (report.loadSeconds == null ? "Unavailable" : report.loadSeconds.toFixed(2) + " s") +
             " · Sample generation speed: " + (report.tokensPerSecond == null ? "Unavailable" : report.tokensPerSecond.toFixed(1) + " tokens/s") +
             " · Tool probe: " + (report.toolCallingWorks === true ? "Tool call returned" :
-              report.toolCallingWorks === false ? "No tool call returned" : "Unavailable")}
+              report.toolCallingWorks === false ? "No tool call observed" : "Inconclusive")}
           {report.status === "complete" && report.message && (" · " + report.message)}
         </p>
       )}
@@ -384,17 +386,20 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
   const contextModel = state.ollamaInventory.find((model) => model.name === inspectedModel)?.name
     ?? state.ollamaInventory.find((model) => model.name === state.ollamaCurrentModel)?.name
     ?? state.ollamaInventory[0]?.name ?? "";
+  const selectedWindow = state.ollamaContextWindows[contextModel.toLowerCase()] ?? 8192;
   const percent = state.ollamaPullTotal > 0
     ? Math.min(100, Math.round((100 * state.ollamaPullCompleted) / state.ollamaPullTotal))
     : null;
 
   useEffect(() => {
     const model = installedModels.find((entry) => entry.name === contextModel);
-    if (model && canDownload) transport.fireIntent("app-settings", "inspectOllamaContextModel", [contextModel]);
-  // Reinspect only when the selected model or scan/server status changes;
-  // keyboard traversal of offline inventory must not make failing daemon calls.
+    if (model && canDownload && !isEmbeddingOnly(model)) {
+      transport.fireIntent("app-settings", "inspectOllamaContextModel", [contextModel]);
+    }
+  // The backend returns an effective per-token KV cost for the saved window;
+  // re-inspect after a changed preset instead of extrapolating past a sliding cap.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contextModel, transport, state.ollamaScanStatus, canDownload]);
+  }, [contextModel, transport, state.ollamaScanStatus, canDownload, selectedWindow]);
 
   useEffect(() => {
     if (state.ollamaRemoveStatus === "done" && lastRemovedModel && document.activeElement === document.body) {
@@ -445,7 +450,7 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
       <div className="settings-button-row">
         <button type="button" className="settings-button"
           disabled={state.ollamaStartStatus === "starting"}
-          onClick={() => transport.fireIntent("app-settings", "checkOllamaStatus", [])}>
+          onClick={() => transport.intent("app-settings", "checkOllamaStatus", [])}>
           Check Ollama status
         </button>
       </div>

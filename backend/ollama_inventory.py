@@ -71,38 +71,87 @@ def _installed_ollama_command() -> list[str] | None:
     return None
 
 
+def _installed_ollama_serve_command() -> list[str] | None:
+    """Find the installed Windows CLI even when the tray app takes precedence.
+
+    Windows installers commonly place both executables in Programs/Ollama.
+    Only an absolute executable in an installed location or PATH is accepted.
+    """
+    if sys.platform != "win32":
+        return None
+    for variable in ("LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)"):
+        root = os.environ.get(variable)
+        if not root:
+            continue
+        folder = Path(root) / ("Programs/Ollama" if variable == "LOCALAPPDATA" else "Ollama")
+        executable = folder / "ollama.exe"
+        if executable.is_file():
+            return [str(executable), "serve"]
+    cli = shutil.which("ollama.exe")
+    if cli:
+        executable = Path(cli)
+        if executable.is_absolute() and executable.is_file():
+            return [str(executable.resolve()), "serve"]
+    return None
+
+
+def _status_tags() -> object:
+    # The Ollama module-level client has no HTTP timeout. A stalled /api/tags
+    # must not hold a Settings health request (or a Start probe) indefinitely.
+    with ollama.Client(timeout=2.0) as client:
+        return client.list()
+
+
 def check_ollama_server_status() -> str:
-    """Lightweight live status; reject malformed /api/tags as unhealthy."""
+    """Lightweight, time-bounded status; reject malformed /api/tags as unhealthy."""
     try:
-        _tag_models(ollama.list())
+        _tag_models(_status_tags())
     except Exception:
         return "installed" if _installed_ollama_command() is not None else "not_found"
     return "running"
 
 
+def _spawn_installed_ollama(command: list[str]) -> None:
+    options = dict(
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        close_fds=True, shell=False,
+    )
+    if sys.platform == "win32":
+        # A GUI app stays a GUI app; the CLI server runs without a console.
+        if command[-1] == "serve":
+            options["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    else:
+        options["start_new_session"] = True
+    subprocess.Popen(command, **options)
+
+
 def start_installed_ollama() -> bool:
-    """Start the installed application, never downloading or installing it.
+    """Start an already-installed app or CLI; never install/download Ollama.
 
     Returns False if the daemon was already running. A failed spawn propagates
-    to the Settings intent so it can report an actionable error.
+    to Settings so the user receives an actionable error.
     """
     if check_ollama_server_status() == "running":
         return False
     command = _installed_ollama_command()
     if command is None:
         raise FileNotFoundError("Ollama is not installed on this computer.")
+    _spawn_installed_ollama(command)
+    return True
 
-    options = dict(
-        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        close_fds=True, shell=False,
-    )
-    if sys.platform == "win32":
-        # Only a CLI server needs its console hidden; a GUI app stays a GUI app.
-        if command[-1] == "serve":
-            options["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    else:
-        options["start_new_session"] = True
-    subprocess.Popen(command, **options)
+
+def start_installed_ollama_server_fallback() -> bool:
+    """Try Windows ollama.exe serve if the preferred tray app did not start a server.
+
+    Never launch a second CLI when the original command already used serve.
+    """
+    preferred = _installed_ollama_command()
+    if sys.platform != "win32" or preferred is None or preferred[-1] == "serve":
+        return False
+    command = _installed_ollama_serve_command()
+    if command is None or check_ollama_server_status() == "running":
+        return False
+    _spawn_installed_ollama(command)
     return True
 
 
@@ -115,8 +164,10 @@ def _field(value: object, name: str, default=None):
 def _nonnegative_int(value: object) -> int | None:
     # Preserve only precise, JSON-safe byte counts. A float, infinity or
     # giant numeric string from a daemon must not reach the JS memory UI.
-    if type(value) is int:
-        number = value
+    if isinstance(value, int) and not isinstance(value, bool):
+        # The Ollama SDK wraps /api/tags and /api/ps sizes in Pydantic
+        # ByteSize (an int subclass). Normalize them before JSON output.
+        number = int(value)
     elif isinstance(value, str) and value.isascii() and value.isdecimal() and len(value) <= 16:
         number = int(value)
     else:
@@ -217,6 +268,40 @@ def _folder_inventory(scan_path: str | None, *, server_error: str = "") -> dict:
     }
 
 
+def _running_models() -> dict[str, object] | None:
+    """Live /api/ps snapshot; None means unavailable, not that nothing is loaded."""
+    try:
+        models = _field(ollama.ps(), "models")
+        if not isinstance(models, (list, tuple)) or len(models) > 2048:
+            return None
+    except Exception:
+        return None
+    return {_key(name): item for item in models if (name := _name(item))}
+
+
+def refresh_ollama_loaded_state(inventory: list[dict]) -> list[dict]:
+    """Update load state after a Check without re-fetching all /api/show rows.
+
+    Each call represents one /api/ps snapshot. A failed request must replace
+    stale load claims with 'unknown', not misreport 'Not loaded'.
+    """
+    running = _running_models()
+    refreshed = []
+    for row in inventory:
+        if row.get("source") != "server":
+            refreshed.append(dict(row))
+            continue
+        name = row.get("name")
+        loaded_model = running.get(_key(name)) if running is not None and isinstance(name, str) else None
+        refreshed.append({
+            **row,
+            "loaded": (loaded_model is not None) if running is not None else None,
+            "memoryBytes": _nonnegative_int(_field(loaded_model, "size")),
+            "vramBytes": _nonnegative_int(_field(loaded_model, "size_vram")),
+        })
+    return refreshed
+
+
 def build_ollama_inventory(scan_path: str | None = None) -> dict:
     """Discover installed models, capabilities and loaded memory in one pass.
 
@@ -231,14 +316,7 @@ def build_ollama_inventory(scan_path: str | None = None) -> dict:
     except Exception as exc:
         return _folder_inventory(None, server_error=str(exc))
 
-    try:
-        running = _field(ollama.ps(), "models")  # /api/ps
-        if not isinstance(running, (list, tuple)) or len(running) > 2048:
-            running = None
-    except Exception:
-        running = None  # Unknown, rather than claiming everything is unloaded.
-
-    loaded_by_name = {_key(_name(item)): item for item in running if _name(item)} if running is not None else {}
+    loaded_by_name = _running_models()
     records_by_name: dict[str, dict] = {}
     for item in tags:
         name = _name(item)
@@ -248,13 +326,13 @@ def build_ollama_inventory(scan_path: str | None = None) -> dict:
             show = ollama.show(name)  # /api/show
         except Exception:
             show = None  # A per-model failure must not discard the tags row.
-        loaded_model = loaded_by_name.get(_key(name))
+        loaded_model = loaded_by_name.get(_key(name)) if loaded_by_name is not None else None
         records_by_name[_key(name)] = _inventory_record(
             name,
             size=_field(item, "size"),
             details=_field(item, "details"),
             show=show,
-            loaded=(loaded_model is not None) if running is not None else None,
+            loaded=(loaded_model is not None) if loaded_by_name is not None else None,
             memory=_field(loaded_model, "size"),
             vram=_field(loaded_model, "size_vram"),
             source="server",

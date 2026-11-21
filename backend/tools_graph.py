@@ -964,6 +964,7 @@ def make_run_node_handler(document: SceneDocument, dispatcher):
             provider, model = dispatcher.active_provider_model()
             reply.state.provider = provider
             reply.state.model = model
+            document.sync_chat_version(reply.id)
             return reply
 
         reply_node, _command = document.record_command(

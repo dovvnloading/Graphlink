@@ -1095,6 +1095,11 @@ export class SceneStore {
     this.transport.fireIntent("scene", "regenerateResponse", [chatNodeId]);
   }
 
+  /** Select an existing chat alternative as an undoable scene command. */
+  setChatVersion(chatNodeId: string, index: number): void {
+    this.transport.fireIntent("scene", "setChatVersion", [chatNodeId, index], undefined, true);
+  }
+
   // R4.4a: real "Generate Image from Text", for ChatNodeView's own menu -
   // resolves purely from the ChatNode's id (backend reads its own .content
   // as the prompt, mirroring legacy's node.text).

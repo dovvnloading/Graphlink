@@ -36,6 +36,9 @@ def _message_input(node) -> bytes:
     if isinstance(node.state, ChatState):
         # chat_branch_history also falls back to the text mirror when the
         # parts list is empty; the fingerprint must follow that exact input.
+        # The selected ChatVersion is projected into node.content/parts by
+        # set_chat_version. Never hash state.versions or version_index: past
+        # alternatives do not belong to the model-visible current history.
         content = node.state.content_parts or node.content
         fields = (
             "user" if node.state.is_user else "assistant", content,

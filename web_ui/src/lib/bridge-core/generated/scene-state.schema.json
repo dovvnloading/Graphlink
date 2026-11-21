@@ -1606,6 +1606,14 @@
             },
             "type": "array"
           },
+          "versionCount": {
+            "default": 0,
+            "type": "integer"
+          },
+          "versionIndex": {
+            "default": 0,
+            "type": "integer"
+          },
           "x": {
             "type": "number"
           },

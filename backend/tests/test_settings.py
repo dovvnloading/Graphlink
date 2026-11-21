@@ -1584,6 +1584,68 @@ def test_ollama_context_inspection_reports_trained_and_memory_metadata(manager, 
     assert result["ollamaContextAvailableMemoryBytes"] == 8 * 1024 ** 3
 
 
+def test_gemma4_inspection_follows_selected_window_without_full_context_overestimate(manager, monkeypatch):
+    from backend.ollama_context import estimated_kv_cache_bytes
+
+    name = "gemma4:12b"
+    info = {
+        "general.architecture": "gemma4", "gemma4.block_count": 48,
+        "gemma4.attention.head_count": 16,
+        "gemma4.attention.head_count_kv": [8] * 48,
+        "gemma4.attention.key_length": 512, "gemma4.attention.value_length": 512,
+        "gemma4.attention.key_length_swa": 256, "gemma4.attention.value_length_swa": 256,
+        "gemma4.attention.sliding_window": 1024,
+        "gemma4.attention.sliding_window_pattern": [i % 6 != 5 for i in range(48)],
+    }
+    monkeypatch.setattr(intents_settings_ollama_module.ollama, "show", lambda _: {"model_info": info})
+    monkeypatch.setattr(intents_settings_ollama_module, "available_memory_bytes", lambda: 12 * 1024 ** 3)
+    monkeypatch.setattr(intents_settings_ollama_module, "build_ollama_inventory", lambda _: {
+        "models": [name], "inventory": [{
+            "name": name, "trainedContextLength": 131_072,
+            "sizeBytes": 7_400_000_000, "capabilities": ["chat"], "source": "server",
+        }], "source": "server", "server_reachable": True, "scan_mode": "server",
+    })
+    bus = SessionBus("gemma4-context-inspection-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+    asyncio.run(bus.dispatch_intent("app-settings", "scanOllamaSystem", []))
+
+    asyncio.run(bus.dispatch_intent("app-settings", "inspectOllamaContextModel", [name]))
+    state = recorder.messages[-1]["payload"]
+    default_kv = (estimated_kv_cache_bytes(info, 8192) + 8191) // 8192
+    assert state["ollamaContextModelSizeBytes"] == 7_400_000_000
+    assert state["ollamaContextKvBytesPerToken"] == default_kv
+    assert default_kv * 8192 < 2 * 1024 ** 3
+
+    manager.set_ollama_context_window(name, 16384)
+    asyncio.run(bus.dispatch_intent("app-settings", "inspectOllamaContextModel", [name]))
+    state = recorder.messages[-1]["payload"]
+    extended_kv = (estimated_kv_cache_bytes(info, 16384) + 16383) // 16384
+    assert state["ollamaContextKvBytesPerToken"] == extended_kv
+    assert extended_kv * 16384 > default_kv * 8192
+    assert extended_kv < default_kv  # Sliding cache stays capped as context grows.
+
+
+def test_embedding_only_model_rejects_chat_context_override(manager, monkeypatch):
+    monkeypatch.setattr(intents_settings_ollama_module, "build_ollama_inventory", lambda _: {
+        "models": ["embed:latest"], "inventory": [{
+            "name": "embed:latest", "trainedContextLength": 8192,
+            "sizeBytes": 200_000_000, "capabilities": ["embeddings"], "source": "server",
+        }], "source": "server", "server_reachable": True, "scan_mode": "server",
+    })
+    monkeypatch.setattr(api_provider, "_get_ollama_context_window",
+                        lambda _: pytest.fail("Embedding models must not inspect a chat context limit"))
+    bus = SessionBus("embedding-chat-context-reject-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+    asyncio.run(bus.dispatch_intent("app-settings", "scanOllamaSystem", []))
+    asyncio.run(bus.dispatch_intent("app-settings", "setOllamaContextWindow", ["embed:latest", 8192]))
+    assert manager.get_ollama_context_windows() == {}
+    assert "embedding-only" in recorder.messages[-1]["payload"]["ollamaContextNotice"].lower()
+
+
 def test_scan_ollama_system_persists_results_and_reports_done(manager, monkeypatch):
     _isolate_ollama_task_config(monkeypatch)
     monkeypatch.setattr(
@@ -3329,32 +3391,86 @@ def test_knowledge_test_publishes_running_during_cold_ollama_load(manager, monke
 
 
 
-def test_ollama_health_check_republishes_status_without_a_full_inventory_scan(manager, monkeypatch):
-    statuses = iter(("installed", "running", "not_found"))
+async def _await_ollama_start(recorder):
+    # Start returns a WS acknowledgement immediately; state settles in a task.
+    for _ in range(200):
+        if recorder.messages and recorder.messages[-1]["payload"]["ollamaStartStatus"] == "idle":
+            return
+        await asyncio.sleep(0.01)
+    pytest.fail("Ollama start did not settle")
+
+
+async def _await_ollama_inventory(recorder):
+    for _ in range(200):
+        if (recorder.messages and recorder.messages[-1]["payload"]["ollamaScanStatus"] == "done"
+                and recorder.messages[-1]["payload"]["ollamaInventorySource"] == "server"):
+            return
+        await asyncio.sleep(0.01)
+    pytest.fail("Ollama inventory did not refresh")
+
+
+def test_ollama_connect_replaces_disk_only_inventory_without_another_manual_refresh(manager, monkeypatch):
+    statuses = iter(("installed", "running", "running"))
     monkeypatch.setattr(intents_settings_ollama_module, "check_ollama_server_status", lambda: next(statuses))
-    monkeypatch.setattr(
-        intents_settings_ollama_module, "build_ollama_inventory",
-        lambda *_args: pytest.fail("health polling must not scan model inventory"),
-    )
-    bus = SessionBus("settings-ollama-health-test")
+    scans = []
+
+    def scan(_path):
+        scans.append("scan")
+        if len(scans) == 1:
+            return {
+                "models": ["qwen:latest"], "inventory": [{
+                    "name": "qwen:latest", "source": "folder", "family": "",
+                    "capabilities": [], "loaded": None,
+                }],
+                "source": "folder", "server_reachable": False, "server_status": "installed",
+                "scan_mode": "system", "scan_path": "", "locations": [],
+            }
+        return {
+            "models": ["qwen:latest"], "inventory": [{
+                "name": "qwen:latest", "source": "server", "family": "qwen",
+                "parameterSize": "4B", "capabilities": ["chat", "tools"],
+                "loaded": False, "trainedContextLength": 32768,
+            }],
+            "source": "server", "server_reachable": True, "server_status": "running",
+            "scan_mode": "server", "scan_path": "", "locations": [],
+        }
+
+    monkeypatch.setattr(intents_settings_ollama_module, "build_ollama_inventory", scan)
+    bus = SessionBus("settings-ollama-connect-refresh-test")
     register_settings(bus, manager)
     recorder = Recorder()
     bus.attach(recorder)
 
-    for expected, reachable in (("installed", False), ("running", True), ("not_found", False)):
-        asyncio.run(bus.dispatch_intent("app-settings", "checkOllamaStatus", []))
-        payload = recorder.messages[-1]["payload"]
-        assert payload["ollamaServerStatus"] == expected
-        assert payload["ollamaServerReachable"] is reachable
-        assert payload["ollamaStartStatus"] == "idle"
+    async def exercise():
+        await bus.dispatch_intent("app-settings", "scanOllamaSystem", [])
+        assert recorder.messages[-1]["payload"]["ollamaInventorySource"] == "folder"
+        await bus.dispatch_intent("app-settings", "checkOllamaStatus", [])
+        assert len(scans) == 1  # Offline health polling remains cheap.
+        await bus.dispatch_intent("app-settings", "checkOllamaStatus", [])
+        await _await_ollama_inventory(recorder)
+        connected = recorder.messages[-1]["payload"]
+        assert connected["ollamaServerStatus"] == "running"
+        assert connected["ollamaInventorySource"] == "server"
+        assert connected["ollamaInventory"][0]["family"] == "qwen"
+        assert connected["ollamaInventory"][0]["capabilities"] == ["chat", "tools"]
+        assert connected["ollamaInventory"][0]["trainedContextLength"] == 32768
+        assert manager.get_ollama_scanned_models() == ["qwen:latest"]
+
+        await bus.dispatch_intent("app-settings", "checkOllamaStatus", [])
+        assert len(scans) == 2  # No expensive rescan on each connected poll.
+
+    asyncio.run(exercise())
 
 
 def test_start_ollama_reports_starting_then_running_without_model_download(manager, monkeypatch):
     calls = []
     monkeypatch.setattr(intents_settings_ollama_module, "start_installed_ollama", lambda: calls.append("start") or True)
+    monkeypatch.setattr(intents_settings_ollama_module, "start_installed_ollama_server_fallback",
+                        lambda: pytest.fail("Healthy GUI launch must not start another server"))
     monkeypatch.setattr(intents_settings_ollama_module, "check_ollama_server_status", lambda: "running")
     scans = []
-    def _scan(_path):
+
+    def scan(_path):
         scans.append("scan")
         return {
             "models": [], "inventory": [], "source": "server",
@@ -3362,19 +3478,23 @@ def test_start_ollama_reports_starting_then_running_without_model_download(manag
             "scan_mode": "server", "scan_path": "", "locations": [],
         }
 
-    monkeypatch.setattr(intents_settings_ollama_module, "build_ollama_inventory", _scan)
+    monkeypatch.setattr(intents_settings_ollama_module, "build_ollama_inventory", scan)
     monkeypatch.setattr(ollama, "pull", lambda *_args, **_kwargs: pytest.fail("Start must not download models"))
     bus = SessionBus("settings-start-ollama-test")
     register_settings(bus, manager)
     recorder = Recorder()
     bus.attach(recorder)
 
-    asyncio.run(bus.dispatch_intent("app-settings", "startOllama", []))
+    async def exercise():
+        await bus.dispatch_intent("app-settings", "startOllama", [])
+        assert recorder.messages[-1]["payload"]["ollamaStartStatus"] == "starting"
+        await _await_ollama_start(recorder)
+        await _await_ollama_inventory(recorder)
 
+    asyncio.run(exercise())
     assert calls == ["start"]
     assert scans == ["scan"]
     assert any(item["payload"]["ollamaStartStatus"] == "starting" for item in recorder.messages)
-    assert any(item["payload"]["ollamaScanStatus"] == "done" for item in recorder.messages)
     payload = recorder.messages[-1]["payload"]
     assert payload["ollamaStartStatus"] == "idle"
     assert payload["ollamaServerStatus"] == "running"
@@ -3382,36 +3502,110 @@ def test_start_ollama_reports_starting_then_running_without_model_download(manag
     assert payload["ollamaStartError"] == ""
 
 
+def test_start_ollama_tries_cli_after_tray_does_not_serve(manager, monkeypatch):
+    calls = []
+    statuses = iter(("installed", "running"))
+    monkeypatch.setattr(intents_settings_ollama_module, "start_installed_ollama",
+                        lambda: calls.append("tray") or True)
+    monkeypatch.setattr(intents_settings_ollama_module, "start_installed_ollama_server_fallback",
+                        lambda: calls.append("cli") or True)
+    monkeypatch.setattr(intents_settings_ollama_module, "check_ollama_server_status",
+                        lambda: next(statuses))
+    monkeypatch.setattr(intents_settings_ollama_module, "OLLAMA_TRAY_START_WAIT_SECONDS", 0.0)
+    monkeypatch.setattr(intents_settings_ollama_module, "OLLAMA_CLI_START_WAIT_SECONDS", 0.0)
+    monkeypatch.setattr(intents_settings_ollama_module, "build_ollama_inventory", lambda _path: {
+        "models": [], "inventory": [], "source": "server", "server_reachable": True,
+        "server_status": "running", "scan_mode": "server",
+    })
+    bus = SessionBus("settings-start-ollama-tray-fallback-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    async def exercise():
+        await bus.dispatch_intent("app-settings", "startOllama", [])
+        await _await_ollama_start(recorder)
+        await _await_ollama_inventory(recorder)
+
+    asyncio.run(exercise())
+    assert calls == ["tray", "cli"]
+    assert recorder.messages[-1]["payload"]["ollamaServerStatus"] == "running"
+    assert recorder.messages[-1]["payload"]["ollamaStartError"] == ""
+
+
+@pytest.mark.parametrize("fallback_available", [True, False])
+def test_start_ollama_fails_boundedly_when_neither_launch_brings_up_server(
+    manager, monkeypatch, fallback_available,
+):
+    calls = []
+    monkeypatch.setattr(intents_settings_ollama_module, "start_installed_ollama",
+                        lambda: calls.append("tray") or True)
+    monkeypatch.setattr(intents_settings_ollama_module, "start_installed_ollama_server_fallback",
+                        lambda: calls.append("fallback") or fallback_available)
+    monkeypatch.setattr(intents_settings_ollama_module, "check_ollama_server_status", lambda: "installed")
+    monkeypatch.setattr(intents_settings_ollama_module, "OLLAMA_TRAY_START_WAIT_SECONDS", 0.0)
+    monkeypatch.setattr(intents_settings_ollama_module, "OLLAMA_CLI_START_WAIT_SECONDS", 0.0)
+    monkeypatch.setattr(intents_settings_ollama_module, "build_ollama_inventory",
+                        lambda _path: pytest.fail("Unreachable server cannot provide verified inventory"))
+    bus = SessionBus("settings-start-ollama-no-server-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    async def exercise():
+        await bus.dispatch_intent("app-settings", "startOllama", [])
+        await _await_ollama_start(recorder)
+
+    asyncio.run(exercise())
+    assert calls == ["tray", "fallback"]
+    payload = recorder.messages[-1]["payload"]
+    assert payload["ollamaStartStatus"] == "idle"
+    assert payload["ollamaServerStatus"] == "installed"
+    assert payload["ollamaServerReachable"] is False
+    assert "did not start a responding server" in payload["ollamaStartError"]
+    assert "manually" in payload["ollamaStartError"]
+
+
 def test_start_ollama_refuses_uninstalled_app_and_surfaces_spawn_failures(manager, monkeypatch):
     def missing():
         raise FileNotFoundError("Ollama is not installed")
 
     monkeypatch.setattr(intents_settings_ollama_module, "start_installed_ollama", missing)
+    monkeypatch.setattr(intents_settings_ollama_module, "build_ollama_inventory", lambda _path: {
+        "models": [], "inventory": [], "source": "server", "server_reachable": True,
+        "server_status": "running", "scan_mode": "server",
+    })
     bus = SessionBus("settings-start-ollama-failure-test")
     register_settings(bus, manager)
     recorder = Recorder()
     bus.attach(recorder)
-    asyncio.run(bus.dispatch_intent("app-settings", "startOllama", []))
-    payload = recorder.messages[-1]["payload"]
-    assert payload["ollamaServerStatus"] == "not_found"
-    assert payload["ollamaStartStatus"] == "idle"
-    assert "could not find" in payload["ollamaStartError"].lower()
 
-    # The user can start Ollama outside Graphlink after an initial failed
-    # launch. The next health check must clear an obsolete error banner.
-    monkeypatch.setattr(intents_settings_ollama_module, "check_ollama_server_status", lambda: "running")
-    asyncio.run(bus.dispatch_intent("app-settings", "checkOllamaStatus", []))
-    assert recorder.messages[-1]["payload"]["ollamaServerStatus"] == "running"
-    assert recorder.messages[-1]["payload"]["ollamaStartError"] == ""
+    async def exercise():
+        await bus.dispatch_intent("app-settings", "startOllama", [])
+        await _await_ollama_start(recorder)
+        payload = recorder.messages[-1]["payload"]
+        assert payload["ollamaServerStatus"] == "not_found"
+        assert payload["ollamaStartStatus"] == "idle"
+        assert "could not find" in payload["ollamaStartError"].lower()
 
-    def spawn_failed():
-        raise OSError("permission denied")
+        # Starting Ollama externally must clear a stale failure banner on connect.
+        monkeypatch.setattr(intents_settings_ollama_module, "check_ollama_server_status", lambda: "running")
+        await bus.dispatch_intent("app-settings", "checkOllamaStatus", [])
+        assert recorder.messages[-1]["payload"]["ollamaServerStatus"] == "running"
+        assert recorder.messages[-1]["payload"]["ollamaStartError"] == ""
+        await _await_ollama_inventory(recorder)
 
-    monkeypatch.setattr(intents_settings_ollama_module, "start_installed_ollama", spawn_failed)
-    asyncio.run(bus.dispatch_intent("app-settings", "startOllama", []))
-    payload = recorder.messages[-1]["payload"]
-    assert payload["ollamaStartStatus"] == "idle"
-    assert "permission denied" in payload["ollamaStartError"]
+        def spawn_failed():
+            raise OSError("permission denied")
+
+        monkeypatch.setattr(intents_settings_ollama_module, "start_installed_ollama", spawn_failed)
+        await bus.dispatch_intent("app-settings", "startOllama", [])
+        await _await_ollama_start(recorder)
+        payload = recorder.messages[-1]["payload"]
+        assert payload["ollamaStartStatus"] == "idle"
+        assert "permission denied" in payload["ollamaStartError"]
+
+    asyncio.run(exercise())
 
 
 def test_saved_ollama_assignments_reject_legacy_path_tricks(manager):
