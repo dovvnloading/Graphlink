@@ -1875,12 +1875,15 @@ def test_pull_success_event_without_verified_inventory_does_not_select_model(man
 
 def test_pull_cancelled_immediately_recovers_running_gate(manager, monkeypatch):
     calls = []
+    second_attempt = []
 
     class FakeClient:
         def __init__(self, **_kwargs):
             calls.append("client")
 
         async def pull(self, _name, *, stream=True):
+            if not second_attempt:
+                await asyncio.Future()
             raise RuntimeError("simulated second attempt")
 
         async def close(self):
@@ -1898,6 +1901,7 @@ def test_pull_cancelled_immediately_recovers_running_gate(manager, monkeypatch):
         await _await_pull_terminal(recorder)
         assert recorder.messages[-1]["payload"]["ollamaPullStatus"] == "cancelled"
         # A subsequent attempt is not held behind a stale "running" gate.
+        second_attempt.append(True)
         await bus.dispatch_intent("app-settings", "pullOllamaModel", ["gemma3:4b"])
         await _await_pull_terminal(recorder)
         assert recorder.messages[-1]["payload"]["ollamaPullStatus"] == "error"
