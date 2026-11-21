@@ -2183,6 +2183,32 @@ def test_save_chat_intent_falls_back_to_insert_when_current_row_was_deleted_else
     assert document.current_chat_id == rows[0]["id"] != 999
 
 
+def test_manual_save_repairs_a_legacy_none_workspace_without_moving_existing_graphs(db_path):
+    default_id = get_default_workspace_id(db_path)
+    other_id = create_workspace(db_path, "Other")["id"]
+    bus, document, _ = _bus_with_canvas(db_path)
+
+    # A pre-fix document can still be manufactured by older callers that
+    # explicitly cleared this field. Save must adopt the real workspace.
+    document.current_workspace_id = None
+    document.add_chat_node(0, 0, "Legacy unsaved draft", is_user=True)
+    assert asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", [])) is True
+    assert document.current_workspace_id == default_id
+    assert load_chat_row(db_path, document.current_chat_id)["workspace_id"] == default_id
+
+    # Updating a saved graph never moves it, even if the in-memory hint is
+    # stale or unscoped; the persisted graph's own workspace is authoritative.
+    asyncio.run(bus.dispatch_intent("app-chat-library", "newChat", [other_id]))
+    document.add_chat_node(0, 0, "Belongs to Other", is_user=True)
+    assert asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", [])) is True
+    other_graph_id = document.current_chat_id
+    document.current_workspace_id = None
+    document.add_chat_node(20, 20, "A later edit", is_user=True)
+    assert asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", [])) is True
+    assert document.current_workspace_id == other_id
+    assert load_chat_row(db_path, other_graph_id)["workspace_id"] == other_id
+
+
 def test_new_chat_intent_clears_canvas_and_resets_current_chat_id(db_path):
     bus, document, _ = _bus_with_canvas(db_path)
     document.add_chat_node(0, 0, "hello", is_user=True)
