@@ -333,6 +333,7 @@ def register_canvas(
         document.scene_payload,
         patch_builder=document.take_dirty_patch_ops,
         baseline_builder=document.published_scene_payload,
+        wire_encoder=document.encode_scene_message,
         # ADR-003 stage 3.5: the patch protocol (stage 3.4) is a real breaking
         # change for a reader that predates it - kind:"patch" previously hit
         # the transport's unknown-kind fallback and was silently dropped, so

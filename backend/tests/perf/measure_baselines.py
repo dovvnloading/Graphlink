@@ -45,13 +45,16 @@ def _measure(workload: Workload) -> dict:
         payload_build_s = time.perf_counter() - t0
 
         t0 = time.perf_counter()
-        serialized = json.dumps(payload)
+        serialized = doc.encode_scene_payload(payload)
         serialize_s = time.perf_counter() - t0
 
         payload_samples.append(payload_build_s)
         serialize_samples.append(serialize_s)
         total_samples.append(payload_build_s + serialize_s)
 
+    # The production scene sender also caches the large arrays, but uses
+    # WebSocket's compact UTF-8 JSON settings. This benchmark retains the
+    # historical json.dumps format to keep byte-size baselines comparable.
     total_bytes = len(serialized.encode("utf-8"))
     one_node_bytes = len(json.dumps(payload["nodes"][-1]).encode("utf-8")) if payload["nodes"] else 0
 

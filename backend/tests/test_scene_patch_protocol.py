@@ -598,3 +598,46 @@ def test_every_attached_connection_receives_the_same_patch(connection_count):
         assert all(p == patches[0] for p in patches)
 
     asyncio.run(run())
+
+
+def test_scene_wire_encoder_uses_text_for_real_websocket_and_preserves_bytes():
+    """Exercise the actual bus sender, not just the standalone JSON helper."""
+    from backend.tests.perf.graph_factory import LARGE
+
+    doc = LARGE.build()
+    bus = SessionBus("wire-cache")
+    bus.register_topic(
+        "scene", doc.scene_payload,
+        patch_builder=doc.take_dirty_patch_ops,
+        baseline_builder=doc.published_scene_payload,
+        wire_encoder=doc.encode_scene_message,
+        schema_version=2, min_compatible=2,
+    )
+
+    class TextRecorder:
+        def __init__(self):
+            self.text = []
+            self.json = []
+
+        async def send_text(self, value):
+            self.text.append(value)
+
+        async def send_json(self, value):
+            self.json.append(value)
+
+    async def run():
+        recorder = TextRecorder()
+        bus.attach(recorder)
+        await bus.publish("scene")
+        doc.move_node(next(iter(doc.nodes)), 5, 9)
+        await bus.publish("scene")
+        await bus.send_snapshot("scene", recorder, request_id="r-1")
+        assert not recorder.json
+        assert len(recorder.text) == 3
+        for wire in recorder.text:
+            assert json.dumps(json.loads(wire), ensure_ascii=False, separators=(",", ":")) == wire
+        assert json.loads(recorder.text[0])["payload"]["nodes"]
+        assert json.loads(recorder.text[1])["kind"] == "patch"
+        assert json.loads(recorder.text[2])["id"] == "r-1"
+
+    asyncio.run(run())

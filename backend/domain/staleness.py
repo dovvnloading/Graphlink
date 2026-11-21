@@ -74,11 +74,43 @@ def _reply_digest(history_digest: bytes, provider: str | None, model: str | None
     return "v1:" + hashlib.sha256(b"graphlink/reply/v1\0" + history_digest + route).hexdigest()
 
 
+def _cached_message_input(document: SceneDocument, node) -> bytes:
+    """Reuse encoded inputs when their immutable model-visible fields agree.
+
+    Raw multimodal part lists are deliberately encoded afresh: callers can
+    modify a nested part in place, even without touching SceneNode's fields.
+    Cache is per-document, not process-global (no cross-session text retention).
+    """
+    state = node.state
+    if isinstance(state, ChatState):
+        if state.content_parts:  # nested mutable input; no identity cache
+            return _message_input(node)
+        key = (
+            node.kind, node.content, state.is_user,
+            state.override_provider, state.override_model_id, state.use_knowledge,
+            state.content_parts is None,
+        )
+    else:
+        key = (node.kind, node.content)
+    cache = document.__dict__.setdefault("_staleness_inputs", {})
+    previous = cache.get(node.id)
+    if previous is not None and previous[0] == key:
+        return previous[1]
+    value = _message_input(node)
+    cache[node.id] = (key, value)
+    return value
+
+
 def _lineage(document: SceneDocument) -> tuple[dict[str, bytes], dict[str, str]]:
     parents = _parents(document)
     hashes: dict[str, bytes] = {}
     statuses: dict[str, str] = {}
     affected: dict[str, bool] = {}
+    # (parent digest, input bytes identity, resulting digest). A changed
+    # ancestor invalidates only its descendants' SHA-256 work; a layout
+    # change or a publish without edits reuses every digest safely.
+    lineage_cache = document.__dict__.setdefault("_staleness_lineage", {})
+    reply_cache = document.__dict__.setdefault("_staleness_replies", {})
 
     # Iterative parent-first resolution handles very deep chains without
     # recursion limits. Each node is hashed at most once per publish.
@@ -108,9 +140,17 @@ def _lineage(document: SceneDocument) -> tuple[dict[str, bytes], dict[str, str]]
                 isinstance(node.state, ChatState) and not node.state.is_user
                 and node.state.reply_history_fingerprint
             ):
-                expected = _reply_digest(
+                proof_key = (
                     prior, node.state.provider, node.state.model, node.state.reply_knowledge_enabled,
                 )
+                cached_proof = reply_cache.get(item)
+                if cached_proof is not None and cached_proof[0] == proof_key:
+                    expected = cached_proof[1]
+                else:
+                    expected = _reply_digest(
+                        prior, node.state.provider, node.state.model, node.state.reply_knowledge_enabled,
+                    )
+                    reply_cache[item] = (proof_key, expected)
                 if expected != node.state.reply_history_fingerprint:
                     statuses[item] = "out_of_date"
                     upstream_changed = True
@@ -132,9 +172,23 @@ def _lineage(document: SceneDocument) -> tuple[dict[str, bytes], dict[str, str]]
                 if upstream_changed:
                     statuses[item] = "upstream_changed"
 
-            hashes[item] = hashlib.sha256(prior + _message_input(node)).digest()
+            message_input = _cached_message_input(document, node)
+            cached = lineage_cache.get(item)
+            if cached is not None and cached[0] == prior and cached[1] is message_input:
+                digest = cached[2]
+            else:
+                digest = hashlib.sha256(prior + message_input).digest()
+                lineage_cache[item] = (prior, message_input, digest)
+            hashes[item] = digest
             affected[item] = upstream_changed
-            prior = hashes[item]
+            prior = digest
+
+    # No cache retains nodes removed from a session indefinitely.
+    # Avoid even the pruning scan on the steady state hot path.
+    for cache in (lineage_cache, reply_cache, document.__dict__.get("_staleness_inputs", {})):
+        if len(cache) > len(document.nodes):
+            for node_id in cache.keys() - document.nodes.keys():
+                del cache[node_id]
     return hashes, statuses
 
 
@@ -206,5 +260,5 @@ def capture_nonchat_context(document: SceneDocument, node_id: str) -> None:
         return
     digest = _ROOT
     for ancestor_id in reversed(path):
-        digest = hashlib.sha256(digest + _message_input(document.nodes[ancestor_id])).digest()
+        digest = hashlib.sha256(digest + _cached_message_input(document, document.nodes[ancestor_id])).digest()
     document.nonchat_upstream_fingerprints[node_id] = "v1:" + digest.hex()

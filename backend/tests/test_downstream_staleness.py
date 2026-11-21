@@ -207,11 +207,22 @@ def test_publish_hashes_each_message_once_even_on_a_deep_branch():
     import backend.domain.staleness as staleness
     with patch.object(staleness, "_message_input", wraps=staleness._message_input) as hash_message:
         doc.scene_payload()
-        assert hash_message.call_count == len(doc.nodes)
+        # _answer captured the reply fingerprint first, warming the whole
+        # lineage. Neither later publish needs to encode a single message.
+        assert hash_message.call_count == 0
         doc.take_dirty_patch_ops()
-        assert hash_message.call_count == 2 * len(doc.nodes)
+        assert hash_message.call_count == 0
+    with patch.object(staleness, "_reply_digest", wraps=staleness._reply_digest) as reply_hash:
+        doc.scene_payload()
+        doc.take_dirty_patch_ops()
+        assert reply_hash.call_count == 0, "unchanged reply proofs should be reused"
+    # An edit invalidates the changed message, and its downstream lineage
+    # digests, but does not re-encode hundreds of unrelated inputs.
+    with patch.object(staleness, "_message_input", wraps=staleness._message_input) as hash_message:
+        doc.update_chat_node_content(parent.id, "Different")
+        doc.scene_payload()
+        assert hash_message.call_count == 1
     # The existing 500-node event-loop watchdog additionally guards wall time.
-    doc.update_chat_node_content(parent.id, "Different")
     assert _states(doc)[reply.id] == "out_of_date"
 
 

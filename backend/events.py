@@ -100,6 +100,7 @@ PatchBuilder = Callable[[], list[dict[str, Any]] | None]
 # connection lands exactly where every existing one already is - see
 # SessionBus.send_snapshot and SceneDocument.published_scene_payload.
 BaselineBuilder = Callable[[], dict[str, Any] | None]
+WireEncoder = Callable[[dict[str, Any]], str]
 IntentHandler = Callable[..., Any | Awaitable[Any]]
 
 # The one session id every real window uses (confirmed by grep:
@@ -208,7 +209,7 @@ class _IntentRegistration:
 
 class _Topic:
     __slots__ = (
-        "name", "builder", "patch_builder", "baseline_builder",
+        "name", "builder", "patch_builder", "baseline_builder", "wire_encoder",
         "schema_version", "min_compatible", "revision",
     )
 
@@ -220,11 +221,13 @@ class _Topic:
         min_compatible: int,
         patch_builder: PatchBuilder | None = None,
         baseline_builder: BaselineBuilder | None = None,
+        wire_encoder: WireEncoder | None = None,
     ):
         self.name = name
         self.builder = builder
         self.patch_builder = patch_builder
         self.baseline_builder = baseline_builder
+        self.wire_encoder = wire_encoder
         self.schema_version = schema_version
         self.min_compatible = min_compatible
         self.revision = 0
@@ -458,6 +461,7 @@ class SessionBus:
         min_compatible: int = 1,
         patch_builder: PatchBuilder | None = None,
         baseline_builder: BaselineBuilder | None = None,
+        wire_encoder: WireEncoder | None = None,
     ) -> None:
         """`patch_builder`, when given, opts this topic into ADR-003 stage
         3.4's delta protocol: publish() asks it for the ops accumulated
@@ -489,7 +493,7 @@ class SessionBus:
                 f"send_snapshot serves live state stamped with a stale revision"
             )
         self._topics[name] = _Topic(
-            name, builder, schema_version, min_compatible, patch_builder, baseline_builder
+            name, builder, schema_version, min_compatible, patch_builder, baseline_builder, wire_encoder
         )
 
     def register_intent(
@@ -596,13 +600,25 @@ class SessionBus:
         while True:
             message = await buffered_conn.queue.get()
             try:
-                await buffered_conn.conn.send_json(message)
+                await self._send_message(buffered_conn.conn, message)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.warning("dropping dead connection on session %s", self.session_id)
                 self.detach(buffered_conn.conn)
                 return
+
+    async def _send_message(self, conn: Connection, message: dict[str, Any]) -> None:
+        """Use a byte-equivalent cached scene encoder for real text WebSockets.
+
+        Recorders and other transports only implementing send_json retain the
+        old API. The encoder is topic-scoped, so every other topic is unchanged.
+        """
+        topic = self._topics.get(message.get("topic", ""))
+        if topic is not None and topic.wire_encoder is not None and callable(getattr(conn, "send_text", None)):
+            await conn.send_text(topic.wire_encoder(message))
+        else:
+            await conn.send_json(message)
 
     @property
     def connection_count(self) -> int:
@@ -751,7 +767,7 @@ class SessionBus:
                     )
                 continue
             try:
-                await conn.send_json(message)
+                await self._send_message(conn, message)
             except Exception:
                 logger.warning("dropping dead connection on session %s", self.session_id)
                 self.detach(conn)
@@ -806,7 +822,7 @@ class SessionBus:
         if buffered_conn is not None:
             buffered_conn.offer_superseding(message, topic)
             return
-        await conn.send_json(message)
+        await self._send_message(conn, message)
 
     async def publish_stream(
         self,

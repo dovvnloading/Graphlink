@@ -736,6 +736,96 @@ def _put_non_default(wire: dict[str, Any], source: object, entries: tuple[_Entry
         wire[key] = value
 
 
+class CachedNodeWire:
+    """Safely reuse scalar wire rows, even with uninstrumented mutations.
+
+    C-level dict equality witnesses every directly assigned node/state
+    field. Empty mutable values are monitored for in-place appends; any
+    nonempty mutable input always falls back to node_wire, to catch nested
+    edits without requiring per-mutator dirty bookkeeping.
+    """
+
+    __slots__ = (
+        "node", "state", "node_values", "state_values", "empties", "length_only",
+        "node_numbers", "state_numbers", "final", "staleness", "row",
+    )
+
+    def __init__(self, node: SceneNode, row: dict[str, Any], *,
+                 final: bool, staleness: str) -> None:
+        self.node = node
+        self.state = node.state
+        self.node_values = dict(vars(node))
+        self.state_values = dict(vars(node.state)) if node.state is not None else None
+        self.final = final
+        self.staleness = staleness
+        self.row = dict(row)
+        empties = []
+        length_only = []
+        for values in (self.node_values, self.state_values):
+            if values is None:
+                continue
+            for name, value in values.items():
+                if name == "state" and value is self.state:
+                    continue
+                if name == "versions" and isinstance(self.state, ChatState) and type(value) is list:
+                    # The sparse wire only reads len(versions), not the
+                    # stored (unselected) alternative bodies. Real chat
+                    # nodes always have a nonempty versions list.
+                    length_only.append((value, len(value)))
+                    continue
+                if type(value) in (list, dict, set, bytearray):
+                    if value:
+                        raise ValueError("nonempty mutable input")
+                    empties.append(value)
+                elif type(value) is tuple:
+                    if value:
+                        raise ValueError("tuple may contain mutable input")
+                elif type(value) not in (str, int, bool, float, bytes, type(None)):
+                    raise ValueError("custom mutable input")
+        self.empties = tuple(empties)
+        self.length_only = tuple(length_only)
+        self.node_numbers = self._numbers(self.node_values)
+        self.state_numbers = self._numbers(self.state_values or {})
+
+    @staticmethod
+    def _numbers(values: dict[str, Any]) -> tuple[tuple[str, type, str | None], ...]:
+        # Dict equality treats False == 0 and 0.0 == -0.0, but JSON does not.
+        return tuple(
+            (key, type(value), value.hex() if type(value) is float else None)
+            for key, value in values.items() if type(value) in (int, bool, float)
+        )
+
+    @staticmethod
+    def _same_numbers(values: dict[str, Any],
+                      guards: tuple[tuple[str, type, str | None], ...]) -> bool:
+        for key, expected_type, float_hex in guards:
+            value = values[key]
+            if type(value) is not expected_type or (
+                float_hex is not None and value.hex() != float_hex
+            ):
+                return False
+        return True
+
+    def matches(self, node: SceneNode, *, final: bool, staleness: str) -> bool:
+        if (
+            node is not self.node or node.state is not self.state
+            or final != self.final or staleness != self.staleness
+            or any(self.empties)
+            or any(len(value) != size for value, size in self.length_only)
+        ):
+            return False
+        node_values = vars(node)
+        if node_values != self.node_values or not self._same_numbers(node_values, self.node_numbers):
+            return False
+        if node.state is None:
+            return True
+        state_values = vars(node.state)
+        return (
+            state_values == self.state_values
+            and self._same_numbers(state_values, self.state_numbers)
+        )
+
+
 def node_wire(
     node: SceneNode, *, is_final_deliverable: bool, plugin_state: dict[str, str], text_input_status: str = "unbound",
     staleness: str = "current",

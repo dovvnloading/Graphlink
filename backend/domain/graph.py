@@ -73,9 +73,10 @@ from backend.domain.model import (
 )
 from backend.domain.node_access import is_node_of, require_node
 from backend.domain.node_states import ChatState, CodeState, FrameState, NodeState
-from backend.domain.node_wire import node_wire
+from backend.domain.node_wire import CachedNodeWire, node_wire
+from backend.domain.scene_json import SceneJSONCache
 from backend.domain.staleness import scene_staleness
-from backend.domain.table_workflows import TableOps, TableReadCache
+from backend.domain.table_workflows import TableOps, TableReadCache, table_output
 from backend.domain.nodes_agent_runs import AgentRunOps
 from backend.domain.nodes_code_review import CodeReviewOps
 from backend.domain.nodes_content import ContentOps, clear_note_text_readers
@@ -321,6 +322,13 @@ class SceneDocument(
     _published_pins: list[dict[str, Any]] | None = field(default=None, repr=False, compare=False)
     _published_view: dict[str, Any] | None = field(default=None, repr=False, compare=False)
     _published_meta: dict[str, Any] | None = field(default=None, repr=False, compare=False)
+    # Only scalar wire rows are memoized. Direct edits are caught by the
+    # live node/state dict comparison; nested mutable inputs take the slow
+    # path (the version list is monitored by length).
+    _node_wire_cache: dict[str, CachedNodeWire] = field(
+        default_factory=dict, repr=False, compare=False,
+    )
+    _scene_json: SceneJSONCache = field(default_factory=SceneJSONCache, repr=False, compare=False)
 
     # -- ADR-003 stage 3.4: the scene topic's patch protocol ---------------
 
@@ -404,6 +412,7 @@ class SceneDocument(
         whenever the pins list changed - pins have no op in the ADR's own
         op set, so a pin mutation is honestly outside what a patch can
         express and falls back rather than being silently dropped."""
+        self._prune_node_wire_cache()
         table_reads = TableReadCache()
         source_digests: dict[str, str] = {}
         stale = scene_staleness(self)
@@ -497,6 +506,11 @@ class SceneDocument(
         self.__dict__.pop("_mcp_revision_epoch", None)
         self.nodes.clear()
         self.edges.clear()
+        self._node_wire_cache.clear()
+        self._scene_json.clear()
+        self.__dict__.pop("_staleness_inputs", None)
+        self.__dict__.pop("_staleness_lineage", None)
+        self.__dict__.pop("_staleness_replies", None)
         self.nonchat_upstream_fingerprints.clear()
         self.image_assets.clear()
         self.pins.clear()
@@ -1028,6 +1042,25 @@ class SceneDocument(
         (ADR-003 stage 3.4), so the two can never drift field by field.
         Sparse: see backend/domain/node_wire.py for the encoding and the
         client-side restore that keeps every reader seeing the full row."""
+        has_live_price = (
+            self.reply_cost_estimator is not None
+            and n.kind == "chat" and isinstance(n.state, ChatState)
+            and not n.state.is_user
+            and (n.state.prompt_tokens is not None or n.state.completion_tokens is not None)
+        )
+        # Bound inputs, derived tables, plugin serializers and live prices
+        # have dependencies outside the node's own scalar fields.
+        external = (
+            (n.kind == "note" and getattr(n.state, "text_input_source_id", None))
+            or table_output(n) is not None
+            or n.kind in self.plugin_node_serializers
+            or has_live_price
+        )
+        final = n.id == self.final_deliverable_node_id
+        previous = self._node_wire_cache.get(n.id)
+        if not external and previous is not None and previous.matches(n, final=final, staleness=staleness):
+            return dict(previous.row)  # do not expose cached rows to callers
+
         row = node_wire(
             n,
             is_final_deliverable=n.id == self.final_deliverable_node_id,
@@ -1036,16 +1069,20 @@ class SceneDocument(
             staleness=staleness,
         )
         row.update(self._table_output_wire(n, table_reads))
-        if (
-            self.reply_cost_estimator is not None
-            and n.kind == "chat" and isinstance(n.state, ChatState)
-            and not n.state.is_user
-            and (n.state.prompt_tokens is not None or n.state.completion_tokens is not None)
-        ):
+        if has_live_price:
             row["estimatedCostUsd"] = self.reply_cost_estimator(
                 n.state.prompt_tokens, n.state.completion_tokens,
                 provider=n.state.provider or "", model=n.state.model or "",
             )
+        if not external and all(type(v) in (str, int, float, bool, type(None)) for v in row.values()):
+            try:
+                self._node_wire_cache[n.id] = CachedNodeWire(
+                    n, row, final=final, staleness=staleness,
+                )
+            except ValueError:
+                self._node_wire_cache.pop(n.id, None)
+        else:
+            self._node_wire_cache.pop(n.id, None)
         return row
 
     def _plugin_state_wire(self, n: SceneNode) -> dict[str, str]:
@@ -1132,7 +1169,15 @@ class SceneDocument(
             "redoLabel": self.redo_label(),
         }
 
+    def _prune_node_wire_cache(self) -> None:
+        # Deletions cannot leave cached node/state references alive forever.
+        # Steady publishes avoid the O(nodes) set comparison entirely.
+        if len(self._node_wire_cache) > len(self.nodes):
+            for node_id in self._node_wire_cache.keys() - self.nodes.keys():
+                del self._node_wire_cache[node_id]
+
     def scene_payload(self) -> dict[str, Any]:
+        self._prune_node_wire_cache()
         table_reads = TableReadCache()
         source_digests: dict[str, str] = {}
         stale = scene_staleness(self)
@@ -1148,6 +1193,18 @@ class SceneDocument(
             # SceneDocument.
             **self._view_wire(),
         }
+
+    def encode_scene_payload(self, payload: dict[str, Any]) -> str:
+        """Byte-for-byte json.dumps(payload), reusing unchanged JSON text.
+
+        The perf harness uses the default encoder settings; production scene
+        snapshots use the same cache with compact WebSocket JSON settings.
+        """
+        return self._scene_json.encode_payload(payload)
+
+    def encode_scene_message(self, message: dict[str, Any]) -> str:
+        """Byte-for-byte Starlette WebSocket.send_json's text encoding."""
+        return self._scene_json.encode_message(message)
 
     def grid_payload(self) -> dict[str, Any]:
         # Field-for-field the GridControlStatePayload shape (whole-percent
