@@ -391,7 +391,9 @@ def register_canvas(
     # ADR-012 stage 12.6: the bundled sample workspace - see that module's
     # own docstring.
     register_onboarding_intents(bus, document)
-    register_knowledge_intents(bus, document, notifications)
+    register_knowledge_intents(
+        bus, document, notifications, composer_document=composer_document, agent_dispatcher=agent_dispatcher,
+    )
     # ADR-020 stage 20.4: global cross-workspace search - deliberately takes
     # no `document` (unlike register_knowledge_intents immediately above,
     # which scopes to the CALLING session's current workspace) - global
