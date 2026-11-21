@@ -170,3 +170,45 @@ def test_malformed_saved_versions_fall_back_to_existing_text():
     })
     assert node.content == "still here"
     assert len(node.state.versions) == 1
+
+
+def test_multimodal_user_version_keeps_its_images_when_switching_and_reloading():
+    document = SceneDocument()
+    parts = [
+        {"type": "text", "text": "with an image"},
+        {"type": "image_bytes", "data": b"test-image-bytes", "mime_type": "image/png"},
+    ]
+    node = document.add_chat_node(
+        0, 0, "with an image", True, content_parts=parts,
+    )
+    document.update_chat_node_content(node.id, "edited text without media")
+    assert node.state.content_parts is None
+    document.set_chat_version(node.id, 0)
+    assert node.state.content_parts == parts
+    assert document.chat_branch_history(node.id)[0]["content"] == parts
+    document.set_chat_version(node.id, 1)
+    assert document.chat_branch_history(node.id)[0]["content"] == "edited text without media"
+
+    saved = build_chat_data(document)
+    original = next(row for row in saved["nodes"] if row["node_type"] == "chat")
+    assert original["versions"][0]["parts"][1]["data"] == "dGVzdC1pbWFnZS1ieXRlcw=="
+    restored = SceneDocument()
+    notes, pins = saved.pop("notes_data"), saved.pop("pins_data")
+    restore_chat_into_document(restored, {"data": saved}, notes, pins)
+    message = next(node for node in restored.nodes.values() if node.kind == "chat")
+    restored.set_chat_version(message.id, 0)
+    assert message.state.content_parts[1]["data"] == b"test-image-bytes"
+
+
+def test_scene_wire_exposes_only_version_count_and_selection_not_full_history():
+    document = SceneDocument()
+    node = document.add_chat_node(0, 0, "first", False)
+    document.update_chat_node_content(node.id, "second")
+    row = next(row for row in document.scene_payload()["nodes"] if row["id"] == node.id)
+    assert row["versionCount"] == 2
+    assert row["versionIndex"] == 1
+    assert "versions" not in row
+    document.set_chat_version(node.id, 0)
+    row = next(row for row in document.scene_payload()["nodes"] if row["id"] == node.id)
+    assert row["content"] == "first"
+    assert row["versionIndex"] == 0
