@@ -445,7 +445,7 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
       <div className="settings-button-row">
         <button type="button" className="settings-button"
           disabled={state.ollamaStartStatus === "starting"}
-          onClick={() => transport.fireIntent("app-settings", "checkOllamaStatus", [])}>
+          onClick={() => transport.intent("app-settings", "checkOllamaStatus", [])}>
           Check Ollama status
         </button>
       </div>

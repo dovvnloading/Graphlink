@@ -171,7 +171,7 @@ describe("queueable intent classification (ADR-003 stage 3.6)", () => {
     // side effect; neither may be replayed after reconnecting from offline.
     // Per-model Ollama metadata inspection and its idempotent setter.
     // Model Check and cancellation are session-only: neither can be replayed after reconnect.
-    expect(sites).toHaveLength(58);
+    expect(sites).toHaveLength(56);
     expect(sites.filter((s) => s.intent === "setOllamaContextWindow").map((s) => s.queueable)).toEqual([true]);
     expect(sites.filter((s) => s.intent === "inspectOllamaContextModel").map((s) => s.queueable)).toEqual([false]);
     expect(sites.filter((s) => s.intent === "checkOllamaModel").map((s) => s.queueable)).toEqual([false]);
@@ -183,13 +183,15 @@ describe("queueable intent classification (ADR-003 stage 3.6)", () => {
       expect(calls.length).toBeGreaterThan(0);
       expect(calls.every((s) => s.queueable === false)).toBe(true);
     }
-    // The Settings dialog polls health on entry; the Ollama page also has a
-    // manual Check button. Both are live, session-only requests, not setters.
-    // Keep both occurrences pinned; a stale health check must never replay.
+    // Health probes are read-only, untracked intents: their result arrives
+    // through app-settings, so a slow probe cannot emit a sticky timeout toast.
+    // Start remains a tracked, non-replayable operation.
     expect(sites.filter((s) => ["checkOllamaStatus", "startOllama"].includes(s.intent))
-      .map(({ intent, queueable }) => [intent, queueable]).sort()).toEqual([
-      ["checkOllamaStatus", false], ["checkOllamaStatus", false], ["startOllama", false],
-    ]);
+      .map(({ intent, queueable }) => [intent, queueable])).toEqual([["startOllama", false]]);
+    for (const file of ["SettingsDialog.tsx", "OllamaSettingsPage.tsx"]) {
+      const source = readFileSync(join(APP_SRC, "chrome", file), "utf-8");
+      expect(source).toContain('transport.intent("app-settings", "checkOllamaStatus", [])');
+    }
     const cloud = sites.filter((s) => s.file.endsWith("CloudProviderSettings.tsx"));
     expect(cloud.map(({ intent, queueable }) => [intent, queueable]).sort()).toEqual([
       ["loadApiModels", false], ["resetApiSettings", false], ["saveApiConfiguration", false],
@@ -200,7 +202,7 @@ describe("queueable intent classification (ADR-003 stage 3.6)", () => {
     // replay after a dropped WebSocket, even when their arguments look stable.
     for (const intent of [
       "scanOllamaSystem", "pickOllamaScanFolder", "inspectOllamaContextModel",
-      "checkOllamaStatus", "startOllama", "checkOllamaModel",
+      "startOllama", "checkOllamaModel",
       "cancelOllamaModelCheck", "pullOllamaModel", "cancelOllamaPull",
       "removeOllamaModel", "setProviderMode", "submitFalJob", "cancelFalJob",
       "uploadFalFile", "runFalSync",

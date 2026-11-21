@@ -71,38 +71,87 @@ def _installed_ollama_command() -> list[str] | None:
     return None
 
 
+def _installed_ollama_serve_command() -> list[str] | None:
+    """Find the installed Windows CLI even when the tray app takes precedence.
+
+    Windows installers commonly place both executables in Programs/Ollama.
+    Only an absolute executable in an installed location or PATH is accepted.
+    """
+    if sys.platform != "win32":
+        return None
+    for variable in ("LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)"):
+        root = os.environ.get(variable)
+        if not root:
+            continue
+        folder = Path(root) / ("Programs/Ollama" if variable == "LOCALAPPDATA" else "Ollama")
+        executable = folder / "ollama.exe"
+        if executable.is_file():
+            return [str(executable), "serve"]
+    cli = shutil.which("ollama.exe")
+    if cli:
+        executable = Path(cli)
+        if executable.is_absolute() and executable.is_file():
+            return [str(executable.resolve()), "serve"]
+    return None
+
+
+def _status_tags() -> object:
+    # The Ollama module-level client has no HTTP timeout. A stalled /api/tags
+    # must not hold a Settings health request (or a Start probe) indefinitely.
+    with ollama.Client(timeout=2.0) as client:
+        return client.list()
+
+
 def check_ollama_server_status() -> str:
-    """Lightweight live status; reject malformed /api/tags as unhealthy."""
+    """Lightweight, time-bounded status; reject malformed /api/tags as unhealthy."""
     try:
-        _tag_models(ollama.list())
+        _tag_models(_status_tags())
     except Exception:
         return "installed" if _installed_ollama_command() is not None else "not_found"
     return "running"
 
 
+def _spawn_installed_ollama(command: list[str]) -> None:
+    options = dict(
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        close_fds=True, shell=False,
+    )
+    if sys.platform == "win32":
+        # A GUI app stays a GUI app; the CLI server runs without a console.
+        if command[-1] == "serve":
+            options["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    else:
+        options["start_new_session"] = True
+    subprocess.Popen(command, **options)
+
+
 def start_installed_ollama() -> bool:
-    """Start the installed application, never downloading or installing it.
+    """Start an already-installed app or CLI; never install/download Ollama.
 
     Returns False if the daemon was already running. A failed spawn propagates
-    to the Settings intent so it can report an actionable error.
+    to Settings so the user receives an actionable error.
     """
     if check_ollama_server_status() == "running":
         return False
     command = _installed_ollama_command()
     if command is None:
         raise FileNotFoundError("Ollama is not installed on this computer.")
+    _spawn_installed_ollama(command)
+    return True
 
-    options = dict(
-        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        close_fds=True, shell=False,
-    )
-    if sys.platform == "win32":
-        # Only a CLI server needs its console hidden; a GUI app stays a GUI app.
-        if command[-1] == "serve":
-            options["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    else:
-        options["start_new_session"] = True
-    subprocess.Popen(command, **options)
+
+def start_installed_ollama_server_fallback() -> bool:
+    """Try Windows ollama.exe serve if the preferred tray app did not start a server.
+
+    Never launch a second CLI when the original command already used serve.
+    """
+    preferred = _installed_ollama_command()
+    if sys.platform != "win32" or preferred is None or preferred[-1] == "serve":
+        return False
+    command = _installed_ollama_serve_command()
+    if command is None or check_ollama_server_status() == "running":
+        return False
+    _spawn_installed_ollama(command)
     return True
 
 

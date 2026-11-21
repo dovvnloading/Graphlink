@@ -187,21 +187,42 @@ def test_explicit_scan_folder_preserves_manual_scan_without_requiring_server(mon
 def test_lightweight_status_probe_distinguishes_running_installed_and_missing(monkeypatch):
     # /api/tags is already the shared inventory's reachability signal; do
     # not call /api/show, /api/ps or traverse model manifests for health.
-    monkeypatch.setattr(ollama_inventory.ollama, "list", Mock(return_value={"models": []}))
+    monkeypatch.setattr(ollama_inventory, "_status_tags", Mock(return_value={"models": []}))
     monkeypatch.setattr(ollama_inventory.ollama, "show", Mock(side_effect=AssertionError("no /api/show")))
     monkeypatch.setattr(ollama_inventory.ollama, "ps", Mock(side_effect=AssertionError("no /api/ps")))
     monkeypatch.setattr(ollama_inventory, "_installed_ollama_command", lambda: None)
     assert ollama_inventory.check_ollama_server_status() == "running"
 
-    monkeypatch.setattr(ollama_inventory.ollama, "list", Mock(side_effect=ConnectionError("refused")))
+    monkeypatch.setattr(ollama_inventory, "_status_tags", Mock(side_effect=ConnectionError("refused")))
     monkeypatch.setattr(ollama_inventory, "_installed_ollama_command", lambda: ["/opt/ollama", "serve"])
     assert ollama_inventory.check_ollama_server_status() == "installed"
     monkeypatch.setattr(ollama_inventory, "_installed_ollama_command", lambda: None)
     assert ollama_inventory.check_ollama_server_status() == "not_found"
 
 
+def test_status_probe_uses_bounded_ollama_client_and_closes_it(monkeypatch):
+    seen = []
+
+    class FakeClient:
+        def __init__(self, *, timeout):
+            seen.append(("timeout", timeout))
+
+        def __enter__(self):
+            return self
+
+        def list(self):
+            return {"models": []}
+
+        def __exit__(self, *_args):
+            seen.append(("closed", True))
+
+    monkeypatch.setattr(ollama_inventory.ollama, "Client", FakeClient)
+    assert ollama_inventory.check_ollama_server_status() == "running"
+    assert seen == [("timeout", 2.0), ("closed", True)]
+
+
 def test_status_ignores_stale_models_when_ollama_executable_is_missing(monkeypatch):
-    monkeypatch.setattr(ollama_inventory.ollama, "list", Mock(side_effect=ConnectionError("offline")))
+    monkeypatch.setattr(ollama_inventory, "_status_tags", Mock(side_effect=ConnectionError("offline")))
     monkeypatch.setattr(ollama_inventory, "_installed_ollama_command", lambda: None)
     # No model manifest (even a saved inventory) can make a missing app launchable.
     assert ollama_inventory.check_ollama_server_status() == "not_found"
@@ -248,6 +269,47 @@ def test_windows_installed_app_is_detected_without_path_entry(tmp_path, monkeypa
     monkeypatch.delenv("PROGRAMFILES(X86)", raising=False)
     monkeypatch.setattr(ollama_inventory.shutil, "which", lambda _name: None)
     assert ollama_inventory._installed_ollama_command() == [str(app)]
+
+
+def test_windows_tray_falls_back_to_installed_cli_without_shell(tmp_path, monkeypatch):
+    folder = tmp_path / "Programs" / "Ollama"
+    folder.mkdir(parents=True)
+    app, cli = folder / "ollama app.exe", folder / "ollama.exe"
+    app.touch()
+    cli.touch()
+    monkeypatch.setattr(ollama_inventory.sys, "platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.delenv("PROGRAMFILES", raising=False)
+    monkeypatch.delenv("PROGRAMFILES(X86)", raising=False)
+    monkeypatch.setattr(ollama_inventory.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(ollama_inventory, "check_ollama_server_status", lambda: "installed")
+    spawn = Mock()
+    monkeypatch.setattr(ollama_inventory.subprocess, "Popen", spawn)
+
+    assert ollama_inventory.start_installed_ollama() is True
+    assert ollama_inventory.start_installed_ollama_server_fallback() is True
+    assert [call.args[0] for call in spawn.call_args_list] == [[str(app)], [str(cli), "serve"]]
+    for call in spawn.call_args_list:
+        assert call.kwargs["shell"] is False
+        assert call.kwargs["close_fds"] is True
+    assert spawn.call_args_list[1].kwargs["creationflags"] == getattr(
+        ollama_inventory.subprocess, "CREATE_NO_WINDOW", 0
+    )
+
+
+def test_windows_tray_without_cli_cannot_spawn_an_unrelated_command(tmp_path, monkeypatch):
+    app = tmp_path / "Programs" / "Ollama" / "ollama app.exe"
+    app.parent.mkdir(parents=True)
+    app.touch()
+    monkeypatch.setattr(ollama_inventory.sys, "platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.delenv("PROGRAMFILES", raising=False)
+    monkeypatch.delenv("PROGRAMFILES(X86)", raising=False)
+    monkeypatch.setattr(ollama_inventory.shutil, "which", lambda _name: None)
+    spawn = Mock(side_effect=AssertionError("no CLI available"))
+    monkeypatch.setattr(ollama_inventory.subprocess, "Popen", spawn)
+    assert ollama_inventory.start_installed_ollama_server_fallback() is False
+    spawn.assert_not_called()
 
 
 def test_macos_installed_app_is_detected_without_path_entry(tmp_path, monkeypatch):
@@ -310,6 +372,7 @@ def test_daemon_inventory_ignores_unsafe_names_and_untrusted_metadata(monkeypatc
 
 def test_bad_tags_response_is_not_marked_as_running(monkeypatch):
     monkeypatch.setattr(ollama_inventory.ollama, "list", lambda: {"models": "not an array"})
+    monkeypatch.setattr(ollama_inventory, "_status_tags", lambda: {"models": "not an array"})
     monkeypatch.setattr(ollama_inventory, "_installed_ollama_command", lambda: None)
     monkeypatch.setattr(api_provider, "scan_local_ollama_models", lambda _path: {
         "models": [], "scan_mode": "system", "locations": [],
