@@ -71,6 +71,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("app-composer", "attachFile", "B", "draft-state: staged attachment before Send, not committed content"),
     Classified("app-composer", "removeAttachment", "B", "draft-state: staged attachment before Send, not committed content"),
     Classified("app-composer", "selectModel", "B", "preference: per-task model assignment"),
+    Classified("app-composer", "selectPickerModel", "B", "preference: provider-qualified model selection"),
     Classified("app-composer", "updateDraft", "B", "draft-state: native-text-edit equivalent - the composer's own draft field before Send"),
     Classified("app-composer", "setReasoningLevel", "B", "preference: reasoning level, mirrors Settings' own reasoning-level setters"),
 
@@ -265,6 +266,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("scene", "sendMessage", "A", "content: user message (hidden create - internally adds a chat node)"),
     Classified("scene", "compareModels", "A", "content: one user message plus sibling model replies, each recorded via record_command"),
     Classified("scene", "listComparisonModels", "B", "read-only: configured comparison catalog; does not mutate graph or settings"),
+    Classified("scene", "listPickerModels", "B", "read-only: installed Ollama inventory and configured cloud models"),
     Classified("scene", "regenerateResponse", "A", "content: delete-then-recreate of a node's content, one composite undo"),
     Classified("scene", "inspectChatContext", "B", "read-only: previews the next chat send's sources and budget without a graph mutation"),
     Classified("scene", "getChatKnowledgePreference", "B", "read-only: resolves branch preference and workspace document presence"),
