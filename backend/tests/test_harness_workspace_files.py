@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -191,6 +192,18 @@ def test_pagination_reuses_snapshot_and_only_resolves_page_candidates(tmp_path, 
     root.mkdir()
     for i in reversed(range(905)):
         (root / f"{i:05}.txt").touch()
+
+    # Snapshot reuse is keyed by both directory metadata and a 30-second
+    # monotonic-clock window. Hold them stable so Windows timestamp updates
+    # and CI delays cannot turn this into a snapshot-expiry test.
+    frozen_stat = root.stat()
+    original_stat = type(root).stat
+
+    def stable_directory_stat(path, *args, **kwargs):
+        return frozen_stat if path == root else original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(root), "stat", stable_directory_stat)
+    monkeypatch.setattr(files_module, "time", SimpleNamespace(monotonic=lambda: 0.0))
 
     original_scan = files_module.os.scandir
     original_inside = files_module._inside
