@@ -65,14 +65,14 @@ When a card is inspected, Graphlink estimates **model weights + KV cache** for t
 
 ## Run a model Check
 
-Select **Check** on a model card to run a short, cancellable diagnostic. It asks the model to generate a brief reply and requests a harmless tool call. The card reports **load time**, **generation speed (tokens/s)** and whether **tool calling worked**; unavailable counters are reported as unavailable rather than invented. **Cancel** stops an in-progress check.
+Select **Check** on a model card to run a short, cancellable diagnostic. It asks the model to generate a brief reply and requests a harmless **native function call** using an actual Ollama tool definition; no tool is executed. For supported reasoning models such as Qwen3, the tool probe uses the runtime's Quick/no-thinking setting and retries once if the response contains reasoning but no call. The card reports **load time**, **generation speed (tokens/s)** and whether a **tool call was observed**; unavailable counters are reported as unavailable rather than invented. If neither attempt returns a call, the result is **Inconclusive**, not proof that tools are unsupported. **Cancel** stops an in-progress check.
 
-**Check is a report only.** It may load or run the model, but it does **not** change saved settings or model assignments, and **never executes** the requested tool call. It is a small probe, not a guarantee of performance on your own workloads. A negative native-tool result does not by itself rule out the Agent's JSON-tool fallback.
+**Check is a report only.** It may load or run the model, but it does **not** change saved settings or model assignments, and **never executes** the requested tool call. It is a small probe, not a guarantee of performance on your own workloads. An inconclusive native-tool check does not override Ollama's advertised tools capability or rule out the Agent's JSON-tool fallback.
 
 ## Understand capability warnings
 
 - If you attach an image in the composer and the selected model is **confirmed not to support vision**, Graphlink warns you before sending. Pick a vision-capable model.
-- If an Agent card's current model is **confirmed not to support native tool calling**, it warns you and may suggest an installed tool-capable Ollama model. Agent's constrained JSON fallback may still work where supported.
+- With **Agent** mode enabled, the main composer warns **before the first task is sent** if the selected model is confirmed not to support native tool calling. Idle Agent cards retain this warning for follow-up tasks. Graphlink may suggest a **server-verified installed Ollama model** with tools whose estimated weights plus context-window KV cache fit **available system RAM**. This is an estimate, not a guarantee of actual memory usage; if the fit cannot be established, it suggests no particular model. Agent's constrained JSON fallback may still work where supported.
 - **Unknown/unavailable** metadata does not trigger those unsupported-capability warnings. If you are unsure, start Ollama, refresh the inventory, and use **Check** to probe native tool calling.
 
 Badges and warnings describe reported or observed support, not a promise that a particular prompt, image format or tool schema will succeed.
