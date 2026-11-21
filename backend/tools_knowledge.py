@@ -63,6 +63,8 @@ def _format_results(results: list[dict]) -> str:
             "offset_start": r["offset_start"],
             "offset_end": r["offset_end"],
             "text": r["text"],
+            "rank_signals": r.get("rank_signals", {}),
+            "rrf_score": r.get("rrf_score"),
         }
         for r in results
     ]

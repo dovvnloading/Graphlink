@@ -39,6 +39,7 @@ interface KnowledgeSearchResult {
   text: string;
   offsetStart: number;
   offsetEnd: number;
+  rankSignals?: { fts5?: number; vector?: number };
 }
 
 
@@ -158,6 +159,20 @@ function KnowledgeResultCard({ result }: { result: KnowledgeSearchResult }) {
       >
         <span className="knowledge-result-title">{result.documentTitle}</span>
         <span className="knowledge-result-source">{result.sourceUri}</span>
+        {(typeof result.rankSignals?.fts5 === "number" || typeof result.rankSignals?.vector === "number") && (
+          <span className="knowledge-result-signals" role="group" aria-label="Match signals">
+            {typeof result.rankSignals?.fts5 === "number" && (
+              <span className="knowledge-result-signal" title="FTS5 keyword match rank">
+                Keyword #{result.rankSignals.fts5}
+              </span>
+            )}
+            {typeof result.rankSignals?.vector === "number" && (
+              <span className="knowledge-result-signal" title="Vector semantic match rank">
+                Semantic #{result.rankSignals.vector}
+              </span>
+            )}
+          </span>
+        )}
       </button>
       {expanded && (
         <div className="knowledge-result-body">

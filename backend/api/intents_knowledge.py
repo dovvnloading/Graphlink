@@ -311,24 +311,16 @@ def register_knowledge_document_intents(
     bus.register_intent("knowledge", "reindexDocument", reindex_document, args_schema=DocumentIdArgs)
 
 
-def register_knowledge_intents(
+def register_knowledge_search_intents(
     bus: SessionBus,
     document: SceneDocument,
-    notifications: NotificationState | None = None,
     settings_manager=None,
-    watch_service: WatchedFolderService | None = None,
-    composer_document=None,
-    agent_dispatcher=None,
+    db_path=None,
 ) -> None:
-    publish_scene = make_publish_scene(bus)
-    db_path = watch_service.db_path if watch_service is not None else DEFAULT_DB_PATH
-    watcher = watch_service if watch_service is not None else WatchedFolderService(db_path)
-    ingest_jobs = KnowledgeIngestManager(bus, db_path)
-    uploads = KnowledgeDropUploads(db_path)
-    bus.register_topic("knowledge-ingest", ingest_jobs.snapshot)
-
+    db_path = DEFAULT_DB_PATH if db_path is None else db_path
     async def search(query, k):
         k = min(max(int(k or _DEFAULT_K), 1), _MAX_K)
+        workspace_id = document.current_workspace_id
 
         # ADR-020 stage 20.3: scoped to the calling session's current
         # workspace - see _resolve_workspace_collection_id's own docstring.
@@ -348,6 +340,10 @@ def register_knowledge_intents(
         # for every other connection, unlike every other blocking-I/O
         # intent handler in this codebase (e.g. intents_settings_*.py).
         results = await asyncio.to_thread(_search)
+        # A slow vector request must not display the previous workspace's
+        # passages after the session switches workspaces mid-search.
+        if document.current_workspace_id != workspace_id:
+            return {"results": []}
         return {"results": _format_search_results(results)}
 
     async def open_citation(document_id, chunk_id, citation_id):
@@ -355,14 +351,14 @@ def register_knowledge_intents(
         workspace_id = document.current_workspace_id
 
         def _read():
-            if not DEFAULT_DB_PATH.exists():
+            if not db_path.exists():
                 return None
             collection_id = (
                 0 if workspace_id is None
-                else get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+                else get_or_create_workspace_collection(db_path, workspace_id)
             )
             return open_cited_document(
-                DEFAULT_DB_PATH, document_id=document_id, chunk_id=chunk_id,
+                db_path, document_id=document_id, chunk_id=chunk_id,
                 citation_id=citation_id, collection_id=collection_id,
             )
 
@@ -372,6 +368,26 @@ def register_knowledge_intents(
         if document.current_workspace_id != workspace_id:
             return {"document": None}
         return {"document": source}
+
+    bus.register_intent("knowledge", "search", search, args_schema=SearchArgs)
+    bus.register_intent("knowledge", "openCitation", open_citation, args_schema=OpenCitationArgs)
+
+
+def register_knowledge_intents(
+    bus: SessionBus,
+    document: SceneDocument,
+    notifications: NotificationState | None = None,
+    settings_manager=None,
+    watch_service: WatchedFolderService | None = None,
+    composer_document=None,
+    agent_dispatcher=None,
+) -> None:
+    publish_scene = make_publish_scene(bus)
+    db_path = watch_service.db_path if watch_service is not None else DEFAULT_DB_PATH
+    watcher = watch_service if watch_service is not None else WatchedFolderService(db_path)
+    ingest_jobs = KnowledgeIngestManager(bus, db_path)
+    uploads = KnowledgeDropUploads(db_path)
+    bus.register_topic("knowledge-ingest", ingest_jobs.snapshot)
 
     async def set_chat_index_into_knowledge(node_id, enabled):
         """Runs the actual knowledge-store write (chat_branch_history() ->
@@ -536,8 +552,7 @@ def register_knowledge_intents(
     async def cancel_upload(upload_id):
         return await asyncio.to_thread(uploads.cancel, upload_id)
 
-    bus.register_intent("knowledge", "search", search, args_schema=SearchArgs)
-    bus.register_intent("knowledge", "openCitation", open_citation, args_schema=OpenCitationArgs)
+    register_knowledge_search_intents(bus, document, settings_manager=settings_manager, db_path=db_path)
     bus.register_intent("knowledge", "addFiles", add_files)
     bus.register_intent("knowledge", "addFolder", add_folder)
     register_knowledge_watched_folder_intents(bus, document, watcher)

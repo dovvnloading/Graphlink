@@ -4123,6 +4123,22 @@ body {
   word-break: break-all;
 }
 
+.knowledge-result-signals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.knowledge-result-signal {
+  padding: 1px 6px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 999px;
+  color: var(--gl-surface-text-muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
 .knowledge-result-body {
   padding: 0 10px 10px;
 }
