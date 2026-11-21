@@ -98,8 +98,10 @@ class WatchedFolderService:
         for folder in folders:
             manager = self._managers.get(folder["id"])
             jobs = manager.snapshot()["jobs"] if manager is not None else []
-            folder["jobId"] = jobs[-1]["jobId"] if jobs else None
-            folder["syncStatus"] = jobs[-1]["status"] if jobs else "idle"
+            last_job = jobs[-1] if jobs else None
+            folder["jobId"] = last_job["jobId"] if last_job else None
+            folder["syncStatus"] = last_job["status"] if last_job else "idle"
+            folder["lastJob"] = last_job
         return {"folders": folders}
 
     async def add(self, workspace_id: int, path: str) -> dict:
