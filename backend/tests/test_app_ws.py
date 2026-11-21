@@ -464,6 +464,7 @@ def test_args_schema_is_scoped_to_the_known_intents():
             ("app-chat-library", "exportWorkspace"),
             ("app-chat-library", "importWorkspace"),
             ("knowledge", "search"),
+            ("knowledge", "openCitation"),
             ("knowledge", "cancelIngest"),
             ("knowledge", "openDocument"),
             ("knowledge", "removeDocument"),

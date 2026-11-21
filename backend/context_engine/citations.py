@@ -164,6 +164,8 @@ def citation_record_for_reply(reply: str) -> dict | None:
             "sourceUri": str(hit.get("source_uri") or ""),
             "sourceFile": str(hit.get("source_file") or hit.get("source_uri") or ""),
             "section": str(hit.get("section") or "Unsectioned"),
+            "documentId": int(hit.get("document_id") or 0),
+            "chunkId": int(hit.get("chunk_id") or 0),
             "offsetStart": int(hit.get("offset_start", 0)),
             "offsetEnd": int(hit.get("offset_end", 0)),
             "excerpt": str(hit.get("text") or ""),

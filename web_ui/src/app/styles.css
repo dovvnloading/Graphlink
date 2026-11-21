@@ -4932,6 +4932,22 @@ mark.document-view-search-match-current {
   color: var(--gl-surface-inset-deep, var(--gl-surface-window));
 }
 
+/* Cited knowledge reuses the Document View reader, with a persistent
+   passage highlight independent of the user's optional Find query. */
+.document-view-panel-scroll .document-view-cited-passage {
+  background-color: color-mix(in srgb, var(--gl-semantic-search-highlight) 25%, transparent);
+  outline: 1px solid var(--gl-semantic-search-highlight);
+  outline-offset: 2px;
+  scroll-margin-top: 12px;
+}
+.document-view-citation-notice {
+  margin: 0;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--gl-surface-border);
+  color: var(--gl-surface-text-muted);
+  font-size: 11px;
+}
+
 /* Standard visually-hidden technique (content present for assistive tech,
    removed from visual layout and the tab order isn't affected since this
    is never itself focusable) - same shape as the pre-existing

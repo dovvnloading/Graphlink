@@ -30,9 +30,9 @@ from backend.domain.graph import SceneDocument, SceneError
 from backend.events import SessionBus
 from backend.knowledge_chunking import chunk_text
 from backend.knowledge_ingest import IngestError, is_supported_knowledge_file
-from backend.knowledge_retrieval import hybrid_search
+from backend.knowledge_embedding_config import configured_hybrid_search
 from backend.knowledge_store import (
-    DEFAULT_DB_PATH, get_or_create_workspace_collection, replace_branch_document_with_chunks,
+    DEFAULT_DB_PATH, get_or_create_workspace_collection, open_cited_document, replace_branch_document_with_chunks,
     list_library_documents, file_sources_for_document, remove_library_document, library_document_text,
 )
 from backend.notifications import NotificationState
@@ -45,6 +45,13 @@ _MAX_K = 25
 class SearchArgs:
     query: str
     k: int
+
+
+@dataclass
+class OpenCitationArgs:
+    documentId: int
+    chunkId: int
+    citationId: str
 
 
 @dataclass
@@ -170,6 +177,7 @@ def register_knowledge_intents(
     bus: SessionBus,
     document: SceneDocument,
     notifications: NotificationState | None = None,
+    settings_manager=None,
 ) -> None:
     publish_scene = make_publish_scene(bus)
     ingest_jobs = KnowledgeIngestManager(bus, DEFAULT_DB_PATH)
@@ -186,7 +194,10 @@ def register_knowledge_intents(
         # blocking SQLite I/O against the SAME underlying database file.
         def _search():
             collection_id = _resolve_workspace_collection_id(document)
-            return hybrid_search(DEFAULT_DB_PATH, query, k=k, collection_id=collection_id)
+            return configured_hybrid_search(
+                DEFAULT_DB_PATH, query, k=k, collection_id=collection_id,
+                settings_manager=settings_manager,
+            )
 
         # Adversarial-review finding: hybrid_search() does real blocking
         # SQLite I/O (and, when an embedding provider is wired, a network
@@ -195,6 +206,29 @@ def register_knowledge_intents(
         # intent handler in this codebase (e.g. intents_settings_*.py).
         results = await asyncio.to_thread(_search)
         return {"results": _format_search_results(results)}
+
+    async def open_citation(document_id, chunk_id, citation_id):
+        """Return only a verified passage's indexed document in this workspace."""
+        workspace_id = document.current_workspace_id
+
+        def _read():
+            if not DEFAULT_DB_PATH.exists():
+                return None
+            collection_id = (
+                0 if workspace_id is None
+                else get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+            )
+            return open_cited_document(
+                DEFAULT_DB_PATH, document_id=document_id, chunk_id=chunk_id,
+                citation_id=citation_id, collection_id=collection_id,
+            )
+
+        source = await asyncio.to_thread(_read)
+        # A workspace switch during the blocking read must not reveal the
+        # previous workspace's document in a late request/reply.
+        if document.current_workspace_id != workspace_id:
+            return {"document": None}
+        return {"document": source}
 
     async def set_chat_index_into_knowledge(node_id, enabled):
         """Runs the actual knowledge-store write (chat_branch_history() ->
@@ -391,6 +425,7 @@ def register_knowledge_intents(
         return await asyncio.to_thread(uploads.cancel, upload_id)
 
     bus.register_intent("knowledge", "search", search, args_schema=SearchArgs)
+    bus.register_intent("knowledge", "openCitation", open_citation, args_schema=OpenCitationArgs)
     bus.register_intent("knowledge", "addFiles", add_files)
     bus.register_intent("knowledge", "addFolder", add_folder)
     bus.register_intent("knowledge", "cancelIngest", cancel_ingest, args_schema=CancelIngestArgs)

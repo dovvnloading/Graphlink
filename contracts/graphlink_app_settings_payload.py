@@ -167,6 +167,17 @@ class AppSettingsStatePayload:
     ollamaScanStatus: str
     ollamaPullStatus: str
     ollamaNotice: str
+    # Knowledge embeddings are independent of the active chat model.
+    # Remote document upload is gated by the explicit persisted consent bit.
+    knowledgeEmbeddingSource: str
+    knowledgeEmbeddingModel: str
+    knowledgeCloudProvider: str
+    knowledgeCloudOptIn: bool
+    knowledgeOllamaModels: list[str]
+    knowledgeOllamaCapableModels: list[str]
+    knowledgeScanStatus: str
+    knowledgeTestStatus: str
+    knowledgeNotice: str
     # R7.4c: Llama.cpp page. R8a: same Mode -> Level change as Ollama above.
     llamaCppReasoningLevel: str
     llamaCppChatModelPath: str

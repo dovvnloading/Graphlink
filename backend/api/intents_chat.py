@@ -49,6 +49,7 @@ from backend.domain.model import SceneError
 
 async def _history_with_chat_knowledge(
     history: list[dict], query: str, workspace_id: str | int | None,
+    settings_manager=None,
 ) -> list[dict]:
     """Add ephemeral retrieval data to the last turn, never to graph history.
 
@@ -59,8 +60,9 @@ async def _history_with_chat_knowledge(
     if not history or not isinstance(query, str) or not query.strip():
         return history
     try:
+        extra = {"settings_manager": settings_manager} if settings_manager is not None else {}
         hits = await asyncio.to_thread(
-            search_chat_knowledge, query[:1500], workspace_id,
+            search_chat_knowledge, query[:1500], workspace_id, **extra,
         )
     except Exception:
         _logger.warning("Chat knowledge lookup failed; proceeding without retrieval", exc_info=True)
@@ -695,7 +697,10 @@ async def _send_model_comparison(
     document.add_session_tokens(full_text)
 
     history = document.chat_branch_history(user.id)
-    history = await _history_with_chat_knowledge(history, text, document.current_workspace_id)
+    history = await _history_with_chat_knowledge(
+        history, text, document.current_workspace_id,
+        settings_manager=getattr(agent_dispatcher, "_settings_manager", None),
+    )
     parent_edge = document._branch_parent_edge(user.id)
     context_history = (
         document.chat_branch_history(parent_edge.source) if parent_edge else []
@@ -902,7 +907,10 @@ def register_chat_intents(
         document.add_session_tokens(full_text)
         await publish_scene()
         history = document.chat_branch_history(node.id)
-        history = await _history_with_chat_knowledge(history, text, document.current_workspace_id)
+        history = await _history_with_chat_knowledge(
+            history, text, document.current_workspace_id,
+            settings_manager=getattr(agent_dispatcher, "_settings_manager", None),
+        )
 
         # R8a (token counter wiring): contextTokens is the branch history the
         # reply will be generated FROM - explicitly NOT `history` above,
@@ -997,6 +1005,7 @@ def register_chat_intents(
         history = document.chat_branch_history(parent_id)
         history = await _history_with_chat_knowledge(
             history, _latest_user_query(history), document.current_workspace_id,
+            settings_manager=getattr(agent_dispatcher, "_settings_manager", None),
         )
         # R8a (token counter wiring): unlike send_message, `history` here
         # already excludes the node being regenerated (rooted at parent_id,

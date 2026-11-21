@@ -10,6 +10,34 @@ import { DocumentViewMarkdown } from "./DocumentViewMarkdown";
 // callouts. See DocumentViewMarkdown.tsx's own doc comment for the full
 // plugin-pipeline rationale.
 
+describe("Document View cited passage highlighting", () => {
+  it("highlights only the overlapping block, including text with inline markdown", () => {
+    const content = [
+      "# Runbook", "", "Before the cited passage.", "",
+      "Use the **cobalt switch** to recover.", "", "After the cited passage.",
+    ].join("\n");
+    const start = content.indexOf("Use the");
+    const { container } = render(<DocumentViewMarkdown content={content} citation={{
+      citationId: "kb:0123456789abcdef0123", offsetStart: start,
+      offsetEnd: start + "Use the **cobalt switch** to recover.".length,
+    }} />);
+    const highlighted = container.querySelectorAll(".document-view-cited-passage");
+    expect(highlighted).toHaveLength(1);
+    expect(highlighted[0]).toHaveTextContent("Use the cobalt switch to recover.");
+    expect(screen.getByText("Before the cited passage.")).not.toHaveClass("document-view-cited-passage");
+    expect(screen.getByText("After the cited passage.")).not.toHaveClass("document-view-cited-passage");
+  });
+
+  it("never highlights content for absent or invalid offsets", () => {
+    const { container, rerender } = render(<DocumentViewMarkdown content="First paragraph" />);
+    expect(container.querySelector(".document-view-cited-passage")).toBeNull();
+    rerender(<DocumentViewMarkdown content="First paragraph" citation={{
+      citationId: "kb:0123456789abcdef0123", offsetStart: 10, offsetEnd: 5,
+    }} />);
+    expect(container.querySelector(".document-view-cited-passage")).toBeNull();
+  });
+});
+
 describe("DocumentViewMarkdown", () => {
   it("renders plain markdown content", () => {
     render(<DocumentViewMarkdown content={"# Heading\n\nA paragraph."} />);

@@ -63,7 +63,7 @@ class BuilderDispatchOps(DispatcherParts):
             # docstring (backend/tools_knowledge.py) for why an unscoped
             # search tool handed to the model is a cross-workspace read
             # primitive for prompt-injected content.
-            register_knowledge_tools(registry, document=document)
+            register_knowledge_tools(registry, document=document, settings_manager=self._settings_manager)
             register_builder_control_tools(registry)
             self._register_configured_mcp_tools(registry)
             register_fal_tools(registry, self._settings_manager)

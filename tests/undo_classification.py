@@ -391,6 +391,10 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("app-settings", "scanOllamaSystem", "B", "run-lifecycle: scans/caches locally installed models"),
     Classified("app-settings", "pullOllamaModel", "B", "run-lifecycle: downloads a model"),
     Classified("app-settings", "pickOllamaScanFolder", "B", "run-lifecycle: native folder pick + scan"),
+    # -- backend/api/intents_settings_knowledge.py (app-settings) ------------
+    Classified("app-settings", "scanKnowledgeOllamaModels", "B", "read-only: list installed local embedding models"),
+    Classified("app-settings", "setKnowledgeEmbedding", "B", "preference: persisted knowledge embedding choice and consent"),
+    Classified("app-settings", "testKnowledgeEmbedding", "B", "read-only: test synthetic text against selected embedding endpoint"),
 
     # -- backend/api/intents_settings_llama_cpp.py (app-settings) -----------
     Classified("app-settings", "setLlamaCppReasoningLevel", "B", "preference: reasoning level"),
@@ -413,6 +417,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
 
     # -- backend/api/intents_knowledge.py (knowledge, scene) - ADR-017 stage 17.5 --
     Classified("knowledge", "search", "B", "read-only: queries the local knowledge store, no document mutation"),
+    Classified("knowledge", "openCitation", "B", "read-only: verifies and reads a workspace-scoped indexed source"),
     Classified("knowledge", "addFiles", "B", "external-store: launches a local knowledge import job, not a scene undo"),
     Classified("knowledge", "addFolder", "B", "external-store: launches a local folder import job, not a scene undo"),
     Classified("knowledge", "cancelIngest", "B", "run-lifecycle: signals cancellation of a background knowledge job"),

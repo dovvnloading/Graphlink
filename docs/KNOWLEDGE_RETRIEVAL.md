@@ -1,5 +1,31 @@
 # Local knowledge retrieval: ranking, citations and offline evaluation
 
+## Settings > Knowledge
+
+The Knowledge page chooses embedding retrieval independently of the chat
+model. **Off (keyword search)** is the default and uses local FTS5 BM25 +
+reranking without contacting an embedding endpoint. **Ollama (local)**
+discovers models installed on the running Ollama daemon, verifies each
+model's reported `embedding` capability, sorts supported models first,
+and recommends `nomic-embed-text` only when installed. The selected model
+is saved in the normal `session.dat` settings store.
+
+**Cloud (OpenAI-compatible)** reuses a configured Settings > API Endpoint
+connection and an explicitly entered embedding-model ID. The user must
+check the consent control explaining that **document text leaves the
+machine**: indexed passages and search queries will be transmitted to
+that service. The backend checks the persisted consent on every use, not
+only when saving settings or rendering the UI. Turning the choice Off
+clears that consent and stops future embedding requests.
+
+The page's **Test** button embeds a fixed synthetic phrase, not any
+stored document. A live saved embedding choice backfills missing vectors
+on demand; vector caches are keyed by local model or cloud
+(provider, endpoint, model) identity, so switching models never compares
+incompatible vector spaces. If an enabled service fails at retrieval
+time, search falls back to local keyword-only results and logs the
+failure. Workspaces remain collection-scoped.
+
 ## Pipeline
 
 `backend.knowledge_retrieval.hybrid_search()` retains the existing FTS5
