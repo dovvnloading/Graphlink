@@ -17,14 +17,17 @@ neighbor machinery would be solving a problem this app doesn't have.
 
 from __future__ import annotations
 
+from heapq import heappush, heapreplace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Protocol, cast
 
 import numpy as np
 
 from backend.knowledge_store import (
-    chunks_pending_embedding,
-    list_embeddings_for_search,
+    embedding_hit_metadata,
+    has_embeddings_for_search,
+    iter_embedding_vector_batches,
+    pending_embedding_batch,
     upsert_embeddings,
 )
 
@@ -66,6 +69,7 @@ def embed_pending_chunks(
     collection_id: int | None = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
     pending_rows: list[dict[str, Any]] | None = None,
+    max_chunk_id: int | None = None,
     should_cancel: Callable[[], bool] | None = None,
     on_batch: Callable[[int], None] | None = None,
 ) -> int:
@@ -93,14 +97,23 @@ def embed_pending_chunks(
     if batch_size < 1:
         raise ValueError("batch_size must be positive.")
 
-    pending = pending_rows if pending_rows is not None else chunks_pending_embedding(
-        db_path, model_id, collection_id=collection_id,
-    )
+    def batches():
+        if pending_rows is not None:
+            for start in range(0, len(pending_rows), batch_size):
+                yield pending_rows[start : start + batch_size]
+            return
+        after_chunk_id = 0
+        while batch := pending_embedding_batch(
+            db_path, model_id, collection_id=collection_id,
+            after_chunk_id=after_chunk_id, max_chunk_id=max_chunk_id, limit=batch_size,
+        ):
+            yield batch
+            after_chunk_id = batch[-1]["chunk_id"]
+
     embedded_count = 0
-    for start in range(0, len(pending), batch_size):
+    for batch in batches():
         if should_cancel is not None and should_cancel():
             break
-        batch = pending[start : start + batch_size]
         vectors = cast(_EmbeddingCapable, provider).embed([row["text"] for row in batch])
         # Adversarial-review finding: zip() alone silently truncates/
         # mispairs if a provider ever returns a different-length list than
@@ -143,28 +156,18 @@ def vector_search(
     collection_id: int | None = None,
     k: int = 10,
 ) -> list[dict]:
-    """Embeds `query` through the SAME `model_id` every stored vector was
-    embedded with (mixing embedding models would compare vectors from
-    different embedding spaces - a meaningless similarity number, not
-    just a less-accurate one), then ranks every stored chunk by cosine
-    similarity, best match first. Returns the same citation shape
-    search_chunks() (FTS5, stage 17.2) returns, plus `score` - HIGHER is
-    better here (cosine similarity), the OPPOSITE convention from FTS5's
-    `bm25()` (lower is better) - stage 17.4's fusion must rank each list
-    by its own ordering, never compare the two `score` values directly.
+    """Stream a flat cosine scan and materialize only the best k passages.
 
-    Returns `[]` (no provider call, no error) for a blank query or a
-    `model_id` with nothing embedded yet - both are legitimate "nothing to
-    search" states, not failures."""
+    At 200,000 chunks, fetching all vector blobs *and* chunk text before
+    scoring consumes hundreds of MiB. A fixed-size matrix and top-k heap
+    preserve exact ranking, workspace boundaries and citation fields without
+    making the peak allocation proportional to the corpus.
+    """
     if k < 1:
         raise ValueError(f"k must be >= 1, got {k!r}.")
     if not provider.capabilities.embedding:
         raise ValueError(f"Provider for model {model_id!r} does not support embeddings.")
-    if not query.strip():
-        return []
-
-    rows = list_embeddings_for_search(db_path, model_id, collection_id=collection_id)
-    if not rows:
+    if not query.strip() or not has_embeddings_for_search(db_path, model_id, collection_id=collection_id):
         return []
 
     query_vectors = cast(_EmbeddingCapable, provider).embed([query])
@@ -178,45 +181,41 @@ def vector_search(
     if query_norm == 0.0:
         return []
 
-    # Adversarial-review finding: knowledge_store.py's own migration-003
-    # docstring names `dim` specifically so a dimension mismatch (the same
-    # model_id backing two different vector lengths - a re-pulled Ollama
-    # tag with a different architecture, a repointed OpenAI-compatible
-    # base_url) is "a cheap integer comparison, not a silent shape error
-    # deep in a numpy call" - checked here, since np.stack() below is
-    # exactly that silent-shape-error call the comment warns against.
-    mismatched = [row for row in rows if row["dim"] != query_array.shape[0]]
-    if mismatched:
-        raise ValueError(
-            f"model_id {model_id!r} has embeddings of mismatched dimension "
-            f"(query embedded to {query_array.shape[0]}, but {len(mismatched)} stored "
-            f"row(s) have dim={mismatched[0]['dim']}) - re-embed the affected chunks or "
-            "delete their stale embedding rows before searching."
+    # A min-heap holds at most k (similarity, negative chunk id) pairs.
+    # Negative IDs give deterministic ties without relying on SQLite scan
+    # order or numpy's unstable default argsort.
+    winners: list[tuple[float, int]] = []
+    for batch in iter_embedding_vector_batches(db_path, model_id, collection_id=collection_id):
+        mismatched = next(
+            ((chunk_id, dim) for chunk_id, dim, vector in batch
+             if dim != query_array.size or len(vector) != dim * 4), None,
         )
+        if mismatched is not None:
+            raise ValueError(
+                f"model_id {model_id!r} has embeddings of mismatched dimension "
+                f"(query dimension {query_array.size}, stored chunk {mismatched[0]} "
+                f"has dim={mismatched[1]}) - re-embed stale chunks."
+            )
+        matrix = np.stack([_unpack_vector(vector) for _, _, vector in batch])
+        norms = np.linalg.norm(matrix, axis=1)
+        safe_norms = np.where(norms == 0.0, np.finfo(np.float32).eps, norms)
+        similarities = (matrix @ query_array) / (safe_norms * query_norm)
+        for (chunk_id, _, _), similarity in zip(batch, similarities):
+            score = float(similarity)
+            if not np.isfinite(score):
+                score = -1.0
+            rank = (score, -int(chunk_id))
+            if len(winners) < k:
+                heappush(winners, rank)
+            elif rank > winners[0]:
+                heapreplace(winners, rank)
 
-    matrix = np.stack([_unpack_vector(row["vector"]) for row in rows])
-    matrix_norms = np.linalg.norm(matrix, axis=1)
-    # A zero-norm stored vector (a pathological all-zero embedding) would
-    # divide-by-zero into nan/inf rather than a real similarity score -
-    # clamped to a tiny epsilon so such a row scores as "unrelated" (~0)
-    # and never breaks the sort with a nan.
-    safe_norms = np.where(matrix_norms == 0.0, np.finfo(np.float32).eps, matrix_norms)
-    similarities = (matrix @ query_array) / (safe_norms * query_norm)
-
-    order = np.argsort(-similarities)[:k]
+    ranked = sorted(winners, reverse=True)
+    metadata = embedding_hit_metadata(
+        db_path, [-chunk_id for _, chunk_id in ranked], collection_id=collection_id,
+    )
     return [
-        {
-            "chunk_id": rows[i]["chunk_id"], "document_id": rows[i]["document_id"],
-            "ordinal": rows[i]["ordinal"], "text": rows[i]["text"],
-            "token_count": rows[i]["token_count"],
-            "offset_start": rows[i]["offset_start"], "offset_end": rows[i]["offset_end"],
-            "document_title": rows[i]["document_title"], "source_uri": rows[i]["source_uri"],
-            # ADR-020 stage 20.4: propagated straight through from
-            # list_embeddings_for_search's own row shape - see that
-            # function's own docstring for why a fused hybrid_search()
-            # result needs this even when found only via this vector path.
-            "source_node_id": rows[i]["source_node_id"],
-            "score": float(similarities[i]),
-        }
-        for i in order
+        {**metadata[-negative_id], "score": score}
+        for score, negative_id in ranked
+        if -negative_id in metadata
     ]

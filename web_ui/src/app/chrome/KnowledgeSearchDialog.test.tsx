@@ -293,7 +293,7 @@ describe("KnowledgeSearchDialog", () => {
     await user.click(screen.getByRole("button", { name: "Refresh" }));
     await user.click(await screen.findByRole("button", { name: "Remove guide.md" }));
     expect(intents).not.toContainEqual(["knowledge", "removeDocument", [12]]);
-    await user.click(screen.getByRole("button", { name: "Confirm remove" }));
+    await user.click(screen.getByRole("button", { name: "Confirm remove guide.md" }));
     await waitFor(() => expect(intents).toContainEqual(["knowledge", "removeDocument", [12]]));
     expect(await screen.findByText(/No documents yet/)).toBeInTheDocument();
   });
@@ -510,4 +510,83 @@ describe("KnowledgeSearchDialog", () => {
     resolveFirst({ results: [RESULT_A] });
     expect(await screen.findByText("Fox Story")).toBeInTheDocument();
   });
+
+  it("limits a 5,000-document library to 50 interactive rows per page, with keyboard-accessible navigation", async () => {
+    const { user, request } = await setup();
+    const largeLibrary = Array.from({ length: 5_000 }, (_, index) => ({
+      ...LIBRARY_DOCUMENT, documentId: index + 1, title: `doc-${index + 1}.md`,
+    }));
+    request.mockImplementation(async (_topic, intent) => {
+      if (intent === "listDocuments") return { documents: largeLibrary };
+      if (intent === "listWatchedFolders") return { folders: [] };
+      return {};
+    });
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+
+    const library = screen.getByRole("region", { name: "Workspace documents" });
+    expect(await within(library).findByText("doc-1.md")).toBeInTheDocument();
+    expect(within(library).getAllByRole("row")).toHaveLength(51); // header + 50 documents
+    expect(within(library).queryByText("doc-51.md")).not.toBeInTheDocument();
+    expect(within(library).getByRole("status")).toHaveTextContent("Showing 1–50 of 5000");
+
+    const next = within(library).getByRole("button", { name: "Next documents" });
+    next.focus();
+    await user.keyboard("{Enter}");
+    expect(within(library).getAllByRole("row")).toHaveLength(51);
+    expect(within(library).getByText("doc-51.md")).toBeInTheDocument();
+    expect(within(library).queryByText("doc-1.md")).not.toBeInTheDocument();
+    expect(within(library).getByRole("status")).toHaveTextContent("Page 2 of 100");
+
+    const previous = within(library).getByRole("button", { name: "Previous documents" });
+    previous.focus();
+    await user.keyboard(" ");
+    expect(within(library).getByText("doc-1.md")).toBeInTheDocument();
+    expect(previous).toBeDisabled();
+  });
+
+  it("moves focus into removal confirmation and restores it if the user keeps the document", async () => {
+    const { user, request } = await setup();
+    request.mockImplementation(async (_topic, intent) =>
+      intent === "listDocuments" ? { documents: [LIBRARY_DOCUMENT] } : {},
+    );
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    const remove = await screen.findByRole("button", { name: "Remove guide.md" });
+    remove.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("button", { name: "Confirm remove guide.md" })).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "Keep guide.md" }));
+    expect(screen.getByRole("button", { name: "Remove guide.md" })).toHaveFocus();
+  });
+
+  it("opens a verified search citation in Document View with the original passage offsets", async () => {
+    const onOpen = vi.fn();
+    const { user, request } = await setup(onOpen);
+    const citationId = "kb:0123456789abcdef0123";
+    request.mockResolvedValueOnce({ results: [{
+      ...RESULT_A, citationId, section: "Runbook", sourceFile: "/indexed/fox.md",
+    }] });
+    await user.type(screen.getByLabelText("Search the knowledge base"), "fox{Enter}");
+    await user.click(await screen.findByText("Fox Story"));
+    const open = screen.getByRole("button", { name: "Open in Document View" });
+    open.focus();
+    await user.keyboard("{Enter}");
+
+    expect(onOpen).toHaveBeenCalledWith("", "Fox Story", {
+      citationId, documentId: RESULT_A.documentId, chunkId: RESULT_A.chunkId,
+      documentTitle: RESULT_A.documentTitle, sourceUri: RESULT_A.sourceUri,
+      sourceFile: "/indexed/fox.md", section: "Runbook",
+      offsetStart: RESULT_A.offsetStart, offsetEnd: RESULT_A.offsetEnd,
+      excerpt: RESULT_A.text, cited: true,
+    });
+    expect(screen.queryByRole("dialog", { name: "Knowledge Library" })).not.toBeInTheDocument();
+  });
+
+  it("never creates a Document View navigation action for an unverified citation", async () => {
+    const { user, request } = await setup(vi.fn());
+    request.mockResolvedValueOnce({ results: [{ ...RESULT_A, citationId: "made-up" }] });
+    await user.type(screen.getByLabelText("Search the knowledge base"), "fox{Enter}");
+    await user.click(await screen.findByText("Fox Story"));
+    expect(screen.queryByRole("button", { name: "Open in Document View" })).not.toBeInTheDocument();
+  });
+
 });

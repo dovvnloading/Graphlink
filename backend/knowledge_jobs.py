@@ -21,7 +21,7 @@ from backend.events import SessionBus
 from backend.knowledge_chunking import chunk_text
 from backend.knowledge_ingest import IngestError, extract_text, is_supported_knowledge_file
 from backend.knowledge_store import (
-    get_or_create_workspace_collection, known_watched_files, reconcile_watched_files,
+    _connect, get_or_create_workspace_collection, known_watched_files, reconcile_watched_files,
     set_watched_folder_sync_result, track_watched_file, upsert_file_with_chunks,
 )
 
@@ -283,6 +283,10 @@ class KnowledgeIngestManager:
         self, job: KnowledgeIngestJob, path: Path | list[Path], folder: bool,
         allowed_root: Path | None = None,
     ) -> None:
+        # A folder can contain thousands of files. Opening/migrating SQLite
+        # per file used to dominate ingestion even though each file's write
+        # is already independently transaction-safe.
+        ingest_connection = None
         try:
             job.change(status="scanning")
             self._emit(force=True)
@@ -299,6 +303,7 @@ class KnowledgeIngestManager:
             watch_id = job.watched_folder_id
             known = known_watched_files(self._db_path, watch_id, collection_id) if watch_id is not None else {}
             present = set(job.observed_paths)
+            ingest_connection = _connect(self._db_path)
             for file, planned_size in files:
                 if job.cancel_event.is_set():
                     break
@@ -341,7 +346,7 @@ class KnowledgeIngestManager:
                         result = upsert_file_with_chunks(
                             self._db_path, source_uri=str(actual), title=actual.name,
                             mime=mime, text=text, chunks=chunks, collection_id=collection_id,
-                            size_bytes=planned_size,
+                            size_bytes=planned_size, connection=ingest_connection,
                         )
                         if watch_id is not None:
                             track_watched_file(
@@ -377,6 +382,8 @@ class KnowledgeIngestManager:
             import logging
             logging.getLogger(__name__).exception("knowledge import job failed")
         finally:
+            if ingest_connection is not None:
+                ingest_connection.close()
             if job.watched_folder_id is not None:
                 row = job.snapshot()
                 if row["status"] != "cancelled":

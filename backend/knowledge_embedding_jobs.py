@@ -18,7 +18,7 @@ from uuid import uuid4
 from backend.events import SessionBus
 from backend.knowledge_embedding_config import embedding_provider_for_choice
 from backend.knowledge_embeddings import DEFAULT_BATCH_SIZE, embed_pending_chunks
-from backend.knowledge_store import chunks_pending_embedding, get_or_create_workspace_collection
+from backend.knowledge_store import get_or_create_workspace_collection, pending_embedding_snapshot
 
 logger = logging.getLogger(__name__)
 _FINAL = frozenset({"completed", "cancelled", "failed"})
@@ -258,10 +258,12 @@ class KnowledgeEmbeddingJobManager:
                 if provider is None or model_id is None or cancelled():
                     job.change(status="cancelled")
                     return
-                # Pin the pending set, so concurrent ingests cannot make the
-                # reported total disagree with the batches in this run.
-                pending = chunks_pending_embedding(self._db_path, model_id, collection_id=collection_id)
-                job.change(model_id=model_id, chunks_total=len(pending))
+                # Pin only the pending count and high-water mark, not 200,000
+                # chunk bodies. Later imports belong to a subsequent job.
+                pending_count, max_chunk_id = pending_embedding_snapshot(
+                    self._db_path, model_id, collection_id=collection_id,
+                )
+                job.change(model_id=model_id, chunks_total=pending_count)
                 self._emit(force=True)
 
                 def on_batch(count: int) -> None:
@@ -272,7 +274,7 @@ class KnowledgeEmbeddingJobManager:
 
                 embed_pending_chunks(
                     self._db_path, provider, model_id, collection_id=collection_id,
-                    batch_size=DEFAULT_BATCH_SIZE, pending_rows=pending,
+                    batch_size=DEFAULT_BATCH_SIZE, max_chunk_id=max_chunk_id,
                     should_cancel=cancelled, on_batch=on_batch,
                 )
                 job.change(status="cancelled" if cancelled() else "completed")

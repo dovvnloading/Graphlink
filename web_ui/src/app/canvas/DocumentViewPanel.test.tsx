@@ -50,6 +50,16 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof DocumentView
 }
 
 describe("Document View knowledge citation focus", () => {
+  it("focuses the cited Document View landmark after verified navigation", () => {
+    const { container } = renderPanel({
+      sourceLabel: "Runbook", content: "# Runbook",
+      citation: { citationId: "kb:0123456789abcdef0123", offsetStart: 0, offsetEnd: 9 },
+    });
+    const landmark = container.querySelector(".document-view-panel") as HTMLElement;
+    expect(landmark).toHaveAttribute("tabindex", "-1");
+    expect(landmark).toHaveFocus();
+  });
+
   it("highlights the cited markdown passage and scrolls to it without opening Find", async () => {
     const raw = ["# Runbook", "", "Unrelated introduction.", "", "Restore the **encrypted snapshot** carefully.", "", "Final check."].join("\n");
     const start = raw.indexOf("Restore the");
@@ -120,6 +130,34 @@ describe("DocumentViewPanel", () => {
     renderPanel();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByLabelText("Document View")).toBeInTheDocument();
+  });
+
+  it("restores keyboard focus to the source button when the reader closes", () => {
+    const opener = document.createElement("button");
+    opener.textContent = "Open source";
+    document.body.appendChild(opener);
+    opener.focus();
+    try {
+      const onClose = vi.fn();
+      const { container, rerender } = render(
+        <DocumentViewPanel isOpen content="Source content" sourceLabel="Source" onClose={onClose} />,
+      );
+      const landmark = container.querySelector(".document-view-panel") as HTMLElement;
+      expect(landmark).toHaveFocus();
+
+      rerender(<DocumentViewPanel isOpen={false} content="Source content" sourceLabel="Source" onClose={onClose} />);
+      expect(opener).toHaveFocus();
+      expect(landmark.inert).toBe(true);
+    } finally {
+      opener.remove();
+    }
+  });
+
+  it("keeps the collapsed reader inert so hidden controls cannot be tabbed to", () => {
+    const { container } = renderPanel({ isOpen: false });
+    const panel = container.querySelector(".document-view-panel") as HTMLElement;
+    expect(panel.inert).toBe(true);
+    expect(panel).toHaveAttribute("aria-hidden", "true");
   });
 
   it("collapses to zero width and is aria-hidden when closed", () => {
