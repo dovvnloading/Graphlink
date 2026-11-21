@@ -8,7 +8,7 @@ type EmbeddingSource = "off" | "ollama" | "cloud";
 const SOURCE_OPTIONS = [
   { id: "off", label: "Off (keyword search)", description: "Local keyword search only, without embeddings." },
   { id: "ollama", label: "Ollama (local)", description: "Use an installed embedding-capable Ollama model." },
-  { id: "cloud", label: "Cloud (OpenAI-compatible)", description: "Requires explicit consent to send document text." },
+  { id: "cloud", label: "Cloud (OpenAI-compatible)", description: "Requires consent to send passages and queries." },
 ];
 
 function suggestedModel(models: string[], capable: string[]): string {
@@ -194,16 +194,24 @@ export function KnowledgeSettingsPage({
               checked={consent}
               onChange={(event) => setConsent(event.target.checked)}
             />
-            I understand that document text leaves the machine.
+            I consent to sending indexed document passages and knowledge search queries to the selected API endpoint.
           </label>
           <p className="settings-field-hint">
             This is an explicit opt-in: Graphlink will send document passages
             and search queries to your selected API endpoint for embeddings.
-            Turning this option off stops future embedding requests.
+            Remote endpoints must use HTTPS; non-TLS HTTP is only supported for
+            loopback addresses. Consent applies only to the selected endpoint;
+            changing that endpoint requires a new opt-in. Turning this option off
+            stops future embedding requests (requests already in flight may finish).
           </p>
         </fieldset>
       )}
 
+      <p className="settings-field-hint">
+        This setting controls embedding requests only. When Knowledge is enabled
+        in a chat using a cloud chat model, cited passages may separately be
+        sent to that chat provider, even if embeddings are Off.
+      </p>
       <div className="settings-button-row">
         <button
           type="button"

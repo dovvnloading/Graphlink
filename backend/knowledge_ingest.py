@@ -21,8 +21,10 @@ _quarantine_corrupt_chats_db docstring for the same call made elsewhere).
 
 from __future__ import annotations
 
+import os
 import re
-from zipfile import BadZipFile, ZipFile
+from tempfile import TemporaryDirectory
+from zipfile import BadZipFile, LargeZipFile, ZipFile
 from xml.etree import ElementTree
 from pathlib import Path
 from typing import Any
@@ -42,6 +44,13 @@ from backend.knowledge_store import DEFAULT_DB_PATH, IngestOutcome, add_document
 from backend.notifications import NotificationState
 
 _HTML_EXTENSIONS = {".html", ".htm"}
+# Cap directly-ingested files as well as background jobs.
+MAX_KNOWLEDGE_FILE_BYTES = 25 * 1024 * 1024
+# Office XML parsers materialize trees much larger than their serialized XML.
+# Check every package before any eager XML parser loads it.
+MAX_OOXML_MEMBERS = 2048
+MAX_OOXML_EXPANDED_BYTES = 32 * 1024 * 1024
+MAX_OOXML_XML_PART_BYTES = 4 * 1024 * 1024
 
 
 
@@ -58,6 +67,27 @@ def is_supported_knowledge_file(path: Path) -> bool:
     )
 
 
+def _check_ooxml_archive(path: Path) -> None:
+    """Bound the full Office package before a DOCX or XLSX XML parser opens it."""
+    try:
+        with ZipFile(path) as archive:
+            members = archive.infolist()
+            if len(members) > MAX_OOXML_MEMBERS:
+                raise IngestError("Office document contains too many ZIP members.")
+            expanded = 0
+            for member in members:
+                if member.flag_bits & 0x1:
+                    raise IngestError("Encrypted Office ZIP members cannot be indexed.")
+                expanded += member.file_size
+                if expanded > MAX_OOXML_EXPANDED_BYTES:
+                    raise IngestError("Office document exceeds the safe expanded-size limit.")
+                if (member.filename.lower().endswith((".xml", ".rels"))
+                        and member.file_size > MAX_OOXML_XML_PART_BYTES):
+                    raise IngestError("Office XML part exceeds the safe expanded-size limit.")
+    except (BadZipFile, LargeZipFile) as exc:
+        raise IngestError("Office document is not a readable ZIP archive.") from exc
+
+
 def _extract_xlsx(path: Path) -> str:
     """Read OOXML cell values without writing files or executing macros.
 
@@ -66,17 +96,19 @@ def _extract_xlsx(path: Path) -> str:
     strings, inline strings, numbers, cached formula values and many sheets.
     """
     ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    _check_ooxml_archive(path)
     try:
         with ZipFile(path) as workbook:
-            members = workbook.infolist()
-            if len(members) > 2048 or sum(member.file_size for member in members) > 64 * 1024 * 1024:
-                raise IngestError("Spreadsheet exceeds the safe expanded-size limit.")
-
             def xml_part(name: str):
                 part = workbook.getinfo(name)
-                if part.file_size > 16 * 1024 * 1024:
+                if part.file_size > MAX_OOXML_XML_PART_BYTES:
                     raise IngestError("Spreadsheet XML part is too large.")
-                return ElementTree.fromstring(workbook.read(part))
+                data = workbook.read(part)
+                # OOXML needs neither DTDs nor entity declarations; deny
+                # entities before ElementTree constructs its in-memory tree.
+                if b"<!DOCTYPE" in data.upper() or b"<!ENTITY" in data.upper():
+                    raise IngestError("Spreadsheet XML contains prohibited DTD or entities.")
+                return ElementTree.fromstring(data)
 
             shared: list[str] = []
             shared_total = 0
@@ -177,11 +209,14 @@ def extract_text(path: Path) -> tuple[str, str]:
     sniffed MIME type."""
     if not path.is_file():
         raise IngestError(f"File not found: {path}")
+    if path.stat().st_size > MAX_KNOWLEDGE_FILE_BYTES:
+        raise IngestError("File exceeds the 25 MiB Knowledge Library limit.")
 
     extension = path.suffix.lower()
     if extension == ".pdf":
         return _read_pdf(path), "application/pdf"
     if extension == ".docx":
+        _check_ooxml_archive(path)
         return _read_docx(path), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     if extension == ".xlsx":
         return _extract_xlsx(path), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -254,7 +289,23 @@ def ingest_file(
     """The one call ADR-017 stage 17.1's exit criterion names: extract ->
     chunk -> store."""
     resolved = Path(path).resolve()
-    text, mime = extract_text(resolved)
+    # Direct ingestion uses the same no-follow, size-bounded descriptor
+    # boundary as asynchronous file/folder imports. A later pathname swap
+    # cannot redirect PDF/Office parsers to a different source.
+    from backend.harness.tools_fs import _read_bounded_bytes
+
+    try:
+        data = _read_bounded_bytes(resolved, max_bytes=MAX_KNOWLEDGE_FILE_BYTES)
+    except (OSError, ValueError) as exc:
+        raise IngestError(f"Could not safely read '{resolved.name}': {exc}") from exc
+
+    with TemporaryDirectory(prefix="graphlink-knowledge-ingest-") as directory:
+        staged = Path(directory) / resolved.name
+        fd = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as target:
+            target.write(data)
+        text, mime = extract_text(staged)
+
     return _chunk_and_store(
         text=text, source_uri=str(resolved), title=resolved.name, mime=mime,
         collection_id=collection_id, db_path=db_path, notifications=notifications,

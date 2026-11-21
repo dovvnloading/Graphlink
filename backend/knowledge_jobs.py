@@ -12,6 +12,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field
+from tempfile import TemporaryDirectory
 from pathlib import Path
 from typing import Callable
 from uuid import uuid4
@@ -19,13 +20,14 @@ from uuid import uuid4
 from backend.attachments import AttachmentError, MAX_DOCUMENT_TEXT_CHARS
 from backend.events import SessionBus
 from backend.knowledge_chunking import chunk_text
-from backend.knowledge_ingest import IngestError, extract_text, is_supported_knowledge_file
+from backend.knowledge_ingest import IngestError, MAX_KNOWLEDGE_FILE_BYTES, extract_text, is_supported_knowledge_file
+from backend.harness.tools_fs import _read_bounded_bytes
 from backend.knowledge_store import (
     get_or_create_workspace_collection, known_watched_files, reconcile_watched_files,
     set_watched_folder_sync_result, track_watched_file, upsert_file_with_chunks,
 )
 
-MAX_FILE_BYTES = 25 * 1024 * 1024
+MAX_FILE_BYTES = MAX_KNOWLEDGE_FILE_BYTES
 MAX_JOB_BYTES = 500 * 1024 * 1024
 MAX_JOB_FILES = 10_000
 _EXCLUDED_DIRS = {
@@ -69,6 +71,10 @@ class KnowledgeIngestJob:
     # be mistaken for deletions. scan_complete is false for unreadable paths.
     observed_paths: set[str] = field(default_factory=set, repr=False)
     scan_complete: bool = True
+    # A folder/grant is pinned for the full scan and import. Re-resolving a
+    # moved watch must never silently authorize its new symlink target.
+    root_path: Path | None = field(default=None, repr=False)
+    root_identity: tuple[int, int] | None = field(default=None, repr=False)
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -120,6 +126,13 @@ def _collect_files(
         root = path.expanduser().resolve(strict=True)
         if not root.is_dir():
             raise IngestError("The selected folder is not a directory.")
+        if job.watched_folder_id is not None and path.expanduser().absolute() != root:
+            raise IngestError("Watched folder became a symlink. Remove and re-add the folder.")
+
+    if root is not None:
+        stat = root.stat()
+        job.root_path = root
+        job.root_identity = (stat.st_dev, stat.st_ino)
 
     found: list[tuple[Path, int]] = []
     seen_files: set[Path] = set()
@@ -171,7 +184,12 @@ def _collect_files(
                 return []
             current = stack.pop()
             resolved_dir = current.resolve(strict=True)
-            if resolved_dir in visited or not resolved_dir.is_relative_to(root):
+            if current == root and resolved_dir != root:
+                raise IngestError("Selected folder changed during scanning.")
+            if resolved_dir in visited:
+                continue
+            if not resolved_dir.is_relative_to(root):
+                job.change(scan_complete=False)
                 continue
             visited.add(resolved_dir)
             try:
@@ -283,10 +301,27 @@ class KnowledgeIngestManager:
         self, job: KnowledgeIngestJob, path: Path | list[Path], folder: bool,
         allowed_root: Path | None = None,
     ) -> None:
+        def check_authorized_root() -> Path | None:
+            # A watched path is a durable grant to one canonical directory,
+            # not to whatever destination a replaced symlink points at.
+            candidate = path if folder and isinstance(path, Path) else allowed_root
+            if candidate is None:
+                return None
+            root = candidate.expanduser().resolve(strict=True)
+            if root != job.root_path:
+                raise IngestError("Selected folder changed during import.")
+            info = root.stat()
+            if (info.st_dev, info.st_ino) != job.root_identity:
+                raise IngestError("Selected folder was replaced during import.")
+            if job.watched_folder_id is not None and candidate.expanduser().absolute() != root:
+                raise IngestError("Watched folder became a symlink. Remove and re-add the folder.")
+            return root
+
         try:
             job.change(status="scanning")
             self._emit(force=True)
             files = _collect_files(path, folder, job, allowed_root=allowed_root)
+            check_authorized_root()
             if job.cancel_event.is_set():
                 job.change(status="cancelled")
                 return
@@ -306,11 +341,7 @@ class KnowledgeIngestManager:
                     # Re-resolve paths on use: an entry that was safe during
                     # enumeration may have been swapped for an outside link.
                     actual = file.resolve(strict=True)
-                    root = (
-                        path.expanduser().resolve(strict=True)
-                        if folder and isinstance(path, Path)
-                        else allowed_root.resolve(strict=True) if allowed_root is not None else None
-                    )
+                    root = check_authorized_root()
                     if root is not None and (
                         not actual.is_relative_to(root)
                         or (folder and _excluded_path(actual.relative_to(root)))
@@ -326,8 +357,22 @@ class KnowledgeIngestManager:
                         # trusted only while its file_sources mapping still exists.
                         job.increment(unchanged=1)
                     else:
-                        text, mime = extract_text(actual)
-                        if actual.stat().st_size != before.st_size or actual.stat().st_mtime_ns != before.st_mtime_ns:
+                        # Never give a parser the original mutable pathname.
+                        # A parent/leaf link swapped after the stat check
+                        # cannot redirect the no-follow descriptor read; the
+                        # private snapshot is the only path parsers reopen.
+                        data = _read_bounded_bytes(actual, max_bytes=MAX_FILE_BYTES)
+                        if len(data) != before.st_size:
+                            raise IngestError("File changed while being read; retry the import.")
+                        with TemporaryDirectory(prefix="graphlink-knowledge-ingest-") as directory:
+                            staged = Path(directory) / actual.name
+                            fd = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                            with os.fdopen(fd, "wb") as target:
+                                target.write(data)
+                            text, mime = extract_text(staged)
+                        check_authorized_root()
+                        after = actual.stat()
+                        if (after.st_size, after.st_mtime_ns) != (before.st_size, before.st_mtime_ns):
                             raise IngestError("File changed while being read; retry the import.")
                         if len(text) > MAX_DOCUMENT_TEXT_CHARS:
                             raise IngestError("Extracted text exceeds the indexing limit.")
@@ -360,6 +405,9 @@ class KnowledgeIngestManager:
                 job.change(last_file=file.name)
                 self._emit()
             if not job.cancel_event.is_set() and watch_id is not None:
+                # Recheck the pinned root before removal; a moved folder
+                # cannot turn its old indexed files into apparent deletions.
+                check_authorized_root()
                 # Only unreadable entries make a scan incomplete. Oversized
                 # and deliberately excluded items do not hide other deletions;
                 # observed_paths also retains the names of oversized files.

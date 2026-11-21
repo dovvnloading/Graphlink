@@ -61,6 +61,7 @@ import logging
 import os
 import re
 import sqlite3
+import stat
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -447,6 +448,41 @@ _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
 }
 
 
+def _secure_knowledge_files(db_path: Path) -> None:
+    """Secure SQLite's directory/files *before* SQLite can read or create them.
+
+    A chmod after connecting leaves a window for an umask-created 0644
+    database. Existing paths must not be symlinks and permission errors
+    must fail closed, not continue with readable knowledge content.
+    """
+    if os.name == "nt":
+        return  # Windows uses ACLs; POSIX mode-bit checks do not apply.
+
+    # This is Graphlink's dedicated knowledge store directory, not an
+    # arbitrary injected test/user parent such as /tmp or a project folder.
+    if db_path.parent.name == "knowledge":
+        os.chmod(db_path.parent, 0o700)
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(db_path, flags, 0o600)
+    except FileExistsError:
+        pass
+    else:
+        os.close(fd)
+
+    for candidate in (db_path, db_path.with_name(db_path.name + "-wal"),
+                      db_path.with_name(db_path.name + "-shm")):
+        try:
+            info = candidate.lstat()
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise PermissionError(f"Knowledge SQLite file is not a private regular file: {candidate}")
+        if stat.S_IMODE(info.st_mode) != 0o600:
+            os.chmod(candidate, 0o600)
+
+
 def _connect(
     db_path: Path, *, notifications: NotificationState | None = None, _retry: bool = False,
 ) -> sqlite3.Connection:
@@ -457,7 +493,8 @@ def _connect(
     it creates are caught, migrations running on every connect as a cheap
     no-op once already current). Not shared code: see this module's own
     docstring for why."""
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+    db_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _secure_knowledge_files(db_path)
     conn: sqlite3.Connection | None = None
     try:
         conn = sqlite3.connect(db_path, timeout=30)
@@ -476,12 +513,13 @@ def _connect(
         _rescue_corrupt_knowledge_db(db_path, exc, notifications)
         return _connect(db_path, notifications=notifications, _retry=True)
 
-    for path in (db_path, db_path.with_name(db_path.name + "-wal"), db_path.with_name(db_path.name + "-shm")):
-        if path.exists():
-            try:
-                os.chmod(path, 0o600)
-            except OSError:
-                logger.warning("could not chmod %s to 0600 - continuing with existing permissions", path)
+    # SQLite creates WAL/SHM sidecars with the secure database's 0600 mode
+    # on POSIX. Revalidate immediately after opening, before migrations.
+    try:
+        _secure_knowledge_files(db_path)
+    except BaseException:
+        conn.close()
+        raise
 
     try:
         run_sqlite_migrations(conn, KNOWLEDGE_DB_SCHEMA_VERSION, _MIGRATIONS)

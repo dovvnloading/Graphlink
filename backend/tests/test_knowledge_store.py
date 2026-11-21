@@ -1172,3 +1172,74 @@ class TestReindexGraphContent:
         finally:
             conn.close()
         assert ks.search_chunks(db_path, "pangolins") == []
+
+
+# -- adversarial privacy checks: enforce modes before opening SQLite ---------
+
+
+@pytest.mark.posix_permissions
+def test_permissions_are_private_before_first_sqlite_open(db_path, monkeypatch):
+    if os.name == "nt":
+        pytest.skip("POSIX modes are not a Windows ACL")
+    db_path.parent.mkdir(parents=True, mode=0o755)
+    os.chmod(db_path.parent, 0o755)
+    db_path.write_bytes(b"")
+    os.chmod(db_path, 0o644)
+
+    observed_modes = []
+    real_connect = sqlite3.connect
+
+    def inspect_before_open(*args, **kwargs):
+        observed_modes.append((
+            os.stat(db_path.parent).st_mode & 0o777,
+            os.stat(db_path).st_mode & 0o777,
+        ))
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(ks.sqlite3, "connect", inspect_before_open)
+    connection = ks._connect(db_path)
+    connection.close()
+    assert observed_modes == [(0o700, 0o600)]
+
+
+@pytest.mark.posix_permissions
+def test_knowledge_db_symlink_is_refused_without_touching_target(db_path, tmp_path):
+    if os.name == "nt":
+        pytest.skip("POSIX symlink protection test")
+    db_path.parent.mkdir(parents=True)
+    outside = tmp_path / "elsewhere.sqlite"
+    outside.write_bytes(b"cannot be indexed")
+    db_path.symlink_to(outside)
+    with pytest.raises(PermissionError, match="private regular file"):
+        ks._connect(db_path)
+    assert outside.read_bytes() == b"cannot be indexed"
+
+
+@pytest.mark.posix_permissions
+def test_loose_sidecars_are_secured_and_permission_failures_abort(db_path, monkeypatch):
+    if os.name == "nt":
+        pytest.skip("POSIX modes are not a Windows ACL")
+    _ingest(db_path)
+    wal = db_path.with_name(db_path.name + "-wal")
+    shm = db_path.with_name(db_path.name + "-shm")
+    wal.touch()
+    shm.touch()
+    os.chmod(wal, 0o644)
+    os.chmod(shm, 0o644)
+    ks._secure_knowledge_files(db_path)
+    assert os.stat(wal).st_mode & 0o777 == 0o600
+    assert os.stat(shm).st_mode & 0o777 == 0o600
+    wal.unlink()
+    shm.unlink()
+
+    os.chmod(db_path, 0o644)
+    real_chmod = os.chmod
+
+    def deny_db_chmod(path, mode):
+        if path == db_path:
+            raise PermissionError("simulated permission denial")
+        return real_chmod(path, mode)
+
+    monkeypatch.setattr(ks.os, "chmod", deny_db_chmod)
+    with pytest.raises(PermissionError, match="simulated permission denial"):
+        ks._connect(db_path)

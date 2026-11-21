@@ -171,3 +171,45 @@ def test_ollama_test_rejects_nonembedding_chat_model(manager, monkeypatch):
     monkeypatch.setattr(config.api_provider, "ollama_supports_embedding", lambda _: False)
     with pytest.raises(ValueError, match="does not support embeddings"):
         config.test_embedding_choice(manager, "ollama", "llama3:latest")
+
+
+def test_cloud_consent_is_scoped_to_exact_api_endpoint(tmp_path):
+    manager = SettingsManager(tmp_path / "session.dat")
+    endpoints = manager.state.setdefault("api_base_urls_by_provider", {})
+    endpoints["OpenAI-Compatible"] = "https://first.example/v1"
+    manager.set_knowledge_embedding_settings(
+        "cloud", "text-embedding-3-small", "OpenAI-Compatible", True,
+    )
+    assert manager.get_knowledge_embedding_settings()["source"] == "cloud"
+
+    endpoints = manager.state["api_base_urls_by_provider"]
+    endpoints["OpenAI-Compatible"] = "https://different.example/v1"
+    choice = manager.get_knowledge_embedding_settings()
+    assert choice["source"] == "off"
+    assert choice["cloud_opt_in"] is False
+
+    manager.set_knowledge_embedding_settings(
+        "cloud", "text-embedding-3-small", "OpenAI-Compatible", True,
+    )
+    assert manager.get_knowledge_embedding_settings()["source"] == "cloud"
+    assert SettingsManager(manager.state_file).get_knowledge_embedding_settings()["source"] == "cloud"
+
+
+def test_missing_destination_binding_and_remote_cleartext_fail_closed(tmp_path):
+    manager = SettingsManager(tmp_path / "session.dat")
+    manager.state.update(
+        knowledge_embedding_source="cloud",
+        knowledge_embedding_model="text-embedding-3-small",
+        knowledge_cloud_provider="OpenAI-Compatible",
+        knowledge_cloud_opt_in=True,
+    )
+    assert manager.get_knowledge_embedding_settings()["source"] == "off"
+
+    manager.state["api_base_urls_by_provider"] = {
+        "OpenAI-Compatible": "http://remote.example/v1",
+    }
+    with pytest.raises(ValueError, match="HTTPS"):
+        manager.set_knowledge_embedding_settings(
+            "cloud", "text-embedding-3-small", "OpenAI-Compatible", True,
+        )
+    assert manager.get_knowledge_embedding_settings()["source"] == "off"

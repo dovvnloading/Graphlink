@@ -18,6 +18,18 @@ from __future__ import annotations
 from settings_store._composed import SettingsManagerParts
 
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
+
+
+def _knowledge_cloud_destination(profile, base_url: str) -> str:
+    """Bind consent to the actual HTTPS (or loopback) destination, not a label."""
+    endpoint = profile.endpoint(base_url)
+    parsed = urlsplit(endpoint)
+    if parsed.scheme != "https" and not (
+        parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+    ):
+        raise ValueError("Cloud knowledge embeddings require HTTPS (except local loopback).")
+    return endpoint
 
 
 class GeneralSettingsOps(SettingsManagerParts):
@@ -93,7 +105,22 @@ class GeneralSettingsOps(SettingsManagerParts):
         if source not in ("off", "ollama", "cloud"):
             source = "off"
         consent = source == "cloud" and self.state.get("knowledge_cloud_opt_in") is True
-        # An old or hand-edited state file must never bypass cloud consent.
+        # Consent is to a specific destination. Editing the API connection,
+        # or loading an old consent bit without an endpoint binding, requires
+        # a new affirmative opt-in before any document/query upload.
+        if consent:
+            from graphlink_cloud_providers import CLOUD_PROVIDERS
+
+            provider = str(self.state.get("knowledge_cloud_provider") or "OpenAI")
+            profile = CLOUD_PROVIDERS.get(provider)
+            try:
+                endpoint = (
+                    _knowledge_cloud_destination(profile, self.get_api_base_url(provider))
+                    if profile is not None and profile.protocol == "openai" else ""
+                )
+                consent = bool(endpoint and endpoint == self.state.get("knowledge_cloud_consent_endpoint"))
+            except (ValueError, OSError):
+                consent = False
         if source == "cloud" and not consent:
             source = "off"
         return {
@@ -115,12 +142,14 @@ class GeneralSettingsOps(SettingsManagerParts):
         cloud_provider = str(cloud_provider or "").strip()
         if source != "off" and (not model or len(model) > 200):
             raise ValueError("Choose a knowledge embedding model (up to 200 characters).")
+        endpoint = ""
         if source == "cloud":
             profile = CLOUD_PROVIDERS.get(cloud_provider)
             if profile is None or profile.protocol != "openai":
                 raise ValueError("Choose an OpenAI-compatible API provider.")
             if cloud_opt_in is not True:
                 raise ValueError("Cloud embeddings require explicit consent: document text leaves the machine.")
+            endpoint = _knowledge_cloud_destination(profile, self.get_api_base_url(cloud_provider))
         else:
             cloud_provider = ""
             cloud_opt_in = False
@@ -132,6 +161,7 @@ class GeneralSettingsOps(SettingsManagerParts):
             knowledge_embedding_model=model,
             knowledge_cloud_provider=cloud_provider,
             knowledge_cloud_opt_in=cloud_opt_in,
+            knowledge_cloud_consent_endpoint=endpoint,
         )
         self._save_state(new_state, raise_on_error=True)
         self.state = new_state

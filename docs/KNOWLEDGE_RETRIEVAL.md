@@ -17,8 +17,24 @@ connection and an explicitly entered embedding-model ID. The user must
 check the consent control explaining that **document text leaves the
 machine**: indexed passages and search queries will be transmitted to
 that service. The backend checks the persisted consent on every use, not
-only when saving settings or rendering the UI. Turning the choice Off
-clears that consent and stops future embedding requests.
+only when saving settings or rendering the UI, and binds consent to the
+**actual endpoint URL**. Changing an API destination requires a new opt-in;
+old settings lacking endpoint-bound consent fail closed. **Only the extracted text
+of pending index chunks (up to 32 per batch) and semantic search-query text**
+is submitted as the embedding API input, not the original files, archive
+bytes, or the whole database. A cold workspace search may also send one
+initial batch of at most 32 passages. The configured embedding endpoint
+receives the request and the configured credential; remote cloud endpoints
+must use HTTPS (non-TLS HTTP is permitted only for loopback addresses).
+Turning the choice Off clears that consent and stops subsequent embedding
+requests; requests already in flight may finish. Stored embeddings remain
+locally cached unless their corresponding source is removed.
+
+This embedding choice does **not** control chat-model egress. If the user
+enables Knowledge on a chat answered by a cloud chat model, selected cited
+passages can separately be included in that model's prompt even with
+embeddings set to Off. The chat provider and Knowledge-on-chat settings
+control that independent transmission.
 
 The page's **Test** button embeds a fixed synthetic phrase, not any
 stored document. A saved choice starts a **background embedding job** for
@@ -106,6 +122,34 @@ untrusted excerpts without accepting a model-supplied collection ID. Only
 the workspace Agent can call `knowledge.add` (`path` within its bound
 workspace); each write requires fresh human approval, including in modes
 that auto-approve ordinary file edits. The source file is not modified.
+
+## Files, watched folders, and local storage
+
+A native picker (or an existing authorized workspace-file/attachment grant)
+determines which filesystem sources are allowed. Folder walks exclude hidden
+directories and known dependency/metadata folders, skip symlinks leaving
+the chosen root, and enforce 10,000 files / 500 MiB per job / 25 MiB per
+file. Prior to parsing, each file is opened with a no-follow, bounded
+descriptor read and parsed only from a private snapshot; changing a symlink
+between enumeration and opening cannot redirect the parser outside the
+authorized folder. Watched folders are explicitly selected, scoped to a
+workspace, and revalidate their canonical root and identity on sync; a
+replaced watch cannot read a new target or cause its previous index to be
+pruned.
+
+PDF imports additionally enforce bounded page/stream expansion and extracted
+text. DOCX and XLSX are ZIP packages: Knowledge Library limits them to
+2,048 members, 32 MiB aggregate expanded bytes, and 4 MiB per XML part
+before parsing. XLSX rejects XML DTD/entity declarations. Extracted text
+remains capped at one million characters. On POSIX, Graphlink's dedicated
+knowledge directory is restricted to mode 0700 and the database and
+SQLite WAL/SHM files to mode 0600 **before** they are opened.
+
+Retrieved material is untrusted evidence, not an instruction source.
+Knowledge tool results carry an untrusted label per passage, chat context
+sources are lower-trust typed user messages, and the legacy citation formatter
+serializes source-controlled titles, URIs and text as JSON records so an
+embedded newline cannot forge a new citation or role.
 
 ## Pipeline
 

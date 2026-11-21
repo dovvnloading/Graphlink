@@ -6,6 +6,7 @@ No model or network call is made by the ranking or provenance stages.
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from difflib import SequenceMatcher
@@ -198,13 +199,22 @@ def format_untrusted_context(results: list[dict]) -> str:
     """Include both positional [kN] and stable [kb:...] citations."""
     if not results:
         return ""
+    # Encode *all* source-controlled fields in individual JSON records:
+    # malicious passages/titles must not inject new context blocks or
+    # impersonate top-level model instructions by containing newlines.
     blocks = [
-        f"[k{index}] [{result.get('citation_id', 'unavailable')}] "
-        f"{result['document_title']} ({result['source_uri']}; "
-        f"section: {result.get('section', 'Unsectioned')}):\n{result['text']}"
+        json.dumps({
+            "trust_label": "untrusted data",
+            "citation": f"[k{index}]",
+            "citation_id": result.get("citation_id", "unavailable"),
+            "document_title": result["document_title"],
+            "source_uri": result["source_uri"],
+            "section": result.get("section", "Unsectioned"),
+            "text": result["text"],
+        }, ensure_ascii=False)
         for index, result in enumerate(results, start=1)
     ]
-    return _UNTRUSTED_HEADER + "\n\n" + "\n\n".join(blocks)
+    return _UNTRUSTED_HEADER + "\n" + "\n".join(blocks)
 
 
 def workspace_has_chat_knowledge(

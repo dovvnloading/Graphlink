@@ -15,6 +15,7 @@ from hashlib import sha256
 import logging
 import math
 from pathlib import Path
+from urllib.parse import urlsplit
 from typing import Iterator
 
 import api_provider
@@ -46,7 +47,9 @@ class _OpenAICompatibleEmbedder:
 
 
 @contextmanager
-def embedding_provider_for_choice(manager, *, choice: dict | None = None) -> Iterator[tuple[object | None, str | None]]:
+def embedding_provider_for_choice(
+    manager, *, choice: dict | None = None, allow_unsaved_test_choice: bool = False,
+) -> Iterator[tuple[object | None, str | None]]:
     """Create a disposable provider for the selected model; never expose keys over WS."""
     selected = choice if choice is not None else manager.get_knowledge_embedding_settings()
     source = selected.get("source", "off")
@@ -57,6 +60,8 @@ def embedding_provider_for_choice(manager, *, choice: dict | None = None) -> Ite
     if not model or len(model) > 200:
         raise ValueError("Choose a knowledge embedding model.")
     if source == "ollama":
+        if not allow_unsaved_test_choice and manager.get_knowledge_embedding_settings() != selected:
+            raise ValueError("Knowledge embedding choice changed.")
         if not api_provider.ollama_supports_embedding(model):
             raise ValueError(f"Ollama model {model!r} is not installed or does not support embeddings.")
         yield OllamaProvider(model=model), f"ollama:{model}"
@@ -67,11 +72,24 @@ def embedding_provider_for_choice(manager, *, choice: dict | None = None) -> Ite
     # older session.dat or a direct intent cannot cause an unapproved upload.
     if selected.get("cloud_opt_in") is not True:
         raise ValueError("Cloud embeddings require explicit consent: document text leaves the machine.")
+    if not allow_unsaved_test_choice and manager.get_knowledge_embedding_settings() != selected:
+        raise ValueError("Cloud embedding consent or destination changed.")
     provider_name = str(selected.get("cloud_provider") or "")
     profile = CLOUD_PROVIDERS.get(provider_name)
     if profile is None or profile.protocol != "openai":
         raise ValueError("Choose an OpenAI-compatible API provider.")
-    endpoint = manager.get_api_base_url(provider_name)
+    endpoint = profile.endpoint(manager.get_api_base_url(provider_name))
+    parsed = urlsplit(endpoint)
+    # A consent checkbox is not consent to transmit private document text
+    # and the API key in cleartext to an arbitrary remote host.
+    if parsed.scheme != "https" and not (
+        parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+    ):
+        raise ValueError("Cloud knowledge embeddings require HTTPS (except local loopback).")
+    # Revalidate after resolving the endpoint; a settings edit during
+    # provider construction must never redirect an old opt-in elsewhere.
+    if not allow_unsaved_test_choice and manager.get_knowledge_embedding_settings() != selected:
+        raise ValueError("Cloud embedding consent or destination changed.")
     key = manager.get_provider_key(provider_name)
     client, _, resolved_url = api_provider._build_api_client(provider_name, key, endpoint)
     # The URL belongs in the cache identity: re-pointing the same model name
@@ -81,6 +99,20 @@ def embedding_provider_for_choice(manager, *, choice: dict | None = None) -> Ite
         yield _OpenAICompatibleEmbedder(client, model), f"cloud:{provider_name}:{endpoint_id}:{model}"
     finally:
         client.close()
+
+
+class _ChoiceGuardedEmbedder:
+    """Stop a later query upload when consent/model changed since selection."""
+
+    def __init__(self, provider: object, still_allowed) -> None:
+        self._provider = provider
+        self._still_allowed = still_allowed
+        self.capabilities = provider.capabilities
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if not self._still_allowed():
+            raise ValueError("Knowledge embedding choice or cloud consent changed.")
+        return self._provider.embed(texts)
 
 
 def test_embedding_choice(
@@ -93,6 +125,7 @@ def test_embedding_choice(
             "source": source, "model": model, "cloud_provider": cloud_provider,
             "cloud_opt_in": cloud_opt_in,
         },
+        allow_unsaved_test_choice=True,  # synthetic fixture only, never stored text
     ) as (provider, _model_id):
         if provider is None:
             return 0
@@ -109,8 +142,19 @@ def configured_hybrid_search(
     """Use cached vectors, with one cold-collection compatibility batch at most."""
     if settings_manager is not None:
         try:
+            # Pin the consent state BEFORE constructing the provider. Taking
+            # the snapshot after a cold-cache query races a concurrent opt-out.
+            get_choice = getattr(settings_manager, "get_knowledge_embedding_settings", None)
+            choice = get_choice() if callable(get_choice) else None
+
+            def still_allowed() -> bool:
+                return choice is None or get_choice() == choice
+
             with embedding_provider_for_choice(settings_manager) as (provider, model_id):
                 if provider is not None and model_id is not None:
+                    if not still_allowed():
+                        raise ValueError("Knowledge embedding choice or cloud consent changed.")
+                    guarded = _ChoiceGuardedEmbedder(provider, still_allowed)
                     # Background jobs own full indexing. Keep existing scoped
                     # UI/chat/tool hybrid behavior on a small cold collection,
                     # without doing a whole-corpus backfill during search.
@@ -120,21 +164,14 @@ def configured_hybrid_search(
                             max_chunks=DEFAULT_BATCH_SIZE,
                         )
                         if cold_rows:
-                            get_choice = getattr(
-                                settings_manager, "get_knowledge_embedding_settings", None,
-                            )
-                            choice = get_choice() if callable(get_choice) else None
-                            changed = (
-                                (lambda: get_choice() != choice) if choice is not None else None
-                            )
                             embed_pending_chunks(
-                                db_path, provider, model_id, collection_id=collection_id,
-                                pending_rows=cold_rows, should_cancel=changed,
+                                db_path, guarded, model_id, collection_id=collection_id,
+                                pending_rows=cold_rows, should_cancel=lambda: not still_allowed(),
                             )
-                            if changed is not None and changed():
+                            if not still_allowed():
                                 return hybrid_search(db_path, query, collection_id=collection_id, k=k)
                     return hybrid_search(
-                        db_path, query, embedding_provider=provider,
+                        db_path, query, embedding_provider=guarded,
                         embedding_model_id=model_id, collection_id=collection_id, k=k,
                     )
         except Exception:
