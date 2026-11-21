@@ -22,6 +22,7 @@ from pathlib import Path
 from backend import native_dialogs
 from backend.knowledge_jobs import KnowledgeIngestManager
 from backend.knowledge_embedding_jobs import KnowledgeEmbeddingJobManager
+from backend.knowledge_uploads import KnowledgeDropUploads
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -32,7 +33,8 @@ from backend.knowledge_chunking import chunk_text
 from backend.knowledge_ingest import IngestError, is_supported_knowledge_file
 from backend.knowledge_embedding_config import configured_hybrid_search
 from backend.knowledge_store import (
-    DEFAULT_DB_PATH, get_or_create_workspace_collection, replace_branch_document_with_chunks,
+    DEFAULT_DB_PATH, get_or_create_workspace_collection, open_cited_document, replace_branch_document_with_chunks,
+    list_library_documents, file_sources_for_document, remove_library_document, library_document_text,
 )
 from backend.notifications import NotificationState
 
@@ -44,6 +46,13 @@ _MAX_K = 25
 class SearchArgs:
     query: str
     k: int
+
+
+@dataclass
+class OpenCitationArgs:
+    documentId: int
+    chunkId: int
+    citationId: str
 
 
 @dataclass
@@ -60,6 +69,28 @@ class CancelIngestArgs:
 @dataclass
 class CancelEmbeddingArgs:
     jobId: str
+
+
+@dataclass
+class DocumentIdArgs:
+    documentId: int
+
+
+@dataclass
+class BeginUploadArgs:
+    files: list[dict]
+
+
+@dataclass
+class AppendUploadArgs:
+    uploadId: str
+    fileIndex: int
+    data: str
+
+
+@dataclass
+class UploadIdArgs:
+    uploadId: str
 
 
 def _resolve_workspace_collection_id(document: SceneDocument, db_path=None) -> int:
@@ -157,6 +188,7 @@ def register_knowledge_intents(
     publish_scene = make_publish_scene(bus)
     embedding_jobs = KnowledgeEmbeddingJobManager(bus, DEFAULT_DB_PATH, settings_manager)
     ingest_jobs = KnowledgeIngestManager(bus, DEFAULT_DB_PATH, on_completed=embedding_jobs.schedule)
+    uploads = KnowledgeDropUploads(DEFAULT_DB_PATH)
     bus.register_topic("knowledge-ingest", ingest_jobs.snapshot)
     bus.register_topic("knowledge-embedding", embedding_jobs.snapshot)
     # Session eviction must stop subsequent provider batches, even if an
@@ -185,6 +217,29 @@ def register_knowledge_intents(
         # intent handler in this codebase (e.g. intents_settings_*.py).
         results = await asyncio.to_thread(_search)
         return {"results": _format_search_results(results)}
+
+    async def open_citation(document_id, chunk_id, citation_id):
+        """Return only a verified passage's indexed document in this workspace."""
+        workspace_id = document.current_workspace_id
+
+        def _read():
+            if not DEFAULT_DB_PATH.exists():
+                return None
+            collection_id = (
+                0 if workspace_id is None
+                else get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+            )
+            return open_cited_document(
+                DEFAULT_DB_PATH, document_id=document_id, chunk_id=chunk_id,
+                citation_id=citation_id, collection_id=collection_id,
+            )
+
+        source = await asyncio.to_thread(_read)
+        # A workspace switch during the blocking read must not reveal the
+        # previous workspace's document in a late request/reply.
+        if document.current_workspace_id != workspace_id:
+            return {"document": None}
+        return {"document": source}
 
     async def set_chat_index_into_knowledge(node_id, enabled):
         """Runs the actual knowledge-store write (chat_branch_history() ->
@@ -309,7 +364,94 @@ def register_knowledge_intents(
         # Cancels any old provider before queuing the current workspace.
         return embedding_jobs.refresh(document.current_workspace_id)
 
+    async def list_documents():
+        workspace_id = document.current_workspace_id
+
+        def load():
+            collection_id = (
+                get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+                if workspace_id is not None else 0
+            )
+            return list_library_documents(DEFAULT_DB_PATH, collection_id=collection_id)
+
+        return {"documents": await asyncio.to_thread(load)}
+
+    async def open_document(document_id):
+        workspace_id = document.current_workspace_id
+
+        def load():
+            collection_id = (
+                get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+                if workspace_id is not None else 0
+            )
+            return library_document_text(
+                DEFAULT_DB_PATH, collection_id=collection_id, document_id=document_id,
+            )
+
+        result = await asyncio.to_thread(load)
+        if result is None:
+            raise IngestError("Document is not in the current workspace.")
+        return result
+
+    async def remove_document(document_id):
+        workspace_id = document.current_workspace_id
+
+        def remove():
+            collection_id = (
+                get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+                if workspace_id is not None else 0
+            )
+            paths = file_sources_for_document(
+                DEFAULT_DB_PATH, collection_id=collection_id, document_id=document_id,
+            )
+            deleted = remove_library_document(
+                DEFAULT_DB_PATH, collection_id=collection_id, document_id=document_id,
+            )
+            if deleted:
+                for path in paths:
+                    uploads.cleanup_source(path)
+            return {"removed": deleted}
+
+        return await asyncio.to_thread(remove)
+
+    async def reindex_document(document_id):
+        # The client provides only an ID. Paths come exclusively from
+        # previously indexed file_sources in this workspace, never from JSON.
+        workspace_id = document.current_workspace_id
+
+        def sources():
+            collection_id = (
+                get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+                if workspace_id is not None else 0
+            )
+            return file_sources_for_document(
+                DEFAULT_DB_PATH, collection_id=collection_id, document_id=document_id,
+            )
+
+        paths = await asyncio.to_thread(sources)
+        if not paths:
+            raise IngestError("This document has no file source to re-index.")
+        return ingest_jobs.start(paths, folder=False, workspace_id=workspace_id)
+
+    async def begin_upload(files):
+        if any(job["status"] in {"queued", "scanning", "running"} for job in ingest_jobs.snapshot()["jobs"]):
+            raise IngestError("An import is already running in this window.")
+        return await asyncio.to_thread(
+            uploads.begin, files, workspace_id=document.current_workspace_id,
+        )
+
+    async def append_upload(upload_id, file_index, data):
+        return await asyncio.to_thread(uploads.append, upload_id, file_index, data)
+
+    async def finish_upload(upload_id):
+        paths, workspace_id = await asyncio.to_thread(uploads.finish, upload_id)
+        return ingest_jobs.start(paths, folder=False, workspace_id=workspace_id)
+
+    async def cancel_upload(upload_id):
+        return await asyncio.to_thread(uploads.cancel, upload_id)
+
     bus.register_intent("knowledge", "search", search, args_schema=SearchArgs)
+    bus.register_intent("knowledge", "openCitation", open_citation, args_schema=OpenCitationArgs)
     bus.register_intent("knowledge", "addFiles", add_files)
     bus.register_intent("knowledge", "addFolder", add_folder)
     bus.register_intent("knowledge", "cancelIngest", cancel_ingest, args_schema=CancelIngestArgs)
@@ -318,6 +460,14 @@ def register_knowledge_intents(
     bus.register_intent("knowledge", "cancelEmbedding", cancel_embedding, args_schema=CancelEmbeddingArgs)
     bus.register_intent("knowledge", "resumeEmbedding", resume_embedding)
     bus.register_intent("knowledge", "refreshEmbeddings", refresh_embeddings)
+    bus.register_intent("knowledge", "listDocuments", list_documents)
+    bus.register_intent("knowledge", "openDocument", open_document, args_schema=DocumentIdArgs)
+    bus.register_intent("knowledge", "removeDocument", remove_document, args_schema=DocumentIdArgs)
+    bus.register_intent("knowledge", "reindexDocument", reindex_document, args_schema=DocumentIdArgs)
+    bus.register_intent("knowledge", "beginUpload", begin_upload, args_schema=BeginUploadArgs)
+    bus.register_intent("knowledge", "appendUpload", append_upload, args_schema=AppendUploadArgs)
+    bus.register_intent("knowledge", "finishUpload", finish_upload, args_schema=UploadIdArgs)
+    bus.register_intent("knowledge", "cancelUpload", cancel_upload, args_schema=UploadIdArgs)
     bus.register_intent(
         "scene", "setChatIndexIntoKnowledge", set_chat_index_into_knowledge,
         args_schema=SetChatIndexIntoKnowledgeArgs,

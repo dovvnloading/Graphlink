@@ -267,6 +267,8 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("scene", "listComparisonModels", "B", "read-only: configured comparison catalog; does not mutate graph or settings"),
     Classified("scene", "regenerateResponse", "A", "content: delete-then-recreate of a node's content, one composite undo"),
     Classified("scene", "inspectChatContext", "B", "read-only: previews the next chat send's sources and budget without a graph mutation"),
+    Classified("scene", "getChatKnowledgePreference", "B", "read-only: resolves branch preference and workspace document presence"),
+    Classified("scene", "setChatUseKnowledge", "A", "content: persists a per-chat-branch knowledge retrieval override"),
     Classified("scene", "cancelChatRequest", "B", "run-lifecycle: cancel"),
 
     # -- backend/api/intents_chat_image.py (scene) ---------------------------
@@ -417,6 +419,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
 
     # -- backend/api/intents_knowledge.py (knowledge, scene) - ADR-017 stage 17.5 --
     Classified("knowledge", "search", "B", "read-only: queries the local knowledge store, no document mutation"),
+    Classified("knowledge", "openCitation", "B", "read-only: verifies and reads a workspace-scoped indexed source"),
     Classified("knowledge", "addFiles", "B", "external-store: launches a local knowledge import job, not a scene undo"),
     Classified("knowledge", "addFolder", "B", "external-store: launches a local folder import job, not a scene undo"),
     Classified("knowledge", "cancelIngest", "B", "run-lifecycle: signals cancellation of a background knowledge job"),
@@ -425,6 +428,14 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("knowledge", "cancelEmbedding", "B", "run-lifecycle: cancels future embedding batches"),
     Classified("knowledge", "resumeEmbedding", "B", "run-lifecycle: resumes pending workspace embeddings"),
     Classified("knowledge", "refreshEmbeddings", "B", "run-lifecycle: restarts embedding for a changed settings choice"),
+    Classified("knowledge", "listDocuments", "B", "read-only: lists current workspace collection"),
+    Classified("knowledge", "openDocument", "B", "read-only: fetches indexed text for Document View"),
+    Classified("knowledge", "removeDocument", "B", "external-store: deletes a workspace knowledge document"),
+    Classified("knowledge", "reindexDocument", "B", "external-store: starts a job from indexed file sources"),
+    Classified("knowledge", "beginUpload", "B", "external-store: starts a bounded browser file transfer"),
+    Classified("knowledge", "appendUpload", "B", "external-store: stores a validated upload chunk"),
+    Classified("knowledge", "finishUpload", "B", "external-store: imports the completed browser transfer"),
+    Classified("knowledge", "cancelUpload", "B", "external-store: discards a browser transfer"),
     Classified("scene", "setChatIndexIntoKnowledge", "A", "content: branch-indexing opt-in is document state, same posture as setGroupColor"),
 
     # -- backend/api/intents_global_search.py - ADR-020 stage 20.4 --

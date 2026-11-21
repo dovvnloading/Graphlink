@@ -297,6 +297,7 @@ def _serialize_chat_node(raw_node: SceneNode) -> dict[str, Any]:
         # routing, not output provenance) - see ChatState's own comment.
         "override_provider": node.state.override_provider,
         "override_model_id": node.state.override_model_id,
+        "use_knowledge": node.state.use_knowledge,
     }
 
 

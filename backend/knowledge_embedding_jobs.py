@@ -30,7 +30,7 @@ class KnowledgeEmbeddingJob:
     job_id: str
     workspace_id: int | None
     source: str
-    model: str
+    model_name: str
     status: str = "queued"
     model_id: str = ""
     chunks_total: int = 0
@@ -55,7 +55,7 @@ class KnowledgeEmbeddingJob:
                 "jobId": self.job_id,
                 "workspaceId": self.workspace_id,
                 "source": self.source,
-                "model": self.model,
+                "model": self.model_name,
                 "modelId": self.model_id,
                 "status": self.status,
                 "chunksTotal": self.chunks_total,

@@ -297,6 +297,7 @@ class KnowledgeIngestManager:
                     result = upsert_file_with_chunks(
                         self._db_path, source_uri=str(actual), title=actual.name,
                         mime=mime, text=text, chunks=chunks, collection_id=collection_id,
+                        size_bytes=planned_size,
                     )
                     key = {
                         "added": "added", "updated": "updated", "duplicate": "duplicates",

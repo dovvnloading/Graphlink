@@ -2940,6 +2940,9 @@ body {
   background-color: var(--gl-neutral-button-hover);
 }
 
+.composer-knowledge-toggle { white-space: nowrap; }
+.composer-knowledge-toggle[aria-pressed="true"] .icon { stroke-width: 2; }
+
 .composer-agent-target {
   display: flex;
   align-items: center;
@@ -3944,9 +3947,10 @@ body {
    content, scrollable" dialogs), reusing that dialog's own 11-13px text
    scale and neutral-button language rather than inventing a third one. */
 .knowledge-search-dialog {
-  min-width: 480px;
-  max-width: min(640px, calc(100vw - 64px));
-  max-height: min(600px, calc(100vh - 96px));
+  min-width: min(720px, calc(100vw - 64px));
+  width: min(1000px, calc(100vw - 64px));
+  max-width: calc(100vw - 64px);
+  max-height: min(760px, calc(100vh - 96px));
   overflow-y: auto;
 }
 
@@ -4112,6 +4116,100 @@ body {
 .knowledge-result-open-link {
   color: var(--gl-surface-text-primary);
 }
+
+/* Knowledge Library follows the neutral Settings page/table vocabulary. */
+.knowledge-library-intro {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--gl-surface-text-muted);
+}
+
+.knowledge-drop-zone {
+  border: 1px dashed var(--gl-surface-border);
+  border-radius: 6px;
+  padding: 14px;
+  margin-bottom: 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--gl-surface-text-muted);
+  background: var(--gl-surface-node-body);
+}
+
+.knowledge-drop-active {
+  border-color: var(--gl-surface-text-primary);
+  background: var(--gl-neutral-button-hover);
+  color: var(--gl-surface-text-primary);
+}
+
+.knowledge-library-section {
+  margin: 14px 0 18px;
+  border-top: 1px solid var(--gl-surface-border);
+  padding-top: 4px;
+}
+
+.knowledge-library-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.knowledge-library-heading .knowledge-section-title {
+  margin-bottom: 0;
+}
+
+.knowledge-library-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+.knowledge-library-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  color: var(--gl-surface-text-primary);
+}
+
+.knowledge-library-table th,
+.knowledge-library-table td {
+  text-align: left;
+  padding: 9px 8px;
+  border-bottom: 1px solid var(--gl-surface-border);
+  vertical-align: middle;
+}
+
+.knowledge-library-table th {
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gl-surface-text-muted);
+}
+
+.knowledge-library-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.knowledge-library-title {
+  max-width: 230px;
+  min-width: 130px;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.knowledge-library-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.knowledge-library-actions .knowledge-search-button {
+  padding: 5px 7px;
+  white-space: nowrap;
+}
+
 
 /* -- Global search dialog (ADR-020 stage 20.4) ------------------------------
    A sibling of .knowledge-search-dialog just above, same rules renamed to
@@ -4835,6 +4933,22 @@ mark.document-view-search-match {
 mark.document-view-search-match-current {
   background-color: var(--gl-semantic-search-highlight);
   color: var(--gl-surface-inset-deep, var(--gl-surface-window));
+}
+
+/* Cited knowledge reuses the Document View reader, with a persistent
+   passage highlight independent of the user's optional Find query. */
+.document-view-panel-scroll .document-view-cited-passage {
+  background-color: color-mix(in srgb, var(--gl-semantic-search-highlight) 25%, transparent);
+  outline: 1px solid var(--gl-semantic-search-highlight);
+  outline-offset: 2px;
+  scroll-margin-top: 12px;
+}
+.document-view-citation-notice {
+  margin: 0;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--gl-surface-border);
+  color: var(--gl-surface-text-muted);
+  font-size: 11px;
 }
 
 /* Standard visually-hidden technique (content present for assistive tech,

@@ -74,6 +74,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
   const onGenerateKeyTakeaway = vi.fn();
   const onGenerateExplainerNote = vi.fn();
   const onOpenDocumentView = vi.fn();
+  const onOpenCitation = vi.fn();
   const onScrollChange = vi.fn();
   const onToggleBranchFocus = vi.fn();
   const onBranchFromHere = vi.fn();
@@ -102,6 +103,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
         onGenerateKeyTakeaway,
         onGenerateExplainerNote,
         onOpenDocumentView,
+        onOpenCitation,
         onScrollChange,
         isBranchFocusActive: false,
         onToggleBranchFocus,
@@ -153,12 +155,43 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
   return {
     onToggleCollapse, onDelete, onUndockChild, onRegenerate, onGenerateImage,
     onGenerateChart, onGenerateKeyTakeaway, onGenerateExplainerNote,
-    onOpenDocumentView, onScrollChange, onToggleBranchFocus, onBranchFromHere,
+    onOpenDocumentView, onOpenCitation, onScrollChange, onToggleBranchFocus, onBranchFromHere,
     onSetBranchStatus, onSetFinalDeliverable, onCollapseBranch, onCancelRegenerate,
     onPinToCurrentModel, onClearModelOverride,
     container, rerenderWithData,
   };
 }
+
+describe("ChatNodeView citation navigation", () => {
+  it("shows numbered reply references and opens the stored passage through the chat dispatcher", () => {
+    const id = "kb:0123456789abcdef0123";
+    const source = {
+      citationId: id, documentId: 12, chunkId: 91,
+      documentTitle: "Runbook", sourceUri: "local/runbook.md",
+      sourceFile: "local/runbook.md", section: "Recovery",
+      offsetStart: 0, offsetEnd: 26, excerpt: "Restore encrypted snapshots.", cited: true,
+    };
+    const ledger = {
+      id: "graphlink-knowledge-citations-v1",
+      name: "graphlink.knowledge.citations",
+      argumentsJson: "{}",
+      result: JSON.stringify({ version: 1, sources: [source], unverifiedIds: [] }),
+      isError: false,
+    };
+    const { onOpenCitation } = renderChatNode({
+      isUser: false, content: `Restore from the snapshot [${id}].`,
+      toolInvocations: [ledger],
+    });
+    expect(screen.getByRole("button", { name: "Source 1: Runbook" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Sources" })).toHaveTextContent("Runbook");
+    fireEvent.click(screen.getByRole("button", { name: "Source 1: Runbook" }));
+    expect(onOpenCitation).toHaveBeenCalledWith(expect.objectContaining({
+      documentId: 12, chunkId: 91, citationId: id,
+    }));
+    // Provenance rows are not fake model tool calls.
+    expect(screen.queryByText("1 tool call")).not.toBeInTheDocument();
+  });
+});
 
 describe("ChatNodeView", () => {
   it("renders the role and markdown content", () => {
@@ -1195,6 +1228,7 @@ describe("ChatNodeView live streaming survives virtualization unmount/remount (A
         onGenerateKeyTakeaway: vi.fn(),
         onGenerateExplainerNote: vi.fn(),
         onOpenDocumentView: vi.fn(),
+        onOpenCitation: vi.fn(),
         onScrollChange: vi.fn(),
         isBranchFocusActive: false,
         onToggleBranchFocus: vi.fn(),
@@ -1408,6 +1442,7 @@ describe("ChatNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
       onGenerateKeyTakeaway: vi.fn(),
       onGenerateExplainerNote: vi.fn(),
       onOpenDocumentView: vi.fn(),
+      onOpenCitation: vi.fn(),
       onScrollChange: vi.fn(),
       isBranchFocusActive: false,
       onToggleBranchFocus: vi.fn(),
