@@ -2,7 +2,7 @@
 
 **A local-first desktop workspace for branching AI conversations.** Ask a question, fork a reply into two lines of inquiry, then bring their answers together. Each branch keeps its own conversation history. Notes, sources, code, charts, and model replies sit next to the question they came from.
 
-[Install Graphlink](#getting-started) · [Connect a model](#connect-a-model) · [Build your first graph](#build-your-first-graph) · [Workspace agent guide](docs/WORKSPACE_AGENT.md) · [API providers](#api-providers) · [Developer guide](#development)
+[Install Graphlink](#getting-started) · [Connect a model](#connect-a-model) · [Knowledge Library](#knowledge-library) · [Build your first graph](#build-your-first-graph) · [Workspace agent guide](docs/WORKSPACE_AGENT.md) · [API providers](#api-providers) · [Developer guide](#development)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/node-detail.png">
@@ -56,6 +56,10 @@ On first launch, choose **Load Sample Workspace** in the welcome wizard to explo
 | **Hosted API** or a **custom endpoint** | Open **Settings → API Endpoint**. Pick a provider, supply its credential and any requested **Base URL**, then choose **Load available models** or type the exact ID into **Default text model**. Select **Save and activate**. |
 
 The composer shows the active route. Use its model picker to switch models on that connection. Under **Per-task models** in API Endpoint settings, you can assign a different model for naming, charts, or web research. To pin the currently selected model to a branch, open the branch root’s chat card menu and choose **Pin to Current Model**. Switch back to that provider before continuing a cloud-pinned branch.
+
+## Knowledge Library
+
+Open **Knowledge** in the top bar to import files or folders, search indexed passages, inspect sources in **Document View**, and manage watched folders that sync about every 10 minutes. **Settings → Knowledge** defaults to local keyword search; installed Ollama models or explicitly consented cloud embeddings can add semantic matches. The composer’s **Use knowledge** toggle controls retrieval for chat. See the [Knowledge Library guide](docs/KNOWLEDGE_LIBRARY.md) for imports, privacy choices, citations and agent tools.
 
 ## Build your first graph
 
