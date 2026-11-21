@@ -18,6 +18,9 @@ def test_probe_reports_daemon_load_duration_speed_and_real_tool_call(monkeypatch
         def __init__(self, **kwargs):
             assert kwargs["timeout"] > 0
 
+        async def close(self):
+            calls.append("closed")
+
         async def chat(self, **kwargs):
             calls.append(kwargs)
             if "tools" in kwargs:
@@ -29,16 +32,22 @@ def test_probe_reports_daemon_load_duration_speed_and_real_tool_call(monkeypatch
     assert result == {
         "loadSeconds": 2.25, "tokensPerSecond": 40.0, "toolCallingWorks": True, "message": "",
     }
-    assert len(calls) == 2
-    assert all(call["model"] == "installed:latest" for call in calls)
+    assert len(calls) == 3
+    assert calls[-1] == "closed"
+    assert all(call["model"] == "installed:latest" and call["keep_alive"] == 0 for call in calls[:2])
     assert calls[0]["options"]["num_predict"] <= 32
     assert calls[1]["tools"][0]["function"]["name"] == "graphlink_model_check"
 
 
 def test_probe_preserves_timings_if_tools_unsupported_and_handles_missing_counters(monkeypatch):
+    closed = []
+
     class FakeClient:
         def __init__(self, **kwargs):
             pass
+
+        async def close(self):
+            closed.append(True)
 
         async def chat(self, **kwargs):
             if "tools" in kwargs:
@@ -51,6 +60,7 @@ def test_probe_preserves_timings_if_tools_unsupported_and_handles_missing_counte
     assert result["tokensPerSecond"] is None
     assert result["toolCallingWorks"] is False
     assert "does not support tools" in result["message"]
+    assert closed == [True]
 
 
 def _registered_bus(tmp_path, monkeypatch):
@@ -200,3 +210,54 @@ def test_daemon_error_is_reported_and_next_check_is_allowed(tmp_path, monkeypatc
     row = recorder.messages[-1]["payload"]["ollamaModelChecks"][0]
     assert row["status"] == "error"
     assert "daemon unreachable" in row["message"]
+
+
+def test_probe_cancellation_closes_async_client_and_does_not_execute_tools(monkeypatch):
+    started = asyncio.Event()
+    closed = []
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def chat(self, **_kwargs):
+            started.set()
+            await asyncio.Future()
+
+        async def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(ollama_model_check.ollama, "AsyncClient", FakeClient)
+
+    async def exercise():
+        task = asyncio.create_task(ollama_model_check.probe_ollama_model("installed:latest"))
+        await asyncio.wait_for(started.wait(), 1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(exercise())
+    assert closed == [True]
+
+
+def test_probe_ignores_malformed_counters_and_tool_calls(monkeypatch):
+    closed = []
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def chat(self, **kwargs):
+            if "tools" in kwargs:
+                return {"message": {"tool_calls": {"function": {"name": "graphlink_model_check"}}}}
+            return {"load_duration": float("inf"), "eval_count": 1e308, "eval_duration": 1e-308}
+
+        async def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(ollama_model_check.ollama, "AsyncClient", FakeClient)
+    report = asyncio.run(ollama_model_check.probe_ollama_model("installed:latest"))
+    assert report["loadSeconds"] is None
+    assert report["tokensPerSecond"] is None
+    assert report["toolCallingWorks"] is False
+    assert closed == [True]
