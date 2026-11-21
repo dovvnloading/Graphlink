@@ -289,6 +289,81 @@ def _route_supports_reasoning(route: dict[str, Any]) -> bool:
     return False
 
 
+async def _apply_picker_model_selection(
+    bus, settings_manager, notifications, provider_runtime, session_runtime,
+    publish, provider, model_id,
+):
+    """Select a provider-qualified model visible in the shared picker.
+
+    Switching providers uses the same activation/persistence routines as
+    Settings. Never accept an arbitrary client-supplied endpoint or ID.
+    """
+    if settings_manager is None:
+        return
+    chosen_provider = str(provider or "").strip()
+    chosen = str(model_id or "").strip()
+    if not chosen_provider or not chosen:
+        return
+
+    from backend.context_engine.model_comparison import available_picker_models
+    from graphlink_cloud_providers import CLOUD_PROVIDERS
+
+    choices = await asyncio.to_thread(available_picker_models, settings_manager, session_runtime)
+    matched = next((item for item in choices
+                    if item["provider"] == chosen_provider and item["modelId"] == chosen), None)
+    if matched is None:
+        return
+    capabilities = matched["capabilities"]
+    # Known embedding-only models are listed for discovery, not sent chat.
+    if "embeddings" in capabilities and "chat" not in capabilities:
+        return
+
+    try:
+        if chosen_provider == config.LOCAL_PROVIDER_OLLAMA:
+            # The Settings > Ollama chat-task assignment remains authoritative.
+            await apply_ollama_chat_model(settings_manager, chosen, provider_runtime)
+
+            def activate_local():
+                from backend.agents import apply_provider_mode
+
+                apply_provider_mode(config.MODE_OLLAMA_LOCAL, settings_manager, provider_runtime)
+                settings_manager.set_current_mode(config.MODE_OLLAMA_LOCAL)
+
+            await asyncio.to_thread(run_locked, activate_local)
+        elif chosen_provider in CLOUD_PROVIDERS:
+            from backend.api.intents_settings_api_provider import _connection_key
+
+            def activate_cloud():
+                profile = CLOUD_PROVIDERS[chosen_provider]
+                endpoint = profile.endpoint(settings_manager.get_api_base_url(chosen_provider))
+                key = _connection_key(settings_manager, profile, endpoint, "")
+                models = settings_manager.get_api_models(chosen_provider)
+                models[config.TASK_CHAT] = chosen
+                staged = api_provider.ProviderRuntime()
+                staged.initialize_api(
+                    chosen_provider, key, endpoint if profile.protocol == "openai" else None,
+                    task_models=models,
+                )
+                settings_manager.save_cloud_profile(chosen_provider, endpoint, "", models)
+                session_runtime.activate_api(staged.snapshot())
+
+            await asyncio.to_thread(run_locked, activate_cloud)
+        else:
+            return
+    except Exception:
+        # Credentials and endpoint exception strings are intentionally
+        # never forwarded to the UI by this model-selection shortcut.
+        if notifications is not None:
+            notifications.show("Unable to activate this model. Check its provider in Settings.", "warning")
+            await bus.publish("notification")
+        return
+
+    if bus.has_topic("app-settings"):
+        await bus.publish("app-settings")
+    await publish()
+
+
+
 def register_composer(
     bus: SessionBus,
     token_counter: TokenCounterState,
@@ -503,74 +578,10 @@ def register_composer(
         await publish()
 
     async def select_picker_model(provider, model_id):
-        """Select a provider-qualified model visible in the shared picker.
-
-        Switching providers uses the same activation/persistence routines as
-        Settings. Never accept an arbitrary client-supplied endpoint or ID.
-        """
-        if settings_manager is None:
-            return
-        chosen_provider = str(provider or "").strip()
-        chosen = str(model_id or "").strip()
-        if not chosen_provider or not chosen:
-            return
-
-        from backend.context_engine.model_comparison import available_picker_models
-        from graphlink_cloud_providers import CLOUD_PROVIDERS
-
-        choices = await asyncio.to_thread(available_picker_models, settings_manager, session_runtime)
-        matched = next((item for item in choices
-                        if item["provider"] == chosen_provider and item["modelId"] == chosen), None)
-        if matched is None:
-            return
-        capabilities = matched["capabilities"]
-        # Known embedding-only models are listed for discovery, not sent chat.
-        if "embeddings" in capabilities and "chat" not in capabilities:
-            return
-
-        try:
-            if chosen_provider == config.LOCAL_PROVIDER_OLLAMA:
-                # The Settings > Ollama chat-task assignment remains authoritative.
-                await apply_ollama_chat_model(settings_manager, chosen, provider_runtime)
-
-                def activate_local():
-                    from backend.agents import apply_provider_mode
-
-                    apply_provider_mode(config.MODE_OLLAMA_LOCAL, settings_manager, provider_runtime)
-                    settings_manager.set_current_mode(config.MODE_OLLAMA_LOCAL)
-
-                await asyncio.to_thread(run_locked, activate_local)
-            elif chosen_provider in CLOUD_PROVIDERS:
-                from backend.api.intents_settings_api_provider import _connection_key
-
-                def activate_cloud():
-                    profile = CLOUD_PROVIDERS[chosen_provider]
-                    endpoint = profile.endpoint(settings_manager.get_api_base_url(chosen_provider))
-                    key = _connection_key(settings_manager, profile, endpoint, "")
-                    models = settings_manager.get_api_models(chosen_provider)
-                    models[config.TASK_CHAT] = chosen
-                    staged = api_provider.ProviderRuntime()
-                    staged.initialize_api(
-                        chosen_provider, key, endpoint if profile.protocol == "openai" else None,
-                        task_models=models,
-                    )
-                    settings_manager.save_cloud_profile(chosen_provider, endpoint, "", models)
-                    session_runtime.activate_api(staged.snapshot())
-
-                await asyncio.to_thread(run_locked, activate_cloud)
-            else:
-                return
-        except Exception:
-            # Credentials and endpoint exception strings are intentionally
-            # never forwarded to the UI by this model-selection shortcut.
-            if notifications is not None:
-                notifications.show("Unable to activate this model. Check its provider in Settings.", "warning")
-                await bus.publish("notification")
-            return
-
-        if bus.has_topic("app-settings"):
-            await bus.publish("app-settings")
-        await publish()
+        await _apply_picker_model_selection(
+            bus, settings_manager, notifications, provider_runtime,
+            session_runtime, publish, provider, model_id,
+        )
 
     async def attach_file():
         """Open a native OPEN file dialog and stage whatever is picked (R8a).
