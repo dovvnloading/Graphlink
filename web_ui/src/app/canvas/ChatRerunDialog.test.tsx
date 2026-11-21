@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { ChatRerunDialog } from "./ChatRerunDialog";
+import { ChatRerunDialog, sameChatRerunProgress } from "./ChatRerunDialog";
 import type { ChatRerunPreview, SceneStore } from "./sceneStore";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
 
@@ -48,6 +48,31 @@ function renderDialog(count: number, terminal = false) {
 }
 
 describe("ChatRerunDialog", () => {
+  it("does not repaint for unchanged polls but detects real progress or cancellation", () => {
+    const state = {
+      jobId: "job-1", status: "running" as const, completed: 1, total: 3,
+      currentNodeId: "reply-1", error: "", cancelRequested: false,
+    };
+    expect(sameChatRerunProgress(null, state)).toBe(false);
+    expect(sameChatRerunProgress(state, { ...state })).toBe(true);
+    expect(sameChatRerunProgress(state, { ...state, completed: 2 })).toBe(false);
+    expect(sameChatRerunProgress(state, { ...state, cancelRequested: true })).toBe(false);
+    expect(sameChatRerunProgress(state, { ...state, status: "completed" })).toBe(false);
+  });
+
+  it("recovers from a temporary status lookup error without losing the running job", async () => {
+    const user = userEvent.setup();
+    const spies = renderDialog(1);
+    spies.getChatRerunStatus.mockRejectedValueOnce(new Error("temporary connection issue"));
+    await user.click(screen.getByRole("button", { name: "Open preview" }));
+    await screen.findByText("Reply 1");
+    await user.click(screen.getByRole("button", { name: "Re-run replies" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("temporary connection issue");
+    await waitFor(() => expect(spies.getChatRerunStatus).toHaveBeenCalledTimes(2), { timeout: 2500 });
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(screen.getByRole("button", { name: "Cancel re-run" })).toBeEnabled();
+  });
+
   it("previews ordered replies with model, input tokens and keyboard-operable scope", async () => {
     const user = userEvent.setup();
     const spies = renderDialog(2);
