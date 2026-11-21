@@ -1,5 +1,5 @@
 import { Handle, Position, useNodeId, useStore, useUpdateNodeInternals } from "@xyflow/react";
-import { useEffect, type CSSProperties, type MouseEvent, type ReactNode } from "react";
+import { useEffect, type CSSProperties, type MouseEvent, type ReactNode, type RefObject } from "react";
 
 import type { MenuPosition } from "./menuPosition";
 import { TEXT_INPUT_HANDLE, TEXT_OUTPUT_HANDLE } from "./textInputs";
@@ -21,6 +21,8 @@ interface NodeShellProps {
   selected: boolean;
   collapsed: boolean;
   onMenuChange?: (position: MenuPosition | null) => void;
+  /** Stable keyboard return target for a node-owned inline editor. */
+  menuTriggerRef?: RefObject<HTMLButtonElement | null>;
   header: ReactNode;
   bodyClassName: string;
   children?: ReactNode;
@@ -42,6 +44,7 @@ export function NodeShell({
   selected,
   collapsed,
   onMenuChange,
+  menuTriggerRef,
   header,
   bodyClassName,
   children,
@@ -79,7 +82,7 @@ export function NodeShell({
         <div className="node-card-header">
           {header}
           {onMenuChange && (
-            <button type="button" className="node-card-menu-trigger nodrag"
+            <button ref={menuTriggerRef} type="button" className="node-card-menu-trigger nodrag"
               title="Node actions" aria-label="Node actions" aria-haspopup="menu" aria-expanded={Boolean(menu)}
               onClick={(event) => {
                 const { left, bottom } = event.currentTarget.getBoundingClientRect();
