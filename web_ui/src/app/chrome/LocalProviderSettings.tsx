@@ -2,6 +2,13 @@ import type { AppSettingsState } from "../../lib/bridge-core/generated/app-setti
 import type { WsTransport } from "../../lib/ws/transport";
 
 // Both local providers share the same reasoning levels and provider switch.
+export function formatLocalModelBytes(value: number | null | undefined): string {
+  if (value == null) return "Unknown";
+  if (value === 0) return "0 B";
+  const unit = Math.min(Math.floor(Math.log(value) / Math.log(1024)), 4);
+  return `${(value / (1024 ** unit)).toFixed(1)} ${["B", "KiB", "MiB", "GiB", "TiB"][unit]}`;
+}
+
 export const REASONING_LEVEL_OPTIONS = [
   { id: "off", label: "Off" },
   { id: "low", label: "Low" },

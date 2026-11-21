@@ -112,6 +112,7 @@ const snapshot = {
   llamaCppNGpuLayers: 0,
   llamaCppNThreads: 0,
   llamaCppScannedModels: [],
+  llamaCppModels: [],
   llamaCppScanSummary: "No saved GGUF scan yet. Run a system scan or choose a folder to build the local model list.",
   llamaCppScanStatus: "idle",
   llamaCppNotice: "",
@@ -634,7 +635,7 @@ describe("SettingsDialog", () => {
     const { user, push } = setup();
     await goToLlamaCpp(user, push, { llamaCppChatModelPath: "C:\\models\\chat.gguf" });
 
-    expect(screen.getByText("chat.gguf")).toBeInTheDocument();
+    expect(screen.getAllByText("chat.gguf")).toHaveLength(2);
   });
 
   it("System Scan fires scanLlamaCppSystem and disables while running", async () => {
@@ -746,6 +747,66 @@ describe("SettingsDialog", () => {
     await user.type(field, "8192");
 
     expect(intents).toContainEqual(["app-settings", "setLlamaCppNCtx", [8192]]);
+  });
+
+  it("shows configured GGUF cards with header metadata and capability badges", async () => {
+    const path = "C:/models/chat-Q4_K_M.gguf";
+    const { user, push } = setup();
+    await goToLlamaCpp(user, push, {
+      llamaCppChatModelPath: path,
+      llamaCppNCtx: 8192,
+      llamaCppModels: [{
+        path, name: "chat-Q4_K_M.gguf", sizeBytes: 4 * 1024 ** 3,
+        quantization: "Q4_K_M", trainedContextLength: 32768, capabilities: ["chat"],
+      }],
+    });
+
+    const card = screen.getByRole("group", { name: "chat-Q4_K_M.gguf" });
+    expect(card).toHaveClass("settings-ollama-model-card");
+    expect(within(card).getByText("4.0 GiB on disk")).toBeInTheDocument();
+    expect(within(card).getByText("Q4_K_M")).toBeInTheDocument();
+    expect(within(card).getByText("Trained context: 32,768 tokens")).toBeInTheDocument();
+    expect(within(card).getByText("chat")).toHaveClass("settings-ollama-capability");
+    expect(within(card).getByRole("spinbutton", { name: "Context Window" })).toHaveValue(8192);
+  });
+
+  it("shows separate chat and naming cards without inventing missing GGUF details", async () => {
+    const chat = "C:/models/chat.gguf";
+    const naming = "C:/models/naming.gguf";
+    const { user, push } = setup();
+    await goToLlamaCpp(user, push, {
+      llamaCppChatModelPath: chat, llamaCppTitleModelPath: naming,
+      llamaCppModels: [
+        { path: chat, name: "chat.gguf", sizeBytes: null, quantization: "", trainedContextLength: null, capabilities: [] },
+        { path: naming, name: "naming.gguf", sizeBytes: 1024, quantization: "F16",
+          trainedContextLength: 4096, capabilities: [] },
+      ],
+    });
+
+    const chatCard = screen.getByRole("group", { name: "chat.gguf" });
+    const namingCard = screen.getByRole("group", { name: "naming.gguf" });
+    expect(within(chatCard).getByText("Unknown on disk")).toBeInTheDocument();
+    expect(within(chatCard).getByText("Unknown quantization")).toBeInTheDocument();
+    expect(within(chatCard).getByText("Trained context: Unverified")).toBeInTheDocument();
+    expect(within(chatCard).getByText("Capabilities unavailable")).toBeInTheDocument();
+    expect(within(namingCard).getByText("1.0 KiB on disk")).toBeInTheDocument();
+    expect(within(namingCard).getByText("F16")).toBeInTheDocument();
+    expect(within(namingCard).queryByRole("spinbutton")).toBeNull();
+    expect(screen.getAllByRole("spinbutton", { name: "Context Window" })).toHaveLength(1);
+  });
+
+  it("keeps the shared llama.cpp context control keyboard-editable on the chat card", async () => {
+    const { user, push, intents } = setup();
+    await goToLlamaCpp(user, push, { llamaCppChatModelPath: "C:/models/chat.gguf" });
+    const chatCard = screen.getByRole("group", { name: "chat.gguf" });
+    const field = within(chatCard).getByRole("spinbutton", { name: "Context Window" });
+
+    await user.click(field);
+    await user.clear(field);
+    await user.keyboard("8192");
+    expect(intents).toContainEqual(["app-settings", "setLlamaCppNCtx", [8192]]);
+    await user.tab();
+    expect(screen.getByLabelText("Chat Format Override")).toHaveFocus();
   });
 
   it("GPU Layers fires setLlamaCppNGpuLayers with the parsed number", async () => {

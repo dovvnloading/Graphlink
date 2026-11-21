@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
 import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
 import type { AppPluginGrant, AppPluginsState } from "../../lib/bridge-core/generated/app-plugins-state";
@@ -9,7 +9,7 @@ import { CustomSelect } from "./CustomSelect";
 import { CloudProviderSettings } from "./CloudProviderSettings";
 import { KnowledgeSettingsPage } from "./KnowledgeSettingsPage";
 import { OllamaSettingsPage } from "./OllamaSettingsPage";
-import { ProviderModeSwitch, REASONING_LEVEL_OPTIONS } from "./LocalProviderSettings";
+import { formatLocalModelBytes, ProviderModeSwitch, REASONING_LEVEL_OPTIONS } from "./LocalProviderSettings";
 
 /**
  * The settings dialog (Qt-removal plan R2.5d, extended R7.4a-c) - settings
@@ -169,6 +169,7 @@ const initialState: AppSettingsState = {
   llamaCppNGpuLayers: 0,
   llamaCppNThreads: 0,
   llamaCppScannedModels: [],
+  llamaCppModels: [],
   llamaCppScanSummary: "",
   llamaCppScanStatus: "idle",
   llamaCppNotice: "",
@@ -788,6 +789,45 @@ function LlamaCppNumberField({
   );
 }
 
+type LlamaCppModel = AppSettingsState["llamaCppModels"][number];
+
+function LlamaCppModelCard({
+  path, label, model, children,
+}: {
+  path: string;
+  label: string;
+  model?: LlamaCppModel;
+  children?: ReactNode;
+}) {
+  const headingId = useId();
+  const name = path ? basename(path) : "No chat model selected";
+  const trained = model?.trainedContextLength;
+  return (
+    <article className="settings-ollama-model-card" role="group" aria-labelledby={headingId}>
+      <div className="settings-ollama-card-header">
+        <h3 id={headingId} className="settings-ollama-model-name">{name}</h3>
+        <span className="settings-ollama-state">{label}</span>
+      </div>
+      {path ? (
+        <>
+          <div className="settings-ollama-model-details">
+            <span>{formatLocalModelBytes(model?.sizeBytes)} on disk</span>
+            <span>{model?.quantization || "Unknown quantization"}</span>
+            <span>Trained context: {typeof trained === "number" && trained > 0
+              ? trained.toLocaleString() + " tokens" : "Unverified"}</span>
+          </div>
+          <div className="settings-ollama-capabilities" aria-label={"Capabilities for " + name}>
+            {model?.capabilities.length ? model.capabilities.map((capability) => (
+              <span className="settings-ollama-capability" key={capability}>{capability}</span>
+            )) : <span className="settings-field-hint">Capabilities unavailable</span>}
+          </div>
+        </>
+      ) : <p className="settings-field-hint">Choose a chat GGUF file to see its metadata.</p>}
+      {children}
+    </article>
+  );
+}
+
 function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport: WsTransport }) {
   const [draftChatFormat, setDraftChatFormat] = useState(state.llamaCppChatFormat);
   const [lastChatFormat, setLastChatFormat] = useState(state.llamaCppChatFormat);
@@ -918,6 +958,40 @@ function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport
         </button>
       </div>
 
+      <div className="settings-field">
+        <span className="settings-field-label">Configured GGUF models</span>
+        <div className="settings-ollama-model-list" role="group" aria-label="Configured GGUF models">
+          <LlamaCppModelCard
+            path={state.llamaCppChatModelPath}
+            label={state.llamaCppTitleModelPath && state.llamaCppTitleModelPath !== state.llamaCppChatModelPath
+              ? "Chat model" : "Chat / naming model"}
+            model={state.llamaCppModels.find((model) => model.path === state.llamaCppChatModelPath)}
+          >
+            <LlamaCppNumberField
+              label="Context Window"
+              value={state.llamaCppNCtx}
+              min={256}
+              max={131072}
+              step={256}
+              onCommit={(n) => transport.fireIntent("app-settings", "setLlamaCppNCtx", [n], undefined, true)}
+            />
+            <p className="settings-field-hint">
+              This context window is shared by llama.cpp's chat and naming models.
+            </p>
+          </LlamaCppModelCard>
+          {state.llamaCppTitleModelPath && state.llamaCppTitleModelPath !== state.llamaCppChatModelPath && (
+            <LlamaCppModelCard
+              path={state.llamaCppTitleModelPath}
+              label="Naming model"
+              model={state.llamaCppModels.find((model) => model.path === state.llamaCppTitleModelPath)}
+            />
+          )}
+        </div>
+        <p className="settings-field-hint">
+          Details come from local GGUF headers; capabilities and context are not runtime-verified.
+        </p>
+      </div>
+
       <label className="settings-field">
         <span className="settings-field-label">Chat Format Override</span>
         <input
@@ -932,14 +1006,6 @@ function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport
         />
       </label>
 
-      <LlamaCppNumberField
-        label="Context Window"
-        value={state.llamaCppNCtx}
-        min={256}
-        max={131072}
-        step={256}
-        onCommit={(n) => transport.fireIntent("app-settings", "setLlamaCppNCtx", [n], undefined, true)}
-      />
       <LlamaCppNumberField
         label="GPU Layers"
         value={state.llamaCppNGpuLayers}

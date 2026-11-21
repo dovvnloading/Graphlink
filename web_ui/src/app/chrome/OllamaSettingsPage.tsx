@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboard
 import type { AppSettingsState } from "../../lib/bridge-core/generated/app-settings-state";
 import type { WsTransport } from "../../lib/ws/transport";
 import { CustomSelect } from "./CustomSelect";
-import { ProviderModeSwitch, REASONING_LEVEL_OPTIONS } from "./LocalProviderSettings";
+import { formatLocalModelBytes, ProviderModeSwitch, REASONING_LEVEL_OPTIONS } from "./LocalProviderSettings";
 
 const MODE_OLLAMA_LOCAL = "Ollama (Local)";
 
@@ -126,14 +126,6 @@ function OllamaTaskField({
 }
 
 
-function formatOllamaBytes(value: number | null | undefined): string {
-  if (value == null) return "Unknown";
-  if (value === 0) return "0 B";
-  const unit = Math.min(Math.floor(Math.log(value) / Math.log(1024)), 4);
-  return `${(value / (1024 ** unit)).toFixed(1)} ${["B", "KiB", "MiB", "GiB", "TiB"][unit]}`;
-}
-
-
 type InventoryModel = AppSettingsState["ollamaInventory"][number];
 type ModelCheck = AppSettingsState["ollamaModelChecks"][number];
 
@@ -190,11 +182,11 @@ function OllamaModelCard({
         </span>
       </div>
       <div className="settings-ollama-model-details">
-        <span>{formatOllamaBytes(model.sizeBytes)} on disk</span>
+        <span>{formatLocalModelBytes(model.sizeBytes)} on disk</span>
         <span>{model.family || "Unknown family"} · {model.parameterSize || "Unknown parameter size"} · {model.quantization || "Unknown quantization"}</span>
         <span>Trained context: {trainedLimit ? trainedLimit.toLocaleString() + " tokens" : "Unverified"}</span>
         {model.loaded === true && (
-          <span>{formatOllamaBytes(model.memoryBytes)} memory in use · {formatOllamaBytes(model.vramBytes)} VRAM</span>
+          <span>{formatLocalModelBytes(model.memoryBytes)} memory in use · {formatLocalModelBytes(model.vramBytes)} VRAM</span>
         )}
       </div>
       <div className="settings-ollama-capabilities" aria-label={"Capabilities for " + model.name}>
@@ -523,8 +515,8 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
           <span className="settings-field-label">
             {state.ollamaPullModel}: {state.ollamaPullMessage}
             {percent !== null && (" — " + percent + "% of current layer (" +
-              formatOllamaBytes(state.ollamaPullCompleted) + " / " +
-              formatOllamaBytes(state.ollamaPullTotal) + ")")}
+              formatLocalModelBytes(state.ollamaPullCompleted) + " / " +
+              formatLocalModelBytes(state.ollamaPullTotal) + ")")}
           </span>
           <progress
             aria-label={"Download progress for " + state.ollamaPullModel}

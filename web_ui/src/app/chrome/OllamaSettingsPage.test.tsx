@@ -105,6 +105,7 @@ const baseState: AppSettingsState = {
   llamaCppNGpuLayers: 0,
   llamaCppNThreads: 0,
   llamaCppScannedModels: [],
+  llamaCppModels: [],
   llamaCppScanSummary: "No saved GGUF scan yet. Run a system scan or choose a folder to build the local model list.",
   llamaCppScanStatus: "idle",
   llamaCppNotice: "",

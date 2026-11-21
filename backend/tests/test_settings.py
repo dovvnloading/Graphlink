@@ -2081,6 +2081,30 @@ def test_set_llama_cpp_chat_model_path_stages_without_persisting(manager):
     assert manager.get_llama_cpp_chat_model_path() == ""
 
 
+def test_llama_cpp_cards_follow_staged_paths_not_unselected_scan_results(manager, tmp_path):
+    gguf = tmp_path / "selected.gguf"
+    gguf.write_bytes(b"unreadable header")
+    manager.set_llama_cpp_model_scan_cache(["C:/models/unselected.gguf"], "system", "", [])
+    bus = SessionBus("settings-llama-cpp-card-snapshot-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppChatModelPath", [str(gguf)]))
+
+    payload = recorder.messages[-1]["payload"]
+    assert payload["llamaCppChatModelPath"] == str(gguf)
+    assert payload["llamaCppModels"] == [{
+        "path": str(gguf),
+        "name": "selected.gguf",
+        "sizeBytes": len(b"unreadable header"),
+        "quantization": "",
+        "trainedContextLength": None,
+        "capabilities": [],
+    }]
+    assert manager.get_llama_cpp_chat_model_path() == ""
+
+
 def test_scan_llama_cpp_system_persists_results_and_reports_done(manager, monkeypatch):
     monkeypatch.setattr(
         api_provider,
