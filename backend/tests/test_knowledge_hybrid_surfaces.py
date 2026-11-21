@@ -108,7 +108,10 @@ def test_ui_chat_and_tool_use_scoped_hybrid_search_and_expose_match_signals(tmp_
     keyword = search_chat_knowledge("heron", 71, db_path=db, k=1)
     assert len(keyword) == 1 and keyword[0]["rank_signals"] == {"fts5": 1}
     # The cache avoids re-embedding the same chunks on later requests.
-    assert sum(len(call) for call in provider.calls if len(call) > 1) == 3
+    assert provider.calls.count([
+        "The blue heron keeps watch over the marshland.",
+        "A pressure valve opens in the boiler room.",
+    ]) == 1
 
 
 def test_workspace_agent_fallback_passes_embedding_settings_to_read_only_search(monkeypatch):
@@ -130,3 +133,34 @@ def test_workspace_agent_fallback_passes_embedding_settings_to_read_only_search(
 
     tools_shared.register_workspace_tools(registry, dispatcher, document)
     assert observed == [{"document": document, "settings_manager": manager}]
+
+def test_knowledge_panel_drops_in_flight_results_after_workspace_switch(tmp_path, monkeypatch):
+    from threading import Event
+
+    db = tmp_path / "knowledge.db"
+    document = SceneDocument()
+    document.current_workspace_id = 1
+    bus = SessionBus("knowledge-switch-test")
+    monkeypatch.setattr(intents_knowledge, "DEFAULT_DB_PATH", db)
+    intents_knowledge.register_knowledge_intents(bus, document)
+
+    entered, release = Event(), Event()
+
+    def held_search(*_args, **_kwargs):
+        entered.set()
+        if not release.wait(3):
+            raise RuntimeError("Knowledge search barrier timed out")
+        return [{"chunk_id": 1}]
+
+    monkeypatch.setattr(intents_knowledge, "configured_hybrid_search", held_search)
+
+    async def switch_during_search():
+        pending = asyncio.create_task(bus.dispatch_intent("knowledge", "search", ["query", 1]))
+        try:
+            assert await asyncio.to_thread(entered.wait, 3)
+            document.current_workspace_id = 2
+        finally:
+            release.set()
+        return await pending
+
+    assert asyncio.run(switch_during_search()) == {"results": []}

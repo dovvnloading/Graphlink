@@ -181,7 +181,7 @@ def register_knowledge_intents(
         # for every other connection, unlike every other blocking-I/O
         # intent handler in this codebase (e.g. intents_settings_*.py).
         results = await asyncio.to_thread(_search)
-        # A slow vector request must not display the previous workspace\u0027s
+        # A slow vector request must not display the previous workspace's
         # passages after the session switches workspaces mid-search.
         if document.current_workspace_id != workspace_id:
             return {"results": []}
