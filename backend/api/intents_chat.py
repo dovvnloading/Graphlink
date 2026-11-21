@@ -278,7 +278,7 @@ def _regenerate_in_place(document, node_to_regenerate, reply_text):
 
 def _land_partial_reply_node(
     document, parent_node, partial_text, fingerprint=None, knowledge_enabled=None,
-    provider=None, model=None,
+    provider=None, model=None, reason=None,
 ):
     """ADR-006 stage 6.4 (H5): a Composer send's stream died mid-reply - land
     the accumulated text as a real assistant node flagged incomplete instead
@@ -291,7 +291,7 @@ def _land_partial_reply_node(
         ax, ay = document.place_child(parent_node.id, "chat")
         ai = document.add_chat_node(ax, ay, partial_text, False, parent_id=parent_node.id)
         ai.state.response_incomplete = True
-        _stamp_reply_provenance(ai, provider, model)
+        _stamp_reply_provenance(ai, provider, model, reason)
         ai.state.reply_history_fingerprint = fingerprint
         ai.state.reply_knowledge_enabled = knowledge_enabled
         document.sync_chat_version(ai.id)
@@ -303,46 +303,96 @@ def _land_partial_reply_node(
     document.record_command("chatReply", "agent", _commit, node_ids=[parent_node.id])
 
 
-def _snapshot_active_provider_model(agent_dispatcher, canvas_document=None, node_id=None, bus=None):
-    """ADR-006 leftover #3: resolved ONCE at request-dispatch time (call
-    this before agent_dispatcher.start_chat_reply is awaited), never at
-    completion time - _stamp_reply_provenance used to re-read the live
-    dispatcher state from inside the completion callback, which
-    mis-attributes a reply to whatever provider happened to be active when
-    the LLM call FINISHED rather than the one that actually generated it
-    (a real divergence if the user flips Settings mid-flight). Best-effort:
-    provenance must never fail the reply.
+def _snapshot_reply_provenance(
+    agent_dispatcher, canvas_document=None, node_id=None, bus=None,
+):
+    """Freeze the routed provider/model AND deciding rule before retrieval.
 
-    With `canvas_document`, the node/branch/workspace model pin is resolved
-    by the same rungs _dispatch uses (pass the same canvas_document/node_id/
-    bus the caller hands start_chat_reply), and the pair names THAT model: a
-    reply pinned to one of two configured models must not be badged and
-    priced as the task's default model."""
+    A saved reply must explain the routing at the time it was generated, not
+    what today's mutable node pin or task setting would resolve to.
+    """
     try:
-        model_ref = None
+        resolved = None
         if canvas_document is not None:
-            model_ref = agent_dispatcher._resolve_model_ref_for_dispatch(canvas_document, node_id, bus=bus)
-        if model_ref is not None:
-            return agent_dispatcher.active_provider_model(model_ref)
-        return agent_dispatcher.active_provider_model()
+            resolve = getattr(agent_dispatcher, "_resolve_model_for_dispatch", None)
+            if resolve is not None:
+                resolved = resolve(canvas_document, node_id, bus=bus)
+            else:
+                # Third-party/test dispatcher implementing the pre-reason API.
+                legacy = agent_dispatcher._resolve_model_ref_for_dispatch(
+                    canvas_document, node_id, bus=bus,
+                )
+                if legacy is not None:
+                    provider, model = agent_dispatcher.active_provider_model(legacy)
+                    return provider, model, None
+        if resolved is not None:
+            provider, model = agent_dispatcher.active_provider_model(resolved.ref)
+            return provider, model, resolved.rung
+
+        provider, model = agent_dispatcher.active_provider_model()
+        settings = getattr(agent_dispatcher, "_settings_manager", None)
+        if settings is None:
+            return provider, model, None
+
+        policy_getter = getattr(settings, "get_auto_model_policy", None)
+        policy = policy_getter() if callable(policy_getter) else "cheapest-capable"
+        if not model:
+            # The provider's auto rung is applied only when the task slot is
+            # empty. Use that same policy and catalog before dispatch, so the
+            # badge and cost metadata name the actual auto-selected model.
+            from backend import agents as agents_module
+            from api_provider import _auto_fallback_model_ref, _snapshot_provider_state
+
+            runtime = getattr(agent_dispatcher, "_provider_runtime", None)
+            state = runtime.snapshot() if runtime is not None else _snapshot_provider_state()
+            auto_ref = _auto_fallback_model_ref(agents_module.config.TASK_CHAT, settings, state)
+            if auto_ref is not None:
+                selected_provider, selected_model = agent_dispatcher.active_provider_model(auto_ref)
+                return selected_provider, selected_model, f"auto: {policy}"
+            return provider, model, None
+
+        reason = "task assignment"
+        # Ollama's stored task assignment distinguishes a deliberate pin
+        # from a model chosen by Auto even when both resolve to the same ID.
+        assignments_getter = getattr(settings, "get_ollama_model_assignments", None)
+        if provider == "ollama" and callable(assignments_getter):
+            from graphlink_model_catalog import ModelAssignment
+            from graphlink_task_config import TASK_CHAT
+
+            assignment = ModelAssignment.from_value(assignments_getter().get(TASK_CHAT))
+            if assignment.mode == "auto":
+                reason = f"auto: {policy}"
+            elif assignment.mode == "inherit":
+                reason = "conversation default"
+        return provider, model, reason
     except Exception:
-        return None, None
+        # A provenance failure must never prevent a real answer from landing.
+        try:
+            provider, model = agent_dispatcher.active_provider_model()
+            return provider, model, None
+        except Exception:
+            return None, None, None
 
 
-def _stamp_reply_provenance(node, provider, model) -> None:
-    """ADR-006 stage 6.8: stamp provider/model on an ordinary chat reply
-    node (previously only branch-synthesis recorded them). `provider`/
-    `model` are the request-time snapshot from
-    _snapshot_active_provider_model, not re-resolved here."""
+def _snapshot_active_provider_model(agent_dispatcher, canvas_document=None, node_id=None, bus=None):
+    """Backwards-compatible pair used by read-only previews and older callers."""
+    provider, model, _reason = _snapshot_reply_provenance(
+        agent_dispatcher, canvas_document, node_id, bus,
+    )
+    return provider, model
+
+
+def _stamp_reply_provenance(node, provider, model, reason=None) -> None:
+    """Record the request-time model and rule on the selected reply version."""
     node.state.provider = provider or None
     node.state.model = model or None
-    # Older call sites and test doubles may have no version history.
+    node.state.model_reason = reason or None
     versions = getattr(node.state, "versions", None)
     if versions:
         selected = versions[getattr(node.state, "version_index", 0)]
         selected.provider_name = node.state.provider
         selected.model_name = node.state.model
-
+        selected.model_reason = node.state.model_reason
 
 def _make_on_usage(
     document, token_counter, publish_token_counter, publish_scene, node_ref,
@@ -405,7 +455,7 @@ def _make_on_usage(
 def _make_send_on_reply(
     document, node, token_counter, publish_token_counter, reply_ref,
     provenance_provider=None, provenance_model=None,
-    request_fingerprint=None, knowledge_enabled=None,
+    request_fingerprint=None, knowledge_enabled=None, provenance_reason=None,
 ):
     """send_message's completion callback, built at module level for the
     same 300-line-cap reason as _make_regenerate_on_reply below. `node` is
@@ -501,7 +551,7 @@ def _make_send_on_reply(
             document.last_chat_node_id = ai.id
             # The command's after-snapshot must contain the request-time
             # provider/model, not an unstamped copy of this reply.
-            _stamp_reply_provenance(ai, provenance_provider, provenance_model)
+            _stamp_reply_provenance(ai, provenance_provider, provenance_model, provenance_reason)
             ai.state.reply_history_fingerprint = request_fingerprint
             ai.state.reply_knowledge_enabled = knowledge_enabled
             apply_reply_citations(ai, reply_text)
@@ -535,7 +585,7 @@ def _make_send_on_reply(
 def _make_regenerate_on_reply(
     document, bus, notifications, token_counter, publish_token_counter, node_to_regenerate,
     provenance_provider=None, provenance_model=None, command_ref=None,
-    request_fingerprint=None, knowledge_enabled=None,
+    request_fingerprint=None, knowledge_enabled=None, provenance_reason=None,
 ):
     """regenerate_response's completion callback, built at module level for
     the same 300-line-cap reason as its siblings above (ADR-006 stage 6.4's
@@ -595,7 +645,7 @@ def _make_regenerate_on_reply(
         def _commit():
             _regenerate_in_place(document, node_to_regenerate, reply_text)
             # Stamp inside record_command so Undo/Redo retains the model.
-            _stamp_reply_provenance(node_to_regenerate, provenance_provider, provenance_model)
+            _stamp_reply_provenance(node_to_regenerate, provenance_provider, provenance_model, provenance_reason)
             node_to_regenerate.state.reply_history_fingerprint = request_fingerprint
             node_to_regenerate.state.reply_knowledge_enabled = knowledge_enabled
             apply_reply_citations(node_to_regenerate, reply_text)
@@ -615,7 +665,7 @@ def _make_regenerate_on_reply(
 
 def _land_partial_regenerate(
     document, node_to_regenerate, partial_text, fingerprint=None, knowledge_enabled=None,
-    provider=None, model=None,
+    provider=None, model=None, reason=None,
 ):
     """ADR-006 stage 6.4 (H5): a regenerate's stream died - preserve the
     accumulated text instead of silently keeping the old content with the
@@ -633,7 +683,7 @@ def _land_partial_regenerate(
         document.update_chat_node_content(
             node_to_regenerate.id, partial_text, incomplete=True
         )
-        _stamp_reply_provenance(node_to_regenerate, provider, model)
+        _stamp_reply_provenance(node_to_regenerate, provider, model, reason)
         node_to_regenerate.state.reply_history_fingerprint = fingerprint
         node_to_regenerate.state.reply_knowledge_enabled = knowledge_enabled
         # A failed stream has no trusted included-passage snapshot. Drop
@@ -789,7 +839,7 @@ async def _send_model_comparison(
             ref_fields = asdict(ref)
             reply.state.override_provider = ref_fields["provider"]
             reply.state.override_model_id = ref_fields["model_id"]
-            reply.state.provider, reply.state.model = provider, model
+            _stamp_reply_provenance(reply, provider, model, "node override")
             reply.state.reply_history_fingerprint = proof
             reply.state.reply_knowledge_enabled = knowledge_enabled
             created.append(reply)
@@ -1063,7 +1113,7 @@ def register_chat_version_intents(
         knowledge_enabled = await _use_knowledge_for_node(document, parent_id)
         # Read selected-version context and route together, before retrieval awaits.
         history = document.chat_branch_history(parent_id)
-        request_provider, request_model = _snapshot_active_provider_model(
+        request_provider, request_model, request_reason = _snapshot_reply_provenance(
             agent_dispatcher, document, parent_id, bus,
         )
         request_fingerprint = fingerprint_for_reply(
@@ -1091,7 +1141,7 @@ def register_chat_version_intents(
         _on_reply = _make_regenerate_on_reply(
             document, bus, notifications, token_counter, publish_token_counter,
             node_to_regenerate, request_provider, request_model, command_ref,
-            request_fingerprint, knowledge_enabled,
+            request_fingerprint, knowledge_enabled, provenance_reason=request_reason,
         )
 
         def _on_partial(partial_text):
@@ -1100,7 +1150,7 @@ def register_chat_version_intents(
                 return
             _land_partial_regenerate(
                 document, node_to_regenerate, partial_text, request_fingerprint,
-                knowledge_enabled, request_provider, request_model,
+                knowledge_enabled, request_provider, request_model, request_reason,
             )
 
         _on_usage = _make_on_usage(
@@ -1275,7 +1325,7 @@ def register_chat_intents(
         knowledge_enabled = await _use_knowledge_for_node(document, node.id)
         # Capture current selected-version context without yielding to retrieval.
         history = document.chat_branch_history(node.id)
-        request_provider, request_model = _snapshot_active_provider_model(
+        request_provider, request_model, request_reason = _snapshot_reply_provenance(
             agent_dispatcher, document, node.id, bus,
         )
         request_fingerprint = fingerprint_for_reply(
@@ -1317,6 +1367,7 @@ def register_chat_intents(
         _on_reply = _make_send_on_reply(
             document, node, token_counter, publish_token_counter, reply_ref,
             request_provider, request_model, request_fingerprint, knowledge_enabled,
+            provenance_reason=request_reason,
         )
 
         async def _on_partial(partial_text):
@@ -1329,7 +1380,7 @@ def register_chat_intents(
             await publish_token_counter()
             _land_partial_reply_node(
                 document, node, partial_text, request_fingerprint, knowledge_enabled,
-                request_provider, request_model,
+                request_provider, request_model, request_reason,
             )
 
         _on_usage = _make_on_usage(

@@ -599,6 +599,7 @@ interface DispatcherLive {
   onToggleBranchFocus: (nodeId: string) => void;
   onCompareChatVersions?: (nodeId: string, count: number, selectedIndex: number) => void;
   onOpenChatRerun?: (nodeId: string) => void;
+  onOpenModelSettings?: (provider: string | null, reason: string | null) => void;
   // ADR-018 stage 18.3: optional - only the chat dispatcher's own call
   // site below supplies it; every other kind's getDispatcher call omits
   // it exactly like they already omit `extra` above.
@@ -752,6 +753,9 @@ function makeChatFns(id: string, liveRef: { current: DispatcherLive }) {
       if (route.provider && route.modelId) store.setModelOverride(id, route.provider, route.modelId);
     },
     onClearModelOverride: () => liveRef.current.store.clearModelOverride(id),
+    onOpenModelSettings: () => liveRef.current.onOpenModelSettings?.(
+      liveRef.current.n.provider ?? null, liveRef.current.n.modelReason ?? null,
+    ),
   };
 }
 
@@ -1191,6 +1195,7 @@ export function toFlowNodes(
   filterStatuses: ReadonlySet<string> = new Set(),
   onCompareChatVersions: (nodeId: string, count: number, selectedIndex: number) => void = NO_COMPARE_CHAT_VERSIONS,
   onOpenChatRerun: (nodeId: string) => void = () => {},
+  onOpenModelSettings: (provider: string | null, reason: string | null) => void = () => {},
 ): SceneFlowNode[] {
   // ADR-011 stage 11.1: ONE upfront O(N+E) pass replacing this function's
   // old standalone `nodesById` map build, PLUS the O(N*E) per-node edge
@@ -1266,7 +1271,7 @@ export function toFlowNodes(
       const extraSig = `${dimmedVal ? 1 : 0}${isBranchFocusActive ? 1 : 0}|${dockedChildrenSig}`;
       const cached = cache.flowNodes.get(n);
       const fns = getDispatcher(
-        cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus, getComposerRoute, onCompareChatVersions, onOpenChatRerun }, makeChatFns,
+        cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus, getComposerRoute, onCompareChatVersions, onOpenChatRerun, onOpenModelSettings }, makeChatFns,
       );
       if (cached && cached.extraSig === extraSig) {
         flowNodes.push(cached.flowNode);
@@ -1305,6 +1310,7 @@ export function toFlowNodes(
           // all - see ChatNodeView.tsx's own guard.
           provider: n.provider ?? null,
           model: n.model ?? null,
+          modelReason: n.modelReason ?? null,
           // ADR-018 stage 18.3: the model-override PIN, opposite direction
           // from provider/model above - see ChatNodeData's own comment.
           overrideProvider: n.overrideProvider,
@@ -2730,6 +2736,14 @@ function CanvasInner({
 }) {
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
   const overlays = useOverlays();
+  const openModelSettings = useCallback((provider: string | null, reason: string | null) => {
+    const normalized = (provider ?? "").toLowerCase();
+    const section = reason?.startsWith("auto: ") ? "general"
+      : normalized === "ollama" ? "ollama (local)"
+      : normalized === "llama.cpp" ? "llama.cpp (local)" : "api endpoint";
+    store.openModelTaskSettings(section);
+    overlays.open("settings", "dialog");
+  }, [store, overlays]);
   const [rerunNodeId, setRerunNodeId] = useState<string | null>(null);
   const openChatRerun = useCallback((id: string) => {
     setRerunNodeId(id);
@@ -2873,6 +2887,7 @@ function CanvasInner({
         filterStatuses,
         onCompareChatVersions,
         openChatRerun,
+        openModelSettings,
       ),
       nodesRef.current,
       // BUG FIX: see withPreservedFlowState's own POSITION doc and
@@ -2897,6 +2912,7 @@ function CanvasInner({
   }, [
     scene, store, onOpenDocumentView, effectiveBranchFocusOriginId, onToggleBranchFocus, focusAcceptedPaths,
     getComposerRoute, filterKinds, filterStatuses, onCompareChatVersions, openChatRerun,
+    openModelSettings,
     // nodesRef/draggingRef/storeApi/pendingSettledIdsRef/lastSyncedSceneRef
     // are all stable ref/store-api identities (useNodeDragAndSizeSync's/
     // useStoreApi's own refs never change across renders) - listed here only

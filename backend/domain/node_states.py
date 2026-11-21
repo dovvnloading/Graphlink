@@ -878,6 +878,7 @@ class ChatVersion:
     content: str
     provider_name: str | None = None
     model_name: str | None = None
+    model_reason: str | None = None
     created_at: str = ""
     incomplete: bool = False
     input_tokens: int | None = None
@@ -978,6 +979,9 @@ class ChatState(NodeState):
     content_parts: list[dict[str, Any]] | None = None
     provider: str | None = None
     model: str | None = None
+    # Recorded at dispatch, never re-resolved against later routing settings.
+    # None is intentional for messages saved before this field existed.
+    model_reason: str | None = None
     is_branch_synthesis: bool = False
     synthesis_instructions: str = ""
     branch_status: str = "active"

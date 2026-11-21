@@ -34,6 +34,7 @@ def test_append_preserves_previous_reply_and_selected_provider_usage_and_tools()
     node = document.add_chat_node(0, 0, "answer A", False)
     node.state.provider = "provider A"
     node.state.model = "model A"
+    node.state.model_reason = "node override"
     node.state.prompt_tokens = 14
     node.state.completion_tokens = 8
     node.state.estimated_cost_usd = 0.02
@@ -45,8 +46,10 @@ def test_append_preserves_previous_reply_and_selected_provider_usage_and_tools()
     assert node.state.version_index == 1
     assert node.state.prompt_tokens is None
     assert node.state.provider is None
+    assert node.state.model_reason is None
     node.state.provider = "provider B"
     node.state.model = "model B"
+    node.state.model_reason = "task assignment"
     node.state.response_incomplete = True
     document.sync_chat_version(node.id)
 
@@ -54,6 +57,7 @@ def test_append_preserves_previous_reply_and_selected_provider_usage_and_tools()
     assert node.content == "answer A"
     assert node.state.provider == "provider A"
     assert node.state.model == "model A"
+    assert node.state.model_reason == "node override"
     assert (node.state.prompt_tokens, node.state.completion_tokens) == (14, 8)
     assert node.state.estimated_cost_usd == 0.02
     assert node.state.tool_invocations == [{"name": "fetch", "result": "A"}]
@@ -64,6 +68,7 @@ def test_append_preserves_previous_reply_and_selected_provider_usage_and_tools()
     assert node.content == "answer B"
     assert node.state.provider == "provider B"
     assert node.state.model == "model B"
+    assert node.state.model_reason == "task assignment"
     assert node.state.response_incomplete is True
 
 
@@ -130,6 +135,8 @@ def test_v1_saved_graph_migrates_to_a_single_current_version():
         "original answer", "old provider", "old model",
     )
     assert version.created_at == "", "old saves did not record an original creation time"
+    assert version.model_reason is None  # legacy reply has no invented explanation
+    assert node.state.model_reason is None
     assert node.state.response_incomplete is True
     assert node.state.prompt_tokens == 4
 
@@ -138,9 +145,11 @@ def test_v2_save_and_restore_selected_version_and_provenance():
     document = SceneDocument()
     node = document.add_chat_node(0, 0, "first reply", False)
     node.state.provider, node.state.model = "Provider 1", "Model 1"
+    node.state.model_reason = "branch override"
     document.sync_chat_version(node.id)
     document.update_chat_node_content(node.id, "second reply")
     node.state.provider, node.state.model = "Provider 2", "Model 2"
+    node.state.model_reason = "auto: fastest"
     document.sync_chat_version(node.id)
     document.set_chat_version(node.id, 0)
 
@@ -149,6 +158,7 @@ def test_v2_save_and_restore_selected_version_and_provenance():
     serialized = next(row for row in saved["nodes"] if row["node_type"] == "chat")
     assert serialized["raw_content"] == "first reply"
     assert serialized["version_index"] == 0
+    assert serialized["model_reason"] == "branch override"
     assert [(v["content"], v["provider"], v["model"]) for v in serialized["versions"]] == [
         ("first reply", "Provider 1", "Model 1"),
         ("second reply", "Provider 2", "Model 2"),
@@ -160,9 +170,24 @@ def test_v2_save_and_restore_selected_version_and_provenance():
     assert message.content == "first reply"
     assert message.state.version_index == 0
     assert len(message.state.versions) == 2
+    assert message.state.model_reason == "branch override"
     restored.set_chat_version(message.id, 1)
     assert message.content == "second reply"
     assert (message.state.provider, message.state.model) == ("Provider 2", "Model 2")
+    assert message.state.model_reason == "auto: fastest"
+    restored.set_chat_version(message.id, 0)
+    assert message.state.model_reason == "branch override"
+
+
+def test_legacy_saved_version_without_reason_stays_without_disclosure():
+    node = _restore_chat_payload({
+        "node_type": "chat", "raw_content": "old reply", "is_user": False,
+        "provider": "ollama", "model": "llama3",
+        "versions": [{"content": "old reply", "provider": "ollama", "model": "llama3"}],
+        "version_index": 0,
+    })
+    assert node.state.model_reason is None
+    assert node.state.versions[0].model_reason is None
 
 
 def test_malformed_saved_versions_fall_back_to_existing_text():
@@ -207,14 +232,18 @@ def test_scene_wire_exposes_only_version_count_and_selection_not_full_history():
     document = SceneDocument()
     node = document.add_chat_node(0, 0, "first", False)
     document.update_chat_node_content(node.id, "second")
+    node.state.model_reason = "task assignment"
+    document.sync_chat_version(node.id)
     row = next(row for row in document.scene_payload()["nodes"] if row["id"] == node.id)
     assert row["versionCount"] == 2
     assert row["versionIndex"] == 1
+    assert row["modelReason"] == "task assignment"
     assert "versions" not in row
     document.set_chat_version(node.id, 0)
     row = next(row for row in document.scene_payload()["nodes"] if row["id"] == node.id)
     assert row["content"] == "first"
     assert row["versionIndex"] == 0
+    assert "modelReason" not in row  # sparse old version with no recorded rule
 
 
 def test_compare_chat_versions_intent_is_read_only_and_returns_provenance():

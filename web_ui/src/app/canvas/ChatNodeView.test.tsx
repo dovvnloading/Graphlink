@@ -89,6 +89,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
   const onCancelRegenerate = vi.fn();
   const onPinToCurrentModel = vi.fn();
   const onClearModelOverride = vi.fn();
+  const onOpenModelSettings = vi.fn();
   function buildProps(dataOverrides: Partial<ChatFlowNode["data"]>) {
     return {
       id: "n0",
@@ -141,6 +142,10 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
         overrideModelId: "",
         onPinToCurrentModel,
         onClearModelOverride,
+        provider: null,
+        model: null,
+        modelReason: null,
+        onOpenModelSettings,
         ...dataOverrides,
       },
     } as unknown as NodeProps<ChatFlowNode>;
@@ -169,7 +174,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
     onGenerateChart, onGenerateKeyTakeaway, onGenerateExplainerNote,
     onOpenDocumentView, onOpenCitation, onScrollChange, onToggleBranchFocus, onBranchFromHere,
     onSetBranchStatus, onSetFinalDeliverable, onCollapseBranch, onCancelRegenerate,
-    onPinToCurrentModel, onClearModelOverride,
+    onPinToCurrentModel, onClearModelOverride, onOpenModelSettings,
     container, rerenderWithData,
   };
 }
@@ -729,6 +734,71 @@ describe("ChatNodeView Synthesize Branches provenance (ADR-002 Workstream 1)", (
       model: null,
     });
     expect(screen.queryByText("claude-sonnet-5")).toBeNull();
+  });
+});
+
+describe("ChatNodeView recorded model-routing disclosure", () => {
+  it("does not invent a disclosure for an older reply with no saved reason", () => {
+    renderChatNode({ isUser: false, provider: "ollama", model: "llama3", modelReason: null });
+    expect(screen.getByText("llama3")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Why this model/ })).toBeNull();
+  });
+
+  it("names the deciding rule in an accessible popover and opens the existing pin menu", async () => {
+    const user = userEvent.setup();
+    const { onPinToCurrentModel } = renderChatNode({
+      isUser: false, provider: "ollama", model: "llama3", modelReason: "branch override",
+    });
+    const trigger = screen.getByRole("button", { name: "Why this model: llama3" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await user.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("menu", { name: "Why this model: llama3" })).toBeInTheDocument();
+    expect(screen.getByText("A model pin on this conversation branch selected this model.")).toBeInTheDocument();
+    const changePin = screen.getByRole("menuitem", { name: "Change node pin" });
+    expect(changePin).toHaveFocus();
+    await user.click(changePin);
+    expect(screen.getByRole("menuitem", { name: "Pin to Current Model" })).toBeInTheDocument();
+    await user.click(screen.getByRole("menuitem", { name: "Pin to Current Model" }));
+    expect(onPinToCurrentModel).toHaveBeenCalledOnce();
+  });
+
+  it("supports Arrow, Home, End, Escape and restores trigger focus", async () => {
+    const user = userEvent.setup();
+    renderChatNode({
+      isUser: false, provider: "OpenAI-Compatible", model: "gpt-5",
+      modelReason: "task assignment",
+    });
+    const trigger = screen.getByRole("button", { name: "Why this model: gpt-5" });
+    trigger.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByText("The chat task's assigned model selected this reply's model.")).toBeInTheDocument();
+    const pin = screen.getByRole("menuitem", { name: "Change node pin" });
+    const task = screen.getByRole("menuitem", { name: "Change task model setting" });
+    expect(pin).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(task).toHaveFocus();
+    await user.keyboard("{Home}");
+    expect(pin).toHaveFocus();
+    await user.keyboard("{End}");
+    expect(task).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "Why this model: gpt-5" })).toBeNull();
+    expect(trigger).toHaveFocus();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("opens the existing task setting and preserves an auto policy explanation", async () => {
+    const user = userEvent.setup();
+    const { onOpenModelSettings } = renderChatNode({
+      isUser: false, provider: "ollama", model: "auto-model",
+      modelReason: "auto: fastest",
+    });
+    await user.click(screen.getByRole("button", { name: "Why this model: auto-model" }));
+    expect(screen.getByText("Automatic routing selected this model using the fastest policy.")).toBeInTheDocument();
+    await user.click(screen.getByRole("menuitem", { name: "Change automatic selection policy" }));
+    expect(onOpenModelSettings).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu", { name: "Why this model: auto-model" })).toBeNull();
   });
 });
 
@@ -1512,6 +1582,8 @@ describe("ChatNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
       estimatedCostUsd: null,
       provider: null,
       model: null,
+      modelReason: null,
+      onOpenModelSettings: vi.fn(),
       overrideProvider: "",
       overrideModelId: "",
       onPinToCurrentModel: vi.fn(),
