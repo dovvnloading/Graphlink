@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from settings_store._composed import SettingsManagerParts
 
+from backend.ollama_model_names import valid_ollama_model_name
+
 from graphlink_model_catalog import (
     AUTO_MODEL,
     INHERIT_MODEL,
@@ -76,7 +78,7 @@ class OllamaSettingsOps(SettingsManagerParts):
         return {
             str(model).strip().casefold(): value
             for model, value in raw.items()
-            if isinstance(model, str) and model.strip()
+            if isinstance(model, str) and valid_ollama_model_name(model.strip())
             and type(value) is int and value in CONTEXT_CHOICES
         }
 
@@ -84,8 +86,8 @@ class OllamaSettingsOps(SettingsManagerParts):
         """Save one model's served window; reject malformed or unbounded writes."""
         from backend.ollama_context import CONTEXT_CHOICES
 
-        model = str(model_name or "").strip().casefold()
-        if not model or len(model) > 255 or type(num_ctx) is not int or num_ctx not in CONTEXT_CHOICES:
+        model = model_name.strip().casefold() if isinstance(model_name, str) else ""
+        if not valid_ollama_model_name(model) or type(num_ctx) is not int or num_ctx not in CONTEXT_CHOICES:
             raise ValueError("Invalid Ollama model or context window.")
         windows = self.get_ollama_context_windows()
         windows[model] = num_ctx
