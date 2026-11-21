@@ -10,7 +10,7 @@ import { bindTopic, type LiveTopicName } from "../../lib/api-contract/bindTopic"
 import type { AppComposerState } from "../../lib/bridge-core/generated/app-composer-state";
 import type { TokenCounterState } from "../../lib/bridge-core/generated/token-counter-state";
 import type { NotificationState } from "../../lib/bridge-core/generated/notification-state";
-import type { WsTransport } from "../../lib/ws/transport";
+import type { StateListener, WsTransport } from "../../lib/ws/transport";
 import { COMPOSER_DRAFT_OFFLINE_COALESCE_KEY } from "../../lib/ws/transport";
 import { announce } from "../announcer";
 
@@ -316,6 +316,15 @@ export class ComposerStore {
     // own pace in a native OS dialog, not on the network - the transport's
     // ordinary 10s default would report an ordinary slow picker as a failure.
     this.transport.fireIntent("app-composer", "attachFile", [], NATIVE_DIALOG_TIMEOUT_MS);
+  }
+
+  /** Add only a server-owned staged attachment ID; paths never cross the wire. */
+  addAttachmentToKnowledge(attachmentId: string): Promise<unknown> {
+    return this.transport.request("knowledge", "addChatAttachment", [attachmentId]);
+  }
+
+  subscribeKnowledgeIngest(listener: StateListener): () => void {
+    return this.transport.subscribe("knowledge-ingest", listener);
   }
 
   removeAttachment(attachmentId: string): void {
