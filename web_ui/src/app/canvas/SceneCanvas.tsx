@@ -2861,7 +2861,9 @@ function CanvasInner({
   // React Flow's implicit first-node fit (which could jump to 250%).
   const revealedSceneRef = useRef<{ ids: Set<string>; approvals: Set<string> } | null>(null);
   useEffect(() => {
-    if (flowWidth <= 0 || flowHeight <= 0) return;
+    // A new scene can arrive during a node drag; defer navigation until the
+    // local drag positions have been reconciled on release.
+    if (flowWidth <= 0 || flowHeight <= 0 || dragActive || draggingRef.current) return;
     const previous = revealedSceneRef.current;
     const ids = new Set(scene.nodes.map((node) => node.id));
     const approvals = new Set(
@@ -2893,9 +2895,11 @@ function CanvasInner({
     // node; never increase zoom just because the new node is the only one.
     void reactFlow.setCenter(target.x + 200, target.y + 60, {
       zoom: Math.min(1, transform[2] || 1),
-      duration: motionDuration(240),
+      // No animation when revealing a previously unmounted approval card:
+      // its own layout effect must then pan to the actual decision buttons.
+      duration: waiting.some((node) => node.id === target.id) ? 0 : motionDuration(240),
     });
-  }, [scene.nodes, flowWidth, flowHeight, reactFlow, storeApi]);
+  }, [scene.nodes, flowWidth, flowHeight, reactFlow, storeApi, dragActive, draggingRef]);
 
   // ADR-012 stage 12.3: Shift+F10 / the ContextMenu key opens a node's menu
   // via the keyboard - see keyboardContextMenu.ts's own doc for why this

@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { useReactFlow, type Node, type NodeProps } from "@xyflow/react";
 import { motionDuration } from "../reducedMotion";
@@ -492,7 +492,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   // composer. Focusing Deny alone does not move the transformed canvas.
   // Use the actual on-screen action rect so the buttons, not just the
   // Agent's header, are visible at every viewport size and zoom.
-  function revealApprovalActions(): void {
+  const revealApprovalActions = useCallback((): void => {
     if (!data.harnessAwaitingApproval || collapsed) return;
     const actions = approvalActionsRef.current;
     const stage = actions?.closest(".react-flow");
@@ -503,7 +503,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
       void flow.setViewport({ ...viewport, x: viewport.x + x, y: viewport.y + y },
         { duration: motionDuration(200) });
     }
-  }
+  }, [data.harnessAwaitingApproval, collapsed, flow]);
 
   // Deny is the safe default. preventScroll avoids document/composer jumps;
   // React Flow's own transform is moved instead.
@@ -512,7 +512,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
       revealApprovalActions();
       denyButtonRef.current?.focus({ preventScroll: true });
     }
-  }, [data.harnessAwaitingApproval, data.harnessApprovalId, collapsed]);
+  }, [data.harnessAwaitingApproval, data.harnessApprovalId, collapsed, revealApprovalActions]);
 
   // "What is it doing?" is the question a running agent raises, and the
   // answer was one click away behind a closed <details>. Opened once, on
@@ -529,7 +529,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
     // Opening the log changes the approval panel's vertical position AFTER
     // its first layout pass. Recheck once against the new measured rect.
     revealApprovalActions();
-  }, [data.harnessActivity.length, data.harnessRunId, running]);
+  }, [data.harnessActivity.length, data.harnessRunId, running, revealApprovalActions]);
 
   // Same follow-the-log behavior as PlanNodeView's activity list: pinned
   // to the newest row only while running and only while open.
