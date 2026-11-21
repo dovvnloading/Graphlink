@@ -261,3 +261,26 @@ def test_probe_ignores_malformed_counters_and_tool_calls(monkeypatch):
     assert report["tokensPerSecond"] is None
     assert report["toolCallingWorks"] is False
     assert closed == [True]
+
+
+def test_check_rejects_disk_only_models_even_if_the_name_is_in_the_inventory(tmp_path, monkeypatch):
+    bus, _manager = _registered_bus(tmp_path, monkeypatch)
+    calls = []
+
+    async def fake_probe(model):
+        calls.append(model)
+        return {}
+
+    monkeypatch.setattr(intents_ollama_model_check, "probe_ollama_model", fake_probe)
+
+    async def scenario():
+        await bus.dispatch_intent("app-settings", "scanOllamaSystem", [])
+        # A stale or offline folder snapshot isn't proof that the daemon can
+        # load the model. No HTTP request should be sent for it.
+        state = intents_ollama_model_check
+        assert state is not None
+        await bus.dispatch_intent("app-settings", "checkOllamaModel", ["../unsafe"])
+        await bus.dispatch_intent("app-settings", "checkOllamaModel", ["not-installed:latest"])
+
+    asyncio.run(scenario())
+    assert calls == []
