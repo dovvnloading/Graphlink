@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -118,6 +119,15 @@ describe("read-only Document View comparison dialog", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(document.activeElement).toBe(opener);
     expect(setChatVersion).not.toHaveBeenCalled();
+  });
+
+  it("styles the actual focusable reading panes with the shared visible focus token", () => {
+    // jsdom cannot implement :focus-visible or a layout engine; lock the
+    // CSS selector to the real tabindex=0 element, not its inert section.
+    const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+    expect(css).toMatch(
+      /\.chat-version-compare-text:focus-visible,\s*\.chat-version-compare-selectors select:focus-visible,\s*\.chat-version-compare-focus-actions button:focus-visible\s*\{\s*outline: 2px solid var\(--gl-graph-selection\)/,
+    );
   });
 
   it("explains failed lookups instead of changing the reply or showing stale text", async () => {
