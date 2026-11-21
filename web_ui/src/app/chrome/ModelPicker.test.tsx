@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { Dialog, OverlayProvider, useOverlays } from "../overlays/overlays";
@@ -133,17 +133,27 @@ describe("shared local/cloud model picker", () => {
     expect(screen.getByRole("button", { name: "Set up a local model" })).toBeEnabled();
   });
 
-  it("retries after a failed model discovery and allows keyboard selection", async () => {
+  it("retries without losing search or focus, then allows keyboard selection", async () => {
     const user = userEvent.setup();
     const { store, loadPickerModels, selectPickerModel } = makeStore([]);
-    loadPickerModels.mockRejectedValueOnce(new Error("Ollama not started")).mockResolvedValueOnce([local]);
+    let completeRetry!: (models: PickerModel[]) => void;
+    loadPickerModels.mockRejectedValueOnce(new Error("Ollama not started"))
+      .mockImplementationOnce(() => new Promise<PickerModel[]>((resolve) => { completeRetry = resolve; }));
     mount(store);
     await user.click(screen.getByRole("button", { name: "Choose a model" }));
     await screen.findByRole("alert");
+    const search = screen.getByRole("searchbox", { name: "Search models" });
+    await user.type(search, "qwen3");
     await user.click(screen.getByRole("button", { name: "Retry model list" }));
+    expect(screen.getByText("Loading local and cloud models…")).toHaveAttribute("role", "status");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(search).toHaveValue("qwen3");
+    expect(search).toHaveFocus();
+
+    await act(async () => { completeRetry([local]); });
     const option = await screen.findByRole("button", { name: /Ollama · qwen3:8b/ });
     expect(option).toBeEnabled();
-    const search = screen.getByRole("searchbox", { name: "Search models" });
+    expect(search).toHaveValue("qwen3");
     expect(search).toHaveFocus();
     await user.keyboard("{ArrowDown}{Enter}");
     expect(selectPickerModel).toHaveBeenCalledWith("Ollama", "qwen3:8b");
