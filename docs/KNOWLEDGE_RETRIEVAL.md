@@ -19,12 +19,45 @@ only when saving settings or rendering the UI. Turning the choice Off
 clears that consent and stops future embedding requests.
 
 The page's **Test** button embeds a fixed synthetic phrase, not any
-stored document. A live saved embedding choice backfills missing vectors
-on demand; vector caches are keyed by local model or cloud
+stored document. A saved choice starts a **background embedding job** for
+the current workspace. File/folder imports, branch indexing, saved graphs
+(including autosave) and retained Web Research sources also queue their
+originating workspace after ingestion.
+The job checks the pending cache, sends batches of at most **32 chunks**,
+and commits each batch independently. Cancellation is cooperative at batch
+boundaries (including after an in-flight provider response), so already
+committed batches survive a cancellation, failure or restart. A resume job
+queries only the remaining chunks. Switching models cancels an old run and
+starts one for the newly selected embedding space; selecting Off stops new
+embedding calls. All provider, SQLite and chunk work runs off the event
+loop. Cached vectors are keyed by local model or cloud
 (provider, endpoint, model) identity, so switching models never compares
-incompatible vector spaces. If an enabled service fails at retrieval
-time, search falls back to local keyword-only results and logs the
-failure. Workspaces remain collection-scoped.
+incompatible vector spaces.
+
+The backend publishes the `knowledge-embedding` topic:
+`{jobs: [{jobId, workspaceId, source, model, modelId, status, chunksTotal,
+chunksEmbedded, chunksRemaining, cancelRequested, error}]}`. Statuses are
+`queued`, `running`, `completed`, `cancelled` and `failed`.
+`knowledge/getEmbeddingJobs` returns the snapshot;
+`knowledge/cancelEmbedding(jobId)` requests cancellation; and
+`knowledge/resumeEmbedding()` resumes pending chunks in the *current*
+workspace. `knowledge/refreshEmbeddings()` handles a saved settings change.
+Cloud provider/SDK failures are logged, but the topic exposes a fixed,
+redacted error rather than exception text that might contain credentials or
+document contents. The Knowledge Library UI for this state is a follow-up.
+
+Searches normally use completed vector batches and FTS5 while background
+jobs fill the cache. To preserve the existing UI, chat, and agent hybrid
+search behavior for small cold workspaces, the first workspace-scoped search
+can embed **one batch of at most 32 chunks** if that entire collection has
+no cached vectors for the selected model. Larger or partially embedded
+collections are cache-only on search; their full indexing remains a
+cancellable background job. The cold-start batch runs off the event loop
+and checks for settings changes before committing vectors.
+
+If an enabled service fails at retrieval time, search falls back to local
+keyword-only results and logs the failure. Workspaces remain
+collection-scoped.
 
 ## Pipeline
 
@@ -140,7 +173,6 @@ The reranked mode is therefore the default. To compare another corpus,
 replace the fixture and re-run the gate; if either metric regresses, change
 `DEFAULT_RANKING` back to `"legacy"` until the regression is addressed.
 Both modes remain selectable without feature flags or schema changes.
-
 
 ## Configured-model quality benchmark (manual only)
 

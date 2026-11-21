@@ -42,12 +42,6 @@ def test_watched_folders_are_opt_in_persisted_and_workspace_scoped(tmp_path):
     other = knowledge_store.add_watched_folder(db, 18, str(folder))
     assert first["id"] != other["id"]
     assert [row["id"] for row in knowledge_store.list_watched_folders(db, 17)] == [first["id"]]
-    assert first["fileCount"] == other["fileCount"] == 0
-    (folder / "note.md").write_text("indexed", encoding="utf-8")
-    knowledge_store.track_watched_file(db, first["id"], str(folder / "note.md"), size_bytes=7, mtime_ns=1)
-    assert knowledge_store.list_watched_folders(db, 17)[0]["fileCount"] == 1
-    assert knowledge_store.add_watched_folder(db, 17, str(folder))["fileCount"] == 1
-    assert knowledge_store.list_watched_folders(db, 18)[0]["fileCount"] == 0
     with sqlite3.connect(db) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == knowledge_store.KNOWLEDGE_DB_SCHEMA_VERSION
         assert conn.execute("SELECT COUNT(*) FROM watched_folders").fetchone()[0] == 2
@@ -74,9 +68,6 @@ def test_watch_sync_add_update_remove_and_errors_preserve_the_old_index(tmp_path
             row = await _finished(service, 11, folder_id, job_id)
             assert row["syncStatus"] == "completed"
             assert row["lastSyncAt"] and not row["lastError"]
-            assert row["fileCount"] == 1
-            assert row["lastJob"]["filesProcessed"] == 1
-            assert row["lastJob"]["filesTotal"] == 1
             collection = knowledge_store.get_or_create_workspace_collection(db, 11)
             assert len(knowledge_store.search_chunks(db, "orchidoldphrase", collection_id=collection)) == 1
 

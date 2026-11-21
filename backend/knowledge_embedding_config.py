@@ -2,9 +2,10 @@
 
 Knowledge embeddings are independent from the chat provider mode. Selecting Off
 does not instantiate an embedding client or make a network request; selecting a
-cloud source requires a persisted, explicit consent bit. The first search with
-an enabled model backfills its missing chunk vectors, scoped to the requested
-collection. A failed embedding service never disables keyword-only retrieval.
+cloud source requires a persisted, explicit consent bit. Background embedding
+jobs populate missing vectors in each workspace; searches use completed cached
+batches, with a bounded bootstrap for small, unindexed collections. A failed
+embedding service never disables keyword-only retrieval.
 """
 
 from __future__ import annotations
@@ -19,8 +20,9 @@ from typing import Iterator
 import api_provider
 from graphlink_cloud_providers import CLOUD_PROVIDERS
 
-from backend.knowledge_embeddings import embed_pending_chunks
+from backend.knowledge_embeddings import DEFAULT_BATCH_SIZE, embed_pending_chunks
 from backend.knowledge_retrieval import hybrid_search
+from backend.knowledge_store import cold_collection_embedding_batch
 from backend.providers.base import ProviderCapabilities
 from backend.providers.ollama_provider import OllamaProvider
 
@@ -104,14 +106,33 @@ def configured_hybrid_search(
     db_path: Path, query: str, *, settings_manager=None,
     collection_id: int | None = None, k: int = 10,
 ) -> list[dict]:
-    """Index/retrieve with the configured source, falling back to local FTS5."""
+    """Use cached vectors, with one cold-collection compatibility batch at most."""
     if settings_manager is not None:
         try:
             with embedding_provider_for_choice(settings_manager) as (provider, model_id):
                 if provider is not None and model_id is not None:
-                    # The cache is per (chunk, endpoint+model) - no repeat
-                    # upload for chunks already embedded under this choice.
-                    embed_pending_chunks(db_path, provider, model_id, collection_id=collection_id)
+                    # Background jobs own full indexing. Keep existing scoped
+                    # UI/chat/tool hybrid behavior on a small cold collection,
+                    # without doing a whole-corpus backfill during search.
+                    if collection_id is not None:
+                        cold_rows = cold_collection_embedding_batch(
+                            db_path, model_id, collection_id=collection_id,
+                            max_chunks=DEFAULT_BATCH_SIZE,
+                        )
+                        if cold_rows:
+                            get_choice = getattr(
+                                settings_manager, "get_knowledge_embedding_settings", None,
+                            )
+                            choice = get_choice() if callable(get_choice) else None
+                            changed = (
+                                (lambda: get_choice() != choice) if choice is not None else None
+                            )
+                            embed_pending_chunks(
+                                db_path, provider, model_id, collection_id=collection_id,
+                                pending_rows=cold_rows, should_cancel=changed,
+                            )
+                            if changed is not None and changed():
+                                return hybrid_search(db_path, query, collection_id=collection_id, k=k)
                     return hybrid_search(
                         db_path, query, embedding_provider=provider,
                         embedding_model_id=model_id, collection_id=collection_id, k=k,

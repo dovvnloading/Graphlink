@@ -1116,17 +1116,10 @@ def library_document_text(db_path: Path, *, collection_id: int, document_id: int
 
 # -- opt-in workspace folder subscriptions ----------------------------------
 
-_WATCHED_FOLDER_SELECT = (
-    "SELECT folders.id, folders.workspace_id, folders.path, folders.last_sync_at, folders.last_error, "
-    "(SELECT COUNT(*) FROM watched_folder_files AS files WHERE files.folder_id = folders.id) "
-    "FROM watched_folders AS folders"
-)
-
-
 def _watched_folder_row(row: tuple) -> dict[str, Any]:
     return {
         "id": int(row[0]), "workspaceId": int(row[1]), "path": str(row[2]),
-        "lastSyncAt": row[3], "lastError": str(row[4]), "fileCount": int(row[5]),
+        "lastSyncAt": row[3], "lastError": str(row[4]),
     }
 
 
@@ -1134,12 +1127,11 @@ def list_watched_folders(db_path: Path, workspace_id: int | None = None) -> list
     """Return only explicitly configured subscriptions; never discover folders."""
     conn = _connect(db_path)
     try:
+        sql = "SELECT id, workspace_id, path, last_sync_at, last_error FROM watched_folders"
         if workspace_id is None:
-            rows = conn.execute(_WATCHED_FOLDER_SELECT + " ORDER BY folders.id").fetchall()
+            rows = conn.execute(sql + " ORDER BY id").fetchall()
         else:
-            rows = conn.execute(
-                _WATCHED_FOLDER_SELECT + " WHERE folders.workspace_id = ? ORDER BY folders.id", (workspace_id,),
-            ).fetchall()
+            rows = conn.execute(sql + " WHERE workspace_id = ? ORDER BY id", (workspace_id,)).fetchall()
         return [_watched_folder_row(row) for row in rows]
     finally:
         conn.close()
@@ -1161,7 +1153,8 @@ def add_watched_folder(db_path: Path, workspace_id: int, path: str) -> dict[str,
                 (workspace_id, str(resolved)),
             )
             row = conn.execute(
-                _WATCHED_FOLDER_SELECT + " WHERE folders.workspace_id = ? AND folders.path = ?",
+                "SELECT id, workspace_id, path, last_sync_at, last_error FROM watched_folders "
+                "WHERE workspace_id = ? AND path = ?",
                 (workspace_id, str(resolved)),
             ).fetchone()
             if row is None:
@@ -1543,6 +1536,41 @@ def upsert_embeddings(db_path: Path, model_id: str, rows: list[tuple[int, int, b
                 "ON CONFLICT(chunk_id, model_id) DO UPDATE SET dim = excluded.dim, vector = excluded.vector",
                 [(chunk_id, model_id, dim, vector_blob) for chunk_id, dim, vector_blob in rows],
             )
+    finally:
+        conn.close()
+
+
+def cold_collection_embedding_batch(
+    db_path: Path, model_id: str, *, collection_id: int, max_chunks: int,
+) -> list[dict[str, Any]]:
+    """Return one small collection's chunks only if its model cache is empty.
+
+    A collection larger than max_chunks, or one with any committed vectors,
+    must be indexed by the normal background job rather than by search.
+    The bound is applied in SQLite so a cold search never loads the corpus.
+    """
+    if max_chunks < 1:
+        raise ValueError("max_chunks must be positive.")
+    conn = _connect(db_path)
+    try:
+        cached = conn.execute(
+            "SELECT 1 FROM embeddings e "
+            "JOIN chunks c ON c.id = e.chunk_id "
+            "JOIN documents d ON d.id = c.document_id "
+            "WHERE e.model_id = ? AND d.collection_id = ? LIMIT 1",
+            (model_id, collection_id),
+        ).fetchone()
+        if cached is not None:
+            return []
+        rows = conn.execute(
+            "SELECT c.id, c.text FROM chunks c "
+            "JOIN documents d ON d.id = c.document_id "
+            "WHERE d.collection_id = ? ORDER BY c.id LIMIT ?",
+            (collection_id, max_chunks + 1),
+        ).fetchall()
+        if len(rows) > max_chunks:
+            return []
+        return [{"chunk_id": row[0], "text": row[1]} for row in rows]
     finally:
         conn.close()
 

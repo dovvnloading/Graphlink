@@ -21,6 +21,7 @@ import asyncio
 from pathlib import Path
 from backend import native_dialogs
 from backend.knowledge_jobs import KnowledgeIngestManager
+from backend.knowledge_embedding_jobs import KnowledgeEmbeddingJobManager
 from backend.knowledge_uploads import KnowledgeDropUploads
 from backend.knowledge_watches import WatchedFolderService
 from dataclasses import dataclass
@@ -66,6 +67,11 @@ class SetChatIndexIntoKnowledgeArgs:
 
 @dataclass
 class CancelIngestArgs:
+    jobId: str
+
+
+@dataclass
+class CancelEmbeddingArgs:
     jobId: str
 
 
@@ -233,6 +239,7 @@ def register_knowledge_document_intents(
     document: SceneDocument,
     ingest_jobs: KnowledgeIngestManager,
     uploads: KnowledgeDropUploads,
+    db_path: Path,
 ) -> None:
     """Register workspace-scoped Knowledge Library document operations."""
 
@@ -241,10 +248,10 @@ def register_knowledge_document_intents(
 
         def load():
             collection_id = (
-                get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+                get_or_create_workspace_collection(db_path, workspace_id)
                 if workspace_id is not None else 0
             )
-            return list_library_documents(DEFAULT_DB_PATH, collection_id=collection_id)
+            return list_library_documents(db_path, collection_id=collection_id)
 
         return {"documents": await asyncio.to_thread(load)}
 
@@ -253,11 +260,11 @@ def register_knowledge_document_intents(
 
         def load():
             collection_id = (
-                get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+                get_or_create_workspace_collection(db_path, workspace_id)
                 if workspace_id is not None else 0
             )
             return library_document_text(
-                DEFAULT_DB_PATH, collection_id=collection_id, document_id=document_id,
+                db_path, collection_id=collection_id, document_id=document_id,
             )
 
         result = await asyncio.to_thread(load)
@@ -270,14 +277,14 @@ def register_knowledge_document_intents(
 
         def remove():
             collection_id = (
-                get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+                get_or_create_workspace_collection(db_path, workspace_id)
                 if workspace_id is not None else 0
             )
             paths = file_sources_for_document(
-                DEFAULT_DB_PATH, collection_id=collection_id, document_id=document_id,
+                db_path, collection_id=collection_id, document_id=document_id,
             )
             deleted = remove_library_document(
-                DEFAULT_DB_PATH, collection_id=collection_id, document_id=document_id,
+                db_path, collection_id=collection_id, document_id=document_id,
             )
             if deleted:
                 for path in paths:
@@ -293,11 +300,11 @@ def register_knowledge_document_intents(
 
         def sources():
             collection_id = (
-                get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+                get_or_create_workspace_collection(db_path, workspace_id)
                 if workspace_id is not None else 0
             )
             return file_sources_for_document(
-                DEFAULT_DB_PATH, collection_id=collection_id, document_id=document_id,
+                db_path, collection_id=collection_id, document_id=document_id,
             )
 
         paths = await asyncio.to_thread(sources)
@@ -309,6 +316,126 @@ def register_knowledge_document_intents(
     bus.register_intent("knowledge", "openDocument", open_document, args_schema=DocumentIdArgs)
     bus.register_intent("knowledge", "removeDocument", remove_document, args_schema=DocumentIdArgs)
     bus.register_intent("knowledge", "reindexDocument", reindex_document, args_schema=DocumentIdArgs)
+
+
+def register_knowledge_ingest_intents(
+    bus: SessionBus,
+    document: SceneDocument,
+    ingest_jobs: KnowledgeIngestManager,
+) -> None:
+    """Register filesystem ingestion and ingestion-job control intents."""
+    async def add_files():
+        """The native multiple-file picker is the filesystem access grant.
+
+        Capture the workspace before opening a potentially long-lived
+        picker, so switching workspaces while it is open cannot redirect
+        the finished import into the next workspace.
+        """
+        workspace_id = document.current_workspace_id
+        selected = await native_dialogs.pick_files()
+        if not selected:
+            return {"cancelled": True}
+        # Unsupported explicit selections are user errors, not jobs that
+        # appear successful after silently processing zero files.
+        if any(not is_supported_knowledge_file(Path(path)) for path in selected):
+            raise IngestError("Selection contains an unsupported file type.")
+        return ingest_jobs.start(selected, folder=False, workspace_id=workspace_id)
+
+    async def add_folder():
+        workspace_id = document.current_workspace_id
+        selected = await native_dialogs.pick_folder()
+        if not selected:
+            return {"cancelled": True}
+        return ingest_jobs.start(selected, folder=True, workspace_id=workspace_id)
+
+    async def cancel_ingest(job_id):
+        return ingest_jobs.cancel(job_id)
+
+    async def get_ingest_jobs():
+        return ingest_jobs.snapshot()
+
+    bus.register_intent("knowledge", "addFiles", add_files)
+    bus.register_intent("knowledge", "addFolder", add_folder)
+    bus.register_intent("knowledge", "cancelIngest", cancel_ingest, args_schema=CancelIngestArgs)
+    bus.register_intent("knowledge", "getIngestJobs", get_ingest_jobs)
+
+
+def register_knowledge_existing_file_intents(
+    bus: SessionBus,
+    document: SceneDocument,
+    ingest_jobs: KnowledgeIngestManager,
+    *,
+    composer_document=None,
+    agent_dispatcher=None,
+    settings_manager=None,
+) -> None:
+    """Register native-authorized imports from chat and workspace Files."""
+    async def add_chat_attachment(attachment_id):
+        """An attachment ID is a native-picker grant in this session, not a path from the browser."""
+        if composer_document is None:
+            raise IngestError("Chat attachments are unavailable.")
+        attachment = next(
+            (item for item in composer_document.staged_attachments if item.id == attachment_id), None,
+        )
+        if attachment is None:
+            raise IngestError("This attachment is no longer staged. Attach the file again.")
+        if attachment.kind != "document" or not is_supported_knowledge_file(Path(attachment.path)):
+            raise IngestError("Only supported text and document attachments can be added to knowledge.")
+        return ingest_jobs.start(attachment.path, folder=False, workspace_id=document.current_workspace_id)
+
+    async def add_workspace_file(node_id, relative_path, expected_root):
+        """Resolve a Files-view selection through the CURRENT agent grant, never client-supplied roots."""
+        if agent_dispatcher is None:
+            raise WorkspaceError("Workspace file imports are unavailable.")
+        node = document.nodes.get(node_id)
+        if node is None or not isinstance(node.state, HarnessState):
+            raise WorkspaceError("This agent node no longer exists.")
+        root, _ = bound_root(
+            node.state.harness_workspace_id,
+            node.state.harness_workspace_path,
+            settings_manager=agent_dispatcher._settings_manager,
+        )
+        if expected_root != str(root):
+            raise WorkspaceError("Workspace folder changed. Refresh the Files list and choose a file again.")
+        if not relative_path:
+            raise WorkspaceError("Select a workspace file to add.")
+        file = _inside(root, relative_path)
+        if not file.is_file():
+            raise WorkspaceError("Not a workspace file.")
+        if not is_supported_knowledge_file(file):
+            raise IngestError("This file type cannot be added to knowledge.")
+        return ingest_jobs.start(
+            str(file), folder=False, workspace_id=document.current_workspace_id, allowed_root=root,
+        )
+
+    bus.register_intent("knowledge", "addChatAttachment", add_chat_attachment)
+    bus.register_intent("knowledge", "addWorkspaceFile", add_workspace_file)
+
+
+def register_knowledge_embedding_intents(
+    bus: SessionBus,
+    document: SceneDocument,
+    embedding_jobs: KnowledgeEmbeddingJobManager,
+) -> None:
+    """Register embedding-job status, cancellation, retry and refresh intents."""
+    async def get_embedding_jobs():
+        return embedding_jobs.snapshot()
+
+    async def cancel_embedding(job_id: str):
+        return embedding_jobs.cancel(job_id)
+
+    async def resume_embedding():
+        return embedding_jobs.resume(document.current_workspace_id)
+
+    async def refresh_embeddings():
+        # Called after Settings > Knowledge saves a genuinely new choice.
+        # Cancels any old provider before queuing the current workspace.
+        return embedding_jobs.refresh(document.current_workspace_id)
+
+    bus.register_intent("knowledge", "getEmbeddingJobs", get_embedding_jobs)
+    bus.register_intent("knowledge", "cancelEmbedding", cancel_embedding, args_schema=CancelEmbeddingArgs)
+    bus.register_intent("knowledge", "resumeEmbedding", resume_embedding)
+    bus.register_intent("knowledge", "refreshEmbeddings", refresh_embeddings)
 
 
 def register_knowledge_search_intents(
@@ -378,16 +505,21 @@ def register_knowledge_intents(
     document: SceneDocument,
     notifications: NotificationState | None = None,
     settings_manager=None,
-    watch_service: WatchedFolderService | None = None,
     composer_document=None,
     agent_dispatcher=None,
+    watch_service: WatchedFolderService | None = None,
 ) -> None:
     publish_scene = make_publish_scene(bus)
     db_path = watch_service.db_path if watch_service is not None else DEFAULT_DB_PATH
     watcher = watch_service if watch_service is not None else WatchedFolderService(db_path)
-    ingest_jobs = KnowledgeIngestManager(bus, db_path)
+    embedding_jobs = KnowledgeEmbeddingJobManager(bus, db_path, settings_manager)
+    ingest_jobs = KnowledgeIngestManager(bus, db_path, on_completed=embedding_jobs.schedule)
     uploads = KnowledgeDropUploads(db_path)
     bus.register_topic("knowledge-ingest", ingest_jobs.snapshot)
+    bus.register_topic("knowledge-embedding", embedding_jobs.snapshot)
+    # Session eviction must stop subsequent provider batches, even if an
+    # already-running synchronous embed call has not returned yet.
+    bus.knowledge_embedding_jobs = embedding_jobs
 
     async def set_chat_index_into_knowledge(node_id, enabled):
         """Runs the actual knowledge-store write (chat_branch_history() ->
@@ -448,6 +580,7 @@ def register_knowledge_intents(
                 # Same blocking-I/O concern as search() above - this branch ingest
                 # does real SQLite writes (chunk + embedding-cache rows).
                 await asyncio.to_thread(_ingest)
+                embedding_jobs.schedule(workspace_id)
             except IngestError as exc:
                 if notifications is not None:
                     notifications.show(str(exc), "error")
@@ -467,74 +600,6 @@ def register_knowledge_intents(
         await publish_scene()
 
 
-    async def add_files():
-        """The native multiple-file picker is the filesystem access grant.
-
-        Capture the workspace before opening a potentially long-lived
-        picker, so switching workspaces while it is open cannot redirect
-        the finished import into the next workspace.
-        """
-        workspace_id = document.current_workspace_id
-        selected = await native_dialogs.pick_files()
-        if not selected:
-            return {"cancelled": True}
-        # Unsupported explicit selections are user errors, not jobs that
-        # appear successful after silently processing zero files.
-        if any(not is_supported_knowledge_file(Path(path)) for path in selected):
-            raise IngestError("Selection contains an unsupported file type.")
-        return ingest_jobs.start(selected, folder=False, workspace_id=workspace_id)
-
-    async def add_folder():
-        workspace_id = document.current_workspace_id
-        selected = await native_dialogs.pick_folder()
-        if not selected:
-            return {"cancelled": True}
-        return ingest_jobs.start(selected, folder=True, workspace_id=workspace_id)
-
-    async def add_chat_attachment(attachment_id):
-        """An attachment ID is a native-picker grant in this session, not a path from the browser."""
-        if composer_document is None:
-            raise IngestError("Chat attachments are unavailable.")
-        attachment = next(
-            (item for item in composer_document.staged_attachments if item.id == attachment_id), None,
-        )
-        if attachment is None:
-            raise IngestError("This attachment is no longer staged. Attach the file again.")
-        if attachment.kind != "document" or not is_supported_knowledge_file(Path(attachment.path)):
-            raise IngestError("Only supported text and document attachments can be added to knowledge.")
-        return ingest_jobs.start(attachment.path, folder=False, workspace_id=document.current_workspace_id)
-
-    async def add_workspace_file(node_id, relative_path, expected_root):
-        """Resolve a Files-view selection through the CURRENT agent grant, never client-supplied roots."""
-        if agent_dispatcher is None:
-            raise WorkspaceError("Workspace file imports are unavailable.")
-        node = document.nodes.get(node_id)
-        if node is None or not isinstance(node.state, HarnessState):
-            raise WorkspaceError("This agent node no longer exists.")
-        root, _ = bound_root(
-            node.state.harness_workspace_id,
-            node.state.harness_workspace_path,
-            settings_manager=agent_dispatcher._settings_manager,
-        )
-        if expected_root != str(root):
-            raise WorkspaceError("Workspace folder changed. Refresh the Files list and choose a file again.")
-        if not relative_path:
-            raise WorkspaceError("Select a workspace file to add.")
-        file = _inside(root, relative_path)
-        if not file.is_file():
-            raise WorkspaceError("Not a workspace file.")
-        if not is_supported_knowledge_file(file):
-            raise IngestError("This file type cannot be added to knowledge.")
-        return ingest_jobs.start(
-            str(file), folder=False, workspace_id=document.current_workspace_id, allowed_root=root,
-        )
-
-    async def cancel_ingest(job_id):
-        return ingest_jobs.cancel(job_id)
-
-    async def get_ingest_jobs():
-        return ingest_jobs.snapshot()
-
     async def begin_upload(files):
         if any(job["status"] in {"queued", "scanning", "running"} for job in ingest_jobs.snapshot()["jobs"]):
             raise IngestError("An import is already running in this window.")
@@ -553,15 +618,15 @@ def register_knowledge_intents(
         return await asyncio.to_thread(uploads.cancel, upload_id)
 
     register_knowledge_search_intents(bus, document, settings_manager=settings_manager, db_path=db_path)
-    bus.register_intent("knowledge", "addFiles", add_files)
-    bus.register_intent("knowledge", "addFolder", add_folder)
+    register_knowledge_ingest_intents(bus, document, ingest_jobs)
     register_knowledge_watched_folder_intents(bus, document, watcher)
-
-    bus.register_intent("knowledge", "addChatAttachment", add_chat_attachment)
-    bus.register_intent("knowledge", "addWorkspaceFile", add_workspace_file)
-    bus.register_intent("knowledge", "cancelIngest", cancel_ingest, args_schema=CancelIngestArgs)
-    bus.register_intent("knowledge", "getIngestJobs", get_ingest_jobs)
-    register_knowledge_document_intents(bus, document, ingest_jobs, uploads)
+    register_knowledge_existing_file_intents(
+        bus, document, ingest_jobs,
+        composer_document=composer_document, agent_dispatcher=agent_dispatcher,
+        settings_manager=settings_manager,
+    )
+    register_knowledge_embedding_intents(bus, document, embedding_jobs)
+    register_knowledge_document_intents(bus, document, ingest_jobs, uploads, db_path)
     bus.register_intent("knowledge", "beginUpload", begin_upload, args_schema=BeginUploadArgs)
     bus.register_intent("knowledge", "appendUpload", append_upload, args_schema=AppendUploadArgs)
     bus.register_intent("knowledge", "finishUpload", finish_upload, args_schema=UploadIdArgs)

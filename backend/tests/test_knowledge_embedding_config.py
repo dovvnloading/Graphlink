@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from backend import knowledge_embedding_config as config
+from backend.knowledge_embeddings import embed_pending_chunks
 from backend.knowledge_ingest import ingest_text
 from backend.knowledge_store import list_embeddings_for_search
 from backend.providers.base import ProviderCapabilities
@@ -98,21 +99,27 @@ class _FakeEmbeddingProvider:
         return [[float(len(text)), 1.0] for text in texts]
 
 
-def test_local_choice_backfills_vectors_once_then_uses_cache(tmp_path, manager, monkeypatch):
+def test_search_uses_background_cache_without_backfilling_inline(tmp_path, manager, monkeypatch):
     path = _database(tmp_path)
     manager.set_knowledge_embedding_settings("ollama", "nomic-embed-text:latest")
     fake = _FakeEmbeddingProvider()
     monkeypatch.setattr(config.api_provider, "ollama_supports_embedding", lambda _model: True)
     monkeypatch.setattr(config, "OllamaProvider", lambda **_kwargs: fake)
 
+    # A missing cache uses keyword search; it must not upload or embed
+    # documents in the latency-sensitive search path.
     first = config.configured_hybrid_search(path, "internal research", settings_manager=manager)
     assert first
-    assert len(list_embeddings_for_search(path, "ollama:nomic-embed-text:latest")) == 1
-    # One batch to backfill passages + one query; second search embeds only
-    # the query, never uploads/embeds the same document again.
-    assert len(fake.calls) == 2
+    assert list_embeddings_for_search(path, "ollama:nomic-embed-text:latest") == []
+    assert fake.calls == []
+
+    # The worker has populated the cache. Searches now embed only their
+    # query; previously indexed passages are never sent again.
+    assert embed_pending_chunks(path, fake, "ollama:nomic-embed-text:latest") == 1
     second = config.configured_hybrid_search(path, "internal research", settings_manager=manager)
-    assert second
+    third = config.configured_hybrid_search(path, "internal research", settings_manager=manager)
+    assert second and third
+    assert len(list_embeddings_for_search(path, "ollama:nomic-embed-text:latest")) == 1
     assert len(fake.calls) == 3
     assert fake.calls[0][0].startswith("Graphlink archives")
 

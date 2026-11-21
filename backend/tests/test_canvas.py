@@ -1896,6 +1896,11 @@ class _FakeSettingsManager:
     def get_enable_system_prompt(self):
         return True
 
+    def get_knowledge_embedding_settings(self):
+        # Canvas tests use an in-memory settings stub; embedding is Off
+        # unless an individual test explicitly wires a real settings store.
+        return {"source": "off", "model": "", "cloud_provider": "", "cloud_opt_in": False}
+
     def get_recipes(self):
         return list(self._recipes)
 
