@@ -89,7 +89,10 @@ def inspect_next_chat_send(document, node_id: str, dispatcher, *, bus=None, draf
     )
     try:
         knowledge_hits = (
-            search_chat_knowledge(draft_text[:1500], document.current_workspace_id)
+            search_chat_knowledge(
+                draft_text[:1500], document.current_workspace_id,
+                settings_manager=getattr(dispatcher, "_settings_manager", None),
+            )
             if draft_text.strip() else []
         )
     except Exception:
