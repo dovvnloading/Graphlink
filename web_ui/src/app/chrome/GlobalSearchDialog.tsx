@@ -87,6 +87,7 @@ function GlobalSearchResultCard({ transport, result }: { transport: WsTransport;
   const { setCenter } = useReactFlow();
   const overlays = useOverlays();
   const graphHit = isGraphHit(result);
+  const sourceLabel = knowledgeSourceLabel(result.sourceUri, result.documentTitle);
 
   function jumpToNode() {
     if (!graphHit || jumping) return;
@@ -120,7 +121,9 @@ function GlobalSearchResultCard({ transport, result }: { transport: WsTransport;
       >
         <span className="global-search-result-title">{result.documentTitle}</span>
         <span className="global-search-result-kind">{graphHit ? "Graph" : "Document"}</span>
-        <span className="global-search-result-source">{knowledgeSourceLabel(result.sourceUri, result.documentTitle)}</span>
+        {sourceLabel !== result.documentTitle && (
+          <span className="global-search-result-source">{sourceLabel}</span>
+        )}
       </button>
       {expanded && (
         <div className="global-search-result-body">
