@@ -973,6 +973,8 @@ async def run_harness(
         node.state.harness_effective_context_tokens = window
         input_limit = context_module.prompt_token_limit(window)
         fixed_tokens = context_module.request_tokens(system_prompt, [], specs)
+        # Report the fixed overhead even if no history can safely be sent.
+        node.state.harness_context_tokens = fixed_tokens
         if fixed_tokens >= input_limit:
             await _land(
                 "failed",
