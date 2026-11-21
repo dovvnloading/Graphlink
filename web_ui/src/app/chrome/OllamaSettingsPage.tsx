@@ -340,7 +340,7 @@ function OllamaModelCard({
             "Sample load time: " + (report.loadSeconds == null ? "Unavailable" : report.loadSeconds.toFixed(2) + " s") +
             " · Sample generation speed: " + (report.tokensPerSecond == null ? "Unavailable" : report.tokensPerSecond.toFixed(1) + " tokens/s") +
             " · Tool probe: " + (report.toolCallingWorks === true ? "Tool call returned" :
-              report.toolCallingWorks === false ? "No tool call returned" : "Unavailable")}
+              report.toolCallingWorks === false ? "No tool call observed" : "Inconclusive")}
           {report.status === "complete" && report.message && (" · " + report.message)}
         </p>
       )}
