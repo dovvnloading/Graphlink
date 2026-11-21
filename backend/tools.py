@@ -114,6 +114,8 @@ class ToolResult:
 # independent it still needs, e.g. reading which node/session this run is
 # for) and returns the ToolResult invoke() hands back untouched on success.
 ToolHandler = Callable[[ToolCall, "RunContext"], Awaitable[ToolResult]]
+# Return an error for the model, or None if the call may reach the approval gate.
+ToolPreApprovalCheck = Callable[[ToolCall, "RunContext"], Awaitable[str | None]]
 
 
 @dataclass
@@ -185,6 +187,7 @@ class _Registration:
     # by the workspace harness. Default serial, including auto-approved
     # interaction tools (plan.update/user.ask).
     parallel_safe: bool = False
+    pre_approval_check: ToolPreApprovalCheck | None = None
 
 
 def _tool_call_fingerprint(call: ToolCall) -> str:
@@ -225,6 +228,7 @@ class ToolRegistry:
         approval: str,
         always_reprompt: "Callable[[ToolCall], bool] | None" = None,
         parallel_safe: bool = False,
+        pre_approval_check: ToolPreApprovalCheck | None = None,
     ) -> None:
         if approval not in _KNOWN_APPROVAL_POLICIES:
             raise ValueError(
@@ -248,7 +252,7 @@ class ToolRegistry:
         if spec.name in self._registrations:
             raise ValueError(f"Tool {spec.name!r} is already registered.")
         self._registrations[spec.name] = _Registration(
-            spec, handler, scope_set, approval, always_reprompt, parallel_safe,
+            spec, handler, scope_set, approval, always_reprompt, parallel_safe, pre_approval_check,
         )
 
     def scopes_for(self, name: str) -> frozenset[str] | None:
@@ -368,6 +372,22 @@ class ToolRegistry:
             if isinstance(file_states, dict):
                 file_states.pop(call.id, None)
             call = ToolCall(id=call.id, name=call.name, arguments=deepcopy(call.arguments))
+
+        # Tool-specific validity checks run on the frozen call *before* any
+        # approval surface. Invalid requests must return an error to the model,
+        # not ask a human to approve something the handler cannot perform.
+        if registration.pre_approval_check is not None:
+            try:
+                failure = await registration.pre_approval_check(call, ctx)
+                _raise_if_cancelled(ctx.cancel.event if ctx.cancel is not None else None)
+            except RequestCancelledError:
+                raise
+            except Exception as exc:
+                return ToolResult(
+                    content=f"Tool {call.name!r} could not validate its request: {exc}", is_error=True,
+                )
+            if failure is not None:
+                return ToolResult(content=failure, is_error=True)
 
         # Only selected workspace operations may bypass an ordinary approval.
         # The scope gate and all handler-level confinement stay in force.

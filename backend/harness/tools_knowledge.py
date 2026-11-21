@@ -19,7 +19,7 @@ from api_provider import _raise_if_cancelled
 from backend.attachments import AttachmentError
 from backend.harness.tools_fs import _is_metadata_path, _read_bounded_bytes
 from backend.harness.workspace import WorkspaceError, resolve_under_root
-from backend.knowledge_ingest import IngestError, extract_text, ingest_text
+from backend.knowledge_ingest import IngestError, extract_text, ingest_text, is_supported_knowledge_file
 from backend.knowledge_store import DEFAULT_DB_PATH, get_or_create_workspace_collection
 from backend.providers.base import ToolCall, ToolSpec
 from backend.tools import FS_READ, KNOWLEDGE_WRITE, RunContext, ToolRegistry, ToolResult
@@ -52,6 +52,19 @@ KNOWLEDGE_ADD_SPEC = ToolSpec(
 )
 
 
+def _validated_source(root: Path, raw_path: str) -> Path:
+    """Validate only the source path/type; execution repeats this after consent."""
+    source = resolve_under_root(root, raw_path)
+    if _is_metadata_path(source):
+        raise WorkspaceError("VCS metadata cannot be added to knowledge.")
+    if not source.is_file():
+        raise WorkspaceError(f"Not a workspace file: {raw_path!r}.")
+    if not is_supported_knowledge_file(source):
+        raise IngestError(f"Unsupported knowledge file type: {source.name}.")
+    root.resolve()  # Reject a replaced pinned workspace before asking for consent.
+    return source
+
+
 def _snapshot_source(root: Path, raw_path: str) -> tuple[Path, str, str]:
     """Confine and open the ORIGINAL bytes before parsing, including Office files.
 
@@ -59,11 +72,7 @@ def _snapshot_source(root: Path, raw_path: str) -> tuple[Path, str, str]:
     the same safe extraction pipeline without reopening a model-controlled
     original pathname after it might have become an escaping symlink.
     """
-    source = resolve_under_root(root, raw_path)
-    if _is_metadata_path(source):
-        raise WorkspaceError("VCS metadata cannot be added to knowledge.")
-    if not source.is_file():
-        raise WorkspaceError(f"Not a workspace file: {raw_path!r}.")
+    source = _validated_source(root, raw_path)
     data = _read_bounded_bytes(source)
     root.resolve()  # Verify a pinned workspace was not swapped during the read.
     with TemporaryDirectory(prefix="graphlink-knowledge-add-") as directory:
@@ -78,6 +87,20 @@ def register_workspace_tools(
 ) -> None:
     """Register only on the Agent fork. Builder cannot invoke this write tool."""
     target_db = db_path if db_path is not None else DEFAULT_DB_PATH
+
+    async def preflight_add(call: ToolCall, ctx: RunContext) -> str | None:
+        """Fail invalid file requests before the registry opens an approval card."""
+        raw_path = call.arguments.get("path")
+        if not isinstance(raw_path, str) or not raw_path.strip() or len(raw_path) > 4096:
+            return "knowledge.add requires a valid workspace file path."
+        root = getattr(ctx, "harness_workspace_dir", None)
+        if not isinstance(root, Path):
+            return "knowledge.add requires an active agent workspace."
+        try:
+            await asyncio.to_thread(_validated_source, root, raw_path)
+        except (OSError, WorkspaceError, IngestError, UnicodeError, ValueError) as exc:
+            return f"Could not add workspace file to knowledge: {exc}"
+        return None
 
     async def add(call: ToolCall, ctx: RunContext) -> ToolResult:
         raw_path = call.arguments.get("path")
@@ -137,4 +160,5 @@ def register_workspace_tools(
     # consent, so a repeated call reaches the human approval gate again.
     registry.register(
         KNOWLEDGE_ADD_SPEC, add, scopes={FS_READ, KNOWLEDGE_WRITE}, approval="once",
+        pre_approval_check=preflight_add,
     )
