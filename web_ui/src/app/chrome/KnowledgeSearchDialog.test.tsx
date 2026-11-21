@@ -342,9 +342,10 @@ describe("KnowledgeSearchDialog", () => {
     expect(await screen.findByRole("button", { name: "Re-index guide.md" })).toBeDisabled();
   });
 
-  it("the search input has an accessible label", async () => {
+  it("the search input has an accessible label and the embedding controls share the dialog", async () => {
     await setup();
     expect(screen.getByLabelText("Search the knowledge base")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Knowledge embeddings" })).toBeInTheDocument();
   });
 
   const WATCHED_FOLDER = {
@@ -500,11 +501,11 @@ describe("KnowledgeSearchDialog", () => {
 
     const input = screen.getByPlaceholderText(/search your ingested knowledge base/i);
     await user.type(input, "first query{Enter}");
-    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenCalledTimes(4);
 
     await user.clear(input);
     await user.type(input, "second query{Enter}");
-    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenCalledTimes(4);
 
     resolveFirst({ results: [RESULT_A] });
     expect(await screen.findByText("Fox Story")).toBeInTheDocument();

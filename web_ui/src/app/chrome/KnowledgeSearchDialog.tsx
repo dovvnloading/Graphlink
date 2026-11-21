@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
 import { Dialog, useOverlays } from "../overlays/overlays";
 import type { KnowledgeCitationSource } from "../canvas/ChatCitationChips";
+import { KnowledgeEmbeddingStatus } from "./KnowledgeEmbeddingStatus";
 
 /**
  * ADR-017 stage 17.5: the "Knowledge" search panel - a human-driven,
@@ -601,6 +602,7 @@ export function KnowledgeSearchDialog({
           {job.warnings.length > 0 && <p className="knowledge-import-stats">{job.warnings[0]}</p>}
         </div>
       ))}
+      <KnowledgeEmbeddingStatus transport={transport} open={knowledgeOpen} />
       <section aria-label="Workspace documents" className="knowledge-library-section">
         <div className="knowledge-library-heading">
           <h2 className="knowledge-section-title">Documents ({documents.length})</h2>
