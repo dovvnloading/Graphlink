@@ -20,29 +20,39 @@ function canChat(model: PickerModel): boolean {
 export function ModelPicker({ store, name = "model" }: { store: ComposerStore; name?: string }) {
   const composer = useSyncExternalStore(store.subscribe, store.getComposer);
   const overlays = useOverlays();
-  const [models, setModels] = useState<PickerModel[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [loadResult, setLoadResult] = useState<{
+    store: ComposerStore;
+    retryCount: number;
+    models: PickerModel[];
+    error: string;
+  } | null>(null);
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
   const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
     let live = true;
-    setLoading(true);
-    setError("");
     void store.loadPickerModels().then((rows) => {
-      if (live) setModels(rows);
+      if (live) setLoadResult({ store, retryCount, models: rows, error: "" });
     }).catch(() => {
       if (live) {
-        setModels([]);
-        setError("Could not load available models. Check the Ollama server or cloud connection, then retry.");
+        setLoadResult({
+          store,
+          retryCount,
+          models: [],
+          error: "Could not load available models. Check the Ollama server or cloud connection, then retry.",
+        });
       }
-    }).finally(() => {
-      if (live) setLoading(false);
     });
     return () => { live = false; };
   }, [store, retryCount]);
+
+  // Derive pending/error from the current request, rather than resetting
+  // state synchronously in the effect. Retry keeps search text and focus.
+  const current = loadResult?.store === store && loadResult.retryCount === retryCount ? loadResult : null;
+  const models = current?.models ?? [];
+  const loading = current === null;
+  const error = current?.error ?? "";
 
   const search = query.trim().toLocaleLowerCase();
   const matches = models.filter((model) =>
