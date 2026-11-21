@@ -351,6 +351,15 @@ def _pdf_expanded_stream_size(stream, remaining: int) -> int:
         raise AttachmentError("PDF has an invalid compressed page/Form stream.") from exc
     if expanded > remaining:
         raise AttachmentError("PDF page/Form content exceeds the expanded-stream attachment limit.")
+
+    # Some pypdf versions accept the PDF ASCII filter aliases during parsing
+    # but cannot decode them for text extraction. Our preflight has now
+    # bounded both the ASCII-decoded payload and the inflated Flate stream;
+    # normalize only these names on the in-memory PDF stream for pypdf.
+    if len(filters_list) == 2 and filters_list[0] in ("/A85", "/AHx"):
+        filters[0] = type(filters[0])(
+            "/ASCII85Decode" if filters_list[0] == "/A85" else "/ASCIIHexDecode"
+        )
     return expanded
 
 
