@@ -186,6 +186,98 @@ def test_invalidate_capability_cache_also_clears_the_context_window_cache(monkey
     assert len(calls) == 2  # invalidation forced a re-fetch
 
 
+
+def test_configured_ollama_window_flows_to_chat_grounding_and_workspace(monkeypatch):
+    """The same chosen window reaches default and pinned budget paths."""
+    from backend.context_engine.assembler import selected_context_window
+    from backend.harness.context import served_context_window
+    from graphlink_model_catalog import ModelRef
+
+    api_provider.invalidate_ollama_capability_cache()
+    model = "larger:7b"
+    monkeypatch.setattr(api_provider, "_OLLAMA_CONFIGURED_CONTEXT_WINDOWS", {model: 32_768})
+    monkeypatch.setattr(
+        api_provider, "ollama",
+        types.SimpleNamespace(show=lambda _: {
+            "model_info": {
+                "general.architecture": "llama",
+                "llama.context_length": 131_072,
+            },
+        }),
+    )
+    runtime = api_provider.ProviderRuntime()
+    runtime.set_ollama_models({config.TASK_CHAT: model})
+    model_ref = ModelRef(config.LOCAL_PROVIDER_OLLAMA, model)
+
+    assert runtime.context_window(config.TASK_CHAT) == 32_768
+    assert selected_context_window(runtime) == 32_768
+    assert selected_context_window(runtime, model_ref=model_ref) == 32_768
+    assert served_context_window(runtime=runtime) == 32_768
+    assert served_context_window(runtime=runtime, model_ref=model_ref) == 32_768
+    api_provider.invalidate_ollama_capability_cache()
+
+
+def test_configured_ollama_window_is_capped_at_trained_length(monkeypatch):
+    api_provider.invalidate_ollama_capability_cache()
+    monkeypatch.setattr(api_provider, "_OLLAMA_CONFIGURED_CONTEXT_WINDOWS", {"small:7b": 65_536})
+    monkeypatch.setattr(
+        api_provider, "ollama",
+        types.SimpleNamespace(show=lambda _: {
+            "parameters": "num_ctx 32768",
+            "model_info": {
+                "general.architecture": "llama",
+                "llama.context_length": 16_384,
+            },
+        }),
+    )
+    assert api_provider._ollama_effective_context_window("small:7b") == 16_384
+    # Modelfile is still authoritative when there is no preference saved.
+    assert api_provider._extract_context_window_from_show({
+        "parameters": "num_ctx 32768",
+        "model_info": {"llama.context_length": 16_384},
+    }) == 32_768
+    api_provider.invalidate_ollama_capability_cache()
+
+
+def test_configured_ollama_window_falls_back_safely_when_metadata_unavailable(monkeypatch):
+    api_provider.invalidate_ollama_capability_cache()
+    monkeypatch.setattr(api_provider, "_OLLAMA_CONFIGURED_CONTEXT_WINDOWS", {"missing:7b": 131_072})
+    monkeypatch.setattr(
+        api_provider, "ollama",
+        types.SimpleNamespace(show=lambda _: (_ for _ in ()).throw(RuntimeError("down"))),
+    )
+    assert api_provider._ollama_effective_context_window("missing:7b") == 8_192
+    api_provider.invalidate_ollama_capability_cache()
+
+
+def test_ollama_provider_requests_the_configured_budget(monkeypatch):
+    from backend.providers.base import CancelToken, ChatRequest
+    from backend.providers.ollama_provider import OllamaProvider
+    import backend.providers.ollama_provider as ollama_module
+
+    api_provider.invalidate_ollama_capability_cache()
+    monkeypatch.setattr(api_provider, "_OLLAMA_CONFIGURED_CONTEXT_WINDOWS", {"large:7b": 65_536})
+    monkeypatch.setattr(
+        api_provider, "ollama",
+        types.SimpleNamespace(show=lambda _: {
+            "model_info": {"general.architecture": "llama", "llama.context_length": 131_072},
+        }),
+    )
+    captured = {}
+    def fake_chat(*, model, messages, **kwargs):
+        captured.update(kwargs)
+        return {"done": True, "message": {"content": "ok"}}
+    monkeypatch.setattr(ollama_module, "ollama", types.SimpleNamespace(chat=fake_chat))
+    served = api_provider._ollama_effective_context_window("large:7b")
+    assert served == 65_536
+    OllamaProvider(model="large:7b", context_window=served).complete(
+        ChatRequest(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+        CancelToken(),
+    )
+    assert captured["options"]["num_ctx"] == 65_536
+    api_provider.invalidate_ollama_capability_cache()
+
+
 # -- trim_history basics (first-ever coverage) --------------------------------
 
 
