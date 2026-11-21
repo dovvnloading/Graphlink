@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Awaitable, Callable
+import threading
 
 import ollama
 
@@ -234,65 +235,208 @@ def register_settings_ollama_intents(
             run_scan=_run_ollama_scan,
         )
 
+    bus.register_intent("app-settings", "setOllamaReasoningLevel", set_ollama_reasoning_level)
+    bus.register_intent("app-settings", "setOllamaModelAssignment", set_ollama_model_assignment)
+    register_ollama_server_intents(bus, state)
+    bus.register_intent("app-settings", "scanOllamaSystem", scan_ollama_system)
+    bus.register_intent("app-settings", "pickOllamaScanFolder", pick_ollama_scan_folder)
+    register_ollama_model_management_intents(bus, manager, state, refresh_inventory=scan_ollama_system)
+    register_ollama_model_check_intents(bus, state)
+    register_ollama_context_intents(bus, manager, state)
+    return scan_ollama_system
+
+
+def register_ollama_model_management_intents(
+    bus: SessionBus, manager: SettingsManager, state: SettingsSessionState,
+    *, refresh_inventory: Callable[[], Awaitable[None]],
+) -> None:
+    def _update_scan_cache(model_name: str, *, remove: bool = False) -> None:
+        """Update the existing discovery cache without erasing scan provenance."""
+        existing = manager.get_ollama_scanned_models()
+        if remove:
+            models = [name for name in existing if name != model_name]
+        else:
+            models = [*existing, model_name]
+        manager.set_ollama_model_scan_cache(
+            models,
+            manager.get_ollama_model_scan_mode() or "system",
+            manager.get_ollama_model_scan_path(),
+            manager.get_ollama_model_scan_locations(),
+        )
+
+    active_pull_cancel: threading.Event | None = None
+
     async def pull_ollama_model(model_name: str):
+        nonlocal active_pull_cancel
         model_name = str(model_name).strip()
         if not model_name:
             state.ollama_notice = "Model name cannot be empty."
             await bus.publish("app-settings")
             return
-        if state.ollama_pull_status == "running":
+        if state.ollama_pull_status in ("running", "cancelling") or state.ollama_remove_status == "running":
             return
+
+        stop = threading.Event()
+        active_pull_cancel = stop
         state.ollama_pull_status = "running"
+        state.ollama_pull_model = model_name
+        state.ollama_pull_message = "Connecting to Ollama..."
+        state.ollama_pull_completed = 0
+        state.ollama_pull_total = 0
         state.ollama_notice = ""
         await bus.publish("app-settings")
 
-        try:
-            await asyncio.to_thread(ollama.pull, model_name)
-        except Exception as exc:  # noqa: BLE001 - mapped to a friendly message, matching ModelPullWorkerThread's own 3-way mapping; no secret here to redact (a model name is not a credential)
-            text = str(exc).lower()
-            if "not found" in text:
-                message = f"Model '{model_name}' was not found on the Ollama hub."
-            elif "connection refused" in text:
-                message = "Could not connect to Ollama. Is Ollama running?"
-            else:
-                message = f"An unexpected error occurred: {exc}"
-            state.ollama_pull_status = "error"
-            state.ollama_notice = message
+        loop = asyncio.get_running_loop()
+        last_progress: tuple[str, int] | None = None
+
+        async def _progress(update: object) -> None:
+            nonlocal last_progress
+            # A cancelled job must never return to "running" when a queued
+            # progress notification arrives after cancelOllamaPull.
+            if state.ollama_pull_status != "running":
+                return
+            value = lambda key, default: (
+                update.get(key, default) if isinstance(update, dict) else getattr(update, key, default)
+            )
+            status = str(value("status", "") or "")
+            total = max(0, int(value("total", 0) or 0))
+            completed = max(0, int(value("completed", 0) or 0))
+            percent = min(100, 100 * completed // total) if total else -1
+            # Ollama can send many chunks per percentage point. Publish at
+            # most one state update per percentage/status change.
+            key = (status, percent)
+            if key == last_progress:
+                return
+            last_progress = key
+            state.ollama_pull_message = status
+            state.ollama_pull_completed = min(completed, total) if total else 0
+            state.ollama_pull_total = total
             await bus.publish("app-settings")
-            return
 
-        def _persist() -> None:
-            api_provider.invalidate_ollama_capability_cache(model_name)
-            api_provider.set_current_ollama_model(model_name)
+        def _stream_pull() -> bool:
+            # Existing pull support remains the single download path; stream
+            # it in a worker thread to keep the WebSocket event loop live.
+            if stop.is_set():
+                return False
+            stream = ollama.pull(model_name, stream=True)
+            try:
+                for update in stream:
+                    if stop.is_set():
+                        return False
+                    asyncio.run_coroutine_threadsafe(_progress(update), loop).result()
+                return not stop.is_set()
+            finally:
+                # Closing the generator releases its HTTP streaming response.
+                close = getattr(stream, "close", None)
+                if callable(close):
+                    close()
 
         try:
-            # Belt-and-suspenders for the same reentrancy-gate hazard fixed
-            # in scan_ollama_system's own _persist call above - unlike that
-            # one, neither invalidate_ollama_capability_cache nor
-            # set_current_model do disk I/O today (both are in-memory-only
-            # global mutations), so this has no realistic failure mode right
-            # now, but a stranded "running" gate is bad enough - and cheap
-            # enough to guard against - that this doesn't wait for one of
-            # them to grow a fallible path first.
+            completed = await asyncio.to_thread(_stream_pull)
+            if not completed or stop.is_set():
+                state.ollama_pull_status = "cancelled"
+                state.ollama_pull_message = "Download cancelled."
+                return
+
+            def _persist() -> None:
+                _update_scan_cache(model_name)
+                api_provider.invalidate_ollama_capability_cache(model_name)
+                api_provider.sync_ollama_models(manager)
+                # Preserve the old pull action's immediate current-model
+                # selection, even for a freshly-downloaded embedding model.
+                api_provider.set_current_ollama_model(model_name)
+
             await asyncio.to_thread(run_locked, _persist)
-        except Exception as exc:  # noqa: BLE001 - no secret here to redact (a model name is not a credential)
-            state.ollama_pull_status = "error"
-            state.ollama_notice = f"An unexpected error occurred: {exc}"
+            # Rebuild the same live inventory used by Settings and Knowledge.
+            await refresh_inventory()
+            state.ollama_pull_status = "done"
+            state.ollama_pull_message = "Download complete."
+            state.ollama_notice = ""
+        except asyncio.CancelledError:
+            stop.set()
+            raise
+        except Exception as exc:  # noqa: BLE001 - map Ollama errors to the existing user-facing notice
+            if stop.is_set():
+                state.ollama_pull_status = "cancelled"
+                state.ollama_pull_message = "Download cancelled."
+            else:
+                text = str(exc).lower()
+                if "not found" in text:
+                    message = f"Model '{model_name}' was not found on the Ollama hub."
+                elif "connection refused" in text:
+                    message = "Could not connect to Ollama. Is Ollama running?"
+                else:
+                    message = f"An unexpected error occurred: {exc}"
+                state.ollama_pull_status = "error"
+                state.ollama_notice = message
+        finally:
+            active_pull_cancel = None
+            await bus.publish("app-settings")
+
+    async def cancel_ollama_pull():
+        # The running worker notices this flag before processing its next
+        # chunk; the download cannot restart until it has actually stopped.
+        if state.ollama_pull_status == "running" and active_pull_cancel is not None:
+            active_pull_cancel.set()
+            state.ollama_pull_status = "cancelling"
+            state.ollama_pull_message = "Cancelling download..."
+            await bus.publish("app-settings")
+
+    async def remove_ollama_model(model_name: str):
+        model_name = str(model_name).strip()
+        if not model_name:
+            state.ollama_notice = "Model name cannot be empty."
             await bus.publish("app-settings")
             return
-        state.ollama_pull_status = "done"
+        if state.ollama_remove_status == "running" or state.ollama_pull_status in ("running", "cancelling") or state.ollama_scan_status == "running":
+            return
+        if state.ollama_inventory_source != "server" or not any(
+            row["name"] == model_name for row in state.ollama_inventory
+        ):
+            state.ollama_notice = "Refresh the Ollama server inventory before removing this model."
+            await bus.publish("app-settings")
+            return
+        state.ollama_remove_status = "running"
+        state.ollama_remove_model = model_name
         state.ollama_notice = ""
         await bus.publish("app-settings")
+        try:
+            await asyncio.to_thread(ollama.delete, model_name)
+            # Deletion succeeded on the daemon; immediately remove the row
+            # from the shared snapshot even if a settings write fails later.
+            state.ollama_inventory = [
+                row for row in state.ollama_inventory if row["name"] != model_name
+            ]
 
-    bus.register_intent("app-settings", "setOllamaReasoningLevel", set_ollama_reasoning_level)
-    bus.register_intent("app-settings", "setOllamaModelAssignment", set_ollama_model_assignment)
-    register_ollama_server_intents(bus, state)
-    bus.register_intent("app-settings", "scanOllamaSystem", scan_ollama_system)
+            def _persist() -> None:
+                _update_scan_cache(model_name, remove=True)
+                assignments = manager.get_ollama_model_assignments()
+                dirty = False
+                for task, assignment in assignments.items():
+                    if assignment.get("mode") == "explicit" and assignment.get("model_id") == model_name:
+                        assignments[task] = {
+                            "mode": AUTO_MODEL if task == config.TASK_CHAT else INHERIT_MODEL,
+                            "model_id": "",
+                        }
+                        dirty = True
+                if dirty:
+                    manager.set_ollama_model_assignments(assignments)
+                api_provider.invalidate_ollama_capability_cache(model_name)
+                api_provider.sync_ollama_models(manager)
+
+            await asyncio.to_thread(run_locked, _persist)
+            await refresh_inventory()
+            state.ollama_remove_status = "done"
+        except Exception as exc:  # noqa: BLE001 - report filesystem/server/settings errors
+            state.ollama_remove_status = "error"
+            state.ollama_notice = f"Could not remove '{model_name}': {exc}"
+        finally:
+            state.ollama_remove_model = ""
+            await bus.publish("app-settings")
+
     bus.register_intent("app-settings", "pullOllamaModel", pull_ollama_model)
-    bus.register_intent("app-settings", "pickOllamaScanFolder", pick_ollama_scan_folder)
-    register_ollama_model_check_intents(bus, state)
-    register_ollama_context_intents(bus, manager, state)
-    return scan_ollama_system
+    bus.register_intent("app-settings", "cancelOllamaPull", cancel_ollama_pull)
+    bus.register_intent("app-settings", "removeOllamaModel", remove_ollama_model)
 
 
 def register_ollama_server_intents(

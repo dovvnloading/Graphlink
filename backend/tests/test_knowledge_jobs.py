@@ -40,6 +40,37 @@ async def _completed(manager: KnowledgeIngestManager, job_id: str) -> dict:
     pytest.fail("knowledge import did not terminate")
 
 
+async def _completed_intent_job(bus: SessionBus, job_id: str) -> dict:
+    """Wait for a terminal job publication, not a fixed number of 20-ms polls."""
+    changed = asyncio.Event()
+
+    class IngestListener:
+        async def send_json(self, message: dict) -> None:
+            if message.get("topic") == "knowledge-ingest":
+                changed.set()
+
+    listener = IngestListener()
+    bus.attach(listener)
+    last_row = None
+    try:
+        # Attaching before reading the snapshot avoids missing a completion
+        # between the initial check and subscribing. Notifications and the
+        # snapshot check run on the same loop, so clear() cannot lose an
+        # intervening publication.
+        async with asyncio.timeout(60):
+            while True:
+                jobs = await bus.dispatch_intent("knowledge", "getIngestJobs", [])
+                last_row = next(row for row in jobs["jobs"] if row["jobId"] == job_id)
+                if last_row["status"] in {"completed", "failed", "cancelled"}:
+                    return last_row
+                changed.clear()
+                await changed.wait()
+    except TimeoutError:
+        pytest.fail(f"knowledge import {job_id} did not finish; last snapshot: {last_row!r}")
+    finally:
+        bus.detach(listener)
+
+
 def test_file_source_aliases_and_replacements_are_atomic(tmp_path):
     db = tmp_path / "knowledge.db"
     first = tmp_path / "a.txt"
@@ -244,15 +275,8 @@ def test_native_picker_intent_pins_workspace_before_dialog_returns(tmp_path, mon
         monkeypatch.setattr(native_dialogs, "pick_files", pick)
         response = await bus.dispatch_intent("knowledge", "addFiles", [])
         assert "jobId" in response
-        for _ in range(500):
-            jobs = await bus.dispatch_intent("knowledge", "getIngestJobs", [])
-            status = jobs["jobs"][-1]["status"]
-            if status in {"completed", "failed", "cancelled"}:
-                assert status == "completed"
-                break
-            await asyncio.sleep(0.02)
-        else:
-            pytest.fail("intent-launched import did not complete")
+        row = await _completed_intent_job(bus, response["jobId"])
+        assert row["status"] == "completed", row
         return document
 
     asyncio.run(scenario())
@@ -284,16 +308,9 @@ def test_staged_chat_document_import_is_workspace_scoped_and_rejects_stale_ids(t
         composer.staged_attachments = [staged]
         result = await bus.dispatch_intent("knowledge", "addChatAttachment", ["staged-1"])
         document.current_workspace_id = 315
-        for _ in range(500):
-            rows = (await bus.dispatch_intent("knowledge", "getIngestJobs", []))["jobs"]
-            row = next(row for row in rows if row["jobId"] == result["jobId"])
-            if row["status"] in {"completed", "cancelled", "failed"}:
-                assert row["status"] == "completed"
-                assert row["added"] == 1
-                break
-            await asyncio.sleep(0.02)
-        else:
-            pytest.fail("staged attachment import did not finish")
+        row = await _completed_intent_job(bus, result["jobId"])
+        assert row["status"] == "completed", row
+        assert row["added"] == 1
 
     asyncio.run(scenario())
     current = knowledge_store.get_or_create_workspace_collection(db, 314)

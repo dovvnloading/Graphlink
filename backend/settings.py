@@ -376,6 +376,12 @@ def _build_settings_payload(
     payload["ollamaScanSummary"] = _ollama_scan_summary(manager)
     payload["ollamaScanStatus"] = state.ollama_scan_status
     payload["ollamaPullStatus"] = state.ollama_pull_status
+    payload["ollamaPullModel"] = state.ollama_pull_model
+    payload["ollamaPullMessage"] = state.ollama_pull_message
+    payload["ollamaPullCompleted"] = state.ollama_pull_completed
+    payload["ollamaPullTotal"] = state.ollama_pull_total
+    payload["ollamaRemoveStatus"] = state.ollama_remove_status
+    payload["ollamaRemoveModel"] = state.ollama_remove_model
     payload["ollamaNotice"] = state.ollama_notice
     # Legacy picker fields are projections of the inventory, not another
     # model discovery path or an additional capability probe.

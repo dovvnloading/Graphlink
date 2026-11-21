@@ -453,10 +453,28 @@
     "ollamaNotice": {
       "type": "string"
     },
+    "ollamaPullCompleted": {
+      "type": "integer"
+    },
+    "ollamaPullMessage": {
+      "type": "string"
+    },
+    "ollamaPullModel": {
+      "type": "string"
+    },
     "ollamaPullStatus": {
       "type": "string"
     },
+    "ollamaPullTotal": {
+      "type": "integer"
+    },
     "ollamaReasoningLevel": {
+      "type": "string"
+    },
+    "ollamaRemoveModel": {
+      "type": "string"
+    },
+    "ollamaRemoveStatus": {
       "type": "string"
     },
     "ollamaScanStatus": {
@@ -560,6 +578,12 @@
     "ollamaScanSummary",
     "ollamaScanStatus",
     "ollamaPullStatus",
+    "ollamaPullModel",
+    "ollamaPullMessage",
+    "ollamaPullCompleted",
+    "ollamaPullTotal",
+    "ollamaRemoveStatus",
+    "ollamaRemoveModel",
     "ollamaNotice",
     "knowledgeEmbeddingSource",
     "knowledgeEmbeddingModel",

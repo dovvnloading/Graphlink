@@ -399,6 +399,8 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("app-settings", "setOllamaContextWindow", "B", "preference: per-model local serving budget"),
     Classified("app-settings", "scanOllamaSystem", "B", "run-lifecycle: scans/caches locally installed models"),
     Classified("app-settings", "pullOllamaModel", "B", "run-lifecycle: downloads a model"),
+    Classified("app-settings", "cancelOllamaPull", "B", "run-lifecycle: cancels an active model download"),
+    Classified("app-settings", "removeOllamaModel", "B", "external-store: removes a local Ollama model"),
     Classified("app-settings", "pickOllamaScanFolder", "B", "run-lifecycle: native folder pick + scan"),
     Classified("app-settings", "checkOllamaModel", "B", "read-only: transient local-model timing and tool-call probe"),
     Classified("app-settings", "cancelOllamaModelCheck", "B", "run-lifecycle: interrupts a model probe"),
