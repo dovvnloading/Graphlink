@@ -32,6 +32,7 @@ from __future__ import annotations
 
 from functools import partial
 import asyncio
+import copy
 import logging
 
 from backend.context_engine.citations import apply_reply_citations
