@@ -89,7 +89,7 @@ BACKUP_FILENAME_PREFIX = "knowledge-"
 # a mid-batch crash without re-snapshotting on every single document.
 BACKUP_CADENCE_SECONDS = 600.0
 
-KNOWLEDGE_DB_SCHEMA_VERSION = 7
+KNOWLEDGE_DB_SCHEMA_VERSION = 8
 
 
 def content_hash(text: str) -> str:
