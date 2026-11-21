@@ -84,6 +84,11 @@ def test_check_uses_only_inventory_and_never_persists_settings(tmp_path, monkeyp
 
     async def scenario():
         await bus.dispatch_intent("app-settings", "scanOllamaSystem", [])
+        # The scan intentionally saves its cache; Check must not write anything after that.
+        assignments_before_check = manager.get_ollama_model_assignments()
+        settings_before_check = manager.state_file.read_bytes()
+        monkeypatch.setattr(manager, "_save_state",
+                            lambda *_args, **_kwargs: pytest.fail("check attempted to save settings"))
         monkeypatch.setattr(manager, "set_ollama_model_assignments",
                             lambda *_: pytest.fail("check attempted to change model settings"))
         monkeypatch.setattr(manager, "set_ollama_model_scan_cache",
@@ -93,6 +98,8 @@ def test_check_uses_only_inventory_and_never_persists_settings(tmp_path, monkeyp
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         await bus.publish("app-settings")
+        assert manager.get_ollama_model_assignments() == assignments_before_check
+        assert manager.state_file.read_bytes() == settings_before_check
 
     class Recorder:
         messages = []
@@ -107,16 +114,19 @@ def test_check_uses_only_inventory_and_never_persists_settings(tmp_path, monkeyp
     rows = recorder.messages[-1]["payload"]["ollamaModelChecks"]
     assert rows == [{"name": "first:latest", "status": "complete", "loadSeconds": 0.4,
                      "tokensPerSecond": 24.0, "toolCallingWorks": True, "message": ""}]
-    assert manager.get_ollama_model_assignments() == {}
 
 
 def test_cancel_interrupts_running_check_and_a_new_check_can_start(tmp_path, monkeypatch):
-    bus, _manager = _registered_bus(tmp_path, monkeypatch)
+    bus, manager = _registered_bus(tmp_path, monkeypatch)
     calls = []
     cancelled = []
 
     async def scenario():
         await bus.dispatch_intent("app-settings", "scanOllamaSystem", [])
+        assignments_before_check = manager.get_ollama_model_assignments()
+        settings_before_check = manager.state_file.read_bytes()
+        monkeypatch.setattr(manager, "_save_state",
+                            lambda *_args, **_kwargs: pytest.fail("check/cancel attempted to save settings"))
         started = asyncio.Event()
 
         async def slow_probe(model):
@@ -134,6 +144,7 @@ def test_cancel_interrupts_running_check_and_a_new_check_can_start(tmp_path, mon
         monkeypatch.setattr(intents_ollama_model_check, "probe_ollama_model", slow_probe)
         await bus.dispatch_intent("app-settings", "checkOllamaModel", ["first:latest"])
         await asyncio.wait_for(started.wait(), 1)
+        assert manager.state_file.read_bytes() == settings_before_check
         await bus.dispatch_intent("app-settings", "checkOllamaModel", ["second:latest"])
         await bus.dispatch_intent("app-settings", "cancelOllamaModelCheck", ["second:latest"])
         await bus.dispatch_intent("app-settings", "cancelOllamaModelCheck", ["first:latest"])
@@ -143,6 +154,8 @@ def test_cancel_interrupts_running_check_and_a_new_check_can_start(tmp_path, mon
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         await bus.publish("app-settings")
+        assert manager.get_ollama_model_assignments() == assignments_before_check
+        assert manager.state_file.read_bytes() == settings_before_check
 
     class Recorder:
         messages = []
