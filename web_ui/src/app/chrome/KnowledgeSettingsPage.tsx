@@ -5,6 +5,9 @@ import { CustomSelect } from "./CustomSelect";
 
 type EmbeddingSource = "off" | "ollama" | "cloud";
 
+// A cold local Ollama embedding model may take minutes to load before replying.
+const EMBEDDING_TEST_TIMEOUT_MS = 5 * 60_000;
+
 const SOURCE_OPTIONS = [
   { id: "off", label: "Off (keyword search)", description: "Local keyword search only, without embeddings." },
   { id: "ollama", label: "Ollama (local)", description: "Use an installed embedding-capable Ollama model." },
@@ -77,6 +80,19 @@ export function KnowledgeSettingsPage({
     source, selectedModel, source === "cloud" ? usableCloudProvider : "",
     source === "cloud" && consent,
   ];
+
+  const testEmbedding = () => {
+    // The backend publishes the authoritative running/done/error status and
+    // notice to app-settings. Unlike fireIntent(), request() does not turn a
+    // missing reply into a global error toast: a cold Ollama model may finish
+    // successfully even if this longer reply deadline is exceeded.
+    void transport.request(
+      "app-settings", "testKnowledgeEmbedding", args, EMBEDDING_TEST_TIMEOUT_MS,
+    ).catch(() => {
+      // The status publish, including a late success or a backend test error,
+      // is what the user sees. Never leave a speculative timeout toast behind.
+    });
+  };
 
   const selectSource = (id: string) => {
     if (id === "off" || id === "ollama" || id === "cloud") {
@@ -212,7 +228,7 @@ export function KnowledgeSettingsPage({
           type="button"
           className="settings-button"
           disabled={!canSubmit || state.knowledgeTestStatus === "running"}
-          onClick={() => transport.fireIntent("app-settings", "testKnowledgeEmbedding", args)}
+          onClick={testEmbedding}
         >
           {state.knowledgeTestStatus === "running" ? "Testing..." : "Test"}
         </button>
@@ -229,6 +245,11 @@ export function KnowledgeSettingsPage({
         Test sends only a sample phrase, never a stored document.
         New or changed embedding sources build their own cache as needed.
       </p>
+      {state.knowledgeTestStatus === "running" && (
+        <p className="settings-update-status" role="status">
+          Testing embedding connection... A cold local model may take several minutes to load.
+        </p>
+      )}
       {state.knowledgeNotice && (
         <p
           className="settings-update-status"
