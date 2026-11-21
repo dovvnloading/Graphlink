@@ -248,7 +248,7 @@ def chat_use_knowledge(document, node_id: str | None = None) -> bool:
 
 def search_chat_knowledge(
     query: str, workspace_id: str | int | None = None, *,
-    db_path: Path | None = None, k: int = 5,
+    db_path: Path | None = None, k: int = 5, settings_manager=None,
 ) -> list[dict]:
     """Retrieve ONLY this workspace's existing knowledge for a chat turn.
 
@@ -257,6 +257,7 @@ def search_chat_knowledge(
     never falls through to another workspace or to global search.
     """
     from backend import knowledge_store
+    from backend.knowledge_embedding_config import configured_hybrid_search
 
     path = db_path if db_path is not None else knowledge_store.DEFAULT_DB_PATH
     if not isinstance(query, str) or not query.strip() or not path.is_file():
@@ -277,7 +278,9 @@ def search_chat_knowledge(
         if row is None:
             return []
         collection_id = int(row[0])
-    hits = hybrid_search(path, query, collection_id=collection_id, k=k)
+    hits = configured_hybrid_search(
+        path, query, collection_id=collection_id, k=k, settings_manager=settings_manager,
+    )
     if hits:
         return hits
     # FTS5 joins question words as AND. Conversational questions usually
@@ -299,7 +302,9 @@ def search_chat_knowledge(
     weighted: dict[str, dict] = {}
     for term in terms:
         for rank, hit in enumerate(
-            hybrid_search(path, term, collection_id=collection_id, k=k),
+            configured_hybrid_search(
+                path, term, collection_id=collection_id, k=k, settings_manager=settings_manager,
+            ),
             start=1,
         ):
             key = hit["citation_id"]

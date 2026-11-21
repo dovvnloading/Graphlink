@@ -95,7 +95,13 @@ def inspect_next_chat_send(
     )
     try:
         knowledge_hits = (
-            search_chat_knowledge(draft_text[:1500], document.current_workspace_id)
+            search_chat_knowledge(
+                draft_text[:1500], document.current_workspace_id,
+                **(
+                    {"settings_manager": dispatcher._settings_manager}
+                    if getattr(dispatcher, "_settings_manager", None) is not None else {}
+                ),
+            )
             if enabled and draft_text.strip() else []
         )
     except Exception:
