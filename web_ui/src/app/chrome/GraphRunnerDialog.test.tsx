@@ -1,5 +1,5 @@
 import { ReactFlowProvider } from "@xyflow/react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { makeRequestOnlyTransport } from "../../lib/ws/transport.testUtils";
@@ -83,6 +83,30 @@ describe("Graph Runner", () => {
       intent === "executeGraphRun" || intent === "executeGraphModel")).toHaveLength(0);
     await user.keyboard("{Escape}");
     await waitFor(() => expect(store.getGraphRunnerRequestedIds()).toBeNull());
+  });
+
+  it("applies bound-node requests received while open without reusing an old preview", async () => {
+    const { user, request, store } = setup(["canvas-selection"], [
+      { id: "bound-a", kind: "model", title: "Bound A" },
+      { id: "bound-b", kind: "model", title: "Bound B" },
+    ]);
+    request.mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ previewToken: "old", steps: [step] })
+      .mockResolvedValueOnce({ previewToken: "bound", steps: [step] });
+    await user.click(screen.getByRole("button", { name: "Open runner" }));
+    const scope = screen.getByRole("combobox", { name: "Run scope" });
+    await user.selectOptions(scope, "all");
+    const preview = screen.getByRole("button", { name: "Preview run" });
+    await user.click(preview);
+    expect(await screen.findByRole("region", { name: "Run preview" })).toBeVisible();
+
+    act(() => store.requestGraphRunnerNodes(["bound-b", "bound-a", "bound-b"]));
+    expect(scope).toHaveValue("selection");
+    expect(screen.queryByRole("region", { name: "Run preview" })).toBeNull();
+    await user.click(preview);
+    expect(request).toHaveBeenLastCalledWith("scene", "previewGraphRun", [["bound-b", "bound-a"]]);
+    expect(request.mock.calls.filter(([, intent]) =>
+      intent === "executeGraphRun" || intent === "executeGraphModel")).toHaveLength(0);
   });
 
   it("routes a saved Model-to-Note handoff into the existing model preview, not execution", async () => {

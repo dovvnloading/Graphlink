@@ -86,8 +86,8 @@ function Runner({ store }: { store: SceneStore }) {
     if (!nodeId || !nodes.some((node) => node.id === nodeId)) return;
     rfStore.getState().setNodes(nodes.map((node) => ({ ...node, selected: node.id === nodeId })));
   }
-  const overlays = useOverlays();
   const requestedIds = useSyncExternalStore(store.subscribe, store.getGraphRunnerRequestedIds);
+  const [appliedRequestedIds, setAppliedRequestedIds] = useState(requestedIds);
   const [selectedIds, setSelectedIds] = useState<string[]>(() =>
     requestedIds ? [...requestedIds] : rf.getNodes().filter((node) => node.selected).map((node) => node.id));
   const [scope, setScope] = useState(selectedIds.length ? "selection" : "all");
@@ -126,18 +126,18 @@ function Runner({ store }: { store: SceneStore }) {
   const [busy, setBusy] = useState("Loading run history…");
   const [cancellingRun, setCancellingRun] = useState(false);
   const [error, setError] = useState("");
-  // A stale-node action selects bound IDs for THIS dialog's normal backend
-  // preview. It never starts a graph execution or grants approval by itself.
-  useEffect(() => {
-    if (!overlays.isOpen("graph-runner")) {
-      store.clearGraphRunnerRequestedIds();
-    } else if (requestedIds !== null) {
+  // A new handoff is a stable store snapshot. Reconcile it during render,
+  // like OrganizationDialog, so scope/selection cannot briefly show a stale
+  // preview. Selecting bound nodes never starts execution or grants approval.
+  if (requestedIds !== appliedRequestedIds) {
+    setAppliedRequestedIds(requestedIds);
+    if (requestedIds !== null) {
       setSelectedIds([...requestedIds]);
       setScope("selection");
       setPreview(null);
       setError("");
     }
-  }, [overlays, requestedIds, store]);
+  }
   const running = latest?.status === "running" || latest?.history?.some((run) => run.status === "running");
 
   // Opening the panel always re-reads the active graph, including after
