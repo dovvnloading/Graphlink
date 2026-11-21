@@ -72,6 +72,15 @@ const snapshot = {
   ollamaScanSummary: "No saved scan yet. Run a system scan or choose a folder to build the local model list.",
   ollamaScanStatus: "idle",
   ollamaPullStatus: "idle",
+  ollamaPullModel: "",
+  ollamaPullMessage: "",
+  ollamaPullCompleted: 0,
+  ollamaPullTotal: 0,
+  ollamaInstalledModels: [],
+  ollamaInstalledStatus: "idle",
+  ollamaInstalledError: "",
+  ollamaRemoveStatus: "idle",
+  ollamaRemoveModel: "",
   ollamaNotice: "",
   knowledgeEmbeddingSource: "off",
   knowledgeEmbeddingModel: "",
@@ -437,7 +446,89 @@ describe("SettingsDialog", () => {
 
     await user.type(screen.getByPlaceholderText("Advanced model ID entry"), "llama3.2:3b");
 
-    expect(screen.getByRole("button", { name: "Validating..." })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Downloading..." })).toBeDisabled();
+  });
+
+  it("shows recommended models with size, but does not download until clicked", async () => {
+    const { user, push, intents } = setup();
+    await goToOllama(user, push);
+
+    expect(intents).toContainEqual(["app-settings", "refreshOllamaInstalledModels", []]);
+    expect(intents.some(([, action]) => action === "pullOllamaModel")).toBe(false);
+    expect(intents.some(([, action]) => action === "removeOllamaModel")).toBe(false);
+    expect(screen.getByText(/Tool-capable chat \(~2\.5 GB\)/)).toBeInTheDocument();
+    expect(screen.getByText(/Embeddings \(~274 MB\)/)).toBeInTheDocument();
+    expect(screen.getByText(/Vision and image understanding \(~3\.4 GB\)/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Pull qwen3:4b" }));
+    expect(intents).toContainEqual(["app-settings", "pullOllamaModel", ["qwen3:4b"]]);
+    expect(intents.filter(([, action]) => action === "pullOllamaModel")).toHaveLength(1);
+  });
+
+  it("indicates installed recommendations and disables redundant pulls", async () => {
+    const { user, push, intents } = setup();
+    await goToOllama(user, push, { ollamaInstalledModels: ["qwen3:4b"], ollamaInstalledStatus: "done" });
+
+    expect(screen.getByRole("button", { name: "Pull qwen3:4b" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Pull gemma3:4b" })).toBeEnabled();
+    expect(intents.some(([, action]) => action === "pullOllamaModel")).toBe(false);
+  });
+
+  it("shows live current-layer progress and lets the user cancel a download", async () => {
+    const { user, push, intents } = setup();
+    await goToOllama(user, push, {
+      ollamaPullStatus: "running",
+      ollamaPullModel: "gemma3:4b",
+      ollamaPullMessage: "downloading",
+      ollamaPullCompleted: 500_000_000,
+      ollamaPullTotal: 1_000_000_000,
+    });
+
+    expect(screen.getByRole("progressbar", { name: "Download progress for gemma3:4b" }))
+      .toHaveAttribute("value", "500000000");
+    expect(screen.getByText(/50% of current layer/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Pull qwen3:4b" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Cancel download" }));
+    expect(intents).toContainEqual(["app-settings", "cancelOllamaPull", []]);
+
+    act(() => push({
+      ...snapshot,
+      activeSection: "ollama (local)",
+      ollamaPullStatus: "cancelling",
+      ollamaPullModel: "gemma3:4b",
+      ollamaPullMessage: "Cancelling download...",
+    }));
+    expect(screen.getByRole("button", { name: "Cancelling..." })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Pull qwen3:4b" })).toBeDisabled();
+  });
+
+  it("requires explicit confirmation before removing any installed model", async () => {
+    const { user, push, intents } = setup();
+    await goToOllama(user, push, { ollamaInstalledModels: ["gemma3:4b"], ollamaInstalledStatus: "done" });
+
+    await user.click(screen.getByRole("button", { name: "Remove gemma3:4b" }));
+    expect(screen.getByRole("group", { name: "Confirm removal of gemma3:4b" })).toBeInTheDocument();
+    expect(intents.some(([, action]) => action === "removeOllamaModel")).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Keep model" }));
+    expect(screen.queryByRole("button", { name: "Confirm remove" })).toBeNull();
+    expect(intents.some(([, action]) => action === "removeOllamaModel")).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: "Remove gemma3:4b" }));
+    await user.click(screen.getByRole("button", { name: "Confirm remove" }));
+    expect(intents).toContainEqual(["app-settings", "removeOllamaModel", ["gemma3:4b"]]);
+    expect(intents.filter(([, action]) => action === "removeOllamaModel")).toHaveLength(1);
+  });
+
+  it("refreshes installed models on demand and surfaces daemon errors", async () => {
+    const { user, push, intents } = setup();
+    await goToOllama(user, push, {
+      ollamaInstalledStatus: "error",
+      ollamaInstalledError: "Could not list installed Ollama models: connection refused",
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("connection refused");
+    const before = intents.filter(([, action]) => action === "refreshOllamaInstalledModels").length;
+    await user.click(screen.getByRole("button", { name: "Refresh installed models" }));
+    expect(intents.filter(([, action]) => action === "refreshOllamaInstalledModels")).toHaveLength(before + 1);
   });
 
   it("an ollamaNotice renders as an inline error", async () => {
