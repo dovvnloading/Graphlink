@@ -1909,7 +1909,7 @@ def test_fresh_session_keeps_default_workspace_for_knowledge_watches_search_and_
     ))
     assert not response.is_error, response.content
     assert {hit["source_uri"] for hit in json.loads(response.content)["results"]} == {
-        str(legacy_file.resolve()),
+        legacy_file.name,
     }
 
     document.add_chat_node(0, 0, "A fresh chat", is_user=True)
