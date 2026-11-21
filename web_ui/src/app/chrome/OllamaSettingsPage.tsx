@@ -276,7 +276,14 @@ function OllamaModelCard({
         <span className="settings-field-hint">{report.message}</span>
       )}
       {confirming && canRemove && (
-        <div role="group" aria-label={"Confirm removal of " + model.name} className="settings-ollama-removal">
+        <div role="group" aria-label={"Confirm removal of " + model.name} className="settings-ollama-removal"
+          onKeyDown={(event) => {
+            if (event.key !== "Escape") return;
+            event.preventDefault();
+            event.stopPropagation();
+            setConfirming(false);
+            removeButtonRef.current?.focus();
+          }}>
           <p className="settings-update-status">Remove {model.name} from Ollama? This deletes the local model files.</p>
           <div className="settings-button-row">
             <button ref={confirmRef} type="button" className="settings-button" disabled={busy}
