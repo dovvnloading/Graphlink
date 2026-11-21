@@ -12,7 +12,7 @@ serializer-branch mistake this subsystem exists to retire).
 Line shapes (one JSON object per line):
   {"t": "meta", "v": 2, "profile": {...}, "app": ..., "git": {...}}
   {"t": "msg", "role": ..., "content": ..., ...}     - one history message
-  {"t": "compact", "content": ...}                   - a compaction record
+  {"t": "compact", "content": ..., "tail": [...]}      - a compaction record
   {"t": "task", "run_id": ..., "permission_mode": ...} - per-task audit record
 Unknown "t" values and corrupt lines are skipped on load, never fatal -
 the same tolerant-restore posture every session_load restorer takes with
@@ -356,12 +356,21 @@ def append_task_start(
     })
 
 
-def append_compaction(workspace: Path, content: str) -> None:
-    """Record that a compaction happened, carrying the exact replacement
-    message the live run continued with - see this module's docstring."""
+def append_compaction(workspace: Path, content: str, *, tail: list[dict] | None = None) -> None:
+    """Atomically record the summary AND retained tail of a compaction.
+
+    A summary-only record would discard the retained assistant/tool turns
+    on reload, even though the live run had kept them. In particular, an
+    unread knowledge.search result must survive a Stop or restart between
+    compaction and its first delivery to the model. Old summary-only
+    records remain readable.
+    """
     path = transcript_path(workspace)
     _ensure_meta(path, None, None)
-    _emit(path, {"t": "compact", "content": content})
+    record = {"t": "compact", "content": content}
+    if tail:
+        record["tail"] = tail
+    _emit(path, record)
 
 
 def drop_leading_orphan_tools(messages: list[dict]) -> list[dict]:
@@ -471,9 +480,21 @@ def load_messages(workspace: Path) -> list[dict]:
                 if item.get("t") == "compact":
                     content = item.get("content")
                     if isinstance(content, str) and content:
-                        # Collapse everything before this point, exactly
-                        # as the live run did when it compacted.
+                        # Rebuild exactly the live post-compaction history.
+                        # Older records without a tail still load unchanged.
                         messages = [{"role": "user", "content": content}]
+                        retained = item.get("tail")
+                        if isinstance(retained, list):
+                            for message in retained:
+                                if not isinstance(message, dict) or message.get("role") not in (
+                                    "user", "assistant", "tool", "system",
+                                ):
+                                    continue
+                                message = dict(message)
+                                body = message.get("content")
+                                if isinstance(body, str) and len(body) > _RELOAD_CONTENT_CAP:
+                                    message["content"] = body[:_RELOAD_CONTENT_CAP] + "…[truncated on reload]"
+                                messages.append(message)
                     continue
                 if item.get("t") != "msg":
                     continue

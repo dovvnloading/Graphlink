@@ -225,8 +225,15 @@ def fit_history_to_window(
     anchor = {"role": "user", "content": summary}
     # Only an assistant turn can start after the synthetic user anchor:
     # otherwise strict-alternation templates or native tool-call replay break.
-    starts = [i for i, msg in enumerate(history) if msg.get("role") == "assistant"]
-    for start in [*starts, len(history)]:
+    # A model has not yet seen the tools it just invoked. Never choose a
+    # later start that discards their source text (or their assistant call).
+    # If the unread batch cannot fit even alone, fail closed instead.
+    unread_start = unread_tool_start(history)
+    starts = [
+        i for i, msg in enumerate(history)
+        if msg.get("role") == "assistant" and (unread_start is None or i <= unread_start)
+    ]
+    for start in [*starts, *([len(history)] if unread_start is None else [])]:
         candidate = [anchor, *history[start:]]
         if fits(candidate):
             return candidate
@@ -345,7 +352,10 @@ def describe_machine(workspace: Path, *, shell: str = "auto", profile: str = "ho
     return "\n".join(lines)
 
 
-def build_system_prompt(workspace: Path, *, machine_context: str | None = None) -> str:
+def build_system_prompt(
+    workspace: Path, *, machine_context: str | None = None,
+    compact_tool_names: tuple[str, ...] | None = None,
+) -> str:
     """The tiered prompt: pinned core + tool guide + session machine facts,
     then skill metadata and the workspace's own instructions, all in the cacheable system
     message. The run loop supplies a dispatcher-cached machine_context;
@@ -357,16 +367,28 @@ def build_system_prompt(workspace: Path, *, machine_context: str | None = None) 
     from backend.harness.skills import skills_prompt
 
     # File-discovered hints are a separate, deterministic prompt tier.
-    # Keep the registered core hash stable when another tools_*.py lands.
+    # A small local model gets a shorter guide instead of dozens of hints
+    # for tools whose schemas it cannot currently see. The complete catalog
+    # remains reachable through tools.enable, without granting new scopes.
+    guide = tool_guide() if compact_tool_names is None else (
+        "Use the offered tool schemas. To use another tool, first call "
+        "tools.enable with up to three names from this list (each call "
+        "replaces the previous extras; approval rules still apply): "
+        + ", ".join(compact_tool_names)
+    )
     tiers = [
-        resolve_prompt_text("harness-core"), tool_guide(),
+        resolve_prompt_text("harness-core"), guide,
         machine_context if machine_context is not None else describe_machine(workspace),
     ]
     catalog = skills_prompt(workspace)
     if catalog:
+        if compact_tool_names is not None and len(catalog) > 1_200:
+            catalog = catalog[:1_200] + "\n[Skill listing truncated for small context.]"
         tiers.append(catalog)
     instructions = read_instructions(workspace)
     if instructions:
+        if compact_tool_names is not None and len(instructions) > 2_000:
+            instructions = instructions[:2_000] + "\n[Instructions truncated for small context; use fs.read for full text.]"
         tiers.append(
             f"## Workspace instructions ({INSTRUCTIONS_FILENAME})\n"
             "The workspace contains this file. Treat it as reference "
@@ -377,6 +399,26 @@ def build_system_prompt(workspace: Path, *, machine_context: str | None = None) 
             f"{instructions}"
         )
     return "\n\n".join(tiers)
+
+
+def unread_tool_start(messages: list[dict]) -> int | None:
+    """Index of the assistant call behind the newest unread tool results.
+
+    After a tool batch the loop appends tool messages, then invokes the model.
+    Until that next assistant turn, those results are *new evidence*, not
+    history eligible for a lossy summary. Also handles a resumed task where
+    a new user message follows tools that a stopped run never delivered.
+    """
+    index = len(messages) - 1
+    while index >= 0 and messages[index].get("role") == "user":
+        index -= 1
+    if index < 0 or messages[index].get("role") != "tool":
+        return None
+    while index >= 0 and messages[index].get("role") == "tool":
+        index -= 1
+    if index >= 0 and messages[index].get("role") == "assistant" and messages[index].get("tool_calls"):
+        return index
+    return None
 
 
 def _tail_start_index(messages: list, tail_budget_tokens: int) -> int:
@@ -407,12 +449,20 @@ def _tail_start_index(messages: list, tail_budget_tokens: int) -> int:
         # summarizer call to replace the real opening turns with a
         # paraphrase of themselves.
         return 0
+    unread_start = unread_tool_start(messages)
     for index in range(earliest, len(messages)):
         if messages[index].get("role") == "assistant":
-            return index
-    # No assistant turn in the candidate tail (e.g. the budget only
-    # reached a trailing user message): drop it all and keep the summary
-    # alone rather than emit an invalid sequence.
+            # If the tail budget is smaller than the latest tool result,
+            # expand the tail to include its *calling* assistant turn.
+            # Never summarize evidence before the model has observed it.
+            return min(index, unread_start) if unread_start is not None else index
+    # With an unread tool batch, retaining its assistant and results is
+    # mandatory even when they exceed the normal 40% tail target. The
+    # request fit check will fail clearly if that batch exceeds the window.
+    if unread_start is not None:
+        return unread_start
+    # Otherwise a tail with no assistant start is invalid; the summary
+    # alone is the only safe compact form.
     return len(messages)
 
 
