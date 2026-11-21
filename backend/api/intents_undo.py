@@ -65,9 +65,15 @@ def register_undo_intents(
             await _refuse(str(exc))
             return 0
         if count == 0:
-            await _refuse("Nothing from that run is left to undo.")
+            await _refuse("No canvas changes from that run remain to undo. Workspace files are not reverted.")
             return 0
         await publish_scene()
+        notifications.show(
+            f"Undid {count} canvas change{'s' if count != 1 else ''} from this run. "
+            "Workspace files are not reverted.",
+            msg_type="info",
+        )
+        await bus.publish("notification")
         return count
 
     bus.register_intent("scene", "undo", undo)
