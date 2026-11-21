@@ -1428,11 +1428,13 @@ describe("Settings > Knowledge embedding source", () => {
     const { user, intents } = await openKnowledge();
     await user.click(screen.getByRole("button", { name: "Embedding source" }));
     await user.click(await screen.findByRole("button", { name: /^Cloud \(OpenAI-compatible\)/ }));
-    expect(screen.getByText(/document passages and search queries/)).toBeInTheDocument();
+    expect(screen.getByText(/full text chunks from indexed files and saved graphs/)).toBeInTheDocument();
+    expect(screen.getByText(/including chat messages, code, prompts, and notes/)).toBeInTheDocument();
+    expect(screen.getByText(/turning this off stops future requests/i)).toBeInTheDocument();
     await user.type(screen.getByRole("textbox", { name: "Cloud embedding model ID" }), "text-embedding-3-small");
     expect(screen.getByRole("button", { name: "Test" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Save choice" })).toBeDisabled();
-    const consent = screen.getByRole("checkbox", { name: /document text leaves the machine/i });
+    const consent = screen.getByRole("checkbox", { name: /I consent to sending indexed content and search queries/i });
     await user.click(consent);
     await user.click(screen.getByRole("button", { name: "Test" }));
     await user.click(screen.getByRole("button", { name: "Save choice" }));
