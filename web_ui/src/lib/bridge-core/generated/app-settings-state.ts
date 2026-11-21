@@ -52,6 +52,15 @@ export interface OllamaModelCheck {
   message: string;
 }
 
+export interface LlamaCppModel {
+  path: string;
+  name: string;
+  sizeBytes?: number | null;
+  quantization: string;
+  trainedContextLength?: number | null;
+  capabilities: string[];
+}
+
 export interface McpServerConfig {
   id: string;
   name: string;
@@ -145,6 +154,7 @@ export interface AppSettingsState {
   llamaCppNGpuLayers: number;
   llamaCppNThreads: number;
   llamaCppScannedModels: string[];
+  llamaCppModels: LlamaCppModel[];
   llamaCppScanSummary: string;
   llamaCppScanStatus: string;
   llamaCppNotice: string;
@@ -197,6 +207,15 @@ const OLLAMA_MODEL_CHECK_FIELDS: WireFields = [
   ["tokensPerSecond", "n", 1],
   ["toolCallingWorks", "b", 1],
   ["message", "s", 0],
+];
+
+const LLAMA_CPP_MODEL_FIELDS: WireFields = [
+  ["path", "s", 0],
+  ["name", "s", 0],
+  ["sizeBytes", "n", 1],
+  ["quantization", "s", 0],
+  ["trainedContextLength", "n", 1],
+  ["capabilities", { a: "s" }, 0],
 ];
 
 const MCP_SERVER_CONFIG_FIELDS: WireFields = [
@@ -292,6 +311,7 @@ const APP_SETTINGS_STATE_FIELDS: WireFields = [
   ["llamaCppNGpuLayers", "n", 0],
   ["llamaCppNThreads", "n", 0],
   ["llamaCppScannedModels", { a: "s" }, 0],
+  ["llamaCppModels", { a: { o: LLAMA_CPP_MODEL_FIELDS } }, 0],
   ["llamaCppScanSummary", "s", 0],
   ["llamaCppScanStatus", "s", 0],
   ["llamaCppNotice", "s", 0],

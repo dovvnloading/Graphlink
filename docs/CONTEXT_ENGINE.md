@@ -121,9 +121,12 @@ constructs a source link from a model-written URL.
 ## Budget and priority
 
 1. Use the selected model's actual existing window estimator, including a
-   node/branch model pin. Ollama uses its cached served context size,
-   llama.cpp its configured n_ctx, cloud models the existing model-family
-   table, and lookup failures the ChatWorker fallback of 8,000 tokens.
+   node/branch model pin. Ollama uses its served `num_ctx` (including the
+   **per-model context choice** in Settings): 8,192 tokens is the default,
+   not a fixed maximum. Larger choices require a server-verified trained
+   length; see [Local models](LOCAL_MODELS.md). Llama.cpp uses its configured
+   `n_ctx`, cloud models the existing model-family table, and lookup
+   failures the ChatWorker fallback of 8,000 tokens.
 2. Reserve min(4096, context_window // 4) for output. Prompt capacity is
    the remaining window. Every source cost uses graphlink_memory.message_tokens
    and the shared graphlink_token_estimator.TokenEstimator, including vision

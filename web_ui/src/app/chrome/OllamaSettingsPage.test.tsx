@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { AppSettingsState } from "../../lib/bridge-core/generated/app-settings-state";
 import type { WsTransport } from "../../lib/ws/transport";
 import { OllamaSettingsPage } from "./OllamaSettingsPage";
+import { formatLocalModelBytes } from "./LocalProviderSettings";
 
 // A standalone page fixture. Navigation/subscription wiring remains covered
 // by SettingsDialog.test.tsx; this file exercises the actual Ollama controls.
@@ -105,6 +106,7 @@ const baseState: AppSettingsState = {
   llamaCppNGpuLayers: 0,
   llamaCppNThreads: 0,
   llamaCppScannedModels: [],
+  llamaCppModels: [],
   llamaCppScanSummary: "No saved GGUF scan yet. Run a system scan or choose a folder to build the local model list.",
   llamaCppScanStatus: "idle",
   llamaCppNotice: "",
@@ -459,4 +461,14 @@ describe("Settings > Ollama", () => {
     await user.click(screen.getByRole("button", { name: "Scan Folder..." }));
     expect(intents).toContainEqual(["app-settings", "pickOllamaScanFolder", []]);
   });
+  it("keeps the shared model byte labels conservative for untrusted values", () => {
+    expect(formatLocalModelBytes(null)).toBe("Unknown");
+    expect(formatLocalModelBytes(Number.NaN)).toBe("Unknown");
+    expect(formatLocalModelBytes(Number.POSITIVE_INFINITY)).toBe("Unknown");
+    expect(formatLocalModelBytes(-10)).toBe("Unknown");
+    expect(formatLocalModelBytes(0)).toBe("0 B");
+    expect(formatLocalModelBytes(1024)).toBe("1.0 KiB");
+  });
+
+
 });
