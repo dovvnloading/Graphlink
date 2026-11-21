@@ -153,6 +153,16 @@ def _drive(
     model = _ScriptedTestModel(turns, json_tools=json_tools, vision=vision)
     monkeypatch.setattr(api_provider, "_provider_for_model_ref", lambda _ref, _state: model)
     provider = config.LOCAL_PROVIDER_LLAMACPP if json_tools else "DeepSeek"
+    # The scripted JSON provider has no real llama.cpp KV cache. The default
+    # 4k n_ctx can discard tool results that the next scripted turn verifies;
+    # context-window trimming has separate focused harness tests.
+    runtime = None
+    if json_tools:
+        runtime = api_provider.ProviderRuntime()
+        runtime._write(
+            local_provider_type=config.LOCAL_PROVIDER_LLAMACPP,
+            llama_cpp_settings={**runtime.snapshot().llama_cpp_settings, "n_ctx": 48_000},
+        )
     expected_approvals = list(approvals)
     spent_before = scenario.agent.state.harness_spent_turns
 
@@ -167,7 +177,7 @@ def _drive(
             harness_node_id=scenario.agent.id, user_text="Complete the scenario.",
             request_id=handle.request_id, handle=handle, cancel_event=cancel_event,
             model_ref=ModelRef(provider, model.model_id),
-            settings_manager=settings_manager,
+            settings_manager=settings_manager, runtime=runtime,
             permission_mode=scenario.agent.state.harness_permission_mode,
             execution_profile=scenario.agent.state.harness_execution_profile,
         ))
