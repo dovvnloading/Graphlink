@@ -7,6 +7,7 @@ import { useExecutionLimits } from "../canvas/ExecutionLimitsContext";
 import { Dialog, useOverlays } from "../overlays/overlays";
 import { CustomSelect } from "./CustomSelect";
 import { CloudProviderSettings } from "./CloudProviderSettings";
+import { KnowledgeSettingsPage } from "./KnowledgeSettingsPage";
 
 /**
  * The settings dialog (Qt-removal plan R2.5d, extended R7.4a-c) - settings
@@ -19,6 +20,7 @@ import { CloudProviderSettings } from "./CloudProviderSettings";
 
 const SECTIONS = [
   "General",
+  "Knowledge",
   "Ollama (Local)",
   "Llama.cpp (Local)",
   "API Endpoint",
@@ -147,6 +149,15 @@ const initialState: AppSettingsState = {
   ollamaScanStatus: "idle",
   ollamaPullStatus: "idle",
   ollamaNotice: "",
+  knowledgeEmbeddingSource: "off",
+  knowledgeEmbeddingModel: "",
+  knowledgeCloudProvider: "OpenAI",
+  knowledgeCloudOptIn: false,
+  knowledgeOllamaModels: [],
+  knowledgeOllamaCapableModels: [],
+  knowledgeScanStatus: "idle",
+  knowledgeTestStatus: "idle",
+  knowledgeNotice: "",
   llamaCppReasoningLevel: "high",
   llamaCppChatModelPath: "",
   llamaCppTitleModelPath: "",
@@ -1610,6 +1621,8 @@ export function SettingsDialog({ transport }: { transport: WsTransport }) {
         <div className="settings-page" role="region" aria-label={activeSection}>
           {activeSection === "General" ? (
             <GeneralPage state={state} transport={transport} />
+          ) : activeSection === "Knowledge" ? (
+            <KnowledgeSettingsPage state={state} transport={transport} />
           ) : activeSection === "Integrations" ? (
             <IntegrationsPage state={state} transport={transport} />
           ) : activeSection === "API Endpoint" ? (
