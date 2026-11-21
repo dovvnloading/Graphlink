@@ -339,6 +339,22 @@ def _rerun_path_unchanged(document, reply_id: str, snapshots: dict[str, tuple]) 
     return cursor is None
 
 
+def _rerun_undo_stack_is_current(document, batch: dict) -> bool:
+    """A concurrent edit/undo must not be merged into the active re-run."""
+    if batch["command"] is not None:
+        # Even an intervening command later undone leaves redo entries that
+        # would replay over the batch. Never merge into that stack.
+        return (
+            bool(document.command_log)
+            and document.command_log[-1] is batch["command"]
+            and not document.redo_stack
+        )
+    return (
+        len(document.command_log) == batch["priorLength"]
+        and (document.command_log[-1] if document.command_log else None) is batch["priorHead"]
+    )
+
+
 def _job_status(job: dict) -> dict:
     return {
         key: job[key] for key in (
@@ -434,19 +450,7 @@ def register_chat_rerun_intents(
         }
 
         def stack_unchanged():
-            if batch["command"] is not None:
-                # A user command that was added and then undone is still a
-                # conflicting edit. Never merge a new reply while its redo
-                # entry could later replay over the batch.
-                return (
-                    bool(document.command_log)
-                    and document.command_log[-1] is batch["command"]
-                    and not document.redo_stack
-                )
-            return (
-                len(document.command_log) == batch["priorLength"]
-                and (document.command_log[-1] if document.command_log else None) is batch["priorHead"]
-            )
+            return _rerun_undo_stack_is_current(document, batch)
 
         async def _execute():
             try:
