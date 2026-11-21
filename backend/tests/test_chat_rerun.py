@@ -306,3 +306,34 @@ def test_reply_re_run_respects_twenty_version_cap_without_touching_other_kinds()
     assert result.state.version_index == 19
     assert result.state.reply_history_fingerprint == "v1:proof"
     assert document.nodes[code.id].state.code == "print(1)"
+
+def test_preview_hashes_a_branch_once_not_once_per_reply():
+    from unittest.mock import patch
+
+    import backend.domain.staleness as staleness
+
+    document, user, *_ = _thread()
+    with patch.object(staleness, "_message_input", wraps=staleness._message_input) as hashed:
+        preview = _preview_plan(document, _Dispatcher(), None, user.id, "all_branches_below")
+    assert preview["count"] == 3
+    # One pass to determine stale targets and one to snapshot ALL history
+    # digests. A per-reply lineage walk makes this four passes instead.
+    assert hashed.call_count == 2 * len(document.nodes)
+
+
+def test_large_preview_and_start_validation_yield_the_event_loop():
+    async def exercise():
+        document, user, *_ = _thread()
+        intents, _ = _register(document, _Dispatcher())
+        tick = asyncio.create_task(asyncio.sleep(0))
+        preview = await intents["previewChatRerun"](user.id, "all_branches_below")
+        assert tick.done(), "preview tokenization blocked the event loop"
+        assert preview["count"] == 3
+
+        tick = asyncio.create_task(asyncio.sleep(0))
+        with pytest.raises(SceneError, match="changed since the preview"):
+            await intents["startChatRerun"](user.id, "this_path", "old-token", False)
+        assert tick.done(), "start-time preview validation blocked the event loop"
+
+    asyncio.run(exercise())
+
