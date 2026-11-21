@@ -1460,7 +1460,10 @@ export function SettingsDialog({ transport }: { transport: WsTransport }) {
   // immediately without re-scanning every installed model.
   useEffect(() => {
     if (!settingsOpen) return;
-    const checkStatus = () => transport.fireIntent("app-settings", "checkOllamaStatus", []);
+    // This is a best-effort health poll; the result arrives through the
+    // app-settings subscription, not a WebSocket request reply. A slow probe
+    // must not leave a stale "request timed out" notification after Connected.
+    const checkStatus = () => transport.intent("app-settings", "checkOllamaStatus", []);
     const onVisible = () => {
       if (document.visibilityState === "visible") checkStatus();
     };

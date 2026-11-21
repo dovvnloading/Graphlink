@@ -39,9 +39,16 @@ from backend.ollama_inventory import (
     build_ollama_inventory,
     check_ollama_server_status,
     start_installed_ollama,
+    start_installed_ollama_server_fallback,
 )
 from graphlink_settings_store import SettingsManager
 from backend.ollama_model_names import valid_ollama_model_name
+
+
+# The first window allows the GUI/tray app to bind the API. If it fails,
+# the CLI fallback gets its own bounded window before Start reports failure.
+OLLAMA_TRAY_START_WAIT_SECONDS = 4.0
+OLLAMA_CLI_START_WAIT_SECONDS = 6.0
 
 
 def register_settings_ollama_intents(
@@ -508,58 +515,86 @@ def register_ollama_server_intents(
 ) -> None:
     """Register lightweight Ollama server-status and installed-app launch intents."""
 
+    # Keep strong references to tasks after their WebSocket request completes.
+    background_tasks: set[asyncio.Task[None]] = set()
+
+    def schedule_background(job: Awaitable[None]) -> None:
+        task = asyncio.create_task(job)
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
+
+    async def refresh_on_connect() -> None:
+        scan_in_progress = state.ollama_scan_status == "running"
+        while state.ollama_scan_status == "running":
+            await asyncio.sleep(0.1)
+        # If a prior offline scan finished just after reconnecting, replace
+        # its disk-only metadata; a concurrent server scan needs no repetition.
+        if not scan_in_progress or state.ollama_inventory_source != "server":
+            await refresh_inventory()
+
     async def check_ollama_status():
-        # Called on Settings open/focus and every 30 seconds. Do not persist
-        # scan results or perform expensive per-model /api/show and /api/ps
-        # requests on this polling path.
+        # A /api/tags-only health probe runs on open/focus and every 30 seconds.
+        # Only a transition to Connected triggers the heavier shared inventory
+        # refresh. It runs outside this intent so health never waits on /show.
         if state.ollama_status_checking:
             return
         state.ollama_status_checking = True
         try:
             status = await asyncio.to_thread(check_ollama_server_status)
-            changed = status != state.ollama_server_status
+            was_connected = state.ollama_server_status == "running" and state.ollama_server_reachable is True
+            changed = status != state.ollama_server_status or (status == "running") != state.ollama_server_reachable
             state.ollama_server_status = status
             state.ollama_server_reachable = status == "running"
             if status == "running" and state.ollama_start_error:
-                # A manual start after a previous launch failure succeeded.
-                # Do not leave a stale "Could not start" alert beside Connected.
+                # An external/manual start succeeded after a previous failure.
                 state.ollama_start_error = ""
                 changed = True
             if changed:
                 await bus.publish("app-settings")
+            if status == "running" and not was_connected:
+                # Replace offline disk-only Unknown metadata with server-verified
+                # /api/tags, /show and /ps without requiring a manual Refresh.
+                schedule_background(refresh_on_connect())
         finally:
             state.ollama_status_checking = False
 
-    async def start_ollama():
-        # The client supplies no path or command. Re-resolve the installation
-        # server-side immediately before spawning and block repeated clicks.
-        if state.ollama_start_status == "starting":
-            return
-        state.ollama_start_status = "starting"
-        state.ollama_start_error = ""
-        await bus.publish("app-settings")
+    async def _wait_for_ollama_server(seconds: float) -> str:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + seconds
+        while True:
+            status = await asyncio.to_thread(check_ollama_server_status)
+            remaining = deadline - loop.time()
+            if status == "running" or remaining <= 0:
+                return status
+            await asyncio.sleep(min(0.5, remaining))
+
+    async def _run_ollama_start() -> None:
         try:
             launched = await asyncio.to_thread(start_installed_ollama)
-            status = await asyncio.to_thread(check_ollama_server_status)
-            # A newly spawned server may need a moment to bind its port.
-            # Keep this short enough for the default WS request timeout.
-            for _ in range(8):
-                if status == "running" or not launched:
-                    break
-                await asyncio.sleep(0.5)
-                status = await asyncio.to_thread(check_ollama_server_status)
+            status = await _wait_for_ollama_server(OLLAMA_TRAY_START_WAIT_SECONDS) if launched else (
+                await asyncio.to_thread(check_ollama_server_status)
+            )
+            if launched and status != "running":
+                # Windows' installed tray app can exit successfully without
+                # ever binding the Ollama API. Use the installed CLI instead.
+                fallback = await asyncio.to_thread(start_installed_ollama_server_fallback)
+                if fallback:
+                    status = await _wait_for_ollama_server(OLLAMA_CLI_START_WAIT_SECONDS)
+                else:
+                    # The tray app may have connected between the last probe
+                    # and our attempt to fall back.
+                    status = await asyncio.to_thread(check_ollama_server_status)
             state.ollama_server_status = status
             state.ollama_server_reachable = status == "running"
             if status == "running":
-                # Start is a first-run action: the models must appear as soon
-                # as the server becomes reachable, without a second manual
-                # system scan. Only a fresh Start triggers this heavier scan;
-                # the 30-second health poll remains lightweight.
-                await refresh_inventory()
-            if launched and status != "running":
+                state.ollama_start_error = ""
+                # A successful Start gets a fresh server inventory too; a scan
+                # cannot hold the Start request open and trigger a WS timeout.
+                schedule_background(refresh_on_connect())
+            else:
                 state.ollama_start_error = (
-                    "Ollama was launched but its server is not responding yet. "
-                    "The status will refresh automatically."
+                    "Ollama did not start a responding server. "
+                    "Try starting Ollama manually (or run ollama serve), then select Check Ollama status."
                 )
         except FileNotFoundError:
             state.ollama_server_status = "not_found"
@@ -568,7 +603,7 @@ def register_ollama_server_intents(
                 "Graphlink could not find an Ollama installation. "
                 "Install Ollama and check its status again."
             )
-        except Exception as exc:  # noqa: BLE001 - surface an OS launch failure without crashing the intent
+        except Exception as exc:  # noqa: BLE001 - surface OS launch failures without crashing Settings
             state.ollama_start_error = (
                 f"Could not start Ollama: {exc}. "
                 "Try launching Ollama manually, then select Check Ollama status."
@@ -576,6 +611,18 @@ def register_ollama_server_intents(
         finally:
             state.ollama_start_status = "idle"
             await bus.publish("app-settings")
+
+    async def start_ollama():
+        # Ack immediately: process startup and its bounded probes are a
+        # background operation, with progress and failures published as state.
+        # This also prevents a slow start from emitting a misleading 10s
+        # WebSocket request-timeout toast.
+        if state.ollama_start_status == "starting":
+            return
+        state.ollama_start_status = "starting"
+        state.ollama_start_error = ""
+        await bus.publish("app-settings")
+        schedule_background(_run_ollama_start())
 
     bus.register_intent("app-settings", "checkOllamaStatus", check_ollama_status)
     bus.register_intent("app-settings", "startOllama", start_ollama)

@@ -244,6 +244,11 @@ export function Composer({
   }
 
   const modelLabel = composer.route.modelLabel || composer.route.modelId || "Select a model";
+  // Only describe the exact selected route. A pending/late lookup must not
+  // warn about the model that was selected before this one.
+  const currentModelCapabilities = modelCapabilities !== null
+    && modelCapabilities.provider === composer.route.provider
+    && modelCapabilities.modelId === composer.route.modelId ? modelCapabilities : null;
   const isSynthesizing = !!synthesizeTargetNodeIds && synthesizeTargetNodeIds.length > 0;
 
   function send() {
@@ -396,10 +401,17 @@ export function Composer({
           ))}
         </div>
       )}
+      {agentMode && currentModelCapabilities?.tools === false && (
+        <p className="composer-model-capability-warning" role="status">
+          {modelLabel} does not support tool calling.{" "}
+          {currentModelCapabilities.suggestedToolModel
+            ? `Try installed Ollama model ${currentModelCapabilities.suggestedToolModel.modelId} (estimated to fit available system RAM) for the Agent task.`
+            : "Choose an installed tool-capable model before sending this Agent task."}
+          {" "}The Agent may still use its constrained JSON tool protocol when supported.
+        </p>
+      )}
       {!agentMode && composer.context.items.some((item) => item.kind === "image") &&
-        modelCapabilities?.provider === composer.route.provider &&
-        modelCapabilities.modelId === composer.route.modelId &&
-        modelCapabilities.vision === false && (
+        currentModelCapabilities?.vision === false && (
           <p className="composer-model-capability-warning" role="status">
             {modelLabel} does not support image input. Choose a vision-capable model before sending these image attachments.
           </p>

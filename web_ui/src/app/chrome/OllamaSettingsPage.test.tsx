@@ -130,6 +130,11 @@ function setup(overrides: Partial<AppSettingsState> = {}) {
     fireIntent: (topic: string, intent: string, args: unknown[] = []) => {
       intents.push([topic, intent, args]);
     },
+    // Health checks are untracked: only the published snapshot matters, not
+    // a request acknowledgement that could time out after Connected.
+    intent: (topic: string, intent: string, args: unknown[] = []) => {
+      intents.push([topic, intent, args]);
+    },
   } as unknown as WsTransport;
   const user = userEvent.setup();
   let state = { ...baseState, ...overrides };
@@ -386,8 +391,15 @@ describe("Settings > Ollama", () => {
     }] });
     const card = within(screen.getByRole("group", { name: "first:latest" }));
     expect(card.getByText(/Sample load time: 2.25 s/)).toHaveTextContent("42.5 tokens/s");
-    expect(card.getByText(/Tool probe: No tool call returned/)).toHaveAttribute("data-level", "warning");
+    expect(card.getByText(/Tool probe: No tool call observed/)).toHaveAttribute("data-level", "warning");
     expect(card.getByText(/Tool probe not supported/)).toBeInTheDocument();
+    update({ ollamaModelChecks: [{
+      name: "first:latest", status: "complete", loadSeconds: 2.25,
+      tokensPerSecond: 42.5, toolCallingWorks: null,
+      message: "Tool probe inconclusive: reasoning output without a matching tool call.",
+    }] });
+    expect(card.getByText(/Tool probe: Inconclusive/)).toHaveAttribute("data-level", "warning");
+    expect(card.getByText(/Tool probe inconclusive: reasoning output/)).toBeInTheDocument();
     update({ ollamaModelChecks: [{
       name: "first:latest", status: "error", loadSeconds: null,
       tokensPerSecond: null, toolCallingWorks: null, message: "Check failed: daemon offline",

@@ -342,7 +342,7 @@ function OllamaModelCard({
             "Sample load time: " + (report.loadSeconds == null ? "Unavailable" : report.loadSeconds.toFixed(2) + " s") +
             " · Sample generation speed: " + (report.tokensPerSecond == null ? "Unavailable" : report.tokensPerSecond.toFixed(1) + " tokens/s") +
             " · Tool probe: " + (report.toolCallingWorks === true ? "Tool call returned" :
-              report.toolCallingWorks === false ? "No tool call returned" : "Unavailable")}
+              report.toolCallingWorks === false ? "No tool call observed" : "Inconclusive")}
           {report.status === "complete" && report.message && (" · " + report.message)}
         </p>
       )}
@@ -450,7 +450,7 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
       <div className="settings-button-row">
         <button type="button" className="settings-button"
           disabled={state.ollamaStartStatus === "starting"}
-          onClick={() => transport.fireIntent("app-settings", "checkOllamaStatus", [])}>
+          onClick={() => transport.intent("app-settings", "checkOllamaStatus", [])}>
           Check Ollama status
         </button>
       </div>

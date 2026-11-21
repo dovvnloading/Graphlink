@@ -48,10 +48,14 @@ format, llama.cpp grammar, or a compatible endpoint’s JSON response format. Th
 uses the **same tool permissions and approval prompts** . If the model/runtime has neither usable
 native tools nor constrained JSON, choose another model; Agent does not execute tool requests
 extracted from free-form prose. Builder still requires native tools. When a model's metadata *confirms* it lacks
-native tool calling, an Agent card warns and may suggest an installed
-tool-capable Ollama model; unknown capability metadata is not treated as
-proof of missing support. See [JSON tool protocol](WORKSPACE_JSON_TOOLS.md)
-and [Local models](LOCAL_MODELS.md).
+native tool calling, **Agent mode in the main composer warns before the first
+task is sent**, and idle Agent cards warn before follow-up tasks. A suggested
+replacement must be installed and verified by the Ollama server, advertise
+tools, and have an estimated model-weight + KV-cache footprint within available
+system RAM. No specific model is suggested if memory fit is unknown or none
+qualify. Memory fit is approximate, not a guarantee. Unknown tool capability
+metadata is not proof of missing support. See
+[JSON tool protocol](WORKSPACE_JSON_TOOLS.md) and [Local models](LOCAL_MODELS.md).
 
 Local inference can work offline after installing its runtime and models, but
 **web research, package downloads, and other approved online integrations can still connect to the network**

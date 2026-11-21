@@ -65,6 +65,65 @@ def test_probe_preserves_timings_if_tools_unsupported_and_handles_missing_counte
     assert closed == [True]
 
 
+def test_probe_qwen3_disables_thinking_and_retries_thinking_only_output(monkeypatch):
+    from types import SimpleNamespace
+
+    tool_requests = []
+    closed = []
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def chat(self, **kwargs):
+            if "tools" not in kwargs:
+                return {"load_duration": 500_000_000, "eval_count": 4, "eval_duration": 500_000_000}
+            tool_requests.append(kwargs)
+            if len(tool_requests) == 1:
+                return {"message": {"thinking": "Still reasoning", "content": ""}, "done_reason": "length"}
+            return SimpleNamespace(message=SimpleNamespace(tool_calls=[
+                SimpleNamespace(function=SimpleNamespace(name="graphlink_model_check"))
+            ]))
+
+        async def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(ollama_model_check.ollama, "AsyncClient", FakeClient)
+    result = asyncio.run(ollama_model_check.probe_ollama_model("qwen3:8b"))
+    assert result["toolCallingWorks"] is True
+    assert result["message"] == ""
+    assert len(tool_requests) == 2
+    assert all(request["think"] is False for request in tool_requests)
+    assert tool_requests[0]["tools"][0]["function"]["parameters"]["required"] == ["value"]
+    assert tool_requests[1]["options"]["num_predict"] > tool_requests[0]["options"]["num_predict"]
+    assert closed == [True]
+
+
+def test_probe_without_native_tool_call_is_inconclusive_not_unsupported(monkeypatch):
+    tool_requests = []
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def chat(self, **kwargs):
+            if "tools" in kwargs:
+                tool_requests.append(kwargs)
+                return {"message": {"content": "I would call the tool now.", "tool_calls": []}}
+            return {"load_duration": 0, "eval_count": 1, "eval_duration": 1_000_000_000}
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(ollama_model_check.ollama, "AsyncClient", FakeClient)
+    result = asyncio.run(ollama_model_check.probe_ollama_model("maybe-tools:latest"))
+    assert result["toolCallingWorks"] is None
+    assert "inconclusive" in result["message"].lower()
+    assert "does not prove" in result["message"]
+    assert len(tool_requests) == 2
+    assert all("think" not in request for request in tool_requests)
+
+
 def _registered_bus(tmp_path, monkeypatch):
     manager = SettingsManager(tmp_path / "session.dat")
     models = [
@@ -308,7 +367,8 @@ def test_probe_ignores_malformed_counters_and_tool_calls(monkeypatch):
     report = asyncio.run(ollama_model_check.probe_ollama_model("installed:latest"))
     assert report["loadSeconds"] is None
     assert report["tokensPerSecond"] is None
-    assert report["toolCallingWorks"] is False
+    assert report["toolCallingWorks"] is None
+    assert "inconclusive" in report["message"].lower()
     assert closed == [True]
 
 

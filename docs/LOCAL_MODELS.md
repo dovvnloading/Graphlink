@@ -5,9 +5,9 @@ Graphlink can run chat and agent tasks using models on your own computer, withou
 ## Get Ollama running
 
 1. Open **Settings → Ollama (Local)**. The **Ollama server** indicator reports **Checking...**, **Running**, **Installed but not running**, or **Not found**.
-2. If it says **Installed but not running**, select **Start Ollama**. Graphlink launches the already-installed app or executable, then checks whether the server responds. You may briefly see **Starting Ollama...** or an error; the status is also checked again automatically.
+2. If it says **Installed but not running**, select **Start Ollama**. Graphlink launches the already-installed app or executable and waits a bounded time for the server to respond. On Windows, if the installed tray app does not start the server, Graphlink tries the installed `ollama.exe serve` CLI. If neither attempt succeeds, it reports that Start failed and suggests starting Ollama manually; status checks continue automatically.
 3. If it says **Not found**, **install Ollama yourself** from [Ollama's official download page](https://ollama.com/download), using the installer for your operating system. Graphlink does not download or install the Ollama runtime. Start the Ollama app, or run `ollama serve` if you use its command-line server, then return to Settings.
-4. When the status is **Running**, select **Refresh installed models** (or **System Scan**) if the inventory needs refreshing. Opening the Ollama settings page also refreshes it.
+4. When the status becomes **Running**, Graphlink automatically refreshes the server-verified model inventory (including after starting Ollama manually), replacing disk-only unknown metadata. The Ollama settings page also scans on open; **Refresh installed models** (or **System Scan**) remains available for an explicit refresh.
 
 A running server is not the same as an installed model: a new installation may show **No models installed in this Ollama instance**. Graphlink reads the running server's installed tags and model details. If the server is unavailable, **System Scan** can fall back to finding model names on disk; **Scan Folder...** lets you choose a folder manually. Disk-only results are *not* verified server inventory: start Ollama and scan again to inspect capabilities, load state and memory, and to enable removal.
 
@@ -65,14 +65,14 @@ When a card is inspected, Graphlink estimates **model weights + KV cache** for t
 
 ## Run a model Check
 
-Select **Check** on a model card to run a short, cancellable diagnostic. It asks the model to generate a brief reply and requests a harmless tool call. The card reports **load time**, **generation speed (tokens/s)** and whether **tool calling worked**; unavailable counters are reported as unavailable rather than invented. **Cancel** stops an in-progress check.
+Select **Check** on a model card to run a short, cancellable diagnostic. It asks the model to generate a brief reply and requests a harmless **native function call** using an actual Ollama tool definition; no tool is executed. For supported reasoning models such as Qwen3, the tool probe uses the runtime's Quick/no-thinking setting and retries once if the response contains reasoning but no call. The card reports **load time**, **generation speed (tokens/s)** and whether a **tool call was observed**; unavailable counters are reported as unavailable rather than invented. If neither attempt returns a call, the result is **Inconclusive**, not proof that tools are unsupported. **Cancel** stops an in-progress check.
 
-**Check is a report only.** It loads the model for its short prompts and requests a five-minute keep-alive so the card can show its updated **Loaded** status and memory after a successful check. Ollama may unload it later or independently of Graphlink. A check does **not** change saved settings or model assignments, and **never executes** the requested tool call. It is a small probe, not a guarantee of performance on your own workloads. A negative native-tool result does not by itself rule out the Agent's JSON-tool fallback.
+**Check is a report only.** It requests a five-minute keep-alive so a successful Check can refresh the card's **Loaded** status and resident RAM/VRAM from Ollama; Ollama may unload the model later or independently. A Check does **not** change saved settings or model assignments, and **never executes** the requested tool call. It is a small probe, not a guarantee of performance on your own workloads. An inconclusive native-tool check does not override Ollama's advertised tools capability or rule out the Agent's JSON-tool fallback.
 
 ## Understand capability warnings
 
 - If you attach an image in the composer and the selected model is **confirmed not to support vision**, Graphlink warns you before sending. Pick a vision-capable model.
-- If an Agent card's current model is **confirmed not to support native tool calling**, it warns you and may suggest an installed tool-capable Ollama model. Agent's constrained JSON fallback may still work where supported.
+- With **Agent** mode enabled, the main composer warns **before the first task is sent** if the selected model is confirmed not to support native tool calling. Idle Agent cards retain this warning for follow-up tasks. Graphlink may suggest a **server-verified installed Ollama model** with tools whose estimated weights plus context-window KV cache fit **available system RAM**. This is an estimate, not a guarantee of actual memory usage; if the fit cannot be established, it suggests no particular model. Agent's constrained JSON fallback may still work where supported.
 - **Unknown/unavailable** metadata does not trigger those unsupported-capability warnings. If you are unsure, start Ollama, refresh the inventory, and use **Check** to probe native tool calling.
 
 Badges and warnings describe reported or observed support, not a promise that a particular prompt, image format or tool schema will succeed.
