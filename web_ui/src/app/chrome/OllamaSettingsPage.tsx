@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { AppSettingsState } from "../../lib/bridge-core/generated/app-settings-state";
 import type { WsTransport } from "../../lib/ws/transport";
 import { CustomSelect } from "./CustomSelect";
@@ -156,6 +156,14 @@ function OllamaModelCard({
     if (confirming) confirmRef.current?.focus();
   }, [confirming]);
 
+  const onConfirmKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    setConfirming(false);
+    removeButtonRef.current?.focus();
+  };
+
   // Never trust folder-only metadata to unlock >8k windows. The server
   // inventory is the same verified /api/show snapshot Knowledge uses.
   const trainedLimit = model.source === "server" && typeof model.trainedContextLength === "number"
@@ -276,22 +284,16 @@ function OllamaModelCard({
         <span className="settings-field-hint">{report.message}</span>
       )}
       {confirming && canRemove && (
-        <div role="group" aria-label={"Confirm removal of " + model.name} className="settings-ollama-removal"
-          onKeyDown={(event) => {
-            if (event.key !== "Escape") return;
-            event.preventDefault();
-            event.stopPropagation();
-            setConfirming(false);
-            removeButtonRef.current?.focus();
-          }}>
+        <div role="group" aria-label={"Confirm removal of " + model.name} className="settings-ollama-removal">
           <p className="settings-update-status">Remove {model.name} from Ollama? This deletes the local model files.</p>
           <div className="settings-button-row">
             <button ref={confirmRef} type="button" className="settings-button" disabled={busy}
+              onKeyDown={onConfirmKeyDown}
               onClick={() => {
                 transport.fireIntent("app-settings", "removeOllamaModel", [model.name]);
                 setConfirming(false);
               }}>Confirm remove</button>
-            <button type="button" className="settings-button" onClick={() => {
+            <button type="button" className="settings-button" onKeyDown={onConfirmKeyDown} onClick={() => {
               setConfirming(false);
               removeButtonRef.current?.focus();
             }}>Keep model</button>
