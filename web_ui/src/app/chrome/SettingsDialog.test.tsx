@@ -70,6 +70,7 @@ const snapshot = {
   ollamaModelAssignments: {},
   ollamaScannedModels: [],
   ollamaInventory: [],
+  ollamaModelChecks: [],
   ollamaInventorySource: "",
   ollamaServerReachable: null,
   ollamaScanSummary: "No saved scan yet. Run a system scan or choose a folder to build the local model list.",
@@ -372,6 +373,67 @@ describe("SettingsDialog", () => {
     expect(screen.getByText(/4.0 GiB on disk/)).toBeInTheDocument();
     expect(screen.getByText(/Trained context: 131,072 tokens/)).toBeInTheDocument();
     expect(screen.getByText(/chat, tools, vision, thinking/)).toBeInTheDocument();
+  });
+
+  it("checks an installed inventory row without changing model assignments", async () => {
+    const { user, push, intents } = setup();
+    await goToOllama(user, push, {
+      ollamaInventory: [ollamaInventoryRow("first:latest"), ollamaInventoryRow("second:latest")],
+      ollamaInventorySource: "server",
+    });
+
+    await user.click(screen.getByRole("button", { name: "Check first:latest" }));
+    expect(intents).toContainEqual(["app-settings", "checkOllamaModel", ["first:latest"]]);
+    expect(intents.some(([, intent]) => intent === "setOllamaModelAssignment")).toBe(false);
+    expect(screen.getByText(/Results are reports only/)).toBeInTheDocument();
+  });
+
+  it("shows the active check and sends Cancel for that same model only", async () => {
+    const { user, push, intents } = setup();
+    const inventory = [ollamaInventoryRow("first:latest"), ollamaInventoryRow("second:latest")];
+    await goToOllama(user, push, {
+      ollamaInventory: inventory,
+      ollamaModelChecks: [{
+        name: "first:latest", status: "running", loadSeconds: null,
+        tokensPerSecond: null, toolCallingWorks: null, message: "",
+      }],
+    });
+
+    expect(screen.getByRole("button", { name: "Check first:latest" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Check second:latest" })).toBeDisabled();
+    expect(screen.getByText("Checking model...")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel check second:latest" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Cancel check first:latest" }));
+    expect(intents).toContainEqual(["app-settings", "cancelOllamaModelCheck", ["first:latest"]]);
+  });
+
+  it("renders per-model metrics, failed tool calling, and cancellation/error reports", async () => {
+    const { user, push } = setup();
+    await goToOllama(user, push, {
+      ollamaInventory: [ollamaInventoryRow("first:latest"), ollamaInventoryRow("second:latest")],
+      ollamaModelChecks: [{
+        name: "first:latest", status: "complete", loadSeconds: 2.25,
+        tokensPerSecond: 42.5, toolCallingWorks: false, message: "Tool probe not supported.",
+      }, {
+        name: "second:latest", status: "cancelled", loadSeconds: null,
+        tokensPerSecond: null, toolCallingWorks: null, message: "Check cancelled.",
+      }],
+    });
+    expect(screen.getByText(/Load: 2\.25 s/)).toBeInTheDocument();
+    expect(screen.getByText(/42\.5 tokens\/s/)).toBeInTheDocument();
+    expect(screen.getByText(/Tool calling: Not working/)).toBeInTheDocument();
+    expect(screen.getByText("Tool probe not supported.")).toBeInTheDocument();
+    expect(screen.getByText("Check cancelled.")).toBeInTheDocument();
+
+    act(() => push({ ...snapshot, activeSection: "ollama (local)",
+      ollamaInventory: [ollamaInventoryRow("second:latest")],
+      ollamaModelChecks: [{
+        name: "second:latest", status: "error", loadSeconds: null,
+        tokensPerSecond: null, toolCallingWorks: null, message: "Check failed: daemon offline",
+      }],
+    }));
+    expect(screen.getByText("Check failed: daemon offline")).toHaveAttribute("data-level", "error");
   });
 
   it("System Scan fires scanOllamaSystem and disables while running", async () => {

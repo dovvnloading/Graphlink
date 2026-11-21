@@ -359,6 +359,7 @@ def _build_settings_payload(
     payload["ollamaModelAssignments"] = _ollama_model_assignments_for_wire(manager)
     payload["ollamaScannedModels"] = manager.get_ollama_scanned_models()
     payload["ollamaInventory"] = state.ollama_inventory
+    payload["ollamaModelChecks"] = list(state.ollama_model_checks.values())
     payload["ollamaInventorySource"] = state.ollama_inventory_source
     payload["ollamaServerReachable"] = state.ollama_server_reachable
     payload["ollamaScanSummary"] = _ollama_scan_summary(manager)

@@ -353,6 +353,9 @@ class SettingsSessionState:
     ollama_inventory: list[dict] = field(default_factory=list)
     ollama_inventory_source: str = ""
     ollama_server_reachable: bool | None = None
+    ollama_model_checks: dict[str, dict] = field(default_factory=dict)
+    ollama_check_task: asyncio.Task[None] | None = None
+    ollama_check_name: str = ""
     knowledge_scan_status: str = "idle"
     knowledge_test_status: str = "idle"
     knowledge_notice: str = ""

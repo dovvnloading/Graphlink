@@ -27,6 +27,7 @@ from backend.api._settings_shared import (
     run_locked,
 )
 from backend.events import SessionBus
+from backend.api.intents_ollama_model_check import register_ollama_model_check_intents
 from backend.ollama_inventory import build_ollama_inventory
 from graphlink_settings_store import SettingsManager
 
@@ -274,4 +275,5 @@ def register_settings_ollama_intents(
     bus.register_intent("app-settings", "scanOllamaSystem", scan_ollama_system)
     bus.register_intent("app-settings", "pullOllamaModel", pull_ollama_model)
     bus.register_intent("app-settings", "pickOllamaScanFolder", pick_ollama_scan_folder)
+    register_ollama_model_check_intents(bus, state)
     return scan_ollama_system
