@@ -261,6 +261,8 @@ def test_sqlite_hardlinks_rejected_before_chmod(tmp_path, suffix):
     outside.write_bytes(b"private data outside the knowledge directory")
     os.chmod(outside, 0o644)
     candidate = path.with_name(path.name + suffix)
+    if candidate.exists():
+        candidate.unlink()  # SQLite may retain a checkpointed sidecar on close
     try:
         os.link(outside, candidate)
     except (OSError, NotImplementedError):
