@@ -22,8 +22,9 @@ from backend.api.intents_chat import (
     _stamp_reply_provenance,
     _use_knowledge_for_node,
 )
-from backend.context_engine.citations import apply_reply_citations
+from backend.context_engine.citations import CITATION_RECORD_NAME, apply_reply_citations
 from backend.domain.commands import _merge_commands
+from backend.domain.graph_runner import bound_dependents, is_bound_node
 from backend.domain.model import SceneError
 from backend.domain.node_states import ChatState
 from backend.domain.staleness import (
@@ -35,8 +36,16 @@ _logger = logging.getLogger(__name__)
 _SCOPES = ("this_path", "all_branches_below")
 
 
-def _rerun_ids(document, root_id: str, scope: str) -> list[str]:
-    """Canonical parent-before-child traversal; never follow reference edges."""
+def _has_executed_tools(node) -> bool:
+    """Citation provenance is metadata, but any other tool call is unsafe to replay."""
+    return isinstance(node.state, ChatState) and any(
+        not isinstance(call, dict) or call.get("name") != CITATION_RECORD_NAME
+        for call in node.state.tool_invocations
+    )
+
+
+def _rerun_selection(document, root_id: str, scope: str) -> tuple[list[str], list[dict]]:
+    """One canonical traversal for BOTH the executable batch and skipped preview."""
     root = document.nodes.get(root_id)
     if root is None or root.kind != "chat" or not isinstance(root.state, ChatState):
         raise SceneError("Re-run from here requires a chat message.")
@@ -48,14 +57,14 @@ def _rerun_ids(document, root_id: str, scope: str) -> list[str]:
         or (not root.state.is_user and stale.get(root_id) == "out_of_date")
     ):
         raise SceneError("Re-run from here requires an edited user message or an out-of-date reply.")
+    if _has_executed_tools(root):
+        raise SceneError("Tool-executing replies must be re-run manually.")
 
     chosen = primary_parent_edges(document.nodes, document.edges, set(document.nodes))
     children: dict[str, list[str]] = {}
     for child_id, edge in chosen.items():
         children.setdefault(edge.source, []).append(child_id)
 
-    # The active conversation tip chooses the path when it descends from the
-    # clicked message. Otherwise the first canonical structural child wins.
     active_path: set[str] = set()
     cursor = document.last_chat_node_id
     while cursor in document.nodes and cursor not in active_path:
@@ -69,22 +78,56 @@ def _rerun_ids(document, root_id: str, scope: str) -> list[str]:
     if root_id not in active_path:
         active_path.clear()
 
-    ordered: list[str] = []
-    stack = [root_id]
+    replies: list[str] = []
+    skipped: list[dict] = []
+    stack = [(root_id, False)]
     visited: set[str] = set()
     while stack:
-        item = stack.pop()
+        item, blocked_upstream = stack.pop()
         if item in visited:
             continue
         visited.add(item)
         node = document.nodes.get(item)
         if node is None:
             continue
-        if (
-            node.kind == "chat" and isinstance(node.state, ChatState)
-            and not node.state.is_user and not node.state.is_branch_synthesis
-        ):
-            ordered.append(item)
+        # A skipped executable or bound node is a dependency boundary.
+        # Never generate a downstream reply using stale tool/runner output.
+        blocked = blocked_upstream
+        if node.kind == "chat" and isinstance(node.state, ChatState):
+            if not node.state.is_user:
+                if _has_executed_tools(node):
+                    reason = "This reply executed tools; re-run it manually."
+                elif node.state.is_branch_synthesis:
+                    reason = "Branch synthesis requires its separate manual action."
+                elif blocked:
+                    reason = "An upstream node was skipped; re-run this reply manually."
+                else:
+                    reason = ""
+                if reason:
+                    skipped.append({
+                        "nodeId": item, "title": node.title or "Assistant reply",
+                        "kind": node.kind, "category": "manual", "reason": reason,
+                    })
+                    blocked = True
+                else:
+                    replies.append(item)
+        elif item != root_id:
+            bound = is_bound_node(node)
+            if bound:
+                reason = "Data-bound output requires Graph Runner preview and approval."
+            else:
+                names = {
+                    "harness": "Workspace agent", "plan": "Builder",
+                    "code_sandbox": "Code sandbox",
+                }
+                name = names.get(node.kind, "Plugin action" if "." in node.kind else "Tool or other")
+                reason = f"{name} nodes may have side effects; never re-run automatically. Re-run manually."
+            skipped.append({
+                "nodeId": item, "title": node.title or node.kind,
+                "kind": node.kind, "category": "bound" if bound else "manual",
+                "reason": reason,
+            })
+            blocked = True
         descendants = children.get(item, ())
         if scope == "this_path":
             next_id = next((child for child in descendants if child in active_path), None)
@@ -94,17 +137,37 @@ def _rerun_ids(document, root_id: str, scope: str) -> list[str]:
                     next(iter(descendants), None),
                 )
             if next_id is not None:
-                stack.append(next_id)
+                stack.append((next_id, blocked))
         else:
-            stack.extend(reversed(descendants))
-    return ordered
+            stack.extend((child, blocked) for child in reversed(descendants))
+
+    # Binding edges are not necessarily structural canvas edges. Include
+    # downstream Model, table and Scientific outputs even when they cannot
+    # be discovered by the chat tree. Selection only; no evaluation here.
+    already_skipped = {row["nodeId"] for row in skipped}
+    for item in bound_dependents(document, visited):
+        if item not in already_skipped:
+            node = document.nodes[item]
+            skipped.append({
+                "nodeId": item, "title": node.title or node.kind,
+                "kind": node.kind, "category": "bound",
+                "reason": "Data-bound output requires Graph Runner preview and approval.",
+            })
+            already_skipped.add(item)
+    return replies, skipped
+
+
+def _rerun_ids(document, root_id: str, scope: str) -> list[str]:
+    """Only ordinary, tool-free replies may enter the actual execution batch."""
+    replies, _ = _rerun_selection(document, root_id, scope)
+    return replies
 
 
 def _preview_plan(document, dispatcher, bus, root_id: str, scope: str):
     """The same server-owned selection is recomputed at execution time."""
     from backend.canvas import _history_image_tokens, _history_token_text
 
-    ids = _rerun_ids(document, root_id, scope)
+    ids, skipped = _rerun_selection(document, root_id, scope)
     rows = []
     root = document.nodes[root_id]
     proof = [root_id, scope, root.content, root.state.version_index, len(root.state.versions)]
@@ -135,10 +198,15 @@ def _preview_plan(document, dispatcher, bus, root_id: str, scope: str):
             node.state.reply_history_fingerprint,
             fingerprint_from_history_hashes(hashes, parent_id, provider, model, bool(node.state.reply_knowledge_enabled)),
         ))
+    # Skipped-node classification is part of the approval token: it must not
+    # silently change between the read-only preview and the batch start.
+    proof.extend((row["nodeId"], row["kind"], row["category"], row["reason"],
+                  document.nodes[row["nodeId"]].content) for row in skipped)
     token = hashlib.sha256(json.dumps(proof, separators=(",", ":")).encode("utf-8")).hexdigest()
     return {
         "previewToken": token,
         "replies": rows,
+        "skipped": skipped,
         "count": len(rows),
         "requiresConfirmation": len(rows) > 10,
     }
@@ -227,8 +295,10 @@ def register_chat_rerun_intents(
                     node_id_to_run = row["nodeId"]
                     node = document.nodes.get(node_id_to_run)
                     if (
-                        node is None or not isinstance(node.state, ChatState)
+                        node is None or node.kind != "chat"
+                        or not isinstance(node.state, ChatState)
                         or node.state.is_user or node.state.is_branch_synthesis
+                        or _has_executed_tools(node)
                     ):
                         raise SceneError("The re-run path changed. Preview it again.")
                     edge = document._branch_parent_edge(node_id_to_run)

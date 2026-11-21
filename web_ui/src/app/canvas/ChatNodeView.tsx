@@ -273,7 +273,7 @@ function ChatNodeMenu({
   onUndockChild: (childId: string) => void;
   onRegenerate: () => void;
   onRerunFromHere?: () => void;
-  menuTriggerRef: RefObject<HTMLButtonElement | null>;
+  menuTriggerRef: RefObject<HTMLButtonElement>;
   canRerun: boolean;
   onEdit: () => void;
   onEditAsNewBranch: () => void;
@@ -810,7 +810,7 @@ export const ChatNodeView = memo(function ChatNodeView({
   const [editError, setEditError] = useState("");
   const [editSaving, setEditSaving] = useState(false);
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
-  const menuTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const restoreEditFocus = useRef(false);
   const staleEdit = editMode !== null && data.content !== editBase;
 
@@ -959,6 +959,11 @@ export const ChatNodeView = memo(function ChatNodeView({
 
   // Citation provenance uses a reserved structured row, not a model tool call.
   const visibleToolInvocations = data.toolInvocations.filter((item) => item.name !== KNOWLEDGE_CITATION_RECORD);
+  // Executed tools are not a normal model reply: neither the menu nor its
+  // quick action may offer automatic replay. Citations are metadata only.
+  const manualRerun = visibleToolInvocations.length > 0 || data.isBranchSynthesis;
+  const canRerunFromHere = !manualRerun &&
+    (data.isUser ? data.versionCount > 1 : data.staleness === "out_of_date");
   const replyCitations = !data.isUser && !data.pendingRequestId
     ? citationsForReply(data.content, data.toolInvocations) : undefined;
   const hasUsage = data.promptTokens != null || data.completionTokens != null;
@@ -1000,6 +1005,7 @@ export const ChatNodeView = memo(function ChatNodeView({
       selected={!!selected}
       collapsed={collapsed}
       staleness={data.staleness}
+      manualRerun={manualRerun}
       onMenuChange={setMenuPosition}
       menuTriggerRef={menuTriggerRef}
       onBodyDoubleClick={data.isUser && editMode === null ? () => beginEdit("in-place") : undefined}
@@ -1061,8 +1067,7 @@ export const ChatNodeView = memo(function ChatNodeView({
                   title="Branch from here" aria-label="Branch from here">
                   <ChatNodeIcon name="branch" />
                 </button>
-                {(data.isUser ? data.versionCount > 1 : data.staleness === "out_of_date")
-                  && data.onRerunFromHere && (
+                {canRerunFromHere && data.onRerunFromHere && (
                   <button type="button" className="chat-node-quick-action nodrag"
                     id={"chat-rerun-trigger-" + id}
                     disabled={!!data.pendingRequestId} onClick={data.onRerunFromHere}
@@ -1096,7 +1101,7 @@ export const ChatNodeView = memo(function ChatNodeView({
             onRegenerate={data.onRegenerate}
             onRerunFromHere={data.onRerunFromHere}
             menuTriggerRef={menuTriggerRef}
-            canRerun={data.isUser ? data.versionCount > 1 : data.staleness === "out_of_date"}
+            canRerun={canRerunFromHere}
             onEdit={() => beginEdit("in-place")}
             onEditAsNewBranch={() => beginEdit("new-branch")}
             editDisabled={!!data.pendingRequestId}

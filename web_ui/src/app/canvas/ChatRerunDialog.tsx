@@ -14,7 +14,13 @@ export function sameChatRerunProgress(a: ChatRerunStatus | null, b: ChatRerunSta
 }
 
 /** A server-owned preview: no client guess about canonical ancestry or cost. */
-export function ChatRerunDialog({ store, nodeId }: { store: SceneStore; nodeId: string | null }) {
+export function ChatRerunDialog({
+  store, nodeId, onRunBoundNodes,
+}: {
+  store: SceneStore;
+  nodeId: string | null;
+  onRunBoundNodes?: (ids: string[]) => void;
+}) {
   const overlays = useOverlays();
   const isOpen = overlays.isOpen(DIALOG);
   const [scope, setScope] = useState<ChatRerunScope>("this_path");
@@ -50,6 +56,8 @@ export function ChatRerunDialog({ store, nodeId }: { store: SceneStore; nodeId: 
   const previewError = loaded?.key === previewKey ? loaded.error ?? "" : "";
   const busyPreview = isOpen && !!nodeId && !jobId && loaded?.key !== previewKey;
   const confirmedLarge = !!preview && confirmedToken === preview.previewToken;
+  const boundNodeIds = preview?.skipped.filter((row) => row.category === "bound")
+    .map((row) => row.nodeId) ?? [];
 
   useEffect(() => {
     if (!isOpen || !nodeId || jobId) return;
@@ -162,7 +170,9 @@ export function ChatRerunDialog({ store, nodeId }: { store: SceneStore; nodeId: 
 
   return (
     <Dialog name={DIALOG} title="Re-run from here" className="chat-rerun-dialog">
-      <p>Re-run only ordinary assistant chat replies. Other node types and their content will stay untouched.</p>
+      <p>Only ordinary tool-free chat replies are re-run automatically. Workspace agents, Builder,
+        code sandboxes, tool-executing replies, plugin actions and data-bound outputs are skipped.
+        Skipped nodes and their downstream replies require manual review.</p>
       <fieldset className="chat-rerun-scopes" disabled={!!jobId || starting}>
         <legend>Replies to re-run</legend>
         <label>
@@ -200,6 +210,31 @@ export function ChatRerunDialog({ store, nodeId }: { store: SceneStore; nodeId: 
               </li>
             ))}
           </ol>
+          {preview.skipped.length > 0 && (
+            <section aria-label="Skipped nodes">
+              <h3 className="chat-rerun-skipped-title" id="chat-rerun-skipped-title">
+                Skipped — never executed by this re-run ({preview.skipped.length})
+              </h3>
+              <ol className="chat-rerun-replies" aria-labelledby="chat-rerun-skipped-title">
+                {preview.skipped.map((item) => (
+                  <li key={item.nodeId}>
+                    <strong>{item.title}</strong>
+                    <span className="chat-rerun-meta">{item.reason}</span>
+                  </li>
+                ))}
+              </ol>
+              {boundNodeIds.length > 0 && onRunBoundNodes && (
+                <button type="button" className="chat-rerun-run-bound"
+                  onClick={() => onRunBoundNodes(boundNodeIds)}>
+                  Run bound nodes
+                </button>
+              )}
+              {boundNodeIds.length > 0 && (
+                <p>Run bound nodes opens Graph Runner for a separate dependency preview and explicit approval.
+                  No bound output is executed by Re-run from here.</p>
+              )}
+            </section>
+          )}
           {preview.count === 0 && <p>No ordinary chat replies are below this message.</p>}
           {preview.requiresConfirmation && !jobId && (
             <label className="chat-rerun-confirm">

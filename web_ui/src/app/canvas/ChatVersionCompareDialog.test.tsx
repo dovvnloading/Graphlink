@@ -1,4 +1,6 @@
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +8,8 @@ import { OverlayProvider, useOverlays } from "../overlays/overlays";
 import { ChatVersionCompareDialog, type ChatVersionCompareTarget } from "./ChatVersionCompareDialog";
 import type { SceneStore, ChatVersionComparison } from "./sceneStore";
 import { diffChatVersionWords, type ChatWordDiff } from "./chatVersionWordDiff";
+
+const REPO_SRC = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 class FakeDiffWorker {
   static created = 0;
@@ -124,7 +128,7 @@ describe("read-only Document View comparison dialog", () => {
   it("styles the actual focusable reading panes with the shared visible focus token", () => {
     // jsdom cannot implement :focus-visible or a layout engine; lock the
     // CSS selector to the real tabindex=0 element, not its inert section.
-    const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+    const css = readFileSync(join(REPO_SRC, "app/styles.css"), "utf-8");
     const start = css.indexOf(".chat-version-compare-text:focus-visible,");
     expect(start).toBeGreaterThanOrEqual(0);
     const rule = css.slice(start, css.indexOf("}", start));

@@ -726,3 +726,19 @@
   pointer-events: none;
 }
 .group-node-staleness .node-staleness-badge { margin: 0; }
+
+.node-staleness-badge { flex-wrap: wrap; }
+.node-staleness-run-bound {
+  background: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 4px;
+  color: var(--gl-surface-text-primary);
+  cursor: pointer;
+  font: inherit;
+  padding: 3px 6px;
+}
+.node-staleness-run-bound:hover { background: var(--gl-neutral-button-hover); }
+.node-staleness-run-bound:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 2px;
+}

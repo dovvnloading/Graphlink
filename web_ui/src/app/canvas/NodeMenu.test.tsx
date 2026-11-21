@@ -1,9 +1,13 @@
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it } from "vitest";
 import { NodeMenu } from "./NodeMenu";
+
+const REPO_SRC = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 /**
  * ADR-012 stage 12.3: NodeMenu.tsx's own keyboard-completeness contract,
@@ -103,7 +107,7 @@ describe("NodeMenu keyboard completeness (ADR-012 stage 12.3)", () => {
 
 describe("Portaled menu keyboard focus styling", () => {
   it("uses a visible token outline rather than relying on hover color", () => {
-    const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+    const css = readFileSync(join(REPO_SRC, "app/styles.css"), "utf-8");
     expect(css).toMatch(
       /\.chat-node-menu button:focus-visible\s*\{\s*outline: 2px solid var\(--gl-focus-ring\)/,
     );

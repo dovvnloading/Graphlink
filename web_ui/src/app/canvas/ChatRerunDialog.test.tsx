@@ -10,6 +10,7 @@ function makePreview(count: number): ChatRerunPreview {
     previewToken: "preview-token",
     count,
     requiresConfirmation: count > 10,
+    skipped: [],
     replies: Array.from({ length: count }, (_, index) => ({
       nodeId: "reply-" + index,
       title: "Reply " + (index + 1),
@@ -20,8 +21,9 @@ function makePreview(count: number): ChatRerunPreview {
   };
 }
 
-function renderDialog(count: number, terminal = false) {
-  const previewChatRerun = vi.fn(async () => makePreview(count));
+function renderDialog(count: number, skipped: ChatRerunPreview["skipped"] = [], terminal = false) {
+  const previewChatRerun = vi.fn(async () => ({ ...makePreview(count), skipped }));
+  const onRunBoundNodes = vi.fn();
   const startChatRerun = vi.fn(async () => ({ jobId: "job-1" }));
   const getChatRerunStatus = vi.fn(async () => ({
     jobId: "job-1", status: terminal ? "completed" as const : "running" as const,
@@ -29,8 +31,9 @@ function renderDialog(count: number, terminal = false) {
     error: "", cancelRequested: false,
   }));
   const cancelChatRerun = vi.fn(async () => ({ ok: true }));
+  const executeGraphRun = vi.fn();
   const store = {
-    previewChatRerun, startChatRerun, getChatRerunStatus, cancelChatRerun,
+    previewChatRerun, startChatRerun, getChatRerunStatus, cancelChatRerun, executeGraphRun,
   } as unknown as SceneStore;
 
   function Harness() {
@@ -38,13 +41,13 @@ function renderDialog(count: number, terminal = false) {
     return (
       <>
         <button type="button" onClick={() => overlays.open("chat-rerun", "dialog")}>Open preview</button>
-        <ChatRerunDialog store={store} nodeId="edited-user" />
+        <ChatRerunDialog store={store} nodeId="edited-user" onRunBoundNodes={onRunBoundNodes} />
       </>
     );
   }
 
   render(<OverlayProvider><Harness /></OverlayProvider>);
-  return { previewChatRerun, startChatRerun, getChatRerunStatus, cancelChatRerun };
+  return { previewChatRerun, startChatRerun, getChatRerunStatus, cancelChatRerun, onRunBoundNodes, executeGraphRun };
 }
 
 describe("ChatRerunDialog", () => {
@@ -146,7 +149,7 @@ describe("ChatRerunDialog", () => {
 
   it("re-previews after completion rather than reusing an expired token", async () => {
     const user = userEvent.setup();
-    const spies = renderDialog(1, true);
+    const spies = renderDialog(1, [], true);
     await user.click(screen.getByRole("button", { name: "Open preview" }));
     await screen.findByText("Reply 1");
     await user.click(screen.getByRole("button", { name: "Re-run replies" }));
@@ -155,6 +158,40 @@ describe("ChatRerunDialog", () => {
     await user.click(retry);
     await waitFor(() => expect(spies.previewChatRerun).toHaveBeenCalledTimes(2));
     expect(screen.getByRole("button", { name: "Re-run replies" })).toBeEnabled();
+  });
+
+  it("lists side effects as skipped, and hands bound outputs to Graph Runner without execution", async () => {
+    const user = userEvent.setup();
+    const skipped: ChatRerunPreview["skipped"] = [
+      { nodeId: "agent", title: "Workspace agent", kind: "harness", category: "manual",
+        reason: "Workspace agent nodes are never re-run automatically; re-run manually." },
+      { nodeId: "builder", title: "Builder plan", kind: "plan", category: "manual",
+        reason: "Builder nodes are never re-run automatically; re-run manually." },
+      { nodeId: "sandbox", title: "Virtual Environment Runner", kind: "code_sandbox", category: "manual",
+        reason: "Code sandbox nodes are never re-run automatically; re-run manually." },
+      { nodeId: "plugin", title: "Plugin action", kind: "example.action", category: "manual",
+        reason: "Plugin nodes are never re-run automatically; re-run manually." },
+      { nodeId: "tool", title: "Tool call reply", kind: "chat", category: "manual",
+        reason: "This reply executed tools; re-run it manually." },
+      { nodeId: "model", title: "Local model", kind: "model", category: "bound",
+        reason: "Data-bound output requires Graph Runner preview and approval." },
+      { nodeId: "report", title: "Data report", kind: "note", category: "bound",
+        reason: "Data-bound output requires Graph Runner preview and approval." },
+    ];
+    const spies = renderDialog(0, skipped);
+    await user.click(screen.getByRole("button", { name: "Open preview" }));
+    const skippedRegion = await screen.findByRole("region", { name: "Skipped nodes" });
+    expect(skippedRegion).toHaveTextContent("never executed by this re-run");
+    expect(skippedRegion).toHaveTextContent("This reply executed tools");
+    expect(skippedRegion).toHaveTextContent("Graph Runner preview and approval");
+    expect(screen.getByRole("button", { name: "Re-run replies" })).toBeDisabled();
+    const action = screen.getByRole("button", { name: "Run bound nodes" });
+    action.focus();
+    await user.keyboard(" ");
+    expect(spies.onRunBoundNodes).toHaveBeenCalledOnce();
+    expect(spies.onRunBoundNodes).toHaveBeenCalledWith(["model", "report"]);
+    expect(spies.startChatRerun).not.toHaveBeenCalled();
+    expect(spies.executeGraphRun).not.toHaveBeenCalled();
   });
 
   it("uses the shared Dialog focus restoration and Escape behaviour", async () => {

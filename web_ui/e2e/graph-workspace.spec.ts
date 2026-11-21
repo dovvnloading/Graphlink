@@ -90,3 +90,46 @@ test("starts a graph and navigates it using the canvas controls", async ({ page 
   await page.getByRole("button", { name: "Collapse minimap" }).click();
   await expect(page.getByRole("button", { name: "Expand minimap" })).toHaveAttribute("aria-expanded", "false");
 });
+
+test("keeps the canvas panels apart when a document split leaves 300px of canvas", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await gotoApp(page);
+  await page.getByRole("button", { name: "Add a note" }).click();
+  await expect(page.locator(".react-flow__node-note")).toHaveCount(1);
+
+  // Document View is a flex sibling of the canvas. Squeeze the canvas itself,
+  // not the browser viewport, so a window media query cannot pass this test.
+  const canvas = page.locator(".app-canvas-content");
+  await canvas.evaluate((element) => {
+    const style = (element as HTMLElement).style;
+    style.flex = "none";
+    style.width = "300px";
+  });
+  const canvasBox = await bounds(canvas);
+  expect(canvasBox.width).toBe(300);
+
+  const navigation = page.getByRole("group", { name: "Canvas navigation" });
+  const minimap = page.getByRole("group", { name: /^Canvas overview/ });
+  await expect(minimap.getByRole("button", { name: "Collapse minimap" })).toBeVisible();
+  const dockBox = await bounds(navigation);
+  const mapBox = await bounds(minimap);
+
+  // Side by side or stacked is fine; their bounding rectangles must not intersect.
+  expect(
+    dockBox.x + dockBox.width <= mapBox.x ||
+    mapBox.x + mapBox.width <= dockBox.x ||
+    dockBox.y + dockBox.height <= mapBox.y ||
+    mapBox.y + mapBox.height <= dockBox.y
+  ).toBe(true);
+  const stageBox = await bounds(page.locator(".graph-stage"));
+  for (const box of [dockBox, mapBox]) {
+    expect(box.x).toBeGreaterThanOrEqual(canvasBox.x - 1);
+    expect(box.x + box.width).toBeLessThanOrEqual(canvasBox.x + canvasBox.width + 1);
+    expect(box.y).toBeGreaterThanOrEqual(stageBox.y - 1);
+    expect(box.y + box.height).toBeLessThanOrEqual(stageBox.y + stageBox.height + 1);
+  }
+
+  // Both controls still accept clicks at the narrow canvas width.
+  await navigation.getByRole("button", { name: "Zoom Out" }).click();
+  await minimap.getByRole("button", { name: "Collapse minimap" }).click();
+});

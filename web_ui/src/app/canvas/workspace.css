@@ -149,6 +149,16 @@
   .app-canvas-hud { inset: auto 0 100%; }
 }
 
+/* The 150px zoom dock and 142px compact minimap need 340px together,
+   including both chrome insets and a 16px gap. If Document View leaves less
+   canvas space, stack the map above the dock (36px high), using the canvas
+   container rather than a viewport breakpoint. */
+@container graph-workspace (max-width: 340px) {
+  .app-canvas-hud > .scene-minimap-panel.react-flow__panel {
+    bottom: calc(36px + var(--gl-chrome-inset));
+  }
+}
+
 /* The composer is one card: staged context, the draft, then one toolbar -
    secondary tools as quiet icons on the left, the model and reasoning chips
    and the single primary action on the right. */

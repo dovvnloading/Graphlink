@@ -1940,6 +1940,35 @@ describe("ChatNodeView re-run from here", () => {
     expect(screen.queryByRole("menuitem", { name: "Re-run from here" })).toBeNull();
   });
 
+  it("shows a shaped manual-rerun badge and never offers batch re-run for a tool reply", () => {
+    const { container, onRerunFromHere } = renderChatNode({
+      isUser: false,
+      staleness: "out_of_date",
+      toolInvocations: [{
+        id: "call-1", name: "execute_plugin_action", argumentsJson: "{}",
+        result: "already executed", isError: false,
+      }],
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("Upstream changed - re-run manually");
+    expect(container.querySelector(".node-staleness-badge svg")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Re-run from here" })).toBeNull();
+    fireEvent.contextMenu(screen.getByText("Assistant"));
+    expect(screen.queryByRole("menuitem", { name: "Re-run from here" })).toBeNull();
+    expect(onRerunFromHere).not.toHaveBeenCalled();
+  });
+
+  it("keeps a citation-only assistant reply eligible for review", () => {
+    renderChatNode({
+      isUser: false, staleness: "out_of_date",
+      toolInvocations: [{
+        id: "citation-v1", name: "graphlink.knowledge.citations",
+        argumentsJson: "{}", result: "", isError: false,
+      }],
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("Out of date");
+    expect(screen.getByRole("button", { name: "Re-run from here" })).toBeInTheDocument();
+  });
+
   it("disables the action while this reply is generating", () => {
     renderChatNode({ isUser: false, staleness: "out_of_date", pendingRequestId: "request-1" });
     fireEvent.contextMenu(screen.getByText("Assistant"));
