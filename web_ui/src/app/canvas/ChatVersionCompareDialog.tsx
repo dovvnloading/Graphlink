@@ -51,7 +51,7 @@ function VersionPane({
   version: ChatVersionSnapshot | null;
   chunks: ChatDiffChunk[] | null;
   unavailable: boolean;
-  paneRef: RefObject<HTMLDivElement | null>;
+  paneRef: RefObject<HTMLDivElement>;
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
 }) {
   return (
