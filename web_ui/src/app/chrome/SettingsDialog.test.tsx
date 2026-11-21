@@ -1441,7 +1441,7 @@ describe("Settings > Knowledge embedding source", () => {
     };
     const { user, push, transport, intents, requests } = await openKnowledge(models);
     await user.click(screen.getByRole("button", { name: "Embedding source" }));
-    await user.click(await screen.findByRole("button", { name: /^Ollama \\(local\\)/ }));
+    await user.click(await screen.findByRole("button", { name: /^Ollama \(local\)/ }));
 
     // Let the transport deadline expire while the backend's worker still runs.
     // Its later done publish, not the timed-out reply, is the test result.
@@ -1475,7 +1475,7 @@ describe("Settings > Knowledge embedding source", () => {
     }));
     expect(screen.getByRole("button", { name: "Test" })).toBeEnabled();
     expect(screen.getByRole("status")).toHaveTextContent("Embedding test succeeded (768 dimensions).");
-    expect(screen.queryByText(/request timed out: app-settings\\/testKnowledgeEmbedding/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/request timed out: app-settings\/testKnowledgeEmbedding/)).not.toBeInTheDocument();
     expect(intents).not.toContainEqual([
       "notification", "showError", ["request timed out: app-settings/testKnowledgeEmbedding"],
     ]);
