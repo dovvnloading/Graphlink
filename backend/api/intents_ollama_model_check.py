@@ -7,6 +7,7 @@ import asyncio
 from backend.api._settings_shared import SettingsSessionState
 from backend.events import SessionBus
 from backend.ollama_model_check import probe_ollama_model
+from backend.ollama_model_names import valid_ollama_model_name
 
 
 def register_ollama_model_check_intents(bus: SessionBus, state: SettingsSessionState) -> None:
@@ -14,9 +15,16 @@ def register_ollama_model_check_intents(bus: SessionBus, state: SettingsSessionS
         if not isinstance(model_name, str):
             return
         model_name = model_name.strip()
-        # Only probe models from the SAME inventory used by Settings/Knowledge.
-        # Never allow an arbitrary model ID to trigger a download or inference.
-        if not model_name or not any(row.get("name") == model_name for row in state.ollama_inventory):
+        # A disk manifest, stale snapshot, or forged WS argument is not
+        # authorization to load a model (and potentially allocate gigabytes).
+        if not valid_ollama_model_name(model_name) or state.ollama_inventory_source != "server":
+            return
+        if not any(row.get("name") == model_name and row.get("source") == "server"
+                   for row in state.ollama_inventory):
+            return
+        if (state.ollama_scan_status == "running"
+                or state.ollama_pull_status in ("running", "cancelling", "finalizing")
+                or state.ollama_remove_status == "running"):
             return
         if state.ollama_check_task is not None and not state.ollama_check_task.done():
             return
@@ -34,7 +42,9 @@ def register_ollama_model_check_intents(bus: SessionBus, state: SettingsSessionS
 
         async def run_probe() -> None:
             try:
-                report.update(await probe_ollama_model(model_name))
+                result = await probe_ollama_model(model_name)
+                for key in ("loadSeconds", "tokensPerSecond", "toolCallingWorks", "message"):
+                    report[key] = result.get(key)
                 report["status"] = "complete"
             except asyncio.CancelledError:
                 report["status"] = "cancelled"
@@ -43,8 +53,9 @@ def register_ollama_model_check_intents(bus: SessionBus, state: SettingsSessionS
                 report["status"] = "error"
                 report["message"] = f"Check failed: {str(exc)[:240]}"
             finally:
-                state.ollama_check_task = None
-                state.ollama_check_name = ""
+                if state.ollama_check_task is asyncio.current_task():
+                    state.ollama_check_task = None
+                    state.ollama_check_name = ""
                 await bus.publish("app-settings")
 
         # Return from the intent immediately: cancellation arrives through
