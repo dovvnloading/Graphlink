@@ -24,6 +24,14 @@ function makeStore(
   const updateDraft = vi.fn();
   const setReasoningLevel = vi.fn();
   const selectModel = vi.fn();
+  const selectPickerModel = vi.fn();
+  const openOllamaSettings = vi.fn();
+  const loadPickerModels = vi.fn().mockResolvedValue(
+    ["qwen3:8b", "nemotron-3-nano:4b"].map((modelId) => ({
+      provider: "Ollama", modelId, label: `Ollama · ${modelId}`,
+      source: "local", capabilities: ["chat", "tools"], sizeBytes: 1024 ** 3,
+    })),
+  );
   const attachFile = vi.fn();
   const removeAttachment = vi.fn();
   const addAttachmentToKnowledge = vi.fn().mockResolvedValue({ jobId: "import-1" });
@@ -56,6 +64,9 @@ function makeStore(
     updateDraft,
     setReasoningLevel,
     selectModel,
+    selectPickerModel,
+    openOllamaSettings,
+    loadPickerModels,
     attachFile,
     removeAttachment,
     addAttachmentToKnowledge,
@@ -66,7 +77,7 @@ function makeStore(
     sendModelComparison,
   };
   return {
-    store, updateDraft, setReasoningLevel, selectModel, attachFile, removeAttachment,
+    store, updateDraft, setReasoningLevel, selectModel, selectPickerModel, openOllamaSettings, loadPickerModels, attachFile, removeAttachment,
     addAttachmentToKnowledge, emitKnowledgeJobs,
     cancelChatRequest, dismissNotification, loadComparisonModels, sendModelComparison,
   };
@@ -644,26 +655,34 @@ describe("Composer", () => {
     expect(updateDraft).toHaveBeenCalledWith("hi!");
   });
 
-  it("Send starts disabled on an empty draft; the model control is disabled ONLY when there is nothing to choose", () => {
-    // R8a: this used to assert the model control "stays visibly disabled with
-    // its deferred phase named" - i.e. it encoded a dead stub as the expected
-    // behaviour. The control is real now, so the assertion is inverted: it is
-    // disabled when the backend reports no models, and enabled when it does.
-    const { store } = makeStore();
+  it("opens the model picker even when no model is configured", async () => {
+    const user = userEvent.setup();
+    const { store, loadPickerModels, openOllamaSettings } = makeStore({
+      composer: {
+        request: { ...initialComposerState.request, canSend: true },
+        route: { ...initialComposerState.route, modelId: "", modelOptions: [] },
+        capabilities: { ...initialComposerState.capabilities, modelSelection: false },
+      },
+    });
+    loadPickerModels.mockResolvedValue([]);
     const { container } = render(
       <OverlayProvider>
-        {/* @ts-expect-error - test double */}
+        {/* @ts-expect-error Test double */}
         <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
       </OverlayProvider>,
     );
     expect(screen.getByLabelText("Send message")).toBeDisabled();
-    // modelSelection defaults false with an empty modelOptions list.
-    expect(container.querySelector('[data-overlay-trigger="model"]')).toBeDisabled();
+    const trigger = container.querySelector('[data-overlay-trigger="model"]') as HTMLButtonElement;
+    expect(trigger).toBeEnabled();
+    await user.click(trigger);
+    expect(await screen.findByRole("button", { name: "Set up a local model" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Set up a local model" }));
+    expect(openOllamaSettings).toHaveBeenCalledOnce();
   });
 
   it("the model control enables when the backend reports real options, and picking one calls selectModel", async () => {
     const user = userEvent.setup();
-    const { store, selectModel } = makeStore({
+    const { store, selectPickerModel } = makeStore({
       composer: {
         route: {
           ...initialComposerState.route,
@@ -690,9 +709,9 @@ describe("Composer", () => {
     expect(trigger).not.toBeDisabled();
 
     await user.click(trigger);
-    await user.click(screen.getByText("nemotron-3-nano:4b"));
+    await user.click(await screen.findByRole("button", { name: /Ollama · nemotron-3-nano:4b/ }));
 
-    expect(selectModel).toHaveBeenCalledWith("nemotron-3-nano:4b");
+    expect(selectPickerModel).toHaveBeenCalledWith("Ollama", "nemotron-3-nano:4b");
     // and the popover closes on choose, like the reasoning picker
     expect(screen.queryByText("nemotron-3-nano:4b")).toBeNull();
   });
@@ -700,13 +719,17 @@ describe("Composer", () => {
   it("filters a large gateway catalog and clears the search when reopened", async () => {
     const user = userEvent.setup();
     const modelOptions = Array.from({ length: 12 }, (_, i) => ({ id: `lab/model-${i}`, label: `Model ${i}` }));
-    const { store, selectModel } = makeStore({
+    const { store, selectPickerModel, loadPickerModels } = makeStore({
       composer: {
         route: { ...initialComposerState.route, provider: "OpenRouter", modelOptions },
         capabilities: { ...initialComposerState.capabilities, modelSelection: true },
         request: { ...initialComposerState.request, canSend: true },
       },
     });
+    loadPickerModels.mockResolvedValue(modelOptions.map(({ id, label }) => ({
+      provider: "OpenRouter", modelId: id, label,
+      source: "cloud", capabilities: [], sizeBytes: null,
+    })));
     render(
       <OverlayProvider>
         {/* @ts-expect-error Test doubles implement only the composer surface. */}
@@ -722,7 +745,7 @@ describe("Composer", () => {
     // Enter while focus is still in the search input must choose the lone
     // match; previously this worked only after tabbing onto the result.
     await user.keyboard("{Enter}");
-    expect(selectModel).toHaveBeenCalledWith("lab/model-11");
+    expect(selectPickerModel).toHaveBeenCalledWith("OpenRouter", "lab/model-11");
     await user.click(trigger);
     expect(screen.getByRole("button", { name: "Model 0" })).toBeVisible();
   });
