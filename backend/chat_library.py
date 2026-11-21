@@ -192,6 +192,15 @@ def _format_timestamp_iso(value: Any) -> str | None:
 
 
 _PREVIEW_MAX_CHARS = 140
+# The saved reply stays untouched (including its citation provenance), but
+# the one-line Library snippet has no citation ledger from which to build
+# clickable/numbered references. Also match an unclosed token: old previews
+# were truncated *before* display and can end halfway through a citation ID.
+_PREVIEW_CITATION_TOKEN = re.compile(r"\\s*\\[kb:[A-Za-z0-9_-]+\\]?")
+
+
+def _clean_chat_preview(text: str) -> str:
+    return " ".join(_PREVIEW_CITATION_TOKEN.sub("", text).split())[:_PREVIEW_MAX_CHARS]
 
 
 def _extract_preview_and_message_count(chat_data: dict[str, Any]) -> tuple[str, int]:
@@ -221,7 +230,7 @@ def _extract_preview_and_message_count(chat_data: dict[str, Any]) -> tuple[str, 
         )
     else:
         text = str(last_content or "")
-    preview = " ".join(text.split())[:_PREVIEW_MAX_CHARS]
+    preview = _clean_chat_preview(text)
     return preview, len(chat_nodes)
 
 
@@ -1177,7 +1186,7 @@ def get_all_chats(db_path: Path, notifications: NotificationState | None = None)
                 "updatedLabel": _format_timestamp(row[3]),
                 "createdAtIso": _format_timestamp_iso(row[2]),
                 "updatedAtIso": _format_timestamp_iso(row[3]),
-                "preview": str(row[4] or ""),
+                "preview": _clean_chat_preview(str(row[4] or "")),
                 "messageCount": int(row[5] or 0),
                 "workspaceId": int(row[6]),
                 "favorite": bool(row[7]),
@@ -1953,22 +1962,73 @@ def _fallback_title(seed_message: str) -> str:
 
 
 def _resolve_seed_message(document: SceneDocument) -> str:
-    """Deliberate simplification of ChatSessionManager.save_current_chat's
-    own `next((node for node in reversed(scene.nodes) if node.text), None)`
-    (manager.py:108) - legacy's `.text` is a generic attribute several
-    different live Qt widget classes each define with their own meaning;
-    this backend has no single equivalent across all 12 node kinds. Since
-    this text only ever seeds a cosmetic fallback title (see this module's
-    own docstring on skipping the LLM title-generation call entirely), the
-    dominant "has real conversational text" kind - chat - is a reasonable,
-    bounded stand-in: the last chat-kind node's content, in creation order,
-    or "New Chat" if the canvas has no chat node at all yet."""
-    last_chat_content = None
-    for node in document.nodes.values():
-        if node.kind == "chat" and node.content:
-            last_chat_content = node.content
-    return last_chat_content if last_chat_content is not None else "New Chat"
+    """Seed new graph titles from the first *user* message, not the latest
+    assistant reply. A Conversation node holds its turns in history rather
+    than in node.content, so a conversation-only graph must also be named
+    from its first message instead of the empty-canvas "New Chat" fallback.
 
+    For graphs with no user message, use their first available content as a
+    best-effort title; preserve "New Chat" only for contentless canvases.
+    """
+    first_content: str | None = None
+    for node in document.nodes.values():
+        if node.kind == "chat":
+            text = node.content.strip()
+            if not text and node.state.content_parts is not None:
+                text = _flatten_content_part_text(node.state.content_parts).strip()
+            if text:
+                if first_content is None:
+                    first_content = text
+                if node.state.is_user:
+                    return text
+        elif node.kind == "conversation":
+            for message in node.history:
+                if not isinstance(message, dict):
+                    continue
+                text = _flatten_content_part_text(message.get("content")).strip()
+                if text:
+                    if first_content is None:
+                        first_content = text
+                    if message.get("role") == "user":
+                        return text
+        elif first_content is None and isinstance(node.content, str) and node.content.strip():
+            first_content = node.content.strip()
+    return first_content or "New Chat"
+
+
+def _existing_title_or_content_title(row: dict[str, Any], document: SceneDocument) -> str:
+    """Preserve saved/renamed titles, except an empty graph's "New Chat"
+    placeholder when its first real message arrives in a later save.
+
+    A user can deliberately rename a populated graph "New Chat". Do not
+    mistake that custom title for an auto-generated empty-canvas title.
+    """
+    title = str(row.get("title") or "Untitled")
+    if title != "New Chat":
+        return title
+    saved_data = row.get("data")
+    if not isinstance(saved_data, dict):
+        return title
+    saved_nodes = saved_data.get("nodes")
+    if not isinstance(saved_nodes, list):
+        return title
+    for saved in saved_nodes:
+        if not isinstance(saved, dict):
+            continue
+        if saved.get("node_type") == "chat" and saved.get("is_user"):
+            if _flatten_content_part_text(saved.get("raw_content")).strip():
+                return title
+        if saved.get("node_type") == "conversation":
+            history = saved.get("conversation_history")
+            if isinstance(history, list) and any(
+                isinstance(message, dict)
+                and message.get("role") == "user"
+                and _flatten_content_part_text(message.get("content")).strip()
+                for message in history
+            ):
+                return title
+    seed = _resolve_seed_message(document)
+    return _fallback_title(seed) if seed != "New Chat" else title
 
 def _content_digest(chat_data: dict[str, Any], notes_data: list, pins_data: list) -> str:
     """A pure function of "what would actually get written" - the change-guard
@@ -2648,7 +2708,7 @@ def make_save_chat(
                 # Resaving an existing chat NEVER regenerates its title,
                 # matching SaveWorkerThread.run()'s own `title = chat["title"]`
                 # (workers.py:69) exactly.
-                title = str(existing_row.get("title") or "Untitled")
+                title = _existing_title_or_content_title(existing_row, canvas_document)
                 chat_id_for_save = int(current_id)
                 saved_workspace_id = int(existing_row["workspace_id"])
                 if last_saved.get("chat_id") == int(current_id):
@@ -3768,7 +3828,7 @@ def flush_dirty_session_before_teardown(
             logger.exception("eviction flush: failed to read the existing chat row - the last edit may be lost")
             return
         if existing_row is not None:
-            title = str(existing_row.get("title") or "Untitled")
+            title = _existing_title_or_content_title(existing_row, canvas_document)
             chat_id_for_save = int(current_id)
             if last_saved.get("chat_id") == int(current_id):
                 expected_updated_at = last_saved.get("updated_at")
