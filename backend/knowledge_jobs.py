@@ -84,7 +84,7 @@ class KnowledgeIngestJob:
             }
 
 
-def _collect_files(path: Path, folder: bool, job: KnowledgeIngestJob) -> list[tuple[Path, int]]:
+def _collect_files(path: Path | list[Path], folder: bool, job: KnowledgeIngestJob) -> list[tuple[Path, int]]:
     """Preflight the entire batch before any store mutation.
 
     Resolved paths stay within the chosen folder, even for symlink entries.
@@ -92,11 +92,13 @@ def _collect_files(path: Path, folder: bool, job: KnowledgeIngestJob) -> list[tu
     Over-limit jobs fail without partially importing their early files.
     Oversized individual files are skipped, and counted in the progress.
     """
-    root = path.expanduser().resolve(strict=True)
-    if folder and not root.is_dir():
-        raise IngestError("The selected folder is not a directory.")
-    if not folder and not root.is_file():
-        raise IngestError("The selected file is not a regular file.")
+    root = None
+    if folder:
+        if isinstance(path, list):
+            raise IngestError("A folder import accepts one selected directory.")
+        root = path.expanduser().resolve(strict=True)
+        if not root.is_dir():
+            raise IngestError("The selected folder is not a directory.")
 
     found: list[tuple[Path, int]] = []
     seen_files: set[Path] = set()
@@ -111,7 +113,7 @@ def _collect_files(path: Path, folder: bool, job: KnowledgeIngestJob) -> list[tu
         if checked > MAX_JOB_FILES:
             raise IngestError("Import exceeds the 10,000-file job limit.")
         real = candidate.resolve(strict=True)
-        if folder and not real.is_relative_to(root):
+        if root is not None and not real.is_relative_to(root):
             job.increment(skipped=1)
             return
         if real in seen_files:
@@ -128,7 +130,12 @@ def _collect_files(path: Path, folder: bool, job: KnowledgeIngestJob) -> list[tu
         found.append((real, size))
 
     if not folder:
-        add_file(root)
+        selected = path if isinstance(path, list) else [path]
+        for item in selected:
+            resolved = item.expanduser().resolve(strict=True)
+            if not resolved.is_file():
+                raise IngestError("A selected file is not a regular file.")
+            add_file(resolved)
     else:
         stack = [root]
         visited: set[Path] = set()
@@ -186,7 +193,7 @@ class KnowledgeIngestManager:
     def snapshot(self) -> dict:
         return {"jobs": [job.snapshot() for job in self._jobs.values()]}
 
-    def start(self, path: str, *, folder: bool, workspace_id: int | None) -> dict:
+    def start(self, path: str | list[str], *, folder: bool, workspace_id: int | None) -> dict:
         if any(job.snapshot()["status"] not in _FINAL for job in self._jobs.values()):
             raise IngestError("An import is already running in this window.")
         # Do not accept arbitrary paths from untrusted persisted document
@@ -199,7 +206,8 @@ class KnowledgeIngestManager:
         job = KnowledgeIngestJob(uuid4().hex, "folder" if folder else "file", workspace_id)
         self._jobs[job.job_id] = job
         self._loop = asyncio.get_running_loop()
-        asyncio.create_task(asyncio.to_thread(self._run, job, Path(path), folder))
+        selected = [Path(value) for value in path] if isinstance(path, list) else Path(path)
+        asyncio.create_task(asyncio.to_thread(self._run, job, selected, folder))
         self._emit(force=True)
         return {"jobId": job.job_id, "status": "queued"}
 
@@ -228,7 +236,7 @@ class KnowledgeIngestManager:
         except RuntimeError:
             pass  # the session/event loop was disposed during shutdown
 
-    def _run(self, job: KnowledgeIngestJob, path: Path, folder: bool) -> None:
+    def _run(self, job: KnowledgeIngestJob, path: Path | list[Path], folder: bool) -> None:
         try:
             job.change(status="scanning")
             self._emit(force=True)
@@ -249,10 +257,12 @@ class KnowledgeIngestManager:
                     # Re-resolve paths on use: an entry that was safe during
                     # enumeration may have been swapped for an outside link.
                     actual = file.resolve(strict=True)
-                    root = path.expanduser().resolve(strict=True) if folder else None
+                    root = path.expanduser().resolve(strict=True) if folder and isinstance(path, Path) else None
                     if root is not None and not actual.is_relative_to(root):
                         raise IngestError("File now points outside the selected folder.")
                     before = actual.stat()
+                    if before.st_size != planned_size:
+                        raise IngestError("File changed since the import was scanned; retry the import.")
                     if before.st_size > MAX_FILE_BYTES:
                         raise IngestError("File exceeds the 25 MiB limit.")
                     text, mime = extract_text(actual)

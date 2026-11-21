@@ -86,6 +86,26 @@ async def pick_file(file_types: Sequence[str] = (), directory: str = "") -> str 
     return result[0] if result else None
 
 
+
+async def pick_files(file_types: Sequence[str] = (), directory: str = "") -> list[str]:
+    """Select multiple local files through one native, user-consented picker.
+
+    No file data or arbitrary paths are accepted from browser JavaScript.
+    The dialog runs in the dedicated executor just like pick_file.
+    """
+    window = _active_window()
+    if window is None:
+        return []
+    result = await _run_in_dialog_executor(
+        window.create_file_dialog,
+        webview.FileDialog.OPEN,
+        directory=directory,
+        file_types=tuple(file_types),
+        allow_multiple=True,
+    )
+    return list(result or [])
+
+
 async def pick_folder(directory: str = "") -> str | None:
     """Opens a native FOLDER dialog. Returns the selected path, or None if
     no window exists or the user cancelled."""

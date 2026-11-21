@@ -47,7 +47,7 @@ _HTML_EXTENSIONS = {".html", ".htm"}
 
 # Import a known set of document and source-code types, not arbitrary
 # "looks like text" files (which may contain binary data or secrets).
-SUPPORTED_KNOWLEDGE_EXTENSIONS = PLAIN_TEXT_EXTENSIONS | {".pdf", ".docx", ".xlsx", ".htm"}
+SUPPORTED_KNOWLEDGE_EXTENSIONS = (PLAIN_TEXT_EXTENSIONS - {".env"}) | {".pdf", ".docx", ".xlsx", ".htm"}
 SUPPORTED_KNOWLEDGE_FILENAMES = SUPPORTED_FILENAMES - {".env", ".gitignore"}
 
 
