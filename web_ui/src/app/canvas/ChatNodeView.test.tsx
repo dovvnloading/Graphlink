@@ -1461,6 +1461,8 @@ describe("ChatNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
       versionCount: 1,
       versionIndex: 0,
       onSelectVersion: vi.fn(),
+      onEditMessage: vi.fn(),
+      onEditAsNewBranch: vi.fn(),
       isCollapsed: false,
       dockedChildren: [],
       chatScrollValue: 0,
