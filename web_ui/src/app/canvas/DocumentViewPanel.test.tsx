@@ -51,8 +51,7 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof DocumentView
 
 describe("Document View knowledge citation focus", () => {
   it("highlights the cited markdown passage and scrolls to it without opening Find", async () => {
-    const content = "# Runbook\\n\\nUnrelated introduction.\\n\\nRestore the **encrypted snapshot** carefully.\\n\\nFinal check.";
-    const raw = content.replaceAll("\\\\n", "\\n");
+    const raw = ["# Runbook", "", "Unrelated introduction.", "", "Restore the **encrypted snapshot** carefully.", "", "Final check."].join("\n");
     const start = raw.indexOf("Restore the");
     const end = start + "Restore the **encrypted snapshot** carefully.".length;
     const originalRect = HTMLElement.prototype.getBoundingClientRect;
