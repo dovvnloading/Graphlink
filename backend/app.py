@@ -318,6 +318,7 @@ def _configure_session(
         bus, settings_manager, notifications_state, agent_dispatcher,
         provider_runtime=provider_runtime,
         on_knowledge_embedding_changed=lambda: bus.dispatch_intent("knowledge", "refreshEmbeddings", []),
+        document=canvas_document,
     )
     # R6.4: register_chat_library needs the same session's canvas_document
     # (built above) so loadChat can actually restore a session into it, and

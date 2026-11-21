@@ -149,6 +149,7 @@ export interface ChatRerunPreview {
     provider: string;
     model: string;
     estimatedInputTokens: number;
+    estimatedInputCostUsd: number | null;
   }>;
   /** All excluded nodes are server-selected, never guessed from canvas layout. */
   skipped: Array<{

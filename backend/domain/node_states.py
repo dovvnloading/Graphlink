@@ -996,13 +996,11 @@ class ChatState(NodeState):
     # replies also stamp as of 6.8.
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
-    # ADR-016 stage 16.2: the USD cost estimated AT THE TIME this reply's
-    # usage was stamped (backend/api/intents_chat.py's _on_usage, via
-    # TokenCounterState.estimate_cost_for) - a snapshot, not a live
-    # recomputation, so an override changed later does not retroactively
-    # rewrite what an already-completed reply is shown to have cost. None
-    # for every node prompt_tokens/completion_tokens is also None for, plus
-    # local providers' genuine $0.00 and unknown-model's genuine "no guess".
+    # The saved cost is the estimate stamped at response time. The scene
+    # wire projects a fresh value from unchanged token counts and current
+    # overrides when canvas has a live estimator, without altering saved
+    # usage or generating undo history. Unknown models are unpriced, and
+    # local model prices are genuinely zero.
     estimated_cost_usd: float | None = None
     # ADR-007 stage 7.4: this turn's tool calls + their results, in call
     # order - empty for the overwhelming majority of chat nodes (no tool-use

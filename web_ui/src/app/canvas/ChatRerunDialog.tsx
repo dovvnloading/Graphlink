@@ -206,6 +206,8 @@ export function ChatRerunDialog({
                     ? reply.provider + " / " + reply.model
                     : reply.model || reply.provider || "Current route"}
                   {" · "}Estimated input: {reply.estimatedInputTokens.toLocaleString()} tokens
+                  {" · "}Estimated input cost: {reply.estimatedInputCostUsd == null
+                    ? "unavailable" : "$" + reply.estimatedInputCostUsd.toFixed(6)}
                 </span>
               </li>
             ))}

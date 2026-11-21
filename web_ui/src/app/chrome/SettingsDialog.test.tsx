@@ -284,6 +284,23 @@ async function chooseCustomOption(
 }
 
 describe("SettingsDialog", () => {
+  it("navigates to Model pricing with distinct accessible rail and list labels", async () => {
+    const { user, push, intents } = setup();
+    await user.click(screen.getByText("open settings"));
+    await user.click(screen.getByRole("button", { name: "Model pricing" }));
+    expect(intents).toContainEqual(["app-settings", "setActiveSection", ["model pricing"]]);
+    act(() => push({
+      ...snapshot, activeSection: "model pricing",
+      pricingOverrides: [],
+      effectiveModelPrices: [{ modelId: "gpt-4o-mini", provider: "OpenAI-Compatible",
+        inputPerMillion: 0.15, outputPerMillion: 0.6, source: "built-in" }],
+    }));
+    expect(screen.getByRole("region", { name: "Model pricing" })).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Effective model prices" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit pricing for OpenAI-Compatible / gpt-4o-mini" }))
+      .toBeInTheDocument();
+  });
+
   it("navigating sections fires setActiveSection with the clicked section's key", async () => {
     const { user, intents } = setup();
     await user.click(screen.getByText("open settings"));

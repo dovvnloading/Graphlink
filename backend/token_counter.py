@@ -155,10 +155,9 @@ class TokenCounterState:
     def estimate_cost_for(self, prompt_tokens, completion_tokens, *, provider: str, model: str) -> float | None:
         """Public wrapper around estimate_cost_usd, using this counter's own
         LIVE pricing-overrides accessor. ADR-016 stage 16.2: lets a caller
-        (backend/api/intents_chat.py's _on_usage) compute the SAME cost
-        estimate the composer's token counter would, to stamp onto a reply
-        node as a point-in-time snapshot - see ChatState.estimated_cost_usd's
-        own comment for why that's a snapshot, not a live recomputation."""
+        (backend/api/intents_chat.py's _on_usage) stamp the original cost
+        estimate. Canvas also calls this accessor when projecting the current
+        displayed cost for a saved reply, without rewriting historical usage."""
         return estimate_cost_usd(provider, model, prompt_tokens, completion_tokens, overrides=self._pricing_overrides())
 
     def set_input_text(self, text: str) -> None:
