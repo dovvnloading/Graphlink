@@ -789,15 +789,21 @@ describe("ChatNodeView model-override pin (ADR-018 stage 18.3)", () => {
 // item after fork/compare/synthesize - status marking, Final Deliverable,
 // and collapsing a whole branch.
 describe("ChatNodeView branch status badge (ADR-002 Workstream 1)", () => {
-  it("always renders the status dot, even for the default 'active' status", () => {
+  it("keeps default active status implicit rather than painting a color-only dot", () => {
     renderChatNode({ branchStatus: "active" });
-    const dot = screen.getByLabelText("Branch status: active");
-    expect(dot).toHaveAttribute("title", "Branch status: active");
+    expect(screen.queryByRole("status", { name: /Branch status:/ })).toBeNull();
   });
 
-  it("renders a distinct status dot for accepted/rejected/superseded", () => {
-    renderChatNode({ branchStatus: "accepted" });
-    expect(screen.getByLabelText("Branch status: accepted")).toBeInTheDocument();
+  it("uses readable text and a live status for accepted/rejected/superseded", () => {
+    const { rerenderWithData } = renderChatNode({ branchStatus: "accepted" });
+    for (const [status, label] of [
+      ["accepted", "Accepted"], ["rejected", "Rejected"], ["superseded", "Superseded"],
+    ] as const) {
+      rerenderWithData({ branchStatus: status });
+      const badge = screen.getByRole("status", { name: `Branch status: ${status}` });
+      expect(badge).toHaveTextContent(label);
+      expect(badge).toHaveAttribute("title", `Branch status: ${status}`);
+    }
   });
 
   it("renders no Final Deliverable badge when isFinalDeliverable is false", () => {
@@ -1967,5 +1973,54 @@ describe("ChatNodeView re-run from here", () => {
     renderChatNode({ isUser: false, staleness: "out_of_date", pendingRequestId: "request-1" });
     fireEvent.contextMenu(screen.getByText("Assistant"));
     expect(screen.getByRole("menuitem", { name: "Re-run from here" })).toBeDisabled();
+  });
+});
+
+describe("ChatNodeView branch-editing accessibility regressions", () => {
+  it("announces the full selected version number without changing the compact label", () => {
+    const { rerenderWithData } = renderChatNode({ versionCount: 3, versionIndex: 1 });
+    const versions = screen.getByRole("group", { name: "Message versions" });
+    expect(versions).toHaveTextContent("2/3");
+    expect(screen.getByRole("status")).toHaveTextContent("Version 2 of 3 selected");
+    rerenderWithData({ versionCount: 3, versionIndex: 2 });
+    expect(screen.getByRole("status")).toHaveTextContent("Version 3 of 3 selected");
+  });
+
+  it("returns focus to the persistent actions button on Escape and a successful save", async () => {
+    const user = userEvent.setup();
+    const { onEditMessage } = renderChatNode({ content: "Original" });
+    const trigger = screen.getByRole("button", { name: "Node actions" });
+    trigger.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("menu", { name: "Chat message actions" })).toBeInTheDocument();
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(screen.getByRole("textbox", { name: "Edit message text" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(trigger).toHaveFocus();
+
+    await user.keyboard("{Enter}");
+    await user.keyboard("{ArrowDown}{Enter}");
+    const editor = screen.getByRole("textbox", { name: "Edit message text" });
+    await user.clear(editor);
+    await user.type(editor, "Revised");
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    act(() => { onEditMessage.mock.calls[0][2](true); });
+    expect(screen.queryByRole("textbox", { name: "Edit message text" })).toBeNull();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("captures a connected dialog return target even when the re-run quick action is folded away", async () => {
+    const user = userEvent.setup();
+    let focusAtOpen: Element | null = null;
+    const onRerunFromHere = vi.fn(() => { focusAtOpen = document.activeElement; });
+    renderChatNode({ versionCount: 2, isCollapsed: true, onRerunFromHere });
+    const trigger = screen.getByRole("button", { name: "Node actions" });
+    trigger.focus();
+    await user.keyboard("{Enter}");
+    const rerun = screen.getByRole("menuitem", { name: "Re-run from here" });
+    rerun.focus();
+    await user.keyboard("{Enter}");
+    expect(onRerunFromHere).toHaveBeenCalledOnce();
+    expect(focusAtOpen).toBe(trigger);
   });
 });

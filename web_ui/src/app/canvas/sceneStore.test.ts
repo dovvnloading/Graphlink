@@ -2177,3 +2177,14 @@ describe("Chat re-run intent forwarding", () => {
     expect(intents).toEqual([]);
   });
 });
+
+describe("Chat version switching offline safety", () => {
+  it("does not queue a version index that could be evicted or reordered before reconnect", () => {
+    const fake = makeFakeTransport({ autoSettleFireIntent: false });
+    const store = new SceneStore(fake.transport);
+    store.setChatVersion("reply-2", 1);
+    expect(fake.transport.fireIntent).toHaveBeenCalledWith(
+      "scene", "setChatVersion", ["reply-2", 1], undefined, false,
+    );
+  });
+});
