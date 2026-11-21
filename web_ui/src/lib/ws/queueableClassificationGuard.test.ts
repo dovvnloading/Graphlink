@@ -166,8 +166,14 @@ describe("queueable intent classification (ADR-003 stage 3.6)", () => {
       /chrome\/(SettingsDialog|CloudProviderSettings)\.tsx$/.test(s.file.replace(/\\/g, "/")),
     );
     // Workspace Agent adds one queueable, idempotent per-folder revoke action.
-    expect(sites).toHaveLength(47);
+    expect(sites).toHaveLength(52);
     expect(sites.filter((s) => s.intent === "revokeHarnessTrustedDir").map((s) => s.queueable)).toEqual([true]);
+    // Downloads, cancellation and deletion must never be offline-replayed.
+    for (const intent of ["pullOllamaModel", "cancelOllamaPull", "removeOllamaModel"]) {
+      const calls = sites.filter((s) => s.intent === intent);
+      expect(calls.length).toBeGreaterThan(0);
+      expect(calls.every((s) => s.queueable === false)).toBe(true);
+    }
     const cloud = sites.filter((s) => s.file.endsWith("CloudProviderSettings.tsx"));
     expect(cloud.map(({ intent, queueable }) => [intent, queueable]).sort()).toEqual([
       ["loadApiModels", false], ["resetApiSettings", false], ["saveApiConfiguration", false],
