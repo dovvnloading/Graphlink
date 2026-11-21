@@ -80,6 +80,9 @@ const snapshot = {
   ollamaInventory: [],
   ollamaInventorySource: "",
   ollamaServerReachable: null,
+  ollamaServerStatus: "checking",
+  ollamaStartStatus: "idle",
+  ollamaStartError: "",
   ollamaScanSummary: "No saved scan yet. Run a system scan or choose a folder to build the local model list.",
   ollamaScanStatus: "idle",
   ollamaPullStatus: "idle",
@@ -381,6 +384,76 @@ describe("SettingsDialog", () => {
     expect(inventory.getByText(/4.0 GiB on disk/)).toBeInTheDocument();
     expect(inventory.getByText(/Trained context: 131,072 tokens/)).toBeInTheDocument();
     expect(inventory.getByText(/chat, tools, vision, thinking/)).toBeInTheDocument();
+  });
+
+  it("shows Running, Installed but not running, and Not found with a conditional start action", async () => {
+    const { user, push, intents } = setup();
+    await goToOllama(user, push, { ollamaServerStatus: "not_found" });
+    const status = screen.getByRole("status", { name: "Ollama server status" });
+    expect(status).toHaveTextContent("Not found");
+    expect(screen.queryByRole("button", { name: "Start Ollama" })).toBeNull();
+
+    act(() => push({ ...snapshot, activeSection: "ollama (local)", ollamaServerStatus: "running" }));
+    expect(status).toHaveTextContent("Running");
+    expect(screen.queryByRole("button", { name: "Start Ollama" })).toBeNull();
+
+    act(() => push({ ...snapshot, activeSection: "ollama (local)", ollamaServerStatus: "installed" }));
+    expect(status).toHaveTextContent("Installed but not running");
+    await user.click(screen.getByRole("button", { name: "Start Ollama" }));
+    expect(intents).toContainEqual(["app-settings", "startOllama", []]);
+
+    act(() => push({
+      ...snapshot, activeSection: "ollama (local)", ollamaServerStatus: "installed",
+      ollamaStartStatus: "starting",
+    }));
+    expect(screen.getByRole("button", { name: "Start Ollama" })).toBeDisabled();
+    expect(screen.getByText("Starting Ollama...")).toBeInTheDocument();
+
+    act(() => push({
+      ...snapshot, activeSection: "ollama (local)", ollamaServerStatus: "installed",
+      ollamaStartError: "Could not start Ollama: permission denied",
+    }));
+    expect(screen.getByRole("alert")).toHaveTextContent("permission denied");
+  });
+
+  it("checks health on Settings open, focus, and each 30-second tick, stopping on close", async () => {
+    const { user, intents } = setup();
+    const checks = () => intents.filter((entry) =>
+      entry[0] === "app-settings" && entry[1] === "checkOllamaStatus",
+    );
+    expect(checks()).toHaveLength(0);
+
+    let poll: () => void = () => { throw new Error("30-second timer not registered"); };
+    const realSetInterval = window.setInterval.bind(window);
+    const intervalSpy = vi.spyOn(window, "setInterval").mockImplementation((handler, delay, ...args) => {
+      if (delay === 30_000 && typeof handler === "function") {
+        poll = handler;
+        // The test uses a numeric window timer ID; Node's typings expect Timeout.
+        return 2026 as unknown as ReturnType<typeof setInterval>;
+      }
+      return realSetInterval(handler, delay, ...args) as unknown as ReturnType<typeof setInterval>;
+    });
+    const clearSpy = vi.spyOn(window, "clearInterval");
+    try {
+      await user.click(screen.getByText("open settings"));
+      expect(checks()).toHaveLength(1);
+      act(() => window.dispatchEvent(new Event("focus")));
+      expect(checks()).toHaveLength(2);
+      act(() => poll());
+      expect(checks()).toHaveLength(3);
+
+      await user.click(screen.getByRole("button", { name: "Close Settings" }));
+      expect(clearSpy).toHaveBeenCalledWith(2026);
+      act(() => window.dispatchEvent(new Event("focus")));
+      expect(checks()).toHaveLength(3);
+
+      await user.click(screen.getByText("open settings"));
+      expect(checks()).toHaveLength(4);
+    } finally {
+      intervalSpy.mockRestore();
+      clearSpy.mockRestore();
+    }
+    expect(intents).not.toContainEqual(["app-settings", "scanOllamaSystem", []]);
   });
 
   it("System Scan fires scanOllamaSystem and disables while running", async () => {

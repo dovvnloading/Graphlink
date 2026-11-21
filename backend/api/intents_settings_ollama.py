@@ -31,7 +31,12 @@ from backend.api._settings_shared import (
     run_locked,
 )
 from backend.events import SessionBus
-from backend.ollama_inventory import _key, build_ollama_inventory
+from backend.ollama_inventory import (
+    _key,
+    build_ollama_inventory,
+    check_ollama_server_status,
+    start_installed_ollama,
+)
 from graphlink_settings_store import SettingsManager
 
 
@@ -175,7 +180,12 @@ def register_settings_ollama_intents(
         # published after the scan cache has been persisted successfully.
         state.ollama_inventory = list(results.get("inventory", []))
         state.ollama_inventory_source = str(results.get("source", ""))
-        state.ollama_server_reachable = results.get("server_reachable")
+        # A manual folder scan does not probe the daemon and must not
+        # overwrite the live health result; the shared system inventory does.
+        if results.get("server_reachable") is not None:
+            state.ollama_server_reachable = results["server_reachable"]
+        if results.get("server_status") in {"running", "installed", "not_found"}:
+            state.ollama_server_status = results["server_status"]
         state.ollama_scan_status = "done"
         state.knowledge_scan_status = "done"
         capable = any("embeddings" in row["capabilities"] for row in state.ollama_inventory)
@@ -275,11 +285,72 @@ def register_settings_ollama_intents(
 
     bus.register_intent("app-settings", "setOllamaReasoningLevel", set_ollama_reasoning_level)
     bus.register_intent("app-settings", "setOllamaModelAssignment", set_ollama_model_assignment)
+    register_ollama_server_intents(bus, state)
     bus.register_intent("app-settings", "scanOllamaSystem", scan_ollama_system)
     bus.register_intent("app-settings", "pullOllamaModel", pull_ollama_model)
     bus.register_intent("app-settings", "pickOllamaScanFolder", pick_ollama_scan_folder)
     register_ollama_context_intents(bus, manager, state)
     return scan_ollama_system
+
+
+def register_ollama_server_intents(
+    bus: SessionBus, state: SettingsSessionState
+) -> None:
+    """Register lightweight Ollama server-status and installed-app launch intents."""
+
+    async def check_ollama_status():
+        # Called on Settings open/focus and every 30 seconds. Do not persist
+        # scan results or perform expensive per-model /api/show and /api/ps
+        # requests on this polling path.
+        if state.ollama_status_checking:
+            return
+        state.ollama_status_checking = True
+        try:
+            status = await asyncio.to_thread(check_ollama_server_status)
+            if status != state.ollama_server_status:
+                state.ollama_server_status = status
+                state.ollama_server_reachable = status == "running"
+                await bus.publish("app-settings")
+        finally:
+            state.ollama_status_checking = False
+
+    async def start_ollama():
+        # The client supplies no path or command. Re-resolve the installation
+        # server-side immediately before spawning and block repeated clicks.
+        if state.ollama_start_status == "starting":
+            return
+        state.ollama_start_status = "starting"
+        state.ollama_start_error = ""
+        await bus.publish("app-settings")
+        try:
+            launched = await asyncio.to_thread(start_installed_ollama)
+            status = await asyncio.to_thread(check_ollama_server_status)
+            # A newly spawned server may need a moment to bind its port.
+            # Keep this short enough for the default WS request timeout.
+            for _ in range(8):
+                if status == "running" or not launched:
+                    break
+                await asyncio.sleep(0.5)
+                status = await asyncio.to_thread(check_ollama_server_status)
+            state.ollama_server_status = status
+            state.ollama_server_reachable = status == "running"
+            if launched and status != "running":
+                state.ollama_start_error = (
+                    "Ollama was launched but its server is not responding yet. "
+                    "The status will refresh automatically."
+                )
+        except FileNotFoundError:
+            state.ollama_server_status = "not_found"
+            state.ollama_server_reachable = False
+            state.ollama_start_error = "Ollama is not installed on this computer."
+        except Exception as exc:  # noqa: BLE001 - surface an OS launch failure without crashing the intent
+            state.ollama_start_error = f"Could not start Ollama: {exc}"
+        finally:
+            state.ollama_start_status = "idle"
+            await bus.publish("app-settings")
+
+    bus.register_intent("app-settings", "checkOllamaStatus", check_ollama_status)
+    bus.register_intent("app-settings", "startOllama", start_ollama)
 
 
 def _inventory_context_model(state: SettingsSessionState, model: str) -> dict | None:

@@ -105,6 +105,9 @@ export interface AppSettingsState {
   ollamaInventory: OllamaInventoryModel[];
   ollamaInventorySource: string;
   ollamaServerReachable?: boolean | null;
+  ollamaServerStatus: string;
+  ollamaStartStatus: string;
+  ollamaStartError: string;
   ollamaScanSummary: string;
   ollamaScanStatus: string;
   ollamaPullStatus: string;
@@ -233,6 +236,9 @@ const APP_SETTINGS_STATE_FIELDS: WireFields = [
   ["ollamaInventory", { a: { o: OLLAMA_INVENTORY_MODEL_FIELDS } }, 0],
   ["ollamaInventorySource", "s", 0],
   ["ollamaServerReachable", "b", 1],
+  ["ollamaServerStatus", "s", 0],
+  ["ollamaStartStatus", "s", 0],
+  ["ollamaStartError", "s", 0],
   ["ollamaScanSummary", "s", 0],
   ["ollamaScanStatus", "s", 0],
   ["ollamaPullStatus", "s", 0],

@@ -393,6 +393,8 @@ CLASSIFICATION: tuple[Classified, ...] = (
     # -- backend/api/intents_settings_ollama.py (app-settings) --------------
     Classified("app-settings", "setOllamaReasoningLevel", "B", "preference: reasoning level"),
     Classified("app-settings", "setOllamaModelAssignment", "B", "preference: per-task model assignment"),
+    Classified("app-settings", "checkOllamaStatus", "B", "read-only: probes local Ollama daemon and installed executable"),
+    Classified("app-settings", "startOllama", "B", "run-lifecycle: launches an already installed local Ollama application"),
     Classified("app-settings", "inspectOllamaContextModel", "B", "read-only: inspect model trained limit and memory"),
     Classified("app-settings", "setOllamaContextWindow", "B", "preference: per-model local serving budget"),
     Classified("app-settings", "scanOllamaSystem", "B", "run-lifecycle: scans/caches locally installed models"),
