@@ -272,7 +272,7 @@ def _regenerate_in_place(document, node_to_regenerate, reply_text):
             )
 
 
-def _land_partial_reply_node(document, parent_node, partial_text):
+def _land_partial_reply_node(document, parent_node, partial_text, provider=None, model=None):
     """ADR-006 stage 6.4 (H5): a Composer send's stream died mid-reply - land
     the accumulated text as a real assistant node flagged incomplete instead
     of losing it. NOT parsed into thinking/code children (a truncated reply
@@ -284,6 +284,7 @@ def _land_partial_reply_node(document, parent_node, partial_text):
         ax, ay = document.place_child(parent_node.id, "chat")
         ai = document.add_chat_node(ax, ay, partial_text, False, parent_id=parent_node.id)
         ai.state.response_incomplete = True
+        _stamp_reply_provenance(ai, provider, model)
         document.sync_chat_version(ai.id)
         # Inside the mutator so the command's after-snapshot of the chat
         # pointers names this node - see _make_send_on_reply's _commit.
@@ -1069,7 +1070,9 @@ def register_chat_intents(
             document.add_session_tokens(partial_text)
             token_counter.set_output_text(partial_text)
             await publish_token_counter()
-            _land_partial_reply_node(document, node, partial_text)
+            _land_partial_reply_node(
+                document, node, partial_text, request_provider, request_model,
+            )
 
         _on_usage = _make_on_usage(
             document, token_counter, publish_token_counter, publish_scene,
