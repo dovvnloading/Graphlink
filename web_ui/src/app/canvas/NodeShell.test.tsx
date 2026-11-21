@@ -45,6 +45,18 @@ describe("NodeShell (ADR-012 stage 12.5)", () => {
     expect(derivedBadge).toHaveAttribute("title", "This node was created before its upstream inputs changed.");
   });
 
+  it("suppresses stale markers for Thinking nodes while keeping real derived warnings", () => {
+    const { rerender } = renderShell({ kindClassName: "thinking-node", staleness: "upstream_changed" });
+    expect(screen.queryByRole("status")).toBeNull();
+    rerender(
+      <ReactFlowProvider>
+        <NodeShell kindClassName="widget-node" selected={false} collapsed={false}
+          header={<div>Widget</div>} bodyClassName="widget-node-content" staleness="upstream_changed" />
+      </ReactFlowProvider>,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Upstream changed");
+  });
+
   it("does not show an alert on current and legacy nodes", () => {
     renderShell();
     expect(screen.queryByRole("status")).toBeNull();
