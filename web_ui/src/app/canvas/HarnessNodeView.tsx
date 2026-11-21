@@ -1,8 +1,11 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { useReactFlow, type Node, type NodeProps } from "@xyflow/react";
 import { motionDuration } from "../reducedMotion";
-import { useModelCapabilityPreview } from "../context/ModelCapabilityContext";
+import { useModelCapabilityPreview, useComposerModelStore } from "../context/ModelCapabilityContext";
+import { OverlayProviderIfMissing, useOverlays } from "../overlays/overlays";
+import { ModelPicker } from "../chrome/ModelPicker";
+import type { ComposerStore } from "../chrome/composerStore";
 import { CollapseToggleButton } from "./CollapseToggleButton";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMenu } from "./NodeMenu";
@@ -439,10 +442,34 @@ function renderApprovalSummary(summary: string, toolName: string) {
   });
 }
 
-function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
+function AgentModelTrigger({ store, name }: { store: ComposerStore; name: string }) {
+  const composer = useSyncExternalStore(store.subscribe, store.getComposer);
+  const overlays = useOverlays();
+  return (
+    <button
+      type="button"
+      className="harness-node-model-trigger nodrag"
+      data-overlay-trigger={name}
+      aria-label="Choose agent model"
+      aria-haspopup="dialog"
+      aria-expanded={overlays.isOpen(name)}
+      disabled={!composer.request.canSend}
+      title="Choose the model for the next Agent task"
+      onClick={() => overlays.toggle(name, "popover")}
+    >
+      <span>{composer.route.modelLabel || composer.route.modelId || "Choose model"}</span>
+      <span aria-hidden="true">⌄</span>
+    </button>
+  );
+}
+
+function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>) {
   const collapsed = useLodVisibility() || data.isCollapsed;
   const running = data.harnessStatus === "running";
   const modelCapabilities = useModelCapabilityPreview();
+  const modelStore = useComposerModelStore();
+  const overlays = useOverlays();
+  const modelPickerName = `agent-model-${id}`;
   const [draft, setDraft] = useState("");
   const [draftError, setDraftError] = useState("");
   const [sending, setSending] = useState(false);
@@ -603,6 +630,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
         <NodeHeading className="plan-node-title">
           <span className="plan-node-badge">Agent</span>
           <span className="plan-node-goal">{data.harnessGoal || "Untitled task"}</span>
+          {modelStore && <AgentModelTrigger store={modelStore} name={modelPickerName} />}
           <button
             ref={settingsTriggerRef}
             type="button"
@@ -640,7 +668,8 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
         )
       }
       footer={
-        settingsPosition && (
+        <>
+        {settingsPosition && (
           <AgentSettingsPopover
             position={settingsPosition}
             shell={data.harnessShell}
@@ -657,7 +686,11 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
             onClose={() => setSettingsPosition(null)}
             triggerRef={settingsTriggerRef}
           />
-        )
+        )}
+        {modelStore && overlays.isOpen(modelPickerName) && (
+          <ModelPicker key={modelPickerName} name={modelPickerName} store={modelStore} />
+        )}
+        </>
       }
     >
       <div className={`plan-node-status ${statusClass(data)}`}>{statusLabel(data)}</div>
@@ -989,4 +1022,12 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   );
 }
 
-export const HarnessNodeView = memo(HarnessNodeViewInner);
+function HarnessNodeViewWithOverlays(props: NodeProps<HarnessFlowNode>) {
+  return (
+    <OverlayProviderIfMissing>
+      <HarnessNodeViewInner {...props} />
+    </OverlayProviderIfMissing>
+  );
+}
+
+export const HarnessNodeView = memo(HarnessNodeViewWithOverlays);

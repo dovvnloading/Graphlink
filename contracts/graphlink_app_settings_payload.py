@@ -193,6 +193,9 @@ class AppSettingsStatePayload:
     ollamaInventory: list[OllamaInventoryModelPayload]
     ollamaInventorySource: str
     ollamaServerReachable: bool | None
+    ollamaServerStatus: str
+    ollamaStartStatus: str
+    ollamaStartError: str
     ollamaScanSummary: str
     ollamaScanStatus: str
     ollamaPullStatus: str

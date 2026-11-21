@@ -3,7 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { ReactFlowProvider } from "@xyflow/react";
 import { describe, expect, it, vi } from "vitest";
 import { HarnessNodeView, approvalPanDelta, type HarnessNodeData } from "./HarnessNodeView";
-import { ModelCapabilityContext } from "../context/ModelCapabilityContext";
+import { ModelCapabilityContext, ComposerModelStoreContext } from "../context/ModelCapabilityContext";
+import { OverlayProvider } from "../overlays/overlays";
+import { initialComposerState, type ComposerStore } from "../chrome/composerStore";
 import type { ModelCapabilityPreview } from "../chrome/composerStore";
 
 // Same minimal-NodeProps-inside-ReactFlowProvider shape as
@@ -71,8 +73,13 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
   };
 }
 
-function renderHarness(data: HarnessNodeData, capabilities: ModelCapabilityPreview | null = null) {
+function renderHarness(
+  data: HarnessNodeData, capabilities: ModelCapabilityPreview | null = null,
+  modelStore: ComposerStore | null = null,
+) {
   return render(
+    <OverlayProvider>
+    <ComposerModelStoreContext.Provider value={modelStore}>
     <ModelCapabilityContext.Provider value={capabilities}>
       <ReactFlowProvider>
       <HarnessNodeView
@@ -91,7 +98,9 @@ function renderHarness(data: HarnessNodeData, capabilities: ModelCapabilityPrevi
         parentId={undefined}
       />
       </ReactFlowProvider>
-    </ModelCapabilityContext.Provider>,
+    </ModelCapabilityContext.Provider>
+    </ComposerModelStoreContext.Provider>
+    </OverlayProvider>,
   );
 }
 
@@ -936,5 +945,80 @@ describe("HarnessNodeView — activity visibility", () => {
       </ReactFlowProvider>,
     );
     expect(details.open).toBe(false);
+  });
+});
+
+describe("Agent model picker", () => {
+  it("uses the same installed inventory, opens without a current model and selects the next agent model", async () => {
+    const user = userEvent.setup();
+    const selectPickerModel = vi.fn();
+    const loadPickerModels = vi.fn().mockResolvedValue([
+      { provider: "Ollama", modelId: "tool-agent:8b",
+        label: "Ollama · tool-agent:8b", source: "local",
+        capabilities: ["chat", "tools", "vision"], sizeBytes: 1024 ** 3 },
+      { provider: "Anthropic Claude", modelId: "claude-test",
+        label: "Anthropic Claude · claude-test", source: "cloud",
+        capabilities: [], sizeBytes: null },
+    ]);
+    const composer = {
+      ...initialComposerState,
+      request: { ...initialComposerState.request, canSend: true },
+      route: { ...initialComposerState.route, modelId: "", modelLabel: "Select a model" },
+    };
+    const store = {
+      subscribe: () => () => {},
+      getComposer: () => composer,
+      loadPickerModels, selectPickerModel, openOllamaSettings: vi.fn(),
+    } as unknown as ComposerStore;
+
+    renderHarness(makeData({ harnessStatus: "done", pendingRequestId: null }), null, store);
+    const trigger = screen.getByRole("button", { name: "Choose agent model" });
+    expect(trigger).toBeEnabled();
+    await user.click(trigger);
+    expect(await screen.findByRole("button", { name: /Ollama · tool-agent:8b/ })).toBeVisible();
+    expect(screen.getByText("tools")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /Anthropic Claude · claude-test/ }));
+    expect(selectPickerModel).toHaveBeenCalledWith("Anthropic Claude", "claude-test");
+    expect(screen.queryByRole("dialog", { name: "Choose a model" })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+  it("keeps the agent picker usable in a standalone render without an OverlayProvider", async () => {
+    const user = userEvent.setup();
+    const selectPickerModel = vi.fn();
+    const composer = {
+      ...initialComposerState,
+      request: { ...initialComposerState.request, canSend: true },
+      route: { ...initialComposerState.route, modelId: "", modelLabel: "" },
+    };
+    const store = {
+      subscribe: () => () => {},
+      getComposer: () => composer,
+      loadPickerModels: vi.fn().mockResolvedValue([{
+        provider: "Ollama", modelId: "tool-agent:8b",
+        label: "Ollama · tool-agent:8b", source: "local",
+        capabilities: ["chat", "tools"], sizeBytes: 1024 ** 3,
+      }]),
+      selectPickerModel,
+      openOllamaSettings: vi.fn(),
+    } as unknown as ComposerStore;
+
+    render(
+      <ComposerModelStoreContext.Provider value={store}>
+        <ReactFlowProvider>
+          <HarnessNodeView
+            id="n1" type="harness"
+            data={makeData({ harnessStatus: "done", pendingRequestId: null })}
+            selected={false} isConnectable={false} positionAbsoluteX={0} positionAbsoluteY={0}
+            zIndex={0} dragging={false} deletable selectable draggable parentId={undefined}
+          />
+        </ReactFlowProvider>
+      </ComposerModelStoreContext.Provider>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "Choose agent model" });
+    await user.click(trigger);
+    await user.click(await screen.findByRole("button", { name: /Ollama · tool-agent:8b/ }));
+    expect(selectPickerModel).toHaveBeenCalledWith("Ollama", "tool-agent:8b");
+    expect(trigger).toHaveFocus();
   });
 });

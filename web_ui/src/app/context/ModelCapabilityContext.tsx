@@ -6,6 +6,12 @@ import type { ComposerStore, ModelCapabilityPreview } from "../chrome/composerSt
 // request; a late response cannot show a warning about the wrong model.
 export const ModelCapabilityContext = createContext<ModelCapabilityPreview | null>(null);
 
+/** Share the composer's model selection with Agent cards; no second store. */
+export const ComposerModelStoreContext = createContext<ComposerStore | null>(null);
+export function useComposerModelStore(): ComposerStore | null {
+  return useContext(ComposerModelStoreContext);
+}
+
 export function useModelCapabilityPreview(): ModelCapabilityPreview | null {
   return useContext(ModelCapabilityContext);
 }
@@ -28,5 +34,9 @@ export function ModelCapabilityProvider({ store, children }: {
   }, [store, provider, modelId]);
 
   const current = loaded?.provider === provider && loaded.modelId === modelId ? loaded : null;
-  return <ModelCapabilityContext.Provider value={current}>{children}</ModelCapabilityContext.Provider>;
+  return (
+    <ComposerModelStoreContext.Provider value={store}>
+      <ModelCapabilityContext.Provider value={current}>{children}</ModelCapabilityContext.Provider>
+    </ComposerModelStoreContext.Provider>
+  );
 }

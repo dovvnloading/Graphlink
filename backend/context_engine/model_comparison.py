@@ -65,6 +65,47 @@ def available_comparison_models(settings_manager, runtime=None) -> list[dict[str
     return [result[key] for key in sorted(result, key=lambda item: (item[0].lower(), item[1].lower()))]
 
 
+
+def available_picker_models(settings_manager, runtime=None) -> list[dict]:
+    """Live installed Ollama models beside usable, configured cloud profiles.
+
+    The Settings/Knowledge inventory is the sole Ollama discovery source. This
+    read-only endpoint runs off-loop; unlike the saved scan cache it observes
+    freshly installed tags even before Settings has been opened.
+    """
+    if settings_manager is None:
+        return []
+
+    from backend.ollama_inventory import build_ollama_inventory
+
+    inventory = build_ollama_inventory()
+    rows = []
+    for item in inventory.get("inventory", []):
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        rows.append({
+            "provider": config.LOCAL_PROVIDER_OLLAMA,
+            "modelId": name,
+            "label": f"Ollama · {name}",
+            "source": "local",
+            "capabilities": item.get("capabilities") or [],
+            "sizeBytes": item.get("sizeBytes"),
+        })
+
+    # Reuse the existing credential/endpoint-filtered cloud catalog; unconfigured
+    # cloud providers are not presented as runnable choices.
+    for model in available_comparison_models(settings_manager, runtime):
+        if model["provider"] in CLOUD_PROVIDERS:
+            rows.append({
+                **model,
+                "source": "cloud",
+                "capabilities": [],
+                "sizeBytes": None,
+            })
+    return sorted(rows, key=lambda row: (row["provider"].casefold(), row["modelId"].casefold()))
+
+
 def validate_comparison_models(raw_models, settings_manager, runtime=None) -> list[ModelRef]:
     """Reject duplicate, unknown and over-limit routes before any graph mutation."""
     if not isinstance(raw_models, list) or not 2 <= len(raw_models) <= 4:
