@@ -452,8 +452,10 @@ class TestLoop:
 
         # Model a verbose schema catalog: the fixed prefix consumes most of
         # Ollama's 8192-token window before any tool result or follow-up turn.
+        # TokenEstimator may use tiktoken or the character-count fallback;
+        # start below the target footprint in both cases.
         registry = ToolRegistry()
-        for repetitions in range(2_000, 9_000, 100):
+        for repetitions in range(100, 9_000, 50):
             spec = ToolSpec(
                 "budget.read", "Inspect files. " * repetitions,
                 {"type": "object", "properties": {}, "additionalProperties": False},
