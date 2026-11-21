@@ -51,12 +51,13 @@ class _Runs:
 class _Dispatcher:
     _settings_manager = None
 
-    def __init__(self, *, hold_call=0, fail_call=0):
+    def __init__(self, *, hold_call=0, fail_call=0, replies=None):
         self._runs = _Runs()
         self.calls = []
         self.cancelled = set()
         self.hold_call = hold_call
         self.fail_call = fail_call
+        self.replies = replies
         self.release = asyncio.Event()
 
     def active_provider_model(self, model_ref=None):
@@ -81,7 +82,8 @@ class _Dispatcher:
                 if number == self.hold_call:
                     await self.release.wait()
                 if request_id not in self.cancelled and number != self.fail_call:
-                    await kwargs["on_reply"](f"new reply {number}")
+                    answer = self.replies[number - 1] if self.replies is not None else f"new reply {number}"
+                    await kwargs["on_reply"](answer)
             finally:
                 kwargs["on_end"]()
 
