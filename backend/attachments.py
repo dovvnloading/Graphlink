@@ -269,6 +269,48 @@ def _pdf_object(value):
     return value.get_object() if hasattr(value, "get_object") else value
 
 
+def _pdf_ascii_flate_payload(raw: bytes, filter_name: str) -> bytes:
+    """Bound the ASCII wrapper of a Flate stream before decompressing it.
+
+    ReportLab emits /ASCII85Decode /FlateDecode by default. Unlike a bare
+    Flate stream, its source must first be ASCII-decoded. The ASCII85 'z'
+    short form can expand one byte into four, so cap this intermediate
+    output too rather than assuming an ASCII filter always shrinks.
+    """
+    cap = MAX_PDF_CONTENT_STREAM_BYTES
+    # Refuse pathological whitespace/padding before allocating a cleaned copy.
+    if len(raw) > 5 * cap:
+        raise AttachmentError("PDF page/Form content exceeds the expanded-stream attachment limit.")
+    whitespace = b"\x00\t\n\x0c\r "
+    compact = raw.translate(None, whitespace)
+    if filter_name in ("/ASCII85Decode", "/A85"):
+        short_forms = compact.count(b"z")
+        # Every 'z' emits four bytes; every other five digits at most four.
+        # This overestimates partial groups and optional Adobe markers.
+        upper_bound = 4 * (short_forms + (len(compact) - short_forms + 4) // 5)
+        if upper_bound > cap:
+            raise AttachmentError("PDF page/Form content exceeds the expanded-stream attachment limit.")
+        try:
+            decoded = base64.a85decode(
+                raw, adobe=compact.endswith(b"~>"), ignorechars=whitespace,
+            )
+        except ValueError as exc:
+            raise AttachmentError("PDF has an invalid ASCII85 page/Form stream.") from exc
+    else:
+        digits = compact.split(b">", 1)[0]
+        if (len(digits) + 1) // 2 > cap:
+            raise AttachmentError("PDF page/Form content exceeds the expanded-stream attachment limit.")
+        try:
+            # PDF pads an odd final hexadecimal digit with a zero nibble.
+            padded = digits + (b"0" if len(digits) % 2 else b"")
+            decoded = bytes.fromhex(padded.decode("ascii"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise AttachmentError("PDF has an invalid ASCIIHex page/Form stream.") from exc
+    if len(decoded) > cap:
+        raise AttachmentError("PDF page/Form content exceeds the expanded-stream attachment limit.")
+    return decoded
+
+
 def _pdf_expanded_stream_size(stream, remaining: int) -> int:
     """Preflight one encoded content/Form stream, bounded by remaining bytes.
 
@@ -286,7 +328,11 @@ def _pdf_expanded_stream_size(stream, remaining: int) -> int:
         if len(raw) > remaining:
             raise AttachmentError("PDF page/Form content exceeds the expanded-stream attachment limit.")
         return len(raw)
-    if filters_list not in (["/FlateDecode"], ["/Fl"]):
+    if (len(filters_list) == 2
+            and filters_list[0] in ("/ASCII85Decode", "/A85", "/ASCIIHexDecode", "/AHx")
+            and filters_list[1] in ("/FlateDecode", "/Fl")):
+        raw = _pdf_ascii_flate_payload(raw, filters_list[0])
+    elif filters_list not in (["/FlateDecode"], ["/Fl"]):
         raise AttachmentError("PDF page/Form uses a compression filter that cannot be safely bounded.")
 
     decoder = zlib.decompressobj()
