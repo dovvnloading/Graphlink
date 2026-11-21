@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from pydantic import ByteSize
 
 import api_provider
 
@@ -99,6 +100,65 @@ def test_sdk_response_objects_and_latest_alias_match_loaded_state(monkeypatch):
     assert row["vramBytes"] == 0
     assert row["trainedContextLength"] == 32768
     assert row["capabilities"] == ["chat"]
+
+
+def test_sdk_bytesize_subclasses_reach_inventory_context_and_live_pickers(monkeypatch):
+    # The real Ollama SDK types /api/tags.size and /api/ps.size as
+    # pydantic.ByteSize, not plain int. Rejecting type(value) is not int
+    # previously made every size label and the context weight unknown.
+    monkeypatch.setattr(ollama_inventory.ollama, "list", lambda: SimpleNamespace(models=[
+        SimpleNamespace(model="gemma4:12b", size=ByteSize(7_400_000_000)),
+    ]))
+    monkeypatch.setattr(ollama_inventory.ollama, "show", lambda name: {
+        "capabilities": ["completion"],
+        "model_info": {"gemma4.context_length": 131072},
+    })
+    monkeypatch.setattr(ollama_inventory.ollama, "ps", lambda: SimpleNamespace(models=[
+        SimpleNamespace(model="gemma4:12b", size=ByteSize(8_000_000_000),
+                        size_vram=ByteSize(6_000_000_000)),
+    ]))
+
+    row = ollama_inventory.build_ollama_inventory()["inventory"][0]
+    assert row["sizeBytes"] == 7_400_000_000 and type(row["sizeBytes"]) is int
+    assert row["memoryBytes"] == 8_000_000_000 and type(row["memoryBytes"]) is int
+    assert row["vramBytes"] == 6_000_000_000 and type(row["vramBytes"]) is int
+    assert row["loaded"] is True
+
+    from backend.context_engine import model_comparison
+
+    monkeypatch.setattr(model_comparison, "available_comparison_models", lambda *_: [])
+    picker = model_comparison.available_picker_models(object())
+    assert picker[0]["modelId"] == "gemma4:12b"
+    assert picker[0]["sizeBytes"] == 7_400_000_000
+    assert ollama_inventory._nonnegative_int(True) is None
+    assert ollama_inventory._nonnegative_int(3.5) is None
+    assert ollama_inventory._nonnegative_int(2**53) is None
+
+
+def test_refresh_loaded_state_uses_ps_without_relisting_and_marks_ps_failures_unknown(monkeypatch):
+    row = {
+        "name": "qwen:8b", "sizeBytes": 4_500_000_000, "source": "server",
+        "loaded": False, "memoryBytes": None, "vramBytes": None,
+    }
+    monkeypatch.setattr(ollama_inventory.ollama, "list",
+                        Mock(side_effect=AssertionError("Do not re-list tags after a Check")))
+    monkeypatch.setattr(ollama_inventory.ollama, "show",
+                        Mock(side_effect=AssertionError("Do not re-show the whole catalog")))
+    monkeypatch.setattr(ollama_inventory.ollama, "ps", lambda: {"models": [
+        {"name": "qwen:8b", "size": ByteSize(5_000_000_000), "size_vram": ByteSize(3_000_000_000)},
+    ]})
+    updated = ollama_inventory.refresh_ollama_loaded_state([row])
+    assert row["loaded"] is False  # Do not mutate the old published snapshot.
+    assert updated[0]["loaded"] is True
+    assert updated[0]["sizeBytes"] == 4_500_000_000
+    assert updated[0]["memoryBytes"] == 5_000_000_000
+    assert updated[0]["vramBytes"] == 3_000_000_000
+
+    monkeypatch.setattr(ollama_inventory.ollama, "ps", Mock(side_effect=ConnectionError("server down")))
+    offline = ollama_inventory.refresh_ollama_loaded_state(updated)
+    assert offline[0]["loaded"] is None
+    assert offline[0]["memoryBytes"] is None
+    assert offline[0]["vramBytes"] is None
 
 
 def test_unavailable_show_and_ps_keep_tagged_models_with_unknown_metadata(monkeypatch):
