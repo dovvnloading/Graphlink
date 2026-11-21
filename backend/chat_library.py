@@ -1369,6 +1369,31 @@ def get_default_workspace_id(db_path: Path) -> int:
     return int(row[0])
 
 
+def _peek_default_workspace_id(db_path: Path) -> int:
+    """Find Default without creating or migrating chats.db on a read-only preview.
+
+    Migration 2 will seed workspace id 1 for a new or legacy database. For an
+    already-migrated database, read the oldest persisted workspace id instead:
+    Default can be renamed, and its id need not still be 1. Unlike _connect,
+    this read-only connection cannot initialize or change the database.
+    """
+    if not db_path.is_file():
+        return 1
+    try:
+        with contextlib.closing(
+            sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+        ) as conn:
+            row = conn.execute("SELECT id FROM workspaces ORDER BY id LIMIT 1").fetchone()
+        if row is not None:
+            return int(row[0])
+    except sqlite3.DatabaseError:
+        # No workspaces table yet (legacy DB), or an unreadable store.
+        # Real load/save operations use _connect to migrate/rescue/report it;
+        # preview registration must not write in order to discover Default.
+        pass
+    return 1
+
+
 def get_all_workspaces(db_path: Path) -> list[dict[str, Any]]:
     """Every workspace row (including archived ones - the same "backend
     always sends everything, filtering is client-side" design this whole
@@ -3488,19 +3513,23 @@ def register_chat_library(
     # including the tests that prove the sharing actually works.
     bus.chat_db_path = resolved_path
 
-    if canvas_document is not None and knowledge_db_path is not None:
-        # The app supplies an explicit knowledge store: bootstrap the real
-        # Default workspace and migrate legacy unscoped documents before any
-        # Knowledge Library/watch/agent request, even with no open graph.
-        # Standalone registrars have no knowledge store to migrate and must
-        # remain lazy: registration and read-only graph previews must not
-        # create chats.db (or change how legacy chat IDs get migrated).
-        default_workspace_id = get_default_workspace_id(resolved_path)
+    if canvas_document is not None:
+        # Every session needs an active workspace, including standalone
+        # registrars used by load/save/autosave/export. Only the live app
+        # (which passes a knowledge store) may create/migrate chats.db here.
+        # Standalone previews merely peek at an existing Default row, or
+        # reserve migration 2's future id 1 for a fresh/legacy database.
+        default_workspace_id = (
+            get_default_workspace_id(resolved_path)
+            if knowledge_db_path is not None
+            else _peek_default_workspace_id(resolved_path)
+        )
         if canvas_document.current_workspace_id is None:
             canvas_document.current_workspace_id = default_workspace_id
-        knowledge_store.move_unscoped_documents_to_workspace(
-            knowledge_db_path, default_workspace_id,
-        )
+        if knowledge_db_path is not None:
+            knowledge_store.move_unscoped_documents_to_workspace(
+                knowledge_db_path, default_workspace_id,
+            )
 
     bus.register_topic("app-chat-library", lambda: chat_library_payload(resolved_path, notifications))
 
