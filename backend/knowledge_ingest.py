@@ -24,7 +24,7 @@ from __future__ import annotations
 import re
 from contextlib import contextmanager
 from tempfile import TemporaryDirectory
-from zipfile import BadZipFile, ZipFile
+from zipfile import BadZipFile, LargeZipFile, ZipFile
 from xml.etree import ElementTree
 from pathlib import Path
 from typing import Any, Iterator
@@ -45,6 +45,9 @@ from backend.notifications import NotificationState
 _HTML_EXTENSIONS = {".html", ".htm"}
 MAX_KNOWLEDGE_FILE_BYTES = 25 * 1024 * 1024
 _MAX_XLSX_XML_TAGS = 150_000
+MAX_OOXML_MEMBERS = 2_048
+MAX_OOXML_EXPANDED_BYTES = 32 * 1024 * 1024
+MAX_OOXML_XML_PART_BYTES = 4 * 1024 * 1024
 
 
 
@@ -61,6 +64,30 @@ def is_supported_knowledge_file(path: Path) -> bool:
     )
 
 
+def _check_ooxml_archive(path: Path) -> None:
+    """Preflight Office ZIP sizes before python-docx or ElementTree parses XML."""
+    try:
+        with ZipFile(path) as archive:
+            members = archive.infolist()
+            if len(members) > MAX_OOXML_MEMBERS:
+                raise IngestError("Office document contains too many ZIP members.")
+            expanded = 0
+            for member in members:
+                if member.flag_bits & 0x1:
+                    raise IngestError("Encrypted Office ZIP members cannot be indexed.")
+                expanded += member.file_size
+                if expanded > MAX_OOXML_EXPANDED_BYTES:
+                    raise IngestError("Office document exceeds the safe expanded-size limit.")
+                if (member.filename.lower().endswith((".xml", ".rels"))
+                        and member.file_size > MAX_OOXML_XML_PART_BYTES):
+                    raise IngestError("Office XML part exceeds the safe expanded-size limit.")
+    except (BadZipFile, LargeZipFile) as exc:
+        format_name = "XLSX" if path.suffix.lower() == ".xlsx" else "DOCX"
+        raise IngestError(
+            f"Could not read {format_name} file '{path.name}': invalid {format_name} ZIP archive."
+        ) from exc
+
+
 def _extract_xlsx(path: Path) -> str:
     """Read OOXML cell values without writing files or executing macros.
 
@@ -69,20 +96,19 @@ def _extract_xlsx(path: Path) -> str:
     strings, inline strings, numbers, cached formula values and many sheets.
     """
     ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    _check_ooxml_archive(path)
     try:
         with ZipFile(path) as workbook:
-            members = workbook.infolist()
-            if len(members) > 2048 or sum(member.file_size for member in members) > 64 * 1024 * 1024:
-                raise IngestError("Spreadsheet exceeds the safe expanded-size limit.")
-
             def xml_part(name: str):
                 part = workbook.getinfo(name)
-                if part.file_size > 16 * 1024 * 1024:
+                if part.file_size > MAX_OOXML_XML_PART_BYTES:
                     raise IngestError("Spreadsheet XML part is too large.")
-                # Small compressed XML can contain hundreds of thousands of
-                # tiny elements. Cap parser nodes *before* building a DOM.
+                # Keep the existing pre-DOM element guard, and check actual
+                # inflated bytes as well as the ZIP central-directory size.
                 raw = workbook.read(part)
-                if len(raw) > 16 * 1024 * 1024 or raw.count(b"<") > _MAX_XLSX_XML_TAGS:
+                if len(raw) > MAX_OOXML_XML_PART_BYTES:
+                    raise IngestError("Spreadsheet XML part is too large.")
+                if raw.count(b"<") > _MAX_XLSX_XML_TAGS:
                     raise IngestError("Spreadsheet XML contains too many elements.")
                 if b"<!DOCTYPE" in raw.upper() or b"<!ENTITY" in raw.upper():
                     raise IngestError("Spreadsheet XML must not contain entity declarations.")
@@ -219,6 +245,7 @@ def extract_text(path: Path) -> tuple[str, str]:
     if extension == ".pdf":
         text, mime = _read_pdf(path), "application/pdf"
     elif extension == ".docx":
+        _check_ooxml_archive(path)
         text, mime = _read_docx(path), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     elif extension == ".xlsx":
         text, mime = _extract_xlsx(path), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

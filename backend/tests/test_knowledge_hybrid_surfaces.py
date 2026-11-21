@@ -7,7 +7,6 @@ or external API is contacted.
 from __future__ import annotations
 
 import asyncio
-from contextlib import contextmanager
 import json
 from types import SimpleNamespace
 
@@ -22,6 +21,7 @@ from backend.knowledge_store import add_document_with_chunks, get_or_create_work
 from backend.providers.base import ProviderCapabilities, ToolCall
 from backend.tools import KNOWLEDGE_READ, RunContext, ToolRegistry
 from backend.tools_knowledge import register_knowledge_tools
+from graphlink_settings_store import SettingsManager
 
 
 class _EmbeddingProvider:
@@ -55,14 +55,11 @@ def test_ui_chat_and_tool_use_scoped_hybrid_search_and_expose_match_signals(tmp_
     _ingest(db, other, "Wetland bird records belong only to the other workspace.", "other.md")
 
     provider = _EmbeddingProvider()
-    manager = object()
-
-    @contextmanager
-    def selected_model(_manager):
-        assert _manager is manager
-        yield provider, "ollama:fixture-model"
-
-    monkeypatch.setattr(config, "embedding_provider_for_choice", selected_model)
+    manager = SettingsManager(tmp_path / "session.dat")
+    manager.set_knowledge_embedding_settings("ollama", "fixture-model")
+    # Exercise the real guarded search path without contacting Ollama.
+    monkeypatch.setattr(config.api_provider, "ollama_supports_embedding", lambda _model: True)
+    monkeypatch.setattr(config, "OllamaProvider", lambda **_kwargs: provider)
     monkeypatch.setattr(intents_knowledge, "DEFAULT_DB_PATH", db)
 
     document = SceneDocument()

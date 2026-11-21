@@ -69,6 +69,9 @@ class KnowledgeIngestJob:
     # be mistaken for deletions. scan_complete is false for unreadable paths.
     observed_paths: set[str] = field(default_factory=set, repr=False)
     scan_root: Path | None = field(default=None, repr=False)
+    # Canonical path equality alone cannot catch an unlink/recreate or rename
+    # of a watched root at the same pathname.
+    scan_root_identity: tuple[int, int] | None = field(default=None, repr=False)
     scan_complete: bool = True
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -127,6 +130,11 @@ def _collect_files(
             raise IngestError("Selected or watched folder was redirected; reselect it.")
 
     job.scan_root = root
+    if root is not None:
+        info = root.stat()
+        job.scan_root_identity = (info.st_dev, info.st_ino)
+    else:
+        job.scan_root_identity = None
     found: list[tuple[Path, int]] = []
     seen_files: set[Path] = set()
     checked = 0
@@ -297,10 +305,30 @@ class KnowledgeIngestManager:
         # per file used to dominate ingestion even though each file's write
         # is already independently transaction-safe.
         ingest_connection = None
+
+        def check_authorized_root() -> Path | None:
+            root = job.scan_root
+            if root is None:
+                return None
+            try:
+                info = root.stat()
+                same_root = (
+                    root.resolve(strict=True) == root
+                    and (info.st_dev, info.st_ino) == job.scan_root_identity
+                )
+            except (OSError, RuntimeError) as exc:
+                job.change(scan_complete=False)
+                raise IngestError("Authorized folder disappeared during import.") from exc
+            if not same_root:
+                job.change(scan_complete=False)
+                raise IngestError("Authorized folder was replaced or redirected during import.")
+            return root
+
         try:
             job.change(status="scanning")
             self._emit(force=True)
             files = _collect_files(path, folder, job, allowed_root=allowed_root)
+            check_authorized_root()  # reject a root swapped during enumeration
             if job.cancel_event.is_set():
                 job.change(status="cancelled")
                 return
@@ -320,10 +348,7 @@ class KnowledgeIngestManager:
                 try:
                     # Pin the authorized root and canonical file from
                     # preflight; never rebase either after a link swap.
-                    root = job.scan_root
-                    if root is not None and root.resolve(strict=True) != root:
-                        job.change(scan_complete=False)
-                        raise IngestError("Authorized folder was redirected during the import.")
+                    root = check_authorized_root()
                     actual = file.resolve(strict=True)
                     if actual != file or (root is not None and (
                         not actual.is_relative_to(root)
@@ -345,6 +370,7 @@ class KnowledgeIngestManager:
                         # following any symlinks, including swapped parents.
                         with snapshot_knowledge_file(actual) as snapshot:
                             text, mime = extract_text(snapshot)
+                        check_authorized_root()  # before writing indexed content
                         if actual.stat().st_size != before.st_size or actual.stat().st_mtime_ns != before.st_mtime_ns:
                             raise IngestError("File changed while being read; retry the import.")
                         if len(text) > MAX_DOCUMENT_TEXT_CHARS:
@@ -378,6 +404,9 @@ class KnowledgeIngestManager:
                 job.change(last_file=file.name)
                 self._emit()
             if not job.cancel_event.is_set() and watch_id is not None:
+                # Never prune the original watch's index if that path now
+                # identifies a different directory, even without a symlink.
+                check_authorized_root()
                 # Only unreadable entries make a scan incomplete. Oversized
                 # and deliberately excluded items do not hide other deletions;
                 # observed_paths also retains the names of oversized files.

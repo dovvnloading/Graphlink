@@ -1487,6 +1487,9 @@ describe("Settings > Knowledge embedding source", () => {
     await user.click(await screen.findByRole("button", { name: /^Cloud \(OpenAI-compatible\)/ }));
     expect(screen.getByText(/full text chunks from indexed files and saved graphs/)).toBeInTheDocument();
     expect(screen.getByText(/including chat messages, code, prompts, and notes/)).toBeInTheDocument();
+    expect(screen.getByText(/remote endpoints require HTTPS/i)).toBeInTheDocument();
+    expect(screen.getByText(/changing its URL requires/i)).toBeInTheDocument();
+    expect(screen.getByText(/cited passages may.*sent to that provider/i)).toBeInTheDocument();
     expect(screen.getByText(/turning this off stops future requests/i)).toBeInTheDocument();
     await user.type(screen.getByRole("textbox", { name: "Cloud embedding model ID" }), "text-embedding-3-small");
     expect(screen.getByRole("button", { name: "Test" })).toBeDisabled();
