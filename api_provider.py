@@ -2463,17 +2463,28 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                         # Ask this same model once more with the concrete
                         # contract violation; do not execute any partial calls.
                         _raise_if_cancelled(cancel_event)
-                        json_messages = [*json_messages, {
-                            "role": "user",
-                            "content": (
-                                f"Workspace JSON tool protocol error: {protocol_exc} "
-                                "Retry this turn with exactly one JSON object containing "
-                                "tool_calls (array) and final_answer (string). "
-                                "Tool calls need an allowed name and arguments_json "
-                                "containing a JSON-encoded object string. "
-                                "Do not include prose, Markdown, or reasoning outside the JSON."
-                            ),
-                        }]
+                        correction = (
+                            f"Workspace JSON tool protocol error: {protocol_exc} "
+                            "Retry this turn with exactly one JSON object containing "
+                            "tool_calls (array) and final_answer (string). "
+                            "Tool calls need an allowed name and arguments_json "
+                            "containing a JSON-encoded object string. "
+                            "Do not include prose, Markdown, or reasoning outside the JSON."
+                        )
+                        # llama.cpp chat templates can reject adjacent user
+                        # roles. Keep the same system/tools and append feedback
+                        # to the most recent user content, including image
+                        # observations, instead of injecting a second user.
+                        if json_messages and json_messages[-1]["role"] == "user":
+                            last = dict(json_messages[-1])
+                            content = last["content"]
+                            if isinstance(content, list):
+                                last["content"] = [*content, {"type": "text", "text": correction}]
+                            else:
+                                last["content"] = f"{content}\\n\\n{correction}"
+                            json_messages = [*json_messages[:-1], last]
+                        else:
+                            json_messages = [*json_messages, {"role": "user", "content": correction}]
                         protocol_correction_sent = True
                         attempt = 0
                         continue
