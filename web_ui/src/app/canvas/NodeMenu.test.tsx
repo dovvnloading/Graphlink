@@ -99,3 +99,33 @@ describe("NodeMenu keyboard completeness (ADR-012 stage 12.3)", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 });
+
+describe("NodeMenu disabled and nested action keyboard navigation", () => {
+  it("skips disabled actions and includes submenu radio items in arrow navigation", async () => {
+    const user = userEvent.setup();
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      return <>
+        <button type="button" onClick={() => setOpen(true)}>Open actions</button>
+        {open && <NodeMenu position={{ x: 10, y: 10 }} ariaLabel="Actions" onClose={() => setOpen(false)}>
+          <button type="button" role="menuitem">First action</button>
+          <button type="button" role="menuitem" disabled>Busy action</button>
+          <button type="button" role="menuitemradio" aria-checked="true">Checked status</button>
+          <button type="button" role="menuitem">Last action</button>
+        </NodeMenu>}
+      </>;
+    }
+    render(<Harness />);
+    await user.click(screen.getByRole("button", { name: "Open actions" }));
+    expect(screen.getByRole("menu", { name: "Actions" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "First action" })).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitemradio", { name: "Checked status" })).toHaveFocus();
+    await user.keyboard("{End}");
+    expect(screen.getByRole("menuitem", { name: "Last action" })).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitem", { name: "First action" })).toHaveFocus();
+    await user.keyboard("{ArrowUp}");
+    expect(screen.getByRole("menuitem", { name: "Last action" })).toHaveFocus();
+  });
+});
