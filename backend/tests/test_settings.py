@@ -1,6 +1,7 @@
 """Settings dialog topic tests (Qt-removal plan R2.5d, extended R7.4a)."""
 
 import asyncio
+import threading
 
 import ollama
 import pytest
@@ -1594,7 +1595,18 @@ def test_pull_ollama_model_rejects_an_empty_model_name(manager, monkeypatch):
 
 def test_pull_ollama_model_success_invalidates_cache_and_sets_current_model(manager, monkeypatch):
     _isolate_ollama_task_config(monkeypatch)
-    monkeypatch.setattr(ollama, "pull", lambda name: None)
+    calls = []
+
+    def _pull(name, *, stream=False):
+        calls.append((name, stream))
+        return iter([
+            {"status": "pulling manifest"},
+            {"status": "downloading", "completed": 25, "total": 100},
+            {"status": "downloading", "completed": 100, "total": 100},
+            {"status": "success"},
+        ])
+
+    monkeypatch.setattr(ollama, "pull", _pull)
     invalidated = []
     monkeypatch.setattr(api_provider, "invalidate_ollama_capability_cache", lambda name: invalidated.append(name))
     bus = SessionBus("settings-ollama-pull-success-test")
@@ -1604,10 +1616,18 @@ def test_pull_ollama_model_success_invalidates_cache_and_sets_current_model(mana
 
     asyncio.run(bus.dispatch_intent("app-settings", "pullOllamaModel", ["qwen3:8b"]))
 
+    assert calls == [("qwen3:8b", True)]
     assert invalidated == ["qwen3:8b"]
     assert config.OLLAMA_MODELS[config.TASK_CHAT] == "qwen3:8b"
+    assert manager.get_ollama_scanned_models() == ["qwen3:8b"]
+    running_payloads = [
+        msg["payload"] for msg in recorder.messages if msg["payload"]["ollamaPullStatus"] == "running"
+    ]
+    assert any(row["ollamaPullMessage"] == "downloading" and row["ollamaPullCompleted"] == 25
+               and row["ollamaPullTotal"] == 100 for row in running_payloads)
     payload = recorder.messages[-1]["payload"]
     assert payload["ollamaPullStatus"] == "done"
+    assert payload["ollamaInstalledModels"] == ["qwen3:8b"]
     assert payload["ollamaNotice"] == ""
 
 
@@ -1620,7 +1640,8 @@ def test_pull_ollama_model_success_invalidates_cache_and_sets_current_model(mana
     ],
 )
 def test_pull_ollama_model_maps_errors_to_friendly_messages(manager, monkeypatch, raw_error, expected_fragment):
-    def _boom(name):
+    def _boom(name, *, stream=False):
+        assert stream is True
         raise RuntimeError(raw_error)
 
     monkeypatch.setattr(ollama, "pull", _boom)
@@ -1634,6 +1655,139 @@ def test_pull_ollama_model_maps_errors_to_friendly_messages(manager, monkeypatch
     payload = recorder.messages[-1]["payload"]
     assert payload["ollamaPullStatus"] == "error"
     assert expected_fragment in payload["ollamaNotice"]
+
+
+
+def test_refresh_ollama_installed_models_uses_server_list_without_pulling(manager, monkeypatch):
+    manager.set_ollama_model_scan_cache(["stale:model"], "folder", "/other/ollama", [])
+    calls = []
+    monkeypatch.setattr(ollama, "list", lambda: {
+        "models": [{"model": "gemma3:4b"}, {"name": "qwen3:4b"}],
+    })
+    monkeypatch.setattr(ollama, "pull", lambda *args, **kwargs: calls.append("pull"))
+    bus = SessionBus("settings-ollama-installed-list-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "refreshOllamaInstalledModels", []))
+
+    payload = recorder.messages[-1]["payload"]
+    assert payload["ollamaInstalledStatus"] == "done"
+    assert payload["ollamaInstalledModels"] == ["gemma3:4b", "qwen3:4b"]
+    assert manager.get_ollama_scanned_models() == ["stale:model"]  # not a persisted scan
+    assert calls == []  # listing/opening this page cannot trigger a download
+
+
+def test_refresh_ollama_installed_models_maps_ollama_connection_error(manager, monkeypatch):
+    def _offline():
+        raise ConnectionError("connection refused")
+
+    monkeypatch.setattr(ollama, "list", _offline)
+    bus = SessionBus("settings-ollama-installed-offline-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "refreshOllamaInstalledModels", []))
+
+    payload = recorder.messages[-1]["payload"]
+    assert payload["ollamaInstalledStatus"] == "error"
+    assert "connection refused" in payload["ollamaInstalledError"]
+
+
+def test_cancel_ollama_pull_stops_stream_and_never_installs_or_selects_the_model(manager, monkeypatch):
+    _isolate_ollama_task_config(monkeypatch)
+    started = threading.Event()
+    release = threading.Event()
+    closed = []
+    calls = []
+
+    def _pull(model_name, *, stream=False):
+        calls.append((model_name, stream))
+        try:
+            yield {"status": "downloading", "total": 100, "completed": 20}
+            started.set()
+            release.wait(timeout=3)
+            yield {"status": "downloading", "total": 100, "completed": 40}
+            yield {"status": "success"}
+        finally:
+            closed.append(model_name)
+
+    monkeypatch.setattr(ollama, "pull", _pull)
+    bus = SessionBus("settings-ollama-cancel-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    async def _exercise():
+        job = asyncio.create_task(bus.dispatch_intent("app-settings", "pullOllamaModel", ["qwen3:4b"]))
+        try:
+            assert await asyncio.to_thread(started.wait, 2)
+            await bus.dispatch_intent("app-settings", "cancelOllamaPull", [])
+            assert recorder.messages[-1]["payload"]["ollamaPullStatus"] == "cancelling"
+            # A second pull while cancellation is draining is ignored.
+            await bus.dispatch_intent("app-settings", "pullOllamaModel", ["gemma3:4b"])
+        finally:
+            release.set()
+        await job
+
+    asyncio.run(_exercise())
+    assert calls == [("qwen3:4b", True)]
+    assert closed == ["qwen3:4b"]
+    assert manager.get_ollama_scanned_models() == []
+    assert recorder.messages[-1]["payload"]["ollamaPullStatus"] == "cancelled"
+    assert recorder.messages[-1]["payload"]["ollamaInstalledModels"] == []
+
+
+def test_remove_ollama_model_cleans_assignments_and_cached_list(manager, monkeypatch):
+    _isolate_ollama_task_config(monkeypatch)
+    manager.set_ollama_model_scan_cache(["qwen3:4b", "gemma3:4b"], "system", "", [])
+    assignments = manager.get_ollama_model_assignments()
+    assignments["task_chat"] = {"mode": "explicit", "model_id": "qwen3:4b"}
+    assignments["task_title"] = {"mode": "explicit", "model_id": "qwen3:4b"}
+    manager.set_ollama_model_assignments(assignments)
+    monkeypatch.setattr(ollama, "list", lambda: {"models": [{"model": "qwen3:4b"}, {"model": "gemma3:4b"}]})
+    deleted = []
+    monkeypatch.setattr(ollama, "delete", lambda name: deleted.append(name))
+    bus = SessionBus("settings-ollama-delete-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "refreshOllamaInstalledModels", []))
+    assert deleted == []  # discovery and display never remove anything
+    asyncio.run(bus.dispatch_intent("app-settings", "removeOllamaModel", ["qwen3:4b"]))
+
+    payload = recorder.messages[-1]["payload"]
+    assert deleted == ["qwen3:4b"]
+    assert payload["ollamaRemoveStatus"] == "done"
+    assert payload["ollamaInstalledModels"] == ["gemma3:4b"]
+    assert manager.get_ollama_scanned_models() == ["gemma3:4b"]
+    assert manager.get_ollama_model_assignments()["task_chat"]["mode"] == "auto"
+    assert manager.get_ollama_model_assignments()["task_title"]["mode"] == "inherit"
+
+
+def test_remove_ollama_model_preserves_state_if_daemon_rejects_delete(manager, monkeypatch):
+    manager.set_ollama_model_scan_cache(["gemma3:4b"], "system")
+    def _fail(name):
+        raise RuntimeError("model is busy")
+
+    monkeypatch.setattr(ollama, "list", lambda: {"models": [{"model": "gemma3:4b"}]})
+    monkeypatch.setattr(ollama, "delete", _fail)
+    bus = SessionBus("settings-ollama-delete-error-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "refreshOllamaInstalledModels", []))
+    asyncio.run(bus.dispatch_intent("app-settings", "removeOllamaModel", ["gemma3:4b"]))
+
+    payload = recorder.messages[-1]["payload"]
+    assert payload["ollamaRemoveStatus"] == "error"
+    assert "model is busy" in payload["ollamaNotice"]
+    assert payload["ollamaInstalledModels"] == ["gemma3:4b"]
+    assert manager.get_ollama_scanned_models() == ["gemma3:4b"]
 
 
 # -- R7.4c: Llama.cpp settings page (reasoning mode, runtime tunables,
