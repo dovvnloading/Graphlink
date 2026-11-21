@@ -92,7 +92,7 @@ class GeneralSettingsOps(SettingsManagerParts):
         source = self.state.get("knowledge_embedding_source", "off")
         if source not in ("off", "ollama", "cloud"):
             source = "off"
-        consent = self.state.get("knowledge_cloud_opt_in") is True
+        consent = source == "cloud" and self.state.get("knowledge_cloud_opt_in") is True
         # An old or hand-edited state file must never bypass cloud consent.
         if source == "cloud" and not consent:
             source = "off"
@@ -112,6 +112,7 @@ class GeneralSettingsOps(SettingsManagerParts):
         if source not in ("off", "ollama", "cloud"):
             raise ValueError("Unknown knowledge embedding source.")
         model = str(model).strip()
+        cloud_provider = str(cloud_provider or "").strip()
         if source != "off" and (not model or len(model) > 200):
             raise ValueError("Choose a knowledge embedding model (up to 200 characters).")
         if source == "cloud":
