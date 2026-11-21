@@ -794,6 +794,7 @@ function OllamaTaskField({
             type="text"
             className="settings-select"
             list={OLLAMA_MODELS_DATALIST_ID}
+            aria-label={`${OLLAMA_TASK_LABELS[task]} (custom model ID)`}
             value={isSpecial ? "" : value}
             onChange={(event) => transport.fireIntent("app-settings", "setOllamaModelAssignment", [task, event.target.value], undefined, true)}
           />
@@ -874,6 +875,7 @@ function OllamaPage({ state, transport }: { state: AppSettingsState; transport: 
           className="settings-select"
           list={OLLAMA_MODELS_DATALIST_ID}
           placeholder="Advanced model ID entry"
+          aria-label="Validate and Pull Model"
           value={draftPullModel}
           onChange={(event) => setDraftPullModel(event.target.value)}
         />

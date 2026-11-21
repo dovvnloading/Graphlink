@@ -265,7 +265,7 @@ def register_harness_intents(
             created.state.harness_execution_profile = execution_profile
             return created
 
-        node, command = document.record_command(
+        node, _creation_command = document.record_command(
             "harnessCreate", "agent", create_with_launch_options,
         )
 
@@ -277,10 +277,10 @@ def register_harness_intents(
             harness_node_id=node.id, user_text=goal_text, model_ref=model_ref,
         )
         if request_id is not None:
-            # Stamp the creation command with the run that now owns it -
-            # the builder-plan precedent: the run id cannot exist before
-            # the node does (the claim needs a node_id).
-            command.run_id = request_id
+            # Creating the Agent is a separate user action, still Ctrl+Z
+            # undoable. Do NOT stamp it with the task's run ID: Undo run
+            # must only roll back the canvas mutations produced by that task,
+            # never delete the Agent card and its follow-up history.
             await publish_scene()
         return node.id if request_id is not None else None
 

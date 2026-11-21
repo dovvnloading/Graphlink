@@ -417,6 +417,10 @@ CLASSIFICATION: tuple[Classified, ...] = (
 
     # -- backend/api/intents_knowledge.py (knowledge, scene) - ADR-017 stage 17.5 --
     Classified("knowledge", "search", "B", "read-only: queries the local knowledge store, no document mutation"),
+    Classified("knowledge", "addFiles", "B", "external-store: launches a local knowledge import job, not a scene undo"),
+    Classified("knowledge", "addFolder", "B", "external-store: launches a local folder import job, not a scene undo"),
+    Classified("knowledge", "cancelIngest", "B", "run-lifecycle: signals cancellation of a background knowledge job"),
+    Classified("knowledge", "getIngestJobs", "B", "read-only: retrieves background knowledge job progress"),
     Classified("scene", "setChatIndexIntoKnowledge", "A", "content: branch-indexing opt-in is document state, same posture as setGroupColor"),
 
     # -- backend/api/intents_global_search.py - ADR-020 stage 20.4 --

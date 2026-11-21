@@ -230,14 +230,16 @@ describe("pin/search jump navigates to an off-viewport target with onlyRenderVis
       pins: [{ id: "p1", title: "Far Away", note: "", x: FAR_X, y: FAR_Y }],
     });
 
-    expect(setCenterCalls).toHaveLength(0);
+    // The canvas may auto-center the newly published off-screen node. Only
+    // count navigation requested by clicking the pin.
+    const callsBeforeJump = setCenterCalls.length;
     await user.click(screen.getByText("Far Away"));
 
     // Called exactly once, with the PIN's own scene coordinates - not
     // anything derived from the target node's DOM/mounted state (there is
     // none to derive from: the click fires setCenter unconditionally).
-    expect(setCenterCalls).toHaveLength(1);
-    const [x, y, options] = setCenterCalls[0];
+    expect(setCenterCalls.slice(callsBeforeJump)).toHaveLength(1);
+    const [x, y, options] = setCenterCalls[callsBeforeJump];
     expect(x).toBe(FAR_X);
     expect(y).toBe(FAR_Y);
     expect(options?.zoom).toBe(1);
@@ -267,12 +269,13 @@ describe("pin/search jump navigates to an off-viewport target with onlyRenderVis
       edges: [],
     });
 
-    expect(setCenterCalls).toHaveLength(0);
     await user.type(screen.getByLabelText("Search the canvas"), "UniqueSearchTarget");
+    // Ignore SceneCanvas's initial node-reveal pan; verify the search jump.
+    const callsBeforeJump = setCenterCalls.length;
     await user.click(screen.getByLabelText("Next match (Enter)"));
 
-    expect(setCenterCalls).toHaveLength(1);
-    const [x, y, options] = setCenterCalls[0];
+    expect(setCenterCalls.slice(callsBeforeJump)).toHaveLength(1);
+    const [x, y, options] = setCenterCalls[callsBeforeJump];
     expect(x).toBe(FAR_X);
     expect(y).toBe(FAR_Y);
     expect(options?.zoom).toBe(1);

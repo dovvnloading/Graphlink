@@ -378,7 +378,10 @@ describe("SettingsDialog", () => {
     await goToOllama(user, push);
 
     await chooseCustomOption(user, "Chart Generation Model", "Custom model ID...");
-    await user.type(screen.getByLabelText("Chart Generation Model (custom model ID)"), "x");
+    // Datalist-backed text inputs expose the combobox role, not textbox.
+    const modelId = screen.getByRole("combobox", { name: "Chart Generation Model (custom model ID)" });
+    expect(modelId).toHaveAttribute("aria-label", "Chart Generation Model (custom model ID)");
+    await user.type(modelId, "x");
 
     expect(intents).toContainEqual(["app-settings", "setOllamaModelAssignment", ["task_chart", "x"]]);
   });
@@ -403,6 +406,8 @@ describe("SettingsDialog", () => {
     await goToOllama(user, push);
 
     const pullButton = screen.getByRole("button", { name: "Validate and Pull Model" });
+    expect(screen.getByRole("combobox", { name: "Validate and Pull Model" }))
+      .toHaveAttribute("aria-label", "Validate and Pull Model");
     expect(pullButton).toBeDisabled();
 
     await user.type(screen.getByPlaceholderText("Advanced model ID entry"), "llama3.2:3b");

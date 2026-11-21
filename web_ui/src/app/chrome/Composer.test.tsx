@@ -450,7 +450,8 @@ describe("Composer", () => {
     expect(search).toHaveFocus();
     await user.type(search, "LAB/MODEL-11");
     expect(screen.queryByRole("button", { name: "Model 0" })).toBeNull();
-    await user.tab();
+    // Enter while focus is still in the search input must choose the lone
+    // match; previously this worked only after tabbing onto the result.
     await user.keyboard("{Enter}");
     expect(selectModel).toHaveBeenCalledWith("lab/model-11");
     await user.click(trigger);

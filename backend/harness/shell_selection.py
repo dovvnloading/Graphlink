@@ -101,30 +101,42 @@ def _powershell_command(command: str) -> str:
     final command can be resolved as a cmdlet/function, discard any stale
     native status. Keep native codes for applications, and for dynamic
     calls whose command kind cannot be determined from the syntax.
+    Flush formatted objects before exit and suppress PowerShell 7's ANSI styling.
     """
     encoded_command = base64.b64encode(command.encode("utf-8")).decode("ascii")
+    # Out-Default must finish formatting before the process exits. Carry the
+    # command status through a reference so Out-Default cannot overwrite it.
     return (
+        "if ($null -ne $PSStyle) { $PSStyle.OutputRendering = 'PlainText' }\n"
+        "$__gl_status = [ref]0\n"
         f"& {{\n{command}\n"
-        "if ($?) { exit 0 }\n"
-        "if ($null -eq $LASTEXITCODE -or $LASTEXITCODE -eq 0) { exit 1 }\n"
-        "$__gl_tokens = $null; $__gl_errors = $null\n"
-        "$__gl_ast = [System.Management.Automation.Language.Parser]::ParseInput(\n"
-        f"    [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_command}')),\n"
-        "    [ref]$__gl_tokens, [ref]$__gl_errors)\n"
-        "$__gl_last = $__gl_ast.EndBlock.Statements[-1]\n"
-        "if ($__gl_last -is [System.Management.Automation.Language.PipelineAst]) {\n"
-        "    $__gl_tail = $__gl_last.PipelineElements[-1]\n"
-        "    if ($__gl_tail -is [System.Management.Automation.Language.CommandAst]) {\n"
-        "        $__gl_name = $__gl_tail.GetCommandName()\n"
-        "        if ($__gl_name) {\n"
-        "            $__gl_resolved = Microsoft.PowerShell.Core\\Get-Command $__gl_name -ErrorAction SilentlyContinue\n"
-        "            if (-not $__gl_resolved -or $__gl_resolved.CommandType -notin @('Application', 'ExternalScript')) {\n"
-        "                exit 1\n"
+        "$__gl_success = $?\n"
+        "$__gl_native_exit_code = $LASTEXITCODE\n"
+        "if (-not $__gl_success) {\n"
+        "    $__gl_status.Value = 1\n"
+        "    if ($null -ne $__gl_native_exit_code -and $__gl_native_exit_code -ne 0) {\n"
+        "        $__gl_status.Value = $__gl_native_exit_code\n"
+        "        $__gl_tokens = $null; $__gl_errors = $null\n"
+        "        $__gl_ast = [System.Management.Automation.Language.Parser]::ParseInput(\n"
+        f"            [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_command}')),\n"
+        "            [ref]$__gl_tokens, [ref]$__gl_errors)\n"
+        "        $__gl_last = $__gl_ast.EndBlock.Statements[-1]\n"
+        "        if ($__gl_last -is [System.Management.Automation.Language.PipelineAst]) {\n"
+        "            $__gl_tail = $__gl_last.PipelineElements[-1]\n"
+        "            if ($__gl_tail -is [System.Management.Automation.Language.CommandAst]) {\n"
+        "                $__gl_name = $__gl_tail.GetCommandName()\n"
+        "                if ($__gl_name) {\n"
+        "                    $__gl_resolved = Microsoft.PowerShell.Core\\Get-Command $__gl_name -ErrorAction SilentlyContinue\n"
+        "                    if (-not $__gl_resolved -or $__gl_resolved.CommandType -notin @('Application', 'ExternalScript')) {\n"
+        "                        $__gl_status.Value = 1\n"
+        "                    }\n"
+        "                }\n"
         "            }\n"
         "        }\n"
         "    }\n"
         "}\n"
-        "exit $LASTEXITCODE\n}"
+        "} | Out-Default\n"
+        "exit $__gl_status.Value"
     )
 
 

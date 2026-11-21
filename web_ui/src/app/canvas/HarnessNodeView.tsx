@@ -1,6 +1,7 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import type { Node, NodeProps } from "@xyflow/react";
+import { useReactFlow, type Node, type NodeProps } from "@xyflow/react";
+import { motionDuration } from "../reducedMotion";
 import { CollapseToggleButton } from "./CollapseToggleButton";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMenu } from "./NodeMenu";
@@ -24,6 +25,25 @@ import { MAX_HARNESS_TASK_LENGTH, exceedsHarnessTaskLimit } from "../../lib/harn
  * line, the shared chat-node-tool-invocations activity disclosure,
  * plan-node button classes) rather than inventing a parallel idiom.
  */
+
+/** Screen-space pan to keep the approval decision above the composer and
+ * inside the canvas. Does not change the user's chosen zoom level. */
+export function approvalPanDelta(
+  actions: Pick<DOMRect, "left" | "right" | "top" | "bottom">,
+  stage: Pick<DOMRect, "left" | "right" | "top" | "bottom">,
+  margin = 20,
+): { x: number; y: number } {
+  const availableLeft = stage.left + margin;
+  const availableRight = stage.right - margin;
+  const availableTop = stage.top + margin;
+  const availableBottom = stage.bottom - margin;
+  return {
+    x: actions.right > availableRight ? availableRight - actions.right :
+      actions.left < availableLeft ? availableLeft - actions.left : 0,
+    y: actions.bottom > availableBottom ? availableBottom - actions.bottom :
+      actions.top < availableTop ? availableTop - actions.top : 0,
+  };
+}
 
 export interface HarnessActivityRowData {
   tool: string;
@@ -426,6 +446,8 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   const [submittedApprovalId, setSubmittedApprovalId] = useState("");
   const submittedApprovalRef = useRef("");
   const denyButtonRef = useRef<HTMLButtonElement>(null);
+  const approvalActionsRef = useRef<HTMLDivElement>(null);
+  const flow = useReactFlow();
   const activityDetailsRef = useRef<HTMLDetailsElement>(null);
   const activityListRef = useRef<HTMLDivElement>(null);
   const activityErrorCount = data.harnessActivity.filter((row) => row.outcome === "error").length;
@@ -466,14 +488,47 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
     data.onApproveNetwork(approvalId, scope);
   }
 
-  // Deny is the safe default, so focus lands there the moment the panel
-  // appears - same effect (and same `collapsed` dependency reasoning) as
-  // PlanNodeView's approval panel.
-  useEffect(() => {
-    if (data.harnessAwaitingApproval && !collapsed) {
-      denyButtonRef.current?.focus();
+  // The panel may grow below the React Flow stage, which ends ABOVE the
+  // composer. Focusing Deny alone does not move the transformed canvas.
+  // Use the actual on-screen action rect so the buttons, not just the
+  // Agent's header, are visible at every viewport size and zoom.
+  const revealApprovalActions = useCallback((): void => {
+    if (!data.harnessAwaitingApproval || collapsed) return;
+    const actions = approvalActionsRef.current;
+    const stage = actions?.closest(".react-flow");
+    if (!actions || !stage) return;
+    const { x, y } = approvalPanDelta(actions.getBoundingClientRect(), stage.getBoundingClientRect());
+    if (x !== 0 || y !== 0) {
+      const viewport = flow.getViewport();
+      void flow.setViewport({ ...viewport, x: viewport.x + x, y: viewport.y + y },
+        { duration: motionDuration(200) });
     }
-  }, [data.harnessAwaitingApproval, data.harnessApprovalId, collapsed]);
+  }, [data.harnessAwaitingApproval, collapsed, flow]);
+
+  // Deny is the safe default. preventScroll avoids document/composer jumps;
+  // React Flow's own transform is moved instead.
+  useLayoutEffect(() => {
+    if (data.harnessAwaitingApproval && !collapsed) {
+      revealApprovalActions();
+      denyButtonRef.current?.focus({ preventScroll: true });
+    }
+  }, [data.harnessAwaitingApproval, data.harnessApprovalId, collapsed, revealApprovalActions]);
+
+  // The composer can grow after the tool has already parked, shrinking the
+  // actual graph stage. An open activity log or file preview can likewise
+  // grow the card. Keep the decision within the newly measured bounds,
+  // without reacting to ordinary user-initiated panning.
+  useEffect(() => {
+    if (!data.harnessAwaitingApproval || collapsed || typeof ResizeObserver === "undefined") return;
+    const actions = approvalActionsRef.current;
+    const stage = actions?.closest(".react-flow");
+    const card = actions?.closest(".scene-node-card");
+    if (!stage || !card) return;
+    const observer = new ResizeObserver(() => revealApprovalActions());
+    observer.observe(stage);
+    observer.observe(card);
+    return () => observer.disconnect();
+  }, [data.harnessAwaitingApproval, data.harnessApprovalId, collapsed, revealApprovalActions]);
 
   // "What is it doing?" is the question a running agent raises, and the
   // answer was one click away behind a closed <details>. Opened once, on
@@ -487,7 +542,10 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
     if (autoOpenedForRun.current === data.harnessRunId) return;
     autoOpenedForRun.current = data.harnessRunId;
     details.open = true;
-  }, [data.harnessActivity.length, data.harnessRunId, running]);
+    // Opening the log changes the approval panel's vertical position AFTER
+    // its first layout pass. Recheck once against the new measured rect.
+    revealApprovalActions();
+  }, [data.harnessActivity.length, data.harnessRunId, running, revealApprovalActions]);
 
   // Same follow-the-log behavior as PlanNodeView's activity list: pinned
   // to the newest row only while running and only while open.
@@ -676,7 +734,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
             title={
               data.harnessCompactions > 0
                 ? `History summarized ${data.harnessCompactions} time${data.harnessCompactions === 1 ? "" : "s"} to stay within the context budget`
-                : "How much of the context budget this agent's history currently fills"
+                : "System prompt, tool schemas and retained history within the model's served context window"
             }
           >
             Context {Math.min(100, Math.round((data.harnessContextTokens / data.harnessMaxContextTokens) * 100))}%
@@ -757,7 +815,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
               Always allow remembers this exact command (including any chain) only for this agent, workspace, shell, and execution profile.
             </p>
           )}
-          <div className="plan-node-approval-actions">
+          <div className="plan-node-approval-actions" ref={approvalActionsRef}>
             {data.harnessApprovalNetworkOffered ? (
               <>
                 <button
@@ -907,6 +965,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
             type="button"
             className="plan-node-button plan-node-button-danger nodrag"
             onClick={data.onUndoRun}
+            title="Undo canvas changes made by this run. Workspace files are not reverted."
           >
             Undo run
           </button>

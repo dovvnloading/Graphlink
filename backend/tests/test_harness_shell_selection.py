@@ -37,10 +37,15 @@ def test_windows_prefers_powershell_7_then_windows_powershell():
     assert not use_shell
     assert args[0].endswith("pwsh.exe")
     launcher = args[-1]
-    assert launcher.startswith("& {\nWrite-Output 'hi'\nif ($?) { exit 0 }\n")
+    assert launcher.startswith(
+        "if ($null -ne $PSStyle) { $PSStyle.OutputRendering = 'PlainText' }\n"
+        "$__gl_status = [ref]0\n& {\nWrite-Output 'hi'\n"
+        "$__gl_success = $?\n"
+    )
     assert "Parser]::ParseInput" in launcher
     assert "CommandType -notin @('Application', 'ExternalScript')" in launcher
-    assert launcher.endswith("exit $LASTEXITCODE\n}")
+    assert launcher.endswith("} | Out-Default\nexit $__gl_status.Value")
+    assert "exit " not in launcher.split("} | Out-Default", 1)[0]
     assert "-NoProfile" in args
 
     with patch("backend.harness.shell_selection.Path.is_file", return_value=False), \
@@ -67,6 +72,23 @@ def test_windows_powershell_process_exit_code(command, expected):
     assert not use_shell
     result = subprocess.run(args, capture_output=True, text=True, timeout=20)
     assert result.returncode == expected, (result.stdout, result.stderr)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="PowerShell object formatting requires Windows")
+@pytest.mark.parametrize(("command", "markers"), [
+    ("Get-Location", ("Path",)),
+    ("[pscustomobject]@{a=1;b=2}", ("a", "b", "1", "2")),
+    (r"Get-Item C:\Windows | Select-Object Name,Mode", ("Name", "Mode", "Windows")),
+    ("Write-Output 'plain text survives'", ("plain text survives",)),
+])
+def test_windows_powershell_shell_exec_flushes_formatted_output_without_ansi(command, markers):
+    args, use_shell = shell_invocation(command, "powershell", os_name="nt")
+    assert not use_shell
+    result = subprocess.run(args, capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert result.stdout.strip(), f"lost output for {command!r}"
+    assert all(marker in result.stdout for marker in markers), result.stdout
+    assert "\x1b[" not in result.stdout, result.stdout
 
 
 def test_powershell_7_found_in_program_files_without_path(tmp_path, monkeypatch):

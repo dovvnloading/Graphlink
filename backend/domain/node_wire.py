@@ -682,7 +682,7 @@ _STATE_FIELDS: dict[type, tuple[_Entry, ...]] = {
         ("harnessAwaitingQuestion", "harness_awaiting_question"),
         ("harnessQuestion", "harness_question"),
         ("harnessContextTokens", "harness_context_tokens"),
-        ("harnessMaxContextTokens", "harness_max_context_tokens"),
+        ("harnessMaxContextTokens", "harness_effective_context_tokens"),
         ("harnessCompactions", "harness_compactions"),
         ("harnessWorkspacePath", "harness_workspace_path"),
         ("harnessWorkspaceActive", "harness_workspace_active"),

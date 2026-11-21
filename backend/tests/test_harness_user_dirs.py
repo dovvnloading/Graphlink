@@ -646,7 +646,57 @@ def test_concurrent_new_agent_starts_do_not_leave_orphan_nodes_or_undo_entries(i
         assert len(document.command_log) == 1
         (creation,) = document.command_log
         assert creation.command_type == "harnessCreate"
-        assert creation.run_id is not None
+        assert creation.run_id is None, "Undo run must never delete the Agent itself"
         assert accepted in creation.node_after
 
     asyncio.run(run())
+
+
+def test_undo_run_keeps_agent_card_and_workspace_files(workspace_root, tmp_path, monkeypatch):
+    """Only tool-made canvas edits belong to a run, not its launcher or disk."""
+    from backend.api.intents_undo import register_undo_intents
+    from backend.notifications import NotificationState
+
+    bus, document = _harness_bus(monkeypatch, _RecordingSettings())
+    agent_id = asyncio.run(bus.dispatch("harness", "start", ["Create a report"]))
+    assert document.command_log[0].command_type == "harnessCreate"
+    assert document.command_log[0].run_id is None
+
+    report = tmp_path / "report.txt"
+    report.write_text("workspace result", encoding="utf-8")
+    note, _ = document.record_command(
+        "addNote", "agent:run-1", lambda: document.add_note(700, 140), run_id="run-1",
+    )
+    notifications = NotificationState()
+    register_undo_intents(bus, document, notifications)
+
+    assert asyncio.run(bus.dispatch("scene", "undoRun", ["run-1"])) == 1
+    assert agent_id in document.nodes
+    assert note.id not in document.nodes
+    assert report.read_text(encoding="utf-8") == "workspace result"
+    assert "Workspace files are not reverted" in notifications.message
+    assert "notification" in bus.published
+    assert asyncio.run(bus.dispatch("scene", "undoRun", ["run-1"])) == 0
+    assert "Workspace files are not reverted" in notifications.message
+    assert agent_id in document.nodes
+    # Ctrl+Z still independently undoes the original user-created Agent.
+    assert document.undo().command_type == "harnessCreate"
+    assert agent_id not in document.nodes
+
+
+def test_undo_run_does_not_remove_legacy_run_stamped_agent_creation():
+    """Guard old in-memory command histories created before the fix."""
+    from backend.domain.graph import SceneDocument
+
+    document = SceneDocument()
+    agent, _ = document.record_command(
+        "harnessCreate", "agent", lambda: document.add_harness_node(120, 120, "Task"), run_id="old-run",
+    )
+    note, _ = document.record_command(
+        "addNote", "agent:old-run", lambda: document.add_note(680, 140), run_id="old-run",
+    )
+    assert document.undo_run("old-run") == 1
+    assert note.id not in document.nodes
+    assert agent.id in document.nodes
+    assert document.undo_run("old-run") == 0
+    assert agent.id in document.nodes

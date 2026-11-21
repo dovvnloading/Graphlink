@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { ReactFlowProvider } from "@xyflow/react";
 import { describe, expect, it, vi } from "vitest";
-import { HarnessNodeView, type HarnessNodeData } from "./HarnessNodeView";
+import { HarnessNodeView, approvalPanDelta, type HarnessNodeData } from "./HarnessNodeView";
 
 // Same minimal-NodeProps-inside-ReactFlowProvider shape as
 // PlanNodeView.test.tsx - the established node-view test pattern.
@@ -88,6 +88,22 @@ function renderHarness(data: HarnessNodeData) {
     </ReactFlowProvider>,
   );
 }
+
+describe("Agent approval viewport navigation", () => {
+  const stage = { left: 0, top: 0, right: 1000, bottom: 600 };
+
+  it("pans approval buttons above the composer instead of leaving them below the stage", () => {
+    expect(approvalPanDelta({ left: 200, right: 540, top: 670, bottom: 790 }, stage))
+      .toEqual({ x: 0, y: -210 });
+  });
+
+  it("pans actions into view from the right and leaves visible decisions in place", () => {
+    expect(approvalPanDelta({ left: 950, right: 1120, top: 200, bottom: 280 }, stage))
+      .toEqual({ x: -140, y: 0 });
+    expect(approvalPanDelta({ left: 150, right: 470, top: 300, bottom: 380 }, stage))
+      .toEqual({ x: 0, y: 0 });
+  });
+});
 
 describe("HarnessNodeView", () => {
   it("preserves oversized follow-up drafts rather than sending partial tasks", async () => {

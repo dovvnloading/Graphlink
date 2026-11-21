@@ -22,6 +22,8 @@ _quarantine_corrupt_chats_db docstring for the same call made elsewhere).
 from __future__ import annotations
 
 import re
+from zipfile import BadZipFile, ZipFile
+from xml.etree import ElementTree
 from pathlib import Path
 from typing import Any
 
@@ -31,12 +33,107 @@ from backend.attachments import (
     _read_docx,
     _read_pdf,
     _read_text,
+    PLAIN_TEXT_EXTENSIONS,
+    SUPPORTED_FILENAMES,
+    MAX_DOCUMENT_TEXT_CHARS,
 )
 from backend.knowledge_chunking import chunk_text
 from backend.knowledge_store import DEFAULT_DB_PATH, IngestOutcome, add_document_with_chunks
 from backend.notifications import NotificationState
 
 _HTML_EXTENSIONS = {".html", ".htm"}
+
+
+
+# Import a known set of document and source-code types, not arbitrary
+# "looks like text" files (which may contain binary data or secrets).
+SUPPORTED_KNOWLEDGE_EXTENSIONS = (PLAIN_TEXT_EXTENSIONS - {".env"}) | {".pdf", ".docx", ".xlsx", ".htm"}
+SUPPORTED_KNOWLEDGE_FILENAMES = SUPPORTED_FILENAMES - {".env", ".gitignore"}
+
+
+def is_supported_knowledge_file(path: Path) -> bool:
+    return (
+        path.suffix.lower() in SUPPORTED_KNOWLEDGE_EXTENSIONS
+        or path.name in SUPPORTED_KNOWLEDGE_FILENAMES
+    )
+
+
+def _extract_xlsx(path: Path) -> str:
+    """Read OOXML cell values without writing files or executing macros.
+
+    Bounded member count, expanded bytes, XML size and output prevent a
+    compressed workbook from consuming unbounded resources. Supports shared
+    strings, inline strings, numbers, cached formula values and many sheets.
+    """
+    ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    try:
+        with ZipFile(path) as workbook:
+            members = workbook.infolist()
+            if len(members) > 2048 or sum(member.file_size for member in members) > 64 * 1024 * 1024:
+                raise IngestError("Spreadsheet exceeds the safe expanded-size limit.")
+
+            def xml_part(name: str):
+                part = workbook.getinfo(name)
+                if part.file_size > 16 * 1024 * 1024:
+                    raise IngestError("Spreadsheet XML part is too large.")
+                return ElementTree.fromstring(workbook.read(part))
+
+            shared: list[str] = []
+            shared_total = 0
+            if "xl/sharedStrings.xml" in workbook.namelist():
+                root = xml_part("xl/sharedStrings.xml")
+                for item in root.iter(ns + "si"):
+                    value = "".join(node.text or "" for node in item.iter(ns + "t"))
+                    shared.append(value)
+                    shared_total += len(value)
+                    if shared_total > MAX_DOCUMENT_TEXT_CHARS:
+                        raise IngestError("Spreadsheet text exceeds the indexing limit.")
+
+            sheets = sorted(
+                name for name in workbook.namelist()
+                if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", name)
+            )
+            if not sheets:
+                raise IngestError("Spreadsheet contains no readable worksheets.")
+            lines: list[str] = []
+            total = 0
+            cells_found = False
+            for name in sheets:
+                lines.append(f"# {Path(name).stem}")
+                root = xml_part(name)
+                for row in root.iter(ns + "row"):
+                    values = []
+                    for cell in row.findall(ns + "c"):
+                        value = cell.find(ns + "v")
+                        kind = cell.get("t")
+                        if kind == "inlineStr":
+                            inline = cell.find(ns + "is")
+                            text = "".join(item.text or "" for item in inline.iter(ns + "t")) if inline is not None else ""
+                        elif value is not None and value.text:
+                            raw = value.text
+                            if kind == "s":
+                                index = int(raw)
+                                if index < 0 or index >= len(shared):
+                                    raise IngestError("Spreadsheet contains an invalid shared-string index.")
+                                text = shared[index]
+                            else:
+                                text = raw
+                        else:
+                            formula = cell.find(ns + "f")
+                            text = (formula.text or "") if formula is not None else ""
+                        values.append(text)
+                    if any(value.strip() for value in values):
+                        cells_found = True
+                        line = "\t".join(values)
+                        total += len(line) + 1
+                        if total > MAX_DOCUMENT_TEXT_CHARS:
+                            raise IngestError("Spreadsheet text exceeds the indexing limit.")
+                        lines.append(line)
+            if not cells_found:
+                raise IngestError("Spreadsheet contains no indexable cells.")
+            return "\n".join(lines).strip()
+    except (BadZipFile, KeyError, ElementTree.ParseError, ValueError, OverflowError) as exc:
+        raise IngestError(f"Could not read spreadsheet '{path.name}': invalid XLSX content.") from exc
 
 
 class IngestError(Exception):
@@ -86,6 +183,8 @@ def extract_text(path: Path) -> tuple[str, str]:
         return _read_pdf(path), "application/pdf"
     if extension == ".docx":
         return _read_docx(path), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    if extension == ".xlsx":
+        return _extract_xlsx(path), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     if extension in _HTML_EXTENSIONS:
         try:
             raw = _read_text(path)
