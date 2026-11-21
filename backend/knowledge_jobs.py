@@ -123,11 +123,14 @@ def _collect_files(
         if checked > MAX_JOB_FILES:
             raise IngestError("Import exceeds the 10,000-file job limit.")
         real = candidate.resolve(strict=True)
-        if root is not None and (not real.is_relative_to(root) or _excluded_path(real.relative_to(root))):
+        if root is not None and not real.is_relative_to(root):
             if folder:
                 job.increment(skipped=1)
                 return
             raise IngestError("File is no longer inside the authorized workspace.")
+        if folder and root is not None and _excluded_path(real.relative_to(root)):
+            job.increment(skipped=1)
+            return
         if real in seen_files:
             return
         seen_files.add(real)
@@ -278,9 +281,14 @@ class KnowledgeIngestManager:
                     # Re-resolve paths on use: an entry that was safe during
                     # enumeration may have been swapped for an outside link.
                     actual = file.resolve(strict=True)
-                    root = path.expanduser().resolve(strict=True) if folder and isinstance(path, Path) else allowed_root
+                    root = (
+                        path.expanduser().resolve(strict=True)
+                        if folder and isinstance(path, Path)
+                        else allowed_root.resolve(strict=True) if allowed_root is not None else None
+                    )
                     if root is not None and (
-                        not actual.is_relative_to(root) or _excluded_path(actual.relative_to(root))
+                        not actual.is_relative_to(root)
+                        or (folder and _excluded_path(actual.relative_to(root)))
                     ):
                         raise IngestError("File now points outside the authorized folder.")
                     before = actual.stat()
