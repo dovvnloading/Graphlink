@@ -1025,8 +1025,17 @@ def register_chat_intents(
         # comment on SceneDocument.
         document.add_session_tokens(full_text)
         await publish_scene()
-        history = document.chat_branch_history(node.id)
         knowledge_enabled = await _use_knowledge_for_node(document, node.id)
+        # No await may separate the context history from the fingerprint:
+        # otherwise an edit during retrieval could be falsely considered
+        # part of the prompt that the model actually received.
+        history = document.chat_branch_history(node.id)
+        request_provider, request_model = _snapshot_active_provider_model(
+            agent_dispatcher, document, node.id, bus,
+        )
+        request_fingerprint = fingerprint_for_reply(
+            document, node.id, request_provider, request_model, knowledge_enabled,
+        )
         history = await _history_with_chat_knowledge(
             history, text, document.current_workspace_id,
             enabled=knowledge_enabled,
@@ -1058,16 +1067,8 @@ def register_chat_intents(
         # _on_usage (which _dispatch invokes AFTER on_reply on success) can
         # stamp the real counts onto that node.
         reply_ref = {"node_id": None}
-        # ADR-006 leftover #3: resolved here, at request-dispatch time - not
-        # inside _on_reply below, which only fires once the reply completes
-        # (see _snapshot_active_provider_model's own note).
-        request_provider, request_model = _snapshot_active_provider_model(
-            agent_dispatcher, document, node.id, bus,
-        )
-        request_fingerprint = fingerprint_for_reply(
-            document, node.id, request_provider, request_model, knowledge_enabled,
-        )
-
+        # Provider/model and branch history were snapshotted together
+        # above, before the asynchronous retrieval query.
         _on_reply = _make_send_on_reply(
             document, node, token_counter, publish_token_counter, reply_ref,
             request_provider, request_model, request_fingerprint, knowledge_enabled,
@@ -1129,8 +1130,17 @@ def register_chat_intents(
             await bus.publish("notification")
             return None
 
-        history = document.chat_branch_history(parent_id)
         knowledge_enabled = await _use_knowledge_for_node(document, parent_id)
+        # Read the transcript and provenance together before any retrieval
+        # await; edits during retrieval will then correctly mark the reply
+        # out of date rather than rewriting its apparent input.
+        history = document.chat_branch_history(parent_id)
+        request_provider, request_model = _snapshot_active_provider_model(
+            agent_dispatcher, document, parent_id, bus,
+        )
+        request_fingerprint = fingerprint_for_reply(
+            document, parent_id, request_provider, request_model, knowledge_enabled,
+        )
         history = await _history_with_chat_knowledge(
             history, _latest_user_query(history), document.current_workspace_id,
             enabled=knowledge_enabled,
@@ -1148,15 +1158,7 @@ def register_chat_intents(
         token_counter.reset_real_usage()
         await publish_token_counter()
 
-        # ADR-006 leftover #3: resolved here, before start_chat_reply is
-        # awaited below - not inside _on_reply, which only fires once the
-        # reply completes (see _snapshot_active_provider_model's own note).
-        request_provider, request_model = _snapshot_active_provider_model(
-            agent_dispatcher, document, parent_id, bus,
-        )
-        request_fingerprint = fingerprint_for_reply(
-            document, parent_id, request_provider, request_model, knowledge_enabled,
-        )
+        # Request-time route/context captured together above.
         command_ref = {}
         _on_reply = _make_regenerate_on_reply(
             document, bus, notifications, token_counter, publish_token_counter,
