@@ -32,6 +32,13 @@ _EXCLUDED_DIRS = {
 _FINAL = {"completed", "cancelled", "failed"}
 
 
+def _excluded_path(relative: Path) -> bool:
+    return any(
+        part.startswith(".") or part.casefold() in _EXCLUDED_DIRS
+        for part in relative.parts
+    )
+
+
 @dataclass
 class KnowledgeIngestJob:
     job_id: str
@@ -113,9 +120,10 @@ def _collect_files(path: Path | list[Path], folder: bool, job: KnowledgeIngestJo
         if checked > MAX_JOB_FILES:
             raise IngestError("Import exceeds the 10,000-file job limit.")
         real = candidate.resolve(strict=True)
-        if root is not None and not real.is_relative_to(root):
-            job.increment(skipped=1)
-            return
+        if root is not None:
+            if not real.is_relative_to(root) or _excluded_path(real.relative_to(root)):
+                job.increment(skipped=1)
+                return
         if real in seen_files:
             return
         seen_files.add(real)
@@ -163,7 +171,7 @@ def _collect_files(path: Path | list[Path], folder: bool, job: KnowledgeIngestJo
                         if entry.name.startswith(".") or entry.name.casefold() in _EXCLUDED_DIRS:
                             continue
                         target = candidate.resolve(strict=True)
-                        if target.is_relative_to(root):
+                        if target.is_relative_to(root) and not _excluded_path(target.relative_to(root)):
                             stack.append(target)
                         else:
                             job.increment(skipped=1)
@@ -187,6 +195,7 @@ class KnowledgeIngestManager:
         self._bus = bus
         self._db_path = db_path
         self._jobs: dict[str, KnowledgeIngestJob] = {}
+        self._tasks: dict[str, asyncio.Task] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
         self._last_event = 0.0
 
@@ -207,7 +216,9 @@ class KnowledgeIngestManager:
         self._jobs[job.job_id] = job
         self._loop = asyncio.get_running_loop()
         selected = [Path(value) for value in path] if isinstance(path, list) else Path(path)
-        asyncio.create_task(asyncio.to_thread(self._run, job, selected, folder))
+        task = asyncio.create_task(asyncio.to_thread(self._run, job, selected, folder))
+        self._tasks[job.job_id] = task
+        task.add_done_callback(lambda _, job_id=job.job_id: self._tasks.pop(job_id, None))
         self._emit(force=True)
         return {"jobId": job.job_id, "status": "queued"}
 

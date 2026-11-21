@@ -117,6 +117,7 @@ def test_folder_scan_skips_unwanted_dirs_and_escaping_symlinks(tmp_path):
     outside.write_text("outside")
     try:
         (root / "external.md").symlink_to(outside)
+        (root / "hidden_link").symlink_to(root / ".git", target_is_directory=True)
     except (OSError, NotImplementedError):
         pass  # Windows CI may lack unprivileged symlink creation.
     job = KnowledgeIngestJob("id", "folder", 11)
