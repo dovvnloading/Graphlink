@@ -111,8 +111,17 @@ def _lineage(document: SceneDocument) -> tuple[dict[str, bytes], dict[str, str]]
                 if expected != node.state.reply_history_fingerprint:
                     statuses[item] = "out_of_date"
                     upstream_changed = True
-            elif node.kind != "chat" and upstream_changed:
-                statuses[item] = "upstream_changed"
+            elif node.kind != "chat":
+                # A derived non-chat node can hang directly off an edited
+                # user/assistant message, with no intervening generated
+                # reply. Its own creation-time parent history captures that
+                # dependency. Existing sessions without a snapshot do not
+                # acquire one just because they are published.
+                baseline = document.nonchat_upstream_fingerprints.get(item)
+                if baseline is not None and baseline != "v1:" + prior.hex():
+                    upstream_changed = True
+                if upstream_changed:
+                    statuses[item] = "upstream_changed"
 
             hashes[item] = hashlib.sha256(prior + _message_input(node)).digest()
             affected[item] = upstream_changed
@@ -143,3 +152,35 @@ def scene_staleness(document: SceneDocument) -> dict[str, str]:
         return {}
     _, statuses = _lineage(document)
     return statuses
+
+
+def capture_nonchat_context(document: SceneDocument, node_id: str) -> None:
+    """Record a NEW non-chat node's current structural-parent history once.
+
+    Called when its first structural edge attaches. A saved non-chat node
+    restored from before this feature never gets a retroactive baseline.
+    New downstream nodes attached after an edit capture the *new* context,
+    so they do not inherit a spurious direct-context mismatch.
+    """
+    node = document.nodes.get(node_id)
+    if (
+        node is None or node.kind == "chat"
+        or node_id in document.nonchat_upstream_fingerprints
+    ):
+        return
+    parents = _parents(document)
+    current = parents.get(node_id)
+    if current is None:
+        return
+    seen: set[str] = set()
+    path: list[str] = []
+    while current in document.nodes and current not in seen:
+        seen.add(current)
+        path.append(current)
+        current = parents.get(current)
+    if current in seen:
+        return
+    digest = _ROOT
+    for ancestor_id in reversed(path):
+        digest = hashlib.sha256(digest + _message_input(document.nodes[ancestor_id])).digest()
+    document.nonchat_upstream_fingerprints[node_id] = "v1:" + digest.hex()
