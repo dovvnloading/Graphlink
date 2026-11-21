@@ -93,6 +93,7 @@ from backend.chat_library import (
     _resolve_seed_message,
     _schedule_embeddings_after_graph_save,
     get_default_workspace_id,
+    _peek_default_workspace_id,
     load_chat_row,
     save_chat_atomically_row,
 )
@@ -309,6 +310,11 @@ def register_autosave(
     ADR-014 review-fix: `settings_manager` is threaded straight through to
     autosave_tick - see that function's own docstring."""
 
+    # Standalone autosave callers may not register the chat library first.
+    # Seed the workspace hint without creating chats.db until a real write.
+    if canvas_document.current_workspace_id is None:
+        canvas_document.current_workspace_id = _peek_default_workspace_id(db_path)
+
     async def _guarded_tick() -> None:
         if mutation_guard["active"]:
             # A manual load/save/new-chat is already in flight - skip this
@@ -335,8 +341,19 @@ def register_autosave(
     async def _loop() -> None:
         while True:
             await asyncio.sleep(interval_seconds)
+            # Cancellation while a tick awaits asyncio.to_thread does not
+            # stop the underlying SQLite writer. Let that write finish before
+            # teardown, so the session cannot disappear with its last row
+            # still in flight (especially on slower Windows disks).
+            tick_task = asyncio.create_task(_guarded_tick())
             try:
-                await _guarded_tick()
+                await asyncio.shield(tick_task)
+            except asyncio.CancelledError:
+                try:
+                    await tick_task
+                except Exception:
+                    logger.exception("autosave: final in-flight tick failed for session %r", bus.session_id)
+                raise
             except Exception:
                 # Defence in depth, not a fix for a known escape: an audit
                 # walked every unguarded line in autosave_tick and found no
