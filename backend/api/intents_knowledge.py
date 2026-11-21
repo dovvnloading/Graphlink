@@ -418,8 +418,17 @@ def register_knowledge_embedding_intents(
     embedding_jobs: KnowledgeEmbeddingJobManager,
 ) -> None:
     """Register embedding-job status, cancellation, retry and refresh intents."""
+
+    def embedding_snapshot():
+        # The manager retains recent jobs from other workspaces. Identify
+        # this session's CURRENT workspace so consumers never show a previous
+        # workspace's progress after switching graphs.
+        return {"workspaceId": document.current_workspace_id, **embedding_jobs.snapshot()}
+
+    bus.register_topic("knowledge-embedding", embedding_snapshot)
+
     async def get_embedding_jobs():
-        return embedding_jobs.snapshot()
+        return embedding_snapshot()
 
     async def cancel_embedding(job_id: str):
         return embedding_jobs.cancel(job_id)
@@ -516,7 +525,6 @@ def register_knowledge_intents(
     ingest_jobs = KnowledgeIngestManager(bus, db_path, on_completed=embedding_jobs.schedule)
     uploads = KnowledgeDropUploads(db_path)
     bus.register_topic("knowledge-ingest", ingest_jobs.snapshot)
-    bus.register_topic("knowledge-embedding", embedding_jobs.snapshot)
     # Session eviction must stop subsequent provider batches, even if an
     # already-running synchronous embed call has not returned yet.
     bus.knowledge_embedding_jobs = embedding_jobs
