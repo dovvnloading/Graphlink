@@ -4062,6 +4062,11 @@ body {
   opacity: 0.5;
 }
 
+.knowledge-search-button:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 2px;
+}
+
 .knowledge-empty {
   margin: 0;
   font-size: 12px;
@@ -4116,6 +4121,22 @@ body {
   font-size: 11px;
   color: var(--gl-surface-text-muted);
   word-break: break-all;
+}
+
+.knowledge-result-signals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.knowledge-result-signal {
+  padding: 1px 6px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 999px;
+  color: var(--gl-surface-text-muted);
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 .knowledge-result-body {
@@ -4178,6 +4199,7 @@ body {
 
 .knowledge-library-heading {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
@@ -4239,6 +4261,18 @@ body {
   white-space: nowrap;
 }
 
+.knowledge-watch-path {
+  max-width: 320px;
+  min-width: 180px;
+  overflow-wrap: anywhere;
+}
+
+.knowledge-watch-error {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--gl-semantic-status-error);
+  overflow-wrap: anywhere;
+}
 
 /* -- Global search dialog (ADR-020 stage 20.4) ------------------------------
    A sibling of .knowledge-search-dialog just above, same rules renamed to

@@ -29,7 +29,9 @@ def register_workspace_tools(registry: ToolRegistry, dispatcher, document) -> No
     if registry.scopes_for("knowledge.search") is None:
         from backend.tools_knowledge import register_knowledge_tools
 
-        register_knowledge_tools(registry, document=document)
+        register_knowledge_tools(
+            registry, document=document, settings_manager=getattr(dispatcher, "_settings_manager", None),
+        )
     if registry.scopes_for("fal.search_models") is None:
         from backend.tools_fal import register_fal_tools
 

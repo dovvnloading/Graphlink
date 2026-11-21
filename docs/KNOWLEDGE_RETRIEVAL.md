@@ -115,8 +115,10 @@ reingestion is necessary. Chunks containing content from multiple sections
 are attributed to the section active at their *start*; formats without
 Markdown headings report `Unsectioned` rather than guessing. The knowledge
 WebSocket result formatter adds `sourceFile`, `section`, `citationId`,
-`rankSignals` and `rrfScore` while preserving all existing keys. Global
-search reuses this same formatter. Existing `[kN]` untrusted-context markers
+`rankSignals` and `rrfScore` while preserving all existing keys. The Knowledge panel displays the
+per-hit signals as **Keyword #rank** (FTS5), **Semantic #rank** (vector),
+or both, including on collapsed result cards; an absent signal is never
+shown as a match. Global search reuses this same formatter. Existing `[kN]` untrusted-context markers
 remain for compatibility; the stable `kb:` id is included alongside them.
 
 ## Reproducible offline evaluation
@@ -209,7 +211,6 @@ The evaluation dataset is intentionally small and a deterministic stand-in
 for an actual embedding model. It proves an improvement on these fixtures,
 not universal retrieval quality. Headings are inferred from available
 Markdown in stored chunks and may be absent for PDFs or plain-text sources.
-The existing model-tool serializer (`backend/tools_knowledge.py`) exposes a
-subset of result fields; the enhanced result contract is available at the
-retrieval layer and knowledge/global-search intents without changing that
-out-of-scope serializer.
+The model-tool serializer (`backend/tools_knowledge.py`) also exposes
+`rank_signals` and `rrf_score` alongside source and citation fields, so
+Builder and workspace agents see the same match provenance as panel searches.

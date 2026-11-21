@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { KnowledgeSearchDialog } from "./KnowledgeSearchDialog";
@@ -17,9 +17,11 @@ function OpenKnowledgeButton() {
 async function setup(onOpenDocumentView?: (content: string, label: string) => void) {
   const user = userEvent.setup();
   const fake = makeTransport();
-  fake.request.mockImplementation(async (_topic, intent) =>
-    intent === "listDocuments" ? { documents: [] } : {},
-  );
+  fake.request.mockImplementation(async (_topic, intent) => {
+    if (intent === "listDocuments") return { documents: [] };
+    if (intent === "listWatchedFolders") return { folders: [] };
+    return {};
+  });
   let importListener: ((payload: Record<string, unknown>) => void) | null = null;
   fake.transport.subscribe = (topic, listener) => {
     if (topic === "knowledge-ingest") importListener = listener;
@@ -145,6 +147,36 @@ describe("KnowledgeSearchDialog", () => {
     await user.click(screen.getByRole("button", { name: "Search" }));
 
     expect(await screen.findByText("No sources found")).toBeInTheDocument();
+  });
+
+  it("shows each hit's keyword and semantic matches, including their retrieval ranks", async () => {
+    const { user, request } = await setup();
+    request.mockResolvedValueOnce({ results: [
+      { ...RESULT_A, rankSignals: { fts5: 2, vector: 1 } },
+      { ...RESULT_B, rankSignals: { fts5: 1 } },
+      { ...RESULT_B, chunkId: 3, documentTitle: "Semantic Only", rankSignals: { vector: 3 } },
+    ] });
+
+    await user.type(screen.getByPlaceholderText(/search your ingested knowledge base/i), "wetland bird");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+
+    const groups = await screen.findAllByRole("group", { name: "Match signals" });
+    expect(groups).toHaveLength(3);
+    expect(within(groups[0]).getByText("Keyword #2")).toBeInTheDocument();
+    expect(within(groups[0]).getByText("Semantic #1")).toBeInTheDocument();
+    expect(within(groups[1]).getByText("Keyword #1")).toBeInTheDocument();
+    expect(within(groups[1]).queryByText(/Semantic/)).not.toBeInTheDocument();
+    expect(within(groups[2]).getByText("Semantic #3")).toBeInTheDocument();
+    expect(within(groups[2]).queryByText(/Keyword/)).not.toBeInTheDocument();
+  });
+
+  it("does not invent match signals for older search responses", async () => {
+    const { user, request } = await setup();
+    request.mockResolvedValueOnce({ results: [RESULT_A] });
+    await user.type(screen.getByPlaceholderText(/search your ingested knowledge base/i), "query");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText("Fox Story");
+    expect(screen.queryByRole("group", { name: "Match signals" })).not.toBeInTheDocument();
   });
 
   it("expanding a result reveals the exact cited excerpt and its offset range", async () => {
@@ -315,6 +347,141 @@ describe("KnowledgeSearchDialog", () => {
     expect(screen.getByLabelText("Search the knowledge base")).toBeInTheDocument();
   });
 
+  const WATCHED_FOLDER = {
+    id: 42, path: "/workspace/notes", fileCount: 7,
+    lastSyncAt: "2026-11-20T14:45:00Z",
+    lastError: "2 items skipped during watched folder scan.",
+    syncStatus: "completed",
+    lastJob: {
+      filesTotal: 8, filesProcessed: 8, added: 2, updated: 1,
+      removed: 0, skipped: 2, failedFiles: 1, error: "",
+    },
+  };
+
+  it("shows a watched folder's persisted file count, last sync time, job counts and errors", async () => {
+    const { user, request } = await setup();
+    request.mockImplementation(async (_topic, intent) => {
+      if (intent === "listDocuments") return { documents: [] };
+      if (intent === "listWatchedFolders") return { folders: [WATCHED_FOLDER] };
+      return {};
+    });
+
+    await user.click(screen.getByRole("button", { name: "Refresh watched folders" }));
+
+    expect(await screen.findByText(WATCHED_FOLDER.path)).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Last successful sync" })).toBeInTheDocument();
+    expect(screen.getByText("7 indexed")).toBeInTheDocument();
+    expect(screen.getByText(new Date(WATCHED_FOLDER.lastSyncAt).toLocaleString())).toBeInTheDocument();
+    expect(screen.getByText(/8\/8 scanned.*2 added.*1 updated.*1 failed/)).toBeInTheDocument();
+    expect(screen.getByText(/Last error: 2 items skipped/)).toBeInTheDocument();
+  });
+
+  it("adds a watched folder using only the native picker intent and supports Enter", async () => {
+    const { user, request, intents } = await setup();
+    let folders: object[] = [];
+    request.mockImplementation(async (_topic, intent) => {
+      if (intent === "listDocuments") return { documents: [] };
+      if (intent === "listWatchedFolders") return { folders };
+      if (intent === "addWatchedFolder") {
+        folders = [{ ...WATCHED_FOLDER, fileCount: 0, lastSyncAt: null, lastError: "",
+          syncStatus: "queued", lastJob: null }];
+        return { folder: folders[0], job: { jobId: "sync-1", status: "queued" } };
+      }
+      return {};
+    });
+
+    const add = screen.getByRole("button", { name: "Add watched folder" });
+    add.focus();
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(intents).toContainEqual(["knowledge", "addWatchedFolder", []]));
+    expect(await screen.findByText(WATCHED_FOLDER.path)).toBeInTheDocument();
+    expect(screen.getByText("0 indexed")).toBeInTheDocument();
+    expect(screen.getByText("Never")).toBeInTheDocument();
+    expect(intents).not.toContainEqual(["knowledge", "addWatchedFolder", [WATCHED_FOLDER.path]]);
+  });
+
+  it("does not add a watch when the native folder picker is cancelled", async () => {
+    const { user, request } = await setup();
+    request.mockImplementation(async (_topic, intent) => {
+      if (intent === "listDocuments") return { documents: [] };
+      if (intent === "listWatchedFolders") return { folders: [] };
+      if (intent === "addWatchedFolder") return { cancelled: true };
+      return {};
+    });
+    await user.click(screen.getByRole("button", { name: "Add watched folder" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add watched folder" })).toBeEnabled());
+    expect(screen.getByText(/No watched folders yet/)).toBeInTheDocument();
+  });
+
+  it("syncs one folder with its id, or all folders with no arguments, using keyboard actions", async () => {
+    const { user, request, intents } = await setup();
+    request.mockImplementation(async (_topic, intent) => {
+      if (intent === "listDocuments") return { documents: [] };
+      if (intent === "listWatchedFolders") return { folders: [WATCHED_FOLDER] };
+      if (intent === "syncWatchedFolders") return { jobs: [{ folderId: 42, status: "queued" }] };
+      return {};
+    });
+    await user.click(screen.getByRole("button", { name: "Refresh watched folders" }));
+
+    const syncOne = await screen.findByRole("button", { name: `Sync ${WATCHED_FOLDER.path} now` });
+    syncOne.focus();
+    await user.keyboard(" ");
+    await waitFor(() => expect(intents).toContainEqual(["knowledge", "syncWatchedFolders", [42]]));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Sync all now" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Sync all now" }));
+    await waitFor(() => expect(intents).toContainEqual(["knowledge", "syncWatchedFolders", []]));
+  });
+
+  it("confirms removal, allows keeping a watch, and never deletes indexed documents", async () => {
+    const { user, request, intents } = await setup();
+    let folders = [WATCHED_FOLDER];
+    request.mockImplementation(async (_topic, intent) => {
+      if (intent === "listDocuments") return { documents: [LIBRARY_DOCUMENT] };
+      if (intent === "listWatchedFolders") return { folders };
+      if (intent === "removeWatchedFolder") { folders = []; return { removed: true }; }
+      return {};
+    });
+    await user.click(screen.getByRole("button", { name: "Refresh watched folders" }));
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+
+    const remove = await screen.findByRole("button", { name: `Remove watched folder ${WATCHED_FOLDER.path}` });
+    remove.focus();
+    await user.keyboard(" ");
+    expect(intents).not.toContainEqual(["knowledge", "removeWatchedFolder", [42]]);
+
+    const keep = screen.getByRole("button", { name: `Keep watching ${WATCHED_FOLDER.path}` });
+    keep.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("button", { name: `Remove watched folder ${WATCHED_FOLDER.path}` })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: `Remove watched folder ${WATCHED_FOLDER.path}` }));
+    const confirm = screen.getByRole("button", {
+      name: `Confirm remove watched folder ${WATCHED_FOLDER.path}`,
+    });
+    confirm.focus();
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(intents).toContainEqual(["knowledge", "removeWatchedFolder", [42]]));
+    expect(await screen.findByText(/No watched folders yet/)).toBeInTheDocument();
+    expect(screen.getByText("guide.md")).toBeInTheDocument();
+  });
+
+  it("surfaces watched-folder request failures without hiding the configured folder", async () => {
+    const { user, request } = await setup();
+    request.mockImplementation(async (_topic, intent) => {
+      if (intent === "listDocuments") return { documents: [] };
+      if (intent === "listWatchedFolders") return { folders: [WATCHED_FOLDER] };
+      if (intent === "syncWatchedFolders") throw new Error("Sync denied.");
+      return {};
+    });
+    await user.click(screen.getByRole("button", { name: "Refresh watched folders" }));
+    await user.click(await screen.findByRole("button", { name: `Sync ${WATCHED_FOLDER.path} now` }));
+    expect(await screen.findByText("Sync denied.")).toHaveAttribute("role", "alert");
+    expect(screen.getByText(WATCHED_FOLDER.path)).toBeInTheDocument();
+  });
+
   // Adversarial-review regression: the input (unlike the Search button) was
   // never disabled while a search was pending, and the Enter-key handler
   // called runSearch() with no `searching` check - so a second Enter press
@@ -333,11 +500,11 @@ describe("KnowledgeSearchDialog", () => {
 
     const input = screen.getByPlaceholderText(/search your ingested knowledge base/i);
     await user.type(input, "first query{Enter}");
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledTimes(3);
 
     await user.clear(input);
     await user.type(input, "second query{Enter}");
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledTimes(3);
 
     resolveFirst({ results: [RESULT_A] });
     expect(await screen.findByText("Fox Story")).toBeInTheDocument();

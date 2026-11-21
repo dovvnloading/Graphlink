@@ -39,6 +39,7 @@ interface KnowledgeSearchResult {
   text: string;
   offsetStart: number;
   offsetEnd: number;
+  rankSignals?: { fts5?: number; vector?: number };
 }
 
 
@@ -52,6 +53,37 @@ interface KnowledgeLibraryDocument {
   addedAt: string;
   status: "indexed";
   canReindex: boolean;
+}
+
+interface WatchedFolderSyncJob {
+  filesTotal: number;
+  filesProcessed: number;
+  added: number;
+  updated: number;
+  removed: number;
+  skipped: number;
+  failedFiles: number;
+  error: string;
+}
+
+interface WatchedFolder {
+  id: number;
+  path: string;
+  fileCount: number;
+  lastSyncAt: string | null;
+  lastError: string;
+  syncStatus: ImportStatus | "idle";
+  lastJob: WatchedFolderSyncJob | null;
+}
+
+function isWatchSyncing(folder: WatchedFolder): boolean {
+  return folder.syncStatus === "queued" || folder.syncStatus === "scanning" || folder.syncStatus === "running";
+}
+
+function formatLastSync(value: string | null): string {
+  if (!value) return "Never";
+  const time = Date.parse(value);
+  return Number.isNaN(time) ? "—" : new Date(time).toLocaleString();
 }
 
 const DROP_CHUNK_BYTES = 192 * 1024;
@@ -127,6 +159,20 @@ function KnowledgeResultCard({ result }: { result: KnowledgeSearchResult }) {
       >
         <span className="knowledge-result-title">{result.documentTitle}</span>
         <span className="knowledge-result-source">{result.sourceUri}</span>
+        {(typeof result.rankSignals?.fts5 === "number" || typeof result.rankSignals?.vector === "number") && (
+          <span className="knowledge-result-signals" role="group" aria-label="Match signals">
+            {typeof result.rankSignals?.fts5 === "number" && (
+              <span className="knowledge-result-signal" title="FTS5 keyword match rank">
+                Keyword #{result.rankSignals.fts5}
+              </span>
+            )}
+            {typeof result.rankSignals?.vector === "number" && (
+              <span className="knowledge-result-signal" title="Vector semantic match rank">
+                Semantic #{result.rankSignals.vector}
+              </span>
+            )}
+          </span>
+        )}
       </button>
       {expanded && (
         <div className="knowledge-result-body">
@@ -165,6 +211,12 @@ export function KnowledgeSearchDialog({
   const [libraryError, setLibraryError] = useState<string | null>(null);
   const [documentAction, setDocumentAction] = useState<number | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<number | null>(null);
+  const [watchedFolders, setWatchedFolders] = useState<WatchedFolder[]>([]);
+  const [loadingWatches, setLoadingWatches] = useState(true);
+  const [watchError, setWatchError] = useState<string | null>(null);
+  const [watchAction, setWatchAction] = useState<string | null>(null);
+  const [confirmRemoveWatch, setConfirmRemoveWatch] = useState<number | null>(null);
+  const latestWatchRequest = useRef(0);
   const [dragging, setDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{ sent: number; total: number } | null>(null);
   const uploadIdRef = useRef<string | null>(null);
@@ -194,10 +246,64 @@ export function KnowledgeSearchDialog({
       });
   }, [transport]);
 
+  const refreshWatchedFolders = useCallback(() => {
+    const requestId = ++latestWatchRequest.current;
+    return transport.request("knowledge", "listWatchedFolders", [])
+      .then((value) => {
+        if (requestId !== latestWatchRequest.current) return;
+        const result = value as { folders: WatchedFolder[] } | null;
+        if (!result || !Array.isArray(result.folders)) throw new Error("Invalid watched folder list response.");
+        setWatchedFolders(result.folders);
+        setWatchError(null);
+      })
+      .catch((cause: unknown) => {
+        if (requestId === latestWatchRequest.current) {
+          setWatchError(cause instanceof Error ? cause.message : "Could not load watched folders.");
+        }
+      })
+      .finally(() => {
+        if (requestId === latestWatchRequest.current) setLoadingWatches(false);
+      });
+  }, [transport]);
+
   const knowledgeOpen = overlays.isOpen("knowledge");
   useEffect(() => {
-    if (knowledgeOpen) void refreshDocuments();
-  }, [knowledgeOpen, refreshDocuments]);
+    if (knowledgeOpen) {
+      void refreshDocuments();
+      void refreshWatchedFolders();
+    }
+  }, [knowledgeOpen, refreshDocuments, refreshWatchedFolders]);
+
+  // Watched syncs run in an app-lifetime service, not the dialog's
+  // knowledge-ingest topic. Refresh while open so periodic and manual
+  // syncs eventually display their persisted timestamps and file counts.
+  const watchRefreshDelay = watchedFolders.some(isWatchSyncing) ? 1_000 : 10_000;
+  useEffect(() => {
+    if (!knowledgeOpen || watchedFolders.length === 0) return;
+    const timer = window.setTimeout(() => { void refreshWatchedFolders(); }, watchRefreshDelay);
+    return () => window.clearTimeout(timer);
+  }, [knowledgeOpen, watchedFolders, watchRefreshDelay, refreshWatchedFolders]);
+
+  async function watchedFolderIntent(
+    action: "addWatchedFolder" | "removeWatchedFolder" | "syncWatchedFolders",
+    folderId?: number,
+  ) {
+    if (watchAction !== null || (action === "addWatchedFolder" && picking !== null)) return;
+    setWatchAction(`${action}:${folderId ?? "all"}`);
+    setWatchError(null);
+    try {
+      const result = await transport.request(
+        "knowledge", action, folderId === undefined ? [] : [folderId],
+        action === "addWatchedFolder" ? 5 * 60_000 : undefined,
+      ) as { cancelled?: boolean };
+      if (action === "removeWatchedFolder") setConfirmRemoveWatch(null);
+      if (!result?.cancelled) await refreshWatchedFolders();
+    } catch (cause) {
+      setWatchError(cause instanceof Error ? cause.message : "Watched folder action failed.");
+    } finally {
+      setWatchAction(null);
+    }
+  }
 
   async function documentIntent(documentId: number, action: "openDocument" | "removeDocument" | "reindexDocument") {
     if (documentAction !== null) return;
@@ -308,7 +414,7 @@ export function KnowledgeSearchDialog({
   );
 
   function beginImport(kind: "files" | "folder") {
-    if (picking || uploadProgress || importJobs.some(isActive)) return;
+    if (picking || uploadProgress || importJobs.some(isActive) || watchAction === "addWatchedFolder:all") return;
     setPicking(kind);
     setImportError(null);
     // The picker can legitimately remain open for minutes. This request
@@ -369,7 +475,7 @@ export function KnowledgeSearchDialog({
         <button
           type="button"
           className="knowledge-search-button"
-          disabled={picking !== null || uploadProgress !== null || importJobs.some(isActive)}
+          disabled={picking !== null || uploadProgress !== null || importJobs.some(isActive) || watchAction === "addWatchedFolder:all"}
           onClick={() => beginImport("files")}
         >
           {picking === "files" ? "Choosing files…" : "Add files"}
@@ -377,7 +483,7 @@ export function KnowledgeSearchDialog({
         <button
           type="button"
           className="knowledge-search-button"
-          disabled={picking !== null || uploadProgress !== null || importJobs.some(isActive)}
+          disabled={picking !== null || uploadProgress !== null || importJobs.some(isActive) || watchAction === "addWatchedFolder:all"}
           onClick={() => beginImport("folder")}
         >
           {picking === "folder" ? "Choosing folder…" : "Add folder"}
@@ -506,6 +612,103 @@ export function KnowledgeSearchDialog({
             </table>
           </div>
         )}
+      </section>
+      <section aria-label="Watched folders" className="knowledge-library-section">
+        <div className="knowledge-library-heading">
+          <h2 className="knowledge-section-title">Watched folders ({watchedFolders.length})</h2>
+          <div className="knowledge-library-actions">
+            <button type="button" className="knowledge-search-button"
+              disabled={watchAction !== null || picking !== null || uploadProgress !== null}
+              onClick={() => void watchedFolderIntent("addWatchedFolder")}>
+              {watchAction === "addWatchedFolder:all" ? "Choosing watched folder…" : "Add watched folder"}
+            </button>
+            <button type="button" className="knowledge-search-button"
+              disabled={watchAction !== null || watchedFolders.length === 0 || watchedFolders.every(isWatchSyncing)}
+              onClick={() => void watchedFolderIntent("syncWatchedFolders")}>Sync all now</button>
+            <button type="button" className="knowledge-search-button"
+              onClick={() => void refreshWatchedFolders()}>Refresh watched folders</button>
+          </div>
+        </div>
+        <p className="knowledge-library-intro">
+          Watched folders sync automatically about every 10 minutes. Removing a watch keeps indexed documents.
+        </p>
+        {watchError && <p role="alert" className="knowledge-watch-error">{watchError}</p>}
+        {loadingWatches ? <p role="status" className="knowledge-empty">Loading watched folders…</p> :
+          watchedFolders.length === 0 ? (
+            <p className="knowledge-empty">No watched folders yet. Add one to keep its files indexed.</p>
+          ) : (
+            <div className="knowledge-library-table-scroll">
+              <table className="knowledge-library-table">
+                <thead><tr>
+                  <th scope="col">Folder</th><th scope="col">Files</th>
+                  <th scope="col">Last successful sync</th><th scope="col">Status</th>
+                  <th scope="col">Actions</th>
+                </tr></thead>
+                <tbody>
+                  {watchedFolders.map((folder) => (
+                    <tr key={folder.id}>
+                      <td className="knowledge-library-title knowledge-watch-path" title={folder.path}>
+                        {folder.path}
+                      </td>
+                      <td>
+                        {folder.fileCount} indexed
+                        {folder.lastJob && (
+                          <p className="knowledge-import-stats">
+                            {folder.lastJob.filesProcessed}/{folder.lastJob.filesTotal} scanned ·{" "}
+                            {folder.lastJob.added} added · {folder.lastJob.updated} updated ·{" "}
+                            {folder.lastJob.removed} removed · {folder.lastJob.skipped} skipped ·{" "}
+                            {folder.lastJob.failedFiles} failed
+                          </p>
+                        )}
+                      </td>
+                      <td>{folder.lastSyncAt ? (
+                        <time dateTime={folder.lastSyncAt}>{formatLastSync(folder.lastSyncAt)}</time>
+                      ) : "Never"}</td>
+                      <td>
+                        {folder.syncStatus === "idle" ? "Idle" :
+                          folder.syncStatus.charAt(0).toUpperCase() + folder.syncStatus.slice(1)}
+                        {(folder.lastError || (folder.syncStatus === "failed" && folder.lastJob?.error)) && (
+                          <p role="alert" className="knowledge-watch-error">
+                            Last error: {folder.lastError || folder.lastJob?.error}
+                          </p>
+                        )}
+                      </td>
+                      <td>
+                        <div className="knowledge-library-actions">
+                          <button type="button" className="knowledge-search-button"
+                            aria-label={`Sync ${folder.path} now`}
+                            disabled={watchAction !== null || isWatchSyncing(folder)}
+                            onClick={() => void watchedFolderIntent("syncWatchedFolders", folder.id)}>
+                            Sync now
+                          </button>
+                          {confirmRemoveWatch === folder.id ? (
+                            <>
+                              <button type="button" className="knowledge-search-button"
+                                aria-label={`Confirm remove watched folder ${folder.path}`}
+                                disabled={watchAction !== null}
+                                onClick={() => void watchedFolderIntent("removeWatchedFolder", folder.id)}>
+                                Confirm remove
+                              </button>
+                              <button type="button" className="knowledge-search-button"
+                                aria-label={`Keep watching ${folder.path}`}
+                                disabled={watchAction !== null}
+                                onClick={() => setConfirmRemoveWatch(null)}>Keep</button>
+                            </>
+                          ) : (
+                            <button type="button" className="knowledge-search-button"
+                              aria-label={`Remove watched folder ${folder.path}`}
+                              title="Stop syncing this folder without removing indexed documents"
+                              disabled={watchAction !== null}
+                              onClick={() => setConfirmRemoveWatch(folder.id)}>Remove</button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
       </section>
       <h2 className="knowledge-section-title">Search indexed sources</h2>
       <div className="knowledge-search-row">
