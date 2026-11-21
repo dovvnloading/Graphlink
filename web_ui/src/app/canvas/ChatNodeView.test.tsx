@@ -69,6 +69,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
   const onDelete = vi.fn();
   const onUndockChild = vi.fn();
   const onRegenerate = vi.fn();
+  const onSelectVersion = vi.fn();
   const onGenerateImage = vi.fn();
   const onGenerateChart = vi.fn();
   const onGenerateKeyTakeaway = vi.fn();
@@ -91,6 +92,9 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
       data: {
         content: "Hello **world**",
         isUser: true,
+        versionCount: 1,
+        versionIndex: 0,
+        onSelectVersion,
         isCollapsed: false,
         dockedChildren: [],
         chatScrollValue: 0,
@@ -153,7 +157,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
     );
   }
   return {
-    onToggleCollapse, onDelete, onUndockChild, onRegenerate, onGenerateImage,
+    onToggleCollapse, onDelete, onUndockChild, onRegenerate, onSelectVersion, onGenerateImage,
     onGenerateChart, onGenerateKeyTakeaway, onGenerateExplainerNote,
     onOpenDocumentView, onOpenCitation, onScrollChange, onToggleBranchFocus, onBranchFromHere,
     onSetBranchStatus, onSetFinalDeliverable, onCollapseBranch, onCancelRegenerate,
@@ -321,6 +325,26 @@ describe("ChatNodeView", () => {
     await user.click(regenerate);
     expect(onRegenerate).toHaveBeenCalledOnce();
     expect(screen.queryByRole("menu")).toBeNull(); // onClose fires after onRegenerate
+  });
+
+  it("shows ‹ n/m › on both roles and dispatches bounded version changes", async () => {
+    const user = userEvent.setup();
+    const { onSelectVersion, rerenderWithData } = renderChatNode({
+      isUser: false, versionCount: 3, versionIndex: 1,
+    });
+    expect(screen.getByLabelText("Message versions").textContent).toBe("‹2/3›");
+    await user.click(screen.getByRole("button", { name: "Previous version" }));
+    expect(onSelectVersion).toHaveBeenLastCalledWith(0);
+    await user.click(screen.getByRole("button", { name: "Next version" }));
+    expect(onSelectVersion).toHaveBeenLastCalledWith(2);
+    rerenderWithData({ isUser: true, versionCount: 3, versionIndex: 0 });
+    expect(screen.getByRole("button", { name: "Previous version" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Next version" })).not.toBeDisabled();
+    rerenderWithData({ isUser: false, versionCount: 2, versionIndex: 1, pendingRequestId: "req" });
+    expect(screen.getByRole("button", { name: "Previous version" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Next version" })).toBeDisabled();
+    rerenderWithData({ isUser: false, versionCount: 1, versionIndex: 0 });
+    expect(screen.queryByLabelText("Message versions")).toBeNull();
   });
 
   it("Generate Image is a real, enabled item (unconditional, unlike Regenerate Response) that calls onGenerateImage then closes the menu", async () => {

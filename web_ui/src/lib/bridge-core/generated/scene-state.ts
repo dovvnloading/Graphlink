@@ -14,6 +14,8 @@ export interface SceneNodeRow {
   kind: string;
   content: string;
   isUser: boolean;
+  versionCount: number;
+  versionIndex: number;
   isCollapsed: boolean;
   code: string;
   language: string;
@@ -645,6 +647,8 @@ const SCENE_NODE_ROW_FIELDS: WireFields = [
   ["kind", "s", 0],
   ["content", "s", 0, ""],
   ["isUser", "b", 0, false],
+  ["versionCount", "n", 0, 0],
+  ["versionIndex", "n", 0, 0],
   ["isCollapsed", "b", 0, false],
   ["code", "s", 0, ""],
   ["language", "s", 0, ""],
