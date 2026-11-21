@@ -474,8 +474,8 @@ def _migrate_chat_versions(
             cost_usd=payload.get("estimated_cost_usd"),
             calls=[dict(call) for call in (payload.get("tool_invocations") or [])
                    if isinstance(call, dict)],
-            reply_history_fingerprint=_valid_reply_fingerprint(payload.get("reply_history_fingerprint")),
-            reply_knowledge_enabled=(payload.get("reply_knowledge_enabled")
+            history_fingerprint=_valid_reply_fingerprint(payload.get("reply_history_fingerprint")),
+            knowledge_enabled=(payload.get("reply_knowledge_enabled")
                                      if isinstance(payload.get("reply_knowledge_enabled"), bool) else None),
         )], 0
 
@@ -499,8 +499,8 @@ def _migrate_chat_versions(
                    if isinstance(call, dict)] if isinstance(row.get("tool_invocations", []), list) else [],
             parts=_content_codec.process_content_for_deserialization(row["parts"])
                   if isinstance(row.get("parts"), list) else None,
-            reply_history_fingerprint=_valid_reply_fingerprint(row.get("reply_history_fingerprint")),
-            reply_knowledge_enabled=(row.get("reply_knowledge_enabled")
+            history_fingerprint=_valid_reply_fingerprint(row.get("reply_history_fingerprint")),
+            knowledge_enabled=(row.get("reply_knowledge_enabled")
                                      if isinstance(row.get("reply_knowledge_enabled"), bool) else None),
         )
         for row in kept
@@ -525,12 +525,12 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
     selected = versions[version_index]
     # Compatibility with saves that have a top-level proof but no per-version
     # proof, including saves written before the two features were combined.
-    if selected.reply_history_fingerprint is None:
-        selected.reply_history_fingerprint = _valid_reply_fingerprint(
+    if selected.history_fingerprint is None:
+        selected.history_fingerprint = _valid_reply_fingerprint(
             payload.get("reply_history_fingerprint"),
         )
         if isinstance(payload.get("reply_knowledge_enabled"), bool):
-            selected.reply_knowledge_enabled = payload["reply_knowledge_enabled"]
+            selected.knowledge_enabled = payload["reply_knowledge_enabled"]
     # raw_content is the live projection in both save formats. Honor it even
     # if a legacy import has updated it but retained an older versions array.
     if "raw_content" in payload or "text" in payload:
@@ -607,8 +607,8 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
             # No data in a pre-feature save may fabricate a fingerprint.
             # Malformed/tampered proofs also degrade to unknown rather than
             # incorrectly labeling a legacy response as out of date.
-            reply_history_fingerprint=selected.reply_history_fingerprint,
-            reply_knowledge_enabled=selected.reply_knowledge_enabled,
+            reply_history_fingerprint=selected.history_fingerprint,
+            reply_knowledge_enabled=selected.knowledge_enabled,
         ),
     )
 

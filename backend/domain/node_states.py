@@ -888,8 +888,8 @@ class ChatVersion:
     # original media when alternatives are created, not only its text mirror.
     parts: list[dict[str, Any]] | None = None
     # Provenance belongs to each alternative, not to the entire node.
-    reply_history_fingerprint: str | None = None
-    reply_knowledge_enabled: bool | None = None
+    history_fingerprint: str | None = None
+    knowledge_enabled: bool | None = None
 
 
 MAX_CHAT_VERSIONS = 20

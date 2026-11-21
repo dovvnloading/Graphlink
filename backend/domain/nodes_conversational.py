@@ -104,8 +104,8 @@ class ConversationalOps(SceneDocumentParts):
         version.cost_usd = node.state.estimated_cost_usd
         version.calls = copy.deepcopy(node.state.tool_invocations)
         version.parts = copy.deepcopy(node.state.content_parts)
-        version.reply_history_fingerprint = node.state.reply_history_fingerprint
-        version.reply_knowledge_enabled = node.state.reply_knowledge_enabled
+        version.history_fingerprint = node.state.reply_history_fingerprint
+        version.knowledge_enabled = node.state.reply_knowledge_enabled
 
     def update_chat_node_content(
         self, node_id: str, content: str, incomplete: bool = False
@@ -164,8 +164,8 @@ class ConversationalOps(SceneDocumentParts):
         node.state.estimated_cost_usd = version.cost_usd
         node.state.tool_invocations = copy.deepcopy(version.calls)
         node.state.content_parts = copy.deepcopy(version.parts)
-        node.state.reply_history_fingerprint = version.reply_history_fingerprint
-        node.state.reply_knowledge_enabled = version.reply_knowledge_enabled
+        node.state.reply_history_fingerprint = version.history_fingerprint
+        node.state.reply_knowledge_enabled = version.knowledge_enabled
         # A scientific source card is only valid for its original snapshot.
         node.state.science_reference = None
 

@@ -269,8 +269,8 @@ def _serialize_chat_versions(node: SceneNode) -> tuple[list[dict[str, Any]], int
             "completion_tokens": version.output_tokens,
             "estimated_cost_usd": version.cost_usd,
             "tool_invocations": [dict(call) for call in version.calls],
-            "reply_history_fingerprint": version.reply_history_fingerprint,
-            "reply_knowledge_enabled": version.reply_knowledge_enabled,
+            "reply_history_fingerprint": version.history_fingerprint,
+            "reply_knowledge_enabled": version.knowledge_enabled,
         }
         for version in saved
     ]

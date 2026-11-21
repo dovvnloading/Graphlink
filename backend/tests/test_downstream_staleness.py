@@ -271,5 +271,5 @@ def test_reply_versions_restore_their_own_fingerprint_after_switch_and_reload():
     ]
     restored = _restore_chat_payload(saved)
     assert restored.state.reply_history_fingerprint == new_proof
-    assert restored.state.versions[0].reply_history_fingerprint == old_proof
-    assert restored.state.versions[1].reply_knowledge_enabled is True
+    assert restored.state.versions[0].history_fingerprint == old_proof
+    assert restored.state.versions[1].knowledge_enabled is True
