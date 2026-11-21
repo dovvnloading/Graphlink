@@ -224,8 +224,12 @@ def test_saved_chat_documents_report_size_and_legacy_rows_have_fallback(db):
 
     # Pre-upgrade chat rows were indexed without size_bytes. Their size is
     # calculated from the existing chunks rather than displayed as "—".
-    with sqlite3.connect(db) as conn:
-        conn.execute("UPDATE documents SET size_bytes = NULL WHERE source_uri IN ('graph:27', 'branch:abc')")
+    conn = sqlite3.connect(db)
+    try:
+        with conn:
+            conn.execute("UPDATE documents SET size_bytes = NULL WHERE source_uri IN ('graph:27', 'branch:abc')")
+    finally:
+        conn.close()
     legacy = {item["title"]: item for item in library()}
     assert legacy["Saved chat"]["sizeBytes"] > 0
     assert legacy["Indexed branch"]["sizeBytes"] > 0
