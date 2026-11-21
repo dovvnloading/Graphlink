@@ -182,6 +182,11 @@ class SceneDocument(
     # first. Reset in clear_for_load below, same list last_chat_node_id is
     # already in.
     final_deliverable_node_id: str | None = None
+    # Generation-time non-chat input ancestry, captured once when a NEW
+    # derived node first connects to a parent. Stored at document level,
+    # keeping SceneNode's lean core field count and avoiding 20 kind-state
+    # migrations. No entry is synthesized when a legacy graph is loaded.
+    nonchat_upstream_fingerprints: dict[str, str] = field(default_factory=dict)
     # R3.21: in-memory, session-scoped store for image-node bytes, keyed by
     # asset id (see backend/domain/node_states.py's ImageState.image_asset_id,
     # ADR-002 stage 2.5) -> (raw_bytes, mime_type).
@@ -490,6 +495,7 @@ class SceneDocument(
         self.__dict__.pop("_mcp_revision_epoch", None)
         self.nodes.clear()
         self.edges.clear()
+        self.nonchat_upstream_fingerprints.clear()
         self.image_assets.clear()
         self.pins.clear()
         self.last_chat_node_id = None
@@ -857,7 +863,11 @@ class SceneDocument(
         # exception this needs (loading pre-unification saved data).
         if self._reaches(target, source):
             raise SceneError(f"cannot connect {source} -> {target}: would create a cycle")
-        return self._insert_edge(source, target)
+        edge = self._insert_edge(source, target)
+        if self.nodes[target].kind != "chat" and not getattr(self, "_restoring_staleness", False):
+            from backend.domain.staleness import capture_nonchat_context
+            capture_nonchat_context(self, target)
+        return edge
 
     def connect_unchecked(self, source: str, target: str) -> SceneEdge:
         """Everything connect() validates EXCEPT the cycle check - unknown
