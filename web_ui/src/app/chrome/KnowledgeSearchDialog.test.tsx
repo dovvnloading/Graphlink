@@ -1,6 +1,6 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { KnowledgeSearchDialog } from "./KnowledgeSearchDialog";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
 import { makeRequestOnlyTransport as makeTransport } from "../../lib/ws/transport.testUtils";
@@ -14,9 +14,12 @@ function OpenKnowledgeButton() {
   );
 }
 
-async function setup() {
+async function setup(onOpenDocumentView?: (content: string, label: string) => void) {
   const user = userEvent.setup();
   const fake = makeTransport();
+  fake.request.mockImplementation(async (_topic, intent) =>
+    intent === "listDocuments" ? { documents: [] } : {},
+  );
   let importListener: ((payload: Record<string, unknown>) => void) | null = null;
   fake.transport.subscribe = (topic, listener) => {
     if (topic === "knowledge-ingest") importListener = listener;
@@ -28,7 +31,7 @@ async function setup() {
   render(
     <OverlayProvider>
       <OpenKnowledgeButton />
-      <KnowledgeSearchDialog transport={fake.transport} />
+      <KnowledgeSearchDialog transport={fake.transport} onOpenDocumentView={onOpenDocumentView} />
     </OverlayProvider>,
   );
   await user.click(screen.getByRole("button", { name: "open knowledge" }));
@@ -235,6 +238,108 @@ describe("KnowledgeSearchDialog", () => {
     expect(intents).toContainEqual(["knowledge", "search", ["enter query", 10]]);
   });
 
+  const LIBRARY_DOCUMENT = {
+    documentId: 12, title: "guide.md", type: "text/markdown",
+    sourceUri: "/workspace/guide.md", sizeBytes: 2048,
+    chunks: 4, addedAt: "2026-11-19T14:00:00Z",
+    status: "indexed", canReindex: true,
+  };
+
+  it("lists workspace documents with metadata, size, chunks, date and status", async () => {
+    const { user, request } = await setup();
+    request.mockImplementation(async (_topic, intent) =>
+      intent === "listDocuments" ? { documents: [LIBRARY_DOCUMENT] } : {},
+    );
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(await screen.findByText("guide.md")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Title" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Type" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Size" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Chunks" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Added" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Status" })).toBeInTheDocument();
+    expect(screen.getByText("2.0 KiB")).toBeInTheDocument();
+    expect(screen.getByText("4")).toBeInTheDocument();
+    expect(screen.getByText("Indexed")).toBeInTheDocument();
+    expect(screen.getByText("MD")).toBeInTheDocument();
+  });
+
+  it("opens indexed content in the existing Document View", async () => {
+    const onOpen = vi.fn();
+    const { user, request, intents } = await setup(onOpen);
+    request.mockImplementation(async (_topic, intent) => {
+      if (intent === "listDocuments") return { documents: [LIBRARY_DOCUMENT] };
+      if (intent === "openDocument") return { title: "guide.md", content: "# Guide" };
+      return {};
+    });
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await user.click(await screen.findByRole("button", { name: "Open guide.md in Document View" }));
+
+    expect(intents).toContainEqual(["knowledge", "openDocument", [12]]);
+    expect(onOpen).toHaveBeenCalledWith("# Guide", "guide.md");
+  });
+
+  it("requires a second confirmation before removing a document", async () => {
+    const { user, request, intents } = await setup();
+    let available = true;
+    request.mockImplementation(async (_topic, intent) => {
+      if (intent === "listDocuments") return { documents: available ? [LIBRARY_DOCUMENT] : [] };
+      if (intent === "removeDocument") { available = false; return { removed: true }; }
+      return {};
+    });
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await user.click(await screen.findByRole("button", { name: "Remove guide.md" }));
+    expect(intents).not.toContainEqual(["knowledge", "removeDocument", [12]]);
+    await user.click(screen.getByRole("button", { name: "Confirm remove" }));
+    await waitFor(() => expect(intents).toContainEqual(["knowledge", "removeDocument", [12]]));
+    expect(await screen.findByText(/No documents yet/)).toBeInTheDocument();
+  });
+
+  it("re-indexes an indexed local source without sending client filesystem paths", async () => {
+    const { user, request, intents } = await setup();
+    request.mockImplementation(async (_topic, intent) =>
+      intent === "listDocuments" ? { documents: [LIBRARY_DOCUMENT] } : { jobId: "job-42" },
+    );
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await user.click(await screen.findByRole("button", { name: "Re-index guide.md" }));
+    expect(intents).toContainEqual(["knowledge", "reindexDocument", [12]]);
+  });
+
+  it("accepts dropped browser files via bounded upload intents", async () => {
+    const { request, intents } = await setup();
+    const bytes = new TextEncoder().encode("dragged markdown");
+    const file = new File([bytes], "dragged.md", { type: "text/markdown" });
+    Object.defineProperty(file, "slice", {
+      value: () => ({ arrayBuffer: async () => bytes.buffer }),
+    });
+    request.mockImplementation(async (_topic, intent) => {
+      if (intent === "listDocuments") return { documents: [] };
+      if (intent === "beginUpload") return { uploadId: "transfer-1" };
+      if (intent === "finishUpload") return { jobId: "job-1" };
+      return { bytesReceived: bytes.byteLength };
+    });
+    fireEvent.drop(screen.getByRole("region", { name: "Drop files to index" }), {
+      dataTransfer: { files: [file] },
+    });
+    await waitFor(() => expect(intents).toContainEqual(["knowledge", "finishUpload", ["transfer-1"]]));
+    expect(intents).toContainEqual([
+      "knowledge", "beginUpload", [[{ name: "dragged.md", size: bytes.byteLength }]],
+    ]);
+    expect(intents.some(([topic, intent]) => topic === "knowledge" && intent === "appendUpload")).toBe(true);
+  });
+
+  it("disables re-indexing documents without a local source", async () => {
+    const { user, request } = await setup();
+    request.mockImplementation(async (_topic, intent) =>
+      intent === "listDocuments" ? {
+        documents: [{ ...LIBRARY_DOCUMENT, canReindex: false, sourceUri: "https://example.org/page" }],
+      } : {},
+    );
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(await screen.findByRole("button", { name: "Re-index guide.md" })).toBeDisabled();
+  });
+
   it("the search input has an accessible label", async () => {
     await setup();
     expect(screen.getByLabelText("Search the knowledge base")).toBeInTheDocument();
@@ -258,11 +363,11 @@ describe("KnowledgeSearchDialog", () => {
 
     const input = screen.getByPlaceholderText(/search your ingested knowledge base/i);
     await user.type(input, "first query{Enter}");
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
 
     await user.clear(input);
     await user.type(input, "second query{Enter}");
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
 
     resolveFirst({ results: [RESULT_A] });
     expect(await screen.findByText("Fox Story")).toBeInTheDocument();
