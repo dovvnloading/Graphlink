@@ -15,6 +15,8 @@ import { createPortal } from "react-dom";
 import type { SceneEdgeRow, SceneNodeRow, SceneState } from "../../lib/bridge-core/generated/scene-state";
 import type { StreamListener } from "../../lib/ws/transport";
 import { BridgeErrorState } from "../../lib/ui/BridgeErrorState";
+import { OverlayProviderIfMissing, useOverlays } from "../overlays/overlays";
+import { ChatRerunDialog } from "./ChatRerunDialog";
 // ADR-019: the node views are lazily imported, one chunk per kind - see
 // lazyNodeViews.tsx for why the Suspense boundary is per node rather than
 // one around the whole canvas. Their TYPES stay statically imported below:
@@ -595,6 +597,7 @@ interface DispatcherLive {
   onOpenDocumentView: (markdown: string, sourceLabel: string, citation?: KnowledgeCitationSource) => void;
   onToggleBranchFocus: (nodeId: string) => void;
   onCompareChatVersions?: (nodeId: string, count: number, selectedIndex: number) => void;
+  onOpenChatRerun?: (nodeId: string) => void;
   // ADR-018 stage 18.3: optional - only the chat dispatcher's own call
   // site below supplies it; every other kind's getDispatcher call omits
   // it exactly like they already omit `extra` above.
@@ -678,6 +681,7 @@ function makeChatFns(id: string, liveRef: { current: DispatcherLive }) {
     onDelete: () => liveRef.current.store.deleteChatNode(id),
     onUndockChild: (childId: string) => liveRef.current.store.setNodeDocked(childId, false),
     onRegenerate: () => liveRef.current.store.regenerateResponse(id),
+    onRerunFromHere: () => liveRef.current.onOpenChatRerun?.(id),
     onSelectVersion: (index: number) => liveRef.current.store.setChatVersion(id, index),
     onEditMessage: (content: string, expectedContent: string, onSettled: (success: boolean) => void) =>
       liveRef.current.store.editChatMessage(id, content, expectedContent, onSettled),
@@ -1185,6 +1189,7 @@ export function toFlowNodes(
   filterKinds: ReadonlySet<string> = new Set(),
   filterStatuses: ReadonlySet<string> = new Set(),
   onCompareChatVersions: (nodeId: string, count: number, selectedIndex: number) => void = NO_COMPARE_CHAT_VERSIONS,
+  onOpenChatRerun: (nodeId: string) => void = () => {},
 ): SceneFlowNode[] {
   // ADR-011 stage 11.1: ONE upfront O(N+E) pass replacing this function's
   // old standalone `nodesById` map build, PLUS the O(N*E) per-node edge
@@ -1260,7 +1265,7 @@ export function toFlowNodes(
       const extraSig = `${dimmedVal ? 1 : 0}${isBranchFocusActive ? 1 : 0}|${dockedChildrenSig}`;
       const cached = cache.flowNodes.get(n);
       const fns = getDispatcher(
-        cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus, getComposerRoute, onCompareChatVersions }, makeChatFns,
+        cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus, getComposerRoute, onCompareChatVersions, onOpenChatRerun }, makeChatFns,
       );
       if (cached && cached.extraSig === extraSig) {
         flowNodes.push(cached.flowNode);
@@ -2717,6 +2722,12 @@ function CanvasInner({
   hudContainer: HTMLElement | null;
 }) {
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
+  const overlays = useOverlays();
+  const [rerunNodeId, setRerunNodeId] = useState<string | null>(null);
+  const openChatRerun = useCallback((id: string) => {
+    setRerunNodeId(id);
+    overlays.open("chat-rerun", "dialog");
+  }, [overlays]);
   // Live mirror for event handlers that must read current scene values
   // (the pan handler's drag factor) without re-registering per publish.
   const sceneRef = useRef(scene);
@@ -2847,6 +2858,7 @@ function CanvasInner({
         filterKinds,
         filterStatuses,
         onCompareChatVersions,
+        openChatRerun,
       ),
       nodesRef.current,
       // BUG FIX: see withPreservedFlowState's own POSITION doc and
@@ -2870,7 +2882,7 @@ function CanvasInner({
     lastSyncedSceneRef.current = scene;
   }, [
     scene, store, onOpenDocumentView, effectiveBranchFocusOriginId, onToggleBranchFocus, focusAcceptedPaths,
-    getComposerRoute, filterKinds, filterStatuses, onCompareChatVersions,
+    getComposerRoute, filterKinds, filterStatuses, onCompareChatVersions, openChatRerun,
     // nodesRef/draggingRef/storeApi/pendingSettledIdsRef/lastSyncedSceneRef
     // are all stable ref/store-api identities (useNodeDragAndSizeSync's/
     // useStoreApi's own refs never change across renders) - listed here only
@@ -3301,6 +3313,7 @@ function CanvasInner({
         )}
       </ReactFlow>
       {scene.nodes.length === 0 && <EmptyGraph store={store} />}
+      <ChatRerunDialog store={store} nodeId={rerunNodeId} />
     </div>
   );
 }
@@ -3348,7 +3361,11 @@ export function SceneCanvas({
       <BridgeErrorState title="Canvas unavailable" rejection={versionRejection} className="scene-bridge-error" />
     );
   }
-  return <CanvasInner store={store} onOpenDocumentView={onOpenDocumentView}
-    onCompareChatVersions={onCompareChatVersions} getComposerRoute={getComposerRoute}
-    hudContainer={hudContainer} />;
+  return (
+    <OverlayProviderIfMissing>
+      <CanvasInner store={store} onOpenDocumentView={onOpenDocumentView}
+        onCompareChatVersions={onCompareChatVersions} getComposerRoute={getComposerRoute}
+        hudContainer={hudContainer} />
+    </OverlayProviderIfMissing>
+  );
 }

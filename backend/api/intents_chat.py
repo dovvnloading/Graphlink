@@ -1367,4 +1367,11 @@ def register_chat_intents(
         token_counter, publish_scene, publish_token_counter,
     )
     register_chat_edit_intents(bus, document, publish_scene)
+    # Batch chat reruns register separately to respect the register* length ratchet.
+    from backend.api.intents_chat_rerun import register_chat_rerun_intents
+
+    register_chat_rerun_intents(
+        bus, document, notifications, agent_dispatcher, composer_document,
+        token_counter, publish_scene, publish_token_counter,
+    )
     register_chat_cancel_intent(bus, agent_dispatcher, comparison_cancelled_requests)

@@ -2153,3 +2153,27 @@ describe("Sent chat message edits", () => {
     expect(branchSettled).toHaveBeenCalledWith(false);
   });
 });
+
+describe("Chat re-run intent forwarding", () => {
+  it("uses non-queueable request/reply intents for preview, start, progress and cancel", async () => {
+    const { transport, requests, intents, requestResults } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    requestResults.push(
+      { previewToken: "proof", count: 1, requiresConfirmation: false, replies: [] },
+      { jobId: "batch-1" },
+      { jobId: "batch-1", status: "completed", completed: 1, total: 1 },
+      { ok: true },
+    );
+    await store.previewChatRerun("n1", "this_path");
+    await store.startChatRerun("n1", "all_branches_below", "proof", true);
+    await store.getChatRerunStatus("batch-1");
+    await store.cancelChatRerun("batch-1");
+    expect(requests).toEqual([
+      { topic: "scene", intent: "previewChatRerun", args: ["n1", "this_path"] },
+      { topic: "scene", intent: "startChatRerun", args: ["n1", "all_branches_below", "proof", true] },
+      { topic: "scene", intent: "getChatRerunStatus", args: ["batch-1"] },
+      { topic: "scene", intent: "cancelChatRerun", args: ["batch-1"] },
+    ]);
+    expect(intents).toEqual([]);
+  });
+});
