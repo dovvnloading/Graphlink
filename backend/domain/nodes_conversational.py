@@ -13,12 +13,14 @@ per-kind method groups are being lifted out of SceneDocument at all.
 
 from __future__ import annotations
 
+import copy
+from datetime import datetime, timezone
 from typing import Any
 
 from backend.domain._composed import SceneDocumentParts
 from backend.domain.model import CHAT_TITLE_PREVIEW_LENGTH, SceneError, SceneNode
 from backend.domain.node_access import require_node
-from backend.domain.node_states import ChatState
+from backend.domain.node_states import ChatState, ChatVersion, MAX_CHAT_VERSIONS
 
 
 # Limit one instruction before it enters scene history and model context.
@@ -68,7 +70,10 @@ class ConversationalOps(SceneDocumentParts):
             title=title,
             kind="chat",
             content=str(content),
-            state=ChatState(is_user=bool(is_user), content_parts=content_parts),
+            state=ChatState(
+                is_user=bool(is_user), content_parts=content_parts,
+                versions=[ChatVersion(content=str(content), created_at=datetime.now(timezone.utc).isoformat())],
+            ),
         )
         self.nodes[node_id] = node
         if parent_id is not None:
@@ -77,36 +82,81 @@ class ConversationalOps(SceneDocumentParts):
             self.adopt_pending_system_prompt(node_id)
         return node
 
+    def sync_chat_version(self, node_id: str) -> None:
+        """Mirror current message/provenance into the selected saved version.
+
+        Async metadata (usage, citations and model selection) can arrive after
+        the initial reply command; those callbacks call this after stamping the
+        live node so navigation and session saves see the same answer.
+        """
+        node = require_node(self.nodes, node_id, "chat", ChatState)
+        if not node.state.versions:
+            # Defensive for older in-memory fixtures constructed directly.
+            node.state.versions = [ChatVersion(content=node.content)]
+            node.state.version_index = 0
+        version = node.state.versions[node.state.version_index]
+        version.content = node.content
+        version.provider_name = node.state.provider
+        version.model_name = node.state.model
+        version.incomplete = node.state.response_incomplete
+        version.input_tokens = node.state.prompt_tokens
+        version.output_tokens = node.state.completion_tokens
+        version.cost_usd = node.state.estimated_cost_usd
+        version.calls = copy.deepcopy(node.state.tool_invocations)
+
     def update_chat_node_content(
         self, node_id: str, content: str, incomplete: bool = False
     ) -> SceneNode:
-        """The regenerate primitive: mutate an EXISTING chat node's content in
-        place - the first in-place mutation of a content-bearing field in this
-        file (move_node/set_chat_collapsed/set_node_docked all mutate a
-        position/flag, never displayed text). Scope confirmed against legacy's
-        ChatNode.update_content (graphlink_nodes/graphlink_node_chat.py:677-686):
-        sets content without changing the title (legacy's update_content never
-        recomputed title-like state). If the text actually changes, any saved
-        science_reference is cleared: its verification receipt only covered the
-        original Discuss-in-chat message. Other chat flags remain untouched.
+        """Append a reply alternative rather than destroying the prior text.
 
-        ADR-006 stage 6.4: `incomplete` marks a PARTIAL reply committed after
-        its stream died (see ChatState.response_incomplete). A normal full
-        regenerate passes the default False, which doubles as the CLEAR for a
-        previously interrupted node - retry succeeds, banner goes away."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
+        The current projection remains on SceneNode for all existing branch
+        history and model-context consumers; only chat-specific history lives
+        in ChatState. Regeneration adds a version even for an identical answer.
+        """
+        node = require_node(self.nodes, node_id, "chat", ChatState)
+        self.sync_chat_version(node_id)
         new_content = str(content)
-        if isinstance(node.state, ChatState):
-            # The card/receipt summarizes the original Discuss-in-chat message.
-            # Once its model context changes, displaying that card would make
-            # the new text look like the old, verified scientific snapshot.
-            if new_content != node.content:
-                node.state.science_reference = None
-            node.state.response_incomplete = bool(incomplete)
+        if new_content != node.content:
+            # Verified scientific receipts only describe their original text.
+            node.state.science_reference = None
         node.content = new_content
+        node.state.provider = None
+        node.state.model = None
+        node.state.response_incomplete = bool(incomplete)
+        node.state.prompt_tokens = None
+        node.state.completion_tokens = None
+        node.state.estimated_cost_usd = None
+        node.state.tool_invocations = []
+        node.state.versions.append(ChatVersion(
+            content=new_content, incomplete=bool(incomplete),
+            created_at=datetime.now(timezone.utc).isoformat(),
+        ))
+        node.state.versions = node.state.versions[-MAX_CHAT_VERSIONS:]
+        node.state.version_index = len(node.state.versions) - 1
         return node
+
+    def set_chat_version(self, node_id: str, index: int) -> None:
+        """Select a saved alternative. The intent records this as one undo step."""
+        node = require_node(self.nodes, node_id, "chat", ChatState)
+        if node.pending_request_id:
+            raise SceneError("Cannot switch versions while a reply is generating.")
+        if type(index) is not int or not 0 <= index < len(node.state.versions):
+            raise SceneError("Chat version index is out of range.")
+        if index == node.state.version_index:
+            return
+        self.sync_chat_version(node_id)
+        version = node.state.versions[index]
+        node.state.version_index = index
+        node.content = version.content
+        node.state.provider = version.provider_name
+        node.state.model = version.model_name
+        node.state.response_incomplete = version.incomplete
+        node.state.prompt_tokens = version.input_tokens
+        node.state.completion_tokens = version.output_tokens
+        node.state.estimated_cost_usd = version.cost_usd
+        node.state.tool_invocations = copy.deepcopy(version.calls)
+        # A scientific source card is only valid for its original snapshot.
+        node.state.science_reference = None
 
     def set_chat_collapsed(self, node_id: str, collapsed: bool) -> None:
         node = self.nodes.get(node_id)

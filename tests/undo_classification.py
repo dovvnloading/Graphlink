@@ -191,6 +191,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("scene", "setNodeDocked", "A", "content: docked flag is document state"),
     Classified("scene", "deleteChatNode", "A", "content: delete"),
     Classified("scene", "setChatCollapsed", "A", "content: collapsed flag is document state"),
+    Classified("scene", "setChatVersion", "A", "content: selecting a saved chat alternative is undoable"),
     Classified("scene", "setBranchStatus", "A", "content: branch status is document state"),
     Classified("scene", "setFinalDeliverable", "A", "content: final-deliverable flag is document state"),
     Classified("scene", "collapseBranch", "A", "content: collapsed flag is document state"),

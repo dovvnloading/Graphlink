@@ -867,6 +867,29 @@ def science_reference_or_none(
 
 
 @dataclass
+class ChatVersion:
+    """A durable alternative for one chat bubble.
+
+    The public projection is SceneNode.content and ChatState.provider/model.
+    Reply badges are also snapshotted so selecting an older answer never
+    displays another attempt's cost, interrupted flag, or tool-call ledger.
+    """
+
+    content: str
+    provider_name: str | None = None
+    model_name: str | None = None
+    created_at: str = ""
+    incomplete: bool = False
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
+    calls: list[dict[str, Any]] = field(default_factory=list)
+
+
+MAX_CHAT_VERSIONS = 20
+
+
+@dataclass
 class ChatState(NodeState):
     """Relocated verbatim from SceneNode's eight chat-only fields (former
     backend/domain/model.py fields). SceneNode's own `content` field
@@ -940,6 +963,11 @@ class ChatState(NodeState):
       not by inventing write-time cascade bookkeeping here."""
 
     is_user: bool = False
+    # A bounded chronological history, including the currently selected
+    # alternative. version_index is zero-based; the wire sends only count and
+    # index so scene snapshots do not duplicate up to 20 full message bodies.
+    versions: list[ChatVersion] = field(default_factory=list)
+    version_index: int = 0
     chat_scroll_value: float = 0.0
     content_parts: list[dict[str, Any]] | None = None
     provider: str | None = None

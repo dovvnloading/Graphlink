@@ -66,6 +66,8 @@ from backend.domain.node_states import (
 WIRE_DEFAULTS: dict[str, Any] = {
     "content": "",
     "isUser": False,
+    "versionCount": 0,
+    "versionIndex": 0,
     "isCollapsed": False,
     "code": "",
     "language": "",
@@ -499,6 +501,8 @@ _GROUP_SIZE_FIELDS = (("groupWidth", "group_width"), ("groupHeight", "group_heig
 _STATE_FIELDS: dict[type, tuple[_Entry, ...]] = {
     ChatState: _table(
         ("isUser", "is_user"),
+        ("versionCount", "versions", len),
+        ("versionIndex", "version_index"),
         # ADR-002 Workstream 1 ("Synthesize Branches") - output provenance.
         ("provider", "provider"),
         ("model", "model"),

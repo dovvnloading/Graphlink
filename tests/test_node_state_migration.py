@@ -352,7 +352,7 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "artifactContent", "artifactError", "artifactProposalId", "attachmentKind", "branchStatus", "byteSize",
     "chartAspectLocked", "chartData",
     "chartError", "chartHeight", "chartSourceNodeId", "chartType", "chartWidth",
-    "chatScrollValue", "code", "codeSandboxAnalysis",
+    "chatScrollValue", "versionCount", "versionIndex", "code", "codeSandboxAnalysis",
     "codeSandboxApprovalAllowSourceBuilds", "codeSandboxApprovalIsRepair",
     "codeSandboxApprovalRequirements",
     "codeSandboxAwaitingApproval", "codeSandboxCode", "codeSandboxError",
