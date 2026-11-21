@@ -90,7 +90,7 @@ def test_ollama_mode_trained_max_is_capped_to_the_served_cap(monkeypatch):
     api_provider.invalidate_ollama_capability_cache()
 
 
-def test_ollama_mode_explicit_modelfile_num_ctx_wins_over_the_cap(monkeypatch):
+def test_ollama_mode_explicit_modelfile_num_ctx_does_not_override_default(monkeypatch):
     api_provider.invalidate_ollama_capability_cache()
 
     def fake_show(model):
@@ -103,9 +103,57 @@ def test_ollama_mode_explicit_modelfile_num_ctx_wins_over_the_cap(monkeypatch):
         }
 
     monkeypatch.setattr(api_provider, "ollama", types.SimpleNamespace(show=fake_show))
+    monkeypatch.setattr(api_provider, "_OLLAMA_CONFIGURED_CONTEXT_WINDOWS", {})
     runtime = api_provider.ProviderRuntime()
     runtime.set_ollama_models({config.TASK_CHAT: "modelfile-ctx-model:7b"})
-    assert runtime.context_window(config.TASK_CHAT) == 16_384
+    assert runtime.context_window(config.TASK_CHAT) == 8_192
+    api_provider.invalidate_ollama_capability_cache()
+
+
+
+def test_ollama_131k_modelfile_without_saved_choice_uses_8k_for_requests_and_budgets(monkeypatch):
+    """Regression: a 131k Modelfile must not allocate a 131k KV cache."""
+    import backend.providers.ollama_provider as ollama_module
+    from backend.context_engine.assembler import selected_context_window
+    from backend.harness.context import served_context_window
+    from backend.providers.base import CancelToken, ChatRequest
+    from backend.providers.ollama_provider import OllamaProvider
+    from graphlink_model_catalog import ModelRef
+
+    model = "granite4.2:3b"
+    api_provider.invalidate_ollama_capability_cache()
+    monkeypatch.setattr(api_provider, "_OLLAMA_CONFIGURED_CONTEXT_WINDOWS", {})
+    monkeypatch.setattr(api_provider, "ollama", types.SimpleNamespace(show=lambda _: {
+        "parameters": "num_ctx 131072",
+        "model_info": {
+            "general.architecture": "llama",
+            "llama.context_length": 131_072,
+        },
+    }))
+
+    runtime = api_provider.ProviderRuntime()
+    runtime.set_ollama_models({config.TASK_CHAT: model})
+    model_ref = ModelRef(config.LOCAL_PROVIDER_OLLAMA, model)
+
+    assert api_provider._get_ollama_context_window(model) == 131_072  # Metadata, not selection.
+    assert runtime.context_window(config.TASK_CHAT) == 8_192
+    assert selected_context_window(runtime) == 8_192
+    assert selected_context_window(runtime, model_ref=model_ref) == 8_192
+    assert served_context_window(runtime=runtime) == 8_192
+    assert served_context_window(runtime=runtime, model_ref=model_ref) == 8_192
+
+    captured = {}
+
+    def fake_chat(*, model, messages, **kwargs):
+        captured.update(kwargs)
+        return {"done": True, "message": {"content": "ok"}}
+
+    monkeypatch.setattr(ollama_module, "ollama", types.SimpleNamespace(chat=fake_chat))
+    OllamaProvider(model=model, context_window=runtime.context_window(config.TASK_CHAT)).complete(
+        ChatRequest(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+        CancelToken(),
+    )
+    assert captured["options"]["num_ctx"] == 8_192
     api_provider.invalidate_ollama_capability_cache()
 
 
@@ -231,7 +279,7 @@ def test_configured_ollama_window_is_capped_at_trained_length(monkeypatch):
         }),
     )
     assert api_provider._ollama_effective_context_window("small:7b") == 16_384
-    # Modelfile is still authoritative when there is no preference saved.
+    # Modelfile metadata is readable, but does not determine the served window.
     assert api_provider._extract_context_window_from_show({
         "parameters": "num_ctx 32768",
         "model_info": {"llama.context_length": 16_384},
