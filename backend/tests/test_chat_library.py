@@ -1171,6 +1171,26 @@ def test_extract_preview_handles_multimodal_content_parts():
     assert count == 1
 
 
+def test_extract_preview_removes_inline_knowledge_citations_without_changing_the_saved_reply():
+    token = "[kb:0b20173e0f2e3ce167e7]"
+    chat_data = {"nodes": [{"node_type": "chat", "raw_content": [
+        {"type": "text", "text": f"Restore the backup {token}"},
+        {"type": "image_bytes", "data": "ignored"},
+        {"type": "text", "text": f"then verify it {token}."},
+    ], "is_user": False}]}
+    preview, count = _extract_preview_and_message_count(chat_data)
+    assert (preview, count) == ("Restore the backup then verify it.", 1)
+    assert token in chat_data["nodes"][0]["raw_content"][0]["text"]
+
+
+def test_extract_preview_truncates_after_removing_citation_ids():
+    token = "[kb:0b20173e0f2e3ce167e7]"
+    chat_data = {"nodes": [{"node_type": "chat", "raw_content": f"{token} " + "x" * 180}]}
+    preview, count = _extract_preview_and_message_count(chat_data)
+    assert preview == "x" * 140
+    assert count == 1
+
+
 def test_extract_preview_truncates_long_text():
     chat_data = {"nodes": [{"node_type": "chat", "raw_content": "a" * 500, "is_user": True}]}
     preview, _ = _extract_preview_and_message_count(chat_data)
@@ -1180,6 +1200,18 @@ def test_extract_preview_truncates_long_text():
 def test_extract_preview_is_empty_for_no_chat_nodes():
     assert _extract_preview_and_message_count({"nodes": []}) == ("", 0)
     assert _extract_preview_and_message_count({}) == ("", 0)
+
+
+def test_library_sanitizes_legacy_cached_preview_even_if_truncated_mid_citation(db_path):
+    chat_id, _ = save_chat_atomically_row(db_path, None, "Legacy", {"nodes": []}, [], [])
+    truncated = ("Details " + "x" * 116 + " [kb:0b20173e0f2e3ce167e7]")[:140]
+    assert "[kb:" in truncated and not truncated.endswith("]")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE graphs SET preview = ? WHERE id = ?", (truncated, chat_id))
+
+    [row] = get_all_chats(db_path)
+    assert row["preview"] == "Details " + "x" * 116
+    assert "[kb:" not in row["preview"]
 
 
 def test_rename_chat_persists_and_updates_timestamp(db_path):
@@ -2076,11 +2108,32 @@ def test_fallback_title_matches_legacy_regex_and_truncation():
     assert len(long_word_title) == 80
 
 
-def test_resolve_seed_message_uses_last_chat_node_content():
+def test_resolve_seed_message_uses_first_user_message_not_last_assistant_reply():
     document = SceneDocument()
     document.add_chat_node(0, 0, "first message", is_user=True)
     document.add_chat_node(0, 100, "second message", is_user=False)
-    assert _resolve_seed_message(document) == "second message"
+    document.add_chat_node(0, 200, "third message", is_user=True)
+    assert _resolve_seed_message(document) == "first message"
+
+
+def test_resolve_seed_message_uses_conversation_history_when_no_user_chat_node():
+    document = SceneDocument()
+    assistant = document.add_chat_node(0, 0, "Assistant context", is_user=False)
+    conversation = document.add_conversation_node(0, 100, assistant.id)
+    document.append_conversation_user_message(conversation.id, "Where are my backups stored?")
+    document.append_conversation_assistant_message(conversation.id, "In the vault.")
+    assert _resolve_seed_message(document) == "Where are my backups stored?"
+
+
+def test_resolve_seed_message_accepts_multimodal_chat_text():
+    document = SceneDocument()
+    document.add_chat_node(
+        0, 0, "", is_user=True, content_parts=[
+            {"type": "text", "text": "Summarize this attachment"},
+            {"type": "image_bytes", "data": "not-really-an-image"},
+        ],
+    )
+    assert _resolve_seed_message(document) == "Summarize this attachment"
 
 
 def test_resolve_seed_message_falls_back_to_new_chat_when_no_chat_nodes():
@@ -2109,6 +2162,74 @@ def test_save_chat_intent_inserts_a_new_row_and_adopts_the_id(db_path):
     assert len(rows) == 1
     assert document.current_chat_id == rows[0]["id"]
     assert notifications.visible and notifications.msg_type == "success"
+
+
+def test_fresh_default_workspace_save_titles_from_first_message_in_both_libraries(
+    db_path, knowledge_db_path, monkeypatch,
+):
+    monkeypatch.setattr(knowledge_store_module, "DEFAULT_DB_PATH", knowledge_db_path)
+    bus = SessionBus("fresh-default-title")
+    document = SceneDocument()
+    bus.register_topic("scene", document.scene_payload)
+    register_chat_library(
+        bus, db_path, document, autosave_interval_seconds=None, knowledge_db_path=knowledge_db_path,
+    )
+    default_id = get_default_workspace_id(db_path)
+    assert document.current_workspace_id == default_id
+
+    user = document.add_chat_node(0, 0, "How do database restores work?", is_user=True)
+    document.add_chat_node(
+        0, 100, "Use backups [kb:0b20173e0f2e3ce167e7] for recovery.",
+        is_user=False, parent_id=user.id,
+    )
+    assert asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", [])) is True
+
+    [row] = get_all_chats(db_path)
+    assert row["workspaceId"] == default_id
+    assert row["title"] == "How do database restores work"
+    assert row["preview"] == "Use backups for recovery."
+    assert load_chat_row(db_path, row["id"])["data"]["nodes"][-1]["raw_content"].endswith(
+        "[kb:0b20173e0f2e3ce167e7] for recovery."
+    )
+    indexed = knowledge_store_module.search_chunks(knowledge_db_path, "database")
+    assert indexed and {hit["document_title"] for hit in indexed} == {row["title"]}
+
+
+def test_save_chat_intent_titles_conversation_only_content_from_first_user_turn(db_path):
+    bus, document, _ = _bus_with_canvas(db_path)
+    parent = document.add_chat_node(0, 0, "Assistant context", is_user=False)
+    conversation = document.add_conversation_node(0, 100, parent.id)
+    document.append_conversation_user_message(conversation.id, "Where are deployment logs located?")
+    document.append_conversation_assistant_message(conversation.id, "Look in the logs directory.")
+
+    assert asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", [])) is True
+    assert get_all_chats(db_path)[0]["title"] == "Where are deployment logs located"
+
+
+def test_save_chat_promotes_an_empty_canvas_placeholder_after_first_message(db_path):
+    bus, document, _ = _bus_with_canvas(db_path)
+    document.add_note(0, 0)
+    assert asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", [])) is True
+    [old] = get_all_chats(db_path)
+    assert old["title"] == "New Chat"
+
+    document.add_chat_node(0, 0, "Review the incident followup", is_user=True)
+    assert asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", [])) is True
+    [saved] = get_all_chats(db_path)
+    assert saved["id"] == old["id"]
+    assert saved["title"] == "Review the incident followup"
+
+
+def test_a_manually_renamed_new_chat_title_remains_unchanged_on_resave(db_path):
+    bus, document, _ = _bus_with_canvas(db_path)
+    document.add_chat_node(0, 0, "First actual message", is_user=True)
+    assert asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", [])) is True
+    chat_id = document.current_chat_id
+    asyncio.run(bus.dispatch_intent("app-chat-library", "renameChat", [chat_id, "New Chat"]))
+
+    document.add_chat_node(0, 100, "An unrelated later message", is_user=True)
+    assert asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", [])) is True
+    assert get_all_chats(db_path)[0]["title"] == "New Chat"
 
 
 def test_save_chat_intent_resave_updates_same_row_and_keeps_existing_title(db_path):
