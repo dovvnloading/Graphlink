@@ -1,4 +1,4 @@
-import { memo, useMemo, useRef, useState, type JSX } from "react";
+import { createContext, memo, useContext, useMemo, useRef, useState, type JSX } from "react";
 import ReactMarkdown, { type ExtraProps } from "react-markdown";
 import type { PluggableList } from "unified";
 import remarkGfm from "remark-gfm";
@@ -288,6 +288,37 @@ export function rehypeInlineKnowledgeCitations() {
 
 const MARKDOWN_COMPONENTS = { pre: CodeBlock, table: TableWrapper, img: ZoomImage, a: SafeAnchor };
 
+// Keep the markdown component override static (React's static-components
+// rule) while making only this reply's verified citation ledger available.
+interface CitationRenderContext {
+  citations?: DisplayCitation[];
+  onCitationClick?: (source: KnowledgeCitationSource) => void;
+}
+const CitationContext = createContext<CitationRenderContext>({});
+
+function CitationSpan({ node, children, ...props }: JSX.IntrinsicElements["span"] & ExtraProps) {
+  const { citations, onCitationClick } = useContext(CitationContext);
+  const citationId = node?.properties?.dataCitationId;
+  if (typeof citationId === "string") {
+    const item = citations?.find((entry) => entry.citationId === citationId);
+    if (item?.source && item.number !== null) {
+      const source = item.source;
+      return (
+        <button type="button" className="chat-citation-inline nodrag"
+          title={`Open ${source.documentTitle} in Document View`}
+          aria-label={`Source ${item.number}: ${source.documentTitle}`}
+          onClick={() => onCitationClick?.(source)}>
+          [{item.number}]
+        </button>
+      );
+    }
+    return <span className="chat-citation-unverified" title="Unverified citation">[{citationId}] (unverified)</span>;
+  }
+  return <span {...props}>{children}</span>;
+}
+
+const CITATION_MARKDOWN_COMPONENTS = { ...MARKDOWN_COMPONENTS, span: CitationSpan };
+
 export const NodeMarkdown = memo(function NodeMarkdown({ content, citations, onCitationClick }: {
   content: string;
   citations?: DisplayCitation[];
@@ -303,31 +334,14 @@ export const NodeMarkdown = memo(function NodeMarkdown({ content, citations, onC
     ],
     [searchQuery, showCitations],
   );
-  const components = useMemo(() => ({
-    ...MARKDOWN_COMPONENTS,
-    span: ({ node, children, ...props }: JSX.IntrinsicElements["span"] & ExtraProps) => {
-      const citationId = node?.properties?.dataCitationId;
-      if (typeof citationId === "string") {
-        const item = citations?.find((entry) => entry.citationId === citationId);
-        if (item?.source && item.number !== null) {
-          const source = item.source;
-          return (
-            <button type="button" className="chat-citation-inline nodrag"
-              title={`Open ${source.documentTitle} in Document View`}
-              aria-label={`Source ${item.number}: ${source.documentTitle}`}
-              onClick={() => onCitationClick?.(source)}>
-              [{item.number}]
-            </button>
-          );
-        }
-        return <span className="chat-citation-unverified" title="Unverified citation">[{citationId}] (unverified)</span>;
-      }
-      return <span {...props}>{children}</span>;
-    },
-  }), [citations, onCitationClick]);
-  return (
-    <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={rehypePlugins} components={components}>
+  const citationContext = useMemo(() => ({ citations, onCitationClick }), [citations, onCitationClick]);
+  const markdown = (
+    <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={rehypePlugins}
+      components={showCitations ? CITATION_MARKDOWN_COMPONENTS : MARKDOWN_COMPONENTS}>
       {content}
     </ReactMarkdown>
   );
+  return showCitations ? (
+    <CitationContext.Provider value={citationContext}>{markdown}</CitationContext.Provider>
+  ) : markdown;
 });
