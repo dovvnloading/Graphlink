@@ -43,17 +43,20 @@ export function KnowledgeSettingsPage({
   const [cloudProvider, setCloudProvider] = useState(state.knowledgeCloudProvider || "OpenAI");
   const [consent, setConsent] = useState(state.knowledgeCloudOptIn);
 
-  // Show the models *installed in the running Ollama server*, rather than
-  // guessing based on a local manifest or offering non-installed suggestions.
+  // Share Settings > Ollama's inventory and refresh. Offline folder
+  // scans have unknown capabilities, so they cannot enable embeddings.
   useEffect(() => {
     if (source === "ollama") {
-      transport.fireIntent("app-settings", "scanKnowledgeOllamaModels", []);
+      transport.fireIntent("app-settings", "scanOllamaSystem", []);
     }
   }, [source, transport]);
 
-  const capable = state.knowledgeOllamaCapableModels;
+  const capable = useMemo(
+    () => state.ollamaInventory.filter((entry) => entry.capabilities.includes("embeddings")).map((entry) => entry.name),
+    [state.ollamaInventory],
+  );
   const available = useMemo(
-    () => [...state.knowledgeOllamaModels].sort((a, b) => {
+    () => state.ollamaInventory.map((entry) => entry.name).sort((a, b) => {
       const aCapable = capable.includes(a);
       const bCapable = capable.includes(b);
       if (aCapable !== bCapable) return aCapable ? -1 : 1;
@@ -62,10 +65,11 @@ export function KnowledgeSettingsPage({
       if (aCapable && aSuggested !== bSuggested) return aSuggested ? -1 : 1;
       return a.localeCompare(b);
     }),
-    [state.knowledgeOllamaModels, capable],
+    [state.ollamaInventory, capable],
   );
 
   const localChoice = ollamaModel || suggestedModel(available, capable);
+  const localMetadata = state.ollamaInventory.find((entry) => entry.name === localChoice);
   const cloudProfiles = state.apiProviders.filter(
     (provider) => provider.id !== "Anthropic Claude" && provider.id !== "Google Gemini",
   );
@@ -161,17 +165,29 @@ export function KnowledgeSettingsPage({
             Embedding-capable models appear first. nomic-embed-text is recommended
             when installed. Other installed models are shown but cannot be chosen.
           </p>
+          {localMetadata && (
+            <p className="settings-field-hint">
+              {localMetadata.family || "Unknown family"} ·
+              {" "}{localMetadata.parameterSize || "Unknown parameters"} ·
+              {" "}Trained context: {localMetadata.trainedContextLength?.toLocaleString() ?? "Unknown"} tokens
+            </p>
+          )}
+          {state.ollamaInventorySource === "folder" && (
+            <p className="settings-field-hint">
+              The Ollama server is unavailable. Disk scanning cannot verify embedding support.
+            </p>
+          )}
           <div className="settings-button-row">
             <button
               type="button"
               className="settings-button"
-              disabled={state.knowledgeScanStatus === "running"}
-              onClick={() => transport.fireIntent("app-settings", "scanKnowledgeOllamaModels", [])}
+              disabled={state.ollamaScanStatus === "running"}
+              onClick={() => transport.fireIntent("app-settings", "scanOllamaSystem", [])}
             >
-              {state.knowledgeScanStatus === "running" ? "Scanning..." : "Refresh installed models"}
+              {state.ollamaScanStatus === "running" ? "Scanning..." : "Refresh installed models"}
             </button>
           </div>
-          {state.knowledgeScanStatus === "done" && capable.length === 0 && (
+          {state.knowledgeScanStatus === "done" && state.ollamaServerReachable === true && capable.length === 0 && (
             <p className="settings-update-status">
               No embedding-capable model installed. You can pull nomic-embed-text
               on the Ollama (Local) page.
