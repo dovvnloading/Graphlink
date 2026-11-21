@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import backend.agents as agents_module  # noqa: F401 - preserve canvas/session import order
 from backend.domain.graph import SceneDocument
 from backend.domain.staleness import fingerprint_for_reply, scene_staleness
 from backend.session_load import _restore_chat_payload
