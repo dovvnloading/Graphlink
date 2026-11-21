@@ -28,7 +28,7 @@ import {
 import type { GridControlState } from "../../lib/bridge-core/generated/grid-control-state";
 import type { DragSpeedState } from "../../lib/bridge-core/generated/drag-speed-state";
 import type { FontControlState } from "../../lib/bridge-core/generated/font-control-state";
-import type { ScenePatch, StreamListener, WsTransport } from "../../lib/ws/transport";
+import type { ScenePatch, StateListener, StreamListener, WsTransport } from "../../lib/ws/transport";
 import type { BridgeRejection } from "../../lib/bridge-core/islandState";
 import type { EditorDraft, Sources, ScienceResult } from "./scientificWorkbench";
 import { announce } from "../announcer";
@@ -1246,6 +1246,15 @@ export class SceneStore {
     const args = expectedRoot === undefined ? [nodeId, path] : [nodeId, path, expectedRoot];
     const result: unknown = await this.transport.request("harness", "readWorkspaceFile", args);
     return parseHarnessWorkspaceDocument(result);
+  }
+
+  /** Import a file from this agent's currently authorized Files root. */
+  addHarnessWorkspaceFileToKnowledge(nodeId: string, path: string, expectedRoot: string): Promise<unknown> {
+    return this.transport.request("knowledge", "addWorkspaceFile", [nodeId, path, expectedRoot]);
+  }
+
+  subscribeKnowledgeIngest(listener: StateListener): () => void {
+    return this.transport.subscribe("knowledge-ingest", listener);
   }
 
   revealHarnessWorkspace(nodeId: string): void {
