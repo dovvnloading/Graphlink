@@ -34,6 +34,97 @@ def _ctx(root, mode="autonomous", profile="isolated"):
 
 
 @pytest.mark.parametrize("command", [
+    "Get-Location", "Get-ChildItem", "dir", "Get-ChildItem src",
+    "dir src", "gci src", "Get-Item src/notes.txt", "Get-Content src/notes.txt",
+])
+def test_powershell_workspace_reads_have_reusable_exact_allow_rules(tmp_path, monkeypatch, command):
+    from backend.harness import shell_selection
+    from backend.harness.shell_policy import shell_allow_rule_candidates
+
+    monkeypatch.setattr(shell_selection, "effective_shell", lambda _shell: "powershell")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "notes.txt").write_text("hello")
+    ctx, prompts = _ctx(tmp_path, mode="ask", profile="host")
+    ctx.harness_shell = "powershell"
+    call = ToolCall(id="read", name="shell.exec", arguments={"command": command})
+    assert not requires_explicit_workspace_approval(call, ctx)
+    rules = shell_allow_rule_candidates(command, shell="powershell", workspace_root=tmp_path)
+    assert len(rules) == 1 and rules[0].startswith("v2\tpowershell\thost\t")
+    ctx.shell_allow_rules = rules
+
+    registry = ToolRegistry()
+
+    async def handler(_call, _ctx):
+        return ToolResult(content="ran")
+
+    registry.register(
+        ToolSpec(name="shell.exec", description="read", input_schema={"type": "object"}),
+        handler, scopes={CODE_EXECUTE}, approval="always",
+    )
+    assert asyncio.run(registry.invoke(call, ctx)) == ToolResult(content="ran")
+    assert not prompts, "a saved safe PowerShell read must not ask again"
+
+
+@pytest.mark.parametrize("command", [
+    "Get-Location ..", "Get-ChildItem ../outside", "dir .git",
+    "Get-ChildItem -Recurse", "Get-Item env:", "Get-Content HKLM:/Software",
+    "Get-ChildItem @args", "Get-ChildItem; Remove-Item notes.txt",
+    "Get-ChildItem; git status", "dir /etc",
+])
+def test_powershell_unsafe_or_unconfined_reads_still_need_fresh_consent(tmp_path, monkeypatch, command):
+    from backend.harness import shell_selection
+
+    monkeypatch.setattr(shell_selection, "effective_shell", lambda _shell: "powershell")
+    ctx, _ = _ctx(tmp_path, mode="ask", profile="host")
+    ctx.harness_shell = "powershell"
+    call = ToolCall(id="unsafe", name="shell.exec", arguments={"command": command})
+    assert requires_explicit_workspace_approval(call, ctx)
+
+
+def test_powershell_read_through_symlink_outside_workspace_still_prompts(tmp_path, monkeypatch):
+    from backend.harness import shell_selection
+
+    monkeypatch.setattr(shell_selection, "effective_shell", lambda _shell: "powershell")
+    root = tmp_path / "root"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    try:
+        (root / "escape").symlink_to(outside, target_is_directory=True)
+    except (NotImplementedError, OSError):
+        pytest.skip("symlinks unavailable")
+    ctx, _ = _ctx(root, mode="ask", profile="host")
+    ctx.harness_shell = "powershell"
+    for command in ("dir escape", "Get-ChildItem escape", "Get-Item escape"):
+        call = ToolCall(id="link", name="shell.exec", arguments={"command": command})
+        assert requires_explicit_workspace_approval(call, ctx)
+
+
+def test_powershell_rule_does_not_authorize_a_different_read(tmp_path, monkeypatch):
+    from backend.harness import shell_selection
+    from backend.harness.shell_policy import shell_allow_rule_candidates
+
+    monkeypatch.setattr(shell_selection, "effective_shell", lambda _shell: "powershell")
+    ctx, prompts = _ctx(tmp_path, mode="ask", profile="host")
+    ctx.harness_shell = "powershell"
+    ctx.shell_allow_rules = shell_allow_rule_candidates(
+        "Get-ChildItem", shell="powershell", workspace_root=tmp_path,
+    )
+    registry = ToolRegistry()
+
+    async def handler(_call, _ctx):
+        return ToolResult(content="ran")
+
+    registry.register(
+        ToolSpec(name="shell.exec", description="read", input_schema={"type": "object"}),
+        handler, scopes={CODE_EXECUTE}, approval="always",
+    )
+    call = ToolCall(id="changed", name="shell.exec", arguments={"command": "dir"})
+    assert asyncio.run(registry.invoke(call, ctx)) == ToolResult(content="ran")
+    assert len(prompts) == 1, "a different read command needs its own exact approval"
+
+
+@pytest.mark.parametrize("command", [
     "bash ./run.sh", "sh ./run.sh", "python ./build.py",
     "python3 -m http.server", "git status", "git -c core.pager=sh status",
     "find . -exec sh", "xargs sh", "make all", "busybox wget",
