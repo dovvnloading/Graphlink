@@ -46,6 +46,33 @@ const OLLAMA_TASK_LABELS: Record<(typeof OLLAMA_TASKS)[number], string> = {
 };
 const OLLAMA_MODELS_DATALIST_ID = "settings-ollama-scanned-models";
 
+// R8a: reasoning went from a 2-value Mode (Thinking/Quick) to a graded
+// 4-value Level shared by both local providers here and the composer's own
+// Reasoning popover (backend/composer.py's REASONING_OPTIONS) - same ids,
+// same labels, so a user never has to learn two different vocabularies.
+const REASONING_LEVEL_OPTIONS = [
+  { id: "off", label: "Off" },
+  { id: "low", label: "Low" },
+  { id: "medium", label: "Medium" },
+  { id: "high", label: "High" },
+] as const;
+
+// ADR-018 stage 18.4: mirrors graphlink_model_catalog.AUTO_POLICIES - the
+// policy the auto rung of the resolution chain applies when neither an
+// explicit task assignment nor a node/branch pin resolves a model.
+const AUTO_MODEL_POLICY_OPTIONS = [
+  { id: "cheapest-capable", label: "Cheapest Capable" },
+  { id: "fastest", label: "Fastest" },
+  { id: "best-quality", label: "Best Quality" },
+] as const;
+
+// ADR-012 stage 12.2: mirrors SettingsManager.THEMES (graphlink_settings_store.py).
+const THEME_OPTIONS = [
+  { id: "system", label: "Match System" },
+  { id: "light", label: "Light" },
+  { id: "dark", label: "Dark" },
+] as const;
+
 // Download sizes are approximate Ollama library sizes for these exact tags.
 // This is a static, opt-in starter list, never an automatic download queue.
 const OLLAMA_RECOMMENDED_MODELS = [
