@@ -86,6 +86,32 @@ def test_read_only_calls_overlap_but_never_exceed_the_limit():
 
 
 
+def test_activity_duration_excludes_time_spent_awaiting_approval():
+    registry = ToolRegistry()
+
+    async def approval(_call):
+        # A human decision can take minutes. Only the actual tool invocation
+        # should contribute to the activity row's elapsedMs.
+        await asyncio.sleep(0.12)
+        return True
+
+    async def execute(_call, _ctx):
+        await asyncio.sleep(0.004)
+        return ToolResult(content="executed")
+
+    _register(registry, "probe.write", execute, approval="once")
+    ctx = _ctx(approval)
+    durations = []
+
+    async def record(_call, _result, elapsed_ms):
+        durations.append(elapsed_ms)
+
+    asyncio.run(_execute_tool_calls([_call("tool-1", "probe.write")], registry, ctx, record))
+    assert ctx.approval_wait_seconds["tool-1"] >= 0.10
+    assert len(durations) == 1
+    assert 0 <= durations[0] < 80, "elapsedMs must not include the 120-ms consent pause"
+
+
 def test_science_search_does_not_split_parallel_fs_read_batch():
     registry = ToolRegistry()
     register_science_tools(registry, None, SceneDocument())

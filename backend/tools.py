@@ -47,6 +47,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
+import time
 from typing import Awaitable, Callable, Literal
 
 from api_provider import RequestCancelledError, _raise_if_cancelled
@@ -70,12 +71,16 @@ PROVIDER_CALL = "provider.call"
 # tool that only ever reads FROM the already-ingested store, never an
 # arbitrary path on disk.
 KNOWLEDGE_READ = "knowledge.read"
+# Approved ingestion into this run's current workspace collection. Never
+# conflate a read-only knowledge grant with permission to retain new files.
+KNOWLEDGE_WRITE = "knowledge.write"
 
 # The ADR's own closed vocabulary (§2) - register() rejects anything outside
 # it immediately, the same fail-fast posture EVENT_TYPES/ProviderEvent.type
 # already take for their own closed vocabularies (backend/providers/base.py).
 KNOWN_SCOPES = frozenset({
-    GRAPH_READ, GRAPH_MUTATE, FS_READ, FS_WRITE, CODE_EXECUTE, NET_FETCH, PROVIDER_CALL, KNOWLEDGE_READ,
+    GRAPH_READ, GRAPH_MUTATE, FS_READ, FS_WRITE, CODE_EXECUTE, NET_FETCH, PROVIDER_CALL,
+    KNOWLEDGE_READ, KNOWLEDGE_WRITE,
 })
 
 ApprovalPolicy = Literal["auto", "once", "always"]
@@ -84,7 +89,7 @@ _KNOWN_APPROVAL_POLICIES = frozenset({"auto", "once", "always"})
 # approval callback returns a forged or stale "session" decision.
 _NON_SESSION_GRANT_TOOLS = frozenset({
     "graph.delete_node", "python.exec", "python.install", "shell.exec",
-    "shell.session", "web.fetch", "web.search",
+    "shell.session", "web.fetch", "web.search", "knowledge.add",
 })
 
 
@@ -152,6 +157,10 @@ class RunContext:
     # Optional per-run catalog, narrower than the scope grant when needed.
     offered_tool_names: frozenset[str] | None = None
     _approved_fingerprints: set[str] = field(default_factory=set)
+    # Human approval wait is not tool execution. The workspace activity
+    # timer subtracts it per call; the registry records it at the actual
+    # gate so streaming tools and normal tools use the same definition.
+    approval_wait_seconds: dict[str, float] = field(default_factory=dict, repr=False)
     # Per-task network consent: domain grants never outlive this RunContext.
     # Web handlers manage their own domain-level prompts, not tool fingerprints.
     _approved_web_domains: set[str] = field(default_factory=set)
@@ -230,7 +239,7 @@ class ToolRegistry:
                 f"must be a subset of {sorted(KNOWN_SCOPES)}."
             )
         if parallel_safe and (
-            approval != "auto" or scope_set & {GRAPH_MUTATE, FS_WRITE, CODE_EXECUTE}
+            approval != "auto" or scope_set & {GRAPH_MUTATE, FS_WRITE, KNOWLEDGE_WRITE, CODE_EXECUTE}
         ):
             raise ValueError(
                 "Parallel-safe tools must be auto-approved and may not have "
@@ -348,9 +357,10 @@ class ToolRegistry:
             call = ToolCall(id=call.id, name=call.name, arguments=deepcopy(call.arguments))
 
         # File paths and content are untrusted mutable dict entries too.
+        # knowledge.add is also an approved path-to-persistent-data mutation.
         # Freeze them before policy evaluation and preview so neither a
         # pending approval nor Auto-edit can execute a changed request.
-        original_file_call = call if call.name in ("fs.write", "fs.edit") else None
+        original_file_call = call if call.name in ("fs.write", "fs.edit", "knowledge.add") else None
         if original_file_call is not None:
             # A provider may reuse a call id. Never inherit a precondition
             # from a prior denied/stale approval or an Auto-edit invocation.
@@ -430,7 +440,14 @@ class ToolRegistry:
                     original_python_call is not None or original_shell_call is not None
                     or original_file_call is not None or original_session_call is not None
                 ) else call
-                decision = await ctx.request_approval(disclosure_call)
+                approval_started = time.monotonic()
+                try:
+                    decision = await ctx.request_approval(disclosure_call)
+                finally:
+                    ctx.approval_wait_seconds[call.id] = (
+                        ctx.approval_wait_seconds.get(call.id, 0.0)
+                        + time.monotonic() - approval_started
+                    )
                 approved = bool(decision)
                 # The approval prompt is the one place this function can be
                 # awaiting for a genuinely long time (a human deciding) -

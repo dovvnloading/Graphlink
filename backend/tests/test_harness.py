@@ -413,6 +413,96 @@ class TestLoop:
         register_harness_fs_tools(registry)
         return document, LoopDispatcher(), registry, FakeBus(), node
 
+    def test_think_block_is_not_visible_or_persisted(self, workspace_root, monkeypatch):
+        document, dispatcher, registry, bus, node = self._make(workspace_root)
+        scripted_turns(monkeypatch, [
+            {"content": "<think>private working notes</think>\nThe answer is 42."},
+        ])
+        asyncio.run(drive(document, dispatcher, registry, bus, node, "find the answer"))
+        assert node.state.harness_status == "done"
+        assert node.state.harness_reply == "The answer is 42."
+        assert "private working notes" not in str(load_messages(ensure_workspace(node.state.harness_workspace_id)))
+        assert node.state.harness_spent_turns == 1
+
+    def test_fixed_prompt_larger_than_served_window_fails_before_model_call(
+        self, workspace_root, monkeypatch,
+    ):
+        document, dispatcher, registry, bus, node = self._make(workspace_root)
+        monkeypatch.setattr(context_module, "served_context_window", lambda **k: 8_192)
+        monkeypatch.setattr(context_module, "build_system_prompt", lambda *a, **k: "rules " * 12_000)
+
+        def must_not_call(*_a, **_k):
+            pytest.fail("A too-large system prompt must never be sent to the provider")
+
+        monkeypatch.setattr(api_provider, "chat_turn_with_tools", must_not_call)
+        asyncio.run(drive(document, dispatcher, registry, bus, node, "do the work"))
+
+        assert node.state.harness_status == "failed"
+        assert "system prompt and tool schemas" in node.state.harness_status_detail
+        assert node.state.harness_effective_context_tokens == 8_192
+        assert node.state.harness_context_tokens > 8_192
+        assert node.state.harness_max_context_tokens == 48_000
+
+    def test_ollama_window_budgets_system_tools_and_history(self, workspace_root, monkeypatch):
+        document, dispatcher, _, bus, node = self._make(workspace_root)
+        node.state.harness_max_context_tokens = 48_000
+        monkeypatch.setattr(context_module, "build_system_prompt", lambda *a, **k: "FIXED SYSTEM RULES")
+        monkeypatch.setattr(context_module, "served_context_window", lambda **k: 8_192)
+        monkeypatch.setattr(context_module, "summarize_dropped", lambda *a, **k: "Past observations summarized")
+
+        # Model a verbose schema catalog: the fixed prefix consumes most of
+        # Ollama's 8192-token window before any tool result or follow-up turn.
+        # TokenEstimator may use tiktoken or the character-count fallback;
+        # start below the target footprint in both cases.
+        registry = ToolRegistry()
+        for repetitions in range(100, 9_000, 50):
+            spec = ToolSpec(
+                "budget.read", "Inspect files. " * repetitions,
+                {"type": "object", "properties": {}, "additionalProperties": False},
+            )
+            prefix = context_module.request_tokens("FIXED SYSTEM RULES", [], (spec,))
+            if 6_500 <= prefix <= 7_100:
+                break
+        else:
+            pytest.fail("Unable to construct a representative tool schema footprint")
+
+        async def read(_call, _ctx):
+            return ToolResult(content="Observed workspace data " * 450)
+
+        registry.register(spec, read, scopes={FS_READ}, approval="auto")
+        received = []
+
+        def turn(_task, messages, tools=(), **_kwargs):
+            received.append((list(messages), tuple(tools)))
+            if len(received) <= 3:
+                return {
+                    "message": {"role": "assistant", "content": "<think>hidden tool planning</think>"},
+                    "tool_calls": [call(f"t{len(received)}", "budget.read")],
+                    "usage": None,
+                }
+            return {
+                "message": {"role": "assistant", "content": "<think>hidden conclusion</think>\nFinished."},
+                "tool_calls": [], "usage": None,
+            }
+
+        monkeypatch.setattr(api_provider, "chat_turn_with_tools", turn)
+        asyncio.run(drive(document, dispatcher, registry, bus, node, "Inspect the workspace"))
+
+        assert node.state.harness_status == "done"
+        assert node.state.harness_reply == "Finished."
+        assert len(received) == 4
+        assert all(messages[0] == {"role": "system", "content": "FIXED SYSTEM RULES"}
+                   and tools == (spec,) for messages, tools in received)
+        assert all(
+            context_module.request_tokens(messages[0]["content"], messages[1:], tools)
+            <= context_module.prompt_token_limit(8_192)
+            for messages, tools in received
+        )
+        assert node.state.harness_max_context_tokens == 48_000  # configured budget intact
+        assert node.state.harness_effective_context_tokens == 8_192  # served window in meter
+        assert node.state.harness_context_tokens >= 6_500  # not 1-8% of context
+        assert "hidden" not in str(load_messages(ensure_workspace(node.state.harness_workspace_id)))
+
     def test_tool_using_task_lands_done_with_reply_and_transcript(self, workspace_root, monkeypatch):
         document, dispatcher, registry, bus, node = self._make(workspace_root)
         ws = ensure_workspace(node.state.harness_workspace_id)
@@ -1428,7 +1518,7 @@ class TestCompaction:
     def test_loop_compacts_over_budget_and_records_it_in_the_transcript(self, workspace_root, monkeypatch):
         document = SceneDocument()
         node = document.add_harness_node(0, 0, "long running task")
-        node.state.harness_max_context_tokens = 1_000
+        node.state.harness_max_context_tokens = 8_192
         ws = ensure_workspace(node.state.harness_workspace_id)
         # Seed a transcript far past the budget.
         for i in range(30):
@@ -1464,7 +1554,7 @@ class TestCompaction:
     def test_a_failed_summarizer_does_not_kill_the_run(self, workspace_root, monkeypatch):
         document = SceneDocument()
         node = document.add_harness_node(0, 0, "task")
-        node.state.harness_max_context_tokens = 1_000
+        node.state.harness_max_context_tokens = 8_192
         ws = ensure_workspace(node.state.harness_workspace_id)
         for i in range(20):
             append_message(ws, {"role": "user", "content": "filler " * 200})

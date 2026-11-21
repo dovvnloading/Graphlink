@@ -69,6 +69,7 @@ from backend.tools import (
     GRAPH_MUTATE,
     GRAPH_READ,
     KNOWLEDGE_READ,
+    KNOWLEDGE_WRITE,
     NET_FETCH,
     PROVIDER_CALL,
     RunContext,
@@ -84,7 +85,7 @@ from backend.tools import (
 # run_harness wires up - the scope-model split ADR-007 names and the
 # builder already follows.
 HARNESS_GRANTED_SCOPES = frozenset({
-    FS_READ, FS_WRITE, CODE_EXECUTE, KNOWLEDGE_READ, NET_FETCH, PROVIDER_CALL,
+    FS_READ, FS_WRITE, CODE_EXECUTE, KNOWLEDGE_READ, KNOWLEDGE_WRITE, NET_FETCH, PROVIDER_CALL,
     # §3.2.6: "existing graph.* ... tools compose in unchanged", and §3.3's
     # invariant that run_id is stamped on all canvas mutations so undo-by-run
     # works across harness runs (HarnessRunContext carries run_id, which
@@ -375,6 +376,12 @@ def _approval_summary(
         return f"shell.session {action} {name}".rstrip()
     if call.name in ("fs.write", "fs.edit"):
         return preview_harness_file_change(call, workspace_root).summary
+    if call.name == "knowledge.add":
+        return (
+            "knowledge.add — ingest a file into the current workspace's persistent knowledge collection.\n"
+            f"File: {call.arguments.get('path')!r}\n"
+            "Its extracted text will be searchable after this task. Approval is for this call only."
+        )
     if call.name == "web.fetch":
         # Disclose the entire redirect target URL, not a truncated JSON blob.
         return f"web.fetch domain {call.arguments['domain']}\nURL: {call.arguments['url']}"
@@ -420,6 +427,15 @@ async def _execute_tool_calls(
     """
     async def invoke_timed(call: ToolCall) -> tuple[ToolResult, int]:
         started = time.monotonic()
+        # Providers may reuse a tool-call ID. Never subtract a previous
+        # invocation's approval time from this one.
+        ctx.approval_wait_seconds.pop(call.id, None)
+
+        def elapsed_ms() -> int:
+            return max(0, round((
+                time.monotonic() - started - ctx.approval_wait_seconds.get(call.id, 0.0)
+            ) * 1000))
+
         # Both streaming tools are non-parallel execution barriers. Set a
         # per-call sink only for them; parallel-safe reads continue to share
         # ctx without racing an output callback.
@@ -439,7 +455,7 @@ async def _execute_tool_calls(
                 def snapshot_for_stop() -> None:
                     record_stopped_output(
                         call, sink.snapshot(),
-                        max(0, round((time.monotonic() - started) * 1000)),
+                        elapsed_ms(),
                     )
                 stop_handle.harness_stop_output = snapshot_for_stop
             finished = False
@@ -451,7 +467,7 @@ async def _execute_tool_calls(
                     current = sink.snapshot()
                     if current is not None and current != previous:
                         await record_progress(
-                            call, current, max(0, round((time.monotonic() - started) * 1000)),
+                            call, current, elapsed_ms(),
                         )
                         previous = current
                 # Drain the final fragment before recording the terminal
@@ -459,7 +475,7 @@ async def _execute_tool_calls(
                 current = sink.snapshot()
                 if current is not None and current != previous:
                     await record_progress(
-                        call, current, max(0, round((time.monotonic() - started) * 1000)),
+                        call, current, elapsed_ms(),
                     )
 
             pump = asyncio.create_task(publish_live())
@@ -469,7 +485,7 @@ async def _execute_tool_calls(
                 ctx.on_tool_output = None
                 finished = True
                 await pump
-        return result, max(0, round((time.monotonic() - started) * 1000))
+        return result, elapsed_ms()
 
     semaphore = asyncio.Semaphore(_MAX_CONCURRENT_READS)
 
@@ -965,6 +981,31 @@ async def run_harness(
         turns = 0
         max_turns = max(1, int(node.state.harness_max_turns))
         budget = max(1_000, int(node.state.harness_max_context_tokens))
+        # The configured history ceiling is not the model's served KV window.
+        # Ollama sends options.num_ctx from this same source of truth; a
+        # 48k node budget cannot override an 8,192-token daemon context.
+        served_window = context_module.served_context_window(model_ref=model_ref, runtime=runtime)
+        window = min(budget, served_window)
+        node.state.harness_effective_context_tokens = window
+        input_limit = context_module.prompt_token_limit(window)
+        fixed_tokens = context_module.request_tokens(system_prompt, [], specs)
+        # Report the fixed overhead even if no history can safely be sent.
+        node.state.harness_context_tokens = fixed_tokens
+        if fixed_tokens >= input_limit:
+            await _land(
+                "failed",
+                f"The model serves {served_window:,} context tokens, but the workspace "
+                f"system prompt and tool schemas need about {fixed_tokens:,} tokens "
+                "before history or reply headroom. Increase the model's served "
+                "context (Ollama num_ctx) or select a larger-window model.",
+            )
+            return
+        history_budget = max(1, input_limit - fixed_tokens)
+
+        def _estimated_input(messages: list[dict]) -> int:
+            return context_module.request_tokens(
+                system_prompt, messages, specs, image_parts=pending_image_parts,
+            )
         # §2.2: ONE state object per TASK, so the recovery budget bounds the
         # whole task rather than resetting every turn (which would make the
         # guards unbounded in aggregate). See backend/harness/retry.py.
@@ -982,7 +1023,7 @@ async def run_harness(
                     context_module.compact_history,
                     history,
                     goal=node.state.harness_goal,
-                    budget_tokens=budget,
+                    budget_tokens=history_budget,
                     cancellation_event=cancel_event,
                     settings_manager=settings_manager,
                     runtime=runtime,
@@ -996,7 +1037,7 @@ async def run_harness(
             history, _summary = compacted
             append_compaction(transcript_dir, history[0]["content"])
             node.state.harness_compactions += 1
-            node.state.harness_context_tokens = context_module.history_tokens(history)
+            node.state.harness_context_tokens = _estimated_input(history)
             await bus.publish("scene")
             return True
 
@@ -1022,12 +1063,11 @@ async def run_harness(
             turns += 1
             node.state.harness_spent_turns += 1
 
-            # H3: measure before every model call, compact when over
-            # budget. Deliberately BEFORE the call rather than after the
-            # append that caused the breach - a turn is never sent with a
-            # context this run already knows is too large.
-            node.state.harness_context_tokens = context_module.history_tokens(history)
-            if node.state.harness_context_tokens > budget:
+            # Measure the ENTIRE request (system + tool schemas + history),
+            # against the actual served window, before giving it to Ollama.
+            # Summarize first; a bounded, valid tail is the last resort when
+            # a summarizer fails or produces a summary too large to fit.
+            if _estimated_input(history) > input_limit:
                 await _compact_now()
 
             # §2.2: the model call is the ONE retried operation. Each fault
@@ -1038,9 +1078,27 @@ async def run_harness(
             while turn is None:
                 if cancel_event.is_set():
                     raise api_provider.RequestCancelledError("stopped")
+                # The canonical transcript remains intact. Only the wire
+                # view may omit old turns, and it always preserves the system
+                # prompt, tool schemas, task and a structurally valid tail.
+                send_history = context_module.fit_history_to_window(
+                    history, goal=node.state.harness_goal, latest_request=user_text,
+                    fits=lambda candidate: _estimated_input(candidate) <= input_limit,
+                )
+                if send_history is None:
+                    await _land(
+                        "failed",
+                        f"The {window:,}-token context window cannot fit the current "
+                        "request and workspace tools with reply headroom. "
+                        "Shorten the task or increase Ollama num_ctx / select a "
+                        "larger-window model.",
+                    )
+                    return
+                node.state.harness_context_tokens = _estimated_input(send_history)
+                await bus.publish("scene")
                 # Rebuild after a possible compaction/retry. The image data
                 # stays ephemeral; only the format/dimensions are persisted.
-                model_messages = [{"role": "system", "content": system_prompt}, *history]
+                model_messages = [{"role": "system", "content": system_prompt}, *send_history]
                 if pending_image_parts:
                     model_messages.append({
                         "role": "user",
@@ -1071,6 +1129,10 @@ async def run_harness(
                 except Exception as exc:
                     action, backoff, reason = retry_state.decide(classify_fault(exc))
                     if action == ACTION_FAIL:
+                        from backend.providers.json_tool_protocol import JSONToolProtocolError
+
+                        if isinstance(exc, JSONToolProtocolError):
+                            reason = f"Workspace JSON tool protocol failed: {exc}"
                         await _land("failed", f"{reason} Send a follow-up to retry.")
                         return
                     node.state.harness_status_detail = reason
@@ -1086,7 +1148,12 @@ async def run_harness(
                         await _sleep_unless_cancelled(backoff)
             pending_image_parts.clear()
             node.state.harness_status_detail = ""
-            assistant_text = turn["message"]["content"] or ""
+            # Ollama composes <think>...</think> into the provider's final
+            # text. The Composer path splits it; the workspace path must do
+            # the same before recording the transcript or rendering a reply.
+            _, assistant_text = api_provider.split_reasoning_and_content(
+                turn["message"]["content"] or "",
+            )
             tool_calls: list[ToolCall] = turn["tool_calls"]
             node.state.harness_spent_tokens += _spend_from_turn(
                 turn, assistant_text + "".join(json.dumps(c.arguments) for c in tool_calls),

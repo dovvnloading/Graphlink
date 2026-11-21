@@ -18,6 +18,7 @@ import {
   isOrthogonalEligible,
   collectChangedNodeSizes,
   makeDebouncedViewportReport,
+  needsNodeReveal,
   SceneCanvas,
   toFlowEdges,
   toFlowNodes,
@@ -44,6 +45,21 @@ function makeStore(): SceneStore {
   const transport = { subscribe: vi.fn(), intent: vi.fn(), fireIntent: vi.fn() } as unknown as WsTransport;
   return new SceneStore(transport);
 }
+
+describe("automatic navigation for newly visible canvas content", () => {
+  it("detects a first Agent clipped at 250% zoom", () => {
+    expect(needsNodeReveal({ x: 120, y: 120 }, [0, 0, 2.5], 1000, 700)).toBe(true);
+  });
+
+  it("finds published graph nodes beyond the current viewport", () => {
+    expect(needsNodeReveal({ x: 2100, y: 120 }, [0, 0, 1], 1000, 700)).toBe(true);
+    expect(needsNodeReveal({ x: 120, y: 900 }, [0, 0, 1], 1000, 700)).toBe(true);
+  });
+
+  it("leaves an already visible card alone on an ordinary scene update", () => {
+    expect(needsNodeReveal({ x: 120, y: 120 }, [0, 0, 1], 1000, 700)).toBe(false);
+  });
+});
 
 function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
   return {

@@ -35,7 +35,10 @@ Example calls for the Mathematics pack:
 
 - Discovery reads Settings grants **at call time**. Disabled packs are not
   imported or exposed in operation results. Enabled packs must also be
-  activated (with a registered Workbench serializer).
+  activated (with a registered Workbench serializer). When installed packs
+  have no grants, both inventory and topic searches return an explicit
+  `installed_not_granted` status and a **Settings > Plugins** grant hint,
+  instead of presenting zero matches as evidence the operations do not exist.
 - `science.search` is read-only. `science.run` has `code.execute` and
   `graph.mutate` scopes and requires the regular tool approval.
 - Invalid inputs, timeout, cancellation, receipt damage, grant revocation,

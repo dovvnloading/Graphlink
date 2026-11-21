@@ -1193,6 +1193,11 @@ class HarnessState(NodeState):
     # long-lived agent's history collapses visibly rather than silently.
     harness_context_tokens: int = 0
     harness_max_context_tokens: int = 48_000
+    # Live, non-persisted effective ceiling: the smaller of the configured
+    # budget above and the selected model's actual served context window.
+    # The wire meter uses this, but a follow-up on a larger model can still
+    # use the original configured budget.
+    harness_effective_context_tokens: int = 48_000
     harness_compactions: int = 0
     # PLAN-2026-08-24 §2.3's todo/plan surface, written by the `plan.update`
     # tool. Rows are {"text", "status"} where status is pending|active|done;

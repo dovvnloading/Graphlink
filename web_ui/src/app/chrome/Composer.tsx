@@ -499,6 +499,16 @@ function ModelPicker({ store }: { store: ComposerStore }) {
           placeholder={`Search ${options.length} models…`}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            // Search is the keyboard's active focus target. When there is
+            // exactly one match, Enter chooses it without a separate Tab.
+            // IME composition's Enter must still commit the composition.
+            if (event.key === "Enter" && !event.nativeEvent.isComposing && matches.length === 1) {
+              event.preventDefault();
+              store.selectModel(matches[0].id);
+              overlays.close();
+            }
+          }}
         />
       )}
       <div className="model-picker-results">
