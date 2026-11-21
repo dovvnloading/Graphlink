@@ -465,7 +465,7 @@ function App() {
                     <DiagnosticsDialog transport={transport} />
                   </LazySurface>
                   <LazySurface overlayName="knowledge">
-                    <KnowledgeSearchDialog transport={transport} />
+                    <KnowledgeSearchDialog transport={transport} onOpenDocumentView={onOpenDocumentView} />
                   </LazySurface>
                   <LazySurface overlayName="global-search">
                     <GlobalSearchDialog transport={transport} />

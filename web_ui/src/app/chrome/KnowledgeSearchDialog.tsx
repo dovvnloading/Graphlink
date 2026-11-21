@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
-import { Dialog } from "../overlays/overlays";
+import { Dialog, useOverlays } from "../overlays/overlays";
 
 /**
  * ADR-017 stage 17.5: the "Knowledge" search panel - a human-driven,
@@ -41,6 +41,47 @@ interface KnowledgeSearchResult {
   offsetEnd: number;
 }
 
+
+interface KnowledgeLibraryDocument {
+  documentId: number;
+  title: string;
+  type: string;
+  sourceUri: string;
+  sizeBytes: number | null;
+  chunks: number;
+  addedAt: string;
+  status: "indexed";
+  canReindex: boolean;
+}
+
+const DROP_CHUNK_BYTES = 192 * 1024;
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
+const MAX_JOB_BYTES = 500 * 1024 * 1024;
+
+function formatSize(value: number | null): string {
+  if (value == null) return "—";
+  if (value < 1024) return `${value} B`;
+  return `${(value / (value < 1024 * 1024 ? 1024 : 1024 * 1024)).toFixed(1)} ${value < 1024 * 1024 ? "KiB" : "MiB"}`;
+}
+
+function formatAdded(value: string): string {
+  const time = Date.parse(value);
+  return Number.isNaN(time) ? "—" : new Date(time).toLocaleDateString();
+}
+
+function formatType(document: KnowledgeLibraryDocument): string {
+  const extension = /\.([a-z0-9]+)$/i.exec(document.title)?.[1];
+  return extension ? extension.toUpperCase() : document.type;
+}
+
+function encodeChunk(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let raw = "";
+  for (let index = 0; index < bytes.length; index += 8192) {
+    raw += String.fromCharCode(...bytes.subarray(index, index + 8192));
+  }
+  return btoa(raw);
+}
 
 type ImportStatus = "queued" | "scanning" | "running" | "completed" | "cancelled" | "failed";
 
@@ -111,7 +152,130 @@ function KnowledgeResultCard({ result }: { result: KnowledgeSearchResult }) {
   );
 }
 
-export function KnowledgeSearchDialog({ transport }: { transport: WsTransport }) {
+export function KnowledgeSearchDialog({
+  transport,
+  onOpenDocumentView,
+}: {
+  transport: WsTransport;
+  onOpenDocumentView?: (content: string, sourceLabel: string) => void;
+}) {
+  const overlays = useOverlays();
+  const [documents, setDocuments] = useState<KnowledgeLibraryDocument[]>([]);
+  const [loadingDocuments, setLoadingDocuments] = useState(true);
+  const [libraryError, setLibraryError] = useState<string | null>(null);
+  const [documentAction, setDocumentAction] = useState<number | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState<number | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ sent: number; total: number } | null>(null);
+  const uploadIdRef = useRef<string | null>(null);
+  const abortUploadRef = useRef(false);
+  const latestLibraryRequest = useRef(0);
+  const completedJobsRef = useRef(new Set<string>());
+
+  const refreshDocuments = useCallback(async () => {
+    const requestId = ++latestLibraryRequest.current;
+    try {
+      const result = await transport.request("knowledge", "listDocuments", []) as {
+        documents: KnowledgeLibraryDocument[];
+      };
+      if (requestId !== latestLibraryRequest.current) return;
+      if (!result || !Array.isArray(result.documents)) throw new Error("Invalid document list response.");
+      setDocuments(result.documents);
+      setLibraryError(null);
+    } catch (cause) {
+      if (requestId === latestLibraryRequest.current) {
+        setLibraryError(cause instanceof Error ? cause.message : "Could not load documents.");
+      }
+    } finally {
+      if (requestId === latestLibraryRequest.current) setLoadingDocuments(false);
+    }
+  }, [transport]);
+
+  const knowledgeOpen = overlays.isOpen("knowledge");
+  useEffect(() => {
+    if (knowledgeOpen) void refreshDocuments();
+  }, [knowledgeOpen, refreshDocuments]);
+
+  async function documentIntent(documentId: number, action: "openDocument" | "removeDocument" | "reindexDocument") {
+    if (documentAction !== null) return;
+    setDocumentAction(documentId);
+    setLibraryError(null);
+    try {
+      const result = await transport.request("knowledge", action, [documentId]) as {
+        content?: string;
+        title?: string;
+      };
+      if (action === "openDocument") {
+        if (!onOpenDocumentView) throw new Error("Document View is unavailable.");
+        onOpenDocumentView(result.content ?? "", result.title ?? "Knowledge document");
+        overlays.close();
+      } else if (action === "removeDocument") {
+        setConfirmRemove(null);
+        await refreshDocuments();
+      }
+    } catch (cause) {
+      setLibraryError(cause instanceof Error ? cause.message : "Document action failed.");
+    } finally {
+      setDocumentAction(null);
+    }
+  }
+
+  async function uploadFiles(files: File[]) {
+    if (files.length === 0 || picking || uploadProgress || importJobs.some(isActive)) return;
+    const total = files.reduce((sum, file) => sum + file.size, 0);
+    if (files.length > 10_000 || total > MAX_JOB_BYTES || files.some((file) => file.size > MAX_FILE_BYTES)) {
+      setImportError("Drop limit: 10,000 files, 25 MiB per file, 500 MiB per job.");
+      return;
+    }
+    abortUploadRef.current = false;
+    setImportError(null);
+    setUploadProgress({ sent: 0, total });
+    let completed = false;
+    try {
+      const begun = await transport.request("knowledge", "beginUpload", [
+        files.map((file) => ({ name: file.name, size: file.size })),
+      ]) as { uploadId: string };
+      uploadIdRef.current = begun.uploadId;
+      let sent = 0;
+      for (const [fileIndex, file] of files.entries()) {
+        for (let offset = 0; offset < file.size; offset += DROP_CHUNK_BYTES) {
+          if (abortUploadRef.current) throw new Error("Upload cancelled.");
+          const bytes = await file.slice(offset, offset + DROP_CHUNK_BYTES).arrayBuffer();
+          await transport.request("knowledge", "appendUpload", [
+            begun.uploadId, fileIndex, encodeChunk(bytes),
+          ]);
+          sent += bytes.byteLength;
+          setUploadProgress({ sent, total });
+        }
+      }
+      if (abortUploadRef.current) throw new Error("Upload cancelled.");
+      await transport.request("knowledge", "finishUpload", [begun.uploadId]);
+      completed = true;
+    } catch (cause) {
+      setImportError(cause instanceof Error ? cause.message : "Could not upload dropped files.");
+    } finally {
+      if (!completed && uploadIdRef.current) {
+        void transport.request("knowledge", "cancelUpload", [uploadIdRef.current]).catch(() => {});
+      }
+      uploadIdRef.current = null;
+      setUploadProgress(null);
+    }
+  }
+
+  function cancelUpload() {
+    abortUploadRef.current = true;
+  }
+
+  // Closing the dialog while a browser transfer is in progress discards
+  // incomplete staged uploads. Finished ingestion jobs continue in the
+  // existing backend manager and remain cancellable after reopening.
+  useEffect(() => () => {
+    abortUploadRef.current = true;
+    if (uploadIdRef.current) {
+      void transport.request("knowledge", "cancelUpload", [uploadIdRef.current]).catch(() => {});
+    }
+  }, [transport]);
+
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<KnowledgeSearchResult[] | null>(null);
   const [searching, setSearching] = useState(false);
@@ -126,13 +290,22 @@ export function KnowledgeSearchDialog({ transport }: { transport: WsTransport })
   useEffect(
     () =>
       transport.subscribe("knowledge-ingest", (payload) => {
-        if (Array.isArray(payload.jobs)) setImportJobs(payload.jobs as KnowledgeImportJob[]);
+        if (Array.isArray(payload.jobs)) {
+          const jobs = payload.jobs as KnowledgeImportJob[];
+          setImportJobs(jobs);
+          for (const job of jobs) {
+            if (!isActive(job) && !completedJobsRef.current.has(job.jobId)) {
+              completedJobsRef.current.add(job.jobId);
+              void refreshDocuments();
+            }
+          }
+        }
       }),
-    [transport],
+    [transport, refreshDocuments],
   );
 
   function beginImport(kind: "files" | "folder") {
-    if (picking || importJobs.some(isActive)) return;
+    if (picking || uploadProgress || importJobs.some(isActive)) return;
     setPicking(kind);
     setImportError(null);
     // The picker can legitimately remain open for minutes. This request
@@ -187,12 +360,13 @@ export function KnowledgeSearchDialog({ transport }: { transport: WsTransport })
   }
 
   return (
-    <Dialog name="knowledge" title="Knowledge" className="knowledge-search-dialog">
+    <Dialog name="knowledge" title="Knowledge Library" className="knowledge-search-dialog">
+      <p className="knowledge-library-intro">Documents indexed for the current workspace</p>
       <div className="knowledge-import-row">
         <button
           type="button"
           className="knowledge-search-button"
-          disabled={picking !== null || importJobs.some(isActive)}
+          disabled={picking !== null || uploadProgress !== null || importJobs.some(isActive)}
           onClick={() => beginImport("files")}
         >
           {picking === "files" ? "Choosing files…" : "Add files"}
@@ -200,7 +374,7 @@ export function KnowledgeSearchDialog({ transport }: { transport: WsTransport })
         <button
           type="button"
           className="knowledge-search-button"
-          disabled={picking !== null || importJobs.some(isActive)}
+          disabled={picking !== null || uploadProgress !== null || importJobs.some(isActive)}
           onClick={() => beginImport("folder")}
         >
           {picking === "folder" ? "Choosing folder…" : "Add folder"}
@@ -210,6 +384,30 @@ export function KnowledgeSearchDialog({ transport }: { transport: WsTransport })
           25 MiB/file; 500 MiB or 10,000 files/job
         </span>
       </div>
+      <div
+        className={"knowledge-drop-zone" + (dragging ? " knowledge-drop-active" : "")}
+        role="region"
+        aria-label="Drop files to index"
+        onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+        onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragging(false); }}
+        onDrop={(event) => {
+          event.preventDefault();
+          setDragging(false);
+          void uploadFiles(Array.from(event.dataTransfer.files));
+        }}
+      >
+        Drag and drop files here to index them in this workspace
+      </div>
+      {uploadProgress && (
+        <div className="knowledge-import-job" aria-label="File upload progress">
+          <div className="knowledge-import-head">
+            <span>Uploading files · {formatSize(uploadProgress.sent)} / {formatSize(uploadProgress.total)}</span>
+            <button type="button" className="knowledge-search-button" onClick={cancelUpload}>Cancel upload</button>
+          </div>
+          <progress aria-label="Bytes uploaded" className="knowledge-import-progress"
+            max={Math.max(uploadProgress.total, 1)} value={uploadProgress.sent} />
+        </div>
+      )}
       {importError && <p className="knowledge-empty" role="alert">{importError}</p>}
       {importJobs.map((job) => (
         <div key={job.jobId} className="knowledge-import-job" aria-label="Knowledge import progress">
@@ -245,6 +443,68 @@ export function KnowledgeSearchDialog({ transport }: { transport: WsTransport })
           {job.warnings.length > 0 && <p className="knowledge-import-stats">{job.warnings[0]}</p>}
         </div>
       ))}
+      <section aria-label="Workspace documents" className="knowledge-library-section">
+        <div className="knowledge-library-heading">
+          <h2 className="knowledge-section-title">Documents ({documents.length})</h2>
+          <button type="button" className="knowledge-search-button"
+            onClick={() => void refreshDocuments()}>Refresh</button>
+        </div>
+        {libraryError && <p role="alert" className="knowledge-empty">{libraryError}</p>}
+        {loadingDocuments ? <p role="status" className="knowledge-empty">Loading documents…</p> : documents.length === 0 ? (
+          <p className="knowledge-empty">No documents yet. Add files or a folder to start indexing.</p>
+        ) : (
+          <div className="knowledge-library-table-scroll">
+            <table className="knowledge-library-table">
+              <thead><tr>
+                <th scope="col">Title</th><th scope="col">Type</th><th scope="col">Size</th>
+                <th scope="col">Chunks</th><th scope="col">Added</th>
+                <th scope="col">Status</th><th scope="col">Actions</th>
+              </tr></thead>
+              <tbody>
+                {documents.map((doc) => (
+                  <tr key={doc.documentId}>
+                    <td className="knowledge-library-title" title={doc.sourceUri}>{doc.title}</td>
+                    <td>{formatType(doc)}</td><td>{formatSize(doc.sizeBytes)}</td>
+                    <td>{doc.chunks}</td><td>{formatAdded(doc.addedAt)}</td>
+                    <td>{doc.status === "indexed" ? "Indexed" : doc.status}</td>
+                    <td>
+                      <div className="knowledge-library-actions">
+                        <button type="button" className="knowledge-search-button"
+                          disabled={documentAction !== null}
+                          aria-label={`Open ${doc.title} in Document View`}
+                          onClick={() => void documentIntent(doc.documentId, "openDocument")}>Open</button>
+                        <button type="button" className="knowledge-search-button"
+                          disabled={!doc.canReindex || documentAction !== null || importJobs.some(isActive) || uploadProgress !== null}
+                          title={doc.canReindex ? "Re-read the indexed source files" : "No local file source available"}
+                          aria-label={`Re-index ${doc.title}`}
+                          onClick={() => void documentIntent(doc.documentId, "reindexDocument")}>Re-index</button>
+                        {confirmRemove === doc.documentId ? (
+                          <>
+                            <button type="button" className="knowledge-search-button"
+                              disabled={documentAction !== null || importJobs.some(isActive)}
+                              onClick={() => void documentIntent(doc.documentId, "removeDocument")}>
+                              Confirm remove
+                            </button>
+                            <button type="button" className="knowledge-search-button" onClick={() => setConfirmRemove(null)}>
+                              Keep
+                            </button>
+                          </>
+                        ) : (
+                          <button type="button" className="knowledge-search-button"
+                            disabled={documentAction !== null || importJobs.some(isActive) || uploadProgress !== null}
+                            aria-label={`Remove ${doc.title}`}
+                            onClick={() => setConfirmRemove(doc.documentId)}>Remove</button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+      <h2 className="knowledge-section-title">Search indexed sources</h2>
       <div className="knowledge-search-row">
         <input
           type="text"

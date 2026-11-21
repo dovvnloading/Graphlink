@@ -417,6 +417,14 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("knowledge", "addFolder", "B", "external-store: launches a local folder import job, not a scene undo"),
     Classified("knowledge", "cancelIngest", "B", "run-lifecycle: signals cancellation of a background knowledge job"),
     Classified("knowledge", "getIngestJobs", "B", "read-only: retrieves background knowledge job progress"),
+    Classified("knowledge", "listDocuments", "B", "read-only: lists current workspace collection"),
+    Classified("knowledge", "openDocument", "B", "read-only: fetches indexed text for Document View"),
+    Classified("knowledge", "removeDocument", "B", "external-store: deletes a workspace knowledge document"),
+    Classified("knowledge", "reindexDocument", "B", "external-store: starts a job from indexed file sources"),
+    Classified("knowledge", "beginUpload", "B", "external-store: starts a bounded browser file transfer"),
+    Classified("knowledge", "appendUpload", "B", "external-store: stores a validated upload chunk"),
+    Classified("knowledge", "finishUpload", "B", "external-store: imports the completed browser transfer"),
+    Classified("knowledge", "cancelUpload", "B", "external-store: discards a browser transfer"),
     Classified("scene", "setChatIndexIntoKnowledge", "A", "content: branch-indexing opt-in is document state, same posture as setGroupColor"),
 
     # -- backend/api/intents_global_search.py - ADR-020 stage 20.4 --
