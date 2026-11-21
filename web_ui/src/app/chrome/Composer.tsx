@@ -294,7 +294,7 @@ export function Composer({
         </div>
       )}
       <KnowledgeFileImportStatus state={knowledgeImport} />
-      {agentError && <p className="composer-agent-error" role="alert">{agentError}</p>
+      {agentError && <p className="composer-agent-error" role="alert">{agentError}</p>}
       <div className="composer-input-wrap">
         <textarea
           // ADR-012 stage 12.3: the skip-link's own jump target - see
