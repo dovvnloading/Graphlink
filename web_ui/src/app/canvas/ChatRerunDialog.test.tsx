@@ -26,7 +26,7 @@ function renderDialog(count: number, skipped: ChatRerunPreview["skipped"] = [], 
   const previewChatRerun = vi.fn(async () => ({ ...makePreview(count), skipped }));
   const onRunBoundNodes = vi.fn();
   const startChatRerun = vi.fn(async () => ({ jobId: "job-1" }));
-  const getChatRerunStatus = vi.fn(async () => ({
+  const getChatRerunStatus = vi.fn(async (_jobId?: string, _afterCompleted?: number) => ({
     jobId: "job-1", status: terminal ? "completed" as const : "running" as const,
     completed: terminal ? count : 1, total: count, currentNodeId: "reply-1",
     error: "", cancelRequested: false,
@@ -132,6 +132,51 @@ describe("ChatRerunDialog", () => {
     expect(spies.cancelChatRerun).toHaveBeenCalledWith("job-1");
     expect(stop).toBeDisabled();
     expect(screen.getByRole("button", { name: "Close" })).toHaveFocus();
+  });
+
+  it("replays 1, 2, and 3 completed before showing the terminal state", async () => {
+    const user = userEvent.setup();
+    const spies = renderDialog(3);
+    spies.getChatRerunStatus.mockImplementation(async (_id, cursor) => ({
+      jobId: "job-1",
+      status: cursor === 3 ? "completed" as const : "running" as const,
+      completed: Math.min(3, (cursor ?? 0) + 1),
+      total: 3,
+      currentNodeId: cursor === 0 ? "reply-1" : cursor === 1 ? "reply-2" : null,
+      error: "",
+      cancelRequested: false,
+    }));
+    await user.click(screen.getByRole("button", { name: "Open preview" }));
+    await screen.findByText("Reply 3");
+    await user.click(screen.getByRole("button", { name: "Re-run replies" }));
+    const region = await screen.findByRole("region", { name: "Re-run progress" });
+    await waitFor(() => expect(region).toHaveTextContent("1 of 3 replies completed."));
+    await waitFor(() => expect(region).toHaveTextContent("2 of 3 replies completed."));
+    await waitFor(() => expect(region).toHaveTextContent("3 of 3 replies completed."));
+    await waitFor(() => expect(region).toHaveTextContent("Re-run complete."));
+    expect(spies.getChatRerunStatus).toHaveBeenNthCalledWith(1, "job-1", 0);
+    expect(spies.getChatRerunStatus).toHaveBeenNthCalledWith(2, "job-1", 1);
+    expect(spies.getChatRerunStatus).toHaveBeenNthCalledWith(3, "job-1", 2);
+    expect(spies.getChatRerunStatus).toHaveBeenNthCalledWith(4, "job-1", 3);
+  });
+
+  it("does not classify Thinking traces as skipped manual actions", async () => {
+    const user = userEvent.setup();
+    renderDialog(3, [
+      { nodeId: "trace", title: "Reasoning trace", kind: "thinking", category: "manual",
+        reason: "Tool or other nodes may have side effects." },
+      { nodeId: "agent", title: "Workspace agent", kind: "harness", category: "manual",
+        reason: "Workspace agent requires a manual re-run." },
+    ]);
+    await user.click(screen.getByRole("button", { name: "Open preview" }));
+    await screen.findByText("Reply 3");
+    const skipped = screen.getByRole("region", { name: "Skipped nodes" });
+    expect(skipped).toHaveTextContent("Skipped — never executed by this re-run (1)");
+    expect(skipped).toHaveTextContent("Workspace agent");
+    expect(skipped).not.toHaveTextContent("Reasoning trace");
+    expect(skipped).not.toHaveTextContent("Tool or other nodes");
+    expect(screen.getByRole("list", { name: /3 replies in parent-before-child order/ }))
+      .toBeInTheDocument();
   });
 
   it("fetches a fresh authorization after close and offers explicit refresh", async () => {
