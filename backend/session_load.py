@@ -486,6 +486,8 @@ def _migrate_chat_versions(
             cost_usd=row.get("estimated_cost_usd"),
             calls=[dict(call) for call in row.get("tool_invocations", [])
                    if isinstance(call, dict)] if isinstance(row.get("tool_invocations", []), list) else [],
+            parts=_content_codec.process_content_for_deserialization(row["parts"])
+                  if isinstance(row.get("parts"), list) else None,
         )
         for row in kept
     ]
@@ -507,6 +509,9 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
         content_text = str(raw_content or "")
     versions, version_index = _migrate_chat_versions(payload, content_text)
     selected = versions[version_index]
+    # The active version's media lives in raw_content for compatibility and
+    # to avoid duplicating large attachments in the versions array on disk.
+    selected.parts = content_parts
     return SceneNode(
         id="", x=x, y=y, title="Chat", kind="chat",
         content=selected.content,

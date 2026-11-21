@@ -272,6 +272,11 @@ def _serialize_chat_versions(node: SceneNode) -> tuple[list[dict[str, Any]], int
         }
         for version in saved
     ]
+    # raw_content already contains the selected version's media; only
+    # non-selected alternatives need their own encoded multimodal parts.
+    for row_index, version in enumerate(saved):
+        if row_index != index and version.parts is not None:
+            rows[row_index]["parts"] = _content_codec.process_content_for_serialization(version.parts)
     rows[index].update({
         "content": node.content,
         "provider": state.provider,

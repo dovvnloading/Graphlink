@@ -884,6 +884,9 @@ class ChatVersion:
     output_tokens: int | None = None
     cost_usd: float | None = None
     calls: list[dict[str, Any]] = field(default_factory=list)
+    # A message can include image/audio parts. Keep the selected version's
+    # original media when alternatives are created, not only its text mirror.
+    parts: list[dict[str, Any]] | None = None
 
 
 MAX_CHAT_VERSIONS = 20
