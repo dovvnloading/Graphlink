@@ -135,6 +135,22 @@ class McpServerConfigPayload:
 
 
 @dataclass
+class ModelPricingOverridePayload:
+    modelId: str
+    inputPerMillion: float
+    outputPerMillion: float
+
+
+@dataclass
+class EffectiveModelPricePayload:
+    modelId: str
+    provider: str
+    inputPerMillion: float | None
+    outputPerMillion: float | None
+    source: str  # local | override | built-in | unknown
+
+
+@dataclass
 class AppSettingsStatePayload:
     schemaVersion: int
     revision: int
@@ -193,6 +209,8 @@ class AppSettingsStatePayload:
     apiKeySource: dict[str, str]
     apiModels: dict[str, str]
     apiModelCatalog: list[ApiModelDescriptorPayload]
+    pricingOverrides: list[ModelPricingOverridePayload]
+    effectiveModelPrices: list[EffectiveModelPricePayload]
     apiCatalogBaseUrl: str
     apiCatalogStatus: str
     apiCatalogMessage: str

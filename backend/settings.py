@@ -79,6 +79,7 @@ from backend.api._settings_shared import (
 )
 from backend.api.intents_settings_api_provider import register_settings_api_provider_intents
 from backend.api.intents_settings_general import register_settings_general_intents
+from backend.api.intents_settings_pricing import register_settings_pricing_intents
 from backend.api.intents_settings_fal import register_settings_fal_intents
 from backend.api.intents_settings_llama_cpp import register_settings_llama_cpp_intents
 from backend.api.intents_settings_knowledge import register_settings_knowledge_intents
@@ -86,6 +87,7 @@ from backend.api.intents_settings_ollama import register_settings_ollama_intents
 from backend.events import SessionBus
 from backend.gguf_model_cards import llama_cpp_model_cards
 from backend.notifications import NotificationState
+from backend.token_counter import price_per_mtok
 
 if TYPE_CHECKING:
     from backend.agents import AgentDispatcher
@@ -216,6 +218,61 @@ def _llama_cpp_scan_summary(manager: SettingsManager) -> str:
     return "Using saved scanned GGUF model list."
 
 
+
+def _model_pricing_for_wire(manager: SettingsManager, document=None) -> tuple[list[dict], list[dict]]:
+    """Price configured and previously used models with the same counter lookup."""
+    overrides = manager.get_pricing_overrides()
+    saved = [
+        {"modelId": model, "inputPerMillion": prices["input"], "outputPerMillion": prices["output"]}
+        for model, prices in sorted(overrides.items())
+    ]
+    models: dict[tuple[str, str], tuple[str, str]] = {}
+
+    def add(provider: object, model: object) -> None:
+        if not isinstance(model, str):
+            return
+        model_id = model.strip()
+        if not model_id or model_id.lower() in {"auto", "inherit"}:
+            return
+        provider_name = str(provider or "").strip()
+        models.setdefault((provider_name.casefold(), model_id.casefold()), (provider_name, model_id))
+
+    for provider in CLOUD_PROVIDERS:
+        for model in manager.get_api_models(provider).values():
+            add(provider, model)
+    for assignment in manager.get_ollama_model_assignments().values():
+        if isinstance(assignment, dict) and assignment.get("mode") == "explicit":
+            add("ollama", assignment.get("model_id"))
+    add("ollama", config.OLLAMA_MODELS.get(config.TASK_CHAT))
+    add("llama.cpp", manager.get_llama_cpp_chat_model_path())
+    add("llama.cpp", manager.get_llama_cpp_title_model_override_path())
+    if document is not None:
+        for node in document.nodes.values():
+            if node.kind == "chat" and not node.state.is_user:
+                add(node.state.provider, node.state.model)
+    # Keep even orphaned overrides discoverable, editable and removable.
+    for model in overrides:
+        if not any(existing.casefold() == model for _, existing in models.values()):
+            add("", model)
+    effective = []
+    for provider, model in sorted(models.values(), key=lambda item: (item[1].casefold(), item[0].casefold())):
+        price = price_per_mtok(provider, model, overrides=overrides)
+        if provider.casefold() in {"ollama", "llama.cpp", "llamacpp", "local"}:
+            source = "local"
+        elif model.casefold() in overrides:
+            source = "override"
+        else:
+            source = "built-in" if price is not None else "unknown"
+        effective.append({
+            "modelId": model,
+            "provider": provider,
+            "inputPerMillion": price[0] if price is not None else None,
+            "outputPerMillion": price[1] if price is not None else None,
+            "source": source,
+        })
+    return saved, effective
+
+
 def settings_payload(manager: SettingsManager) -> dict[str, Any]:
     knowledge = manager.get_knowledge_embedding_settings()
     return {
@@ -297,8 +354,10 @@ def _api_key_source(stored: bool, provider: str) -> str:
 def _build_settings_payload(
     manager: SettingsManager, state: SettingsSessionState,
     provider_runtime: api_provider.ProviderRuntime | None = None,
+    document=None,
 ) -> dict[str, Any]:
     payload = settings_payload(manager)
+    payload["pricingOverrides"], payload["effectiveModelPrices"] = _model_pricing_for_wire(manager, document)
     payload["activeSection"] = state.active_section
     # ADR-012 stage 12.6: the provider-mode switcher's read side - which of
     # the 3 mode pages (Ollama/Llama.cpp/API Endpoint) is actually live.
@@ -433,6 +492,7 @@ def register_settings(
     agent_dispatcher: "AgentDispatcher | None" = None,
     *, provider_runtime: api_provider.ProviderRuntime | None = None,
     on_knowledge_embedding_changed: Callable[[], Awaitable[object]] | None = None,
+    document=None,
 ) -> None:
     # notifications is optional only so the ~11 pre-R7.4a tests in
     # backend/tests/test_settings.py that call register_settings(bus,
@@ -463,11 +523,12 @@ def register_settings(
         active = provider_runtime.snapshot().api_provider_type
         if active in CLOUD_PROVIDERS and active is not None:
             state.viewing_api_provider = active
-    bus.register_topic("app-settings", lambda: _build_settings_payload(manager, state, provider_runtime))
+    bus.register_topic("app-settings", lambda: _build_settings_payload(manager, state, provider_runtime, document))
 
     # ADR-006 stage 6.5: the general page now takes notifications too - its
     # new setProviderMode intent surfaces switch failures/success banners.
     register_settings_general_intents(bus, manager, state, notifications, agent_dispatcher, provider_runtime=provider_runtime)
+    register_settings_pricing_intents(bus, manager)
     register_settings_fal_intents(bus, manager, state)
     register_settings_api_provider_intents(bus, manager, notifications, state, provider_runtime)
     refresh_ollama_inventory = register_settings_ollama_intents(bus, manager, state)
