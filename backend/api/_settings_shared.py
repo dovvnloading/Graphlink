@@ -356,6 +356,13 @@ class SettingsSessionState:
     ollama_model_checks: dict[str, dict] = field(default_factory=dict)
     ollama_check_task: asyncio.Task[None] | None = None
     ollama_check_name: str = ""
+    ollama_context_model: str = ""
+    ollama_context_status: str = "idle"
+    ollama_context_notice: str = ""
+    ollama_context_trained_length: int = 0
+    ollama_context_model_size_bytes: int = 0
+    ollama_context_kv_bytes_per_token: int = 0
+    ollama_context_available_memory_bytes: int = 0
     knowledge_scan_status: str = "idle"
     knowledge_test_status: str = "idle"
     knowledge_notice: str = ""

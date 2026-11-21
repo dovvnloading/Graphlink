@@ -30,6 +30,7 @@ import graphlink_task_config as config
 from graphlink_audio import guess_audio_mime_type
 from graphlink_cloud_providers import CLOUD_PROVIDERS
 from graphlink_model_catalog import FALLBACK_ENABLED_TASKS, ModelDescriptor, ModelRef, ollama_descriptor, sort_descriptors
+from backend.ollama_context import CONTEXT_CHOICES, trained_context_length
 
 # Phase 4d god-file decomposition (provider_runtime/): module-top re-exports
 # of every relocated name. NOT circular: the submodules never import
@@ -359,7 +360,12 @@ def sync_ollama_models(settings_manager=None):
     graphlink_task_config (it owns the persistence semantics); this wrapper
     owns the locking, which that module cannot (it would be a circular
     import)."""
+    global _OLLAMA_CONFIGURED_CONTEXT_WINDOWS
     with _PROVIDER_STATE_LOCK:
+        if settings_manager is not None:
+            # Keep per-model overrides alongside the model-table update;
+            # all request paths consult the same immutable replacement map.
+            _OLLAMA_CONFIGURED_CONTEXT_WINDOWS = settings_manager.get_ollama_context_windows()
         return config.sync_ollama_task_models(settings_manager)
 
 
@@ -722,6 +728,8 @@ _OLLAMA_CAPABILITY_CACHE: dict[str, set[str] | None] = {}
 # call the capability cache uses, cached under the same key discipline and
 # invalidated by the same invalidate_ollama_capability_cache() entry point.
 _OLLAMA_CONTEXT_WINDOW_CACHE: dict[str, int | None] = {}
+_OLLAMA_TRAINED_CONTEXT_WINDOW_CACHE: dict[str, int | None] = {}
+_OLLAMA_CONFIGURED_CONTEXT_WINDOWS: dict[str, int] = {}
 
 # ADR-006 stage 6.6: API-mode context windows, matched by model-id prefix.
 # Same posture as anthropic_supports_reasoning below: a documented
@@ -752,12 +760,19 @@ _OLLAMA_SERVED_CONTEXT_CAP = 8_192
 
 
 def _ollama_effective_context_window(model: str | None) -> int:
-    """The single source of truth for Ollama-mode context: the served
-    window from show() (see _get_ollama_context_window) or the conservative
-    default. Used by BOTH the budget side (ProviderRuntime.context_window)
-    and the request side (OllamaProvider's options.num_ctx) so the two can
-    never disagree."""
+    """One served window for requests, chat, knowledge and agent budgets.
+
+    A saved per-model preference wins over Modelfile num_ctx and the legacy
+    8192 fallback, but never exceeds the model's trained limit. When show()
+    is unavailable we retain the conservative 8192 ceiling instead of
+    assuming a model can safely accept a larger window.
+    """
+    normalized = str(model or "").strip().casefold()
     window = _get_ollama_context_window(model)
+    configured = _OLLAMA_CONFIGURED_CONTEXT_WINDOWS.get(normalized)
+    if type(configured) is int and configured in CONTEXT_CHOICES:
+        trained = _OLLAMA_TRAINED_CONTEXT_WINDOW_CACHE.get(normalized)
+        return min(configured, trained if trained else _OLLAMA_SERVED_CONTEXT_CAP)
     return window if window else _DEFAULT_CONTEXT_WINDOW
 
 
@@ -903,6 +918,10 @@ def _get_ollama_context_window(model_name: str | None) -> int | None:
         _OLLAMA_CONTEXT_WINDOW_CACHE[cache_key] = None
         return None
 
+    model_info = _extract_response_field(show_response, "model_info")
+    if model_info is None:
+        model_info = _extract_response_field(show_response, "modelinfo")
+    _OLLAMA_TRAINED_CONTEXT_WINDOW_CACHE[cache_key] = trained_context_length(model_info)
     window = _extract_context_window_from_show(show_response)
     _OLLAMA_CONTEXT_WINDOW_CACHE[cache_key] = window
     return window
@@ -920,30 +939,9 @@ def _extract_context_window_from_show(show_response) -> int | None:
     model_info = _extract_response_field(show_response, "model_info")
     if model_info is None:
         model_info = _extract_response_field(show_response, "modelinfo")
-    if not isinstance(model_info, dict):
-        return None
+    trained = trained_context_length(model_info)
+    return min(trained, _OLLAMA_SERVED_CONTEXT_CAP) if trained else None
 
-    architecture = str(model_info.get("general.architecture") or "").strip()
-    candidates = []
-    if architecture:
-        candidates.append(f"{architecture}.context_length")
-    # Fallback: any "<arch>.context_length" key (architecture field absent
-    # or mismatched in some manifests).
-    candidates.extend(
-        key for key in model_info if str(key).endswith(".context_length")
-    )
-    for key in candidates:
-        raw_value = model_info.get(key)
-        if raw_value is None:
-            # Was reached by letting int(None) raise into the handler below.
-            continue
-        try:
-            value = int(raw_value)
-        except (TypeError, ValueError):
-            continue
-        if value > 0:
-            return min(value, _OLLAMA_SERVED_CONTEXT_CAP)
-    return None
 
 
 def _extract_modelfile_num_ctx(show_response) -> int | None:
@@ -978,9 +976,11 @@ def invalidate_ollama_capability_cache(model_name: str | None = None):
     if model_name is None:
         _OLLAMA_CAPABILITY_CACHE.clear()
         _OLLAMA_CONTEXT_WINDOW_CACHE.clear()
+        _OLLAMA_TRAINED_CONTEXT_WINDOW_CACHE.clear()
         return
     _OLLAMA_CAPABILITY_CACHE.pop(model_name.strip().lower(), None)
     _OLLAMA_CONTEXT_WINDOW_CACHE.pop(model_name.strip().lower(), None)
+    _OLLAMA_TRAINED_CONTEXT_WINDOW_CACHE.pop(model_name.strip().lower(), None)
 
 
 def _is_known_ollama_audio_model(model_name: str | None) -> bool:

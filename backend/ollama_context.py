@@ -1,0 +1,118 @@
+"""Ollama context choices, trained limits and conservative memory estimates.
+
+Values shown in Settings are estimates, not allocator guarantees: KV-cache
+precision, parallel requests, GPU offload and runtime overhead vary by model.
+No network I/O is performed here.
+"""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Mapping
+
+CONTEXT_CHOICES = (4_096, 8_192, 16_384, 32_768, 65_536, 131_072)
+DEFAULT_CONTEXT_WINDOW = 8_192
+# Conservative fallback for a typical 7-8B GQA model when Ollama metadata
+# lacks the attention geometry. The UI identifies the figure as an estimate.
+FALLBACK_KV_BYTES_PER_TOKEN = 128 * 1024
+
+
+def _positive_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if number > 0 else None
+
+
+def trained_context_length(model_info: object) -> int | None:
+    """The architecture's trained maximum, never the Modelfile's num_ctx."""
+    if not isinstance(model_info, Mapping):
+        return None
+    architecture = str(model_info.get("general.architecture") or "").strip()
+    keys = ([f"{architecture}.context_length"] if architecture else [])
+    keys += [str(key) for key in model_info if str(key).endswith(".context_length")]
+    for key in keys:
+        length = _positive_int(model_info.get(key))
+        if length:
+            return length
+    return None
+
+
+def kv_bytes_per_token(model_info: object) -> int:
+    """Estimate key+value cache bytes/token from GGUF attention metadata.
+
+    Assumes float16 KV storage. Ollama can use other KV types, so this
+    estimate is deliberately labeled approximate by the settings screen.
+    """
+    if not isinstance(model_info, Mapping):
+        return FALLBACK_KV_BYTES_PER_TOKEN
+    architecture = str(model_info.get("general.architecture") or "").strip()
+    if not architecture:
+        return FALLBACK_KV_BYTES_PER_TOKEN
+    prefix = f"{architecture}."
+    layers = _positive_int(model_info.get(prefix + "block_count"))
+    kv_heads = _positive_int(model_info.get(prefix + "attention.head_count_kv"))
+    heads = _positive_int(model_info.get(prefix + "attention.head_count"))
+    embedding = _positive_int(model_info.get(prefix + "embedding_length"))
+    key_length = _positive_int(model_info.get(prefix + "attention.key_length"))
+    value_length = _positive_int(model_info.get(prefix + "attention.value_length"))
+    if not key_length and heads and embedding:
+        key_length = embedding // heads
+    if not value_length:
+        value_length = key_length
+    if layers and (kv_heads or heads) and key_length and value_length:
+        return layers * (kv_heads or heads) * (key_length + value_length) * 2
+    return FALLBACK_KV_BYTES_PER_TOKEN
+
+
+def estimated_memory_bytes(model_size_bytes: int, context_window: int, kv_bytes: int) -> int:
+    """Approximate resident model weights plus a single request's KV cache."""
+    return max(0, int(model_size_bytes)) + max(0, int(context_window)) * max(0, int(kv_bytes))
+
+
+def available_memory_bytes() -> int:
+    """Best-effort currently available system RAM; zero means unknown.
+
+    GPU VRAM is not included; callers must not present this as available VRAM.
+    """
+    if os.name == "nt":
+        import ctypes
+
+        class MemoryStatus(ctypes.Structure):
+            _fields_ = [
+                ("length", ctypes.c_ulong),
+                ("memory_load", ctypes.c_ulong),
+                ("total_phys", ctypes.c_ulonglong),
+                ("avail_phys", ctypes.c_ulonglong),
+                ("total_page_file", ctypes.c_ulonglong),
+                ("avail_page_file", ctypes.c_ulonglong),
+                ("total_virtual", ctypes.c_ulonglong),
+                ("avail_virtual", ctypes.c_ulonglong),
+                ("avail_extended_virtual", ctypes.c_ulonglong),
+            ]
+
+        status = MemoryStatus()
+        status.length = ctypes.sizeof(status)
+        try:
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return int(status.avail_phys)
+        except (AttributeError, OSError):
+            pass
+        return 0
+
+    # Linux's MemAvailable includes reclaimable cache, unlike MemFree.
+    try:
+        with open("/proc/meminfo", encoding="ascii") as stream:
+            for line in stream:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+
+    try:
+        return int(os.sysconf("SC_AVPHYS_PAGES")) * int(os.sysconf("SC_PAGE_SIZE"))
+    except (AttributeError, OSError, ValueError):
+        return 0
