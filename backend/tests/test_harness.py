@@ -424,6 +424,25 @@ class TestLoop:
         assert "private working notes" not in str(load_messages(ensure_workspace(node.state.harness_workspace_id)))
         assert node.state.harness_spent_turns == 1
 
+    def test_fixed_prompt_larger_than_served_window_fails_before_model_call(
+        self, workspace_root, monkeypatch,
+    ):
+        document, dispatcher, registry, bus, node = self._make(workspace_root)
+        monkeypatch.setattr(context_module, "served_context_window", lambda **k: 8_192)
+        monkeypatch.setattr(context_module, "build_system_prompt", lambda *a, **k: "rules " * 12_000)
+
+        def must_not_call(*_a, **_k):
+            pytest.fail("A too-large system prompt must never be sent to the provider")
+
+        monkeypatch.setattr(api_provider, "chat_turn_with_tools", must_not_call)
+        asyncio.run(drive(document, dispatcher, registry, bus, node, "do the work"))
+
+        assert node.state.harness_status == "failed"
+        assert "system prompt and tool schemas" in node.state.harness_status_detail
+        assert node.state.harness_effective_context_tokens == 8_192
+        assert node.state.harness_context_tokens > 8_192
+        assert node.state.harness_max_context_tokens == 48_000
+
     def test_ollama_window_budgets_system_tools_and_history(self, workspace_root, monkeypatch):
         document, dispatcher, _, bus, node = self._make(workspace_root)
         node.state.harness_max_context_tokens = 48_000
