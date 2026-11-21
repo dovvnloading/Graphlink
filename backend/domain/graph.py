@@ -72,7 +72,7 @@ from backend.domain.model import (
     SceneNode,
 )
 from backend.domain.node_access import is_node_of, require_node
-from backend.domain.node_states import CodeState, FrameState, NodeState
+from backend.domain.node_states import ChatState, CodeState, FrameState, NodeState
 from backend.domain.node_wire import node_wire
 from backend.domain.staleness import scene_staleness
 from backend.domain.table_workflows import TableOps, TableReadCache
@@ -106,6 +106,8 @@ class SceneDocument(
     R6 serializer will read/write exactly this shape."""
 
     nodes: dict[str, SceneNode] = field(default_factory=dict)
+    # Injected by canvas registration; keeps domain logic independent of pricing infrastructure.
+    reply_cost_estimator: Callable[..., float | None] | None = field(default=None, repr=False, compare=False)
     edges: dict[str, SceneEdge] = field(default_factory=dict)
     # node id -> (width, height): each node's ACTUAL rendered footprint in
     # flow units, as last reported by the frontend (the reportNodeSizes
@@ -1034,6 +1036,16 @@ class SceneDocument(
             staleness=staleness,
         )
         row.update(self._table_output_wire(n, table_reads))
+        if (
+            self.reply_cost_estimator is not None
+            and n.kind == "chat" and isinstance(n.state, ChatState)
+            and not n.state.is_user
+            and (n.state.prompt_tokens is not None or n.state.completion_tokens is not None)
+        ):
+            row["estimatedCostUsd"] = self.reply_cost_estimator(
+                n.state.prompt_tokens, n.state.completion_tokens,
+                provider=n.state.provider or "", model=n.state.model or "",
+            )
         return row
 
     def _plugin_state_wire(self, n: SceneNode) -> dict[str, str]:

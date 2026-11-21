@@ -29,6 +29,7 @@ from backend.domain.model import SceneError
 from backend.domain.node_states import ChatState
 from backend.domain.staleness import fingerprint_for_reply, scene_staleness
 from backend.domain.structure import primary_parent_edges
+from backend.token_counter import estimate_cost_usd
 
 _logger = logging.getLogger(__name__)
 _SCOPES = ("this_path", "all_branches_below")
@@ -170,6 +171,8 @@ def _preview_plan(document, dispatcher, bus, root_id: str, scope: str):
     root = document.nodes[root_id]
     proof = [root_id, scope, root.content, root.state.version_index, len(root.state.versions)]
     estimator = TokenEstimator()
+    manager = getattr(dispatcher, "_settings_manager", None)
+    overrides = manager.get_pricing_overrides() if manager is not None else None
     for node_id in ids:
         node = document.nodes[node_id]
         parent_edge = document._branch_parent_edge(node_id)
@@ -180,18 +183,21 @@ def _preview_plan(document, dispatcher, bus, root_id: str, scope: str):
         provider, model = _snapshot_active_provider_model(dispatcher, document, parent_id, bus)
         provider = provider or node.state.provider or ""
         model = model or node.state.model or ""
-        estimate = estimator.count_tokens(_history_token_text(history)) + _history_image_tokens(history)
+        estimate = max(0, int(estimator.count_tokens(_history_token_text(history)) + _history_image_tokens(history)))
+        input_cost = estimate_cost_usd(provider, model, estimate, 0, overrides=overrides)
         rows.append({
             "nodeId": node_id,
             "title": node.title or "Assistant reply",
             "provider": provider,
             "model": model,
-            "estimatedInputTokens": max(0, int(estimate)),
+            "estimatedInputTokens": estimate,
+            "estimatedInputCostUsd": input_cost,
         })
         proof.append((
             node_id, parent_id, node.content, node.state.version_index,
             node.state.reply_history_fingerprint,
             fingerprint_for_reply(document, parent_id, provider, model, bool(node.state.reply_knowledge_enabled)),
+            input_cost,  # A price change invalidates a previously approved preview.
         ))
     # Skipped-node classification is part of the approval token: it must not
     # silently change between the read-only preview and the batch start.
