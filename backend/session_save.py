@@ -279,8 +279,8 @@ def _serialize_chat_versions(node: SceneNode) -> tuple[list[dict[str, Any]], int
             rows[row_index]["parts"] = _content_codec.process_content_for_serialization(version.parts)
     rows[index].update({
         "content": node.content,
-        "provider": state.provider,
-        "model": state.model,
+        "provider": node.state.provider,
+        "model": node.state.model,
         "incomplete": state.response_incomplete,
         "prompt_tokens": state.prompt_tokens,
         "completion_tokens": state.completion_tokens,

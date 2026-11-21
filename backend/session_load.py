@@ -509,6 +509,10 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
         content_text = str(raw_content or "")
     versions, version_index = _migrate_chat_versions(payload, content_text)
     selected = versions[version_index]
+    # raw_content is the live projection in both save formats. Honor it even
+    # if a legacy import has updated it but retained an older versions array.
+    if "raw_content" in payload or "text" in payload:
+        selected.content = content_text
     # The active version's media lives in raw_content for compatibility and
     # to avoid duplicating large attachments in the versions array on disk.
     selected.parts = content_parts
@@ -2155,6 +2159,9 @@ def _restore_verified_science_references(
             old_id = lines[1].removeprefix("Source node: ")
             if re.fullmatch(r"n[0-9]+", old_id):
                 chat.content = "\n".join((heading, historical + old_id, lines[2]))
+                # The migrated display text must also survive version
+                # selection and a subsequent save/reload.
+                chat.state.versions[chat.state.version_index].content = chat.content
                 lines = chat.content.split("\n", 2)
 
         candidate = payload.get("science_reference")

@@ -164,13 +164,6 @@ def register_conversation_intents(
         )
         await publish_scene()
 
-    async def set_chat_version(node_id, index):
-        document.record_command(
-            "setChatVersion", "user", lambda: document.set_chat_version(node_id, index),
-            node_ids=[node_id],
-        )
-        await publish_scene()
-
     # ADR-002 Workstream 1 ("Branch status and lifecycle"): three plain
     # setter intents, same "no try/except SceneError guard, a bad node_id
     # propagates as a generic WS intent error" posture as set_chat_collapsed
@@ -237,7 +230,6 @@ def register_conversation_intents(
     bus.register_intent("scene", "setNodeDocked", set_node_docked)
     bus.register_intent("scene", "deleteChatNode", delete_chat_node)
     bus.register_intent("scene", "setChatCollapsed", set_chat_collapsed)
-    bus.register_intent("scene", "setChatVersion", set_chat_version)
     bus.register_intent("scene", "setBranchStatus", set_branch_status)
     bus.register_intent("scene", "setFinalDeliverable", set_final_deliverable)
     bus.register_intent("scene", "collapseBranch", collapse_branch)

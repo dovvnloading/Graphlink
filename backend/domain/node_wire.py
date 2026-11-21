@@ -751,6 +751,10 @@ def node_wire(
         wire["isFinalDeliverable"] = True
     if node.state is not None:
         _put_non_default(wire, node.state, _fields_for(type(node.state)))
+        if isinstance(node.state, ChatState) and node.state.versions:
+            # The switcher needs an explicit selection, even when it is 0.
+            # Histories still never cross the sparse scene wire.
+            wire["versionIndex"] = node.state.version_index
     if text_input_status != "unbound":
         wire["textInputStatus"] = text_input_status
     if plugin_state:

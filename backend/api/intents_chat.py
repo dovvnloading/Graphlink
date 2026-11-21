@@ -328,8 +328,10 @@ def _stamp_reply_provenance(node, provider, model) -> None:
     _snapshot_active_provider_model, not re-resolved here."""
     node.state.provider = provider or None
     node.state.model = model or None
-    if node.state.versions:
-        selected = node.state.versions[node.state.version_index]
+    # Older call sites and test doubles may have no version history.
+    versions = getattr(node.state, "versions", None)
+    if versions:
+        selected = versions[getattr(node.state, "version_index", 0)]
         selected.provider_name = node.state.provider
         selected.model_name = node.state.model
 
@@ -955,6 +957,124 @@ def register_chat_cancel_intent(
     bus.register_intent("scene", "cancelChatRequest", cancel_chat_request)
 
 
+def register_chat_version_intents(
+    bus: SessionBus,
+    document: SceneDocument,
+    notifications: NotificationState,
+    agent_dispatcher: AgentDispatcher,
+    composer_document: ComposerDocument,
+    token_counter: TokenCounterState,
+    publish_scene,
+    publish_token_counter,
+) -> None:
+    """Register version-producing regeneration and undoable version selection."""
+    # Deferred import - same canvas import-order constraint as sendMessage.
+    from backend.canvas import _history_image_tokens, _history_token_text
+
+    async def regenerate_response(node_id):
+        try:
+            node_to_regenerate, parent_id = document.regenerate_response(node_id)
+        except SceneError:
+            # Deliberate: ALL THREE of regenerate_response's SceneErrors funnel
+            # into this ONE legacy-parity message. app.py's _handle_message
+            # would otherwise turn a raised SceneError into a generic
+            # "intent failed" WS error - and transport.ts's intent() is
+            # fire-and-forget (no id), so that error is ONLY ever
+            # console.error'd, never shown to the user (confirmed by reading
+            # transport.ts's handleMessage). A stale click racing a delete, or
+            # a future caller passing a bad kind, must never go silently to the
+            # console when legacy's real, reachable case shows a visible
+            # banner - so this is the one deliberate divergence from every
+            # other register_canvas wrapper's convention of letting SceneError
+            # bubble to the generic WS error path.
+            notifications.show("This node has no parent and cannot be regenerated.", "warning")
+            await bus.publish("notification")
+            return None
+
+        history = document.chat_branch_history(parent_id)
+        history = await _history_with_chat_knowledge(
+            history, _latest_user_query(history), document.current_workspace_id,
+            enabled=await _use_knowledge_for_node(document, parent_id),
+            settings_manager=getattr(agent_dispatcher, "_settings_manager", None),
+        )
+        # R8a (token counter wiring): unlike send_message, `history` here
+        # already excludes the node being regenerated (rooted at parent_id,
+        # not node_id) - there is no fresh draft text to double-count
+        # against, so it's usable directly as contextTokens with no
+        # adjustment.
+        token_counter.set_context_text(
+            _history_token_text(history), image_tokens=_history_image_tokens(history),
+        )
+        # 6.8 review fix: same request-start reset as send_message above.
+        token_counter.reset_real_usage()
+        await publish_token_counter()
+
+        # ADR-006 leftover #3: resolved here, before start_chat_reply is
+        # awaited below - not inside _on_reply, which only fires once the
+        # reply completes (see _snapshot_active_provider_model's own note).
+        request_provider, request_model = _snapshot_active_provider_model(
+            agent_dispatcher, document, parent_id, bus,
+        )
+        command_ref = {}
+        _on_reply = _make_regenerate_on_reply(
+            document, bus, notifications, token_counter, publish_token_counter,
+            node_to_regenerate, request_provider, request_model, command_ref,
+        )
+
+        def _on_partial(partial_text):
+            # See _land_partial_regenerate; same liveness check as _on_reply.
+            if node_to_regenerate.id not in document.nodes:
+                return
+            _land_partial_regenerate(
+                document, node_to_regenerate, partial_text,
+                request_provider, request_model,
+            )
+
+        _on_usage = _make_on_usage(
+            document, token_counter, publish_token_counter, publish_scene,
+            lambda: node_to_regenerate.id, request_provider, request_model,
+            command_ref=lambda: command_ref.get("command"),
+        )
+
+        await agent_dispatcher.start_chat_reply(
+            bus=bus,
+            notifications_state=notifications,
+            composer_document=composer_document,
+            conversation_history=history,
+            on_reply=_on_reply,
+            on_usage=_on_usage,
+            # ADR-006 stage 6.4: streams, closing R4.4's deferral. The old
+            # Composer-preview objection is dissolved by IDENTITY, not
+            # suppression - the overrides below key the frames to the target
+            # node's own pending_request_id on "scene" (CodeSandboxNodeView's
+            # subscription contract), so the Composer never sees this request.
+            stream=True,
+            on_begin=lambda request_id: setattr(
+                node_to_regenerate, "pending_request_id", request_id
+            ),
+            on_end=lambda: setattr(node_to_regenerate, "pending_request_id", None),
+            state_topic="scene",
+            on_partial=_on_partial,
+            # R6.1: same branch-system-prompt-override resolution as
+            # send_message above - parent_id (not node_to_regenerate.id) so
+            # the walk starts from the SAME node chat_branch_history just
+            # built `history` from, a moment above.
+            canvas_document=document,
+            node_id=parent_id,
+        )
+        return node_to_regenerate.id
+
+    async def set_chat_version(node_id, index):
+        document.record_command(
+            "setChatVersion", "user", lambda: document.set_chat_version(node_id, index),
+            node_ids=[node_id],
+        )
+        await publish_scene()
+
+    bus.register_intent("scene", "regenerateResponse", regenerate_response)
+    bus.register_intent("scene", "setChatVersion", set_chat_version)
+
+
 def register_chat_intents(
     bus: SessionBus,
     document: SceneDocument,
@@ -1098,99 +1218,6 @@ def register_chat_intents(
         )
         return node.id
 
-    async def regenerate_response(node_id):
-        try:
-            node_to_regenerate, parent_id = document.regenerate_response(node_id)
-        except SceneError:
-            # Deliberate: ALL THREE of regenerate_response's SceneErrors funnel
-            # into this ONE legacy-parity message. app.py's _handle_message
-            # would otherwise turn a raised SceneError into a generic
-            # "intent failed" WS error - and transport.ts's intent() is
-            # fire-and-forget (no id), so that error is ONLY ever
-            # console.error'd, never shown to the user (confirmed by reading
-            # transport.ts's handleMessage). A stale click racing a delete, or
-            # a future caller passing a bad kind, must never go silently to the
-            # console when legacy's real, reachable case shows a visible
-            # banner - so this is the one deliberate divergence from every
-            # other register_canvas wrapper's convention of letting SceneError
-            # bubble to the generic WS error path.
-            notifications.show("This node has no parent and cannot be regenerated.", "warning")
-            await bus.publish("notification")
-            return None
-
-        history = document.chat_branch_history(parent_id)
-        history = await _history_with_chat_knowledge(
-            history, _latest_user_query(history), document.current_workspace_id,
-            enabled=await _use_knowledge_for_node(document, parent_id),
-            settings_manager=getattr(agent_dispatcher, "_settings_manager", None),
-        )
-        # R8a (token counter wiring): unlike send_message, `history` here
-        # already excludes the node being regenerated (rooted at parent_id,
-        # not node_id) - there is no fresh draft text to double-count
-        # against, so it's usable directly as contextTokens with no
-        # adjustment.
-        token_counter.set_context_text(
-            _history_token_text(history), image_tokens=_history_image_tokens(history),
-        )
-        # 6.8 review fix: same request-start reset as send_message above.
-        token_counter.reset_real_usage()
-        await publish_token_counter()
-
-        # ADR-006 leftover #3: resolved here, before start_chat_reply is
-        # awaited below - not inside _on_reply, which only fires once the
-        # reply completes (see _snapshot_active_provider_model's own note).
-        request_provider, request_model = _snapshot_active_provider_model(
-            agent_dispatcher, document, parent_id, bus,
-        )
-        command_ref = {}
-        _on_reply = _make_regenerate_on_reply(
-            document, bus, notifications, token_counter, publish_token_counter,
-            node_to_regenerate, request_provider, request_model, command_ref,
-        )
-
-        def _on_partial(partial_text):
-            # See _land_partial_regenerate; same liveness check as _on_reply.
-            if node_to_regenerate.id not in document.nodes:
-                return
-            _land_partial_regenerate(
-                document, node_to_regenerate, partial_text,
-                request_provider, request_model,
-            )
-
-        _on_usage = _make_on_usage(
-            document, token_counter, publish_token_counter, publish_scene,
-            lambda: node_to_regenerate.id, request_provider, request_model,
-            command_ref=lambda: command_ref.get("command"),
-        )
-
-        await agent_dispatcher.start_chat_reply(
-            bus=bus,
-            notifications_state=notifications,
-            composer_document=composer_document,
-            conversation_history=history,
-            on_reply=_on_reply,
-            on_usage=_on_usage,
-            # ADR-006 stage 6.4: streams, closing R4.4's deferral. The old
-            # Composer-preview objection is dissolved by IDENTITY, not
-            # suppression - the overrides below key the frames to the target
-            # node's own pending_request_id on "scene" (CodeSandboxNodeView's
-            # subscription contract), so the Composer never sees this request.
-            stream=True,
-            on_begin=lambda request_id: setattr(
-                node_to_regenerate, "pending_request_id", request_id
-            ),
-            on_end=lambda: setattr(node_to_regenerate, "pending_request_id", None),
-            state_topic="scene",
-            on_partial=_on_partial,
-            # R6.1: same branch-system-prompt-override resolution as
-            # send_message above - parent_id (not node_to_regenerate.id) so
-            # the walk starts from the SAME node chat_branch_history just
-            # built `history` from, a moment above.
-            canvas_document=document,
-            node_id=parent_id,
-        )
-        return node_to_regenerate.id
-
     def list_comparison_models():
         from backend.context_engine.model_comparison import available_comparison_models
         return {"models": available_comparison_models(
@@ -1224,5 +1251,8 @@ def register_chat_intents(
 
     register_chat_knowledge_intents(bus, document, agent_dispatcher, publish_scene)
     bus.register_intent("scene", "sendMessage", send_message)
-    bus.register_intent("scene", "regenerateResponse", regenerate_response)
+    register_chat_version_intents(
+        bus, document, notifications, agent_dispatcher, composer_document,
+        token_counter, publish_scene, publish_token_counter,
+    )
     register_chat_cancel_intent(bus, agent_dispatcher, comparison_cancelled_requests)

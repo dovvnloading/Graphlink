@@ -127,7 +127,8 @@ class ConversationalOps(SceneDocumentParts):
         node.state.prompt_tokens = None
         node.state.completion_tokens = None
         node.state.estimated_cost_usd = None
-        node.state.tool_invocations = []
+        # A new version must not discard real tool calls. Regeneration
+        # replaces only the stale citation ledger via apply_reply_citations.
         node.state.content_parts = None
         node.state.versions.append(ChatVersion(
             content=new_content, incomplete=bool(incomplete),
