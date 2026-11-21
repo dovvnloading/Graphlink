@@ -340,7 +340,8 @@ def test_workspace_file_import_checks_root_trust_and_path_before_scheduling(tmp_
         else:
             pytest.fail("workspace import did not finish")
         trusted.clear()
-        with pytest.raises(WorkspaceError, match="Workspace folder changed"):
+        # Revoking a grant can also fail closed at root pinning on Windows.
+        with pytest.raises(WorkspaceError, match=r"Workspace (?:folder|root) changed"):
             await bus.dispatch_intent("knowledge", "addWorkspaceFile", [agent.id, "file.txt", str(project)])
 
     asyncio.run(scenario())
