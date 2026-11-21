@@ -153,7 +153,8 @@ def _lineage(document: SceneDocument) -> tuple[dict[str, bytes], dict[str, str]]
                 # live upstream history. A stored baseline alone must not
                 # mark an otherwise unchanged orphan as stale.
                 if (
-                    baseline is not None and item in parents
+                    node.kind != "thinking"
+                    and baseline is not None and item in parents
                     and baseline != "v1:" + prior.hex()
                 ):
                     upstream_changed = True
