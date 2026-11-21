@@ -1060,9 +1060,9 @@ def library_document_text(db_path: Path, *, collection_id: int, document_id: int
         limit = 2_000_000
         for value, start, stop in rows:
             if str(doc[1]).startswith("graph:") or start < 0 or stop < start:
-                part = ("\\n\\n" if pieces else "") + value
+                part = ("\n\n" if pieces else "") + value
             elif start > end:
-                part = ("\\n\\n" if pieces else "") + value
+                part = ("\n\n" if pieces else "") + value
             else:
                 part = value[max(end - start, 0):]
             if not part:
@@ -1075,7 +1075,7 @@ def library_document_text(db_path: Path, *, collection_id: int, document_id: int
             end = max(end, stop)
         content = "".join(pieces)
         if length >= limit:
-            content += "\\n\\n[Document View truncated to 2,000,000 characters]"
+            content += "\n\n[Document View truncated to 2,000,000 characters]"
         return {"title": doc[0], "content": content}
     finally:
         conn.close()
