@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 
 import api_provider
+from graphlink_cloud_providers import CLOUD_PROVIDERS
 
 from backend.api._settings_shared import SettingsSessionState, redact_secret, run_locked
 from backend.events import SessionBus
@@ -89,7 +90,12 @@ def register_settings_knowledge_intents(
         except Exception as exc:
             # Provider errors may contain the configured credential. It stays
             # in the backend; surface only a redacted, bounded explanation.
-            secret = manager.get_provider_key(cloud_provider) if source == "cloud" and cloud_provider else ""
+            secret = ""
+            if source == "cloud" and cloud_provider in CLOUD_PROVIDERS:
+                try:
+                    secret = manager.get_provider_key(cloud_provider)
+                except Exception:
+                    pass  # A missing/decrypt-failed key cannot mask the test result.
             state.knowledge_test_status = "error"
             state.knowledge_notice = "Embedding test failed: " + redact_secret(str(exc), secret)[:400]
         else:
