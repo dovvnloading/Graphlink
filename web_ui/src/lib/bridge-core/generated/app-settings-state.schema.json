@@ -182,6 +182,39 @@
     "hasCompletedOnboarding": {
       "type": "boolean"
     },
+    "knowledgeCloudOptIn": {
+      "type": "boolean"
+    },
+    "knowledgeCloudProvider": {
+      "type": "string"
+    },
+    "knowledgeEmbeddingModel": {
+      "type": "string"
+    },
+    "knowledgeEmbeddingSource": {
+      "type": "string"
+    },
+    "knowledgeNotice": {
+      "type": "string"
+    },
+    "knowledgeOllamaCapableModels": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "knowledgeOllamaModels": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "knowledgeScanStatus": {
+      "type": "string"
+    },
+    "knowledgeTestStatus": {
+      "type": "string"
+    },
     "llamaCppChatFormat": {
       "type": "string"
     },
@@ -387,6 +420,15 @@
     "ollamaScanStatus",
     "ollamaPullStatus",
     "ollamaNotice",
+    "knowledgeEmbeddingSource",
+    "knowledgeEmbeddingModel",
+    "knowledgeCloudProvider",
+    "knowledgeCloudOptIn",
+    "knowledgeOllamaModels",
+    "knowledgeOllamaCapableModels",
+    "knowledgeScanStatus",
+    "knowledgeTestStatus",
+    "knowledgeNotice",
     "llamaCppReasoningLevel",
     "llamaCppChatModelPath",
     "llamaCppTitleModelPath",
