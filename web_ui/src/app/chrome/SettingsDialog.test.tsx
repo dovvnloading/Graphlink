@@ -1397,7 +1397,8 @@ describe("Settings > Knowledge embedding source", () => {
       knowledgeOllamaModels: ["llama3:latest", "mxbai-embed-large:latest", "nomic-embed-text:latest"],
       knowledgeOllamaCapableModels: ["mxbai-embed-large:latest", "nomic-embed-text:latest"],
     });
-    await chooseCustomOption(user, "Embedding source", "Ollama (local)");
+    await user.click(screen.getByRole("button", { name: "Embedding source" }));
+    await user.click(await screen.findByRole("button", { name: /^Ollama \(local\)/ }));
     expect(intents).toContainEqual(["app-settings", "scanKnowledgeOllamaModels", []]);
     const models = screen.getByRole("combobox", { name: "Installed Ollama embedding model" });
     const options = within(models).getAllByRole("option");
@@ -1420,7 +1421,8 @@ describe("Settings > Knowledge embedding source", () => {
 
   it("requires explicit consent before a cloud Test or Save", async () => {
     const { user, intents } = await openKnowledge();
-    await chooseCustomOption(user, "Embedding source", "Cloud (OpenAI-compatible)");
+    await user.click(screen.getByRole("button", { name: "Embedding source" }));
+    await user.click(await screen.findByRole("button", { name: /^Cloud \(OpenAI-compatible\)/ }));
     expect(screen.getByText(/document passages and search queries/)).toBeInTheDocument();
     await user.type(screen.getByRole("textbox", { name: "Cloud embedding model ID" }), "text-embedding-3-small");
     expect(screen.getByRole("button", { name: "Test" })).toBeDisabled();
