@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -57,6 +58,7 @@ def test_list_has_real_metadata_and_respects_workspace(db, tmp_path):
     [row] = response["documents"]
     assert row["documentId"] == a.document_id
     assert row["title"] == "notes.md" and row["type"] == "text/markdown"
+    assert row["sourceUri"] == "notes.md"  # never the local absolute path
     assert row["sizeBytes"] == first.stat().st_size
     assert row["chunks"] == 1
     assert row["addedAt"] and row["status"] == "indexed"
@@ -138,6 +140,15 @@ def test_chunked_drag_drop_upload_can_index_reindex_and_clean_private_copy(db):
             db, collection_id=collection, document_id=row["documentId"],
         )
         assert Path(source).is_file()
+        hits = (await bus.dispatch_intent("knowledge", "search", ["safe drag", 5]))["results"]
+        [hit] = hits
+        assert hit["sourceUri"] == hit["sourceFile"] == "dropped.md"
+        assert str(source) not in str(hit)
+        opened = await bus.dispatch_intent("knowledge", "openCitation", [
+            hit["documentId"], hit["chunkId"], hit["citationId"],
+        ])
+        assert opened["document"]["sourceUri"] == "dropped.md"
+        assert opened["document"]["content"] == body.decode("utf-8")
         removed = await bus.dispatch_intent("knowledge", "removeDocument", [row["documentId"]])
         assert removed["removed"] is True
         assert not Path(source).exists()
@@ -166,3 +177,59 @@ def test_upload_rejects_untrusted_paths_oversize_and_partial_transfer(db):
         assert not (db.parent / "upload-staging" / response["uploadId"]).exists()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(("source", "expected"), [
+    (r"C:\Users\Ada\.graphlink\knowledge\uploads\upload-id\0\lighthouse.md", "lighthouse.md"),
+    ("/home/ada/.graphlink/knowledge/uploads/upload-id/0/lighthouse.md", "lighthouse.md"),
+    ("file:///home/ada/private/notes.md", "notes.md"),
+    ("https://example.org/notes.md", "https://example.org/notes.md"),
+    ("ops/recovery.md", "ops/recovery.md"),
+    ("graph:27", "Saved chat"),
+    ("branch:abc", "Saved chat"),
+])
+def test_public_knowledge_source_labels_hide_local_directories(source, expected):
+    assert knowledge_store.display_source_label(source, "Saved chat") == expected
+
+
+def test_saved_chat_documents_report_size_and_legacy_rows_have_fallback(db):
+    collection_id = knowledge_store.get_or_create_workspace_collection(db, 33)
+    messages = [("node-1", "Hello 🌎"), ("node-2", "Answer about lighthouses.")]
+    knowledge_store.reindex_graph_content(
+        db, graph_id=27, workspace_id=33, title="Saved chat",
+        node_chunks=messages,
+    )
+    branch_text = "user: Find the lighthouse\n\nassistant: It is on the coast."
+    knowledge_store.replace_branch_document_with_chunks(
+        db, source_uri="branch:abc", title="Indexed branch",
+        text=branch_text, chunks=chunk_text(branch_text), collection_id=collection_id,
+    )
+
+    bus, document, _ = make_bus()
+    document.current_workspace_id = 33
+
+    def library():
+        return asyncio.run(bus.dispatch_intent("knowledge", "listDocuments", []))["documents"]
+
+    documents = {item["title"]: item for item in library()}
+    chat = documents["Saved chat"]
+    branch = documents["Indexed branch"]
+    assert chat["type"] == "text/graph"
+    assert chat["sourceUri"] == "Saved chat"
+    assert chat["sizeBytes"] == len("\n\n".join(text for _, text in messages).encode("utf-8"))
+    assert branch["type"] == "text/branch"
+    assert branch["sourceUri"] == "Indexed branch"
+    assert branch["sizeBytes"] == len(branch_text.encode("utf-8"))
+    assert not chat["canReindex"] and not branch["canReindex"]
+
+    # Pre-upgrade chat rows were indexed without size_bytes. Their size is
+    # calculated from the existing chunks rather than displayed as "—".
+    conn = sqlite3.connect(db)
+    try:
+        with conn:
+            conn.execute("UPDATE documents SET size_bytes = NULL WHERE source_uri IN ('graph:27', 'branch:abc')")
+    finally:
+        conn.close()
+    legacy = {item["title"]: item for item in library()}
+    assert legacy["Saved chat"]["sizeBytes"] > 0
+    assert legacy["Indexed branch"]["sizeBytes"] > 0

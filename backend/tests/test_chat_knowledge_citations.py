@@ -119,6 +119,24 @@ def test_chat_worker_only_sends_included_sources_and_preserves_plain_answer(monk
     assert history[-1]["_knowledge_hits"] == [_hit()]  # no mutation
 
 
+def test_legacy_windows_upload_paths_stay_out_of_chat_context_and_citation_ledger():
+    private_path = r"C:\Users\Ada\.graphlink\knowledge\uploads\upload-id\0\lighthouse.md"
+    hit = {**_hit(), "document_title": "lighthouse.md",
+           "source_uri": private_path, "source_file": private_path}
+    plan, selected = _plan([hit])
+    assert selected == (hit,)
+    assert "lighthouse.md" in str(plan.messages)
+    assert private_path not in str(plan.messages)
+
+    record = citation_record_for_reply(CitedChatReply(f"See [{REAL_ID}]", [hit]))
+    assert record is not None
+    payload = json.loads(record["result"])
+    [source] = payload["sources"]
+    assert source["sourceUri"] == source["sourceFile"] == "lighthouse.md"
+    assert private_path not in record["result"]
+    assert source["citationId"] == REAL_ID
+
+
 def test_unverified_ids_do_not_inherit_other_source_metadata():
     answer = CitedChatReply(
         "Answer [" + REAL_ID + "], forged [" + INVENTED_ID + "] and again [" + REAL_ID + "]",
