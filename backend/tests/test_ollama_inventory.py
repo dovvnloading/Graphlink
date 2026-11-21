@@ -326,4 +326,6 @@ def test_relative_path_ollama_cli_is_not_executed_from_working_directory(monkeyp
     monkeypatch.setattr(ollama_inventory.sys, "platform", "linux")
     monkeypatch.setattr(ollama_inventory.shutil, "which", lambda _: "ollama")
     monkeypatch.setattr(ollama_inventory.Path, "home", classmethod(lambda _cls: tmp_path / "no-home"))
+    # CI machines may themselves have /usr/bin/ollama installed.
+    monkeypatch.setattr(ollama_inventory.Path, "is_file", lambda self: self == executable)
     assert ollama_inventory._installed_ollama_command() is None
