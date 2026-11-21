@@ -279,6 +279,13 @@ def test_settings_change_and_file_ingestion_start_real_intent_jobs(tmp_path, mon
         document = SceneDocument()
         document.current_workspace_id = 22
         intents_knowledge.register_knowledge_intents(bus, document, settings_manager=manager)
+        assert (await bus.dispatch_intent("knowledge", "getEmbeddingJobs", [])) == {
+            "workspaceId": 22, "jobs": [],
+        }
+        assert (await bus.publish("knowledge-embedding"))["workspaceId"] == 22
+        document.current_workspace_id = 23
+        assert (await bus.dispatch_intent("knowledge", "getEmbeddingJobs", []))["workspaceId"] == 23
+        document.current_workspace_id = 22
         register_settings(
             bus, manager,
             on_knowledge_embedding_changed=lambda: bus.dispatch_intent("knowledge", "refreshEmbeddings", []),
