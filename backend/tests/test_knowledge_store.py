@@ -431,6 +431,84 @@ class TestMigration004WorkspaceScopedCollections:
             conn.close()
 
 
+class TestUnscopedDocumentMigration:
+    def test_adopts_legacy_documents_without_losing_chunks_sources_or_search(self, db_path):
+        destination = ks.get_or_create_workspace_collection(db_path, 1)
+        other_collection = ks.get_or_create_workspace_collection(db_path, 2)
+
+        # A pre-workspace document's ID, chunks and citation offsets should
+        # survive the move, instead of being re-ingested with new identities.
+        original = _ingest(
+            db_path, source_uri="legacy.txt", title="Legacy",
+            text="Legacy sea otter notes.", collection_id=0,
+        )
+        old_chunks = ks.list_chunks_for_document(db_path, original.document_id)
+
+        # Old file imports have source aliases as well as their indexed text.
+        source_a = ks.upsert_file_with_chunks(
+            db_path, source_uri="/old/a.md", title="a.md", mime="text/markdown",
+            text="Shared mountain marmot notes.", chunks=_chunks_for("Shared mountain marmot notes."),
+            collection_id=0, size_bytes=34,
+        )
+        source_b = ks.upsert_file_with_chunks(
+            db_path, source_uri="/old/b.md", title="b.md", mime="text/markdown",
+            text="Shared mountain marmot notes.", chunks=_chunks_for("Shared mountain marmot notes."),
+            collection_id=0, size_bytes=34,
+        )
+        assert source_a.document_id == source_b.document_id
+
+        # The same content was also ingested independently into Default.
+        target = ks.upsert_file_with_chunks(
+            db_path, source_uri="/new/c.md", title="c.md", mime="text/markdown",
+            text="Shared mountain marmot notes.", chunks=_chunks_for("Shared mountain marmot notes."),
+            collection_id=destination,
+        )
+        # An unrelated workspace is not part of this migration.
+        private = _ingest(
+            db_path, source_uri="private.txt", title="Private",
+            text="Private workspace text.", collection_id=other_collection,
+        )
+
+        assert ks.move_unscoped_documents_to_workspace(db_path, 1) == 2
+        assert ks.list_documents(db_path, collection_id=0) == []
+        assert ks.move_unscoped_documents_to_workspace(db_path, 1) == 0
+
+        after = ks.get_document(db_path, original.document_id)
+        assert after is not None and after["collection_id"] == destination
+        assert ks.list_chunks_for_document(db_path, original.document_id) == old_chunks
+        assert ks.search_chunks(db_path, "otter", collection_id=destination)
+        assert ks.get_document(db_path, source_a.document_id) is None
+        assert ks.get_document(db_path, target.document_id) is not None
+        assert ks.file_sources_for_document(
+            db_path, collection_id=destination, document_id=target.document_id,
+        ) == ["/new/c.md", "/old/a.md", "/old/b.md"]
+        assert ks.search_chunks(db_path, "marmot", collection_id=destination)
+        assert ks.get_document(db_path, private.document_id)["collection_id"] == other_collection
+        assert not ks.search_chunks(db_path, "otter", collection_id=other_collection)
+
+    def test_preserves_existing_default_alias_if_legacy_path_collides(self, db_path):
+        default = ks.get_or_create_workspace_collection(db_path, 1)
+        existing = ks.upsert_file_with_chunks(
+            db_path, source_uri="/same.md", title="same.md", mime="text/markdown",
+            text="New version of knowledge.", chunks=_chunks_for("New version of knowledge."),
+            collection_id=default,
+        )
+        older = ks.upsert_file_with_chunks(
+            db_path, source_uri="/same.md", title="same.md", mime="text/markdown",
+            text="Old version of knowledge.", chunks=_chunks_for("Old version of knowledge."),
+            collection_id=0,
+        )
+        assert ks.move_unscoped_documents_to_workspace(db_path, 1) == 1
+        assert ks.file_sources_for_document(
+            db_path, collection_id=default, document_id=existing.document_id,
+        ) == ["/same.md"]
+        # Keep the older content searchable, even though its file path is
+        # already indexed to a newer revision in Default.
+        assert ks.get_document(db_path, older.document_id)["collection_id"] == default
+        assert ks.search_chunks(db_path, "Old", collection_id=default)
+        assert ks.search_chunks(db_path, "New", collection_id=default)
+
+
 class TestGetOrCreateWorkspaceCollection:
     """ADR-020 stage 20.3's own scoping decision (see this module's own
     module-docstring update): exactly ONE auto-created collection per
