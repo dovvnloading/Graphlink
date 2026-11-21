@@ -60,6 +60,39 @@ def _pdf(path):
     writer.write(path)
 
 
+def _ascii_flate_pdf(path, filter_name: str, *, text: bytes = b"ASCII wrapped page"):
+    """A ReportLab-style two-filter content stream, without a ReportLab dependency."""
+    import base64
+    import zlib
+
+    from pypdf import PdfWriter
+    from pypdf.generic import ArrayObject, DictionaryObject, EncodedStreamObject, NameObject
+
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+    font = writer._add_object(DictionaryObject({
+        NameObject("/Type"): NameObject("/Font"),
+        NameObject("/Subtype"): NameObject("/Type1"),
+        NameObject("/BaseFont"): NameObject("/Helvetica"),
+    }))
+    page[NameObject("/Resources")] = DictionaryObject({
+        NameObject("/Font"): DictionaryObject({NameObject("/F1"): font}),
+    })
+    compressed = zlib.compress(b"BT /F1 12 Tf 40 720 Td (" + text + b") Tj ET")
+    encoded = (
+        base64.a85encode(compressed, adobe=True)[2:]  # ReportLab omits the <~ prefix.
+        if filter_name in ("/ASCII85Decode", "/A85")
+        else compressed.hex().encode("ascii") + b">"
+    )
+    stream = EncodedStreamObject()
+    stream._data = encoded
+    stream[NameObject("/Filter")] = ArrayObject([
+        NameObject(filter_name), NameObject("/FlateDecode"),
+    ])
+    page[NameObject("/Contents")] = writer._add_object(stream)
+    writer.write(path)
+
+
 def _docx(path):
     from docx import Document
 
@@ -145,6 +178,67 @@ def test_pdf_read_and_page_range(fs):
     whole = read("report.pdf")
     assert not whole.is_error and "First page" in whole.content
     assert "Third page" in whole.content
+
+
+@pytest.mark.parametrize("filter_name", [
+    "/ASCII85Decode", "/A85", "/ASCIIHexDecode", "/AHx",
+])
+def test_pdf_ascii_wrapped_flate_is_read_by_fs_and_attachment_pipeline(fs, filter_name):
+    from backend.attachments import stage_file
+
+    root, read = fs
+    path = root / "report.pdf"
+    _ascii_flate_pdf(path, filter_name)
+    result = read("report.pdf")
+    assert not result.is_error, result.content
+    assert "[Page 1]" in result.content and "ASCII wrapped page" in result.content
+    assert "ASCII wrapped page" in stage_file(str(path)).extracted_text
+
+
+@pytest.mark.parametrize(
+    ("alias", "canonical"),
+    [("/A85", "/ASCII85Decode"), ("/AHx", "/ASCIIHexDecode")],
+)
+def test_pdf_ascii_alias_is_normalized_after_bounded_preflight(tmp_path, alias, canonical):
+    from backend import attachments
+    from pypdf import PdfReader
+
+    path = tmp_path / "alias.pdf"
+    _ascii_flate_pdf(path, alias)
+    reader = PdfReader(path)
+    page = reader.pages[0]
+    stream = page["/Contents"].get_object()
+    assert str(stream["/Filter"][0]) == alias
+
+    assert attachments._check_pdf_content_size(page) > 0
+    assert str(stream["/Filter"][0]) == canonical
+    assert "ASCII wrapped page" in page.extract_text()
+
+
+@pytest.mark.parametrize("filter_name", ["/ASCII85Decode", "/ASCIIHexDecode"])
+def test_pdf_ascii_wrapped_flate_still_rejects_expansion_bombs(fs, monkeypatch, filter_name):
+    from backend import attachments
+
+    root, read = fs
+    _ascii_flate_pdf(root / "bomb.pdf", filter_name, text=b"x" * 10_000)
+    monkeypatch.setattr(attachments, "MAX_PDF_CONTENT_STREAM_BYTES", 512)
+    result = read("bomb.pdf")
+    assert result.is_error and "expanded-stream" in result.content
+
+
+def test_pdf_ascii85_short_form_has_a_bounded_intermediate_decode():
+    from backend import attachments
+    from pypdf.generic import ArrayObject, EncodedStreamObject, NameObject
+
+    # Each 'z' produces four bytes before Flate can even begin. A tiny
+    # encoded stream must not bypass the intermediate expansion guard.
+    stream = EncodedStreamObject()
+    stream._data = b"z" * (attachments.MAX_PDF_CONTENT_STREAM_BYTES // 4 + 1)
+    stream[NameObject("/Filter")] = ArrayObject([
+        NameObject("/ASCII85Decode"), NameObject("/FlateDecode"),
+    ])
+    with pytest.raises(attachments.AttachmentError, match="expanded-stream"):
+        attachments._pdf_expanded_stream_size(stream, attachments.MAX_PDF_CONTENT_STREAM_BYTES)
 
 
 @pytest.mark.parametrize("page_start,page_end", [(0, 2), (3, 2), (1, 4), ("1", 2)])

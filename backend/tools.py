@@ -47,6 +47,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
+import time
 from typing import Awaitable, Callable, Literal
 
 from api_provider import RequestCancelledError, _raise_if_cancelled
@@ -152,6 +153,10 @@ class RunContext:
     # Optional per-run catalog, narrower than the scope grant when needed.
     offered_tool_names: frozenset[str] | None = None
     _approved_fingerprints: set[str] = field(default_factory=set)
+    # Human approval wait is not tool execution. The workspace activity
+    # timer subtracts it per call; the registry records it at the actual
+    # gate so streaming tools and normal tools use the same definition.
+    approval_wait_seconds: dict[str, float] = field(default_factory=dict, repr=False)
     # Per-task network consent: domain grants never outlive this RunContext.
     # Web handlers manage their own domain-level prompts, not tool fingerprints.
     _approved_web_domains: set[str] = field(default_factory=set)
@@ -430,7 +435,14 @@ class ToolRegistry:
                     original_python_call is not None or original_shell_call is not None
                     or original_file_call is not None or original_session_call is not None
                 ) else call
-                decision = await ctx.request_approval(disclosure_call)
+                approval_started = time.monotonic()
+                try:
+                    decision = await ctx.request_approval(disclosure_call)
+                finally:
+                    ctx.approval_wait_seconds[call.id] = (
+                        ctx.approval_wait_seconds.get(call.id, 0.0)
+                        + time.monotonic() - approval_started
+                    )
                 approved = bool(decision)
                 # The approval prompt is the one place this function can be
                 # awaiting for a genuinely long time (a human deciding) -

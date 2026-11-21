@@ -39,13 +39,20 @@ USAGE_HINT = (
     "Workbench node beside this agent, and returns its values, summary and receipt."
 )
 
+_NO_GRANTED_PACKS_HINT = (
+    "Scientific Workbench packs are installed but not granted. "
+    "Grant the desired packs in Settings > Plugins, then retry science.search."
+)
+
+
 SEARCH_SPEC = ToolSpec(
     name="science.search",
     description=(
         "List enabled Scientific Workbench packs, or search their operations. Without a "
         "query or pack_id, returns the enabled pack inventory. With either, returns "
         "paginated operation descriptions, fields and example inputs for science.run. "
-        "Only enabled, activated packs are searched; never use disabled packs."
+        "Only enabled, activated packs are searched; never use disabled packs. "
+        "If no packs are granted, explains how to grant installed packs."
     ),
     input_schema={
         "type": "object",
@@ -210,12 +217,14 @@ def register_workspace_tools(registry: ToolRegistry, dispatcher, document) -> No
             for key, (title, description) in sorted(PACKS.items())
             if _enabled(ctx, key)
         ]
+        no_grants_hint = _NO_GRANTED_PACKS_HINT if PACKS and not packs else None
         if pack_id is not None and pack_id not in {pack["pack_id"] for pack in packs}:
             return _error("That scientific pack is unavailable or not enabled in Settings > Plugins.")
         if pack_id is None and not (query or "").strip():
             return ToolResult(content=json.dumps({
                 "packs": packs, "operations": [],
-                "hint": "Supply pack_id or query to discover operations and their input examples.",
+                "hint": no_grants_hint or "Supply pack_id or query to discover operations and their input examples.",
+                **({"status": "installed_not_granted"} if no_grants_hint else {}),
             }))
 
         selected = [pack for pack in packs if pack_id is None or pack["pack_id"] == pack_id]
@@ -243,6 +252,7 @@ def register_workspace_tools(registry: ToolRegistry, dispatcher, document) -> No
             ],
             "total": len(matches),
             "next_offset": offset + len(page) if offset + len(page) < len(matches) else None,
+            **({"status": "installed_not_granted", "hint": no_grants_hint} if no_grants_hint else {}),
         }, allow_nan=False))
 
     async def run(call: ToolCall, ctx: RunContext) -> ToolResult:
