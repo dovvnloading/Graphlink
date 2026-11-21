@@ -91,7 +91,7 @@ def register_settings_knowledge_intents(
             # Provider errors may contain the configured credential. It stays
             # in the backend; surface only a redacted, bounded explanation.
             secret = ""
-            if source == "cloud" and cloud_provider in CLOUD_PROVIDERS:
+            if source == "cloud" and isinstance(cloud_provider, str) and cloud_provider in CLOUD_PROVIDERS:
                 try:
                     secret = manager.get_provider_key(cloud_provider)
                 except Exception:
