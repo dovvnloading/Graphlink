@@ -199,6 +199,16 @@ def register_settings_ollama_intents(
             run_scan=_run_ollama_scan,
         )
 
+    bus.register_intent("app-settings", "setOllamaReasoningLevel", set_ollama_reasoning_level)
+    bus.register_intent("app-settings", "setOllamaModelAssignment", set_ollama_model_assignment)
+    bus.register_intent("app-settings", "scanOllamaSystem", scan_ollama_system)
+    bus.register_intent("app-settings", "pickOllamaScanFolder", pick_ollama_scan_folder)
+    register_ollama_model_management_intents(bus, manager, state)
+
+
+def register_ollama_model_management_intents(
+    bus: SessionBus, manager: SettingsManager, state: SettingsSessionState
+) -> None:
     def _installed_model_names() -> list[str]:
         """Only the Ollama daemon's installed models are removable.
 
@@ -410,11 +420,7 @@ def register_settings_ollama_intents(
             state.ollama_remove_model = ""
             await bus.publish("app-settings")
 
-    bus.register_intent("app-settings", "setOllamaReasoningLevel", set_ollama_reasoning_level)
-    bus.register_intent("app-settings", "setOllamaModelAssignment", set_ollama_model_assignment)
-    bus.register_intent("app-settings", "scanOllamaSystem", scan_ollama_system)
     bus.register_intent("app-settings", "pullOllamaModel", pull_ollama_model)
     bus.register_intent("app-settings", "cancelOllamaPull", cancel_ollama_pull)
     bus.register_intent("app-settings", "refreshOllamaInstalledModels", refresh_ollama_installed_models)
     bus.register_intent("app-settings", "removeOllamaModel", remove_ollama_model)
-    bus.register_intent("app-settings", "pickOllamaScanFolder", pick_ollama_scan_folder)
