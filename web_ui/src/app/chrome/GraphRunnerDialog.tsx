@@ -1,8 +1,8 @@
 import { useReactFlow, useStoreApi } from "@xyflow/react";
-import { lazy, Suspense, useEffect, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { GraphModelBinding, GraphRun, GraphRunPreview, GraphRunStep, LatestGraphRun, SceneStore } from "../canvas/sceneStore";
 import { formatScienceSummary } from "../canvas/scientificWorkbench";
-import { Dialog } from "../overlays/overlays";
+import { Dialog, useOverlays } from "../overlays/overlays";
 import { getRunTrace } from "./graphRunTrace";
 import { Disclosure } from "./RunnerDisclosure";
 import "./GraphRunnerDialog.css";
@@ -86,7 +86,10 @@ function Runner({ store }: { store: SceneStore }) {
     if (!nodeId || !nodes.some((node) => node.id === nodeId)) return;
     rfStore.getState().setNodes(nodes.map((node) => ({ ...node, selected: node.id === nodeId })));
   }
-  const [selectedIds] = useState(() => rf.getNodes().filter((node) => node.selected).map((node) => node.id));
+  const requestedIds = useSyncExternalStore(store.subscribe, store.getGraphRunnerRequestedIds);
+  const [appliedRequestedIds, setAppliedRequestedIds] = useState(requestedIds);
+  const [selectedIds, setSelectedIds] = useState<string[]>(() =>
+    requestedIds ? [...requestedIds] : rf.getNodes().filter((node) => node.selected).map((node) => node.id));
   const [scope, setScope] = useState(selectedIds.length ? "selection" : "all");
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
   const names = new Map(scene.nodes.map((node) => [node.id, node.title]));
@@ -98,6 +101,9 @@ function Runner({ store }: { store: SceneStore }) {
     node.kind === "chat" || node.kind === "artifact" || node.kind === "model" ||
     (node.kind === "note" && plainNotes.some((note) => note.id === node.id))
   );
+  const modelNoteHandoff = !!requestedIds?.some((id) => plainNotes.some((node) =>
+    node.id === id && !node.textInputSourceId && !node.tableInputSourceId,
+  ));
   const [modelSourceSelection, setModelSourceSelection] = useState("");
   const [modelTargetSelection, setModelTargetSelection] = useState("");
   const [modelId, setModelId] = useState("");
@@ -112,14 +118,26 @@ function Runner({ store }: { store: SceneStore }) {
   );
   const modelTargetId = eligibleTargets.some((node) => node.id === modelTargetSelection)
     ? modelTargetSelection : (eligibleTargets[0]?.id ?? "");
-  const noteModelBindings = modelBindings.filter((binding) => binding.nodeKind !== "model");
-  const modelNodes = modelBindings.filter((binding) => binding.nodeKind === "model");
+  const noteModelBindings = (modelBindings ?? []).filter((binding) => binding.nodeKind !== "model");
+  const modelNodes = (modelBindings ?? []).filter((binding) => binding.nodeKind === "model");
   const savedModelBinding = noteModelBindings.find((binding) => binding.targetId === modelTargetId);
   const [preview, setPreview] = useState<(GraphRunPreview & { nodeIds: string[]; operationId: string }) | null>(null);
   const [latest, setLatest] = useState<LatestGraphRun | null>(null);
   const [busy, setBusy] = useState("Loading run history…");
   const [cancellingRun, setCancellingRun] = useState(false);
   const [error, setError] = useState("");
+  // A new handoff is a stable store snapshot. Reconcile it during render,
+  // like OrganizationDialog, so scope/selection cannot briefly show a stale
+  // preview. Selecting bound nodes never starts execution or grants approval.
+  if (requestedIds !== appliedRequestedIds) {
+    setAppliedRequestedIds(requestedIds);
+    if (requestedIds !== null) {
+      setSelectedIds([...requestedIds]);
+      setScope("selection");
+      setPreview(null);
+      setError("");
+    }
+  }
   const running = latest?.status === "running" || latest?.history?.some((run) => run.status === "running");
 
   // Opening the panel always re-reads the active graph, including after
@@ -136,6 +154,27 @@ function Runner({ store }: { store: SceneStore }) {
     return () => { active = false; };
   }, [store]);
 
+  // Saved Model→Note bindings have their OWN existing Graph Runner model
+  // preview/approval panel. Selecting the note in a graph-run preview would
+  // otherwise show no steps, since it is not a first-class Model node.
+  useEffect(() => {
+    if (!modelNoteHandoff || !requestedIds) return;
+    let active = true;
+    void store.getGraphModelBindings().then((rows) => {
+      if (!active) return;
+      setModelBindings(rows ?? []);
+      const bound = (rows ?? []).find((row) =>
+        row.nodeKind !== "model" && requestedIds.includes(row.targetId));
+      if (bound) {
+        setModelSourceSelection(bound.sourceId);
+        setModelTargetSelection(bound.targetId);
+        setModelId(bound.modelId);
+      }
+    }).catch((err: unknown) => {
+      if (active) setError(err instanceof Error ? err.message : String(err));
+    });
+    return () => { active = false; };
+  }, [store, modelNoteHandoff, requestedIds]);
   // Poll in-flight requests to expose the backend's cancellable running state.
   // Do not invent a local run: a lost reply must remain retryable by operation ID.
   useEffect(() => {
@@ -206,8 +245,8 @@ function Runner({ store }: { store: SceneStore }) {
 
   function loadModelBindings() {
     void store.getGraphModelBindings().then((rows) => {
-      setModelBindings(rows);
-      const noteRows = rows.filter((row) => row.nodeKind !== "model");
+      setModelBindings(rows ?? []);
+      const noteRows = (rows ?? []).filter((row) => row.nodeKind !== "model");
       if (!modelTargetSelection && noteRows.length) {
         // Reopening the dialog should make a saved connection reusable, not
         // require the user to re-enter the original source/model identity.
@@ -269,7 +308,10 @@ function Runner({ store }: { store: SceneStore }) {
       <button type="button" className="appbar-btn" disabled={!!busy} onClick={previewRun}>Preview run</button>
     </div>
     {scope === "selection" && <p className="runner-note">Includes downstream outputs and the inputs they depend on.</p>}
-    <Disclosure label="Run a local model into a note" onOpen={loadModelBindings}>
+    {modelNoteHandoff && <p className="runner-note">The selected note has a saved local-model
+      input. Review it below with Preview model step; a separate approval is required to run it.</p>}
+    <Disclosure label="Run a local model into a note" onOpen={loadModelBindings}
+      initiallyOpen={modelNoteHandoff}>
       {noteModelBindings.length > 0 && <div className="runner-controls">
         <label>Saved model connections
           <select aria-label="Saved model connections" value={savedModelBinding?.targetId ?? ""} disabled={!!busy}
@@ -307,17 +349,17 @@ function Runner({ store }: { store: SceneStore }) {
         <button type="button" className="appbar-btn" disabled={!!busy || !modelSourceId || !modelId.trim()}
           onClick={() => void perform("Creating Model node…", async () => {
             await store.addModelNode(modelSourceId, "Ollama", modelId.trim());
-            setModelBindings(await store.getGraphModelBindings());
+            setModelBindings((await store.getGraphModelBindings()) ?? []);
             setModelPreview(null);
           })}>Create Model node</button>
         <button type="button" className="appbar-btn" disabled={!!busy || !modelSourceId || !modelTargetId || !modelId.trim()}
           onClick={() => void perform("Saving model connection…", async () => {
-            setModelBindings(await store.bindGraphModel(modelSourceId, modelTargetId, "Ollama", modelId.trim()));
+            setModelBindings((await store.bindGraphModel(modelSourceId, modelTargetId, "Ollama", modelId.trim())) ?? []);
             setModelPreview(null);
           })}>Save model connection</button>
         {savedModelBinding && <button type="button" className="appbar-btn" disabled={!!busy} onClick={() =>
           void perform("Disconnecting model…", async () => {
-            setModelBindings(await store.unbindGraphModel(modelTargetId));
+            setModelBindings((await store.unbindGraphModel(modelTargetId)) ?? []);
             setModelPreview(null);
           })
         }>Disconnect model connection</button>}
@@ -340,7 +382,7 @@ function Runner({ store }: { store: SceneStore }) {
                 modelPreview.previewToken, modelPreview.operationId,
               ));
               setModelPreview(null);
-              setModelBindings(await store.getGraphModelBindings());
+              setModelBindings((await store.getGraphModelBindings()) ?? []);
             })
           }>Run local model</button>
         </div>
@@ -406,6 +448,16 @@ function Runner({ store }: { store: SceneStore }) {
 }
 
 export function GraphRunnerDialog({ store }: { store: SceneStore }) {
+  const overlays = useOverlays();
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    const isOpen = overlays.isOpen("graph-runner");
+    // Runner itself unmounts while Dialog is closed. Clear the handoff at
+    // the parent level on an actual open -> closed transition, not on the
+    // initial closed mount (which might precede a queued badge handoff).
+    if (wasOpen.current && !isOpen) store.clearGraphRunnerRequestedIds();
+    wasOpen.current = isOpen;
+  }, [overlays, store]);
   return <Dialog name="graph-runner" title="Graph Runner" className="graph-runner-dialog">
     <Runner store={store} />
   </Dialog>;

@@ -314,6 +314,133 @@ def test_reply_re_run_respects_twenty_version_cap_without_touching_other_kinds()
     assert document.nodes[code.id].state.code == "print(1)"
 
 
+def test_side_effects_and_explicit_bindings_are_skipped_even_without_structural_edges():
+    """Only ordinary chat enters a batch; no tool, agent, plugin or runner step dispatches."""
+    async def exercise():
+        document = SceneDocument()
+        user = document.add_chat_node(0, 0, "original", True)
+        ordinary = document.add_chat_node(0, 150, "ordinary answer", False, parent_id=user.id)
+        tool = document.add_chat_node(200, 150, "tool output", False, parent_id=user.id)
+        tool.state.tool_invocations = [{"name": "write_workspace_file", "result": "done"}]
+        after_tool = document.add_chat_node(200, 300, "uses tool output", False, parent_id=tool.id)
+        agent = document.add_harness_node(400, 150, "modify workspace")
+        builder = document.add_plan_node(600, 150, "build project")
+        document.connect(user.id, agent.id)
+        document.connect(user.id, builder.id)
+        sandbox = document.add_code_sandbox_node(800, 150, user.id)
+        plugin = document.add_plugin_node(
+            "example.execute_action", 1000, 150, user.id, title="Post to service",
+        )
+        # Data dependencies have no structural edges: they must still be
+        # listed as skipped when their original source message was edited.
+        model = document.add_model_node(user.id, "Ollama", "qwen3:8b")
+        note = document.add_note(1200, 150)
+        document.bind_note_text_input(user.id, note.id, "word_count")
+        model_note = document.add_note(1400, 150)
+        document.bind_note_model_input(user.id, model_note.id, "Ollama", "qwen3:8b")
+        source_table = document.add_table(1600, 150, "Group,Value\na,1\na,2")
+        document.connect(user.id, source_table.id)
+        table_output = document.create_table_output(source_table.id, "table", "Group", "Value")
+        document.last_chat_node_id = ordinary.id
+        document.edit_chat_message(user.id, "changed", "original")
+
+        dispatcher = _Dispatcher()
+        intents, _ = _register(document, dispatcher)
+        before = {node.id: node.content for node in document.nodes.values()}
+        plan = await intents["previewChatRerun"](user.id, "all_branches_below")
+        assert [row["nodeId"] for row in plan["replies"]] == [ordinary.id]
+        skipped = {row["nodeId"]: row for row in plan["skipped"]}
+        for node in (tool, after_tool, agent, builder, sandbox, plugin, source_table):
+            assert skipped[node.id]["category"] == "manual"
+            assert skipped[node.id]["reason"]
+        assert "executed tools" in skipped[tool.id]["reason"]
+        for node in (model, note, model_note, table_output):
+            assert skipped[node.id]["category"] == "bound"
+            assert "Graph Runner" in skipped[node.id]["reason"]
+        assert plan["requiresConfirmation"] is False
+        started = await intents["startChatRerun"](
+            user.id, "all_branches_below", plan["previewToken"], False,
+        )
+        done = await _status(intents, started["jobId"])
+        assert (done["status"], done["completed"], done["total"]) == ("completed", 1, 1)
+        assert len(dispatcher.calls) == 1
+        assert ordinary.content == "new reply 1"
+        for node_id, content in before.items():
+            if node_id != ordinary.id:
+                assert document.nodes[node_id].content == content
+        assert len(document.command_log) == 1
+        # Structured provenance survives the batch for every skipped
+        # side-effecting kind; the backend publishes a manual warning.
+        staleness = scene_staleness(document)
+        for node in (agent, builder, sandbox, plugin, source_table):
+            assert staleness[node.id] == "upstream_changed"
+
+    asyncio.run(exercise())
+
+
+def test_tool_calls_added_after_preview_are_rejected_and_never_dispatched():
+    async def exercise():
+        document = SceneDocument()
+        user = document.add_chat_node(0, 0, "before", True)
+        reply = document.add_chat_node(0, 150, "reply", False, parent_id=user.id)
+        document.edit_chat_message(user.id, "after", "before")
+        dispatcher = _Dispatcher()
+        intents, _ = _register(document, dispatcher)
+        preview = await intents["previewChatRerun"](user.id, "all_branches_below")
+        reply.state.tool_invocations = [{"name": "shell", "result": "executed"}]
+        with pytest.raises(SceneError, match="changed since"):
+            await intents["startChatRerun"](
+                user.id, "all_branches_below", preview["previewToken"], False,
+            )
+        assert dispatcher.calls == []
+        assert reply.content == "reply"
+
+    asyncio.run(exercise())
+
+
+def test_tool_metadata_only_is_not_executed_but_citation_marker_remains_safe():
+    from backend.context_engine.citations import CITATION_RECORD_NAME
+
+    document = SceneDocument()
+    user = document.add_chat_node(0, 0, "prompt", True)
+    cited = document.add_chat_node(0, 150, "cited text", False, parent_id=user.id)
+    cited.state.tool_invocations = [{"name": CITATION_RECORD_NAME}]
+    document.edit_chat_message(user.id, "edited", "prompt")
+    plan = _preview_plan(document, _Dispatcher(), None, user.id, "all_branches_below")
+    assert [row["nodeId"] for row in plan["replies"]] == [cited.id]
+    assert plan["skipped"] == []
+
+
+def test_execution_rechecks_tool_boundary_when_a_running_job_mutates():
+    async def exercise():
+        document = SceneDocument()
+        user = document.add_chat_node(0, 0, "prompt", True)
+        first = document.add_chat_node(0, 150, "first", False, parent_id=user.id)
+        second = document.add_chat_node(0, 300, "second", False, parent_id=first.id)
+        document.edit_chat_message(user.id, "edited", "prompt")
+
+        class ChangingDispatcher(_Dispatcher):
+            async def start_chat_reply(self, **kwargs):
+                await super().start_chat_reply(**kwargs)
+                if len(self.calls) == 1:
+                    second.state.tool_invocations = [{"name": "execute_plugin_action"}]
+
+        dispatcher = ChangingDispatcher()
+        intents, _ = _register(document, dispatcher)
+        plan = await intents["previewChatRerun"](user.id, "all_branches_below")
+        assert len(plan["replies"]) == 2
+        started = await intents["startChatRerun"](
+            user.id, "all_branches_below", plan["previewToken"], False,
+        )
+        done = await _status(intents, started["jobId"])
+        assert done["status"] == "failed"
+        assert done["completed"] == 1
+        assert len(dispatcher.calls) == 1
+        assert second.content == "second"
+
+    asyncio.run(exercise())
+
+
 async def _second_reply_started(intents, job_id, node_id):
     for _ in range(200):
         state = await intents["getChatRerunStatus"](job_id)

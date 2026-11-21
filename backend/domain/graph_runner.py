@@ -41,6 +41,56 @@ def _binding(node: SceneNode) -> tuple[str, str] | None:
     return None
 
 
+def is_bound_node(node: SceneNode) -> bool:
+    """Only explicit data bindings, never executable agent/plugin actions.
+
+    Note model bindings use Graph Runner's existing dedicated Model preview,
+    not its ordinary deterministic graph-plan endpoint.
+    """
+    return (
+        science_configured(node)
+        or _binding(node) is not None
+        or isinstance(node.state, NoteState) and node.state.model_text_input is not None
+    )
+
+
+def bound_dependents(document: SceneDocument, source_ids: set[str]) -> list[str]:
+    """Find typed bound outputs downstream of sources, without running them.
+
+    Structural ancestry does not capture text ports or Model inputs. Model,
+    note, table and configured scientific dependencies are separate from
+    visual edges, and can therefore feed an output below a changed message
+    without appearing in a canonical chat branch traversal.
+    """
+    children: dict[str, list[str]] = defaultdict(list)
+    for node in document.nodes.values():
+        if science_configured(node):
+            try:
+                parents = science_dependencies(document, node)
+            except SceneError:
+                # A broken configuration cannot be safely resolved into a
+                # source; Graph Runner will report that on manual preview.
+                parents = ()
+        elif isinstance(node.state, NoteState) and node.state.model_text_input is not None:
+            parents = (node.state.model_text_input.source_id,)
+        else:
+            binding = _binding(node)
+            parents = (binding[0],) if binding else ()
+        for parent in parents:
+            if parent:
+                children[parent].append(node.id)
+    visited = set(source_ids)
+    pending = deque(source_ids)
+    result: list[str] = []
+    while pending:
+        for child in children.get(pending.popleft(), ()):
+            if child not in visited:
+                visited.add(child)
+                result.append(child)
+                pending.append(child)
+    return result
+
+
 def _closure(seeds: set[str], neighbors: dict[str, list[str]]) -> set[str]:
     seen = seeds.copy()
     pending = list(seeds)

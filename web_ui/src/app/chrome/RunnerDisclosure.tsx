@@ -1,9 +1,10 @@
 import { useState, type ReactNode } from "react";
 
-export function Disclosure({ label, children, className, onOpen, onToggle }: {
-  label: string; children: ReactNode; className?: string; onOpen?: () => void; onToggle?: () => void;
+export function Disclosure({ label, children, className, onOpen, onToggle, initiallyOpen = false }: {
+  label: string; children: ReactNode; className?: string; onOpen?: () => void;
+  onToggle?: () => void; initiallyOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initiallyOpen);
   return <div className={className}>
     <button type="button" className="runner-disclosure" aria-expanded={open} onClick={() => {
       setOpen(!open);

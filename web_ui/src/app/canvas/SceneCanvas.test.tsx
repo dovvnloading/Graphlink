@@ -276,6 +276,25 @@ describe("published staleness on every canvas kind", () => {
     expect(data.get("note")?.staleness).toBe("upstream_changed");
     expect(data.get("fresh")?.staleness).toBeUndefined();
   });
+
+  it("labels only stale model, text and table bindings for Graph Runner handoff", () => {
+    const scene = baseScene({ nodes: [
+      baseNode({ id: "model", kind: "model", staleness: "upstream_changed" }),
+      baseNode({ id: "text-note", kind: "note", textInputSourceId: "input", staleness: "upstream_changed" }),
+      baseNode({ id: "table", kind: "note", tableInputSourceId: "source", staleness: "upstream_changed" }),
+      baseNode({ id: "agent", kind: "harness", staleness: "upstream_changed" }),
+      baseNode({ id: "plugin", kind: "example.action", staleness: "upstream_changed" }),
+    ] });
+    const entries = new Map(toFlowNodes(scene, makeStore()).map((node) => [
+      node.id, node.data as Record<string, unknown>,
+    ]));
+    for (const id of ["model", "text-note", "table"]) {
+      expect(entries.get(id)?.isBoundForRunner).toBe(true);
+    }
+    for (const id of ["agent", "plugin"]) {
+      expect(entries.get(id)?.isBoundForRunner).toBe(false);
+    }
+  });
 });
 
 describe("first-class Model canvas ports", () => {
