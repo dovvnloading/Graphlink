@@ -30,12 +30,15 @@ def _validated_pricing_overrides(raw: object) -> dict[str, dict[str, float]]:
         values = []
         for name in ("input", "output"):
             value = prices[name]
-            if (
-                isinstance(value, bool) or not isinstance(value, (int, float))
-                or not math.isfinite(value) or value < 0
-            ):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise ValueError(f"Model {model_id}: {name} price must be a finite non-negative number.")
-            values.append(float(value))
+            try:
+                price = float(value)
+            except (ValueError, OverflowError):
+                raise ValueError(f"Model {model_id}: {name} price must be a finite non-negative number.") from None
+            if not math.isfinite(price) or price < 0:
+                raise ValueError(f"Model {model_id}: {name} price must be a finite non-negative number.")
+            values.append(price)
         normalized[key] = {"input": values[0], "output": values[1]}
     return normalized
 

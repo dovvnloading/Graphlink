@@ -263,13 +263,10 @@ def _model_pricing_for_wire(manager: SettingsManager, document=None) -> tuple[li
             source = "override"
         else:
             source = "built-in" if price is not None else "unknown"
-        effective.append({
-            "modelId": model,
-            "provider": provider,
-            "inputPerMillion": price[0] if price is not None else None,
-            "outputPerMillion": price[1] if price is not None else None,
-            "source": source,
-        })
+        entry = {"modelId": model, "provider": provider, "source": source}
+        if price is not None:
+            entry.update({"inputPerMillion": price[0], "outputPerMillion": price[1]})
+        effective.append(entry)
     return saved, effective
 
 

@@ -107,7 +107,7 @@ class SceneDocument(
 
     nodes: dict[str, SceneNode] = field(default_factory=dict)
     # Injected by canvas registration; keeps domain logic independent of pricing infrastructure.
-    reply_cost_estimator: Callable[..., float | None] | None = field(default=None, repr=False, compare=False)
+    reply_cost_estimator: Callable[..., float | None] | None = field(default=None, init=False, repr=False, compare=False)
     edges: dict[str, SceneEdge] = field(default_factory=dict)
     # node id -> (width, height): each node's ACTUAL rendered footprint in
     # flow units, as last reported by the frontend (the reportNodeSizes
