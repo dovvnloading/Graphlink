@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useReactFlow, type Node, type NodeProps } from "@xyflow/react";
 import { motionDuration } from "../reducedMotion";
 import { useModelCapabilityPreview, useComposerModelStore } from "../context/ModelCapabilityContext";
-import { useOverlays } from "../overlays/overlays";
+import { OverlayProviderIfMissing, useOverlays } from "../overlays/overlays";
 import { ModelPicker } from "../chrome/ModelPicker";
 import type { ComposerStore } from "../chrome/composerStore";
 import { CollapseToggleButton } from "./CollapseToggleButton";
@@ -1022,4 +1022,12 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
   );
 }
 
-export const HarnessNodeView = memo(HarnessNodeViewInner);
+function HarnessNodeViewWithOverlays(props: NodeProps<HarnessFlowNode>) {
+  return (
+    <OverlayProviderIfMissing>
+      <HarnessNodeViewInner {...props} />
+    </OverlayProviderIfMissing>
+  );
+}
+
+export const HarnessNodeView = memo(HarnessNodeViewWithOverlays);
