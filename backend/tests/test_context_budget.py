@@ -710,3 +710,9 @@ def test_untrusted_modelfile_num_ctx_cannot_request_unbounded_context(monkeypatc
     assert api_provider._ollama_effective_context_window("safe:tag") == 8192
     assert shown == ["safe:tag"]
     api_provider.invalidate_ollama_capability_cache()
+
+
+def test_runtime_capabilities_only_accept_printable_string_items():
+    assert api_provider._normalize_ollama_capabilities({"tools": True}) == set()
+    assert api_provider._normalize_ollama_capabilities([{"tools": True}, False, "tools"]) == {"tools"}
+    assert api_provider._normalize_ollama_capabilities(["tools\u0000", "completion"]) == {"completion"}
