@@ -155,6 +155,38 @@ def test_custom_openai_compatible_endpoint_uses_strict_json_not_unreliable_nativ
     assert response_format["json_schema"]["schema"] == tool_turn_schema(TOOLS)
 
 
+def test_malformed_json_turn_gets_one_protocol_feedback_retry(monkeypatch):
+    provider = ScriptedProvider([
+        '{"tool_calls":[{"name":"fs.read","arguments_json":"{"}],"final_answer":""}',
+        _json_reply(("fs.read", {"path": "notes.txt"})),
+    ])
+    result = _turn(monkeypatch, provider, config.LOCAL_PROVIDER_OLLAMA)
+
+    assert len(provider.requests) == 2
+    assert [call.name for call in result["tool_calls"]] == ["fs.read"]
+    assert result["tool_calls"][0].arguments == {"path": "notes.txt"}
+    assert provider.requests[0].messages[0] == provider.requests[1].messages[0]
+    assert provider.requests[0].tools == provider.requests[1].tools == ()
+    correction = provider.requests[1].messages[-1]
+    assert correction["role"] == "user"
+    assert "Invalid JSON arguments for tool 'fs.read'" in correction["content"]
+    assert "arguments_json" in correction["content"]
+
+
+def test_second_bad_json_turn_surfaces_real_protocol_cause(monkeypatch):
+    provider = ScriptedProvider([
+        "not json",
+        '{"tool_calls":[],"final_answer":""}',
+    ])
+    with pytest.raises(
+        JSONToolProtocolError,
+        match="after one protocol correction.*nonempty final answer",
+    ):
+        _turn(monkeypatch, provider, config.LOCAL_PROVIDER_OLLAMA)
+    assert len(provider.requests) == 2
+    assert "valid constrained JSON" in provider.requests[1].messages[-1]["content"]
+
+
 def test_native_tool_capability_keeps_the_existing_path(monkeypatch):
     from backend.providers.base import ToolCall
 
