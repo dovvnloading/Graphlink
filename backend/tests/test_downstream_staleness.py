@@ -97,6 +97,27 @@ def test_reference_edges_do_not_make_an_unrelated_branch_stale():
     assert _states(doc)[reply.id] == "out_of_date"
 
 
+def test_interrupted_reply_and_regeneration_keep_request_time_context():
+    from backend.api.intents_chat import _land_partial_reply_node, _land_partial_regenerate
+
+    doc = SceneDocument()
+    parent = doc.add_chat_node(0, 0, "original question", True)
+    proof = fingerprint_for_reply(doc, parent.id, "Test", "model-a", False)
+    _land_partial_reply_node(doc, parent, "partial", proof, False, "Test", "model-a")
+    reply = doc.nodes[doc.last_chat_node_id]
+    assert reply.state.response_incomplete is True
+    assert reply.state.reply_history_fingerprint == proof
+    assert _states(doc)[reply.id] == "current"
+
+    doc.update_chat_node_content(parent.id, "edited question")
+    assert _states(doc)[reply.id] == "out_of_date"
+    retry_proof = fingerprint_for_reply(doc, parent.id, "Test", "model-b", False)
+    _land_partial_regenerate(doc, reply, "retry partial", retry_proof, False, "Test", "model-b")
+    assert reply.state.reply_history_fingerprint == retry_proof
+    assert reply.state.model == "model-b"
+    assert _states(doc)[reply.id] == "current"
+
+
 def test_pre_feature_graphs_and_malformed_saved_proofs_never_flag_stale():
     doc = SceneDocument()
     parent = doc.add_chat_node(0, 0, "Old user", True)
