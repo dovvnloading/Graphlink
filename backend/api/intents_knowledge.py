@@ -28,7 +28,7 @@ from backend.knowledge_chunking import chunk_text
 from backend.knowledge_ingest import IngestError
 from backend.knowledge_retrieval import hybrid_search
 from backend.knowledge_store import (
-    DEFAULT_DB_PATH, get_or_create_workspace_collection, replace_branch_document_with_chunks,
+    DEFAULT_DB_PATH, get_or_create_workspace_collection, open_cited_document, replace_branch_document_with_chunks,
 )
 from backend.notifications import NotificationState
 
@@ -40,6 +40,13 @@ _MAX_K = 25
 class SearchArgs:
     query: str
     k: int
+
+
+@dataclass
+class OpenCitationArgs:
+    documentId: int
+    chunkId: int
+    citationId: str
 
 
 @dataclass
@@ -161,6 +168,29 @@ def register_knowledge_intents(
         results = await asyncio.to_thread(_search)
         return {"results": _format_search_results(results)}
 
+    async def open_citation(document_id, chunk_id, citation_id):
+        """Return only a verified passage's indexed document in this workspace."""
+        workspace_id = document.current_workspace_id
+
+        def _read():
+            if not DEFAULT_DB_PATH.exists():
+                return None
+            collection_id = (
+                0 if workspace_id is None
+                else get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+            )
+            return open_cited_document(
+                DEFAULT_DB_PATH, document_id=document_id, chunk_id=chunk_id,
+                citation_id=citation_id, collection_id=collection_id,
+            )
+
+        source = await asyncio.to_thread(_read)
+        # A workspace switch during the blocking read must not reveal the
+        # previous workspace's document in a late request/reply.
+        if document.current_workspace_id != workspace_id:
+            return {"document": None}
+        return {"document": source}
+
     async def set_chat_index_into_knowledge(node_id, enabled):
         """Runs the actual knowledge-store write (chat_branch_history() ->
         ingest_text()) BEFORE the flag flips - see backend/domain/
@@ -239,6 +269,7 @@ def register_knowledge_intents(
         await publish_scene()
 
     bus.register_intent("knowledge", "search", search, args_schema=SearchArgs)
+    bus.register_intent("knowledge", "openCitation", open_citation, args_schema=OpenCitationArgs)
     bus.register_intent(
         "scene", "setChatIndexIntoKnowledge", set_chat_index_into_knowledge,
         args_schema=SetChatIndexIntoKnowledgeArgs,
