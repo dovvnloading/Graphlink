@@ -106,20 +106,59 @@ def test_denial_and_scope_check_happen_before_persistent_storage(harness_knowled
     assert not db.exists()
 
 
-@pytest.mark.parametrize("path", ["../secret.md", "missing.txt", ".git/config", "subdir"])
-def test_invalid_or_private_source_cannot_be_added(harness_knowledge, tmp_path, path):
-    root, db, *_rest, add = harness_knowledge
+@pytest.mark.parametrize(
+    ("path", "error"),
+    [
+        ("../secret.md", "outside this run's workspace"),
+        ("missing.txt", "Not a workspace file"),
+        (".git/config", "VCS metadata"),
+        ("subdir", "Not a workspace file"),
+        ("pixel.png", "Unsupported knowledge file type"),
+        ("secret.env", "Unsupported knowledge file type"),
+    ],
+)
+def test_invalid_or_private_source_is_rejected_before_approval(harness_knowledge, tmp_path, path, error):
+    root, db, _document, _agent, _registry, _ctx, decisions, add = harness_knowledge
     (tmp_path / "secret.md").write_text("private")
     (root / ".git").mkdir()
     (root / ".git" / "config").write_text("secret")
     (root / "subdir").mkdir()
+    (root / "pixel.png").write_bytes(b"PNG")
+    (root / "secret.env").write_text("PRIVATE=1")
     result = add(path)
-    assert result.is_error
+    assert result.is_error and error in result.content
+    assert decisions == [], "Invalid knowledge.add requests must not produce an approval card"
+    assert not db.exists()
+
+
+@pytest.mark.parametrize("path", [None, 7, "", " " * 4, "x" * 4097])
+def test_bad_path_arguments_are_rejected_before_approval(harness_knowledge, path):
+    _root, db, _document, _agent, _registry, _ctx, decisions, add = harness_knowledge
+    result = add(path)
+    assert result.is_error and "valid workspace file path" in result.content
+    assert decisions == []
+    assert not db.exists()
+
+
+def test_file_removed_during_approval_is_refused_at_execution(harness_knowledge):
+    root, db, _document, _agent, registry, ctx, decisions, _add = harness_knowledge
+    target = root / "notes.md"
+    target.write_text("Text that existed when approval was requested.")
+
+    async def remove_during_approval(call):
+        decisions.append((call.name, dict(call.arguments)))
+        target.unlink()
+        return True
+
+    ctx.request_approval = remove_during_approval
+    result = asyncio.run(registry.invoke(ToolCall("removed", "knowledge.add", {"path": "notes.md"}), ctx))
+    assert result.is_error and "Not a workspace file" in result.content
+    assert len(decisions) == 1
     assert not db.exists()
 
 
 def test_symlink_escape_is_refused(harness_knowledge, tmp_path):
-    root, db, *_rest, add = harness_knowledge
+    root, db, _doc, _agent, _registry, _ctx, decisions, add = harness_knowledge
     target = tmp_path / "outside.md"
     target.write_text("Do not index this.")
     try:
@@ -128,13 +167,15 @@ def test_symlink_escape_is_refused(harness_knowledge, tmp_path):
         pytest.skip("Symlinks unavailable")
     result = add("escape.md")
     assert result.is_error and "outside" in result.content
+    assert decisions == []
     assert not db.exists()
 
 
 def test_binary_and_oversized_files_are_refused(harness_knowledge):
-    root, db, *_rest, add = harness_knowledge
+    root, db, _document, _agent, _registry, _ctx, decisions, add = harness_knowledge
     (root / "pixel.png").write_bytes(bytes([0x89, 80, 78, 71, 0, 0, 0]))
     assert add("pixel.png").is_error
+    assert decisions == []
     (root / "huge.txt").write_bytes(b"x" * (8 * 1024 * 1024 + 1))
     result = add("huge.txt")
     assert result.is_error and "limit" in result.content
