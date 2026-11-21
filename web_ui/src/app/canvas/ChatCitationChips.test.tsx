@@ -72,6 +72,25 @@ describe("verified knowledge citation chips", () => {
     expect(onOpen).toHaveBeenLastCalledWith(expect.objectContaining({ documentId: 10, chunkId: 43 }));
   });
 
+  it("sanitizes a legacy upload path in the Sources footer and inline citation target", () => {
+    const privatePath = String.raw`C:\Users\Ada\.graphlink\knowledge\uploads\id\0\lighthouse.md`;
+    const citations = citationsForReply(`Verified [${ID}].`, [
+      record([source({ documentTitle: "Lighthouse", sourceUri: privatePath, sourceFile: privatePath })]),
+    ]);
+    const onOpen = vi.fn();
+    render(<>
+      <NodeMarkdown content={`Verified [${ID}].`} citations={citations} onCitationClick={onOpen} />
+      <ChatCitationChips citations={citations} onOpenCitation={onOpen} />
+    </>);
+    expect(screen.getByText("lighthouse.md")).toBeInTheDocument();
+    expect(screen.queryByText(privatePath)).not.toBeInTheDocument();
+    expect(JSON.stringify(citations)).not.toContain(privatePath);
+    fireEvent.click(screen.getByRole("button", { name: "Source 1: Lighthouse" }));
+    expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({
+      sourceFile: "lighthouse.md", sourceUri: "lighthouse.md",
+    }));
+  });
+
   it("never navigates on invented IDs, uncited passages or missing trusted locators", () => {
     const body = `Use [${ID}], unknown [${FORGED}], repeat [${FORGED}].`;
     const citations = citationsForReply(body, [record([source({ cited: false })])]);

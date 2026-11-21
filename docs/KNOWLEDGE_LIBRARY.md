@@ -16,7 +16,7 @@ You can also choose **Add to knowledge** on a supported staged chat attachment o
 
 ## Manage documents in the Library dialog
 
-The **Documents** table lists **Title**, **Type**, **Size**, **Chunks**, **Added**, **Status**, and **Actions**. Select **Refresh** to reload it.
+The **Documents** table lists **Title**, **Type**, **Size**, **Chunks**, **Added**, **Status**, and **Actions**. Select **Refresh** to reload it. Saved chat graphs appear with type **Chat** and indexed chat branches with type **Chat branch**, rather than their internal MIME types. Their **Size** is based on the indexed text; older entries use the stored chunks when a size was not recorded.
 
 - **Open** opens the indexed text in the docked **Document View**. Graphlink reconstructs this view from stored passages, rather than reopening the original PDF, spreadsheet or file in an external application; some original formatting or gaps may not be reproduced.
 - **Re-index** starts another import from the recorded source path(s). It is disabled when no file source is recorded, and it can fail if a previously indexed file has been moved or deleted. Use it to pick up edits to a manually imported file.
@@ -57,7 +57,7 @@ Each collapsed result shows its title, source and any available match signals:
 - **Keyword #N** means that passage ranked **N** in the keyword candidate list.
 - **Semantic #N** means it ranked **N** in the vector candidate list. A result may show either signal or both; missing signals are not implied matches.
 
-These are **rank positions, not percentages, confidence scores, or proof of correctness**. Expand a card to read the retrieved passage and its character **Offset start–end** within the indexed source. An **Open source** link appears only for HTTP(S) sources (for example, a retained web page); Graphlink does not invent a file link or offset jump for a local path.
+These are **rank positions, not percentages, confidence scores, or proof of correctness**. Local sources, including browser-dropped uploads, are displayed by filename instead of an internal upload path or your home directory. The chat reply's **Sources** footer uses the same labels. Expand a card to read the retrieved passage and its character **Offset start–end** within the indexed source. An **Open source** link appears only for HTTP(S) sources (for example, a retained web page); Graphlink does not invent a file link or offset jump for a local path.
 
 ## Citations and Document View
 
