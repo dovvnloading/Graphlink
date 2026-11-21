@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
 /**
@@ -103,7 +103,7 @@ export function CustomSelect({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const onPanelKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+  const onPanelKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const buttons = [...(panelRef.current?.querySelectorAll<HTMLButtonElement>(".reasoning-option") ?? [])];
     if (!buttons.length) return;
     const focused = buttons.findIndex((button) => button === document.activeElement);
@@ -115,13 +115,12 @@ export function CustomSelect({
       event.preventDefault();
       buttons[event.key === "Home" ? 0 : buttons.length - 1].focus();
     } else if (event.key === "Tab") {
-      const atBoundary = event.shiftKey ? focused === 0 : focused === buttons.length - 1;
-      if (atBoundary) {
-        // Don't send Tab past the portaled list into the background app.
-        event.preventDefault();
-        setOpen(false);
-        triggerRef.current?.focus();
-      }
+      // A portaled panel sits outside its parent modal's focus trap: native
+      // Tab would be redirected to the first Settings control instead of the
+      // next option. Exit cleanly, then Tab from the trigger to keep going.
+      event.preventDefault();
+      setOpen(false);
+      triggerRef.current?.focus();
     }
   };
 
