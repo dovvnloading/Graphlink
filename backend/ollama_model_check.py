@@ -45,8 +45,8 @@ def _nonnegative_number(value: object) -> float | None:
 async def probe_ollama_model(model_name: str) -> dict[str, float | bool | str | None]:
     """Time a short chat, observe but never execute a tool call, then release HTTP resources.
 
-    keep_alive=0 also tells Ollama to unload the model after each probe,
-    rather than leaving a benchmark-loaded model using the user's VRAM.
+    Keep the checked model available for five minutes, not permanently.
+    /api/ps can then report its newly loaded state to the inventory card.
     """
     client = ollama.AsyncClient(timeout=180.0)
     try:
@@ -54,7 +54,7 @@ async def probe_ollama_model(model_name: str) -> dict[str, float | bool | str | 
             model=model_name,
             messages=[{"role": "user", "content": "In one short sentence, what is two plus two?"}],
             options={"num_predict": 32, "temperature": 0},
-            keep_alive=0,
+            keep_alive="5m",
         )
         load_ns = _nonnegative_number(_field(response, "load_duration"))
         eval_ns = _nonnegative_number(_field(response, "eval_duration"))
@@ -76,7 +76,7 @@ async def probe_ollama_model(model_name: str) -> dict[str, float | bool | str | 
                 messages=[{"role": "user", "content": "Call graphlink_model_check with value 'ok'."}],
                 tools=[_TOOL],
                 options={"num_predict": 64, "temperature": 0},
-                keep_alive=0,
+                keep_alive="5m",
             )
             calls = _field(_field(probe, "message"), "tool_calls")
             if not isinstance(calls, (list, tuple)):
