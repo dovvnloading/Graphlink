@@ -762,6 +762,7 @@ class FileIngestOutcome(NamedTuple):
 def upsert_file_with_chunks(
     db_path: Path, *, source_uri: str, title: str, mime: str, text: str,
     chunks: list, collection_id: int = 0, size_bytes: int | None = None,
+    connection: sqlite3.Connection | None = None,
 ) -> FileIngestOutcome:
     """Ingest a real file by path, atomically replacing its old content.
 
@@ -772,7 +773,8 @@ def upsert_file_with_chunks(
     BEGIN IMMEDIATE serializes competing jobs on the same source.
     """
     digest = content_hash(text)
-    conn = _connect(db_path)
+    # Folder imports reuse one connection while retaining one atomic transaction per file.
+    conn = connection if connection is not None else _connect(db_path)
     try:
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -871,7 +873,8 @@ def upsert_file_with_chunks(
             conn.rollback()
             raise
     finally:
-        conn.close()
+        if connection is None:
+            conn.close()
 
 
 def get_document(db_path: Path, document_id: int) -> dict[str, Any] | None:
@@ -1599,6 +1602,146 @@ def chunks_pending_embedding(
             params.append(collection_id)
         rows = conn.execute(query, params).fetchall()
         return [{"chunk_id": row[0], "text": row[1]} for row in rows]
+    finally:
+        conn.close()
+
+
+def pending_embedding_snapshot(
+    db_path: Path, model_id: str, *, collection_id: int | None = None,
+) -> tuple[int, int]:
+    """Count outstanding vectors and pin their highest chunk ID without loading text.
+
+    A background job must not absorb documents imported after it starts: the
+    high-water mark keeps its progress total and cancellation checkpoints
+    meaningful while later imports can schedule their own embedding pass.
+    """
+    conn = _connect(db_path)
+    try:
+        query = (
+            "SELECT COUNT(*), COALESCE(MAX(c.id), 0) FROM chunks c "
+            "JOIN documents d ON d.id = c.document_id "
+            "LEFT JOIN embeddings e ON e.chunk_id = c.id AND e.model_id = ? "
+            "WHERE e.chunk_id IS NULL"
+        )
+        params: list[Any] = [model_id]
+        if collection_id is not None:
+            query += " AND d.collection_id = ?"
+            params.append(collection_id)
+        count, high_water = conn.execute(query, params).fetchone()
+        return int(count), int(high_water)
+    finally:
+        conn.close()
+
+
+def pending_embedding_batch(
+    db_path: Path, model_id: str, *, collection_id: int | None = None,
+    after_chunk_id: int = 0, max_chunk_id: int | None = None, limit: int = 32,
+) -> list[dict[str, Any]]:
+    """Read only the next pending batch using the chunk primary-key cursor."""
+    if limit < 1:
+        raise ValueError("limit must be positive.")
+    conn = _connect(db_path)
+    try:
+        query = (
+            "SELECT c.id, c.text FROM chunks c "
+            "JOIN documents d ON d.id = c.document_id "
+            "LEFT JOIN embeddings e ON e.chunk_id = c.id AND e.model_id = ? "
+            "WHERE e.chunk_id IS NULL AND c.id > ?"
+        )
+        params: list[Any] = [model_id, after_chunk_id]
+        if max_chunk_id is not None:
+            query += " AND c.id <= ?"
+            params.append(max_chunk_id)
+        if collection_id is not None:
+            query += " AND d.collection_id = ?"
+            params.append(collection_id)
+        rows = conn.execute(query + " ORDER BY c.id LIMIT ?", (*params, limit)).fetchall()
+        return [{"chunk_id": row[0], "text": row[1]} for row in rows]
+    finally:
+        conn.close()
+
+
+def has_embeddings_for_search(
+    db_path: Path, model_id: str, *, collection_id: int | None = None,
+) -> bool:
+    """Avoid a provider request when the selected model/workspace has no vectors."""
+    conn = _connect(db_path)
+    try:
+        query = (
+            "SELECT 1 FROM embeddings e "
+            "JOIN chunks c ON c.id = e.chunk_id "
+            "JOIN documents d ON d.id = c.document_id "
+            "WHERE e.model_id = ?"
+        )
+        params: list[Any] = [model_id]
+        if collection_id is not None:
+            query += " AND d.collection_id = ?"
+            params.append(collection_id)
+        return conn.execute(query + " LIMIT 1", params).fetchone() is not None
+    finally:
+        conn.close()
+
+
+def iter_embedding_vector_batches(
+    db_path: Path, model_id: str, *, collection_id: int | None = None,
+    batch_size: int = 256,
+):
+    """Stream compact (id, dimension, vector) records, not the corpus's text.
+
+    Keeping one SQLite read cursor and fetching fixed-size batches avoids
+    allocating 200,000 BLOBs and passages before a single cosine score exists.
+    Metadata is fetched only for the final top-k results.
+    """
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive.")
+    conn = _connect(db_path)
+    try:
+        query = (
+            "SELECT e.chunk_id, e.dim, e.vector FROM embeddings e "
+            "JOIN chunks c ON c.id = e.chunk_id "
+            "JOIN documents d ON d.id = c.document_id "
+            "WHERE e.model_id = ?"
+        )
+        params: list[Any] = [model_id]
+        if collection_id is not None:
+            query += " AND d.collection_id = ?"
+            params.append(collection_id)
+        cursor = conn.execute(query, params)
+        while batch := cursor.fetchmany(batch_size):
+            yield batch
+    finally:
+        conn.close()
+
+
+def embedding_hit_metadata(
+    db_path: Path, chunk_ids: list[int], *, collection_id: int | None = None,
+) -> dict[int, dict[str, Any]]:
+    """Retrieve passage text and citation fields for top-k IDs only."""
+    if not chunk_ids:
+        return {}
+    conn = _connect(db_path)
+    try:
+        placeholders = ",".join("?" for _ in chunk_ids)
+        query = (
+            "SELECT c.id, c.document_id, c.ordinal, c.text, c.token_count, "
+            "c.offset_start, c.offset_end, d.title, d.source_uri, c.source_node_id "
+            "FROM chunks c JOIN documents d ON d.id = c.document_id "
+            f"WHERE c.id IN ({placeholders})"
+        )
+        params: list[Any] = list(chunk_ids)
+        if collection_id is not None:
+            query += " AND d.collection_id = ?"
+            params.append(collection_id)
+        rows = conn.execute(query, params).fetchall()
+        return {
+            int(row[0]): {
+                "chunk_id": row[0], "document_id": row[1], "ordinal": row[2],
+                "text": row[3], "token_count": row[4], "offset_start": row[5],
+                "offset_end": row[6], "document_title": row[7], "source_uri": row[8],
+                "source_node_id": row[9],
+            }
+            for row in rows
+        }
     finally:
         conn.close()
 

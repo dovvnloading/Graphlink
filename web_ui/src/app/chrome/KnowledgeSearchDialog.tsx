@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
 import { Dialog, useOverlays } from "../overlays/overlays";
+import type { KnowledgeCitationSource } from "../canvas/ChatCitationChips";
 
 /**
  * ADR-017 stage 17.5: the "Knowledge" search panel - a human-driven,
@@ -17,18 +18,11 @@ import { Dialog, useOverlays } from "../overlays/overlays";
  * `: void`).
  *
  * "N sources used" (the ADR's own stage-17.5 exit criterion phrasing):
- * the result count heading below. "Opens the cited source at the right
- * offset": each result IS already the exact passage recorded at
- * `document[offsetStart:offsetEnd]` (backend.knowledge_chunking's own
- * offset-exactness contract) - expanding a card reveals that precise
- * span verbatim, and a source whose `sourceUri` is a real http(s) URL
- * (a web-research-retained page) gets a genuine "Open source" link. A
- * local file path has no OS-level "jump to this byte offset" mechanism
- * anywhere in this codebase (verified before building this - see this
- * ADR's own stage 17.5 recon) - this component does not fabricate one;
- * the offset is shown as citation metadata and the excerpt itself IS the
- * content at that offset, which is the honest, buildable version of the
- * exit criterion's own claim.
+ * the result count heading below. Server-derived citation identifiers
+ * open the existing Document View through knowledge/openCitation, whose
+ * workspace and chunk identity checks precede highlighting. The card
+ * reveals the exact passage, and a genuine http(s) source also has its
+ * external Open source link. No OS-level file-path jump is fabricated.
  */
 
 interface KnowledgeSearchResult {
@@ -40,6 +34,9 @@ interface KnowledgeSearchResult {
   offsetStart: number;
   offsetEnd: number;
   rankSignals?: { fts5?: number; vector?: number };
+  citationId?: string;
+  sourceFile?: string;
+  section?: string;
 }
 
 
@@ -86,6 +83,7 @@ function formatLastSync(value: string | null): string {
   return Number.isNaN(time) ? "—" : new Date(time).toLocaleString();
 }
 
+const DOCUMENT_PAGE_SIZE = 50;
 const DROP_CHUNK_BYTES = 192 * 1024;
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_JOB_BYTES = 500 * 1024 * 1024;
@@ -146,8 +144,16 @@ function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
 }
 
-function KnowledgeResultCard({ result }: { result: KnowledgeSearchResult }) {
+function KnowledgeResultCard({
+  result, onOpenCitation,
+}: {
+  result: KnowledgeSearchResult;
+  onOpenCitation?: (source: KnowledgeCitationSource) => void;
+}) {
   const [expanded, setExpanded] = useState(false);
+  const canOpenCitation = Boolean(onOpenCitation && /^kb:[0-9a-f]{20}$/.test(result.citationId ?? "") &&
+    Number.isSafeInteger(result.documentId) && Number.isSafeInteger(result.chunkId) &&
+    result.offsetStart >= 0 && result.offsetEnd >= result.offsetStart);
 
   return (
     <li className="knowledge-result-item">
@@ -155,6 +161,7 @@ function KnowledgeResultCard({ result }: { result: KnowledgeSearchResult }) {
         type="button"
         className="knowledge-result-header"
         aria-expanded={expanded}
+        aria-controls={expanded ? `knowledge-result-body-${result.chunkId}` : undefined}
         onClick={() => setExpanded((value) => !value)}
       >
         <span className="knowledge-result-title">{result.documentTitle}</span>
@@ -175,12 +182,27 @@ function KnowledgeResultCard({ result }: { result: KnowledgeSearchResult }) {
         )}
       </button>
       {expanded && (
-        <div className="knowledge-result-body">
+        <div id={`knowledge-result-body-${result.chunkId}`} className="knowledge-result-body">
           <p className="knowledge-result-excerpt">{result.text}</p>
           <div className="knowledge-result-footer">
             <span className="knowledge-result-offset">
               Offset {result.offsetStart}–{result.offsetEnd}
             </span>
+            {canOpenCitation && (
+              <button
+                type="button"
+                className="knowledge-search-button"
+                onClick={() => onOpenCitation?.({
+                  citationId: result.citationId ?? "", documentId: result.documentId,
+                  chunkId: result.chunkId, documentTitle: result.documentTitle,
+                  sourceUri: result.sourceUri, sourceFile: result.sourceFile ?? result.sourceUri,
+                  section: result.section ?? "Unsectioned", offsetStart: result.offsetStart,
+                  offsetEnd: result.offsetEnd, excerpt: result.text, cited: true,
+                })}
+              >
+                Open in Document View
+              </button>
+            )}
             {isHttpUrl(result.sourceUri) && (
               <a
                 className="knowledge-result-open-link"
@@ -203,14 +225,23 @@ export function KnowledgeSearchDialog({
   onOpenDocumentView,
 }: {
   transport: WsTransport;
-  onOpenDocumentView?: (content: string, sourceLabel: string) => void;
+  onOpenDocumentView?: (content: string, sourceLabel: string, citation?: KnowledgeCitationSource) => void;
 }) {
   const overlays = useOverlays();
   const [documents, setDocuments] = useState<KnowledgeLibraryDocument[]>([]);
+  const [documentPage, setDocumentPage] = useState(0);
+  const documentPageCount = Math.max(1, Math.ceil(documents.length / DOCUMENT_PAGE_SIZE));
+  const currentDocumentPage = Math.min(documentPage, documentPageCount - 1);
+  const firstDocument = currentDocumentPage * DOCUMENT_PAGE_SIZE;
+  const visibleDocuments = documents.slice(firstDocument, firstDocument + DOCUMENT_PAGE_SIZE);
   const [loadingDocuments, setLoadingDocuments] = useState(true);
   const [libraryError, setLibraryError] = useState<string | null>(null);
   const [documentAction, setDocumentAction] = useState<number | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<number | null>(null);
+  const confirmRemoveRef = useRef<HTMLButtonElement>(null);
+  const restoreRemoveRef = useRef<number | null>(null);
+  const refreshButtonRef = useRef<HTMLButtonElement>(null);
+  const [documentStatus, setDocumentStatus] = useState<string | null>(null);
   const [watchedFolders, setWatchedFolders] = useState<WatchedFolder[]>([]);
   const [loadingWatches, setLoadingWatches] = useState(true);
   const [watchError, setWatchError] = useState<string | null>(null);
@@ -223,6 +254,18 @@ export function KnowledgeSearchDialog({
   const abortUploadRef = useRef(false);
   const latestLibraryRequest = useRef(0);
   const completedJobsRef = useRef(new Set<string>());
+
+  // The Remove button unmounts when confirmation appears. Keep keyboard focus
+  // in the same row rather than dropping it on the document body.
+  useEffect(() => {
+    if (confirmRemove !== null) {
+      confirmRemoveRef.current?.focus();
+    } else if (restoreRemoveRef.current !== null) {
+      const id = restoreRemoveRef.current;
+      restoreRemoveRef.current = null;
+      document.querySelector<HTMLButtonElement>(`[data-knowledge-remove="${id}"]`)?.focus();
+    }
+  }, [confirmRemove]);
 
   const refreshDocuments = useCallback(() => {
     const requestId = ++latestLibraryRequest.current;
@@ -309,6 +352,7 @@ export function KnowledgeSearchDialog({
     if (documentAction !== null) return;
     setDocumentAction(documentId);
     setLibraryError(null);
+    setDocumentStatus(null);
     try {
       const result = await transport.request("knowledge", action, [documentId]) as {
         content?: string;
@@ -321,6 +365,10 @@ export function KnowledgeSearchDialog({
       } else if (action === "removeDocument") {
         setConfirmRemove(null);
         await refreshDocuments();
+        setDocumentStatus("Document removed from this workspace.");
+        refreshButtonRef.current?.focus();
+      } else {
+        setDocumentStatus("Re-indexing queued.");
       }
     } catch (cause) {
       setLibraryError(cause instanceof Error ? cause.message : "Document action failed.");
@@ -451,6 +499,7 @@ export function KnowledgeSearchDialog({
     if (!trimmed || searching) return;
     const requestId = ++latestRequestId.current;
     setSearching(true);
+    setResults(null);
     setError(null);
     transport
       .request("knowledge", "search", [trimmed, 10])
@@ -555,13 +604,15 @@ export function KnowledgeSearchDialog({
       <section aria-label="Workspace documents" className="knowledge-library-section">
         <div className="knowledge-library-heading">
           <h2 className="knowledge-section-title">Documents ({documents.length})</h2>
-          <button type="button" className="knowledge-search-button"
+          <button ref={refreshButtonRef} type="button" className="knowledge-search-button"
             onClick={() => void refreshDocuments()}>Refresh</button>
         </div>
         {libraryError && <p role="alert" className="knowledge-empty">{libraryError}</p>}
+        {documentStatus && <p role="status" className="knowledge-empty">{documentStatus}</p>}
         {loadingDocuments ? <p role="status" className="knowledge-empty">Loading documents…</p> : documents.length === 0 ? (
           <p className="knowledge-empty">No documents yet. Add files or a folder to start indexing.</p>
         ) : (
+          <>
           <div className="knowledge-library-table-scroll">
             <table className="knowledge-library-table">
               <thead><tr>
@@ -570,7 +621,7 @@ export function KnowledgeSearchDialog({
                 <th scope="col">Status</th><th scope="col">Actions</th>
               </tr></thead>
               <tbody>
-                {documents.map((doc) => (
+                {visibleDocuments.map((doc) => (
                   <tr key={doc.documentId}>
                     <td className="knowledge-library-title" title={doc.sourceUri}>{doc.title}</td>
                     <td>{formatType(doc)}</td><td>{formatSize(doc.sizeBytes)}</td>
@@ -589,12 +640,15 @@ export function KnowledgeSearchDialog({
                           onClick={() => void documentIntent(doc.documentId, "reindexDocument")}>Re-index</button>
                         {confirmRemove === doc.documentId ? (
                           <>
-                            <button type="button" className="knowledge-search-button"
+                            <button ref={confirmRemoveRef} type="button" className="knowledge-search-button"
                               disabled={documentAction !== null || importJobs.some(isActive)}
+                              aria-label={`Confirm remove ${doc.title}`}
                               onClick={() => void documentIntent(doc.documentId, "removeDocument")}>
                               Confirm remove
                             </button>
-                            <button type="button" className="knowledge-search-button" onClick={() => setConfirmRemove(null)}>
+                            <button type="button" className="knowledge-search-button"
+                              aria-label={`Keep ${doc.title}`}
+                              onClick={() => { restoreRemoveRef.current = doc.documentId; setConfirmRemove(null); }}>
                               Keep
                             </button>
                           </>
@@ -602,6 +656,7 @@ export function KnowledgeSearchDialog({
                           <button type="button" className="knowledge-search-button"
                             disabled={documentAction !== null || importJobs.some(isActive) || uploadProgress !== null}
                             aria-label={`Remove ${doc.title}`}
+                            data-knowledge-remove={doc.documentId}
                             onClick={() => setConfirmRemove(doc.documentId)}>Remove</button>
                         )}
                       </div>
@@ -611,6 +666,21 @@ export function KnowledgeSearchDialog({
               </tbody>
             </table>
           </div>
+          {documents.length > DOCUMENT_PAGE_SIZE && (
+            <nav aria-label="Document pages" className="knowledge-library-pages">
+              <button type="button" className="knowledge-search-button"
+                disabled={currentDocumentPage === 0}
+                onClick={() => setDocumentPage(currentDocumentPage - 1)}>Previous documents</button>
+              <span className="knowledge-library-page-count" role="status" aria-live="polite" aria-atomic="true">
+                Showing {firstDocument + 1}–{Math.min(firstDocument + DOCUMENT_PAGE_SIZE, documents.length)} of {documents.length}
+                {" "}· Page {currentDocumentPage + 1} of {documentPageCount}
+              </span>
+              <button type="button" className="knowledge-search-button"
+                disabled={currentDocumentPage >= documentPageCount - 1}
+                onClick={() => setDocumentPage(currentDocumentPage + 1)}>Next documents</button>
+            </nav>
+          )}
+          </>
         )}
       </section>
       <section aria-label="Watched folders" className="knowledge-library-section">
@@ -733,6 +803,8 @@ export function KnowledgeSearchDialog({
         </button>
       </div>
 
+      {searching && <p className="knowledge-empty" role="status">Searching indexed sources…</p>}
+
       {error && (
         <p className="knowledge-empty" role="alert">
           {error}
@@ -741,12 +813,18 @@ export function KnowledgeSearchDialog({
 
       {results != null && !error && (
         <>
-          <h2 className="knowledge-section-title">
-            {results.length === 0 ? "No sources found" : `${results.length} source${results.length === 1 ? "" : "s"} used`}
-          </h2>
+          <div role="status" aria-live="polite" aria-atomic="true">
+            <h2 className="knowledge-section-title">
+              {results.length === 0 ? "No sources found" : `${results.length} source${results.length === 1 ? "" : "s"} used`}
+            </h2>
+          </div>
           <ul className="knowledge-result-list">
             {results.map((result) => (
-              <KnowledgeResultCard key={result.chunkId} result={result} />
+              <KnowledgeResultCard key={result.chunkId} result={result}
+                onOpenCitation={onOpenDocumentView ? (source) => {
+                  onOpenDocumentView("", source.documentTitle, source);
+                  overlays.close();
+                } : undefined} />
             ))}
           </ul>
         </>

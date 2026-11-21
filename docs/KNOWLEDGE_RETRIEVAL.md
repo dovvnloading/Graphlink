@@ -221,3 +221,37 @@ Markdown in stored chunks and may be absent for PDFs or plain-text sources.
 The model-tool serializer (`backend/tools_knowledge.py`) also exposes
 `rank_signals` and `rrf_score` alongside source and citation fields, so
 Builder and workspace agents see the same match provenance as panel searches.
+
+
+## Scale and accessibility audit: 5,000 documents / 200,000 chunks
+
+Run the deterministic, offline scale benchmark from the repository root:
+
+```sh
+python -m backend.tests.perf.measure_knowledge_library
+```
+
+It builds a **disposable** SQLite corpus of 5,000 documents and 200,000
+FTS5-indexed, embedded chunks. It reports document-list, lexical search,
+exact vector top-10, verified citation-opening latency, plus 3,200-chunk
+embedding and 200-file ingestion throughput samples. The fake provider
+measures local pipeline throughput, not model inference or network calls.
+Times depend on the host CPU, disk and SQLite build; they are observations,
+not hard, flaky CI timing thresholds.
+
+The library renders 50 document rows per page rather than mounting 5,000
+sets of action controls. Vector retrieval remains an **exact flat scan**:
+it streams batches of compact stored vectors, keeps a bounded top-k heap,
+and fetches full passage text only for winners. Computation and SQLite
+I/O still scale linearly with the number of embeddings (this is not an
+approximate-nearest-neighbor index), while peak memory no longer grows
+with all chunk text and vectors. The embedding background job pins a
+count/high-water mark and loads only the next missing batch; folder ingest
+reuses its SQLite connection while keeping independent per-file commits
+and rollbacks.
+
+Knowledge search cards can open a server-verified citation in the existing
+Document View at the indexed passage; external source links remain separate.
+Document-list pagination, search status and destructive-action
+confirmations have keyboard controls and screen-reader announcements.
+The side reader becomes inert when closed and restores focus on exit.

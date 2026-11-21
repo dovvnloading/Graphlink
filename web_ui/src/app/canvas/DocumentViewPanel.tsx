@@ -177,6 +177,34 @@ export function DocumentViewPanel({
   const panelRef = useRef<HTMLElement>(null);
   const dragStartRef = useRef<{ pointerX: number; startWidth: number } | null>(null);
 
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  // This reader stays mounted for its width animation. aria-hidden alone
+  // leaves its hidden controls in the Tab order; inert removes them. On open
+  // we move focus into the landmark, and on close return it to the button
+  // that opened the reader (whether that was in the library or on the canvas).
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    panel.inert = !isOpen;
+    if (isOpen) {
+      if (!panel.contains(document.activeElement)) {
+        previousFocusRef.current = document.activeElement as HTMLElement | null;
+      }
+      panel.focus();
+    } else {
+      const restore = previousFocusRef.current;
+      previousFocusRef.current = null;
+      if (restore && document.contains(restore)) restore.focus();
+    }
+  }, [isOpen]);
+
+  // A citation source arrives asynchronously. Re-announce the verified
+  // passage after content/offsets replace the initial loading message.
+  useEffect(() => {
+    if (isOpen && citation) panelRef.current?.focus();
+  }, [isOpen, citation]);
+
   // Real Pointer Capture, not a window-level pointermove/pointerup pair:
   // capturing the pointer on the handle ITSELF guarantees the browser keeps
   // routing every subsequent event for that pointer ID here (even once the
@@ -489,6 +517,7 @@ export function DocumentViewPanel({
         .filter(Boolean)
         .join(" ")}
       aria-label="Document View"
+      tabIndex={-1}
       aria-hidden={!isOpen}
       style={{ width: isOpen ? (isExpanded ? undefined : width) : 0 }}
     >
