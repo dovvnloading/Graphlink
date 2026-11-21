@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ChatRerunDialog, sameChatRerunProgress } from "./ChatRerunDialog";
-import type { ChatRerunPreview, SceneStore } from "./sceneStore";
+import type { ChatRerunPreview, ChatRerunStatus, SceneStore } from "./sceneStore";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
 
 function makePreview(count: number): ChatRerunPreview {
@@ -26,7 +26,7 @@ function renderDialog(count: number, skipped: ChatRerunPreview["skipped"] = [], 
   const previewChatRerun = vi.fn(async () => ({ ...makePreview(count), skipped }));
   const onRunBoundNodes = vi.fn();
   const startChatRerun = vi.fn(async () => ({ jobId: "job-1" }));
-  const getChatRerunStatus = vi.fn(async (_jobId?: string, _afterCompleted?: number) => ({
+  const getChatRerunStatus = vi.fn(async (_jobId?: string, _afterCompleted?: number): Promise<ChatRerunStatus> => ({
     jobId: "job-1", status: terminal ? "completed" as const : "running" as const,
     completed: terminal ? count : 1, total: count, currentNodeId: "reply-1",
     error: "", cancelRequested: false,
