@@ -60,9 +60,9 @@ async def _history_with_chat_knowledge(
     if not history or not isinstance(query, str) or not query.strip():
         return history
     try:
+        extra = {"settings_manager": settings_manager} if settings_manager is not None else {}
         hits = await asyncio.to_thread(
-            search_chat_knowledge, query[:1500], workspace_id,
-            settings_manager=settings_manager,
+            search_chat_knowledge, query[:1500], workspace_id, **extra,
         )
     except Exception:
         _logger.warning("Chat knowledge lookup failed; proceeding without retrieval", exc_info=True)
@@ -698,9 +698,9 @@ async def _send_model_comparison(
 
     history = document.chat_branch_history(user.id)
     history = await _history_with_chat_knowledge(
-            history, text, document.current_workspace_id,
-            settings_manager=getattr(agent_dispatcher, "_settings_manager", None),
-        )
+        history, text, document.current_workspace_id,
+        settings_manager=getattr(agent_dispatcher, "_settings_manager", None),
+    )
     parent_edge = document._branch_parent_edge(user.id)
     context_history = (
         document.chat_branch_history(parent_edge.source) if parent_edge else []
