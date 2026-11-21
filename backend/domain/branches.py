@@ -151,11 +151,10 @@ class BranchOps(SceneDocumentParts):
         the node it's set on (the caller's job to pass the branch ROOT's
         node_id, mirroring set_model_override's own "branch root" framing
         for override fields). PURE - this method only flips the flag; the
-        actual one-time indexing pass over the branch's text is
-        backend/api/intents_knowledge.py's own job (that intent calls
-        chat_branch_history() + backend.knowledge_ingest.ingest_text()
-        BEFORE calling this method, so a document I/O failure never leaves
-        the flag set without the indexing having actually happened) -
+        actual branch indexing or removal is
+        backend/api/intents_knowledge.py's own job (it writes the workspace
+        source BEFORE calling this method, so document I/O failure never
+        leaves this flag disagreeing with the search index) -
         mirroring this whole file's own "SceneDocument mutates the graph,
         intents own the side effects" separation (chat_library persistence
         is owned by intents_chat_library.py, never by graph.py/branches.py

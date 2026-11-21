@@ -38,8 +38,8 @@ from backend.knowledge_ingest import IngestError, is_supported_knowledge_file
 from backend.knowledge_embedding_config import configured_hybrid_search
 from backend.knowledge_store import (
     DEFAULT_DB_PATH, get_or_create_workspace_collection, open_cited_document, replace_branch_document_with_chunks,
-    list_library_documents, file_sources_for_document, remove_library_document, library_document_text,
-    display_source_label,
+    list_library_documents, file_sources_for_document, remove_library_document, remove_branch_document,
+    library_document_text, display_source_label,
 )
 from backend.notifications import NotificationState
 
@@ -551,47 +551,29 @@ def register_knowledge_intents(
     # already-running synchronous embed call has not returned yet.
     bus.knowledge_embedding_jobs = embedding_jobs
 
-    async def set_chat_index_into_knowledge(node_id, enabled):
-        """Runs the actual knowledge-store write (chat_branch_history() ->
-        ingest_text()) BEFORE the flag flips - see backend/domain/
-        node_states.py's own comment on ChatState.index_into_knowledge for
-        why: a caller reading `indexIntoKnowledge: true` off the wire must
-        be able to trust the branch really was indexed as of that toggle,
-        never a flag that silently went True while the write underneath it
-        failed. Disabling (`enabled=False`) never de-indexes anything
-        already stored - the flag is a one-shot trigger + a "has this ever
-        been indexed" marker, not a live subscription toggle.
+    async def sync_chat_index_into_knowledge(node_id: str, enabled: bool) -> bool:
+        """Write or remove a branch source before its graph flag changes.
 
-        Validates node_id is a real chat node FIRST, before any knowledge-
-        store write - chat_branch_history() itself does not raise for a
-        bad/non-chat node_id (its own docstring: "should stop the walk
-        quietly rather than raise"), so without this check a non-chat
-        node's empty `content` would silently fail ingestion (IngestError,
-        swallowed below) and this function would return before ever
-        reaching set_chat_index_into_knowledge's own SceneError - the
-        wrong failure surfacing for what is genuinely a bad call, not a
-        transient indexing problem."""
+        Undo and redo call this too: restoring only the node flag would leave
+        the separately stored SQLite search index out of sync with the badge.
+        """
         node = document.nodes.get(node_id)
         if node is None or node.kind != "chat":
             raise SceneError(f"node is not a chat node: {node_id}")
 
-        if enabled:
-            history = document.chat_branch_history(node_id)
-            text = branch_history_to_text(history)
-            # Pin the workspace BEFORE the to_thread hop: another window can
-            # load a different graph while the worker is chunking this one.
-            # Resolving document.current_workspace_id inside the worker would
-            # write the OLD branch into the NEW workspace's collection.
-            workspace_id = document.current_workspace_id
-            # Each node gets a stable persisted key rather than relying on
-            # node_id (reassigned on reload, reused across other graphs).
-            source_key = document.branch_index_sources.setdefault(node_id, uuid4().hex)
-            source_uri = f"branch:{source_key}"
-            title = f"Branch (node {node_id})"
+        # Capture the workspace on the event loop before the blocking worker.
+        workspace_id = document.current_workspace_id
+        source_key = (
+            document.branch_index_sources.setdefault(node_id, uuid4().hex)
+            if enabled else document.branch_index_sources.get(node_id)
+        )
+        source_uri = f"branch:{source_key}" if source_key else ""
+        title = f"Branch (node {node_id})"
 
-            # ADR-020 stage 20.3: same workspace scoping, but use a mutable
-            # source-aware replacement instead of immutable content dedup.
-            def _ingest():
+        if enabled:
+            text = branch_history_to_text(document.chat_branch_history(node_id))
+
+            def ingest():
                 if not text.strip():
                     raise IngestError(f"'{title}' contained no indexable text.")
                 chunks = chunk_text(text)
@@ -602,26 +584,46 @@ def register_knowledge_intents(
                     if workspace_id is not None else 0
                 )
                 return replace_branch_document_with_chunks(
-                    db_path, source_uri=source_uri, title=title,
-                    text=text, chunks=chunks, collection_id=collection_id,
+                    db_path, source_uri=source_uri, title=title, text=text,
+                    chunks=chunks, collection_id=collection_id,
                 )
 
             try:
-                # Same blocking-I/O concern as search() above - this branch ingest
-                # does real SQLite writes (chunk + embedding-cache rows).
-                await asyncio.to_thread(_ingest)
+                await asyncio.to_thread(ingest)
                 embedding_jobs.schedule(workspace_id)
             except IngestError as exc:
                 if notifications is not None:
                     notifications.show(str(exc), "error")
                     await bus.publish("notification")
-                return
-            # A load/new-chat may replace the graph while the DB write is
-            # running. Never mark a newly assigned node id as indexed based
-            # on the old node's completed operation.
-            if document.nodes.get(node_id) is not node:
-                return
+                return False
+        elif source_key:
+            # Remove only this source in the same workspace knowledge.search
+            # queries. Keep the stable key for a later re-index.
+            def remove():
+                collection_id = (
+                    get_or_create_workspace_collection(db_path, workspace_id)
+                    if workspace_id is not None else 0
+                )
+                return remove_branch_document(
+                    db_path, source_uri=source_uri, collection_id=collection_id,
+                )
 
+            await asyncio.to_thread(remove)
+
+        # A graph load may replace this node while the worker is running.
+        if document.nodes.get(node_id) is not node:
+            return False
+        await bus.publish("knowledge-library")
+        return True
+
+    # Registered after this module by canvas.py, undo/redo reuse the same
+    # validated, workspace-scoped document operation.
+    bus.sync_chat_index_into_knowledge = sync_chat_index_into_knowledge
+
+    async def set_chat_index_into_knowledge(node_id, enabled):
+        """Sync search storage first; record and publish the graph flag last."""
+        if not await sync_chat_index_into_knowledge(node_id, enabled):
+            return
         document.record_command(
             "setChatIndexIntoKnowledge", "user",
             lambda: document.set_chat_index_into_knowledge(node_id, enabled),

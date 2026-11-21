@@ -107,7 +107,7 @@ class TestSetChatIndexIntoKnowledgeIntent:
         assert "first message" in full_text
         assert "second message" in full_text
 
-    def test_disabling_clears_the_flag_without_touching_already_indexed_content(self, _isolated_knowledge_db):
+    def test_disabling_removes_the_branch_from_search_and_library(self, _isolated_knowledge_db):
         bus, document, recorder = make_bus()
         node_id = _run(bus.dispatch_intent("scene", "addChatNode", [0, 0, "hello there", True]))
         _run(bus.dispatch_intent("scene", "setChatIndexIntoKnowledge", [node_id, True]))
@@ -115,7 +115,41 @@ class TestSetChatIndexIntoKnowledgeIntent:
         _run(bus.dispatch_intent("scene", "setChatIndexIntoKnowledge", [node_id, False]))
 
         assert document.nodes[node_id].state.index_into_knowledge is False
-        assert len(knowledge_store.list_documents(_isolated_knowledge_db)) == 1  # untouched
+        assert knowledge_store.list_documents(_isolated_knowledge_db) == []
+        assert _run(bus.dispatch_intent("knowledge", "search", ["hello there", 5])) == {"results": []}
+
+    def test_indexed_branch_is_searchable_and_undo_redo_restore_library(self, _isolated_knowledge_db):
+        bus, document, recorder = make_bus()
+        document.current_workspace_id = 41
+        node_id = _run(bus.dispatch_intent("scene", "addChatNode", [0, 0, "uniquejasperword", True]))
+        recorder.messages.clear()
+
+        _run(bus.dispatch_intent("scene", "setChatIndexIntoKnowledge", [node_id, True]))
+        listed = _run(bus.dispatch_intent("knowledge", "listDocuments", []))["documents"]
+        assert len(listed) == 1
+        assert listed[0]["type"] == "text/branch"
+        assert listed[0]["title"] == f"Branch (node {node_id})"
+        assert listed[0]["status"] == "indexed"
+        assert listed[0]["canReindex"] is False
+        assert listed[0]["chunks"] > 0
+        assert "knowledge-library" in recorder.topics_seen()
+        assert len(_run(bus.dispatch_intent("knowledge", "search", ["uniquejasperword", 5]))["results"]) == 1
+
+        _run(bus.dispatch_intent("scene", "undo", []))
+        assert document.nodes[node_id].state.index_into_knowledge is False
+        assert _run(bus.dispatch_intent("knowledge", "listDocuments", []))["documents"] == []
+        assert _run(bus.dispatch_intent("knowledge", "search", ["uniquejasperword", 5])) == {"results": []}
+
+        _run(bus.dispatch_intent("scene", "redo", []))
+        assert document.nodes[node_id].state.index_into_knowledge is True
+        assert len(_run(bus.dispatch_intent("knowledge", "listDocuments", []))["documents"]) == 1
+        assert len(_run(bus.dispatch_intent("knowledge", "search", ["uniquejasperword", 5]))["results"]) == 1
+
+        _run(bus.dispatch_intent("scene", "setChatIndexIntoKnowledge", [node_id, False]))
+        assert _run(bus.dispatch_intent("knowledge", "listDocuments", []))["documents"] == []
+        _run(bus.dispatch_intent("scene", "undo", []))
+        assert document.nodes[node_id].state.index_into_knowledge is True
+        assert len(_run(bus.dispatch_intent("knowledge", "search", ["uniquejasperword", 5]))["results"]) == 1
 
     def test_empty_branch_index_failure_is_published_to_the_user(self, _isolated_knowledge_db):
         bus, document, recorder = make_bus()

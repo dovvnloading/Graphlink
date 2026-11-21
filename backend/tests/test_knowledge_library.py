@@ -242,3 +242,25 @@ def test_saved_chat_documents_report_size_and_legacy_rows_have_fallback(db):
     legacy = {item["title"]: item for item in library()}
     assert legacy["Saved chat"]["sizeBytes"] > 0
     assert legacy["Indexed branch"]["sizeBytes"] > 0
+
+
+
+def test_remove_branch_document_is_source_and_workspace_scoped(db):
+    one = knowledge_store.get_or_create_workspace_collection(db, 51)
+    two = knowledge_store.get_or_create_workspace_collection(db, 52)
+    text = "user: a branch kept for search"
+    for collection_id in (one, two):
+        knowledge_store.replace_branch_document_with_chunks(
+            db, source_uri="branch:shared", title="Chat branch",
+            text=text, chunks=chunk_text(text), collection_id=collection_id,
+        )
+    knowledge_store.replace_branch_document_with_chunks(
+        db, source_uri="branch:other", title="Other branch",
+        text=text, chunks=chunk_text(text), collection_id=one,
+    )
+    assert knowledge_store.remove_branch_document(db, source_uri="branch:shared", collection_id=one)
+    assert not knowledge_store.remove_branch_document(db, source_uri="branch:shared", collection_id=one)
+    assert [row["title"] for row in knowledge_store.list_library_documents(db, collection_id=one)] == ["Other branch"]
+    assert [row["title"] for row in knowledge_store.list_library_documents(db, collection_id=two)] == ["Chat branch"]
+    with pytest.raises(ValueError, match="branch:"):
+        knowledge_store.remove_branch_document(db, source_uri="file:///private/notes.txt", collection_id=one)

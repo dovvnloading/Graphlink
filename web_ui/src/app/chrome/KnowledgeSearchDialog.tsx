@@ -325,6 +325,13 @@ export function KnowledgeSearchDialog({
     }
   }, [knowledgeOpen, refreshDocuments, refreshWatchedFolders]);
 
+  // Branch opt-ins/out and external source removals change the Library without
+  // an ingest job. Refresh while open when the backend publishes that change.
+  useEffect(() => {
+    if (!knowledgeOpen) return;
+    return transport.subscribe("knowledge-library", () => { void refreshDocuments(); });
+  }, [knowledgeOpen, transport, refreshDocuments]);
+
   // Watched syncs run in an app-lifetime service, not the dialog's
   // knowledge-ingest topic. Refresh while open so periodic and manual
   // syncs eventually display their persisted timestamps and file counts.

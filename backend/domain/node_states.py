@@ -1049,11 +1049,9 @@ class ChatState(NodeState):
     # also the TRIGGER for a one-time indexing pass over that history as
     # of right now (backend/api/intents_knowledge.py's own
     # set_chat_index_into_knowledge intent runs the ingest BEFORE flipping
-    # this flag) - there is no live "index every new turn automatically"
-    # pipeline yet (that needs ADR-008's tool-use loop machinery to hook a
-    # real per-turn point; this field's job is the opt-in flag + one
-    # honest snapshot, not a promise of continuous re-indexing this
-    # codebase cannot make yet).
+    # this flag). Clearing it removes the branch's indexed source;
+    # undo/redo also synchronize the external document. New turns are not
+    # indexed automatically - re-add the branch to capture a new snapshot.
     index_into_knowledge: bool = False
     # None follows the workspace's document-presence default. A boolean is a
     # deliberate per-branch preference, resolved along chat ancestry by

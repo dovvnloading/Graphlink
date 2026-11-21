@@ -36,12 +36,31 @@ def register_undo_intents(
         notifications.show(message, msg_type="info")
         await bus.publish("notification")
 
+    async def _sync_knowledge_after_history(command) -> None:
+        # CommandOps restores the graph flag but not the separately persisted
+        # Knowledge Library document. Undo/redo must reconcile both.
+        if command.command_type != "setChatIndexIntoKnowledge":
+            return
+        sync = getattr(bus, "sync_chat_index_into_knowledge", None)
+        if sync is None:
+            return
+        for node_id in command.touched_node_ids:
+            node = document.nodes.get(node_id)
+            if node is not None and node.kind == "chat":
+                if not await sync(node_id, node.state.index_into_knowledge):
+                    raise RuntimeError("Could not restore the branch Knowledge Library index.")
+
     async def undo():
         try:
             command = document.undo()
         except UndoRefusedError as exc:
             await _refuse(str(exc))
             return None
+        try:
+            await _sync_knowledge_after_history(command)
+        except Exception:
+            document.redo()
+            raise
         await publish_scene()
         return command.label
 
@@ -51,6 +70,11 @@ def register_undo_intents(
         except UndoRefusedError as exc:
             await _refuse(str(exc))
             return None
+        try:
+            await _sync_knowledge_after_history(command)
+        except Exception:
+            document.undo()
+            raise
         await publish_scene()
         return command.label
 

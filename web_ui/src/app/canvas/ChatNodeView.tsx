@@ -111,6 +111,10 @@ export interface ChatNodeData extends Record<string, unknown> {
   // (SceneDocument.send_message's branch_from_node_id) once the user
   // types a message and sends it; this callback only stages the pick.
   onBranchFromHere: () => void;
+  // The backend indexes the full root-to-this-node history before publishing
+  // this flag, so the visual indicator always reflects server-confirmed state.
+  indexIntoKnowledge: boolean;
+  onSetIndexIntoKnowledge: (enabled: boolean) => void;
   // ADR-002 Workstream 1 ("Synthesize Branches"): provenance for a
   // Synthesize Branches result node - null/false/"" for every ordinary chat
   // node (the vast majority), which renders no badge/label at all (see the
@@ -269,6 +273,8 @@ function ChatNodeMenu({
   isBranchFocusActive,
   onToggleBranchFocus,
   onBranchFromHere,
+  indexIntoKnowledge,
+  onSetIndexIntoKnowledge,
   branchStatus,
   isFinalDeliverable,
   onSetBranchStatus,
@@ -302,6 +308,8 @@ function ChatNodeMenu({
   isBranchFocusActive: boolean;
   onToggleBranchFocus: () => void;
   onBranchFromHere: () => void;
+  indexIntoKnowledge: boolean;
+  onSetIndexIntoKnowledge: (enabled: boolean) => void;
   branchStatus: string;
   isFinalDeliverable: boolean;
   onSetBranchStatus: (status: string) => void;
@@ -393,6 +401,13 @@ function ChatNodeMenu({
         }}
       >
         Branch from Here
+      </button>
+      <button type="button" role="menuitemcheckbox" aria-checked={indexIntoKnowledge}
+        onClick={() => {
+          onSetIndexIntoKnowledge(!indexIntoKnowledge);
+          onClose();
+        }}>
+        {indexIntoKnowledge ? "Remove from Knowledge Library" : "Add branch to Knowledge Library"}
       </button>
       {/* ADR-002 Workstream 1 ("Branch status and lifecycle"): the final
           sequenced item after fork/compare/synthesize, grouped here right
@@ -767,6 +782,7 @@ export function chatNodePropsAreEqual(prev: NodeProps<ChatFlowNode>, next: NodeP
     a.isCollapsed === b.isCollapsed &&
     a.staleness === b.staleness &&
     a.isBranchFocusActive === b.isBranchFocusActive &&
+    a.indexIntoKnowledge === b.indexIntoKnowledge &&
     a.branchStatus === b.branchStatus &&
     a.isFinalDeliverable === b.isFinalDeliverable &&
     a.provider === b.provider &&
@@ -800,6 +816,7 @@ export function chatNodePropsAreEqual(prev: NodeProps<ChatFlowNode>, next: NodeP
     a.onScrollChange === b.onScrollChange &&
     a.onToggleBranchFocus === b.onToggleBranchFocus &&
     a.onBranchFromHere === b.onBranchFromHere &&
+    a.onSetIndexIntoKnowledge === b.onSetIndexIntoKnowledge &&
     a.onSetBranchStatus === b.onSetBranchStatus &&
     a.onSetFinalDeliverable === b.onSetFinalDeliverable &&
     a.onCollapseBranch === b.onCollapseBranch &&
@@ -1056,6 +1073,16 @@ export const ChatNodeView = memo(function ChatNodeView({
             {data.isFinalDeliverable && (
               <span className="chat-node-final-badge" title="Final Deliverable" aria-label="Final Deliverable">★</span>
             )}
+            {data.indexIntoKnowledge && (
+              <span className="chat-node-knowledge-badge" role="status"
+                aria-label="Indexed in Knowledge Library" title="Indexed in Knowledge Library">
+                <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M3 2.5h7l3 3v8H3z" strokeLinejoin="round" />
+                  <path d="M10 2.5v3h3M5.5 8h5M5.5 10.5h5" strokeLinecap="round" />
+                </svg>
+                In Knowledge Library
+              </span>
+            )}
           </span>
           <span className="chat-node-title-actions">
             {!collapsed && (
@@ -1113,6 +1140,8 @@ export const ChatNodeView = memo(function ChatNodeView({
             isBranchFocusActive={data.isBranchFocusActive}
             onToggleBranchFocus={data.onToggleBranchFocus}
             onBranchFromHere={data.onBranchFromHere}
+            indexIntoKnowledge={data.indexIntoKnowledge}
+            onSetIndexIntoKnowledge={data.onSetIndexIntoKnowledge}
             branchStatus={data.branchStatus}
             isFinalDeliverable={data.isFinalDeliverable}
             onSetBranchStatus={data.onSetBranchStatus}

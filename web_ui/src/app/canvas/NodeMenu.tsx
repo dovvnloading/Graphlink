@@ -45,6 +45,8 @@ import type { ReactNode } from "react";
  */
 
 const VIEWPORT_MARGIN = 8;
+// Checkbox and radio actions belong in the same keyboard focus sequence.
+const MENU_ITEMS = '[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]';
 
 export function NodeMenu({
   position,
@@ -89,7 +91,7 @@ export function NodeMenu({
     // and every WAI-ARIA menu pattern implementation does this regardless of
     // whether the menu was opened by mouse or keyboard, so a screen-reader
     // user doesn't have to guess that a new interactive surface appeared.
-    const first = menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]');
+    const first = menuRef.current?.querySelector<HTMLElement>(MENU_ITEMS);
     first?.focus();
     // Captured into a local, not read via triggerRef.current directly in the
     // cleanup below - triggerRef itself never gets reassigned after mount
@@ -154,7 +156,7 @@ export function NodeMenu({
       // this menu (the mount effect above puts it there on open), so a
       // stray arrow-key press elsewhere on the page is never intercepted.
       if (!menuRef.current?.contains(document.activeElement)) return;
-      const items = Array.from(menuRef.current.querySelectorAll<HTMLElement>('[role="menuitem"]'));
+      const items = Array.from(menuRef.current.querySelectorAll<HTMLElement>(MENU_ITEMS));
       if (items.length === 0) return;
       const currentIndex = items.indexOf(document.activeElement as HTMLElement);
       let nextIndex: number | null = null;

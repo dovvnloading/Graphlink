@@ -30,6 +30,25 @@ describe("Workspace preview selection and list-root validation", () => {
   });
 });
 
+describe("chat Knowledge Library intent forwarding", () => {
+  it("sends explicit true/false setters without opting into offline replay", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.setChatIndexIntoKnowledge("chat-1", true);
+    store.setChatIndexIntoKnowledge("chat-1", false);
+    expect(intents).toEqual([
+      { topic: "scene", intent: "setChatIndexIntoKnowledge", args: ["chat-1", true] },
+      { topic: "scene", intent: "setChatIndexIntoKnowledge", args: ["chat-1", false] },
+    ]);
+    expect(transport.fireIntent).toHaveBeenNthCalledWith(
+      1, "scene", "setChatIndexIntoKnowledge", ["chat-1", true], undefined, false,
+    );
+    expect(transport.fireIntent).toHaveBeenNthCalledWith(
+      2, "scene", "setChatIndexIntoKnowledge", ["chat-1", false], undefined, false,
+    );
+  });
+});
+
 describe("Agent settings intent forwarding", () => {
   it("sends the shell preference without starting or cancelling a task", () => {
     const { transport, intents } = makeFakeTransport();
