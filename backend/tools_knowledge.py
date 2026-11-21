@@ -42,6 +42,7 @@ from pathlib import Path
 from backend.api.intents_knowledge import _resolve_workspace_collection_id
 from backend.domain.graph import SceneDocument
 from backend.knowledge_retrieval import hybrid_search
+from backend.knowledge_embedding_config import configured_hybrid_search
 from backend.knowledge_store import DEFAULT_DB_PATH
 from backend.providers.base import ToolCall, ToolSpec
 from backend.tools import KNOWLEDGE_READ, RunContext, ToolRegistry, ToolResult
@@ -90,6 +91,7 @@ def make_knowledge_search_handler(
     db_path: Path | None = None, *,
     document: SceneDocument | None = None,
     embedding_provider=None, embedding_model_id: str | None = None,
+    settings_manager=None,
 ):
     """Builds the `knowledge.search` handler bound to `db_path` (defaults
     to knowledge_store.DEFAULT_DB_PATH) - a factory rather than a bare
@@ -136,11 +138,18 @@ def make_knowledge_search_handler(
 
         # Hybrid search can do disk I/O and embedding work; keep the event
         # loop free so independent workspace reads can actually overlap.
-        results = await asyncio.to_thread(
-            hybrid_search, resolved_db_path, query,
-            embedding_provider=embedding_provider, embedding_model_id=embedding_model_id,
-            collection_id=collection_id, k=k,
-        )
+        if embedding_provider is not None:
+            # Explicit test/caller injection keeps the original API contract.
+            results = await asyncio.to_thread(
+                hybrid_search, resolved_db_path, query,
+                embedding_provider=embedding_provider, embedding_model_id=embedding_model_id,
+                collection_id=collection_id, k=k,
+            )
+        else:
+            results = await asyncio.to_thread(
+                configured_hybrid_search, resolved_db_path, query,
+                settings_manager=settings_manager, collection_id=collection_id, k=k,
+            )
         return ToolResult(content=_format_results(results))
 
     return handle_knowledge_search
@@ -150,6 +159,7 @@ def register_knowledge_tools(
     registry: ToolRegistry, *, db_path: Path | None = None,
     document: SceneDocument | None = None,
     embedding_provider=None, embedding_model_id: str | None = None,
+    settings_manager=None,
 ) -> None:
     """Registers `knowledge.search` as `auto`-approval (read-only, matching
     every other read-only tool's approval posture in backend/tools.py's own
@@ -162,6 +172,7 @@ def register_knowledge_tools(
         make_knowledge_search_handler(
             db_path, document=document,
             embedding_provider=embedding_provider, embedding_model_id=embedding_model_id,
+            settings_manager=settings_manager,
         ),
         scopes={KNOWLEDGE_READ},
         approval="auto",
