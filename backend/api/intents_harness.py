@@ -64,8 +64,10 @@ def _memory_safe_tool_model(settings_manager, excluded_model: str) -> str | None
             continue
         name = row.get("name")
         size = row.get("sizeBytes")
+        capabilities = row.get("capabilities")
         if (not isinstance(name, str) or not name or name.casefold() == excluded_model.casefold()
-                or type(size) is not int or size <= 0 or "tools" not in row.get("capabilities", ())):
+                or type(size) is not int or size <= 0 or not isinstance(capabilities, (list, tuple))
+                or "tools" not in capabilities):
             continue
         trained = row.get("trainedContextLength")
         limit = trained if type(trained) is int and trained > 0 else DEFAULT_CONTEXT_WINDOW
