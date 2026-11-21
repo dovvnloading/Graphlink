@@ -2152,6 +2152,21 @@ export function toFlowNodes(
     flowNodes.push(placeholderFlowNode);
   }
 
+  // Only non-current nodes get new flow data. Keep unchanged view objects
+  // and callbacks cached so the one-node render-count budget still holds.
+  for (let i = 0; i < flowNodes.length; i++) {
+    const flow = flowNodes[i];
+    const row = nodesById.get(flow.id);
+    const staleness = row?.staleness ?? "current";
+    if (staleness === "current" || (flow.data as Record<string, unknown>).staleness === staleness) continue;
+    const updated = { ...flow, data: { ...flow.data, staleness } } as SceneFlowNode;
+    flowNodes[i] = updated;
+    if (row) {
+      const cached = cache.flowNodes.get(row);
+      if (cached) cache.flowNodes.set(row, { ...cached, flowNode: updated });
+    }
+  }
+
   pruneDispatcherCache(cache, nodesById);
   // React Flow's hidden flag unmounts cards without deleting their internal
   // records. This preserves nested group-drag propagation and the ability

@@ -630,3 +630,18 @@
 .note-text-input-fields button { justify-self: start; }
 .note-text-input-actions { display: flex; align-items: center; gap: 6px; }
 .note-text-input-source { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* A visible shape, patterned outline, and text work without color cues. */
+.node-staleness-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 8px;
+  padding: 4px 7px;
+  border: 1px dashed var(--gl-graph-border);
+  border-radius: 4px;
+  background: var(--gl-graph-surface);
+  color: var(--gl-surface-text-primary);
+  font: 600 11px/1.35 var(--gl-font-family);
+}
+.node-staleness-badge svg { width: 15px; height: 15px; flex: none; }

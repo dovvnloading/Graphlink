@@ -1499,6 +1499,15 @@
             ],
             "type": "object"
           },
+          "staleness": {
+            "default": "current",
+            "enum": [
+              "current",
+              "out_of_date",
+              "upstream_changed"
+            ],
+            "type": "string"
+          },
           "synthesisInstructions": {
             "default": "",
             "type": "string"

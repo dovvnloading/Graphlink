@@ -1,4 +1,4 @@
-import { Handle, Position, useNodeId, useUpdateNodeInternals } from "@xyflow/react";
+import { Handle, Position, useNodeId, useStore, useUpdateNodeInternals } from "@xyflow/react";
 import { useEffect, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 
 import type { MenuPosition } from "./menuPosition";
@@ -30,6 +30,8 @@ interface NodeShellProps {
   textInput?: boolean;
   tablePort?: "source" | "target" | "both";
   modelPort?: boolean;
+  /** Direct-render override; live canvas status is subscribed from React Flow. */
+  staleness?: "current" | "out_of_date" | "upstream_changed";
   footer?: ReactNode;
   onBodyDoubleClick?: (event: MouseEvent<HTMLDivElement>) => void;
 }
@@ -49,9 +51,19 @@ export function NodeShell({
   textInput,
   tablePort,
   modelPort,
+  staleness,
   footer,
   onBodyDoubleClick,
 }: NodeShellProps) {
+  // One O(1) lookup per node, and a primitive-selector subscription: only
+  // the affected card re-renders when a different branch becomes stale.
+  const nodeId = useNodeId();
+  const liveStaleness = useStore((state) => (
+    nodeId ? state.nodeLookup.get(nodeId)?.data.staleness : undefined
+  ));
+  const visibleStaleness = staleness ?? liveStaleness;
+  const label = visibleStaleness === "out_of_date" ? "Out of date"
+    : visibleStaleness === "upstream_changed" ? "Upstream changed" : null;
   return (
     <div
       className={`scene-node scene-node-card ${kindClassName}${selected ? " selected" : ""}${collapsed ? " collapsed" : ""}`}
@@ -82,6 +94,16 @@ export function NodeShell({
             </button>
           )}
         </div>
+        {label && (
+          <div className="node-staleness-badge" role="status">
+            <svg aria-hidden="true" viewBox="0 0 20 20" fill="none"
+              stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round">
+              <path d="M10 2.5 18 17H2L10 2.5Z" />
+              <path d="M10 7v4.5M10 14.5h.01" strokeLinecap="round" />
+            </svg>
+            <span>{label}</span>
+          </div>
+        )}
         {!collapsed && (
           <div className={`scene-node-body ${bodyClassName}`} onDoubleClick={onBodyDoubleClick}>
             {children}
