@@ -182,7 +182,7 @@ function chatRow(id: string, x: number): SceneNodeRow {
         codeSandboxPrompt: "", codeSandboxCode: "", codeSandboxOutput: "",
         codeSandboxAnalysis: "", codeSandboxAwaitingApproval: false,
         codeSandboxError: "", provider: null, model: null, isBranchSynthesis: false,
-        synthesisInstructions: "", branchStatus: "active", responseIncomplete: false,
+        synthesisInstructions: "", branchStatus: "active", staleness: "current", responseIncomplete: false,
         isFinalDeliverable: false,
         color: null, headerColor: null, isSystemPrompt: false, isSummaryNote: false,
         isBranchComparison: false, itemIds: [], isLocked: true, groupWidth: null,

@@ -161,6 +161,7 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
     isBranchSynthesis: false,
     synthesisInstructions: "",
     branchStatus: "active",
+    staleness: "current",
     // ADR-006 stage 6.4
     responseIncomplete: false,
     isFinalDeliverable: false,
@@ -258,6 +259,24 @@ function baseScene(overrides: Partial<SceneState> = {}): SceneState {
     ...overrides,
   };
 }
+
+describe("published staleness on every canvas kind", () => {
+  it("annotates stale chat and non-chat cards without touching current ones", () => {
+    const scene = baseScene({ nodes: [
+      baseNode({ id: "reply", kind: "chat", isUser: false, staleness: "out_of_date" }),
+      baseNode({ id: "code", kind: "code", staleness: "upstream_changed" }),
+      baseNode({ id: "note", kind: "note", staleness: "upstream_changed" }),
+      baseNode({ id: "fresh", kind: "chat", isUser: true }),
+    ] });
+    const data = new Map(toFlowNodes(scene, makeStore()).map((node) => [
+      node.id, node.data as Record<string, unknown>,
+    ]));
+    expect(data.get("reply")?.staleness).toBe("out_of_date");
+    expect(data.get("code")?.staleness).toBe("upstream_changed");
+    expect(data.get("note")?.staleness).toBe("upstream_changed");
+    expect(data.get("fresh")?.staleness).toBeUndefined();
+  });
+});
 
 describe("first-class Model canvas ports", () => {
   it("renders a real Model card with a typed input and a distinct execution edge", () => {

@@ -202,6 +202,13 @@ describe("ChatNodeView citation navigation", () => {
 });
 
 describe("ChatNodeView", () => {
+  it("shows an out-of-date assistant response with a warning shape and text", () => {
+    const { container } = renderChatNode({ isUser: false, staleness: "out_of_date" });
+    expect(screen.getByRole("status")).toHaveTextContent("Out of date");
+    expect(container.querySelector(".node-staleness-badge svg")).not.toBeNull();
+  });
+
+
   it("renders the role and markdown content", () => {
     renderChatNode();
     expect(screen.getByText("You")).toBeInTheDocument();

@@ -104,6 +104,7 @@ export interface SceneNodeRow {
   isBranchSynthesis: boolean;
   synthesisInstructions: string;
   branchStatus: string;
+  staleness: "current" | "out_of_date" | "upstream_changed";
   responseIncomplete: boolean;
   promptTokens?: number | null;
   completionTokens?: number | null;
@@ -737,6 +738,7 @@ const SCENE_NODE_ROW_FIELDS: WireFields = [
   ["isBranchSynthesis", "b", 0, false],
   ["synthesisInstructions", "s", 0, ""],
   ["branchStatus", "s", 0, "active"],
+  ["staleness", { e: ["current", "out_of_date", "upstream_changed"] }, 0, "current"],
   ["responseIncomplete", "b", 0, false],
   ["promptTokens", "n", 1, null],
   ["completionTokens", "n", 1, null],

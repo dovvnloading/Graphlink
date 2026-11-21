@@ -758,6 +758,10 @@ class SceneNodeRow:
     isBranchSynthesis: bool = False
     synthesisInstructions: str = ""
     branchStatus: str = "active"
+    # Derived from a reply's saved generation-context fingerprint. The
+    # default is intentionally omitted from the sparse scene wire; old
+    # sessions without fingerprints always hydrate to "current".
+    staleness: Literal["current", "out_of_date", "upstream_changed"] = "current"
     # ADR-006 stage 6.4 (H5): chat-kind partial reply preserved after a dead
     # stream; the frontend offers Regenerate as the retry affordance.
     responseIncomplete: bool = False

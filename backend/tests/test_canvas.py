@@ -1196,6 +1196,8 @@ def test_regenerate_response_intent_mutates_the_existing_node_in_place_not_a_new
         assert returned_id == assistant_node.id, "the same node id, never a new node"
         assert assistant_node.id in document.nodes
         assert document.nodes[assistant_node.id].content == "regenerated reply"
+        assert assistant_node.state.reply_history_fingerprint is not None
+        assert "staleness" not in next(row for row in document.scene_payload()["nodes"] if row["id"] == assistant_node.id)
         assert len(document.nodes) == node_count_before, "no new node was created"
 
     asyncio.run(run())
@@ -2002,7 +2004,12 @@ def test_send_message_intent_dispatches_a_real_agent_reply():
         reply_node = reply_nodes[0]
         assert reply_node.content == "a real agent reply"
         assert reply_node.state.is_user is False
+        assert reply_node.state.reply_history_fingerprint is not None
+        assert reply_node.state.reply_knowledge_enabled in (True, False)
         assert any(e.source == node_id and e.target == reply_node.id for e in document.edges.values())
+        assert "staleness" not in next(row for row in document.scene_payload()["nodes"] if row["id"] == reply_node.id)
+        document.update_chat_node_content(node_id, "the question changed")
+        assert next(row for row in document.scene_payload()["nodes"] if row["id"] == reply_node.id)["staleness"] == "out_of_date"
         assert document.last_chat_node_id == reply_node.id
         assert recorder.topics_seen().count("scene") >= 2, "user node + reply node both publish scene"
 

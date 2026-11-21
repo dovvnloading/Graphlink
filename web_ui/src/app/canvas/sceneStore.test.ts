@@ -378,6 +378,7 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
         isBranchSynthesis: false,
         synthesisInstructions: "",
         branchStatus: "active",
+        staleness: "current",
         // ADR-006 stage 6.4
         responseIncomplete: false,
         isFinalDeliverable: false,

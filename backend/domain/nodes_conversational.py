@@ -104,6 +104,8 @@ class ConversationalOps(SceneDocumentParts):
         version.cost_usd = node.state.estimated_cost_usd
         version.calls = copy.deepcopy(node.state.tool_invocations)
         version.parts = copy.deepcopy(node.state.content_parts)
+        version.history_fingerprint = node.state.reply_history_fingerprint
+        version.knowledge_enabled = node.state.reply_knowledge_enabled
 
     def update_chat_node_content(
         self, node_id: str, content: str, incomplete: bool = False
@@ -123,6 +125,9 @@ class ConversationalOps(SceneDocumentParts):
         node.content = new_content
         node.state.provider = None
         node.state.model = None
+        # A new attempt must not inherit an older answer's input proof.
+        node.state.reply_history_fingerprint = None
+        node.state.reply_knowledge_enabled = None
         node.state.response_incomplete = bool(incomplete)
         node.state.prompt_tokens = None
         node.state.completion_tokens = None
@@ -159,6 +164,8 @@ class ConversationalOps(SceneDocumentParts):
         node.state.estimated_cost_usd = version.cost_usd
         node.state.tool_invocations = copy.deepcopy(version.calls)
         node.state.content_parts = copy.deepcopy(version.parts)
+        node.state.reply_history_fingerprint = version.history_fingerprint
+        node.state.reply_knowledge_enabled = version.knowledge_enabled
         # A scientific source card is only valid for its original snapshot.
         node.state.science_reference = None
 

@@ -74,6 +74,7 @@ from backend.domain.model import (
 from backend.domain.node_access import is_node_of, require_node
 from backend.domain.node_states import CodeState, FrameState, NodeState
 from backend.domain.node_wire import node_wire
+from backend.domain.staleness import scene_staleness
 from backend.domain.table_workflows import TableOps, TableReadCache
 from backend.domain.nodes_agent_runs import AgentRunOps
 from backend.domain.nodes_code_review import CodeReviewOps
@@ -181,6 +182,11 @@ class SceneDocument(
     # first. Reset in clear_for_load below, same list last_chat_node_id is
     # already in.
     final_deliverable_node_id: str | None = None
+    # Generation-time non-chat input ancestry, captured once when a NEW
+    # derived node first connects to a parent. Stored at document level,
+    # keeping SceneNode's lean core field count and avoiding 20 kind-state
+    # migrations. No entry is synthesized when a legacy graph is loaded.
+    nonchat_upstream_fingerprints: dict[str, str] = field(default_factory=dict)
     # R3.21: in-memory, session-scoped store for image-node bytes, keyed by
     # asset id (see backend/domain/node_states.py's ImageState.image_asset_id,
     # ADR-002 stage 2.5) -> (raw_bytes, mime_type).
@@ -398,7 +404,11 @@ class SceneDocument(
         express and falls back rather than being silently dropped."""
         table_reads = TableReadCache()
         source_digests: dict[str, str] = {}
-        nodes = {node_id: self._node_wire(n, source_digests, table_reads) for node_id, n in self.nodes.items()}
+        stale = scene_staleness(self)
+        nodes = {
+            node_id: self._node_wire(n, source_digests, table_reads, staleness=stale.get(node_id, "current"))
+            for node_id, n in self.nodes.items()
+        }
         edges = {edge_id: self._edge_wire(e) for edge_id, e in self.edges.items()}
         pins = self._pins_wire()
         view = self._view_wire()
@@ -485,6 +495,7 @@ class SceneDocument(
         self.__dict__.pop("_mcp_revision_epoch", None)
         self.nodes.clear()
         self.edges.clear()
+        self.nonchat_upstream_fingerprints.clear()
         self.image_assets.clear()
         self.pins.clear()
         self.last_chat_node_id = None
@@ -852,7 +863,11 @@ class SceneDocument(
         # exception this needs (loading pre-unification saved data).
         if self._reaches(target, source):
             raise SceneError(f"cannot connect {source} -> {target}: would create a cycle")
-        return self._insert_edge(source, target)
+        edge = self._insert_edge(source, target)
+        if self.nodes[target].kind != "chat" and not getattr(self, "_restoring_staleness", False):
+            from backend.domain.staleness import capture_nonchat_context
+            capture_nonchat_context(self, target)
+        return edge
 
     def connect_unchecked(self, source: str, target: str) -> SceneEdge:
         """Everything connect() validates EXCEPT the cycle check - unknown
@@ -1004,6 +1019,7 @@ class SceneDocument(
 
     def _node_wire(
         self, n: SceneNode, source_digests: dict[str, str] | None = None, table_reads: TableReadCache | None = None,
+        *, staleness: str = "current",
     ) -> dict[str, Any]:
         """The per-node wire row - the ONE place both the full snapshot and
         take_dirty_patch_ops's upsertNode ops build a node's payload from
@@ -1015,6 +1031,7 @@ class SceneDocument(
             is_final_deliverable=n.id == self.final_deliverable_node_id,
             text_input_status=self._text_input_status(n, source_digests),
             plugin_state=self._plugin_state_wire(n),
+            staleness=staleness,
         )
         row.update(self._table_output_wire(n, table_reads))
         return row
@@ -1106,8 +1123,12 @@ class SceneDocument(
     def scene_payload(self) -> dict[str, Any]:
         table_reads = TableReadCache()
         source_digests: dict[str, str] = {}
+        stale = scene_staleness(self)
         return {
-            "nodes": [self._node_wire(n, source_digests, table_reads) for n in self.nodes.values()],
+            "nodes": [
+                self._node_wire(n, source_digests, table_reads, staleness=stale.get(n.id, "current"))
+                for n in self.nodes.values()
+            ],
             "edges": [self._edge_wire(e) for e in self.edges.values()],
             "pins": self._pins_wire(),
             **self._meta_wire(),
