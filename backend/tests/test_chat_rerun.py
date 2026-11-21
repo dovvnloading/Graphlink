@@ -753,14 +753,40 @@ def test_preview_hashes_a_branch_once_not_once_per_reply():
 
     import backend.domain.staleness as staleness
 
-    document, user, *_ = _thread()
+    document, user, first, *_ = _thread()
+    dispatcher = _Dispatcher()
     with patch.object(staleness, "_message_input", wraps=staleness._message_input) as hashed:
-        preview = _preview_plan(document, _Dispatcher(), None, user.id, "all_branches_below")
+        preview = _preview_plan(document, dispatcher, None, user.id, "all_branches_below")
     assert preview["count"] == 3
-    # One pass to determine stale targets and one to snapshot ALL history
-    # digests. A per-reply lineage walk makes this four passes instead.
-    assert hashed.call_count == 2 * len(document.nodes)
+    # _thread() warmed all eight message hashes while stamping reply proofs.
+    # Editing the root invalidates it and its five descendants; the stale
+    # selection pass rehashes those six, and preview reuses the same digests.
+    assert hashed.call_count == 6
 
+    def assert_matches_uncached(warm_preview):
+        warm_statuses = scene_staleness(document)
+        warm_hashes = staleness.history_hashes(document)
+        # Bypass the cache for both passes. The preview token commits to each
+        # reply's history fingerprint, so equal plans prove equal fingerprints.
+        with patch.object(staleness, "_immutable_message_signature", return_value=None):
+            uncached_preview = _preview_plan(document, dispatcher, None, user.id, "all_branches_below")
+            uncached_statuses = scene_staleness(document)
+            uncached_hashes = staleness.history_hashes(document)
+        assert uncached_preview == warm_preview
+        assert uncached_statuses == warm_statuses
+        assert uncached_hashes == warm_hashes
+
+    assert scene_staleness(document)[first.id] == "out_of_date"
+    assert_matches_uncached(preview)
+
+    # Re-warm after the forced-uncached pass, then switch the selected version.
+    # Previously cached ancestors must not conceal the restored fresh context.
+    staleness.history_hashes(document)
+    document.set_chat_version(user.id, 0)
+    switched = _preview_plan(document, dispatcher, None, user.id, "all_branches_below")
+    assert switched["previewToken"] != preview["previewToken"]
+    assert first.id not in scene_staleness(document)
+    assert_matches_uncached(switched)
 
 def test_large_preview_and_start_validation_yield_the_event_loop():
     async def exercise():
