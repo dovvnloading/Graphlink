@@ -264,7 +264,9 @@ def test_picker_reads_live_shared_inventory_and_configured_cloud_without_stale_s
         return {"inventory": records}
     monkeypatch.setattr("backend.ollama_inventory.build_ollama_inventory", inventory)
 
-    options = available_picker_models(settings)
+    runtime = api_provider.ProviderRuntime()
+    runtime.initialize_local_provider(config.LOCAL_PROVIDER_OLLAMA)
+    options = available_picker_models(settings, runtime)
     assert len(calls) == 1
     assert {(row["provider"], row["modelId"]) for row in options} == {
         ("Ollama", row["name"]) for row in records
