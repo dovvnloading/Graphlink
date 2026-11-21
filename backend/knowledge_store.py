@@ -481,8 +481,11 @@ def _secure_knowledge_paths(db_path: Path) -> None:
                     continue
             fd = os.open(name, flags, 0o600, dir_fd=parent_fd)
             try:
-                if not stat.S_ISREG(os.fstat(fd).st_mode):
-                    raise OSError("Knowledge SQLite path is not a regular file.")
+                info = os.fstat(fd)
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                    # Chmod on a hard-linked file alters the other name too,
+                    # and SQLite would read/write data outside this store.
+                    raise OSError("Knowledge SQLite path must be a private regular file (no hardlinks).")
                 os.fchmod(fd, 0o600)
             finally:
                 os.close(fd)
