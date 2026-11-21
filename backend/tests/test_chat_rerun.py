@@ -249,6 +249,43 @@ def test_rerun_parses_reasoning_into_reply_thinking_children_with_atomic_undo():
     asyncio.run(exercise())
 
 
+def test_rerun_without_reasoning_preserves_thinking_continuation():
+    async def exercise():
+        document = SceneDocument()
+        user = document.add_chat_node(0, 0, "before edit", True)
+        first = document.add_chat_node(0, 100, "old first", False, parent_id=user.id)
+        thought = document.add_thinking_node(0, 200, "old private reasoning", first.id)
+        follow_up = document.add_chat_node(0, 300, "next question", True, parent_id=thought.id)
+        second = document.add_chat_node(0, 400, "old second", False, parent_id=follow_up.id)
+        for reply, parent in ((first, user), (second, follow_up)):
+            reply.state.provider = "test-provider"
+            reply.state.model = "test-model"
+            reply.state.reply_history_fingerprint = fingerprint_for_reply(
+                document, parent.id, "test-provider", "test-model", False,
+            )
+            reply.state.reply_knowledge_enabled = False
+            document.sync_chat_version(reply.id)
+        document.last_chat_node_id = second.id
+        document.edit_chat_message(user.id, "after edit", "before edit")
+        dispatcher = _Dispatcher(replies=["new first without thinking", "new second without thinking"])
+        intents, _ = _register(document, dispatcher)
+        preview = await intents["previewChatRerun"](user.id, "this_path")
+        assert [row["nodeId"] for row in preview["replies"]] == [first.id, second.id]
+        result = await intents["startChatRerun"](user.id, "this_path", preview["previewToken"], False)
+        done = await _status(intents, result["jobId"])
+        assert (done["status"], done["completed"]) == ("completed", 2)
+        assert document.nodes[thought.id].content == ""
+        assert document._branch_parent_edge(follow_up.id).source == thought.id
+        assert document.nodes[second.id].content == "new second without thinking"
+        document.undo()
+        assert document.nodes[thought.id].content == "old private reasoning"
+        document.redo()
+        assert document.nodes[thought.id].content == ""
+
+    asyncio.run(exercise())
+
+
+
 def test_rerun_status_replays_each_completion_after_job_finishes():
     async def exercise():
         document, user, _, deep, branch, _, _ = _thread()
