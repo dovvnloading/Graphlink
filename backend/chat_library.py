@@ -1968,8 +1968,9 @@ def _resolve_seed_message(document: SceneDocument) -> str:
     than in node.content, so a conversation-only graph must also be named
     from its first message instead of the empty-canvas "New Chat" fallback.
 
-    For graphs with no user message, use their first available content as a
-    best-effort title; preserve "New Chat" only for contentless canvases.
+    Without a user message, use the first chat message or conversation turn
+    as a best-effort title. Ignore non-chat node content, so a canvas with
+    only notes or other non-chat nodes retains the "New Chat" fallback.
     """
     first_content: str | None = None
     for node in document.nodes.values():
@@ -1992,8 +1993,6 @@ def _resolve_seed_message(document: SceneDocument) -> str:
                         first_content = text
                     if message.get("role") == "user":
                         return text
-        elif first_content is None and isinstance(node.content, str) and node.content.strip():
-            first_content = node.content.strip()
     return first_content or "New Chat"
 
 
