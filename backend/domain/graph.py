@@ -231,24 +231,14 @@ class SceneDocument(
     # original saved database row. Not persisted or published: this is a
     # per-load safety latch reset by clear_for_load/newChat.
     unrestored_node_count: int = 0
-    # ADR-020 stage 20.2: which workspace the NEXT save of this document
-    # should INSERT a brand-new graph row into, or None to fall back to the
-    # Default workspace (see save_chat_atomically_row's own workspace_id
-    # docstring in backend/chat_library.py for exactly how this is
-    # consumed). Set by the newChat intent's own optional workspaceId
-    # argument (backend/chat_library.py's new_chat closure, ALREADY
-    # validated against a real, current workspace row by that closure before
-    # it ever reaches here - this field trusts whatever it holds), left None
-    # for a session that never called newChat with an explicit workspace
-    # (every pre-20.2 caller, and the zero-arg newChat() every non-library
-    # caller like commands.ts's palette command still uses). Deliberately
-    # NOT consulted for an UPDATE of an EXISTING graph (current_chat_id
-    # truthy) - resaving a chat never moves it to a different workspace, no
-    # matter what this field holds; only a fresh INSERT reads it. Reset to
-    # None by clear_for_load below, same "fresh session default" list
-    # current_chat_id is already in - a freshly loaded OR freshly cleared
-    # scene has no pending workspace assignment of its own until the next
-    # newChat call sets one.
+    # The active workspace for this scene's knowledge/tools and for the NEXT
+    # new graph's insert. A standalone SceneDocument may start with None;
+    # register_chat_library assigns the real Default workspace on session
+    # startup, even without a saved chat. loadChat adopts its saved graph's
+    # workspace, while newChat selects a validated explicit workspace or
+    # Default. clear_for_load resets this field during an internal restore;
+    # the load/new-chat path always assigns the destination immediately
+    # afterward. Saving an existing graph keeps its persisted workspace.
     current_workspace_id: int | None = None
     # Durable, globally unique identities for explicitly indexed chat
     # branches. Node ids can be reassigned on load, and multiple graphs
