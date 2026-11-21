@@ -474,7 +474,7 @@
         "items": [
           {
             "action": "Ollama and Llama.cpp",
-            "description": "Local models, each with its own Settings page. Nothing leaves the machine. Both scan for installed models rather than making you type an identifier."
+            "description": "Local models have separate Settings pages. Ollama shows server status, can start an already-installed server, pull or remove models, and configure per-model context windows; install the Ollama runtime yourself. Llama.cpp uses selected GGUF files. Model downloads and approved Agent network tools can still use the internet."
           },
           {
             "action": "API Endpoint",

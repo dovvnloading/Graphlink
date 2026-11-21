@@ -51,11 +51,15 @@ On first launch, choose **Load Sample Workspace** in the welcome wizard to explo
 
 | Where the model runs | How to get your first reply |
 | --- | --- |
-| **Ollama** on your machine | Start Ollama and pull a chat model with `ollama pull MODEL`, replacing `MODEL` with an Ollama model tag. Open **Settings → Ollama (Local) → System Scan**. Leave **Chat Model** on **Auto** to use a compatible installed model, or pick one by name. Ollama is the default on a fresh install. |
+| **Ollama** on your machine | Open **Settings → Ollama (Local)** to check server status or **Start Ollama** if it is installed but stopped. Use **Pull** to download a model, then choose it under **Model Selection (per task) → Chat Model**. Ollama is the default on a fresh install. |
 | **Llama.cpp** on your machine | In Graphlink’s Python environment, install `llama-cpp-python` with `python -m pip install llama-cpp-python`. Open **Settings → Llama.cpp (Local)**, choose a GGUF under **Chat Model File**, then **Save Settings**. Choose **Use This Provider** if it is inactive. |
 | **Hosted API** or a **custom endpoint** | Open **Settings → API Endpoint**. Pick a provider, supply its credential and any requested **Base URL**, then choose **Load available models** or type the exact ID into **Default text model**. Select **Save and activate**. |
 
-The composer shows the active route. Use its model picker to switch models on that connection. Under **Per-task models** in API Endpoint settings, you can assign a different model for naming, charts, or web research. To pin the currently selected model to a branch, open the branch root’s chat card menu and choose **Pin to Current Model**. Switch back to that provider before continuing a cloud-pinned branch.
+The composer shows the selected model. Its searchable picker lists installed local models and configured cloud models. Use **Model Selection (per task)** in Ollama settings or **Per-task models** in API Endpoint settings to choose separate models for naming, charts, or web research. To pin a model to a branch, open the branch root’s chat card menu and choose **Pin to Current Model**. Switch back to that provider before continuing a cloud-pinned branch.
+
+### Local models
+
+Graphlink can start an already-installed Ollama server, download and remove models in Settings, display capability badges, and configure a **per-model context window** with a memory estimate. It also supports locally selected llama.cpp GGUF files. For downloads, model cards, **Check**, composer and Agent model pickers, and capability warnings, see the [Local models setup guide](docs/LOCAL_MODELS.md).
 
 ## Knowledge Library
 
