@@ -2403,6 +2403,7 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
         attempt = 0
         json_object_mode = False
         tried_native_after_json = False
+        protocol_correction_sent = False
         while True:
             full_response_content = None
             reasoning_parts: list[str] = []
@@ -2444,8 +2445,46 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                         replay_payload = getattr(event, "replay", None)
                 if not saw_terminal_done:
                     raise RuntimeError("Provider stream ended without a terminal done event.")
+                if use_json_protocol:
+                    from backend.providers.json_tool_protocol import JSONToolProtocolError, parse_tool_turn
+
+                    try:
+                        full_response_content, tool_calls = parse_tool_turn(
+                            full_response_content or "", tuple(tools),
+                        )
+                    except JSONToolProtocolError as protocol_exc:
+                        if protocol_correction_sent:
+                            raise JSONToolProtocolError(
+                                "The model returned invalid workspace JSON again after one "
+                                f"protocol correction: {protocol_exc}"
+                            ) from protocol_exc
+                        # A malformed *completed* response is not a network
+                        # failure or a reason to downgrade schema enforcement.
+                        # Ask this same model once more with the concrete
+                        # contract violation; do not execute any partial calls.
+                        _raise_if_cancelled(cancel_event)
+                        json_messages = [*json_messages, {
+                            "role": "user",
+                            "content": (
+                                f"Workspace JSON tool protocol error: {protocol_exc} "
+                                "Retry this turn with exactly one JSON object containing "
+                                "tool_calls (array) and final_answer (string). "
+                                "Tool calls need an allowed name and arguments_json "
+                                "containing a JSON-encoded object string. "
+                                "Do not include prose, Markdown, or reasoning outside the JSON."
+                            ),
+                        }]
+                        protocol_correction_sent = True
+                        attempt = 0
+                        continue
                 break
             except Exception as retry_exc:
+                # Parser failures must never be misread as an endpoint
+                # rejecting the grammar itself (those are distinct paths).
+                from backend.providers.json_tool_protocol import JSONToolProtocolError
+
+                if isinstance(retry_exc, JSONToolProtocolError):
+                    raise
                 if use_json_protocol:
                     from backend.providers.json_tool_protocol import structured_output_rejected
                     if structured_output_rejected(retry_exc):
@@ -2522,12 +2561,7 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                 _transport_retry_wait(retry_exc, attempt, cancel_event)
                 attempt += 1
 
-        if use_json_protocol:
-            from backend.providers.json_tool_protocol import parse_tool_turn
-            full_response_content, tool_calls = parse_tool_turn(
-                full_response_content or "", tuple(tools),
-            )
-        elif json_tool_fallback and len(tool_calls) > 8:
+        if not use_json_protocol and json_tool_fallback and len(tool_calls) > 8:
             # Match the structured JSON path: a single native turn must not
             # schedule an unbounded batch of workspace tool executions.
             raise RuntimeError("Workspace model requested more than 8 tool calls in one turn.")
