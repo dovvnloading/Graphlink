@@ -196,7 +196,7 @@ _PREVIEW_MAX_CHARS = 140
 # the one-line Library snippet has no citation ledger from which to build
 # clickable/numbered references. Also match an unclosed token: old previews
 # were truncated *before* display and can end halfway through a citation ID.
-_PREVIEW_CITATION_TOKEN = re.compile(r"\\s*\\[kb:[A-Za-z0-9_-]+\\]?")
+_PREVIEW_CITATION_TOKEN = re.compile(r"\s*\[kb:[A-Za-z0-9_-]+\]?")
 
 
 def _clean_chat_preview(text: str) -> str:
