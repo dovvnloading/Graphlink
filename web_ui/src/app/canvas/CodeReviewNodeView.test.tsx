@@ -186,11 +186,13 @@ describe("Walkthrough tab", () => {
       codeReviewQa: [{ question: "Where is auth checked?", answer: "In auth.py." }],
     };
     rerender(
-      <ReactFlowProvider>
-        <CodeReviewNodeView
-          {...({ id: "cr-1", selected: false, data: answered } as unknown as NodeProps<CodeReviewFlowNode>)}
-        />
-      </ReactFlowProvider>,
+      <OverlayProvider>
+        <ReactFlowProvider>
+          <CodeReviewNodeView
+            {...({ id: "cr-1", selected: false, data: answered } as unknown as NodeProps<CodeReviewFlowNode>)}
+          />
+        </ReactFlowProvider>
+      </OverlayProvider>,
     );
     expect((screen.getByLabelText("Ask about this diff") as HTMLInputElement).value).toBe("");
   });
