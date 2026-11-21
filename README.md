@@ -74,6 +74,10 @@ Open **Knowledge** in the top bar to import files or folders, search indexed pas
 3. Click the header of the first branch’s answer, then **Ctrl-click** the second (**Cmd-click** on macOS). Open the command palette with **Ctrl+K** or **Cmd+K**, choose **Synthesize Branches**, and send *“Give me one test that distinguishes these explanations.”* The resulting card records both source branches.
 4. Use **Fit All** to see the whole graph. **Save** keeps it in the **Chat Library**. To share an editable workspace, choose **Export Workspace…** in the Library. To share a snapshot, use **Export Canvas as PNG** in the command palette.
 
+### Edit and re-run branches
+
+You can edit a sent **You** message in place or save the revision as a new branch. Message versions can be switched and compared in Document View; changed inputs can mark replies **Out of date** and derived cards **Upstream changed**. **Re-run from here** previews one path or all branches below and regenerates only ordinary chat replies—not agents, Builder, code sandbox, tool, plugin, or data-bound nodes. See the [branch editing and re-run user guide](docs/BRANCH_RERUN.md) for keyboard steps, scope choices, cancellation, and undo.
+
 ### Connect text to a note
 
 To count the words in a draft, add a plain note using **Add Note** in the command palette. Open **Text input** on that note, choose the Drafter document as the **Text source**, select **Word count**, and choose **Connect**. **Run text input** writes the count into the note. After you edit the draft, the note marks its input as changed and keeps the previous count. Run it again when you want a fresh count.
