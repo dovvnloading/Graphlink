@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { SettingsDialog, parseEnvLines } from "./SettingsDialog";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
 import { ExecutionLimitsProvider } from "../canvas/ExecutionLimitsContext";
-import type { WsTransport } from "../../lib/ws/transport";
+import { WsTimeoutError, type WsTransport } from "../../lib/ws/transport";
 
 // R7.4a: the first dedicated test file for SettingsDialog.tsx - recon for
 // this increment confirmed every sibling chrome dialog built in the same
@@ -100,6 +100,7 @@ const snapshot = {
 
 function makeTransport() {
   const intents: unknown[][] = [];
+  const requests: Array<[string, string, unknown[], number | undefined]> = [];
   // Topic-keyed, not a single shared listener slot - ADR-012 stage 12.6's
   // new Resource Limits section pulls in ExecutionLimitsProvider (below),
   // which subscribes to its own "execution-limits" topic on mount alongside
@@ -121,10 +122,16 @@ function makeTransport() {
     fireIntent: (topic: string, intent: string, args: unknown[] = []) => {
       intents.push([topic, intent, args]);
     },
+    request: (topic: string, intent: string, args: unknown[] = [], timeoutMs?: number) => {
+      intents.push([topic, intent, args]);
+      requests.push([topic, intent, args, timeoutMs]);
+      return Promise.resolve(null);
+    },
   } as unknown as WsTransport;
   return {
     transport,
     intents,
+    requests,
     push: (payload: Record<string, unknown>) => listeners.get("app-settings")?.(payload),
     pushExecutionLimits: (payload: Record<string, unknown>) => listeners.get("execution-limits")?.(payload),
     // ADR-014 stage 14.4: the Plugins page reads a SECOND, independent
@@ -1398,7 +1405,7 @@ describe("Settings > Knowledge embedding source", () => {
   });
 
   it("sorts installed embedding models first and recommends installed nomic-embed-text", async () => {
-    const { user, push, intents } = await openKnowledge({
+    const { user, push, intents, requests } = await openKnowledge({
       knowledgeOllamaModels: ["llama3:latest", "mxbai-embed-large:latest", "nomic-embed-text:latest"],
       knowledgeOllamaCapableModels: ["mxbai-embed-large:latest", "nomic-embed-text:latest"],
     });
@@ -1415,6 +1422,9 @@ describe("Settings > Knowledge embedding source", () => {
     expect(intents).toContainEqual([
       "app-settings", "testKnowledgeEmbedding", ["ollama", "nomic-embed-text:latest", "", false],
     ]);
+    expect(requests).toContainEqual([
+      "app-settings", "testKnowledgeEmbedding", ["ollama", "nomic-embed-text:latest", "", false], 300_000,
+    ]);
     act(() => push({
       ...snapshot, activeSection: "knowledge",
       knowledgeOllamaModels: ["llama3:latest", "mxbai-embed-large:latest", "nomic-embed-text:latest"],
@@ -1422,6 +1432,53 @@ describe("Settings > Knowledge embedding source", () => {
       knowledgeTestStatus: "done", knowledgeNotice: "Embedding test succeeded (768 dimensions).",
     }));
     expect(screen.getByRole("status")).toHaveTextContent("Embedding test succeeded");
+  });
+
+  it("keeps testing during a cold load and never shows a stale timeout after a late success", async () => {
+    const models = {
+      knowledgeOllamaModels: ["nomic-embed-text:latest"],
+      knowledgeOllamaCapableModels: ["nomic-embed-text:latest"],
+    };
+    const { user, push, transport, intents, requests } = await openKnowledge(models);
+    await user.click(screen.getByRole("button", { name: "Embedding source" }));
+    await user.click(await screen.findByRole("button", { name: /^Ollama \\(local\\)/ }));
+
+    // Let the transport deadline expire while the backend's worker still runs.
+    // Its later done publish, not the timed-out reply, is the test result.
+    let rejectReply!: (reason?: unknown) => void;
+    vi.spyOn(transport, "request").mockImplementation((topic, intent, args, timeoutMs) => {
+      requests.push([topic, intent, args, timeoutMs]);
+      return new Promise<unknown>((_resolve, reject) => { rejectReply = reject; });
+    });
+    await user.click(screen.getByRole("button", { name: "Test" }));
+    expect(requests).toContainEqual([
+      "app-settings", "testKnowledgeEmbedding", ["ollama", "nomic-embed-text:latest", "", false], 300_000,
+    ]);
+
+    act(() => push({
+      ...snapshot, ...models, activeSection: "knowledge",
+      knowledgeTestStatus: "running", knowledgeNotice: "",
+    }));
+    expect(screen.getByRole("button", { name: "Testing..." })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent(/may take several minutes to load/i);
+
+    await act(async () => {
+      rejectReply(new WsTimeoutError("request timed out: app-settings/testKnowledgeEmbedding"));
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("button", { name: "Testing..." })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent(/may take several minutes to load/i);
+
+    act(() => push({
+      ...snapshot, ...models, activeSection: "knowledge",
+      knowledgeTestStatus: "done", knowledgeNotice: "Embedding test succeeded (768 dimensions).",
+    }));
+    expect(screen.getByRole("button", { name: "Test" })).toBeEnabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Embedding test succeeded (768 dimensions).");
+    expect(screen.queryByText(/request timed out: app-settings\\/testKnowledgeEmbedding/)).not.toBeInTheDocument();
+    expect(intents).not.toContainEqual([
+      "notification", "showError", ["request timed out: app-settings/testKnowledgeEmbedding"],
+    ]);
   });
 
   it("requires explicit consent before a cloud Test or Save", async () => {
