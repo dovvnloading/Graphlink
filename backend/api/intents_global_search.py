@@ -25,7 +25,7 @@ from dataclasses import dataclass
 
 from backend.api.intents_knowledge import format_search_result_row
 from backend.events import SessionBus
-from backend.knowledge_retrieval import hybrid_search
+from backend.knowledge_embedding_config import configured_hybrid_search
 from backend.knowledge_store import DEFAULT_DB_PATH, get_or_create_workspace_collection
 
 _DEFAULT_K = 20
@@ -92,7 +92,7 @@ def _format_global_search_results(results: list[dict]) -> list[dict]:
     return formatted
 
 
-def register_global_search_intents(bus: SessionBus) -> None:
+def register_global_search_intents(bus: SessionBus, settings_manager=None) -> None:
     async def search(query: str, k: int, workspace_id: int | None = None):
         k = min(max(int(k or _DEFAULT_K), 1), _MAX_K)
 
@@ -139,7 +139,10 @@ def register_global_search_intents(bus: SessionBus) -> None:
                         collection_id = get_or_create_workspace_collection(
                             DEFAULT_DB_PATH, candidate_workspace_id
                         )
-            return hybrid_search(DEFAULT_DB_PATH, query, k=k, collection_id=collection_id)
+            return configured_hybrid_search(
+                DEFAULT_DB_PATH, query, k=k, collection_id=collection_id,
+                settings_manager=settings_manager,
+            )
 
         results = await asyncio.to_thread(_search)
         return {"results": _format_global_search_results(results)}
