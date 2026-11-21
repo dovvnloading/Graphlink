@@ -13,7 +13,6 @@ import asyncio
 import ctypes
 import itertools
 import json
-import os
 import subprocess
 import sys
 import uuid
