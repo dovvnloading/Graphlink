@@ -395,6 +395,13 @@ def _migration_007_file_sources(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_file_sources_document ON file_sources(document_id)")
 
 
+def _migration_008_document_size(conn: sqlite3.Connection) -> None:
+    """Keep the actual source byte size of newly imported files, not a guess from text chunks."""
+    columns = [row[1] for row in conn.execute("PRAGMA table_info(documents)").fetchall()]
+    if "size_bytes" not in columns:
+        conn.execute("ALTER TABLE documents ADD COLUMN size_bytes INTEGER")
+
+
 _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     1: _migration_001_initial_schema,
     2: _migration_002_fts5_lexical_index,
@@ -403,6 +410,7 @@ _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     5: _migration_005_graph_node_chunks,
     6: _migration_006_unique_workspace_collections,
     7: _migration_007_file_sources,
+    8: _migration_008_document_size,
 }
 
 
@@ -720,7 +728,7 @@ class FileIngestOutcome(NamedTuple):
 
 def upsert_file_with_chunks(
     db_path: Path, *, source_uri: str, title: str, mime: str, text: str,
-    chunks: list, collection_id: int = 0,
+    chunks: list, collection_id: int = 0, size_bytes: int | None = None,
 ) -> FileIngestOutcome:
     """Ingest a real file by path, atomically replacing its old content.
 
@@ -742,6 +750,8 @@ def upsert_file_with_chunks(
                 (collection_id, source_uri),
             ).fetchone()
             if old is not None and old[1] == digest:
+                if size_bytes is not None:
+                    conn.execute("UPDATE documents SET size_bytes = ? WHERE id = ?", (size_bytes, old[0]))
                 count = conn.execute(
                     "SELECT COUNT(*) FROM chunks WHERE document_id = ?", (old[0],),
                 ).fetchone()[0]
@@ -754,9 +764,9 @@ def upsert_file_with_chunks(
             created = existing is None
             if created:
                 cursor = conn.execute(
-                    "INSERT INTO documents (collection_id, source_uri, title, mime, content_hash, added_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (collection_id, source_uri, title, mime, digest, _now_iso()),
+                    "INSERT INTO documents (collection_id, source_uri, title, mime, content_hash, added_at, size_bytes) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (collection_id, source_uri, title, mime, digest, _now_iso(), size_bytes),
                 )
                 if cursor.lastrowid is None:
                     raise RuntimeError("SQLite did not return the ingested document id")
@@ -768,6 +778,12 @@ def upsert_file_with_chunks(
                         (existing, part.ordinal, part.text, part.token_count, part.offset_start, part.offset_end)
                         for part in chunks
                     ],
+                )
+
+            if not created and size_bytes is not None:
+                conn.execute(
+                    "UPDATE documents SET size_bytes = COALESCE(size_bytes, ?) WHERE id = ?",
+                    (size_bytes, existing),
                 )
 
             # A document indexed by the old ingest_file API predates the
@@ -959,6 +975,108 @@ def delete_document(db_path: Path, document_id: int) -> bool:
         with conn:
             cursor = conn.execute("DELETE FROM documents WHERE id = ?", (document_id,))
             return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def list_library_documents(db_path: Path, *, collection_id: int) -> list[dict[str, Any]]:
+    """Workspace-scoped rows for the Knowledge Library, with chunk counts and source availability.
+
+    A document may have multiple file aliases, so count chunks independently
+    instead of joining both tables (which would multiply chunk counts).
+    """
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT d.id, d.title, d.mime, d.source_uri, d.size_bytes, d.added_at,
+                   (SELECT COUNT(*) FROM chunks c WHERE c.document_id = d.id),
+                   (SELECT COUNT(*) FROM file_sources f WHERE f.document_id = d.id)
+            FROM documents d WHERE d.collection_id = ?
+            ORDER BY d.added_at DESC, d.id DESC
+            """, (collection_id,),
+        ).fetchall()
+        return [
+            {
+                "documentId": int(row[0]), "title": row[1], "type": row[2] or "text/plain",
+                "sourceUri": row[3], "sizeBytes": row[4], "chunks": int(row[6]),
+                "addedAt": row[5], "status": "indexed", "canReindex": bool(row[7]),
+            }
+            for row in rows
+        ]
+    finally:
+        conn.close()
+
+
+def file_sources_for_document(db_path: Path, *, collection_id: int, document_id: int) -> list[str]:
+    """Resolve only sources that already belong to a document in this workspace."""
+    conn = _connect(db_path)
+    try:
+        return [str(row[0]) for row in conn.execute(
+            "SELECT f.source_uri FROM file_sources f "
+            "JOIN documents d ON d.id = f.document_id "
+            "WHERE d.id = ? AND d.collection_id = ? AND f.collection_id = ? "
+            "ORDER BY f.source_uri", (document_id, collection_id, collection_id),
+        ).fetchall()]
+    finally:
+        conn.close()
+
+
+def remove_library_document(db_path: Path, *, collection_id: int, document_id: int) -> bool:
+    """Remove only the selected workspace document, cascading its aliases and chunks."""
+    conn = _connect(db_path)
+    try:
+        with conn:
+            cursor = conn.execute(
+                "DELETE FROM documents WHERE id = ? AND collection_id = ?", (document_id, collection_id),
+            )
+            return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def library_document_text(db_path: Path, *, collection_id: int, document_id: int) -> dict | None:
+    """Return bounded text for the existing docked Document View.
+
+    Original source bodies are not retained by the knowledge DB. Assemble
+    offset-exact chunks without repeating their overlaps; paragraph
+    separators lost during chunking are represented by blank lines.
+    """
+    conn = _connect(db_path)
+    try:
+        doc = conn.execute(
+            "SELECT title, source_uri FROM documents WHERE id = ? AND collection_id = ?",
+            (document_id, collection_id),
+        ).fetchone()
+        if doc is None:
+            return None
+        rows = conn.execute(
+            "SELECT text, offset_start, offset_end FROM chunks "
+            "WHERE document_id = ? ORDER BY ordinal", (document_id,),
+        ).fetchall()
+        pieces: list[str] = []
+        end = 0
+        length = 0
+        limit = 2_000_000
+        for value, start, stop in rows:
+            if str(doc[1]).startswith("graph:") or start < 0 or stop < start:
+                part = ("\\n\\n" if pieces else "") + value
+            elif start > end:
+                part = ("\\n\\n" if pieces else "") + value
+            else:
+                part = value[max(end - start, 0):]
+            if not part:
+                continue
+            remaining = limit - length
+            if remaining <= 0:
+                break
+            pieces.append(part[:remaining])
+            length += min(len(part), remaining)
+            end = max(end, stop)
+        content = "".join(pieces)
+        if length >= limit:
+            content += "\\n\\n[Document View truncated to 2,000,000 characters]"
+        return {"title": doc[0], "content": content}
     finally:
         conn.close()
 
