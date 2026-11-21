@@ -1031,7 +1031,7 @@ export const ChatNodeView = memo(function ChatNodeView({
                   disabled={!!data.pendingRequestId} onClick={data.onCompareVersions}>Compare</button>
               </span>
             )}
-            {data.branchStatus !== "active" && (
+            {data.branchStatus && data.branchStatus !== "active" && (
               <span className="chat-node-status-badge" role="status" data-status={data.branchStatus}
                 title={`Branch status: ${data.branchStatus}`}
                 aria-label={`Branch status: ${data.branchStatus}`}>
