@@ -205,8 +205,9 @@ async function panAndZoom(page) {
     await sleep(12);
   }
   await page.mouse.up();
-  await page.getByRole("button", { name: "Zoom Out" }).click();
+  // A large fitted graph can already be at minZoom; zoom IN first.
   await page.getByRole("button", { name: "Zoom In" }).click();
+  await page.getByRole("button", { name: "Zoom Out" }).click();
   await sleep(150);
   const samples = await endFrameSampling(page);
   const after = await page.locator(".react-flow__viewport").getAttribute("transform");
