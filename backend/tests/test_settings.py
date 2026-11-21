@@ -1489,7 +1489,7 @@ def test_set_ollama_model_assignment_reads_and_writes_atomically_across_concurre
 
 
 
-def test_ollama_per_model_context_persists_validated_choices_and_defaults(manager, monkeypatch):
+def test_ollama_per_model_context_persists_validated_choices_and_defaults(manager):
     assert manager.get_ollama_context_windows() == {}
     manager.set_ollama_context_window("Llama:7B", 32_768)
     manager.set_ollama_context_window("Qwen:8B", 131_072)
@@ -1502,9 +1502,8 @@ def test_ollama_per_model_context_persists_validated_choices_and_defaults(manage
         manager.set_ollama_context_window("llama:7b", True)
     with pytest.raises(ValueError):
         manager.set_ollama_context_window("", 8192)
-    restored = SettingsManager(manager._settings_path) if hasattr(manager, "_settings_path") else None
-    if restored is not None:
-        assert restored.get_ollama_context_windows() == manager.get_ollama_context_windows()
+    restored = SettingsManager(manager.state_file)
+    assert restored.get_ollama_context_windows() == manager.get_ollama_context_windows()
 
 
 def test_ollama_context_intent_rejects_over_trained_window_and_publishes_preference(manager, monkeypatch):
