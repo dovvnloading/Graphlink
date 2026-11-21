@@ -755,6 +755,8 @@ class SceneNodeRow:
     # Synthesize-Branches fields - see this file's own module docstring.
     provider: str | None = None
     model: str | None = None
+    # Frozen output-routing rule for the selected reply, absent on old replies.
+    modelReason: str | None = None
     isBranchSynthesis: bool = False
     synthesisInstructions: str = ""
     branchStatus: str = "active"

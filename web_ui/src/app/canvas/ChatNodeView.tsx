@@ -120,6 +120,9 @@ export interface ChatNodeData extends Record<string, unknown> {
   // ADR's own "provider/model provenance" acceptance criterion.
   provider: string | null;
   model: string | null;
+  /** Request-time routing rule, absent for replies created before this field. */
+  modelReason: string | null;
+  onOpenModelSettings: () => void;
   isBranchSynthesis: boolean;
   synthesisInstructions: string;
   synthesisSourceNodeIds: string[];
@@ -754,6 +757,7 @@ export function chatNodePropsAreEqual(prev: NodeProps<ChatFlowNode>, next: NodeP
     a.isFinalDeliverable === b.isFinalDeliverable &&
     a.provider === b.provider &&
     a.model === b.model &&
+    a.modelReason === b.modelReason &&
     a.overrideProvider === b.overrideProvider &&
     a.overrideModelId === b.overrideModelId &&
     a.isBranchSynthesis === b.isBranchSynthesis &&
@@ -788,11 +792,72 @@ export function chatNodePropsAreEqual(prev: NodeProps<ChatFlowNode>, next: NodeP
     a.onCollapseBranch === b.onCollapseBranch &&
     a.onPinToCurrentModel === b.onPinToCurrentModel &&
     a.onClearModelOverride === b.onClearModelOverride &&
+    a.onOpenModelSettings === b.onOpenModelSettings &&
     a.onCancelRegenerate === b.onCancelRegenerate &&
     a.subscribeStream === b.subscribeStream &&
     dockedChildrenEqual(a.dockedChildren, b.dockedChildren) &&
     toolInvocationsEqual(a.toolInvocations, b.toolInvocations) &&
     stringArraysEqual(a.synthesisSourceNodeIds, b.synthesisSourceNodeIds)
+  );
+}
+
+/** Request-time reason: the words deliberately describe the OLD reply,
+ * while the actions below change routing for FUTURE replies only. */
+function describeModelReason(reason: string): string {
+  if (reason === "node override") return "A model pin on the sending node selected this reply's model.";
+  if (reason === "branch override") return "A model pin on this conversation branch selected this model.";
+  if (reason === "workspace default") return "The workspace default model selected this reply's model.";
+  if (reason === "task assignment") return "The chat task's assigned model selected this reply's model.";
+  if (reason === "conversation default") return "The conversation default selected this reply's model.";
+  if (reason.startsWith("auto: ")) return `Automatic routing selected this model using the ${reason.slice(6)} policy.`;
+  return `Routing rule: ${reason}`;
+}
+
+/** Same portaled, light-dismiss and roving-keyboard-focus pattern as
+ * GroupColorPicker's NodeMenu popover. Never render for legacy replies. */
+function ModelReasonDisclosure({
+  model, reason, onOpenNodePinMenu, onOpenModelSettings,
+}: {
+  model: string;
+  reason: string;
+  onOpenNodePinMenu: (position: MenuPosition) => void;
+  onOpenModelSettings: () => void;
+}) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [anchor, setAnchor] = useState<MenuPosition | null>(null);
+  function toggle() {
+    if (anchor) {
+      setAnchor(null);
+      return;
+    }
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (rect) setAnchor({ x: rect.left, y: rect.bottom + 6 });
+  }
+  return (
+    <span className="chat-node-model-reason nodrag">
+      <button
+        ref={triggerRef} type="button" className="chat-node-model-reason-trigger nodrag"
+        aria-label={`Why this model: ${model}`}
+        aria-haspopup="menu" aria-expanded={anchor !== null}
+        onClick={toggle}
+      >Why this model</button>
+      {anchor && (
+        <NodeMenu
+          position={anchor} onClose={() => setAnchor(null)}
+          ignoreRef={triggerRef} className="chat-node-model-reason-popover"
+          ariaLabel={`Why this model: ${model}`}
+        >
+          <p className="chat-node-model-reason-description">{describeModelReason(reason)}</p>
+          <p className="chat-node-model-reason-hint">Changes affect future replies, not this recorded answer.</p>
+          <button type="button" role="menuitem" className="chat-node-model-reason-action"
+            onClick={() => { onOpenNodePinMenu(anchor); setAnchor(null); }}>Change node pin</button>
+          <button type="button" role="menuitem" className="chat-node-model-reason-action"
+            onClick={() => { setAnchor(null); onOpenModelSettings(); }}>
+            {reason.startsWith("auto: ") ? "Change automatic selection policy" : "Change task model setting"}
+          </button>
+        </NodeMenu>
+      )}
+    </span>
   );
 }
 
@@ -982,7 +1047,13 @@ export const ChatNodeView = memo(function ChatNodeView({
   ) : hasMetadata && (
     <div className="chat-node-metadata">
       {data.model && (
-        <span className="chat-node-model-badge" title={data.provider ?? undefined}>{data.model}</span>
+        <>
+          <span className="chat-node-model-badge" title={data.provider ?? undefined}>{data.model}</span>
+          {data.modelReason && (
+            <ModelReasonDisclosure model={data.model} reason={data.modelReason}
+              onOpenNodePinMenu={setMenuPosition} onOpenModelSettings={data.onOpenModelSettings} />
+          )}
+        </>
       )}
       {data.overrideModelId && (
         <span className="chat-node-model-override-badge"

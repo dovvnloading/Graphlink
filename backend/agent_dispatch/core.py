@@ -267,7 +267,7 @@ class DispatcherCoreOps(DispatcherParts):
             return ""
         return agents_module.BASE_SYSTEM_PROMPT
 
-    def _resolve_model_ref_for_dispatch(
+    def _resolve_model_for_dispatch(
         self, canvas_document, node_id: str | None, bus: "SessionBus | None" = None,
     ):
         """ADR-018 stage 18.2 + ADR-020 stage 20.3: the full node -> branch
@@ -282,11 +282,10 @@ class DispatcherCoreOps(DispatcherParts):
         so this still returns None in exactly that case, falling through to
         api_provider's existing task-keyed lookup UNCHANGED (see
         _provider_for_model_ref's own docstring in api_provider.py).
-        Diagnostics-worthy (the "why this model" rung name) is thrown away
-        at this layer on purpose - stage 18.3's explain-resolution intent
-        recomputes it fresh from the SAME SceneDocument state the UI can
-        already read, rather than this already-in-flight dispatch trying to
-        smuggle it back out.
+        Return the full ResolvedModel, including its deciding rung. The
+        compatibility _resolve_model_ref_for_dispatch wrapper below returns
+        only the ref to existing dispatch callers; reply provenance captures
+        the rung at request time rather than inferring it from later state.
 
         ADR-020 stage 20.3: `bus`, when supplied, is the one extra piece of
         context needed to find `canvas_document.current_workspace_id`'s own
@@ -327,6 +326,13 @@ class DispatcherCoreOps(DispatcherParts):
         resolved = agents_module.resolve_model_ref(
             agents_module.config.TASK_CHAT, node_ref=node_ref, branch_ref=branch_ref, workspace_ref=workspace_ref, catalog=(),
         )
+        return resolved
+
+    def _resolve_model_ref_for_dispatch(
+        self, canvas_document, node_id: str | None, bus: "SessionBus | None" = None,
+    ):
+        """Compatibility for dispatch callers requiring only a ModelRef."""
+        resolved = self._resolve_model_for_dispatch(canvas_document, node_id, bus=bus)
         return resolved.ref if resolved is not None else None
 
     def is_node_run_live(self, request_id: "str | None") -> bool:

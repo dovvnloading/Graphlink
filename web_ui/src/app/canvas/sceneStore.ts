@@ -2245,6 +2245,11 @@ export class SceneStore {
     this.transport.fireIntent("scene", "clearModelOverride", [nodeId], undefined, true);
   }
 
+  /** Navigate to the existing provider's per-task model setting. */
+  openModelTaskSettings(section: string): void {
+    this.transport.fireIntent("app-settings", "setActiveSection", [section], undefined, true);
+  }
+
   // -- R6.2: Chart node -----------------------------------------------------
   //
   // Mirrors backend/canvas.py's register_canvas() intent names/argument order

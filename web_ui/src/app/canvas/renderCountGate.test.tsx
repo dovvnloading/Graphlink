@@ -181,7 +181,7 @@ function chatRow(id: string, x: number): SceneNodeRow {
         codeSandboxApprovalAllowSourceBuilds: false, codeSandboxApprovalIsRepair: false,
         codeSandboxPrompt: "", codeSandboxCode: "", codeSandboxOutput: "",
         codeSandboxAnalysis: "", codeSandboxAwaitingApproval: false,
-        codeSandboxError: "", provider: null, model: null, isBranchSynthesis: false,
+        codeSandboxError: "", provider: null, model: null, modelReason: null, isBranchSynthesis: false,
         synthesisInstructions: "", branchStatus: "active", staleness: "current", responseIncomplete: false,
         isFinalDeliverable: false,
         color: null, headerColor: null, isSystemPrompt: false, isSummaryNote: false,

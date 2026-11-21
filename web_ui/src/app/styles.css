@@ -1225,6 +1225,67 @@ body {
   max-width: 140px;
 }
 
+/* Recorded model-routing disclosure: plain --gl-* surface tokens only,
+   positioned outside React Flow's clipped/transformed node by NodeMenu. */
+.chat-node-model-reason {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.chat-node-model-reason-trigger {
+  padding: 2px 4px;
+  color: var(--gl-surface-text-muted);
+  background: transparent;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.chat-node-model-reason-trigger:hover,
+.chat-node-model-reason-trigger:focus-visible {
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-hover);
+}
+.chat-node-model-reason-popover {
+  z-index: var(--gl-z-node-menu);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  width: 240px;
+  max-width: 85vw;
+  padding: 10px;
+  background-color: var(--gl-surface-node-body);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  box-shadow: var(--gl-shadow-1);
+  color: var(--gl-surface-text-primary);
+}
+.chat-node-model-reason-description,
+.chat-node-model-reason-hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.chat-node-model-reason-hint {
+  color: var(--gl-surface-text-muted);
+}
+.chat-node-model-reason-action {
+  padding: 6px 8px;
+  text-align: left;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: var(--gl-radius-sm);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.chat-node-model-reason-action:hover,
+.chat-node-model-reason-action:focus-visible {
+  background-color: var(--gl-neutral-button-hover);
+}
+
 /* ADR-018 stage 18.3: the model-override PIN - same plain-text scale as
    .chat-node-model-badge above, but tinted (not muted) since it reflects a
    deliberate user choice governing the NEXT reply, not passive provenance

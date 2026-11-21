@@ -19,6 +19,7 @@ from backend.api.intents_chat import (
     _latest_user_query,
     _make_on_usage,
     _snapshot_active_provider_model,
+    _snapshot_reply_provenance,
     _stamp_reply_provenance,
     _use_knowledge_for_node,
 )
@@ -218,11 +219,11 @@ def _preview_plan(document, dispatcher, bus, root_id: str, scope: str):
     }
 
 
-def _apply_reply(document, node_id: str, answer: str, provider, model, fingerprint, knowledge_enabled):
+def _apply_reply(document, node_id: str, answer: str, provider, model, fingerprint, knowledge_enabled, reason=None):
     """Only the chat node changes; content children and other kinds survive."""
     node = document.nodes[node_id]
     document.update_chat_node_content(node_id, answer)
-    _stamp_reply_provenance(node, provider, model)
+    _stamp_reply_provenance(node, provider, model, reason)
     node.state.reply_history_fingerprint = fingerprint
     node.state.reply_knowledge_enabled = knowledge_enabled
     apply_reply_citations(node, answer)
@@ -316,7 +317,7 @@ def register_chat_rerun_intents(
                     if job["cancelRequested"]:
                         break
                     history = document.chat_branch_history(parent_id)
-                    provider, model = _snapshot_active_provider_model(
+                    provider, model, reason = _snapshot_reply_provenance(
                         agent_dispatcher, document, parent_id, bus,
                     )
                     fingerprint = fingerprint_for_reply(document, parent_id, provider, model, knowledge)
@@ -349,6 +350,7 @@ def register_chat_rerun_intents(
                             "rerunFromHere", "agent",
                             lambda: _apply_reply(
                                 document, node_id_to_run, answer, provider, model, fingerprint, knowledge,
+                                reason,
                             ),
                             node_ids=[node_id_to_run],
                         )
