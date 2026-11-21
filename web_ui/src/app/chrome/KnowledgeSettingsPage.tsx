@@ -194,19 +194,26 @@ export function KnowledgeSettingsPage({
               checked={consent}
               onChange={(event) => setConsent(event.target.checked)}
             />
-            I consent to sending indexed content and search queries to the selected cloud service.
+            I consent to sending indexed content and search queries to the selected cloud API endpoint.
           </label>
           <p className="settings-field-hint">
             With this opt-in, Graphlink sends full text chunks from indexed
             files and saved graphs (including chat messages, code, prompts, and
             notes), plus search queries, to your selected API endpoint.
             Embedding requests send text, not original file bytes or paths.
-            Turning this off stops future requests, but cannot recall text
-            already sent to the provider.
+            Remote endpoints require HTTPS (HTTP is allowed only for local loopback).
+            Consent is bound to this API endpoint; changing its URL requires
+            a new opt-in. Turning this off stops future requests, but cannot
+            recall text already sent to the provider.
           </p>
         </fieldset>
       )}
 
+      <p className="settings-field-hint">
+        This setting controls embedding requests only. When Knowledge is
+        enabled in a chat using a cloud chat model, cited passages may
+        separately be sent to that provider even when embeddings are Off.
+      </p>
       <div className="settings-button-row">
         <button
           type="button"
