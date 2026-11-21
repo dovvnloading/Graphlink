@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from backend.canvas import SceneDocument
+from backend.domain.graph import SceneDocument
 from backend.events import SessionBus
 from backend.settings import register_settings
 from backend.token_counter import TokenCounterState
