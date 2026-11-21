@@ -82,13 +82,26 @@ def test_catalog_is_file_discovered_and_approval_scoped(setup):
     assert registry.scopes_for("science.run") == frozenset({FS_READ, CODE_EXECUTE, GRAPH_MUTATE})
     assert registry.approval_for("science.run") == "once"
 
-    assert json.loads(invoke("science.search").content)["packs"] == []
+    ungranted = json.loads(invoke("science.search").content)
+    assert ungranted["packs"] == []
+    assert ungranted["status"] == "installed_not_granted"
+    assert "installed but not granted" in ungranted["hint"]
+    assert "Settings > Plugins" in ungranted["hint"]
+    # A topic query must not look like a legitimate zero-match search when
+    # none of the installed packs have been granted.
+    query_ungranted = json.loads(invoke("science.search", query="trapezoid").content)
+    assert query_ungranted["operations"] == []
+    assert query_ungranted["total"] == 0
+    assert query_ungranted["status"] == "installed_not_granted"
+    assert query_ungranted["hint"] == ungranted["hint"]
+
     activate("mathematics")
     activate("core")
     catalog = json.loads(invoke("science.search").content)
     assert {p["pack_id"] for p in catalog["packs"]} == {"core", "mathematics"}
     assert not catalog["operations"]
     assert all(p["ready"] for p in catalog["packs"])
+    assert "status" not in catalog
     assert not approvals  # Discovery is read-only and never prompts.
 
     result = json.loads(invoke("science.search", query="trapezoid").content)
