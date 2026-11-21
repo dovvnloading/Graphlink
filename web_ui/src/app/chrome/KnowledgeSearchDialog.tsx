@@ -179,6 +179,7 @@ export function KnowledgeSearchDialog({
         documents: KnowledgeLibraryDocument[];
       };
       if (requestId !== latestLibraryRequest.current) return;
+      if (!result || !Array.isArray(result.documents)) throw new Error("Invalid document list response.");
       setDocuments(result.documents);
       setLibraryError(null);
     } catch (cause) {
@@ -265,6 +266,16 @@ export function KnowledgeSearchDialog({
     abortUploadRef.current = true;
   }
 
+  // Closing the dialog while a browser transfer is in progress discards
+  // incomplete staged uploads. Finished ingestion jobs continue in the
+  // existing backend manager and remain cancellable after reopening.
+  useEffect(() => () => {
+    abortUploadRef.current = true;
+    if (uploadIdRef.current) {
+      void transport.request("knowledge", "cancelUpload", [uploadIdRef.current]).catch(() => {});
+    }
+  }, [transport]);
+
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<KnowledgeSearchResult[] | null>(null);
   const [searching, setSearching] = useState(false);
@@ -294,7 +305,7 @@ export function KnowledgeSearchDialog({
   );
 
   function beginImport(kind: "files" | "folder") {
-    if (picking || importJobs.some(isActive)) return;
+    if (picking || uploadProgress || importJobs.some(isActive)) return;
     setPicking(kind);
     setImportError(null);
     // The picker can legitimately remain open for minutes. This request
