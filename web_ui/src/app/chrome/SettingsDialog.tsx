@@ -145,6 +145,9 @@ const initialState: AppSettingsState = {
   ollamaCurrentModel: "",
   ollamaModelAssignments: {},
   ollamaScannedModels: [],
+  ollamaInventory: [],
+  ollamaInventorySource: "",
+  ollamaServerReachable: null,
   ollamaScanSummary: "",
   ollamaScanStatus: "idle",
   ollamaPullStatus: "idle",
@@ -804,6 +807,13 @@ function OllamaTaskField({
   );
 }
 
+function formatOllamaBytes(value: number | null | undefined): string {
+  if (value == null) return "Unknown";
+  if (value === 0) return "0 B";
+  const unit = Math.min(Math.floor(Math.log(value) / Math.log(1024)), 4);
+  return `${(value / (1024 ** unit)).toFixed(1)} ${["B", "KiB", "MiB", "GiB", "TiB"][unit]}`;
+}
+
 function OllamaPage({ state, transport }: { state: AppSettingsState; transport: WsTransport }) {
   const [draftPullModel, setDraftPullModel] = useState("");
 
@@ -849,6 +859,36 @@ function OllamaPage({ state, transport }: { state: AppSettingsState; transport: 
         </button>
       </div>
       <p className="settings-update-status">{state.ollamaScanSummary}</p>
+      {state.ollamaInventorySource === "folder" && (
+        <p className="settings-field-hint">
+          Models were found on disk. Run System Scan with Ollama running to inspect capabilities and memory usage.
+        </p>
+      )}
+
+      <fieldset className="settings-fieldset">
+        <legend>Local model inventory</legend>
+        {state.ollamaInventory.length === 0 && (
+          <p className="settings-field-hint">Run a system scan to inspect installed models.</p>
+        )}
+        {state.ollamaInventory.map((model) => (
+          <div className="settings-field" key={model.name}>
+            <strong>{model.name}</strong>
+            <span className="settings-field-hint">
+              {model.loaded === true
+                ? `Loaded · ${formatOllamaBytes(model.memoryBytes)} memory in use · ${formatOllamaBytes(model.vramBytes)} VRAM`
+                : model.loaded === false ? "Not loaded" : "Load state unavailable"}
+            </span>
+            <span className="settings-field-hint">
+              {formatOllamaBytes(model.sizeBytes)} on disk · {model.family || "Unknown family"} ·
+              {" "}{model.parameterSize || "Unknown parameter size"} · {model.quantization || "Unknown quantization"}
+              {" "}· Trained context: {model.trainedContextLength?.toLocaleString() ?? "Unknown"} tokens
+            </span>
+            <span className="settings-field-hint">
+              Capabilities: {model.capabilities.join(", ") || "Unavailable"}
+            </span>
+          </div>
+        ))}
+      </fieldset>
 
       <datalist id={OLLAMA_MODELS_DATALIST_ID}>
         {state.ollamaScannedModels.map((model) => (

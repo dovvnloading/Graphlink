@@ -9,6 +9,7 @@ change.
 from __future__ import annotations
 
 import asyncio
+from typing import Awaitable, Callable
 
 import ollama
 
@@ -26,12 +27,13 @@ from backend.api._settings_shared import (
     run_locked,
 )
 from backend.events import SessionBus
+from backend.ollama_inventory import build_ollama_inventory
 from graphlink_settings_store import SettingsManager
 
 
 def register_settings_ollama_intents(
     bus: SessionBus, manager: SettingsManager, state: SettingsSessionState
-) -> None:
+) -> Callable[[], Awaitable[None]]:
     async def set_ollama_reasoning_level(level: str):
         # Checked and applied inside the SAME to_thread hop, not split across
         # an await boundary: a concurrent mode switch (the toolbar's provider
@@ -118,20 +120,20 @@ def register_settings_ollama_intents(
         # pick_ollama_scan_folder (below) can share it with a real path
         # instead of duplicating the scan/persist/report sequence.
         state.ollama_scan_status = "running"
+        state.knowledge_scan_status = "running"
         state.ollama_notice = ""
+        state.knowledge_notice = ""
         await bus.publish("app-settings")
 
         try:
-            # scan_local_ollama_models never raises for "Ollama not
-            # running" - that's reported via the returned server_reachable/
-            # server_error fields (which legacy's own worker/bridge never
-            # surfaced either; matched here, not newly dropped). Only a
-            # genuine, unexpected exception (e.g. a filesystem error
-            # walking a manifest folder) reaches this except.
-            results = await asyncio.to_thread(api_provider.scan_local_ollama_models, scan_path)
+            # /api/tags is authoritative when running; disk manifests are
+            # scanned only while offline or when a folder is explicitly chosen.
+            results = await asyncio.to_thread(build_ollama_inventory, scan_path)
         except Exception as exc:  # noqa: BLE001 - no secret in this path to redact
             state.ollama_scan_status = "error"
+            state.knowledge_scan_status = "error"
             state.ollama_notice = f"Scan failed: {exc}"
+            state.knowledge_notice = f"Could not refresh Ollama models: {exc}"
             await bus.publish("app-settings")
             return
 
@@ -160,10 +162,29 @@ def register_settings_ollama_intents(
             await asyncio.to_thread(run_locked, _persist)
         except Exception as exc:  # noqa: BLE001 - no secret in this path to redact
             state.ollama_scan_status = "error"
+            state.knowledge_scan_status = "error"
             state.ollama_notice = f"Scan failed: {exc}"
+            state.knowledge_notice = f"Could not refresh Ollama models: {exc}"
             await bus.publish("app-settings")
             return
+        # The completed snapshot is shared by both Settings pages and only
+        # published after the scan cache has been persisted successfully.
+        state.ollama_inventory = list(results.get("inventory", []))
+        state.ollama_inventory_source = str(results.get("source", ""))
+        state.ollama_server_reachable = results.get("server_reachable")
         state.ollama_scan_status = "done"
+        state.knowledge_scan_status = "done"
+        capable = any("embeddings" in row["capabilities"] for row in state.ollama_inventory)
+        if state.ollama_inventory_source == "folder":
+            state.knowledge_notice = (
+                "Ollama model names were read from disk; start the server and refresh "
+                "to verify embedding capabilities."
+            )
+        elif not capable:
+            state.knowledge_notice = (
+                "No embedding-capable Ollama models confirmed. "
+                "Try refreshing or pulling nomic-embed-text."
+            )
         await bus.publish("app-settings")
 
     async def scan_ollama_system():
@@ -253,3 +274,4 @@ def register_settings_ollama_intents(
     bus.register_intent("app-settings", "scanOllamaSystem", scan_ollama_system)
     bus.register_intent("app-settings", "pullOllamaModel", pull_ollama_model)
     bus.register_intent("app-settings", "pickOllamaScanFolder", pick_ollama_scan_folder)
+    return scan_ollama_system
