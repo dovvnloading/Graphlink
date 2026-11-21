@@ -260,34 +260,62 @@ def test_malformed_import_cannot_restore_half_a_plan_and_unmapped_ids_never_alia
 
 
 
-def test_final_write_is_reported_as_running_until_sqlite_commits(tmp_path, monkeypatch):
+@pytest.mark.parametrize("commit_succeeds", [False, True], ids=["rollback", "commit"])
+def test_final_write_is_reported_as_running_until_sqlite_commits(tmp_path, monkeypatch, commit_succeeds):
     async def scenario():
         path = tmp_path / "graphs.db"
         _, doc, send = open_session(path)
         setup_chain(doc)
         token = (await send("previewGraphRun", []))["previewToken"]
         original_write = chat_library.save_chat_atomically_row
-        started, released = threading.Event(), threading.Event()
+        loop = asyncio.get_running_loop()
+        started = asyncio.Event()
+        released = threading.Event()
 
-        def fail_terminal(db_path, chat_id, title, data, *args, **kwargs):
+        def pause_terminal(db_path, chat_id, title, data, *args, **kwargs):
             if data["graph_runs"][-1]["status"] == "completed":
-                started.set()
-                assert released.wait(5)
-                raise OSError("terminal write rolled back")
+                # The writer runs in a thread; notify the event loop without
+                # assuming how long earlier graph checkpoints take on CI.
+                loop.call_soon_threadsafe(started.set)
+                released.wait()
+                if not commit_succeeds:
+                    raise OSError("terminal write rolled back")
             return original_write(db_path, chat_id, title, data, *args, **kwargs)
 
-        monkeypatch.setattr(chat_library, "save_chat_atomically_row", fail_terminal)
+        def persisted_status():
+            row = chat_library.load_chat_row(path, doc.current_chat_id)
+            return row["data"]["graph_runs"][-1]["status"]
+
+        monkeypatch.setattr(chat_library, "save_chat_atomically_row", pause_terminal)
         args = [[], token, "terminal-receipt"]
         run = asyncio.create_task(send("executeGraphRun", *args))
+        started_waiter = asyncio.create_task(started.wait())
         try:
-            assert await asyncio.to_thread(started.wait, 5)
+            # Wait for the intercepted terminal write, or fail promptly if the
+            # run ends without reaching it. The timeout is only a deadlock guard.
+            async with asyncio.timeout(60):
+                done, _ = await asyncio.wait({started_waiter, run}, return_when=asyncio.FIRST_COMPLETED)
+            if run in done:
+                await run
+                pytest.fail("graph run finished without reaching the terminal SQLite write")
+            assert not run.done()
             assert (await send("executeGraphRun", *args))["status"] == "running"
             assert (await send("getGraphRun"))["status"] == "running"
+            assert persisted_status() == "running"
         finally:
             released.set()
-        with pytest.raises(IntentValidationError, match="checkpoint"):
-            await run
-        assert (await send("getGraphRun"))["status"] == "interrupted"
+            started_waiter.cancel()
+            await asyncio.gather(started_waiter, return_exceptions=True)
+
+        if commit_succeeds:
+            assert (await run)["status"] == "completed"
+            assert (await send("getGraphRun"))["status"] == "completed"
+            assert persisted_status() == "completed"
+        else:
+            with pytest.raises(IntentValidationError, match="checkpoint"):
+                await run
+            assert (await send("getGraphRun"))["status"] == "interrupted"
+            assert persisted_status() == "running"
 
     asyncio.run(scenario())
 
