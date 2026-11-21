@@ -69,7 +69,8 @@ def test_nearest_branch_override_isolated_from_siblings(tmp_path, monkeypatch):
 
     with pytest.raises(SceneError, match="boolean"):
         document.set_use_knowledge_override(left.id, "off")
-    with pytest.raises(SceneError, match="chat"):
+    # Missing IDs keep require_node's established error contract.
+    with pytest.raises(SceneError, match="unknown node"):
         document.set_use_knowledge_override("not-a-node", False)
 
 
