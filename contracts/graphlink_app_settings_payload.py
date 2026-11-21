@@ -209,8 +209,6 @@ class AppSettingsStatePayload:
     apiKeySource: dict[str, str]
     apiModels: dict[str, str]
     apiModelCatalog: list[ApiModelDescriptorPayload]
-    pricingOverrides: list[ModelPricingOverridePayload]
-    effectiveModelPrices: list[EffectiveModelPricePayload]
     apiCatalogBaseUrl: str
     apiCatalogStatus: str
     apiCatalogMessage: str
@@ -284,4 +282,7 @@ class AppSettingsStatePayload:
     # native folder selection and individually revocable from Settings.
     harnessTrustedDirs: list[str]
     mcpServers: list[McpServerConfigPayload]
+    # Additive optional wire fields: old settings snapshots remain readable.
+    pricingOverrides: list[ModelPricingOverridePayload] | None = None
+    effectiveModelPrices: list[EffectiveModelPricePayload] | None = None
     minCompatibleSchemaVersion: int | None = None
