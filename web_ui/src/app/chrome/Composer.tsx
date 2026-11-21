@@ -96,23 +96,53 @@ export function Composer({
   // The server owns the collection existence check and branch ancestry.
   // Do not cache a workspace default locally: an indexed document can make
   // an otherwise untouched branch switch from off to on after a scene update.
-  const [knowledgePreference, setKnowledgePreference] = useState<ChatKnowledgePreference | null>(null);
+  // A result belongs to the scene revision and branch that requested it.
+  // Derive the loading state instead of synchronously resetting it in an effect.
+  const knowledgeTargetNodeId = replyTargetNode?.id ?? null;
+  const [knowledgeResult, setKnowledgeResult] = useState<{
+    store: SceneStore;
+    targetNodeId: string | null;
+    revision: number;
+    preference: ChatKnowledgePreference | null;
+  } | null>(null);
+  const knowledgePreference = knowledgeResult?.store === sceneStore &&
+    knowledgeResult.targetNodeId === knowledgeTargetNodeId &&
+    knowledgeResult.revision === scene.revision
+      ? knowledgeResult.preference
+      : null;
   const [knowledgeUpdating, setKnowledgeUpdating] = useState(false);
   useEffect(() => {
     let current = true;
-    setKnowledgePreference(null);
-    void sceneStore.getChatKnowledgePreference(replyTargetNode?.id ?? null).then(
-      (preference) => { if (current) setKnowledgePreference(preference); },
-      () => { if (current) setKnowledgePreference(null); },
+    void sceneStore.getChatKnowledgePreference(knowledgeTargetNodeId).then(
+      (preference) => {
+        if (current) setKnowledgeResult({
+          store: sceneStore, targetNodeId: knowledgeTargetNodeId, revision: scene.revision, preference,
+        });
+      },
+      () => {
+        if (current) setKnowledgeResult({
+          store: sceneStore, targetNodeId: knowledgeTargetNodeId, revision: scene.revision, preference: null,
+        });
+      },
     );
     return () => { current = false; };
-  }, [sceneStore, replyTargetNode?.id, scene.revision]);
+  }, [sceneStore, knowledgeTargetNodeId, scene.revision]);
+
+  function updateKnowledgePreference(
+    next: (current: ChatKnowledgePreference | null) => ChatKnowledgePreference | null,
+  ) {
+    setKnowledgeResult((result) => result?.store === sceneStore &&
+      result.targetNodeId === knowledgeTargetNodeId &&
+      result.revision === scene.revision
+        ? { ...result, preference: next(result.preference) }
+        : result);
+  }
 
   function toggleUseKnowledge() {
     if (!knowledgePreference || knowledgeUpdating) return;
     const preference = knowledgePreference;
     const enabled = !preference.enabled;
-    setKnowledgePreference({ ...preference, enabled, override: enabled });
+    updateKnowledgePreference(() => ({ ...preference, enabled, override: enabled }));
     if (preference.nodeId === null) return; // Sent with the first new root message.
     setKnowledgeUpdating(true);
     void (async () => {
@@ -121,9 +151,9 @@ export function Composer({
       } catch {
         try {
           const fresh = await sceneStore.getChatKnowledgePreference(preference.nodeId);
-          setKnowledgePreference((now) => now?.nodeId === preference.nodeId ? fresh : now);
+          updateKnowledgePreference((now) => now?.nodeId === preference.nodeId ? fresh : now);
         } catch {
-          setKnowledgePreference((now) => now?.nodeId === preference.nodeId ? null : now);
+          updateKnowledgePreference((now) => now?.nodeId === preference.nodeId ? null : now);
         }
       } finally {
         setKnowledgeUpdating(false);
