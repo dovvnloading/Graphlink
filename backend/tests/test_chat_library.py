@@ -2326,6 +2326,20 @@ def _library_session(db_path):
     return bus, document, notifications
 
 
+def test_standalone_registration_is_lazy_until_the_first_write(db_path):
+    # Read-only graph/model previews use this bare registrar; neither
+    # registration nor preview should create a chats.db behind the user.
+    bus = SessionBus("standalone-library")
+    document = SceneDocument()
+    register_chat_library(bus, db_path, document, autosave_interval_seconds=None)
+    assert not db_path.exists()
+
+    document.add_chat_node(0, 0, "first write", is_user=True)
+    assert asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", [])) is True
+    assert document.current_chat_id is not None
+    assert document.current_workspace_id == get_default_workspace_id(db_path)
+
+
 def test_a_manual_save_seeds_the_save_state_so_the_next_tick_is_a_no_op(db_path, monkeypatch):
     # Audit finding: backend/autosave.py's docstring claimed its change-guard
     # covered "auto OR manual", but the cell was a closure-local nothing else
