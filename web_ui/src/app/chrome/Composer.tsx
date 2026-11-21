@@ -1,5 +1,7 @@
-import { lazy, Suspense, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { ChatKnowledgePreference, SceneStore } from "../canvas/sceneStore";
+import { KnowledgeFileImportStatus, useKnowledgeFileImport } from "../knowledgeFileImport";
+import type { StateListener } from "../../lib/ws/transport";
 import { Popover, useOverlays } from "../overlays/overlays";
 import type { ComparisonModel, ComposerStore } from "./composerStore";
 import { TokenCounter } from "./TokenCounter";
@@ -77,6 +79,10 @@ export function Composer({
   const composer = useSyncExternalStore(store.subscribe, store.getComposer);
   const streamText = useSyncExternalStore(store.subscribe, store.getStreamText);
   const overlays = useOverlays();
+  const subscribeKnowledge = useCallback(
+    (listener: StateListener) => store.subscribeKnowledgeIngest(listener), [store],
+  );
+  const knowledgeImport = useKnowledgeFileImport(subscribeKnowledge);
 
   // ADR-002 Workstream 1 ("Branch from here"): sceneStore's own
   // replyTargetNodeId/scene, subscribed here (not just in SceneCanvas) so
@@ -338,6 +344,19 @@ export function Composer({
               <span className="composer-attachment-chip-name" title={item.name}>
                 {item.name}
               </span>
+              {item.kind === "document" && (
+                <button
+                  type="button"
+                  className="composer-attachment-chip-add"
+                  aria-label={`Add ${item.name} to knowledge`}
+                  disabled={knowledgeImport.busy}
+                  onClick={() => void knowledgeImport.add(
+                    item.name, () => store.addAttachmentToKnowledge(item.id),
+                  )}
+                >
+                  Add to knowledge
+                </button>
+              )}
               <button
                 type="button"
                 className="composer-attachment-chip-remove"
@@ -350,6 +369,7 @@ export function Composer({
           ))}
         </div>
       )}
+      <KnowledgeFileImportStatus state={knowledgeImport} />
       {agentError && <p className="composer-agent-error" role="alert">{agentError}</p>}
       <div className="composer-input-wrap">
         <textarea

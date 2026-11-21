@@ -93,7 +93,9 @@ class KnowledgeIngestJob:
             }
 
 
-def _collect_files(path: Path | list[Path], folder: bool, job: KnowledgeIngestJob) -> list[tuple[Path, int]]:
+def _collect_files(
+    path: Path | list[Path], folder: bool, job: KnowledgeIngestJob, *, allowed_root: Path | None = None,
+) -> list[tuple[Path, int]]:
     """Preflight the entire batch before any store mutation.
 
     Resolved paths stay within the chosen folder, even for symlink entries.
@@ -101,7 +103,7 @@ def _collect_files(path: Path | list[Path], folder: bool, job: KnowledgeIngestJo
     Over-limit jobs fail without partially importing their early files.
     Oversized individual files are skipped, and counted in the progress.
     """
-    root = None
+    root = allowed_root.resolve(strict=True) if allowed_root is not None else None
     if folder:
         if isinstance(path, list):
             raise IngestError("A folder import accepts one selected directory.")
@@ -122,10 +124,14 @@ def _collect_files(path: Path | list[Path], folder: bool, job: KnowledgeIngestJo
         if checked > MAX_JOB_FILES:
             raise IngestError("Import exceeds the 10,000-file job limit.")
         real = candidate.resolve(strict=True)
-        if root is not None:
-            if not real.is_relative_to(root) or _excluded_path(real.relative_to(root)):
+        if root is not None and not real.is_relative_to(root):
+            if folder:
                 job.increment(skipped=1)
                 return
+            raise IngestError("File is no longer inside the authorized workspace.")
+        if folder and root is not None and _excluded_path(real.relative_to(root)):
+            job.increment(skipped=1)
+            return
         if real in seen_files:
             return
         seen_files.add(real)
@@ -208,11 +214,14 @@ class KnowledgeIngestManager:
     def snapshot(self) -> dict:
         return {"jobs": [job.snapshot() for job in self._jobs.values()]}
 
-    def start(self, path: str | list[str], *, folder: bool, workspace_id: int | None) -> dict:
+    def start(
+        self, path: str | list[str], *, folder: bool, workspace_id: int | None,
+        allowed_root: Path | None = None,
+    ) -> dict:
         if any(job.snapshot()["status"] not in _FINAL for job in self._jobs.values()):
             raise IngestError("An import is already running in this window.")
-        # Do not accept arbitrary paths from untrusted persisted document
-        # state; the API calls this only after a native picker has returned.
+        # Callers must resolve paths through a native picker, a staged
+        # attachment ID, or an authorized workspace root before starting.
         for job_id, old in list(self._jobs.items()):
             if len(self._jobs) <= 10:
                 break
@@ -222,7 +231,7 @@ class KnowledgeIngestManager:
         self._jobs[job.job_id] = job
         self._loop = asyncio.get_running_loop()
         selected = [Path(value) for value in path] if isinstance(path, list) else Path(path)
-        task = asyncio.create_task(asyncio.to_thread(self._run, job, selected, folder))
+        task = asyncio.create_task(asyncio.to_thread(self._run, job, selected, folder, allowed_root))
         self._tasks[job.job_id] = task
         task.add_done_callback(lambda _, job_id=job.job_id: self._tasks.pop(job_id, None))
         self._emit(force=True)
@@ -253,11 +262,14 @@ class KnowledgeIngestManager:
         except RuntimeError:
             pass  # the session/event loop was disposed during shutdown
 
-    def _run(self, job: KnowledgeIngestJob, path: Path | list[Path], folder: bool) -> None:
+    def _run(
+        self, job: KnowledgeIngestJob, path: Path | list[Path], folder: bool,
+        allowed_root: Path | None = None,
+    ) -> None:
         try:
             job.change(status="scanning")
             self._emit(force=True)
-            files = _collect_files(path, folder, job)
+            files = _collect_files(path, folder, job, allowed_root=allowed_root)
             if job.cancel_event.is_set():
                 job.change(status="cancelled")
                 return
@@ -274,9 +286,16 @@ class KnowledgeIngestManager:
                     # Re-resolve paths on use: an entry that was safe during
                     # enumeration may have been swapped for an outside link.
                     actual = file.resolve(strict=True)
-                    root = path.expanduser().resolve(strict=True) if folder and isinstance(path, Path) else None
-                    if root is not None and not actual.is_relative_to(root):
-                        raise IngestError("File now points outside the selected folder.")
+                    root = (
+                        path.expanduser().resolve(strict=True)
+                        if folder and isinstance(path, Path)
+                        else allowed_root.resolve(strict=True) if allowed_root is not None else None
+                    )
+                    if root is not None and (
+                        not actual.is_relative_to(root)
+                        or (folder and _excluded_path(actual.relative_to(root)))
+                    ):
+                        raise IngestError("File now points outside the authorized folder.")
                     before = actual.stat()
                     if before.st_size != planned_size:
                         raise IngestError("File changed since the import was scanned; retry the import.")

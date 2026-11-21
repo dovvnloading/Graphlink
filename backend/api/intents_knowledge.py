@@ -28,6 +28,9 @@ from uuid import uuid4
 
 from backend.api._shared import make_publish_scene
 from backend.domain.graph import SceneDocument, SceneError
+from backend.domain.node_states import HarnessState
+from backend.harness.workspace import WorkspaceError, bound_root
+from backend.harness.workspace_files import _inside
 from backend.events import SessionBus
 from backend.knowledge_chunking import chunk_text
 from backend.knowledge_ingest import IngestError, is_supported_knowledge_file
@@ -221,6 +224,57 @@ def register_knowledge_ingest_intents(
     bus.register_intent("knowledge", "getIngestJobs", get_ingest_jobs)
 
 
+def register_knowledge_existing_file_intents(
+    bus: SessionBus,
+    document: SceneDocument,
+    ingest_jobs: KnowledgeIngestManager,
+    *,
+    composer_document=None,
+    agent_dispatcher=None,
+) -> None:
+    """Register native-authorized imports from chat and workspace Files."""
+    async def add_chat_attachment(attachment_id):
+        """An attachment ID is a native-picker grant in this session, not a path from the browser."""
+        if composer_document is None:
+            raise IngestError("Chat attachments are unavailable.")
+        attachment = next(
+            (item for item in composer_document.staged_attachments if item.id == attachment_id), None,
+        )
+        if attachment is None:
+            raise IngestError("This attachment is no longer staged. Attach the file again.")
+        if attachment.kind != "document" or not is_supported_knowledge_file(Path(attachment.path)):
+            raise IngestError("Only supported text and document attachments can be added to knowledge.")
+        return ingest_jobs.start(attachment.path, folder=False, workspace_id=document.current_workspace_id)
+
+    async def add_workspace_file(node_id, relative_path, expected_root):
+        """Resolve a Files-view selection through the CURRENT agent grant, never client-supplied roots."""
+        if agent_dispatcher is None:
+            raise WorkspaceError("Workspace file imports are unavailable.")
+        node = document.nodes.get(node_id)
+        if node is None or not isinstance(node.state, HarnessState):
+            raise WorkspaceError("This agent node no longer exists.")
+        root, _ = bound_root(
+            node.state.harness_workspace_id,
+            node.state.harness_workspace_path,
+            settings_manager=agent_dispatcher._settings_manager,
+        )
+        if expected_root != str(root):
+            raise WorkspaceError("Workspace folder changed. Refresh the Files list and choose a file again.")
+        if not relative_path:
+            raise WorkspaceError("Select a workspace file to add.")
+        file = _inside(root, relative_path)
+        if not file.is_file():
+            raise WorkspaceError("Not a workspace file.")
+        if not is_supported_knowledge_file(file):
+            raise IngestError("This file type cannot be added to knowledge.")
+        return ingest_jobs.start(
+            str(file), folder=False, workspace_id=document.current_workspace_id, allowed_root=root,
+        )
+
+    bus.register_intent("knowledge", "addChatAttachment", add_chat_attachment)
+    bus.register_intent("knowledge", "addWorkspaceFile", add_workspace_file)
+
+
 def register_knowledge_embedding_intents(
     bus: SessionBus,
     document: SceneDocument,
@@ -252,6 +306,8 @@ def register_knowledge_intents(
     document: SceneDocument,
     notifications: NotificationState | None = None,
     settings_manager=None,
+    composer_document=None,
+    agent_dispatcher=None,
 ) -> None:
     publish_scene = make_publish_scene(bus)
     embedding_jobs = KnowledgeEmbeddingJobManager(bus, DEFAULT_DB_PATH, settings_manager)
@@ -477,6 +533,10 @@ def register_knowledge_intents(
     bus.register_intent("knowledge", "search", search, args_schema=SearchArgs)
     bus.register_intent("knowledge", "openCitation", open_citation, args_schema=OpenCitationArgs)
     register_knowledge_ingest_intents(bus, document, ingest_jobs)
+    register_knowledge_existing_file_intents(
+        bus, document, ingest_jobs,
+        composer_document=composer_document, agent_dispatcher=agent_dispatcher,
+    )
     register_knowledge_embedding_intents(bus, document, embedding_jobs)
     bus.register_intent("knowledge", "listDocuments", list_documents)
     bus.register_intent("knowledge", "openDocument", open_document, args_schema=DocumentIdArgs)
