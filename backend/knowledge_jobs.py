@@ -386,7 +386,16 @@ class KnowledgeIngestManager:
                     prune=job.scan_complete,
                 )
                 job.increment(removed=removed)
-            job.change(status="cancelled" if job.cancel_event.is_set() else "completed")
+            if job.cancel_event.is_set():
+                job.change(status="cancelled")
+            elif (
+                self._on_completed is None or self._loop is None
+                or not (job.snapshot()["added"] or job.snapshot()["updated"])
+            ):
+                job.change(status="completed")
+            # A changed import stays "running" until its loop callback has
+            # scheduled downstream work; callers must not see "completed"
+            # while an automatic embedding run is still pending.
         except (OSError, IngestError, RuntimeError) as exc:
             job.change(status="cancelled" if job.cancel_event.is_set() else "failed", error=str(exc))
         except Exception:
@@ -417,15 +426,24 @@ class KnowledgeIngestManager:
                         logging.getLogger(__name__).exception("could not persist watched folder sync result")
             self._emit(force=True)
             outcome = job.snapshot()
-            if (
-                outcome["status"] == "completed"
-                and (outcome["added"] or outcome["updated"])
-                and self._on_completed is not None and self._loop is not None
-            ):
-                # The import thread cannot launch asyncio tasks. Schedule
-                # the embedding run on its owning session loop only after
-                # committed knowledge writes have finished.
+            if outcome["status"] == "running" and self._on_completed is not None and self._loop is not None:
+                # The worker's DB connection is closed at this point. Run the
+                # follow-up on the owning loop *before* reporting completion:
+                # otherwise a manual resume can race the automatic embedding
+                # schedule and create a duplicate job.
+                def finish_on_loop() -> None:
+                    try:
+                        self._on_completed(job.workspace_id)
+                    except Exception:
+                        import logging
+                        logging.getLogger(__name__).exception("knowledge import completion callback failed")
+                    finally:
+                        job.change(status="completed")
+                        self._emit(force=True)
+
                 try:
-                    self._loop.call_soon_threadsafe(self._on_completed, job.workspace_id)
+                    self._loop.call_soon_threadsafe(finish_on_loop)
                 except RuntimeError:
-                    pass  # session loop disposed during shutdown
+                    # A disposed session cannot schedule more embeddings.
+                    job.change(status="completed")
+                    self._emit(force=True)

@@ -39,6 +39,7 @@ from backend.knowledge_embedding_config import configured_hybrid_search
 from backend.knowledge_store import (
     DEFAULT_DB_PATH, get_or_create_workspace_collection, open_cited_document, replace_branch_document_with_chunks,
     list_library_documents, file_sources_for_document, remove_library_document, library_document_text,
+    display_source_label,
 )
 from backend.notifications import NotificationState
 
@@ -175,12 +176,12 @@ def format_search_result_row(result: dict) -> dict:
         "chunkId": result["chunk_id"],
         "documentId": result["document_id"],
         "documentTitle": result["document_title"],
-        "sourceUri": result["source_uri"],
+        "sourceUri": display_source_label(str(result["source_uri"]), str(result["document_title"])),
         "text": result["text"],
         "trustLabel": "untrusted data",
         "offsetStart": result["offset_start"],
         "offsetEnd": result["offset_end"],
-        "sourceFile": result["source_file"],
+        "sourceFile": display_source_label(str(result["source_file"]), str(result["document_title"])),
         "section": result["section"],
         "citationId": result["citation_id"],
         "rankSignals": result.get("rank_signals", {}),
@@ -292,7 +293,12 @@ def register_knowledge_document_intents(
                     uploads.cleanup_source(path)
             return {"removed": deleted}
 
-        return await asyncio.to_thread(remove)
+        result = await asyncio.to_thread(remove)
+        if result["removed"]:
+            # A Library removal changes the workspace's default chat retrieval
+            # even when the canvas itself has not changed.
+            await bus.publish("knowledge-library")
+        return result
 
     async def reindex_document(document_id):
         # The client provides only an ID. Paths come exclusively from
@@ -527,7 +533,18 @@ def register_knowledge_intents(
     db_path = watch_service.db_path if watch_service is not None else DEFAULT_DB_PATH
     watcher = watch_service if watch_service is not None else WatchedFolderService(db_path)
     embedding_jobs = KnowledgeEmbeddingJobManager(bus, db_path, settings_manager)
-    ingest_jobs = KnowledgeIngestManager(bus, db_path, on_completed=embedding_jobs.schedule)
+    # A separate, tiny topic invalidates workspace knowledge preferences
+    # without forcing a large scene publish or polling the document list.
+    # SessionBus stamps a monotonically increasing revision on every publish.
+    bus.register_topic("knowledge-library", lambda: {"workspaceId": document.current_workspace_id})
+
+    def on_ingest_completed(workspace_id):
+        embedding_jobs.schedule(workspace_id)
+        # Called on this session's event loop after the ingest worker commits.
+        # Re-indexing and newly imported documents both change library state.
+        asyncio.create_task(bus.publish("knowledge-library"))
+
+    ingest_jobs = KnowledgeIngestManager(bus, db_path, on_completed=on_ingest_completed)
     uploads = KnowledgeDropUploads(db_path)
     bus.register_topic("knowledge-ingest", ingest_jobs.snapshot)
     # Session eviction must stop subsequent provider batches, even if an

@@ -1265,6 +1265,11 @@ export class SceneStore {
     return this.transport.subscribe("knowledge-ingest", listener);
   }
 
+  /** Library changes are independent of canvas revisions (including empty scenes). */
+  subscribeKnowledgeLibrary(listener: StateListener): () => void {
+    return this.transport.subscribe("knowledge-library", listener);
+  }
+
   revealHarnessWorkspace(nodeId: string): void {
     this.transport.fireIntent("harness", "revealWorkspace", [nodeId]);
   }

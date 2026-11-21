@@ -92,6 +92,24 @@ BACKUP_CADENCE_SECONDS = 600.0
 KNOWLEDGE_DB_SCHEMA_VERSION = 9
 
 
+def display_source_label(source_uri: str, title: str = "") -> str:
+    """Public provenance label, never a local absolute path.
+
+    Keep the original source_uri in storage for re-indexing, graph jumps and
+    stable citation hashing. Windows paths also occur in saved citation data
+    read on other platforms, so normalize both kinds of separators here.
+    """
+    if source_uri.startswith(("graph:", "branch:")):
+        return title or "Chat"
+    if source_uri.lower().startswith(("http://", "https://")):
+        return source_uri
+    normalized = source_uri.replace("\\", "/")
+    if (normalized.startswith("/") or normalized.startswith("file://")
+            or re.match(r"^[A-Za-z]:/", normalized)):
+        return normalized.rstrip("/").rsplit("/", 1)[-1] or title or source_uri
+    return source_uri or title
+
+
 def content_hash(text: str) -> str:
     """SHA-256 of the extracted text (UTF-8 encoded), matching
     backend/asset_store.py's own content_ref() convention (SHA-256 hex
@@ -769,9 +787,9 @@ def replace_branch_document_with_chunks(
                 (collection_id, source_uri),
             )
             cursor = conn.execute(
-                "INSERT INTO documents (collection_id, source_uri, title, mime, content_hash, added_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (collection_id, source_uri, title, "text/branch", hash_value, _now_iso()),
+                "INSERT INTO documents (collection_id, source_uri, title, mime, content_hash, added_at, size_bytes) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (collection_id, source_uri, title, "text/branch", hash_value, _now_iso(), len(text.encode("utf-8"))),
             )
             new_doc_id = cursor.lastrowid
             if new_doc_id is None:
@@ -1133,7 +1151,11 @@ def list_library_documents(db_path: Path, *, collection_id: int) -> list[dict[st
     try:
         rows = conn.execute(
             """
-            SELECT d.id, d.title, d.mime, d.source_uri, d.size_bytes, d.added_at,
+            SELECT d.id, d.title, d.mime, d.source_uri,
+                   COALESCE(d.size_bytes, CASE WHEN d.mime IN ('text/graph', 'text/branch')
+                       THEN (SELECT SUM(LENGTH(CAST(c.text AS BLOB)))
+                             FROM chunks c WHERE c.document_id = d.id)
+                   END), d.added_at,
                    (SELECT COUNT(*) FROM chunks c WHERE c.document_id = d.id),
                    (SELECT COUNT(*) FROM file_sources f WHERE f.document_id = d.id)
             FROM documents d WHERE d.collection_id = ?
@@ -1143,7 +1165,7 @@ def list_library_documents(db_path: Path, *, collection_id: int) -> list[dict[st
         return [
             {
                 "documentId": int(row[0]), "title": row[1], "type": row[2] or "text/plain",
-                "sourceUri": row[3], "sizeBytes": row[4], "chunks": int(row[6]),
+                "sourceUri": display_source_label(row[3], row[1]), "sizeBytes": row[4], "chunks": int(row[6]),
                 "addedAt": row[5], "status": "indexed", "canReindex": bool(row[7]),
             }
             for row in rows
@@ -1563,11 +1585,11 @@ def reindex_graph_content(
 
             full_text = "\n\n".join(text for _, text in node_chunks)
             cursor = conn.execute(
-                "INSERT INTO documents (collection_id, source_uri, title, mime, content_hash, added_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO documents (collection_id, source_uri, title, mime, content_hash, added_at, size_bytes) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     collection_id, source_uri, title, "text/graph",
-                    content_hash(f"{source_uri}\n{full_text}"), _now_iso(),
+                    content_hash(f"{source_uri}\n{full_text}"), _now_iso(), len(full_text.encode("utf-8")),
                 ),
             )
             document_id = cursor.lastrowid
@@ -2091,7 +2113,7 @@ def provenance_for_hits(db_path: Path, results: list[dict]) -> dict[int, dict[st
             first = next((name for pos, name in options if start <= pos <= min(end, start + lead)), None)
             section = first or "Unsectioned"
         metadata[result["chunk_id"]] = {
-            "source_file": str(result["source_uri"]),
+            "source_file": display_source_label(str(result["source_uri"]), str(result.get("document_title") or "")),
             "section": section,
             "citation_id": _stable_chunk_citation(result),
         }
@@ -2156,6 +2178,6 @@ def open_cited_document(
     if content[int(start):int(end)] != excerpt:
         return None
     return {
-        "title": title, "sourceUri": source_uri, "content": content,
+        "title": title, "sourceUri": display_source_label(source_uri, title), "content": content,
         "offsetStart": int(start), "offsetEnd": int(end), "excerpt": excerpt,
     }

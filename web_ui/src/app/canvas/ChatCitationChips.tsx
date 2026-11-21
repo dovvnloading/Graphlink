@@ -1,5 +1,6 @@
 import type { ToolInvocationData } from "./ChatNodeView";
 import "./ChatCitationChips.css";
+import { knowledgeSourceLabel } from "../knowledgeSourceLabel";
 
 /** Server-created provenance, stored separately from model-authored reply text. */
 export const KNOWLEDGE_CITATION_RECORD = "graphlink.knowledge.citations";
@@ -51,7 +52,11 @@ export function citationsForReply(content: string, invocations: ToolInvocationDa
             Number.isSafeInteger(row.offsetStart) && Number.isSafeInteger(row.offsetEnd) &&
             (row.offsetStart ?? -1) >= 0 && (row.offsetEnd ?? -1) >= (row.offsetStart ?? 0) &&
             row.cited === true;
-        });
+        }).map((source) => ({
+          ...source,
+          sourceUri: knowledgeSourceLabel(source.sourceUri, source.documentTitle),
+          sourceFile: knowledgeSourceLabel(source.sourceFile, source.documentTitle),
+        }));
       }
     } catch {
       // Malformed/older metadata is never promoted to a verified source link.
@@ -87,7 +92,7 @@ export function ChatCitationChips({ citations, onOpenCitation }: {
               <span className="chat-citation-number">[{number}]</span>
               <span>{source.documentTitle} · {source.section}</span>
             </button>
-            <div className="chat-citation-origin">{source.sourceFile}</div>
+            <div className="chat-citation-origin">{knowledgeSourceLabel(source.sourceFile, source.documentTitle)}</div>
           </li>
         ))}
       </ol>
