@@ -171,3 +171,46 @@ def test_ollama_test_rejects_nonembedding_chat_model(manager, monkeypatch):
     monkeypatch.setattr(config.api_provider, "ollama_supports_embedding", lambda _: False)
     with pytest.raises(ValueError, match="does not support embeddings"):
         config.test_embedding_choice(manager, "ollama", "llama3:latest")
+
+
+def test_cloud_opt_in_sends_indexed_passage_and_query_and_revocation_stops_calls(
+    tmp_path, manager, monkeypatch,
+):
+    """The cloud choice uploads chunk text AND query text, but only after consent."""
+    path = _database(tmp_path)
+    requests = []
+
+    class Client:
+        def __init__(self):
+            self.embeddings = SimpleNamespace(create=self.create)
+
+        def create(self, **kwargs):
+            requests.append(kwargs)
+            return SimpleNamespace(data=[
+                SimpleNamespace(embedding=[1.0, 0.25]) for _ in kwargs["input"]
+            ])
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(config.api_provider, "_build_api_client", lambda *_args: (
+        Client(), "test-credential", "https://api.openai.com/v1",
+    ))
+    manager.set_knowledge_embedding_settings(
+        "cloud", "text-embedding-3-small", "OpenAI", True,
+    )
+    results = config.configured_hybrid_search(
+        path, "internal", collection_id=0, settings_manager=manager,
+    )
+    assert results
+    payloads = [text for request in requests for text in request["input"]]
+    assert any("Graphlink archives important internal research notes." in text for text in payloads)
+    assert "internal" in payloads
+
+    # A revoked opt-in must not embed either pending documents or new searches.
+    manager.set_knowledge_embedding_settings("off")
+    sent_count = len(requests)
+    assert config.configured_hybrid_search(
+        path, "research", collection_id=0, settings_manager=manager,
+    )
+    assert len(requests) == sent_count

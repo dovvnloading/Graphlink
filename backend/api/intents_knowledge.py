@@ -179,6 +179,7 @@ def format_search_result_row(result: dict) -> dict:
         "documentTitle": result["document_title"],
         "sourceUri": result["source_uri"],
         "text": result["text"],
+        "trustLabel": "untrusted data",
         "offsetStart": result["offset_start"],
         "offsetEnd": result["offset_end"],
         "sourceFile": result["source_file"],
@@ -213,7 +214,9 @@ def register_knowledge_watched_folder_intents(
         selected = await native_dialogs.pick_folder()
         if not selected:
             return {"cancelled": True}
-        return await watcher.add(workspace_id, selected)
+        # Pin the native picker grant before a worker can persist the watch.
+        canonical = str(Path(selected).expanduser().resolve(strict=True))
+        return await watcher.add(workspace_id, canonical)
 
     async def remove_watched_folder(folder_id: int):
         return await watcher.remove(_watched_workspace_id(), folder_id)
@@ -337,16 +340,19 @@ def register_knowledge_ingest_intents(
             return {"cancelled": True}
         # Unsupported explicit selections are user errors, not jobs that
         # appear successful after silently processing zero files.
-        if any(not is_supported_knowledge_file(Path(path)) for path in selected):
+        canonical = [str(Path(path).expanduser().resolve(strict=True)) for path in selected]
+        if any(not is_supported_knowledge_file(Path(path)) for path in canonical):
             raise IngestError("Selection contains an unsupported file type.")
-        return ingest_jobs.start(selected, folder=False, workspace_id=workspace_id)
+        return ingest_jobs.start(canonical, folder=False, workspace_id=workspace_id)
 
     async def add_folder():
         workspace_id = document.current_workspace_id
         selected = await native_dialogs.pick_folder()
         if not selected:
             return {"cancelled": True}
-        return ingest_jobs.start(selected, folder=True, workspace_id=workspace_id)
+        # Freeze the picker grant before any background scan can run.
+        canonical = str(Path(selected).expanduser().resolve(strict=True))
+        return ingest_jobs.start(canonical, folder=True, workspace_id=workspace_id)
 
     async def cancel_ingest(job_id):
         return ingest_jobs.cancel(job_id)
@@ -381,7 +387,8 @@ def register_knowledge_existing_file_intents(
             raise IngestError("This attachment is no longer staged. Attach the file again.")
         if attachment.kind != "document" or not is_supported_knowledge_file(Path(attachment.path)):
             raise IngestError("Only supported text and document attachments can be added to knowledge.")
-        return ingest_jobs.start(attachment.path, folder=False, workspace_id=document.current_workspace_id)
+        canonical = str(Path(attachment.path).expanduser().resolve(strict=True))
+        return ingest_jobs.start(canonical, folder=False, workspace_id=document.current_workspace_id)
 
     async def add_workspace_file(node_id, relative_path, expected_root):
         """Resolve a Files-view selection through the CURRENT agent grant, never client-supplied roots."""

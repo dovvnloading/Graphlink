@@ -22,13 +22,14 @@ _quarantine_corrupt_chats_db docstring for the same call made elsewhere).
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
+from tempfile import TemporaryDirectory
 from zipfile import BadZipFile, ZipFile
 from xml.etree import ElementTree
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from backend.attachments import (
-    AttachmentError,
     _can_read_as_document,
     _read_docx,
     _read_pdf,
@@ -42,6 +43,8 @@ from backend.knowledge_store import DEFAULT_DB_PATH, IngestOutcome, add_document
 from backend.notifications import NotificationState
 
 _HTML_EXTENSIONS = {".html", ".htm"}
+MAX_KNOWLEDGE_FILE_BYTES = 25 * 1024 * 1024
+_MAX_XLSX_XML_TAGS = 150_000
 
 
 
@@ -76,7 +79,14 @@ def _extract_xlsx(path: Path) -> str:
                 part = workbook.getinfo(name)
                 if part.file_size > 16 * 1024 * 1024:
                     raise IngestError("Spreadsheet XML part is too large.")
-                return ElementTree.fromstring(workbook.read(part))
+                # Small compressed XML can contain hundreds of thousands of
+                # tiny elements. Cap parser nodes *before* building a DOM.
+                raw = workbook.read(part)
+                if len(raw) > 16 * 1024 * 1024 or raw.count(b"<") > _MAX_XLSX_XML_TAGS:
+                    raise IngestError("Spreadsheet XML contains too many elements.")
+                if b"<!DOCTYPE" in raw.upper() or b"<!ENTITY" in raw.upper():
+                    raise IngestError("Spreadsheet XML must not contain entity declarations.")
+                return ElementTree.fromstring(raw)
 
             shared: list[str] = []
             shared_total = 0
@@ -144,6 +154,33 @@ class IngestError(Exception):
     ingestion itself, e.g. a genuinely unreadable path)."""
 
 
+@contextmanager
+def snapshot_knowledge_file(path: Path) -> Iterator[Path]:
+    """Parse immutable, size-bounded bytes from a private copy, not a raced path.
+
+    The shared workspace reader opens every path component without following
+    links (and validates the opened handle on Windows). Callers pass the
+    *canonical path from preflight*, not a freshly resolved path. Otherwise
+    a renamed parent/symlink could redirect the parser after authorization.
+    """
+    from backend.harness.tools_fs import _read_bounded_bytes
+    from backend.harness.workspace import WorkspaceError
+
+    try:
+        data = _read_bounded_bytes(path, max_bytes=MAX_KNOWLEDGE_FILE_BYTES)
+    except WorkspaceError as exc:
+        if "exceeds the" in str(exc):
+            raise IngestError("File exceeds the 25 MiB knowledge import limit.") from exc
+        raise IngestError(f"File changed while opening: {path.name}") from exc
+    except OSError as exc:
+        raise IngestError(f"File became inaccessible while opening: {path.name}") from exc
+    with TemporaryDirectory(prefix="graphlink-knowledge-read-") as directory:
+        snapshot = Path(directory) / path.name
+        snapshot.write_bytes(data)
+        snapshot.chmod(0o600)
+        yield snapshot
+
+
 def _extract_html(html_text: str) -> str:
     """Strips script/style/nav/footer/header/aside/form/noscript/template,
     then reads heading/paragraph/list/quote/code-block text from
@@ -170,33 +207,38 @@ def _extract_html(html_text: str) -> str:
 
 
 def extract_text(path: Path) -> tuple[str, str]:
-    """Returns (text, mime) for `path`, or raises IngestError/AttachmentError
-    with a user-facing message. `mime` is a coarse label
-    ("application/pdf" | "application/vnd...docx" | "text/html" |
-    "text/plain") - good enough for `documents.mime` display, not a real
-    sniffed MIME type."""
+    """Extract supported documents under the same file and output ceilings as jobs."""
     if not path.is_file():
         raise IngestError(f"File not found: {path}")
+    if not is_supported_knowledge_file(path):
+        raise IngestError(f"Unsupported file type: {path.name}")
+    if path.stat().st_size > MAX_KNOWLEDGE_FILE_BYTES:
+        raise IngestError("File exceeds the 25 MiB knowledge import limit.")
 
     extension = path.suffix.lower()
     if extension == ".pdf":
-        return _read_pdf(path), "application/pdf"
-    if extension == ".docx":
-        return _read_docx(path), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    if extension == ".xlsx":
-        return _extract_xlsx(path), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    if extension in _HTML_EXTENSIONS:
-        try:
-            raw = _read_text(path)
-        except AttachmentError:
-            raise
+        text, mime = _read_pdf(path), "application/pdf"
+    elif extension == ".docx":
+        text, mime = _read_docx(path), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    elif extension == ".xlsx":
+        text, mime = _extract_xlsx(path), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    elif extension in _HTML_EXTENSIONS:
+        raw = _read_text(path)
+        # BeautifulSoup builds a DOM before producing the extracted text.
+        if len(raw) > MAX_DOCUMENT_TEXT_CHARS:
+            raise IngestError("HTML exceeds the indexing text limit.")
         text = _extract_html(raw)
         if not text:
             raise IngestError(f"'{path.name}' contained no readable text after stripping markup.")
-        return text, "text/html"
-    if _can_read_as_document(path):
-        return _read_text(path), "text/plain"
-    raise IngestError(f"Unsupported file type: {path.name}")
+        mime = "text/html"
+    elif _can_read_as_document(path):
+        text, mime = _read_text(path), "text/plain"
+    else:
+        raise IngestError(f"Unsupported file type: {path.name}")
+
+    if len(text) > MAX_DOCUMENT_TEXT_CHARS:
+        raise IngestError("Extracted text exceeds the indexing limit.")
+    return text, mime
 
 
 def _chunk_and_store(
@@ -253,8 +295,13 @@ def ingest_file(
 ) -> IngestOutcome:
     """The one call ADR-017 stage 17.1's exit criterion names: extract ->
     chunk -> store."""
-    resolved = Path(path).resolve()
-    text, mime = extract_text(resolved)
+    resolved = Path(path).expanduser().resolve()
+    if not resolved.is_file():
+        raise IngestError(f"File not found: {resolved}")
+    if resolved.stat().st_size > MAX_KNOWLEDGE_FILE_BYTES:
+        raise IngestError("File exceeds the 25 MiB knowledge import limit.")
+    with snapshot_knowledge_file(resolved) as snapshot:
+        text, mime = extract_text(snapshot)
     return _chunk_and_store(
         text=text, source_uri=str(resolved), title=resolved.name, mime=mime,
         collection_id=collection_id, db_path=db_path, notifications=notifications,

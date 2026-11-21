@@ -8,7 +8,7 @@ type EmbeddingSource = "off" | "ollama" | "cloud";
 const SOURCE_OPTIONS = [
   { id: "off", label: "Off (keyword search)", description: "Local keyword search only, without embeddings." },
   { id: "ollama", label: "Ollama (local)", description: "Use an installed embedding-capable Ollama model." },
-  { id: "cloud", label: "Cloud (OpenAI-compatible)", description: "Requires explicit consent to send document text." },
+  { id: "cloud", label: "Cloud (OpenAI-compatible)", description: "Requires consent to send indexed documents, saved graph/chat text, and queries." },
 ];
 
 function suggestedModel(models: string[], capable: string[]): string {
@@ -194,12 +194,15 @@ export function KnowledgeSettingsPage({
               checked={consent}
               onChange={(event) => setConsent(event.target.checked)}
             />
-            I understand that document text leaves the machine.
+            I consent to sending indexed content and search queries to the selected cloud service.
           </label>
           <p className="settings-field-hint">
-            This is an explicit opt-in: Graphlink will send document passages
-            and search queries to your selected API endpoint for embeddings.
-            Turning this option off stops future embedding requests.
+            With this opt-in, Graphlink sends full text chunks from indexed
+            files and saved graphs (including chat messages, code, prompts, and
+            notes), plus search queries, to your selected API endpoint.
+            Embedding requests send text, not original file bytes or paths.
+            Turning this off stops future requests, but cannot recall text
+            already sent to the provider.
           </p>
         </fieldset>
       )}
