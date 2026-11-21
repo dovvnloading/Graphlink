@@ -3055,7 +3055,6 @@ def test_failed_cloud_settings_write_preserves_saved_and_live_profile(manager, m
 
 
 def test_reset_discards_inflight_catalog_even_when_another_session_requested_it(manager, monkeypatch):
-    import threading
 
     started, resume = threading.Event(), threading.Event()
     def list_models(*_args):
@@ -3267,7 +3266,6 @@ def test_knowledge_test_status_reports_synthetic_model_response(manager, monkeyp
 
 
 def test_knowledge_test_publishes_running_during_cold_ollama_load(manager, monkeypatch):
-    import threading
 
     from backend.api import intents_settings_knowledge
 
