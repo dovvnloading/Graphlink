@@ -29,22 +29,29 @@ Agent card and history.
 
 | Model route | Setup | What to expect |
 | --- | --- | --- |
-| **Ollama (local)** | Start Ollama, pull a chat model, and configure **Settings → Ollama (Local)**. | Inference runs through your local Ollama server. Models without native tool support can use Ollama’s constrained JSON mode when supported by the model/runtime. |
+| **Ollama (local)** | Open **Settings → Ollama (Local)** to check or start an installed Ollama server, pull a model and select it under **Model Selection (per task)**. See [Local models](LOCAL_MODELS.md). | Inference runs through your local Ollama server. Models without native tool support can use Ollama’s constrained JSON mode when supported by the model/runtime. |
 | **Llama.cpp (local GGUF)** | Install `llama-cpp-python` in Graphlink’s application Python environment, select a GGUF in **Settings → Llama.cpp (Local)**, and activate it. | Local inference uses llama.cpp; JSON tool calls require its supported grammar/JSON mode. |
 | **Cloud provider or custom endpoint** | Select **Settings → API Endpoint**, configure provider credentials and model ID, then **Save and activate**. | The selected provider receives the model request and relevant task context. Actual tool calling and structured-output support vary by endpoint and model. |
 
-The Agent normally uses the configured chat route. When you send to an Agent through the
-**main composer** , it uses the exact available model shown in that composer for that task. The
-Agent launcher and the follow-up input on its card use their existing/default route. Check the
-active connection before launching a task if model choice matters.
+The Agent normally uses the configured chat route. When you send a task through
+the **main composer**, it uses the model selected in the composer's picker.
+On an existing Agent card, **Choose agent model** opens that same searchable,
+provider-qualified picker for the next task. Selecting a model changes the shared
+current-model choice, not a task already running. The launcher and follow-up
+route should be checked before starting a task if model choice matters. The
+[local-model guide](LOCAL_MODELS.md) also explains capability badges and
+warnings in these pickers.
 
 **Tool support:** Native function calling works where the model supports it. For some models
 without native tools, Agent automatically uses a constrained **JSON tool protocol** : Ollama
 format, llama.cpp grammar, or a compatible endpoint’s JSON response format. This is text-only and
 uses the **same tool permissions and approval prompts** . If the model/runtime has neither usable
 native tools nor constrained JSON, choose another model; Agent does not execute tool requests
-extracted from free-form prose. Builder still requires native tools. See
-[JSON tool protocol](WORKSPACE_JSON_TOOLS.md) .
+extracted from free-form prose. Builder still requires native tools. When a model's metadata *confirms* it lacks
+native tool calling, an Agent card warns and may suggest an installed
+tool-capable Ollama model; unknown capability metadata is not treated as
+proof of missing support. See [JSON tool protocol](WORKSPACE_JSON_TOOLS.md)
+and [Local models](LOCAL_MODELS.md).
 
 Local inference can work offline after installing its runtime and models, but
 **web research, package downloads, and other approved online integrations can still connect to the network**
