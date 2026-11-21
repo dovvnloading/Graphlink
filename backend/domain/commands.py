@@ -942,6 +942,11 @@ class CommandOps(SceneDocumentParts):
         try:
             while self.command_log and self.command_log[-1].run_id == run_id:
                 command = self.command_log[-1]
+                # Legacy in-memory sessions could have tagged the Agent
+                # creation itself with the run ID. Even then, Undo run must
+                # never remove the user-created Agent card.
+                if command.command_type == "harnessCreate":
+                    break
                 self._guard_live_runs(command)
                 command.invert(self)
                 self.command_log.pop()

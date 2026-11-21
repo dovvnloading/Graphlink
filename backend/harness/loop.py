@@ -420,6 +420,15 @@ async def _execute_tool_calls(
     """
     async def invoke_timed(call: ToolCall) -> tuple[ToolResult, int]:
         started = time.monotonic()
+        # Providers may reuse a tool-call ID. Never subtract a previous
+        # invocation's approval time from this one.
+        ctx.approval_wait_seconds.pop(call.id, None)
+
+        def elapsed_ms() -> int:
+            return max(0, round((
+                time.monotonic() - started - ctx.approval_wait_seconds.get(call.id, 0.0)
+            ) * 1000))
+
         # Both streaming tools are non-parallel execution barriers. Set a
         # per-call sink only for them; parallel-safe reads continue to share
         # ctx without racing an output callback.
@@ -439,7 +448,7 @@ async def _execute_tool_calls(
                 def snapshot_for_stop() -> None:
                     record_stopped_output(
                         call, sink.snapshot(),
-                        max(0, round((time.monotonic() - started) * 1000)),
+                        elapsed_ms(),
                     )
                 stop_handle.harness_stop_output = snapshot_for_stop
             finished = False
@@ -451,7 +460,7 @@ async def _execute_tool_calls(
                     current = sink.snapshot()
                     if current is not None and current != previous:
                         await record_progress(
-                            call, current, max(0, round((time.monotonic() - started) * 1000)),
+                            call, current, elapsed_ms(),
                         )
                         previous = current
                 # Drain the final fragment before recording the terminal
@@ -459,7 +468,7 @@ async def _execute_tool_calls(
                 current = sink.snapshot()
                 if current is not None and current != previous:
                     await record_progress(
-                        call, current, max(0, round((time.monotonic() - started) * 1000)),
+                        call, current, elapsed_ms(),
                     )
 
             pump = asyncio.create_task(publish_live())
@@ -469,7 +478,7 @@ async def _execute_tool_calls(
                 ctx.on_tool_output = None
                 finished = True
                 await pump
-        return result, max(0, round((time.monotonic() - started) * 1000))
+        return result, elapsed_ms()
 
     semaphore = asyncio.Semaphore(_MAX_CONCURRENT_READS)
 
