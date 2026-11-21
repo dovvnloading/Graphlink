@@ -24,6 +24,7 @@ from backend.harness import workspace as workspace_module
 from backend.harness.loop import HarnessRunContext, _BoundedToolOutput, run_harness
 from backend.harness.tools_fs import register_harness_fs_tools
 from backend.harness.tools_interaction import register_harness_interaction_tools
+from backend.harness.tools_enable import register_workspace_tools as register_enable_tool
 from backend.harness.transcript import append_message, load_messages, transcript_path
 from backend.harness.workspace import WorkspaceError, ensure_workspace, resolve_in_workspace
 from backend.providers.base import CancelToken, ToolCall, ToolSpec
@@ -1569,6 +1570,180 @@ class TestCompaction:
         assert node.state.harness_status == "done"
         assert node.state.harness_reply == "answered anyway"
         assert node.state.harness_compactions == 0
+
+
+class TestSmallLocalContext:
+    @staticmethod
+    def _sized_text(unit: str, tokens: int) -> str:
+        """Size fixtures by the real tokenizer or its installed fallback."""
+        lo, hi = 1, tokens * 10 + 100
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if context_module.message_tokens({"role": "user", "content": unit * mid}) < tokens:
+                lo = mid + 1
+            else:
+                hi = mid
+        return unit * lo
+
+    def test_knowledge_passage_survives_the_first_post_search_compaction(
+        self, workspace_root, monkeypatch,
+    ):
+        document = SceneDocument()
+        node = document.add_harness_node(0, 0, "What figure does the report give?")
+        node.state.harness_max_context_tokens = 8_192
+        registry = ToolRegistry()
+        spec = ToolSpec(
+            "knowledge.search", "Read cited passages.",
+            {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        )
+        fixed = "Small model rules"
+        window_limit = context_module.prompt_token_limit(8_192)
+        history_room = window_limit - context_module.request_tokens(fixed, [], (spec,))
+        old_text = self._sized_text("earlier observations ", int(history_room * 0.52))
+        passage = (
+            "Citation [report:12]. The reported figure is 47.3 million. "
+            + self._sized_text("supporting passage text ", int(history_room * 0.57))
+        )
+        ws = ensure_workspace(node.state.harness_workspace_id)
+        append_message(ws, {"role": "user", "content": old_text})
+        append_message(ws, {"role": "assistant", "content": "Previous analysis completed."})
+
+        async def knowledge(_call, _ctx):
+            return ToolResult(passage)
+
+        registry.register(spec, knowledge, scopes={KNOWLEDGE_READ}, approval="auto")
+        monkeypatch.setattr(context_module, "served_context_window", lambda **_k: 8_192)
+        monkeypatch.setattr(context_module, "build_system_prompt", lambda *_a, **_k: fixed)
+        dropped = []
+
+        def summarize(messages, **_kwargs):
+            dropped.extend(messages)
+            return "Earlier analysis, summarized without the report."
+
+        monkeypatch.setattr(context_module, "summarize_dropped", summarize)
+        observed = []
+
+        def model_turn(_task, messages, tools=(), **_kwargs):
+            observed.append(list(messages))
+            if len(observed) == 1:
+                return {
+                    "message": {"role": "assistant", "content": ""},
+                    "tool_calls": [call("search-1", "knowledge.search", query="reported figure")],
+                    "usage": None,
+                }
+            has_figure = any("47.3 million" in str(m.get("content")) for m in messages)
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": "The figure is 47.3 million." if has_figure else "No figure was available.",
+                },
+                "tool_calls": [],
+                "usage": None,
+            }
+
+        monkeypatch.setattr(api_provider, "chat_turn_with_tools", model_turn)
+        asyncio.run(drive(document, LoopDispatcher(), registry, FakeBus(), node, "Look up the figure."))
+
+        assert node.state.harness_status == "done"
+        assert node.state.harness_reply == "The figure is 47.3 million."
+        assert len(observed) == 2
+        assert node.state.harness_compactions == 1
+        assert old_text in str(observed[0])
+        assert old_text not in str(observed[1])
+        assert any(m.get("role") == "tool" and m.get("content") == passage for m in observed[1])
+        assert all("47.3 million" not in str(m.get("content")) for m in dropped)
+        # Reload must retain the exact post-compaction tail, not only its summary.
+        assert any(m.get("role") == "tool" and m.get("content") == passage for m in load_messages(ws))
+
+    def test_unread_result_too_large_to_fit_fails_instead_of_answering_without_it(
+        self, workspace_root, monkeypatch,
+    ):
+        document = SceneDocument()
+        node = document.add_harness_node(0, 0, "Read the evidence")
+        registry = ToolRegistry()
+        spec = ToolSpec("knowledge.search", "Search.", {"type": "object"})
+        registry.register(
+            spec, lambda *_: None, scopes={KNOWLEDGE_READ}, approval="auto",
+        )
+        async def huge_result(_call, _ctx):
+            return ToolResult("critical figure 47.3 " * 10_000)
+
+        registry = ToolRegistry()
+        registry.register(spec, huge_result, scopes={KNOWLEDGE_READ}, approval="auto")
+        monkeypatch.setattr(context_module, "served_context_window", lambda **_k: 8_192)
+        monkeypatch.setattr(context_module, "build_system_prompt", lambda *_a, **_k: "Rules")
+        monkeypatch.setattr(context_module, "summarize_dropped", lambda *_a, **_k: "Old work")
+        calls = []
+
+        def model_turn(_task, messages, tools=(), **_kwargs):
+            calls.append(messages)
+            return {
+                "message": {"role": "assistant", "content": ""},
+                "tool_calls": [call("k", "knowledge.search", query="figure")],
+                "usage": None,
+            }
+
+        monkeypatch.setattr(api_provider, "chat_turn_with_tools", model_turn)
+        asyncio.run(drive(document, LoopDispatcher(), registry, FakeBus(), node, "Find the number"))
+        assert len(calls) == 1, "No model call is allowed without the unread evidence"
+        assert node.state.harness_status == "failed"
+        assert "most recent unread tool result" in node.state.harness_status_detail
+        assert "47.3" in str(load_messages(ensure_workspace(node.state.harness_workspace_id)))
+
+    def test_compact_ollama_catalog_can_enable_other_tools_without_losing_knowledge(
+        self, workspace_root, monkeypatch,
+    ):
+        document = SceneDocument()
+        node = document.add_harness_node(0, 0, "Inspect knowledge and a media result")
+        registry = ToolRegistry()
+        register_enable_tool(registry, None, None)
+        async def get_value(_call, _ctx):
+            return ToolResult("Value read")
+
+        registry.register(
+            ToolSpec("knowledge.search", "Read a cited passage", {"type": "object"}),
+            get_value, scopes={KNOWLEDGE_READ}, approval="auto",
+        )
+        registry.register(
+            ToolSpec("fal.result", "Get the completed media result", {"type": "object"}),
+            get_value, scopes={CODE_EXECUTE if False else FS_READ}, approval="auto",
+        )
+        monkeypatch.setattr(context_module, "served_context_window", lambda **_k: 8_192)
+        monkeypatch.setattr(api_provider, "describe_active_model", lambda *_a, **_k: ("ollama", "qwen3:8b"))
+        offered = []
+
+        def model_turn(_task, messages, tools=(), **_kwargs):
+            names = {tool.name for tool in tools}
+            offered.append((messages, names, tools))
+            if len(offered) == 1:
+                return {
+                    "message": {"role": "assistant", "content": ""},
+                    "tool_calls": [call("enable", "tools.enable", names=["fal.result"])],
+                    "usage": None,
+                }
+            if len(offered) == 2:
+                return {
+                    "message": {"role": "assistant", "content": ""},
+                    "tool_calls": [call("fetch", "fal.result")],
+                    "usage": None,
+                }
+            return {
+                "message": {"role": "assistant", "content": "All done."},
+                "tool_calls": [], "usage": None,
+            }
+
+        monkeypatch.setattr(api_provider, "chat_turn_with_tools", model_turn)
+        asyncio.run(drive(document, LoopDispatcher(), registry, FakeBus(), node, "Inspect these results"))
+
+        assert node.state.harness_status == "done"
+        assert len(offered) == 3
+        assert "knowledge.search" in offered[0][1]
+        assert "tools.enable" in offered[0][1]
+        assert "fal.result" not in offered[0][1]
+        assert "fal.result" in offered[1][1]
+        assert "fal.result" in offered[0][0][0]["content"], "The compact prompt lists enableable names"
+        for messages, _names, tools in offered:
+            assert context_module.request_tokens(messages[0]["content"], [], tools) < 4_096
 
 
 class TestPersistence:
