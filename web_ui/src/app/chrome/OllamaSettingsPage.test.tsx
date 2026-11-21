@@ -130,6 +130,11 @@ function setup(overrides: Partial<AppSettingsState> = {}) {
     fireIntent: (topic: string, intent: string, args: unknown[] = []) => {
       intents.push([topic, intent, args]);
     },
+    // Health checks are untracked: only the published snapshot matters, not
+    // a request acknowledgement that could time out after Connected.
+    intent: (topic: string, intent: string, args: unknown[] = []) => {
+      intents.push([topic, intent, args]);
+    },
   } as unknown as WsTransport;
   const user = userEvent.setup();
   let state = { ...baseState, ...overrides };
