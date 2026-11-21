@@ -72,6 +72,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
   const onSelectVersion = vi.fn();
   const onEditMessage = vi.fn();
   const onEditAsNewBranch = vi.fn();
+  const onCompareVersions = vi.fn();
   const onGenerateImage = vi.fn();
   const onGenerateChart = vi.fn();
   const onGenerateKeyTakeaway = vi.fn();
@@ -99,6 +100,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
         onSelectVersion,
         onEditMessage,
         onEditAsNewBranch,
+        onCompareVersions,
         isCollapsed: false,
         dockedChildren: [],
         chatScrollValue: 0,
@@ -161,7 +163,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
     );
   }
   return {
-    onToggleCollapse, onDelete, onUndockChild, onRegenerate, onSelectVersion, onEditMessage, onEditAsNewBranch, onGenerateImage,
+    onToggleCollapse, onDelete, onUndockChild, onRegenerate, onSelectVersion, onEditMessage, onEditAsNewBranch, onCompareVersions, onGenerateImage,
     onGenerateChart, onGenerateKeyTakeaway, onGenerateExplainerNote,
     onOpenDocumentView, onOpenCitation, onScrollChange, onToggleBranchFocus, onBranchFromHere,
     onSetBranchStatus, onSetFinalDeliverable, onCollapseBranch, onCancelRegenerate,
@@ -340,22 +342,27 @@ describe("ChatNodeView", () => {
 
   it("shows ‹ n/m › on both roles and dispatches bounded version changes", async () => {
     const user = userEvent.setup();
-    const { onSelectVersion, rerenderWithData } = renderChatNode({
+    const { onSelectVersion, onCompareVersions, rerenderWithData } = renderChatNode({
       isUser: false, versionCount: 3, versionIndex: 1,
     });
-    expect(screen.getByLabelText("Message versions").textContent).toBe("‹2/3›");
+    expect(screen.getByLabelText("Message versions")).toHaveTextContent("2/3");
     await user.click(screen.getByRole("button", { name: "Previous version" }));
     expect(onSelectVersion).toHaveBeenLastCalledWith(0);
     await user.click(screen.getByRole("button", { name: "Next version" }));
     expect(onSelectVersion).toHaveBeenLastCalledWith(2);
+    await user.click(screen.getByRole("button", { name: "Compare message versions" }));
+    expect(onCompareVersions).toHaveBeenCalledOnce();
+    expect(onSelectVersion).toHaveBeenCalledTimes(2);
     rerenderWithData({ isUser: true, versionCount: 3, versionIndex: 0 });
     expect(screen.getByRole("button", { name: "Previous version" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Next version" })).not.toBeDisabled();
     rerenderWithData({ isUser: false, versionCount: 2, versionIndex: 1, pendingRequestId: "req" });
     expect(screen.getByRole("button", { name: "Previous version" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Next version" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Compare message versions" })).toBeDisabled();
     rerenderWithData({ isUser: false, versionCount: 1, versionIndex: 0 });
     expect(screen.queryByLabelText("Message versions")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Compare message versions" })).toBeNull();
   });
 
   it("Generate Image is a real, enabled item (unconditional, unlike Regenerate Response) that calls onGenerateImage then closes the menu", async () => {
@@ -1470,6 +1477,7 @@ describe("ChatNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
       onSelectVersion: vi.fn(),
       onEditMessage: vi.fn(),
       onEditAsNewBranch: vi.fn(),
+      onCompareVersions: vi.fn(),
       isCollapsed: false,
       dockedChildren: [],
       chatScrollValue: 0,

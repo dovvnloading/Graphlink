@@ -47,6 +47,8 @@ from backend.composer import ComposerDocument
 from backend.domain.graph import SceneDocument
 from backend.domain.model import SceneError
 from backend.domain.staleness import fingerprint_for_reply
+from backend.domain.node_access import require_node
+from backend.domain.node_states import ChatState
 
 
 async def _history_with_chat_knowledge(
@@ -1142,8 +1144,42 @@ def register_chat_version_intents(
         )
         await publish_scene()
 
+    def compare_chat_versions(node_id, left_index, right_index):
+        """Return only the requested pair; never select or modify a version.
+
+        Scene snapshots intentionally omit historical reply bodies. Keeping
+        these large texts behind a read-only request also avoids publishing
+        other versions to every subscribed canvas window.
+        """
+        node = require_node(document.nodes, node_id, "chat", ChatState)
+        versions = node.state.versions
+        if len(versions) < 2:
+            raise SceneError("This message needs at least two versions to compare.")
+        if any(type(index) is not int or not 0 <= index < len(versions)
+               for index in (left_index, right_index)):
+            raise SceneError("Chat comparison version index is out of range.")
+        if left_index == right_index:
+            raise SceneError("Choose two different chat versions.")
+
+        def snapshot(index):
+            version = versions[index]
+            return {
+                "index": index,
+                "content": version.content,
+                "provider": version.provider_name,
+                "model": version.model_name,
+                "createdAt": version.created_at,
+            }
+
+        return {
+            "left": snapshot(left_index),
+            "right": snapshot(right_index),
+            "versionCount": len(versions),
+        }
+
     bus.register_intent("scene", "regenerateResponse", regenerate_response)
     bus.register_intent("scene", "setChatVersion", set_chat_version)
+    bus.register_intent("scene", "compareChatVersions", compare_chat_versions)
 
 
 def register_chat_edit_intents(

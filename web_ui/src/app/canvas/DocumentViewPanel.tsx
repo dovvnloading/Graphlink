@@ -483,6 +483,9 @@ export function DocumentViewPanel({
     if (!isOpen) return;
     function onKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
+      // A modal comparison Dialog may be open over this docked reader.
+      // Escape belongs to the topmost modal; do not close BOTH surfaces.
+      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
       if (isSearchOpen) {
         onSearchClose();
         event.stopImmediatePropagation();

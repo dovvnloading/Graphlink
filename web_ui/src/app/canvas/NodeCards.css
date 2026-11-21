@@ -308,6 +308,25 @@
   outline: 2px solid var(--gl-graph-selection);
   outline-offset: 1px;
 }
+.chat-node-version-compare-button {
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  background: transparent;
+  color: var(--gl-surface-text-secondary);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.chat-node-version-compare-button:hover:not(:disabled) {
+  background: var(--gl-neutral-button-hover);
+  color: var(--gl-surface-text-primary);
+}
+.chat-node-version-compare-button:disabled { opacity: 0.35; cursor: default; }
+.chat-node-version-compare-button:focus-visible {
+  outline: 2px solid var(--gl-graph-selection);
+  outline-offset: 2px;
+}
 
 .chat-node .scene-node-surface > .chat-node-content-shell {
   padding-block: 2px 15px;

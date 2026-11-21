@@ -20,6 +20,7 @@ import { CanvasSearchProvider } from "./canvas/CanvasSearchContext";
 import { ExecutionLimitsProvider } from "./canvas/ExecutionLimitsContext";
 import { SceneStore } from "./canvas/sceneStore";
 import { DocumentViewPanel } from "./canvas/DocumentViewPanel";
+import type { ChatVersionCompareTarget } from "./canvas/ChatVersionCompareDialog";
 import type { KnowledgeCitationSource } from "./canvas/ChatCitationChips";
 import type { DocumentCitationTarget } from "./canvas/DocumentViewMarkdown";
 import { AppBar } from "./chrome/AppBar";
@@ -41,6 +42,9 @@ import { OverlayProvider, useOverlays } from "./overlays/overlays";
 // The canvas is an interactive surface, not part of the static application shell.
 // Fetch its React Flow renderer on first mount; the shared size helper stays eager.
 const SceneCanvas = lazy(() => import("./canvas/SceneCanvas").then((m) => ({ default: m.SceneCanvas })));
+const ChatVersionCompareDialog = lazy(() =>
+  import("./canvas/ChatVersionCompareDialog").then((m) => ({ default: m.ChatVersionCompareDialog })),
+);
 const GlobalShortcuts = lazy(() =>
   import("./chrome/GlobalShortcuts").then((m) => ({ default: m.GlobalShortcuts })),
 );
@@ -227,7 +231,8 @@ export function SkipToComposerLink() {
   );
 }
 
-function App() {
+function AppShell() {
+  const overlays = useOverlays();
   const [status, setStatus] = useState<ConnectionStatus>("closed");
   const [system, setSystem] = useState<SystemState>({});
   // showTokenCounter defaults false (R8a: off by default, matching
@@ -245,6 +250,13 @@ function App() {
   const [documentViewSourceLabel, setDocumentViewSourceLabel] = useState<string | null>(null);
   const [documentViewCitation, setDocumentViewCitation] = useState<DocumentCitationTarget | null>(null);
   const [isDocumentViewOpen, setIsDocumentViewOpen] = useState(false);
+  const [compareTarget, setCompareTarget] = useState<ChatVersionCompareTarget | null>(null);
+  const nextCompareRequestId = useRef(0);
+  const onCompareChatVersions = useCallback((nodeId: string, count: number, selectedIndex: number) => {
+    if (count < 2) return;
+    setCompareTarget({ nodeId, versionCount: count, selectedIndex, requestId: ++nextCompareRequestId.current });
+    overlays.open("chat-version-compare", "dialog");
+  }, [overlays]);
   // The composer row's HUD slot: the canvas portals its zoom dock and minimap
   // here so they share the composer card's baseline (see workspace.css).
   const [canvasHud, setCanvasHud] = useState<HTMLDivElement | null>(null);
@@ -344,8 +356,7 @@ function App() {
   }, [transport, sceneStore, composerStore]);
 
   return (
-    <OverlayProvider>
-      <ReactFlowProvider>
+    <ReactFlowProvider>
         <Suspense fallback={null}>
           <GlobalShortcuts store={sceneStore} />
         </Suspense>
@@ -437,6 +448,7 @@ function App() {
                         <SceneCanvas
                           store={sceneStore}
                           onOpenDocumentView={onOpenDocumentView}
+                          onCompareChatVersions={onCompareChatVersions}
                           getComposerRoute={getComposerRoute}
                           hudContainer={canvasHud}
                         />
@@ -526,15 +538,23 @@ function App() {
                   <LazySurface overlayName="library">
                     <ChatLibraryDialog transport={transport} store={sceneStore} />
                   </LazySurface>
+                  <LazySurface overlayName="chat-version-compare">
+                    {compareTarget && (
+                      <ChatVersionCompareDialog key={compareTarget.requestId} store={sceneStore} target={compareTarget} />
+                    )}
+                  </LazySurface>
                   </ModelCapabilityProvider>
                 </ExecutionLimitsProvider>
               </div>
             </div>
           </main>
         </div>
-      </ReactFlowProvider>
-    </OverlayProvider>
+    </ReactFlowProvider>
   );
+}
+
+function App() {
+  return <OverlayProvider><AppShell /></OverlayProvider>;
 }
 
 export default App;

@@ -194,6 +194,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("scene", "setChatVersion", "A", "content: selecting a saved chat alternative is undoable"),
     Classified("scene", "editChatMessage", "A", "content: user edit appends a version with one undoable command"),
     Classified("scene", "editChatMessageAsNewBranch", "A", "content: edited sibling creation is one undoable command"),
+    Classified("scene", "compareChatVersions", "B", "read-only: fetches two saved reply snapshots without changing selection"),
     Classified("scene", "setBranchStatus", "A", "content: branch status is document state"),
     Classified("scene", "setFinalDeliverable", "A", "content: final-deliverable flag is document state"),
     Classified("scene", "collapseBranch", "A", "content: collapsed flag is document state"),

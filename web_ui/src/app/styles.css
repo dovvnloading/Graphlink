@@ -10631,3 +10631,133 @@ mark.document-view-search-match-current {
   border-color: var(--gl-surface-border);
   cursor: default;
 }
+
+
+/* Read-only, side-by-side chat version comparison. Uses the shared Dialog
+   shell and Document View scroll/typography rules; every colour is a --gl
+   theme token. Strike/underline, dashed/solid borders and explicit labels
+   distinguish edits even with colour perception or contrast differences. */
+.chat-version-compare-dialog {
+  width: min(1180px, calc(100vw - 40px));
+  max-width: calc(100vw - 24px);
+  height: min(780px, calc(100vh - 40px));
+}
+.chat-version-compare-dialog .overlay-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow: hidden;
+}
+.chat-version-compare-help {
+  margin: 0;
+  color: var(--gl-surface-text-secondary);
+  font-size: 12px;
+}
+.chat-version-compare-selectors {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.chat-version-compare-selectors label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--gl-surface-text-primary);
+}
+.chat-version-compare-selectors select {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 5px;
+  background: var(--gl-surface-node-body);
+  color: var(--gl-surface-text-primary);
+  font: inherit;
+}
+.chat-version-compare-legend,
+.chat-version-compare-focus-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--gl-surface-text-secondary);
+}
+.chat-version-compare-legend del { text-decoration: line-through double; }
+.chat-version-compare-legend ins { text-decoration: underline double; }
+.chat-version-compare-focus-actions button {
+  border: 1px solid var(--gl-neutral-button-border);
+  background: var(--gl-neutral-button-background);
+  color: var(--gl-surface-text-primary);
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font: inherit;
+}
+.chat-version-compare-focus-actions button:hover {
+  background: var(--gl-neutral-button-hover);
+}
+.chat-version-compare-status {
+  margin: 0;
+  min-height: 1em;
+  font-size: 11px;
+  color: var(--gl-surface-text-muted);
+}
+.chat-version-compare-panes {
+  min-height: 0;
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.chat-version-compare-pane {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  border-radius: 6px;
+}
+.chat-version-compare-pane-heading {
+  margin-bottom: 10px;
+  white-space: normal;
+}
+.chat-version-compare-pane-heading h3 {
+  margin: 0 0 3px;
+  color: var(--gl-surface-text-primary);
+  font-size: 14px;
+}
+.chat-version-compare-pane-heading .document-view-panel-subtitle {
+  display: block;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.chat-version-compare-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--gl-surface-text-primary);
+  line-height: 1.6;
+}
+.chat-version-compare-deleted {
+  text-decoration: line-through double;
+  border-bottom: 1px dashed var(--gl-surface-text-muted);
+  background: var(--gl-neutral-button-hover);
+}
+.chat-version-compare-inserted {
+  text-decoration: underline double;
+  border-bottom: 2px solid var(--gl-graph-selection);
+  background: var(--gl-neutral-button-hover);
+}
+.chat-version-compare-pane:focus-visible,
+.chat-version-compare-selectors select:focus-visible,
+.chat-version-compare-focus-actions button:focus-visible {
+  outline: 2px solid var(--gl-graph-selection);
+  outline-offset: 2px;
+}
+@media (max-width: 680px) {
+  .chat-version-compare-dialog .overlay-dialog-body { overflow-y: auto; }
+  .chat-version-compare-panes { min-height: 320px; }
+  .chat-version-compare-pane-heading .document-view-panel-subtitle { font-size: 10px; }
+}

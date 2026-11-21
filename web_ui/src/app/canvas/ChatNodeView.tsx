@@ -81,6 +81,7 @@ export interface ChatNodeData extends Record<string, unknown> {
   onSelectVersion: (index: number) => void;
   onEditMessage: (content: string, expectedContent: string, onSettled: (success: boolean) => void) => void;
   onEditAsNewBranch: (content: string, expectedContent: string, onSettled: (success: boolean) => void) => void;
+  onCompareVersions: () => void;
   isCollapsed: boolean;
   staleness?: "current" | "out_of_date" | "upstream_changed";
   dockedChildren: { id: string; label: string }[];
@@ -768,6 +769,7 @@ export function chatNodePropsAreEqual(prev: NodeProps<ChatFlowNode>, next: NodeP
     a.onSelectVersion === b.onSelectVersion &&
     a.onEditMessage === b.onEditMessage &&
     a.onEditAsNewBranch === b.onEditAsNewBranch &&
+    a.onCompareVersions === b.onCompareVersions &&
     a.onGenerateImage === b.onGenerateImage &&
     a.onGenerateChart === b.onGenerateChart &&
     a.onGenerateKeyTakeaway === b.onGenerateKeyTakeaway &&
@@ -1004,6 +1006,9 @@ export const ChatNodeView = memo(function ChatNodeView({
                   aria-label="Next version" title="Next version"
                   disabled={data.versionIndex >= data.versionCount - 1 || !!data.pendingRequestId}
                   onClick={() => data.onSelectVersion(data.versionIndex + 1)}>›</button>
+                <button type="button" className="chat-node-version-compare-button nodrag"
+                  aria-label="Compare message versions" title="Compare message versions"
+                  disabled={!!data.pendingRequestId} onClick={data.onCompareVersions}>Compare</button>
               </span>
             )}
             <span

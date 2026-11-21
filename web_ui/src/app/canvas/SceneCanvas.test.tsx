@@ -388,6 +388,39 @@ describe("toFlowNodes (R4.3c parentChatNodeId derivation)", () => {
     expect(regenerate).not.toHaveBeenCalled();
   });
 
+  it("chat comparison uses a stable read-only callback and current version metadata", () => {
+    const original = baseNode({
+      id: "chat-1", kind: "chat", content: "Second", isUser: false,
+      versionCount: 3, versionIndex: 2,
+    });
+    const scene = baseScene({ nodes: [original], edges: [] });
+    const store = makeStore();
+    const cache = createToFlowNodesCache();
+    const openComparison = vi.fn();
+    const toNodes = (current: SceneState) => toFlowNodes(
+      current, store, undefined, null, undefined, false, cache,
+      undefined, undefined, undefined, openComparison,
+    );
+    const first = toNodes(scene)[0];
+    if (first.type !== "chat") throw new Error("Expected a chat node");
+    const data = first.data;
+    data.onCompareVersions();
+    expect(openComparison).toHaveBeenLastCalledWith("chat-1", 3, 2);
+
+    // No new view render and no new callback on an unchanged scene.
+    const second = toNodes(scene)[0];
+    if (second.type !== "chat") throw new Error("Expected a chat node");
+    expect(second).toBe(first);
+    expect(second.data.onCompareVersions).toBe(data.onCompareVersions);
+
+    const newer = baseScene({ nodes: [{ ...original, versionIndex: 1 }], edges: [] });
+    const third = toNodes(newer)[0];
+    if (third.type !== "chat") throw new Error("Expected a chat node");
+    expect(third.data.onCompareVersions).toBe(data.onCompareVersions);
+    third.data.onCompareVersions();
+    expect(openComparison).toHaveBeenLastCalledWith("chat-1", 3, 1);
+  });
+
   it("a chat node's onRegenerate calls regenerateResponse with its own id", () => {
     const scene = baseScene({
       nodes: [baseNode({ id: "chat-1", kind: "chat", content: "Hello", isUser: false })],

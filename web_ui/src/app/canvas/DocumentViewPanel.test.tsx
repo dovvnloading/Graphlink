@@ -471,6 +471,24 @@ describe("DocumentViewPanel", () => {
   });
 
   describe("drawer UX polish (stage 4)", () => {
+    it("keeps the docked Document View open when Escape dismisses a modal comparison above it", async () => {
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      renderPanel({ onClose });
+      const modal = document.createElement("div");
+      modal.setAttribute("role", "dialog");
+      modal.setAttribute("aria-modal", "true");
+      document.body.appendChild(modal);
+      try {
+        await user.keyboard("{Escape}");
+        expect(onClose).not.toHaveBeenCalled();
+      } finally {
+        modal.remove();
+      }
+      await user.keyboard("{Escape}");
+      expect(onClose).toHaveBeenCalledOnce();
+    });
+
     it("Escape closes the panel", async () => {
       const user = userEvent.setup();
       const onClose = vi.fn();

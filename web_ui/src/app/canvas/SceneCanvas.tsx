@@ -594,6 +594,7 @@ interface DispatcherLive {
   store: SceneStore;
   onOpenDocumentView: (markdown: string, sourceLabel: string, citation?: KnowledgeCitationSource) => void;
   onToggleBranchFocus: (nodeId: string) => void;
+  onCompareChatVersions?: (nodeId: string, count: number, selectedIndex: number) => void;
   // ADR-018 stage 18.3: optional - only the chat dispatcher's own call
   // site below supplies it; every other kind's getDispatcher call omits
   // it exactly like they already omit `extra` above.
@@ -666,6 +667,8 @@ function getDispatcher<T extends Record<string, unknown>>(
   return fns;
 }
 
+const NO_COMPARE_CHAT_VERSIONS: (nodeId: string, count: number, selectedIndex: number) => void = () => {};
+
 function makeChatFns(id: string, liveRef: { current: DispatcherLive }) {
   return {
     onToggleCollapse: () => {
@@ -680,6 +683,10 @@ function makeChatFns(id: string, liveRef: { current: DispatcherLive }) {
       liveRef.current.store.editChatMessage(id, content, expectedContent, onSettled),
     onEditAsNewBranch: (content: string, expectedContent: string, onSettled: (success: boolean) => void) =>
       liveRef.current.store.editChatMessageAsNewBranch(id, content, expectedContent, onSettled),
+    onCompareVersions: () => {
+      const { n, onCompareChatVersions } = liveRef.current;
+      onCompareChatVersions?.(id, n.versionCount, n.versionIndex);
+    },
     onGenerateImage: () => liveRef.current.store.generateImage(id),
     // R6.2: real chart generation - fires the new generateChart intent with
     // this chat node as the parent (see ChatNodeView.tsx's own Generate
@@ -1177,6 +1184,7 @@ export function toFlowNodes(
   // omits these two keeps working unchanged.
   filterKinds: ReadonlySet<string> = new Set(),
   filterStatuses: ReadonlySet<string> = new Set(),
+  onCompareChatVersions: (nodeId: string, count: number, selectedIndex: number) => void = NO_COMPARE_CHAT_VERSIONS,
 ): SceneFlowNode[] {
   // ADR-011 stage 11.1: ONE upfront O(N+E) pass replacing this function's
   // old standalone `nodesById` map build, PLUS the O(N*E) per-node edge
@@ -1252,7 +1260,7 @@ export function toFlowNodes(
       const extraSig = `${dimmedVal ? 1 : 0}${isBranchFocusActive ? 1 : 0}|${dockedChildrenSig}`;
       const cached = cache.flowNodes.get(n);
       const fns = getDispatcher(
-        cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus, getComposerRoute }, makeChatFns,
+        cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus, getComposerRoute, onCompareChatVersions }, makeChatFns,
       );
       if (cached && cached.extraSig === extraSig) {
         flowNodes.push(cached.flowNode);
@@ -2692,11 +2700,13 @@ function useConnectionColors() {
 function CanvasInner({
   store,
   onOpenDocumentView,
+  onCompareChatVersions,
   getComposerRoute,
   hudContainer,
 }: {
   store: SceneStore;
   onOpenDocumentView: (markdown: string, sourceLabel: string, citation?: KnowledgeCitationSource) => void;
+  onCompareChatVersions: (nodeId: string, count: number, selectedIndex: number) => void;
   // ADR-018 stage 18.3: passed straight through to toFlowNodes - see that
   // function's own comment on why a getter, not a subscribed value.
   getComposerRoute: () => { provider: string; modelId: string };
@@ -2836,6 +2846,7 @@ function CanvasInner({
         getComposerRoute,
         filterKinds,
         filterStatuses,
+        onCompareChatVersions,
       ),
       nodesRef.current,
       // BUG FIX: see withPreservedFlowState's own POSITION doc and
@@ -2859,7 +2870,7 @@ function CanvasInner({
     lastSyncedSceneRef.current = scene;
   }, [
     scene, store, onOpenDocumentView, effectiveBranchFocusOriginId, onToggleBranchFocus, focusAcceptedPaths,
-    getComposerRoute, filterKinds, filterStatuses,
+    getComposerRoute, filterKinds, filterStatuses, onCompareChatVersions,
     // nodesRef/draggingRef/storeApi/pendingSettledIdsRef/lastSyncedSceneRef
     // are all stable ref/store-api identities (useNodeDragAndSizeSync's/
     // useStoreApi's own refs never change across renders) - listed here only
@@ -3301,6 +3312,7 @@ function CanvasInner({
 export function SceneCanvas({
   store,
   onOpenDocumentView,
+  onCompareChatVersions = NO_COMPARE_CHAT_VERSIONS,
   // ADR-018 stage 18.3: optional (default no-op) so every existing direct
   // render of <SceneCanvas> - App.tsx aside - keeps working unchanged; only
   // App.tsx's real render supplies the composer's live route. See
@@ -3310,6 +3322,7 @@ export function SceneCanvas({
 }: {
   store: SceneStore;
   onOpenDocumentView: (markdown: string, sourceLabel: string, citation?: KnowledgeCitationSource) => void;
+  onCompareChatVersions?: (nodeId: string, count: number, selectedIndex: number) => void;
   getComposerRoute?: () => { provider: string; modelId: string };
   /** Where the zoom dock and minimap render; see CanvasInner's own prop. */
   hudContainer?: HTMLElement | null;
@@ -3335,6 +3348,7 @@ export function SceneCanvas({
       <BridgeErrorState title="Canvas unavailable" rejection={versionRejection} className="scene-bridge-error" />
     );
   }
-  return <CanvasInner store={store} onOpenDocumentView={onOpenDocumentView} getComposerRoute={getComposerRoute}
+  return <CanvasInner store={store} onOpenDocumentView={onOpenDocumentView}
+    onCompareChatVersions={onCompareChatVersions} getComposerRoute={getComposerRoute}
     hudContainer={hudContainer} />;
 }

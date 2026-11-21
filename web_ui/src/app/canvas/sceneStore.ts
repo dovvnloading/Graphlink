@@ -167,6 +167,36 @@ export interface OrganizationPreview {
 export type EdgeRole = "legacy" | "primary" | "secondary" | "reference" | "association";
 
 /** Resolved by the backend from this branch and its workspace collection. */
+/** Lazily retrieved pair; historical bodies never ride scene snapshots. */
+export interface ChatVersionSnapshot {
+  index: number;
+  content: string;
+  provider: string | null;
+  model: string | null;
+  createdAt: string;
+}
+
+export interface ChatVersionComparison {
+  left: ChatVersionSnapshot;
+  right: ChatVersionSnapshot;
+  versionCount: number;
+}
+
+function parseChatVersionSnapshot(value: unknown, index: number): ChatVersionSnapshot {
+  if (!value || typeof value !== "object") throw new Error("Invalid chat version response.");
+  const row = value as Record<string, unknown>;
+  if (row.index !== index || typeof row.content !== "string" ||
+    (row.provider !== null && typeof row.provider !== "string") ||
+    (row.model !== null && typeof row.model !== "string") ||
+    typeof row.createdAt !== "string") {
+    throw new Error("Invalid chat version response.");
+  }
+  return {
+    index, content: row.content, provider: row.provider,
+    model: row.model, createdAt: row.createdAt,
+  };
+}
+
 export interface ChatKnowledgePreference {
   nodeId: string | null;
   hasDocuments: boolean;
@@ -1119,6 +1149,25 @@ export class SceneStore {
   /** Select an existing chat alternative as an undoable scene command. */
   setChatVersion(chatNodeId: string, index: number): void {
     this.transport.fireIntent("scene", "setChatVersion", [chatNodeId, index], undefined, true);
+  }
+
+  async compareChatVersions(
+    chatNodeId: string, leftIndex: number, rightIndex: number,
+  ): Promise<ChatVersionComparison> {
+    // Deliberately request(), not fireIntent(): the caller needs the two
+    // selected snapshots and this path MUST NOT select a current version.
+    const response: unknown = await this.transport.request(
+      "scene", "compareChatVersions", [chatNodeId, leftIndex, rightIndex],
+    );
+    if (!response || typeof response !== "object") throw new Error("Invalid chat comparison response.");
+    const row = response as Record<string, unknown>;
+    if (typeof row.versionCount !== "number" || !Number.isSafeInteger(row.versionCount) ||
+        row.versionCount < 2) throw new Error("Invalid chat comparison response.");
+    return {
+      left: parseChatVersionSnapshot(row.left, leftIndex),
+      right: parseChatVersionSnapshot(row.right, rightIndex),
+      versionCount: row.versionCount,
+    };
   }
 
   // R4.4a: real "Generate Image from Text", for ChatNodeView's own menu -

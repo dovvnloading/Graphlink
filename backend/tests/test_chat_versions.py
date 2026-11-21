@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime
+import asyncio
 
 import pytest
 
 import backend.agents as agents_module  # noqa: F401 - backend.canvas import order
 from backend.canvas import SceneDocument
+from backend.api.intents_chat import register_chat_version_intents
+from backend.events import SessionBus
 from backend.domain.model import SceneError
 from backend.domain.node_states import MAX_CHAT_VERSIONS
 from backend.session_load import _restore_chat_payload, restore_chat_into_document
@@ -212,3 +215,50 @@ def test_scene_wire_exposes_only_version_count_and_selection_not_full_history():
     row = next(row for row in document.scene_payload()["nodes"] if row["id"] == node.id)
     assert row["content"] == "first"
     assert row["versionIndex"] == 0
+
+
+def test_compare_chat_versions_intent_is_read_only_and_returns_provenance():
+    document = SceneDocument()
+    node = document.add_chat_node(0, 0, "earlier answer", False)
+    node.state.provider, node.state.model = "Provider A", "Model A"
+    node.state.versions[0].created_at = "2026-01-02T12:00:00+00:00"
+    document.sync_chat_version(node.id)
+    document.update_chat_node_content(node.id, "later answer")
+    node.state.provider, node.state.model = "Provider B", "Model B"
+    node.state.versions[1].created_at = "2026-02-03T14:05:00+00:00"
+    document.sync_chat_version(node.id)
+    # The active selection is deliberately neither selected by this intent
+    # nor changed by an invalid comparison.
+    bus = SessionBus("comparison-test")
+
+    async def no_publish():
+        pytest.fail("a read-only comparison must not publish scene state")
+
+    register_chat_version_intents(
+        bus, document, None, None, None, None, no_publish, no_publish,
+    )
+    result = asyncio.run(bus.dispatch_intent("scene", "compareChatVersions", [node.id, 0, 1]))
+    assert result == {
+        "left": {
+            "index": 0, "content": "earlier answer",
+            "provider": "Provider A", "model": "Model A",
+            "createdAt": "2026-01-02T12:00:00+00:00",
+        },
+        "right": {
+            "index": 1, "content": "later answer",
+            "provider": "Provider B", "model": "Model B",
+            "createdAt": "2026-02-03T14:05:00+00:00",
+        },
+        "versionCount": 2,
+    }
+    assert (node.content, node.state.version_index) == ("later answer", 1)
+
+    for left, right in [(0, 0), (True, 1), (-1, 1), (0, 2), (0, "1")]:
+        with pytest.raises(SceneError):
+            asyncio.run(bus.dispatch_intent("scene", "compareChatVersions", [node.id, left, right]))
+    assert (node.content, node.state.version_index) == ("later answer", 1)
+
+    single = document.add_chat_node(0, 0, "only version", True)
+    with pytest.raises(SceneError, match="at least two"):
+        asyncio.run(bus.dispatch_intent("scene", "compareChatVersions", [single.id, 0, 1]))
+    assert document.nodes[single.id].content == "only version"
