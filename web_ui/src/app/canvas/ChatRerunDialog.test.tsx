@@ -17,6 +17,7 @@ function makePreview(count: number): ChatRerunPreview {
       provider: "Provider",
       model: "Model",
       estimatedInputTokens: 100 + index,
+      estimatedInputCostUsd: 0.000123,
     })),
   };
 }
@@ -60,6 +61,7 @@ describe("ChatRerunDialog", () => {
     expect(screen.getByRole("list", { name: /2 replies in parent-before-child order/ }))
       .toBeInTheDocument();
     expect(screen.getByText(/Estimated input: 100 tokens/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Estimated input cost: \$0.000123/)).toHaveLength(2);
     expect(screen.getAllByText(/Provider \/ Model/)).toHaveLength(2);
     const branches = screen.getByRole("radio", { name: "All branches below" });
     branches.focus();

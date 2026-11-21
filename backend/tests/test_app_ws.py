@@ -381,6 +381,8 @@ def test_junk_args_never_crash_or_disconnect_any_registered_intent():
 
         session_bus = client.app.state.bus.session()
         all_intents = sorted(session_bus._intents.keys())
+        # Pin both pricing intents in the real WebSocket registry.
+        assert {("app-settings", "getPricingOverrides"), ("app-settings", "setPricingOverrides")} <= set(all_intents)
         # Sanity guard: if this collapses to a handful of entries, the
         # introspection path itself broke silently (e.g. an empty/wrong
         # session) - the test would then "pass" while covering nothing.

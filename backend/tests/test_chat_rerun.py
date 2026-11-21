@@ -160,6 +160,27 @@ def test_preview_canonical_scopes_order_models_tokens_and_nonchat_isolation():
     assert [row["nodeId"] for row in other_path["replies"]] == [branch.id]
 
 
+def test_preview_input_cost_reprices_with_current_exact_model_override():
+    document, user, *_ = _thread()
+    dispatcher = _Dispatcher()
+
+    class Pricing:
+        prices = {"test-model": {"input": 2.0, "output": 6.0}}
+
+        def get_pricing_overrides(self):
+            return self.prices
+
+    settings = Pricing()
+    dispatcher._settings_manager = settings
+    first = _preview_plan(document, dispatcher, None, user.id, "this_path")
+    row = first["replies"][0]
+    assert row["estimatedInputCostUsd"] == round(row["estimatedInputTokens"] * 2.0 / 1_000_000, 6)
+    settings.prices = {"test-model": {"input": 300.0, "output": 600.0}}
+    second = _preview_plan(document, dispatcher, None, user.id, "this_path")
+    assert second["replies"][0]["estimatedInputCostUsd"] > row["estimatedInputCostUsd"]
+    assert second["previewToken"] != first["previewToken"]
+
+
 def test_only_edited_user_or_stale_reply_may_start():
     document = SceneDocument()
     user = document.add_chat_node(0, 0, "unedited", True)
