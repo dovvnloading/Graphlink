@@ -23,9 +23,14 @@
    byte-for-byte the old messages.
 6. backend/knowledge_retrieval.py has hybrid FTS5/vector retrieval, a token
    budgeter, stable citation IDs (PR #599) and untrusted source formatting.
-   Ordinary chat Send and Regenerate now search ONLY the current workspace's
+   Ordinary chat Send, Regenerate and model comparison can search ONLY the current workspace's
    already-existing knowledge collection (with the legacy unscoped pool as
-   the fallback for a session without a workspace). Questions are first
+   the fallback for a session without a workspace), but ONLY when the composer's
+**Use knowledge** toggle is on. With no override the toggle is on when that
+workspace collection contains documents and off when empty. Overrides are
+stored on individual chat branches: the nearest ancestor preference wins,
+without leaking to sibling forks. The document-presence check is read-only.
+Questions are first
    searched as written, then with significant terms if the full question
    has no lexical matches. They do not ingest or
    create a collection. backend/api/intents_knowledge.py still supplies the
@@ -147,15 +152,18 @@ wrappers and their cost is counted before the final model call.
 
 ## Read-only Context Inspector
 
-scene/inspectChatContext(nodeId, draftText) previews the next chat send.
+scene/inspectChatContext(nodeId, draftText, useKnowledge?) previews the next chat send.
 The intent returns provider/model, node, window, prompt budget, reserved
 output, estimated prompt tokens, whether included content leaves the
 device, and every candidate source with ID, origin, trust, kind, original
 and sent token counts, included/excluded status, truncation, egress and
 reason. It includes NO raw source text. The inspector does not run inference, consume staged attachments, edit nodes,
 publish scene state or modify settings. If a draft is supplied, it runs the
-same read-only, workspace-scoped local retrieval and context selection to
-preview possible knowledge candidates. Preview metadata shows IDs, sections,
+same read-only, workspace-scoped local retrieval and context selection (only
+when Use knowledge is enabled) to
+preview possible knowledge candidates. The Inspector separately lists
+knowledge hits actually included in the next request after token budgeting.
+Preview metadata shows IDs, sections,
 inclusion, estimated token costs, exclusion reasons and device egress.
 The latest assistant ancestor's persisted citation ledger is audited
 separately as `lastReplyCitations`: each sent passage is marked **Cited**

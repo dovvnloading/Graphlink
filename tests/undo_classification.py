@@ -267,6 +267,8 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("scene", "listComparisonModels", "B", "read-only: configured comparison catalog; does not mutate graph or settings"),
     Classified("scene", "regenerateResponse", "A", "content: delete-then-recreate of a node's content, one composite undo"),
     Classified("scene", "inspectChatContext", "B", "read-only: previews the next chat send's sources and budget without a graph mutation"),
+    Classified("scene", "getChatKnowledgePreference", "B", "read-only: resolves branch preference and workspace document presence"),
+    Classified("scene", "setChatUseKnowledge", "A", "content: persists a per-chat-branch knowledge retrieval override"),
     Classified("scene", "cancelChatRequest", "B", "run-lifecycle: cancel"),
 
     # -- backend/api/intents_chat_image.py (scene) ---------------------------
@@ -417,14 +419,25 @@ CLASSIFICATION: tuple[Classified, ...] = (
 
     # -- backend/api/intents_knowledge.py (knowledge, scene) - ADR-017 stage 17.5 --
     Classified("knowledge", "search", "B", "read-only: queries the local knowledge store, no document mutation"),
+    Classified("knowledge", "openCitation", "B", "read-only: verifies and reads a workspace-scoped indexed source"),
     Classified("knowledge", "addFiles", "B", "external-store: launches a local knowledge import job, not a scene undo"),
     Classified("knowledge", "addFolder", "B", "external-store: launches a local folder import job, not a scene undo"),
     Classified("knowledge", "addWatchedFolder", "B", "external-store: opts a native-picked folder into knowledge sync"),
     Classified("knowledge", "removeWatchedFolder", "B", "external-store: stops a subscription without scene mutation"),
     Classified("knowledge", "listWatchedFolders", "B", "read-only: lists the workspace's explicit watches and last sync"),
     Classified("knowledge", "syncWatchedFolders", "B", "external-store: schedules existing knowledge ingestion jobs"),
+    Classified("knowledge", "addChatAttachment", "B", "external-store: imports a staged chat attachment into workspace knowledge"),
+    Classified("knowledge", "addWorkspaceFile", "B", "external-store: imports an authorized agent workspace file"),
     Classified("knowledge", "cancelIngest", "B", "run-lifecycle: signals cancellation of a background knowledge job"),
     Classified("knowledge", "getIngestJobs", "B", "read-only: retrieves background knowledge job progress"),
+    Classified("knowledge", "listDocuments", "B", "read-only: lists current workspace collection"),
+    Classified("knowledge", "openDocument", "B", "read-only: fetches indexed text for Document View"),
+    Classified("knowledge", "removeDocument", "B", "external-store: deletes a workspace knowledge document"),
+    Classified("knowledge", "reindexDocument", "B", "external-store: starts a job from indexed file sources"),
+    Classified("knowledge", "beginUpload", "B", "external-store: starts a bounded browser file transfer"),
+    Classified("knowledge", "appendUpload", "B", "external-store: stores a validated upload chunk"),
+    Classified("knowledge", "finishUpload", "B", "external-store: imports the completed browser transfer"),
+    Classified("knowledge", "cancelUpload", "B", "external-store: discards a browser transfer"),
     Classified("scene", "setChatIndexIntoKnowledge", "A", "content: branch-indexing opt-in is document state, same posture as setGroupColor"),
 
     # -- backend/api/intents_global_search.py - ADR-020 stage 20.4 --

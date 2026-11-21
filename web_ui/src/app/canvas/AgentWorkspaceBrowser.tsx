@@ -1,16 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { HarnessWorkspaceListing } from "./harnessWorkspaceFiles";
+import type { StateListener } from "../../lib/ws/transport";
+import { KnowledgeFileImportStatus, useKnowledgeFileImport } from "../knowledgeFileImport";
 
 /** On-demand folder browser. Only relative paths are sent; the backend
  * derives the root from the current node grant on every request. */
 export function HarnessWorkspaceFiles({
   onList,
   onOpen,
+  onAddToKnowledge,
+  onSubscribeKnowledgeIngest,
   onReveal,
   onTrustChanged,
 }: {
   onList: (path: string, cursor?: string) => Promise<HarnessWorkspaceListing>;
   onOpen: (path: string, expectedRoot: string) => Promise<void>;
+  onAddToKnowledge?: (path: string, expectedRoot: string) => Promise<unknown>;
+  onSubscribeKnowledgeIngest?: (listener: StateListener) => () => void;
   onReveal: () => void;
   onTrustChanged?: (listener: () => void) => () => void;
 }) {
@@ -24,6 +30,11 @@ export function HarnessWorkspaceFiles({
   const [loading, setLoading] = useState(false);
   const [opening, setOpening] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const subscribeKnowledge = useCallback(
+    (listener: StateListener) => onSubscribeKnowledgeIngest?.(listener) ?? (() => {}),
+    [onSubscribeKnowledgeIngest],
+  );
+  const knowledgeImport = useKnowledgeFileImport(subscribeKnowledge);
 
   // Fetch on user actions, not in an effect: this avoids an extra mount
   // request and keeps one pending directory navigation from replacing a
@@ -138,6 +149,7 @@ export function HarnessWorkspaceFiles({
           )}
           {loading && <p className="harness-files-note" role="status">Loading files…</p>}
           {error && <p className="harness-files-error" role="alert">{error}</p>}
+          <KnowledgeFileImportStatus state={knowledgeImport} />
           {listing && listing.entries.length === 0 && (
             <p className="harness-files-note">No files in this folder.</p>
           )}
@@ -160,6 +172,19 @@ export function HarnessWorkspaceFiles({
                     <span className="harness-files-name">{entry.name}</span>
                     {opening === entry.path && <span aria-hidden="true">…</span>}
                   </button>
+                  {!entry.isDir && onAddToKnowledge && (
+                    <button
+                      type="button"
+                      className="harness-files-add-knowledge nodrag"
+                      aria-label={`Add ${entry.name} to knowledge`}
+                      disabled={knowledgeImport.busy}
+                      onClick={() => void knowledgeImport.add(
+                        entry.name, () => onAddToKnowledge(entry.path, listing.root),
+                      )}
+                    >
+                      Add to knowledge
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>

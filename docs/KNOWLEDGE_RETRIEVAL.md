@@ -139,6 +139,45 @@ replace the fixture and re-run the gate; if either metric regresses, change
 `DEFAULT_RANKING` back to `"legacy"` until the regression is addressed.
 Both modes remain selectable without feature flags or schema changes.
 
+
+## Configured-model quality benchmark (manual only)
+
+To measure retrieval with the **actual embedding model chosen in
+Settings > Knowledge**, run this separately from the deterministic gate,
+from the repository root:
+
+```bash
+python -m backend.evals.knowledge_model_benchmark --run
+```
+
+The command requires an explicitly enabled Ollama or consented
+OpenAI-compatible cloud embedding choice. It uses the *same checked-in
+14-document, six-question fixture* as the offline reranker evaluation and
+creates a temporary SQLite database; it never reads or modifies your
+workspace knowledge index. It measures keyword-only FTS5 + default reranking
+against hybrid FTS5/vector + the **same** default reranking. The keyword
+baseline makes no embedding calls. Fixture passages are embedded once with
+the configured model; each hybrid question then uses that model's query
+embedding. Provider failures abort rather than silently reporting fallback
+keyword results as hybrid.
+
+Its JSON output identifies the model and includes both modes' average
+**recall@5** and **MRR** (truncated to the top five, i.e. MRR@5), plus
+per-question scores and returned source files. Scores are fractions of
+relevant sources retrieved and the reciprocal rank of the first relevant
+source, respectively. No score threshold is asserted: even when hybrid
+performs worse, the command only reports the measurements and exits
+successfully if the run completed.
+
+This is an opt-in **local invocation**, not an automated regression test.
+It requires `--run`, is absent from the normal eval runner and PR
+workflows, and refuses to run when `CI` or `GITHUB_ACTIONS`
+is set. If a consented cloud embedding model is selected, the **fixture
+passages and questions leave the machine** and provider charges may apply;
+Ollama keeps embedding requests local. Scores reflect a small synthetic
+corpus and your current model configuration, not production retrieval
+performance.
+
 ## Limitations
 
 The evaluation dataset is intentionally small and a deterministic stand-in

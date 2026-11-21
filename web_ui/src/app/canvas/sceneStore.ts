@@ -28,7 +28,7 @@ import {
 import type { GridControlState } from "../../lib/bridge-core/generated/grid-control-state";
 import type { DragSpeedState } from "../../lib/bridge-core/generated/drag-speed-state";
 import type { FontControlState } from "../../lib/bridge-core/generated/font-control-state";
-import type { ScenePatch, StreamListener, WsTransport } from "../../lib/ws/transport";
+import type { ScenePatch, StateListener, StreamListener, WsTransport } from "../../lib/ws/transport";
 import type { BridgeRejection } from "../../lib/bridge-core/islandState";
 import type { EditorDraft, Sources, ScienceResult } from "./scientificWorkbench";
 import { announce } from "../announcer";
@@ -165,6 +165,14 @@ export interface OrganizationPreview {
 }
 
 export type EdgeRole = "legacy" | "primary" | "secondary" | "reference" | "association";
+
+/** Resolved by the backend from this branch and its workspace collection. */
+export interface ChatKnowledgePreference {
+  nodeId: string | null;
+  hasDocuments: boolean;
+  enabled: boolean;
+  override: boolean | null;
+}
 
 export interface GraphRunExternalAttempt {
   requestId: string;
@@ -1248,6 +1256,15 @@ export class SceneStore {
     return parseHarnessWorkspaceDocument(result);
   }
 
+  /** Import a file from this agent's currently authorized Files root. */
+  addHarnessWorkspaceFileToKnowledge(nodeId: string, path: string, expectedRoot: string): Promise<unknown> {
+    return this.transport.request("knowledge", "addWorkspaceFile", [nodeId, path, expectedRoot]);
+  }
+
+  subscribeKnowledgeIngest(listener: StateListener): () => void {
+    return this.transport.subscribe("knowledge-ingest", listener);
+  }
+
   revealHarnessWorkspace(nodeId: string): void {
     this.transport.fireIntent("harness", "revealWorkspace", [nodeId]);
   }
@@ -1539,7 +1556,7 @@ export class SceneStore {
   // and returns early. The two staging fields are already kept mutually
   // exclusive by their own setters, so this branch and the replyTargetNodeId
   // branch below it can never both apply to the same call.
-  sendMessage(text: string): void {
+  sendMessage(text: string, useKnowledge: boolean | null = null): void {
     const synthesizeNodeIds = this.synthesizeTargetNodeIds;
     if (synthesizeNodeIds !== null) {
       // REVIEW-FIX: this used to clear the staged synthesize-target selection
@@ -1567,7 +1584,8 @@ export class SceneStore {
     }
     const branchFromNodeId = this.replyTargetNodeId;
     const args: unknown[] = [text];
-    if (branchFromNodeId !== null) args.push(branchFromNodeId);
+    if (branchFromNodeId !== null || useKnowledge !== null) args.push(branchFromNodeId);
+    if (useKnowledge !== null) args.push(useKnowledge);
     // REVIEW-FIX: same optimistic-clear-before-confirm bug as above, for the
     // "Branch from here" reply target. Cleared only once the send has
     // actually settled successfully, so a failure leaves the staged branch
@@ -1578,6 +1596,16 @@ export class SceneStore {
     this.transport.fireIntent("scene", "sendMessage", args, undefined, false, undefined, (succeeded) => {
       if (succeeded && branchFromNodeId !== null) this.setReplyTargetNodeId(null);
     });
+  }
+
+  getChatKnowledgePreference(nodeId: string | null = null): Promise<ChatKnowledgePreference> {
+    return this.transport.request(
+      "scene", "getChatKnowledgePreference", [nodeId],
+    ) as Promise<ChatKnowledgePreference>;
+  }
+
+  async setChatUseKnowledge(nodeId: string, enabled: boolean): Promise<void> {
+    await this.transport.request("scene", "setChatUseKnowledge", [nodeId, enabled]);
   }
 
   moveNode(id: string, x: number, y: number): void {

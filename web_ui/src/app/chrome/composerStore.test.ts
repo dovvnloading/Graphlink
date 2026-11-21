@@ -117,16 +117,32 @@ describe("ComposerStore", () => {
       { provider: "Ollama", modelId: "alpha" },
       { provider: "Anthropic Claude", modelId: "claude-test" },
     ];
+    // Backend signature: compare_models(text, models, branch_from_node_id=None,
+    // use_knowledge=None). An explicit null means inherit the branch/workspace default.
     store.sendModelComparison("hello", models, "n42", onSettled);
     expect(intents.at(-1)).toEqual({
-      topic: "scene", intent: "compareModels", args: ["hello", models, "n42"],
+      topic: "scene", intent: "compareModels", args: ["hello", models, "n42", null],
     });
     expect(transport.fireIntent).toHaveBeenLastCalledWith(
-      "scene", "compareModels", ["hello", models, "n42"],
+      "scene", "compareModels", ["hello", models, "n42", null],
       undefined, false, undefined, onSettled,
     );
   });
 
+  it("forwards explicit comparison knowledge choices as the fourth backend argument", () => {
+    const { transport } = makeFakeTransport();
+    const store = new ComposerStore(transport);
+    const models = [{ provider: "Ollama", modelId: "alpha" }];
+
+    for (const useKnowledge of [false, true]) {
+      // The null branch placeholder keeps useKnowledge in the correct position.
+      store.sendModelComparison("hello", models, null, undefined, useKnowledge);
+      expect(transport.fireIntent).toHaveBeenLastCalledWith(
+        "scene", "compareModels", ["hello", models, null, useKnowledge],
+        undefined, false, undefined, undefined,
+      );
+    }
+  });
 
   it("accepts a valid composer snapshot", () => {
     const { transport, listeners } = makeFakeTransport();

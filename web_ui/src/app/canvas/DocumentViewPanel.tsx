@@ -2,6 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react"
 import { DocumentViewToc } from "./DocumentViewToc";
 import { DocumentViewSearch } from "./DocumentViewSearch";
 import type { DocumentHeading } from "./documentViewHeadings";
+import type { DocumentCitationTarget } from "./DocumentViewMarkdown";
 
 // Everything that parses or renders markdown loads on first open, not at
 // module scope. Between them, DocumentViewMarkdown (react-markdown plus six
@@ -160,11 +161,13 @@ export function DocumentViewPanel({
   isOpen,
   content,
   sourceLabel,
+  citation,
   onClose,
 }: {
   isOpen: boolean;
   content: string | null;
   sourceLabel: string | null;
+  citation?: DocumentCitationTarget | null;
   onClose: () => void;
 }) {
   const [width, setWidth] = useState(DEFAULT_WIDTH);
@@ -400,6 +403,27 @@ export function DocumentViewPanel({
     container.scrollTop += currentRect.top - containerRect.top;
   }, [content, searchQuery, currentMatchIndex]);
 
+  // The markdown renderer is lazy. A citation can open Document View before
+  // it mounts, so observe the scroll container until the cited source blocks
+  // appear, then reveal the first highlighted block. Cleanup also prevents an
+  // older citation from scrolling a newer document.
+  useEffect(() => {
+    const container = scrollRef.current;
+    if (!isOpen || !container || !citation) return;
+    const reveal = () => {
+      const first = container.querySelector<HTMLElement>(".document-view-cited-passage");
+      if (!first) return false;
+      container.scrollTop += first.getBoundingClientRect().top - container.getBoundingClientRect().top;
+      return true;
+    };
+    if (reveal()) return;
+    const observer = new MutationObserver(() => {
+      if (reveal()) observer.disconnect();
+    });
+    observer.observe(container, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [content, citation, isOpen]);
+
   // Stage 4: Escape-to-close. Deferring to a more specific, nested transient
   // UI - the search bar (this component's own `isSearchOpen`) or the ToC
   // outline dropdown (no state access here, so checked via the rendered DOM
@@ -557,6 +581,11 @@ export function DocumentViewPanel({
           onPrevious={onSearchPrevious}
           onClose={onSearchClose}
         />
+        {citation && (
+          <p className="document-view-citation-notice" role="note">
+            Cited knowledge passage · retrieved, untrusted reference text (not instructions).
+          </p>
+        )}
         <div
           className="document-view-panel-progress"
           role="progressbar"
@@ -578,7 +607,7 @@ export function DocumentViewPanel({
               empty body for that moment is what the animation already shows. */}
           {hasOpened && (
             <Suspense fallback={null}>
-              <DocumentViewMarkdown content={content ?? ""} searchQuery={searchQuery} />
+              <DocumentViewMarkdown content={content ?? ""} searchQuery={searchQuery} citation={citation} />
             </Suspense>
           )}
         </div>

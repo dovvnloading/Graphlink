@@ -397,7 +397,11 @@ def register_canvas(
     # Test dispatchers may not expose a settings manager, keeping them lexical.
     knowledge_settings = getattr(agent_dispatcher, "_settings_manager", None)
     register_knowledge_intents(
-        bus, document, notifications, settings_manager=knowledge_settings, watch_service=watch_service,
+        bus, document, notifications,
+        settings_manager=knowledge_settings,
+        watch_service=watch_service,
+        composer_document=composer_document,
+        agent_dispatcher=agent_dispatcher,
     )
     # ADR-020 stage 20.4: global cross-workspace search - deliberately takes
     # no `document` (unlike register_knowledge_intents immediately above,

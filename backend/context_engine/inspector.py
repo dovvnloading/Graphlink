@@ -11,7 +11,7 @@ from __future__ import annotations
 import api_provider
 from backend.context_engine import ContextAssembler, ContextBudgetError, selected_context_window
 from backend.context_engine.citations import assemble_chat_context, inspected_reply_citations
-from backend.knowledge_retrieval import search_chat_knowledge
+from backend.knowledge_retrieval import chat_use_knowledge, search_chat_knowledge
 from backend.domain.model import SceneError
 from graphlink_chat_agent import ChatAgent
 from graphlink_memory import message_tokens
@@ -33,7 +33,10 @@ def _branch_origins(document, node_id: str) -> list[str]:
     return list(reversed(reversed_ids))
 
 
-def inspect_next_chat_send(document, node_id: str, dispatcher, *, bus=None, draft_text: str = "") -> dict:
+def inspect_next_chat_send(
+    document, node_id: str, dispatcher, *, bus=None, draft_text: str = "",
+    use_knowledge: bool | None = None,
+) -> dict:
     """Explain the next dispatch and audit the last reply without mutation.
 
     Incoming draft attachments cannot be inferred. An existing knowledge
@@ -44,6 +47,9 @@ def inspect_next_chat_send(document, node_id: str, dispatcher, *, bus=None, draf
         raise SceneError(f"node is not a chat node: {node_id}")
     if not isinstance(draft_text, str):
         raise ValueError("draft_text must be a string")
+    if use_knowledge is not None and not isinstance(use_knowledge, bool):
+        raise ValueError("use_knowledge must be a boolean or None")
+    enabled = chat_use_knowledge(document, node_id) if use_knowledge is None else use_knowledge
     # Keep the full walk and its origins from the same immutable-in-this-call
     # graph snapshot; neither operation creates a node or modifies the model.
     history = document.chat_branch_history(node_id)
@@ -96,7 +102,7 @@ def inspect_next_chat_send(document, node_id: str, dispatcher, *, bus=None, draf
                     if getattr(dispatcher, "_settings_manager", None) is not None else {}
                 ),
             )
-            if draft_text.strip() else []
+            if enabled and draft_text.strip() else []
         )
     except Exception:
         # Inspection is best-effort, never an ingestion or provider call.
@@ -125,6 +131,7 @@ def inspect_next_chat_send(document, node_id: str, dispatcher, *, bus=None, draf
             "promptTokens": 0,
             "leavesDevice": not local,
             "draftIncluded": bool(draft_text),
+            "useKnowledge": enabled,
             "error": str(exc),
             **({"lastReplyCitations": last_reply_citations} if last_reply_citations else {}),
             "sources": [
@@ -150,7 +157,15 @@ def inspect_next_chat_send(document, node_id: str, dispatcher, *, bus=None, draf
         "model": model,
         "leavesDevice": not local,
         "draftIncluded": bool(draft_text),
-        "notice": "Preview includes read-only workspace knowledge retrieval for the draft. Unsent attachments and model-generated summaries are not available until send; the corpus or selected model may change.",
+        "useKnowledge": enabled,
+        "notice": (
+            "Knowledge retrieval is on: the listed knowledge hits are selected using the "
+            "same budget as Send. Unsent attachments and generated summaries are not "
+            "available; the corpus or model may change."
+            if enabled else
+            "Knowledge retrieval is off for this branch. Unsent attachments and "
+            "generated summaries are not available until send."
+        ),
         **({"lastReplyCitations": last_reply_citations} if last_reply_citations else {}),
     })
     return result

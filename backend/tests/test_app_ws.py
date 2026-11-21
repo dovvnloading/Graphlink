@@ -436,6 +436,7 @@ def test_args_schema_is_scoped_to_the_known_intents():
     # addWatchedFolder/listWatchedFolders counterparts, like the other
     # ingestion intents (addFiles, addFolder, getIngestJobs), have no
     # args_schema and are intentionally excluded.
+    # Knowledge Library document and upload actions add seven more schemas.
     # Each intentional schema addition updates this set explicitly, not as drift;
     # the same discipline this test itself exists to enforce.
     client = make_client()
@@ -466,7 +467,15 @@ def test_args_schema_is_scoped_to_the_known_intents():
             ("app-chat-library", "exportWorkspace"),
             ("app-chat-library", "importWorkspace"),
             ("knowledge", "search"),
+            ("knowledge", "openCitation"),
             ("knowledge", "cancelIngest"),
+            ("knowledge", "openDocument"),
+            ("knowledge", "removeDocument"),
+            ("knowledge", "reindexDocument"),
+            ("knowledge", "beginUpload"),
+            ("knowledge", "appendUpload"),
+            ("knowledge", "finishUpload"),
+            ("knowledge", "cancelUpload"),
             ("knowledge", "removeWatchedFolder"),
             ("knowledge", "syncWatchedFolders"),
             ("scene", "setChatIndexIntoKnowledge"),

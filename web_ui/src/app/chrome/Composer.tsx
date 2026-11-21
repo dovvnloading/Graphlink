@@ -1,5 +1,7 @@
-import { lazy, Suspense, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
-import type { SceneStore } from "../canvas/sceneStore";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
+import type { ChatKnowledgePreference, SceneStore } from "../canvas/sceneStore";
+import { KnowledgeFileImportStatus, useKnowledgeFileImport } from "../knowledgeFileImport";
+import type { StateListener } from "../../lib/ws/transport";
 import { Popover, useOverlays } from "../overlays/overlays";
 import type { ComparisonModel, ComposerStore } from "./composerStore";
 import { TokenCounter } from "./TokenCounter";
@@ -42,7 +44,7 @@ const LazyModelComparisonPicker = lazy(() =>
   import("./ModelComparisonPicker").then((m) => ({ default: m.ModelComparisonPicker })),
 );
 
-function Icon({ name }: { name: "attach" | "send" | "chevron" | "stop" | "compare" | "reasoning" | "agent" }) {
+function Icon({ name }: { name: "attach" | "send" | "chevron" | "stop" | "compare" | "reasoning" | "agent" | "knowledge" }) {
   const paths: Record<string, string> = {
     attach:
       "M12 5.5 6.4 11.1a3.6 3.6 0 0 0 5.1 5.1l6-6a2.5 2.5 0 0 0-3.5-3.5l-6.1 6.1a1.35 1.35 0 0 0 1.9 1.9l5.5-5.5",
@@ -52,6 +54,7 @@ function Icon({ name }: { name: "attach" | "send" | "chevron" | "stop" | "compar
     compare: "M9 8V5.5A1.5 1.5 0 0 1 10.5 4h8A1.5 1.5 0 0 1 20 5.5v8a1.5 1.5 0 0 1-1.5 1.5H16M5.5 9h8A1.5 1.5 0 0 1 15 10.5v8a1.5 1.5 0 0 1-1.5 1.5h-8A1.5 1.5 0 0 1 4 18.5v-8A1.5 1.5 0 0 1 5.5 9Z",
     reasoning: "M12 3.5v2m0 13v2M3.5 12h2m13 0h2M6 6l1.4 1.4m9.2 9.2L18 18M6 18l1.4-1.4m9.2-9.2L18 6M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z",
     agent: "M8 4h8m-4 0v3m-7 6V9a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v4m-14 0v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4M9 12h.01M15 12h.01M9 16h6",
+    knowledge: "M12 6.5a6 6 0 0 0-8-1v13a6 6 0 0 1 8 1m0-13a6 6 0 0 1 8-1v13a6 6 0 0 0-8 1m0-13v13",
   };
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
@@ -71,11 +74,15 @@ export function Composer({
   showTokenCounter?: boolean;
   /** Rendered in the control rail beside Attach, so it never floats over
    * the canvas HUD (it used to sit on top of the minimap). */
-  contextInspector?: ReactNode;
+  contextInspector?: ReactNode | ((useKnowledge: boolean | null, targetNodeId: string | null | undefined) => ReactNode);
 }) {
   const composer = useSyncExternalStore(store.subscribe, store.getComposer);
   const streamText = useSyncExternalStore(store.subscribe, store.getStreamText);
   const overlays = useOverlays();
+  const subscribeKnowledge = useCallback(
+    (listener: StateListener) => store.subscribeKnowledgeIngest(listener), [store],
+  );
+  const knowledgeImport = useKnowledgeFileImport(subscribeKnowledge);
 
   // ADR-002 Workstream 1 ("Branch from here"): sceneStore's own
   // replyTargetNodeId/scene, subscribed here (not just in SceneCanvas) so
@@ -91,6 +98,74 @@ export function Composer({
   const replyTargetNode = replyTargetNodeId ? scene.nodes.find((n) => n.id === replyTargetNodeId) : undefined;
   const selectedNodeId = useSyncExternalStore(sceneStore.subscribe, sceneStore.getSelectedNodeId);
   const selectedAgent = scene.nodes.find((n) => n.id === selectedNodeId && n.kind === "harness");
+
+  // The server owns the collection existence check and branch ancestry.
+  // Do not cache a workspace default locally: an indexed document can make
+  // an otherwise untouched branch switch from off to on after a scene update.
+  // A result belongs to the scene revision and branch that requested it.
+  // Derive the loading state instead of synchronously resetting it in an effect.
+  const knowledgeTargetNodeId = replyTargetNode?.id ?? null;
+  const [knowledgeResult, setKnowledgeResult] = useState<{
+    store: SceneStore;
+    targetNodeId: string | null;
+    revision: number;
+    preference: ChatKnowledgePreference | null;
+  } | null>(null);
+  const knowledgePreference = knowledgeResult?.store === sceneStore &&
+    knowledgeResult.targetNodeId === knowledgeTargetNodeId &&
+    knowledgeResult.revision === scene.revision
+      ? knowledgeResult.preference
+      : null;
+  const [knowledgeUpdating, setKnowledgeUpdating] = useState(false);
+  useEffect(() => {
+    let current = true;
+    void sceneStore.getChatKnowledgePreference(knowledgeTargetNodeId).then(
+      (preference) => {
+        if (current) setKnowledgeResult({
+          store: sceneStore, targetNodeId: knowledgeTargetNodeId, revision: scene.revision, preference,
+        });
+      },
+      () => {
+        if (current) setKnowledgeResult({
+          store: sceneStore, targetNodeId: knowledgeTargetNodeId, revision: scene.revision, preference: null,
+        });
+      },
+    );
+    return () => { current = false; };
+  }, [sceneStore, knowledgeTargetNodeId, scene.revision]);
+
+  function updateKnowledgePreference(
+    next: (current: ChatKnowledgePreference | null) => ChatKnowledgePreference | null,
+  ) {
+    setKnowledgeResult((result) => result?.store === sceneStore &&
+      result.targetNodeId === knowledgeTargetNodeId &&
+      result.revision === scene.revision
+        ? { ...result, preference: next(result.preference) }
+        : result);
+  }
+
+  function toggleUseKnowledge() {
+    if (!knowledgePreference || knowledgeUpdating) return;
+    const preference = knowledgePreference;
+    const enabled = !preference.enabled;
+    updateKnowledgePreference(() => ({ ...preference, enabled, override: enabled }));
+    if (preference.nodeId === null) return; // Sent with the first new root message.
+    setKnowledgeUpdating(true);
+    void (async () => {
+      try {
+        await sceneStore.setChatUseKnowledge(preference.nodeId!, enabled);
+      } catch {
+        try {
+          const fresh = await sceneStore.getChatKnowledgePreference(preference.nodeId);
+          updateKnowledgePreference((now) => now?.nodeId === preference.nodeId ? fresh : now);
+        } catch {
+          updateKnowledgePreference((now) => now?.nodeId === preference.nodeId ? null : now);
+        }
+      } finally {
+        setKnowledgeUpdating(false);
+      }
+    })();
+  }
 
   // ADR-002 Workstream 1 ("Synthesize Branches"): the list-valued sibling of
   // replyTargetNodeId above - same subscription reasoning (re-renders if a
@@ -146,7 +221,7 @@ export function Composer({
 
   function send() {
     const text = composer.draft.text.trim();
-    if (!text || !composer.request.canSend) return;
+    if (!text || !composer.request.canSend || knowledgeUpdating) return;
     if (agentMode) {
       if (exceedsHarnessTaskLimit(text)) {
         setAgentError(`Agent tasks cannot exceed ${MAX_HARNESS_TASK_LENGTH.toLocaleString()} characters. Shorten the task; your draft is preserved.`);
@@ -171,20 +246,27 @@ export function Composer({
     }
     if (comparisonMode && !isSynthesizing) {
       if (!comparisonReady) return;
-      store.sendModelComparison(
-        text,
-        selectedComparisonModels.map(({ provider, modelId }) => ({ provider, modelId })),
-        replyTargetNode?.id ?? null,
-        (succeeded) => {
-          if (!succeeded) return; // preserve the draft and staged branch target
-          if (replyTargetNode?.id) sceneStore.setReplyTargetNodeId(null);
-          if (store.getComposer().draft.text === text) store.updateDraft("");
-        },
-      );
+      const models = selectedComparisonModels.map(({ provider, modelId }) => ({ provider, modelId }));
+      const onSettled = (succeeded: boolean) => {
+        if (!succeeded) return; // preserve the draft and staged branch target
+        if (replyTargetNode?.id) sceneStore.setReplyTargetNodeId(null);
+        if (store.getComposer().draft.text === text) store.updateDraft("");
+      };
+      const firstRootOverride = knowledgePreference?.nodeId === null ? knowledgePreference.override : null;
+      if (firstRootOverride !== null && firstRootOverride !== undefined) {
+        store.sendModelComparison(text, models, replyTargetNode?.id ?? null, onSettled, firstRootOverride);
+      } else {
+        store.sendModelComparison(text, models, replyTargetNode?.id ?? null, onSettled);
+      }
       return;
     }
     // Unmodified single-model and Synthesize Branches paths.
-    sceneStore.sendMessage(text);
+    const firstRootOverride = knowledgePreference?.nodeId === null ? knowledgePreference.override : null;
+    if (firstRootOverride !== null && firstRootOverride !== undefined) {
+      sceneStore.sendMessage(text, firstRootOverride);
+    } else {
+      sceneStore.sendMessage(text);
+    }
     store.updateDraft("");
   }
 
@@ -262,6 +344,19 @@ export function Composer({
               <span className="composer-attachment-chip-name" title={item.name}>
                 {item.name}
               </span>
+              {item.kind === "document" && (
+                <button
+                  type="button"
+                  className="composer-attachment-chip-add"
+                  aria-label={`Add ${item.name} to knowledge`}
+                  disabled={knowledgeImport.busy}
+                  onClick={() => void knowledgeImport.add(
+                    item.name, () => store.addAttachmentToKnowledge(item.id),
+                  )}
+                >
+                  Add to knowledge
+                </button>
+              )}
               <button
                 type="button"
                 className="composer-attachment-chip-remove"
@@ -274,6 +369,7 @@ export function Composer({
           ))}
         </div>
       )}
+      <KnowledgeFileImportStatus state={knowledgeImport} />
       {agentError && <p className="composer-agent-error" role="alert">{agentError}</p>}
       <div className="composer-input-wrap">
         <textarea
@@ -333,7 +429,24 @@ export function Composer({
             <Icon name="attach" />
           </button>
 
-          {contextInspector}
+          {typeof contextInspector === "function"
+            ? contextInspector(knowledgePreference?.enabled ?? null, knowledgePreference?.nodeId)
+            : contextInspector}
+
+          <button
+            type="button"
+            className={`composer-icon-button composer-agent-toggle composer-knowledge-toggle${knowledgePreference?.enabled ? " active" : ""}`}
+            aria-label="Use knowledge"
+            aria-pressed={knowledgePreference?.enabled ?? false}
+            disabled={!knowledgePreference || !composer.request.canSend || knowledgeUpdating || agentMode}
+            title={!knowledgePreference ? "Checking workspace knowledge…" : knowledgePreference.override === null
+              ? "Uses knowledge automatically when this workspace has documents"
+              : "Knowledge retrieval overridden for this branch"}
+            onClick={toggleUseKnowledge}
+          >
+            <Icon name="knowledge" />
+            <span>Use knowledge</span>
+          </button>
 
           <button
             type="button"
@@ -441,7 +554,7 @@ export function Composer({
             <button
               type="button"
               className="composer-send-button"
-              disabled={!composer.draft.text.trim() || !composer.request.canSend || agentSending || (agentMode && (!composer.route.available || !composer.route.modelId)) || (comparisonMode && !agentMode && !isSynthesizing && !comparisonReady)}
+              disabled={!composer.draft.text.trim() || !composer.request.canSend || knowledgeUpdating || agentSending || (agentMode && (!composer.route.available || !composer.route.modelId)) || (comparisonMode && !agentMode && !isSynthesizing && !comparisonReady)}
               title={agentMode
                 ? (agentSending ? "Starting agent…" : !composer.route.modelId || !composer.route.available ? "Choose an available model first" : "Send task to workspace agent")
                 : comparisonMode && !comparisonReady && !isSynthesizing ? "Choose at least two comparison models" : "Send message"}

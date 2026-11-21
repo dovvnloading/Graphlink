@@ -21,18 +21,23 @@ import asyncio
 from pathlib import Path
 from backend import native_dialogs
 from backend.knowledge_jobs import KnowledgeIngestManager
+from backend.knowledge_uploads import KnowledgeDropUploads
 from backend.knowledge_watches import WatchedFolderService
 from dataclasses import dataclass
 from uuid import uuid4
 
 from backend.api._shared import make_publish_scene
 from backend.domain.graph import SceneDocument, SceneError
+from backend.domain.node_states import HarnessState
+from backend.harness.workspace import WorkspaceError, bound_root
+from backend.harness.workspace_files import _inside
 from backend.events import SessionBus
 from backend.knowledge_chunking import chunk_text
 from backend.knowledge_ingest import IngestError, is_supported_knowledge_file
 from backend.knowledge_embedding_config import configured_hybrid_search
 from backend.knowledge_store import (
-    DEFAULT_DB_PATH, get_or_create_workspace_collection, replace_branch_document_with_chunks,
+    DEFAULT_DB_PATH, get_or_create_workspace_collection, open_cited_document, replace_branch_document_with_chunks,
+    list_library_documents, file_sources_for_document, remove_library_document, library_document_text,
 )
 from backend.notifications import NotificationState
 
@@ -47,6 +52,13 @@ class SearchArgs:
 
 
 @dataclass
+class OpenCitationArgs:
+    documentId: int
+    chunkId: int
+    citationId: str
+
+
+@dataclass
 class SetChatIndexIntoKnowledgeArgs:
     nodeId: str
     enabled: bool
@@ -55,6 +67,28 @@ class SetChatIndexIntoKnowledgeArgs:
 @dataclass
 class CancelIngestArgs:
     jobId: str
+
+
+@dataclass
+class DocumentIdArgs:
+    documentId: int
+
+
+@dataclass
+class BeginUploadArgs:
+    files: list[dict]
+
+
+@dataclass
+class AppendUploadArgs:
+    uploadId: str
+    fileIndex: int
+    data: str
+
+
+@dataclass
+class UploadIdArgs:
+    uploadId: str
 
 
 @dataclass
@@ -159,11 +193,14 @@ def register_knowledge_intents(
     notifications: NotificationState | None = None,
     settings_manager=None,
     watch_service: WatchedFolderService | None = None,
+    composer_document=None,
+    agent_dispatcher=None,
 ) -> None:
     publish_scene = make_publish_scene(bus)
     db_path = watch_service.db_path if watch_service is not None else DEFAULT_DB_PATH
     watcher = watch_service if watch_service is not None else WatchedFolderService(db_path)
     ingest_jobs = KnowledgeIngestManager(bus, db_path)
+    uploads = KnowledgeDropUploads(db_path)
     bus.register_topic("knowledge-ingest", ingest_jobs.snapshot)
 
     async def search(query, k):
@@ -188,6 +225,29 @@ def register_knowledge_intents(
         # intent handler in this codebase (e.g. intents_settings_*.py).
         results = await asyncio.to_thread(_search)
         return {"results": _format_search_results(results)}
+
+    async def open_citation(document_id, chunk_id, citation_id):
+        """Return only a verified passage's indexed document in this workspace."""
+        workspace_id = document.current_workspace_id
+
+        def _read():
+            if not DEFAULT_DB_PATH.exists():
+                return None
+            collection_id = (
+                0 if workspace_id is None
+                else get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+            )
+            return open_cited_document(
+                DEFAULT_DB_PATH, document_id=document_id, chunk_id=chunk_id,
+                citation_id=citation_id, collection_id=collection_id,
+            )
+
+        source = await asyncio.to_thread(_read)
+        # A workspace switch during the blocking read must not reveal the
+        # previous workspace's document in a late request/reply.
+        if document.current_workspace_id != workspace_id:
+            return {"document": None}
+        return {"document": source}
 
     async def set_chat_index_into_knowledge(node_id, enabled):
         """Runs the actual knowledge-store write (chat_branch_history() ->
@@ -315,13 +375,139 @@ def register_knowledge_intents(
     async def sync_watched_folders(folder_id: int | None = None):
         return await watcher.sync(_watched_workspace_id(), folder_id)
 
+
+    async def add_chat_attachment(attachment_id):
+        """An attachment ID is a native-picker grant in this session, not a path from the browser."""
+        if composer_document is None:
+            raise IngestError("Chat attachments are unavailable.")
+        attachment = next(
+            (item for item in composer_document.staged_attachments if item.id == attachment_id), None,
+        )
+        if attachment is None:
+            raise IngestError("This attachment is no longer staged. Attach the file again.")
+        if attachment.kind != "document" or not is_supported_knowledge_file(Path(attachment.path)):
+            raise IngestError("Only supported text and document attachments can be added to knowledge.")
+        return ingest_jobs.start(attachment.path, folder=False, workspace_id=document.current_workspace_id)
+
+    async def add_workspace_file(node_id, relative_path, expected_root):
+        """Resolve a Files-view selection through the CURRENT agent grant, never client-supplied roots."""
+        if agent_dispatcher is None:
+            raise WorkspaceError("Workspace file imports are unavailable.")
+        node = document.nodes.get(node_id)
+        if node is None or not isinstance(node.state, HarnessState):
+            raise WorkspaceError("This agent node no longer exists.")
+        root, _ = bound_root(
+            node.state.harness_workspace_id,
+            node.state.harness_workspace_path,
+            settings_manager=agent_dispatcher._settings_manager,
+        )
+        if expected_root != str(root):
+            raise WorkspaceError("Workspace folder changed. Refresh the Files list and choose a file again.")
+        if not relative_path:
+            raise WorkspaceError("Select a workspace file to add.")
+        file = _inside(root, relative_path)
+        if not file.is_file():
+            raise WorkspaceError("Not a workspace file.")
+        if not is_supported_knowledge_file(file):
+            raise IngestError("This file type cannot be added to knowledge.")
+        return ingest_jobs.start(
+            str(file), folder=False, workspace_id=document.current_workspace_id, allowed_root=root,
+        )
+
     async def cancel_ingest(job_id):
         return ingest_jobs.cancel(job_id)
 
     async def get_ingest_jobs():
         return ingest_jobs.snapshot()
 
+    async def list_documents():
+        workspace_id = document.current_workspace_id
+
+        def load():
+            collection_id = (
+                get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+                if workspace_id is not None else 0
+            )
+            return list_library_documents(DEFAULT_DB_PATH, collection_id=collection_id)
+
+        return {"documents": await asyncio.to_thread(load)}
+
+    async def open_document(document_id):
+        workspace_id = document.current_workspace_id
+
+        def load():
+            collection_id = (
+                get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+                if workspace_id is not None else 0
+            )
+            return library_document_text(
+                DEFAULT_DB_PATH, collection_id=collection_id, document_id=document_id,
+            )
+
+        result = await asyncio.to_thread(load)
+        if result is None:
+            raise IngestError("Document is not in the current workspace.")
+        return result
+
+    async def remove_document(document_id):
+        workspace_id = document.current_workspace_id
+
+        def remove():
+            collection_id = (
+                get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+                if workspace_id is not None else 0
+            )
+            paths = file_sources_for_document(
+                DEFAULT_DB_PATH, collection_id=collection_id, document_id=document_id,
+            )
+            deleted = remove_library_document(
+                DEFAULT_DB_PATH, collection_id=collection_id, document_id=document_id,
+            )
+            if deleted:
+                for path in paths:
+                    uploads.cleanup_source(path)
+            return {"removed": deleted}
+
+        return await asyncio.to_thread(remove)
+
+    async def reindex_document(document_id):
+        # The client provides only an ID. Paths come exclusively from
+        # previously indexed file_sources in this workspace, never from JSON.
+        workspace_id = document.current_workspace_id
+
+        def sources():
+            collection_id = (
+                get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+                if workspace_id is not None else 0
+            )
+            return file_sources_for_document(
+                DEFAULT_DB_PATH, collection_id=collection_id, document_id=document_id,
+            )
+
+        paths = await asyncio.to_thread(sources)
+        if not paths:
+            raise IngestError("This document has no file source to re-index.")
+        return ingest_jobs.start(paths, folder=False, workspace_id=workspace_id)
+
+    async def begin_upload(files):
+        if any(job["status"] in {"queued", "scanning", "running"} for job in ingest_jobs.snapshot()["jobs"]):
+            raise IngestError("An import is already running in this window.")
+        return await asyncio.to_thread(
+            uploads.begin, files, workspace_id=document.current_workspace_id,
+        )
+
+    async def append_upload(upload_id, file_index, data):
+        return await asyncio.to_thread(uploads.append, upload_id, file_index, data)
+
+    async def finish_upload(upload_id):
+        paths, workspace_id = await asyncio.to_thread(uploads.finish, upload_id)
+        return ingest_jobs.start(paths, folder=False, workspace_id=workspace_id)
+
+    async def cancel_upload(upload_id):
+        return await asyncio.to_thread(uploads.cancel, upload_id)
+
     bus.register_intent("knowledge", "search", search, args_schema=SearchArgs)
+    bus.register_intent("knowledge", "openCitation", open_citation, args_schema=OpenCitationArgs)
     bus.register_intent("knowledge", "addFiles", add_files)
     bus.register_intent("knowledge", "addFolder", add_folder)
     bus.register_intent("knowledge", "addWatchedFolder", add_watched_folder)
@@ -332,8 +518,20 @@ def register_knowledge_intents(
     bus.register_intent(
         "knowledge", "syncWatchedFolders", sync_watched_folders, args_schema=SyncWatchedFoldersArgs,
     )
+
+
+    bus.register_intent("knowledge", "addChatAttachment", add_chat_attachment)
+    bus.register_intent("knowledge", "addWorkspaceFile", add_workspace_file)
     bus.register_intent("knowledge", "cancelIngest", cancel_ingest, args_schema=CancelIngestArgs)
     bus.register_intent("knowledge", "getIngestJobs", get_ingest_jobs)
+    bus.register_intent("knowledge", "listDocuments", list_documents)
+    bus.register_intent("knowledge", "openDocument", open_document, args_schema=DocumentIdArgs)
+    bus.register_intent("knowledge", "removeDocument", remove_document, args_schema=DocumentIdArgs)
+    bus.register_intent("knowledge", "reindexDocument", reindex_document, args_schema=DocumentIdArgs)
+    bus.register_intent("knowledge", "beginUpload", begin_upload, args_schema=BeginUploadArgs)
+    bus.register_intent("knowledge", "appendUpload", append_upload, args_schema=AppendUploadArgs)
+    bus.register_intent("knowledge", "finishUpload", finish_upload, args_schema=UploadIdArgs)
+    bus.register_intent("knowledge", "cancelUpload", cancel_upload, args_schema=UploadIdArgs)
     bus.register_intent(
         "scene", "setChatIndexIntoKnowledge", set_chat_index_into_knowledge,
         args_schema=SetChatIndexIntoKnowledgeArgs,

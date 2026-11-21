@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
@@ -19,6 +20,8 @@ import { CanvasSearchProvider } from "./canvas/CanvasSearchContext";
 import { ExecutionLimitsProvider } from "./canvas/ExecutionLimitsContext";
 import { SceneStore } from "./canvas/sceneStore";
 import { DocumentViewPanel } from "./canvas/DocumentViewPanel";
+import type { KnowledgeCitationSource } from "./canvas/ChatCitationChips";
+import type { DocumentCitationTarget } from "./canvas/DocumentViewMarkdown";
 import { AppBar } from "./chrome/AppBar";
 import { Composer } from "./chrome/Composer";
 import { ComposerStore } from "./chrome/composerStore";
@@ -239,23 +242,58 @@ function App() {
   // DocumentViewPanel.tsx's own doc comment.
   const [documentViewContent, setDocumentViewContent] = useState<string | null>(null);
   const [documentViewSourceLabel, setDocumentViewSourceLabel] = useState<string | null>(null);
+  const [documentViewCitation, setDocumentViewCitation] = useState<DocumentCitationTarget | null>(null);
   const [isDocumentViewOpen, setIsDocumentViewOpen] = useState(false);
   // The composer row's HUD slot: the canvas portals its zoom dock and minimap
   // here so they share the composer card's baseline (see workspace.css).
   const [canvasHud, setCanvasHud] = useState<HTMLDivElement | null>(null);
   const transport = useMemo(() => new WsTransport(defaultWsUrl()), []);
   const sceneStore = useMemo(() => new SceneStore(transport), [transport]);
+  const latestDocumentViewRequest = useRef(0);
   const composerStore = useMemo(() => new ComposerStore(transport), [transport]);
 
-  const onOpenDocumentView = useCallback((markdown: string, sourceLabel: string) => {
-    // A non-workspace document selection must supersede any outstanding
-    // workspace read, just as a newer workspace selection does.
+  const onOpenDocumentView = useCallback((
+    markdown: string, sourceLabel: string, citation?: KnowledgeCitationSource,
+  ) => {
+    // Each selection supersedes any earlier read, including after the panel
+    // closes or a different chat node opens. Document View remains the
+    // existing shared reader, never a second citation-specific modal.
+    const requestId = ++latestDocumentViewRequest.current;
     sceneStore.cancelWorkspacePreview();
-    setDocumentViewContent(markdown);
+    setDocumentViewCitation(null);
     setDocumentViewSourceLabel(sourceLabel);
+    setDocumentViewContent(citation ? "Opening cited source…" : markdown);
     setIsDocumentViewOpen(true);
-  }, [sceneStore]);
+    if (!citation) return;
+
+    void transport.request("knowledge", "openCitation", [
+      citation.documentId, citation.chunkId, citation.citationId,
+    ]).then((value) => {
+      if (requestId !== latestDocumentViewRequest.current) return;
+      const payload = value as { document?: {
+        title: string; content: string; offsetStart: number; offsetEnd: number;
+      } | null };
+      const source = payload?.document;
+      if (!source || typeof source.content !== "string" || typeof source.title !== "string" ||
+          !Number.isSafeInteger(source.offsetStart) || !Number.isSafeInteger(source.offsetEnd)) {
+        setDocumentViewContent("This cited source is no longer available in the current workspace.");
+        return;
+      }
+      setDocumentViewContent(source.content);
+      setDocumentViewSourceLabel(source.title);
+      setDocumentViewCitation({
+        citationId: citation.citationId,
+        offsetStart: source.offsetStart,
+        offsetEnd: source.offsetEnd,
+      });
+    }).catch(() => {
+      if (requestId === latestDocumentViewRequest.current) {
+        setDocumentViewContent("Unable to open the cited source.");
+      }
+    });
+  }, [sceneStore, transport]);
   const onCloseDocumentView = useCallback(() => {
+    ++latestDocumentViewRequest.current;
     sceneStore.cancelWorkspacePreview();
     setIsDocumentViewOpen(false);
   }, [sceneStore]);
@@ -373,6 +411,7 @@ function App() {
                 isOpen={isDocumentViewOpen}
                 content={documentViewContent}
                 sourceLabel={documentViewSourceLabel}
+                citation={documentViewCitation}
                 onClose={onCloseDocumentView}
               />
               <div className="app-canvas-content">
@@ -427,11 +466,14 @@ function App() {
                         store={composerStore}
                         sceneStore={sceneStore}
                         showTokenCounter={settingsVisibility.showTokenCounter !== false}
-                        contextInspector={
+                        contextInspector={(useKnowledge, branchNodeId) => (
                           <Suspense fallback={null}>
-                            <ContextInspectorLauncher sceneStore={sceneStore} composerStore={composerStore} transport={transport} />
+                            <ContextInspectorLauncher
+                              sceneStore={sceneStore} composerStore={composerStore} transport={transport}
+                              useKnowledge={useKnowledge} targetNodeId={branchNodeId}
+                            />
                           </Suspense>
-                        }
+                        )}
                       />
                     </footer>
                     <div className="app-canvas-hud" ref={setCanvasHud} />
@@ -465,7 +507,7 @@ function App() {
                     <DiagnosticsDialog transport={transport} />
                   </LazySurface>
                   <LazySurface overlayName="knowledge">
-                    <KnowledgeSearchDialog transport={transport} />
+                    <KnowledgeSearchDialog transport={transport} onOpenDocumentView={onOpenDocumentView} />
                   </LazySurface>
                   <LazySurface overlayName="global-search">
                     <GlobalSearchDialog transport={transport} />
