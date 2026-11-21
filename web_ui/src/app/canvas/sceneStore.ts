@@ -1192,9 +1192,11 @@ export class SceneStore {
     );
   }
 
-  /** Select an existing chat alternative as an undoable scene command. */
+  /** Select an existing chat alternative as an undoable scene command.
+   * Version indices can be evicted by later replies; do not replay an
+   * offline selection against a different saved-history ordering. */
   setChatVersion(chatNodeId: string, index: number): void {
-    this.transport.fireIntent("scene", "setChatVersion", [chatNodeId, index], undefined, true);
+    this.transport.fireIntent("scene", "setChatVersion", [chatNodeId, index], undefined, false);
   }
 
   async compareChatVersions(
