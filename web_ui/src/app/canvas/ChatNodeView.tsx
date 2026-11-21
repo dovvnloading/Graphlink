@@ -4,7 +4,6 @@ import type { StreamListener } from "../../lib/ws/transport";
 import { CHAT_SCROLL_REPORT_DEBOUNCE_MS } from "./canvasConstants";
 import { CollapseToggleButton } from "./CollapseToggleButton";
 import { downloadTextFile } from "./downloadTextFile";
-import { GROUP_MONO_COLORS, GROUP_NAMED_COLORS } from "./GroupColorPicker";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { ChatCitationChips, KNOWLEDGE_CITATION_RECORD, citationsForReply, type KnowledgeCitationSource } from "./ChatCitationChips";
@@ -228,23 +227,6 @@ const BRANCH_STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "superseded", label: "Superseded" },
 ];
 
-// ADR-002 Workstream 1 ("Branch status and lifecycle"): the status-dot
-// badge's colors REUSE GroupColorPicker.tsx's own named palette verbatim
-// (looked up by name, not by array index, so a future reordering of that
-// palette can't silently retarget these) rather than defining new hex
-// literals - that palette is the one place in this codebase with real,
-// visually-distinct color values for a "pick one of several named
-// semantic colors" concept (the --gl-semantic-status-* CSS token names
-// exist for exactly this kind of status vocabulary, but their current
-// values are indistinguishable placeholder grays - see that token's own
-// definition for why this reuses GroupColorPicker's palette instead).
-const BRANCH_STATUS_COLORS: Record<string, string> = {
-  active: GROUP_MONO_COLORS.find((c) => c.name === "Mid Gray")!.hex,
-  accepted: GROUP_NAMED_COLORS.find((c) => c.name === "Green")!.hex,
-  rejected: GROUP_NAMED_COLORS.find((c) => c.name === "Red")!.hex,
-  superseded: GROUP_NAMED_COLORS.find((c) => c.name === "Orange")!.hex,
-};
-
 function ChatNodeMenu({
   position,
   nodeId,
@@ -317,7 +299,7 @@ function ChatNodeMenu({
 
 
   return (
-    <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
+    <NodeMenu position={position} onClose={onClose} className="chat-node-menu" ariaLabel="Chat message actions">
       <button
         type="button"
         role="menuitem"
@@ -827,14 +809,24 @@ export const ChatNodeView = memo(function ChatNodeView({
   const [editError, setEditError] = useState("");
   const [editSaving, setEditSaving] = useState(false);
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
+  const menuTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const restoreEditFocus = useRef(false);
   const staleEdit = editMode !== null && data.content !== editBase;
 
   useEffect(() => {
-    if (editMode) editorRef.current?.focus();
+    if (editMode) {
+      editorRef.current?.focus();
+    } else if (restoreEditFocus.current) {
+      // The textarea is gone on Save or Escape; don't strand focus on body.
+      // The NodeShell menu button survives collapse and low-detail views.
+      restoreEditFocus.current = false;
+      if (menuTriggerRef.current?.isConnected) menuTriggerRef.current.focus();
+    }
   }, [editMode]);
 
   function beginEdit(mode: "in-place" | "new-branch") {
     if (!data.isUser || data.pendingRequestId) return;
+    restoreEditFocus.current = true;
     setEditBase(data.content);
     setEditDraft(data.content);
     setEditError("");
@@ -1008,6 +1000,7 @@ export const ChatNodeView = memo(function ChatNodeView({
       collapsed={collapsed}
       staleness={data.staleness}
       onMenuChange={setMenuPosition}
+      menuTriggerRef={menuTriggerRef}
       onBodyDoubleClick={data.isUser && editMode === null ? () => beginEdit("in-place") : undefined}
       header={
         <NodeHeading
@@ -1022,7 +1015,12 @@ export const ChatNodeView = memo(function ChatNodeView({
                   aria-label="Previous version" title="Previous version"
                   disabled={data.versionIndex <= 0 || !!data.pendingRequestId}
                   onClick={() => data.onSelectVersion(data.versionIndex - 1)}>‹</button>
-                <span aria-live="polite">{data.versionIndex + 1}/{data.versionCount}</span>
+                <span>
+                  <span aria-hidden="true">{data.versionIndex + 1}/{data.versionCount}</span>
+                  <span className="visually-hidden" role="status" aria-live="polite">
+                    Version {data.versionIndex + 1} of {data.versionCount} selected
+                  </span>
+                </span>
                 <button type="button" className="chat-node-version-button nodrag"
                   aria-label="Next version" title="Next version"
                   disabled={data.versionIndex >= data.versionCount - 1 || !!data.pendingRequestId}
@@ -1032,13 +1030,13 @@ export const ChatNodeView = memo(function ChatNodeView({
                   disabled={!!data.pendingRequestId} onClick={data.onCompareVersions}>Compare</button>
               </span>
             )}
-            <span
-              className="chat-node-status-badge"
-              data-status={data.branchStatus}
-              style={{ backgroundColor: BRANCH_STATUS_COLORS[data.branchStatus] ?? BRANCH_STATUS_COLORS.active }}
-              title={`Branch status: ${data.branchStatus}`}
-              aria-label={`Branch status: ${data.branchStatus}`}
-            />
+            {data.branchStatus !== "active" && (
+              <span className="chat-node-status-badge" role="status" data-status={data.branchStatus}
+                title={`Branch status: ${data.branchStatus}`}
+                aria-label={`Branch status: ${data.branchStatus}`}>
+                {data.branchStatus.charAt(0).toUpperCase() + data.branchStatus.slice(1)}
+              </span>
+            )}
             {data.dockedChildren.length > 0 && (
               <span className="chat-node-docked-badge" title="Docked items">{data.dockedChildren.length}</span>
             )}
