@@ -251,7 +251,7 @@ interface CitationTree {
 }
 export function rehypeInlineKnowledgeCitations() {
   return (tree: CitationTree) => {
-    const token = /\\[(kb:[A-Za-z0-9_-]{1,128})\\]/g;
+    const token = /\[(kb:[A-Za-z0-9_-]{1,128})\]/g;
     function walk(node: CitationTree, excluded = false) {
       if (!node.children) return;
       const blocked = excluded || (node.type === "element" &&
