@@ -95,6 +95,9 @@ MAX_PDF_DOCUMENT_STREAM_BYTES = 32 * 1024 * 1024
 MAX_DOCX_MEMBERS = 2_048
 MAX_DOCX_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
 MAX_DOCX_XML_PART_BYTES = 16 * 1024 * 1024
+# Millions of tiny XML tags can exhaust RAM while a bounded-size XML part
+# is parsed into an lxml tree. Check markup density before python-docx loads it.
+MAX_DOCX_XML_TAGS = 150_000
 
 
 class AttachmentError(Exception):
@@ -513,13 +516,25 @@ def _check_docx_archive(path: Path) -> None:
             if len(members) > MAX_DOCX_MEMBERS:
                 raise AttachmentError("DOCX contains too many ZIP members.")
             uncompressed = 0
+            xml_tags = 0
             for member in members:
                 uncompressed += member.file_size
                 if uncompressed > MAX_DOCX_UNCOMPRESSED_BYTES:
                     raise AttachmentError("DOCX exceeds the uncompressed ZIP size limit.")
-                if (member.filename.lower().endswith((".xml", ".rels"))
-                        and member.file_size > MAX_DOCX_XML_PART_BYTES):
-                    raise AttachmentError("DOCX XML part exceeds the expanded-size limit.")
+                if member.filename.lower().endswith((".xml", ".rels")):
+                    if member.file_size > MAX_DOCX_XML_PART_BYTES:
+                        raise AttachmentError("DOCX XML part exceeds the expanded-size limit.")
+                    # Verify actual inflated bytes, not just central-directory
+                    # claims. Cap markup nodes before lxml creates a tree.
+                    with archive.open(member) as source:
+                        xml = source.read(MAX_DOCX_XML_PART_BYTES + 1)
+                    if len(xml) > MAX_DOCX_XML_PART_BYTES:
+                        raise AttachmentError("DOCX XML part exceeds the expanded-size limit.")
+                    if b"<!DOCTYPE" in xml.upper() or b"<!ENTITY" in xml.upper():
+                        raise AttachmentError("DOCX XML must not contain entity declarations.")
+                    xml_tags += xml.count(b"<")
+                    if xml_tags > MAX_DOCX_XML_TAGS:
+                        raise AttachmentError("DOCX XML contains too many elements.")
     except (zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
         raise AttachmentError("DOCX is not a readable ZIP archive.") from exc
 

@@ -1172,3 +1172,101 @@ class TestReindexGraphContent:
         finally:
             conn.close()
         assert ks.search_chunks(db_path, "pangolins") == []
+
+
+# -- Knowledge Library confidentiality: safe creation, repair, and uploads ---
+
+
+@pytest.mark.posix_permissions
+def test_knowledge_db_is_private_before_sqlite_connect_even_with_open_umask(tmp_path, monkeypatch):
+    if os.name == "nt":
+        pytest.skip("POSIX permissions are not meaningful on Windows")
+    db = tmp_path / "private" / "knowledge.db"
+    connect = ks.sqlite3.connect
+    checked = []
+
+    def assert_private_on_connect(database, *args, **kwargs):
+        if str(database) == str(db):
+            assert db.is_file(), "Knowledge DB must be created before sqlite3.connect"
+            assert (db.parent.stat().st_mode & 0o777) == 0o700
+            assert (db.stat().st_mode & 0o777) == 0o600
+            checked.append(True)
+        return connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(ks.sqlite3, "connect", assert_private_on_connect)
+    previous = os.umask(0)
+    try:
+        _ingest(db)
+    finally:
+        os.umask(previous)
+    assert checked
+
+
+@pytest.mark.posix_permissions
+def test_reopens_repair_loose_db_directory_and_wal_sidecars(db_path):
+    if os.name == "nt":
+        pytest.skip("POSIX permissions are not meaningful on Windows")
+    _ingest(db_path)
+    original = ks._connect(db_path)
+    try:
+        original.execute("UPDATE documents SET title = title")
+        original.commit()
+        sidecars = [db_path.with_name(db_path.name + suffix) for suffix in ("-wal", "-shm")]
+        assert all(sidecar.exists() for sidecar in sidecars)
+        os.chmod(db_path.parent, 0o777)
+        os.chmod(db_path, 0o666)
+        for sidecar in sidecars:
+            os.chmod(sidecar, 0o666)
+
+        again = ks._connect(db_path)
+        again.close()
+        assert (db_path.parent.stat().st_mode & 0o777) == 0o700
+        assert (db_path.stat().st_mode & 0o777) == 0o600
+        assert all((sidecar.stat().st_mode & 0o777) == 0o600 for sidecar in sidecars)
+    finally:
+        original.close()
+
+
+@pytest.mark.posix_permissions
+def test_knowledge_db_refuses_symlink_without_chmodding_target(db_path, tmp_path):
+    if os.name == "nt":
+        pytest.skip("POSIX no-follow mode is not available on Windows")
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    outside = tmp_path / "other.db"
+    outside.write_bytes(b"not an approved database")
+    os.chmod(outside, 0o644)
+    try:
+        db_path.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("This filesystem cannot create symlinks")
+    with pytest.raises(OSError):
+        ks._connect(db_path)
+    assert outside.read_bytes() == b"not an approved database"
+    assert (outside.stat().st_mode & 0o777) == 0o644
+
+
+@pytest.mark.posix_permissions
+def test_drop_upload_creates_private_directories_before_database_exists(tmp_path):
+    if os.name == "nt":
+        pytest.skip("POSIX permissions are not meaningful on Windows")
+    from backend.knowledge_uploads import KnowledgeDropUploads
+
+    db = tmp_path / "knowledge" / "knowledge.db"
+    uploader = KnowledgeDropUploads(db)
+    previous = os.umask(0)
+    try:
+        created = uploader.begin([{"name": "safe.md", "size": 1}], workspace_id=4)
+    finally:
+        os.umask(previous)
+
+    paths = (
+        db.parent,
+        db.parent / "upload-staging",
+        db.parent / "upload-staging" / created["uploadId"],
+        db.parent / "upload-staging" / created["uploadId"] / "0",
+    )
+    assert all((path.stat().st_mode & 0o777) == 0o700 for path in paths)
+    source = paths[-1] / "safe.md"
+    assert (source.stat().st_mode & 0o777) == 0o600
+    assert not db.exists()
+    assert uploader.cancel(created["uploadId"])["cancelled"]

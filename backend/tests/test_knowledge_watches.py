@@ -255,3 +255,38 @@ def test_watched_intents_require_a_workspace_and_a_native_picker(tmp_path, monke
         assert (await bus.dispatch_intent("knowledge", "removeWatchedFolder", [folder_id]))["removed"]
 
     asyncio.run(scenario())
+
+
+def test_watched_root_redirect_does_not_index_new_tree_or_prune_old_index(tmp_path):
+    db = tmp_path / "knowledge.db"
+    root = tmp_path / "watched"
+    root.mkdir()
+    (root / "original.md").write_text("watchedoldsecretphrase")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "private.md").write_text("outsideprivatephrase")
+
+    async def scenario():
+        service = WatchedFolderService(db)
+        try:
+            first = await service.add(17, str(root))
+            folder_id = first["folder"]["id"]
+            row = await _finished(service, 17, folder_id, first["job"]["jobId"])
+            assert row["syncStatus"] == "completed"
+            collection = knowledge_store.get_or_create_workspace_collection(db, 17)
+
+            root.rename(tmp_path / "previous")
+            try:
+                root.symlink_to(outside, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                pytest.skip("This filesystem cannot create symlinks")
+            started = await service.sync(17, folder_id)
+            row = await _finished(service, 17, folder_id, started["jobs"][0]["jobId"])
+            assert row["syncStatus"] == "failed"
+            assert "redirected" in row["lastError"]
+            assert len(knowledge_store.search_chunks(db, "watchedoldsecretphrase", collection_id=collection)) == 1
+            assert knowledge_store.search_chunks(db, "outsideprivatephrase", collection_id=collection) == []
+        finally:
+            await service.stop()
+
+    asyncio.run(scenario())

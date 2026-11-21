@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import os
 import shutil
 import threading
 from dataclasses import dataclass
@@ -21,6 +22,20 @@ from backend.knowledge_ingest import IngestError, is_supported_knowledge_file
 from backend.knowledge_jobs import MAX_FILE_BYTES, MAX_JOB_BYTES, MAX_JOB_FILES
 
 UPLOAD_CHUNK_BYTES = 192 * 1024
+
+
+def _ensure_private_upload_dir(path: Path) -> None:
+    """Do not expose staged filenames or redirect uploads via an existing link."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if path.parent.is_symlink() or path.is_symlink():
+        raise IngestError("Knowledge upload directory is redirected by a symlink.")
+    if os.name != "nt":
+        path.parent.chmod(0o700)
+    path.mkdir(mode=0o700, exist_ok=True)
+    if path.is_symlink():
+        raise IngestError("Knowledge upload directory is redirected by a symlink.")
+    if os.name != "nt":
+        path.chmod(0o700)
 
 
 @dataclass
@@ -74,7 +89,7 @@ class KnowledgeDropUploads:
             if self._session is not None:
                 raise IngestError("A file drop is already uploading.")
             upload_id = uuid4().hex
-            self._staging.mkdir(parents=True, exist_ok=True)
+            _ensure_private_upload_dir(self._staging)
             directory = self._staging / upload_id
             directory.mkdir(mode=0o700)
             try:
@@ -122,7 +137,7 @@ class KnowledgeDropUploads:
                 raise IngestError("Upload session is no longer active.")
             if any(entry.received != entry.size for entry in session.files):
                 raise IngestError("Upload is incomplete.")
-            self._sources.mkdir(parents=True, exist_ok=True)
+            _ensure_private_upload_dir(self._sources)
             destination = self._sources / session.upload_id
             session.directory.rename(destination)
             self._session = None
@@ -143,6 +158,8 @@ class KnowledgeDropUploads:
     def cleanup_source(self, source_uri: str) -> None:
         """Remove only owned upload copies, never native-picker source files."""
         source = Path(source_uri)
+        if self._sources.is_symlink() or self._sources.parent.is_symlink():
+            return
         root = self._sources.resolve()
         try:
             resolved = source.resolve(strict=True)

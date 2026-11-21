@@ -19,7 +19,7 @@ from uuid import uuid4
 from backend.attachments import AttachmentError, MAX_DOCUMENT_TEXT_CHARS
 from backend.events import SessionBus
 from backend.knowledge_chunking import chunk_text
-from backend.knowledge_ingest import IngestError, extract_text, is_supported_knowledge_file
+from backend.knowledge_ingest import IngestError, extract_text, is_supported_knowledge_file, snapshot_knowledge_file
 from backend.knowledge_store import (
     get_or_create_workspace_collection, known_watched_files, reconcile_watched_files,
     set_watched_folder_sync_result, track_watched_file, upsert_file_with_chunks,
@@ -68,6 +68,7 @@ class KnowledgeIngestJob:
     # Worker-only scan observations include oversized files, which must not
     # be mistaken for deletions. scan_complete is false for unreadable paths.
     observed_paths: set[str] = field(default_factory=set, repr=False)
+    scan_root: Path | None = field(default=None, repr=False)
     scan_complete: bool = True
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -120,7 +121,12 @@ def _collect_files(
         root = path.expanduser().resolve(strict=True)
         if not root.is_dir():
             raise IngestError("The selected folder is not a directory.")
+        if os.path.normcase(str(path.expanduser().absolute())) != os.path.normcase(str(root)):
+            # Intents canonicalize the picker grant before scheduling. Never
+            # rebase an already approved folder onto a new symlink target.
+            raise IngestError("Selected or watched folder was redirected; reselect it.")
 
+    job.scan_root = root
     found: list[tuple[Path, int]] = []
     seen_files: set[Path] = set()
     checked = 0
@@ -160,6 +166,10 @@ def _collect_files(
         selected = path if isinstance(path, list) else [path]
         for item in selected:
             resolved = item.expanduser().resolve(strict=True)
+            if root is None and resolved != item.expanduser().absolute():
+                # The native picker/attachment path is canonicalized at its
+                # call site. A later symlink cannot change that grant.
+                raise IngestError("Selected file was redirected; reselect it.")
             if not resolved.is_file():
                 raise IngestError("A selected file is not a regular file.")
             add_file(resolved)
@@ -303,19 +313,19 @@ class KnowledgeIngestManager:
                 if job.cancel_event.is_set():
                     break
                 try:
-                    # Re-resolve paths on use: an entry that was safe during
-                    # enumeration may have been swapped for an outside link.
+                    # Pin the authorized root and canonical file from
+                    # preflight; never rebase either after a link swap.
+                    root = job.scan_root
+                    if root is not None and root.resolve(strict=True) != root:
+                        job.change(scan_complete=False)
+                        raise IngestError("Authorized folder was redirected during the import.")
                     actual = file.resolve(strict=True)
-                    root = (
-                        path.expanduser().resolve(strict=True)
-                        if folder and isinstance(path, Path)
-                        else allowed_root.resolve(strict=True) if allowed_root is not None else None
-                    )
-                    if root is not None and (
+                    if actual != file or (root is not None and (
                         not actual.is_relative_to(root)
                         or (folder and _excluded_path(actual.relative_to(root)))
-                    ):
-                        raise IngestError("File now points outside the authorized folder.")
+                    )):
+                        job.change(scan_complete=False)
+                        raise IngestError("File changed into a link or left the authorized folder.")
                     before = actual.stat()
                     if before.st_size != planned_size:
                         raise IngestError("File changed since the import was scanned; retry the import.")
@@ -326,7 +336,10 @@ class KnowledgeIngestManager:
                         # trusted only while its file_sources mapping still exists.
                         job.increment(unchanged=1)
                     else:
-                        text, mime = extract_text(actual)
+                        # Parse an immutable, private snapshot opened without
+                        # following any symlinks, including swapped parents.
+                        with snapshot_knowledge_file(actual) as snapshot:
+                            text, mime = extract_text(snapshot)
                         if actual.stat().st_size != before.st_size or actual.stat().st_mtime_ns != before.st_mtime_ns:
                             raise IngestError("File changed while being read; retry the import.")
                         if len(text) > MAX_DOCUMENT_TEXT_CHARS:

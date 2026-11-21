@@ -61,6 +61,7 @@ import logging
 import os
 import re
 import sqlite3
+import stat
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -447,6 +448,48 @@ _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
 }
 
 
+def _secure_knowledge_paths(db_path: Path) -> None:
+    """Make the directory private and the DB/sidecars 0600 before SQLite opens.
+
+    sqlite3.connect and journal_mode=WAL can create files before a later
+    chmod. With a permissive process umask this briefly exposes knowledge,
+    including during a crash. Open without following symlinks and set modes
+    on file descriptors; repeat after WAL creation to cover its sidecars.
+    """
+    db_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if os.name == "nt":
+        # Windows access control uses inherited ACLs, not POSIX mode bits.
+        return
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    directory_flag = getattr(os, "O_DIRECTORY", 0)
+    if not nofollow or not directory_flag:
+        raise OSError("Private knowledge storage requires no-follow file opens.")
+    parent_fd = os.open(db_path.parent, os.O_RDONLY | directory_flag | nofollow)
+    try:
+        os.fchmod(parent_fd, 0o700)
+        for suffix in ("", "-wal", "-shm"):
+            name = db_path.name + suffix
+            flags = os.O_RDWR | nofollow if not suffix else os.O_RDONLY | nofollow
+            if not suffix:
+                flags |= os.O_CREAT
+            else:
+                # Check even dangling links before SQLite can follow them.
+                sidecar = db_path.with_name(name)
+                if sidecar.is_symlink():
+                    raise OSError("Knowledge SQLite sidecar must not be a symlink.")
+                if not sidecar.exists():
+                    continue
+            fd = os.open(name, flags, 0o600, dir_fd=parent_fd)
+            try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    raise OSError("Knowledge SQLite path is not a regular file.")
+                os.fchmod(fd, 0o600)
+            finally:
+                os.close(fd)
+    finally:
+        os.close(parent_fd)
+
+
 def _connect(
     db_path: Path, *, notifications: NotificationState | None = None, _retry: bool = False,
 ) -> sqlite3.Connection:
@@ -457,7 +500,7 @@ def _connect(
     it creates are caught, migrations running on every connect as a cheap
     no-op once already current). Not shared code: see this module's own
     docstring for why."""
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+    _secure_knowledge_paths(db_path)
     conn: sqlite3.Connection | None = None
     try:
         conn = sqlite3.connect(db_path, timeout=30)
@@ -476,12 +519,11 @@ def _connect(
         _rescue_corrupt_knowledge_db(db_path, exc, notifications)
         return _connect(db_path, notifications=notifications, _retry=True)
 
-    for path in (db_path, db_path.with_name(db_path.name + "-wal"), db_path.with_name(db_path.name + "-shm")):
-        if path.exists():
-            try:
-                os.chmod(path, 0o600)
-            except OSError:
-                logger.warning("could not chmod %s to 0600 - continuing with existing permissions", path)
+    try:
+        _secure_knowledge_paths(db_path)
+    except OSError:
+        conn.close()
+        raise
 
     try:
         run_sqlite_migrations(conn, KNOWLEDGE_DB_SCHEMA_VERSION, _MIGRATIONS)
@@ -1141,7 +1183,10 @@ def add_watched_folder(db_path: Path, workspace_id: int, path: str) -> dict[str,
     """Native-picker paths are canonicalized; adding the same watch is idempotent."""
     if workspace_id <= 0:
         raise ValueError("Select a workspace before watching a folder.")
-    resolved = Path(path).expanduser().resolve(strict=True)
+    selected = Path(path).expanduser().absolute()
+    resolved = selected.resolve(strict=True)
+    if os.path.normcase(str(selected)) != os.path.normcase(str(resolved)):
+        raise ValueError("Watched folder was redirected; reselect it.")
     if not resolved.is_dir():
         raise ValueError("The selected path is not a directory.")
     conn = _connect(db_path)
