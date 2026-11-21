@@ -49,6 +49,12 @@ export function approvalPanDelta(
   };
 }
 
+export interface HarnessHook {
+  phase: "before_tool" | "after_tool" | "end_run";
+  command: string;
+  enabled: boolean;
+}
+
 export interface HarnessActivityRowData {
   tool: string;
   summary: string;
@@ -117,6 +123,8 @@ export interface HarnessNodeData extends Record<string, unknown> {
   onSetPermissionMode: (mode: string) => void;
   onSetNetworkAlways: (enabled: boolean) => void;
   onGetIsolationEngine: () => Promise<string | null>;
+  onGetHooks: () => Promise<HarnessHook[]>;
+  onSetHooks: (hooks: HarnessHook[]) => Promise<void>;
 }
 
 export type HarnessFlowNode = Node<HarnessNodeData, "harness">;
@@ -169,7 +177,8 @@ function HarnessNodeMenu({
  * transformed React Flow node. Otherwise fixed coordinates drift with zoom. */
 function AgentSettingsPopover({
   position, shell, rules, onSetShell, onRemoveRule, profile, onSetExecutionProfile,
-  permissionMode, onSetPermissionMode, allowNetwork, onSetNetworkAlways, onGetIsolationEngine, onClose, triggerRef,
+  permissionMode, onSetPermissionMode, allowNetwork, onSetNetworkAlways, onGetIsolationEngine,
+  onGetHooks, onSetHooks, onClose, triggerRef,
 }: {
   position: MenuPosition;
   shell: string;
@@ -183,6 +192,8 @@ function AgentSettingsPopover({
   allowNetwork: boolean;
   onSetNetworkAlways: (enabled: boolean) => void;
   onGetIsolationEngine: () => Promise<string | null>;
+  onGetHooks: () => Promise<HarnessHook[]>;
+  onSetHooks: (hooks: HarnessHook[]) => Promise<void>;
   onClose: () => void;
   triggerRef: RefObject<HTMLButtonElement | null>;
 }) {
@@ -190,6 +201,34 @@ function AgentSettingsPopover({
   const [placement, setPlacement] = useState(position);
   // undefined = checking, null = neither Docker nor Podman on the backend PATH.
   const [engine, setEngine] = useState<string | null | undefined>(undefined);
+  const [hooks, setHooks] = useState<HarnessHook[] | null>(null);
+  const [hooksError, setHooksError] = useState("");
+  const [savingHooks, setSavingHooks] = useState(false);
+  const [savedHooks, setSavedHooks] = useState(false);
+  useEffect(() => {
+    let active = true;
+    void onGetHooks()
+      .then((loaded) => { if (active) setHooks(loaded); })
+      .catch(() => { if (active) setHooksError("Could not load agent hooks."); });
+    return () => { active = false; };
+  }, [onGetHooks]);
+  const changeHook = (index: number, patch: Partial<HarnessHook>) => {
+    setHooks((previous) => previous?.map((item, i) => i === index ? { ...item, ...patch } : item) ?? null);
+    setSavedHooks(false);
+  };
+  const saveHooks = async () => {
+    if (hooks === null || hooks.some((hook) => !hook.command.trim())) return;
+    setSavingHooks(true);
+    setHooksError("");
+    try {
+      await onSetHooks(hooks);
+      setSavedHooks(true);
+    } catch {
+      setHooksError("Could not save agent hooks; no changes were applied.");
+    } finally {
+      setSavingHooks(false);
+    }
+  };
   useEffect(() => {
     let mounted = true;
     void onGetIsolationEngine()
@@ -215,10 +254,10 @@ function AgentSettingsPopover({
       ? Math.max(8, position.y - rect.height - 28)
       : position.y;
     setPlacement({ x, y });
-  }, [position.x, position.y, engine]);
+  }, [position.x, position.y, engine, hooks]);
 
   useEffect(() => {
-    panelRef.current?.querySelector("select")?.focus();
+    panelRef.current?.querySelector("select:not([disabled])")?.focus();
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as HTMLElement;
       if (panelRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
@@ -228,6 +267,25 @@ function AgentSettingsPopover({
       if (event.key === "Escape") {
         event.stopPropagation();
         onClose();
+      } else if (event.key === "Tab" && panelRef.current) {
+        // A portaled dialog must not lose its keyboard user behind the
+        // canvas. Keep focus in the popup and restore the trigger on close.
+        const controls = Array.from(panelRef.current.querySelectorAll<HTMLElement>(
+          "button:not([disabled]), select:not([disabled]), input:not([disabled]), textarea:not([disabled])",
+        ));
+        const first = controls[0];
+        const last = controls[controls.length - 1];
+        if (first && last) {
+          if (event.shiftKey && (document.activeElement === first ||
+              !panelRef.current.contains(document.activeElement))) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && (document.activeElement === last ||
+              !panelRef.current.contains(document.activeElement))) {
+            event.preventDefault();
+            first.focus();
+          }
+        }
       }
     };
     document.addEventListener("pointerdown", onPointerDown, true);
@@ -246,6 +304,7 @@ function AgentSettingsPopover({
       className="harness-node-settings-popover nodrag nowheel"
       role="dialog"
       aria-label="Agent settings"
+      aria-modal="true"
       style={{ position: "fixed", left: placement.x, top: placement.y }}
     >
       <div className="harness-node-settings-heading">
@@ -353,6 +412,103 @@ function AgentSettingsPopover({
           </ul>
         )}
       </div>
+      <section className="harness-node-hooks" aria-label="Workspace hooks">
+        <strong>Workspace hooks</strong>
+        <p className="harness-node-hooks-warning">
+          Warning: enabled hooks run local commands with your workspace access.
+          They use the selected Host or Isolated shell, the normal policy and
+          a fresh approval for every invocation, and a 10-second timeout.
+          No credentials, model content or tool arguments are supplied to hooks.
+          Every execution and its result are recorded in activity and transcript.
+          A nonzero before-tool exit blocks the tool and displays its output
+          as the reason; successful after-tool output adds a note.
+          Changes take effect on the next task.
+        </p>
+        {hooks === null ? (
+          <p role="status">Loading hooks…</p>
+        ) : (
+          <>
+            {hooks.length === 0 && <p>No hooks configured. Hooks are off by default.</p>}
+            <ul aria-label="Agent hooks">
+              {hooks.map((hook, index) => (
+                <li key={index} className="harness-node-hook-row">
+                  <label className="harness-node-hook-enabled">
+                    <input
+                      type="checkbox"
+                      className="nodrag"
+                      aria-label={"Enable hook " + (index + 1)}
+                      checked={hook.enabled}
+                      onChange={(event) => changeHook(index, { enabled: event.target.checked })}
+                    />
+                    Enabled
+                  </label>
+                  <label className="harness-node-settings-field">
+                    <span>When</span>
+                    <select
+                      className="nodrag nowheel"
+                      aria-label={"Hook phase " + (index + 1)}
+                      value={hook.phase}
+                      onChange={(event) => changeHook(index, { phase: event.target.value as HarnessHook["phase"] })}
+                    >
+                      <option value="before_tool">Before tool (can block)</option>
+                      <option value="after_tool">After tool (adds note)</option>
+                      <option value="end_run">End of run</option>
+                    </select>
+                  </label>
+                  <label className="harness-node-settings-field">
+                    <span>Command</span>
+                    <input
+                      className="nodrag nowheel"
+                      type="text"
+                      maxLength={4000}
+                      aria-label={"Hook command " + (index + 1)}
+                      value={hook.command}
+                      onChange={(event) => changeHook(index, { command: event.target.value })}
+                      placeholder="Command to run in workspace"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="harness-node-hook-remove nodrag"
+                    aria-label={"Remove hook " + (index + 1)}
+                    onClick={() => {
+                      setHooks((current) => current?.filter((_, i) => i !== index) ?? null);
+                      setSavedHooks(false);
+                    }}
+                  >
+                    Remove hook
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <div className="harness-node-hook-actions">
+              <button
+                type="button"
+                className="nodrag"
+                disabled={hooks.length >= 8 || savingHooks}
+                onClick={() => {
+                  setHooks((current) => [...(current ?? []), {
+                    phase: "before_tool", command: "", enabled: false,
+                  }]);
+                  setSavedHooks(false);
+                }}
+              >
+                Add hook
+              </button>
+              <button
+                type="button"
+                className="nodrag"
+                disabled={savingHooks || hooks.some((hook) => !hook.command.trim())}
+                onClick={() => { void saveHooks(); }}
+              >
+                {savingHooks ? "Saving…" : "Save hooks"}
+              </button>
+            </div>
+            {savedHooks && <p role="status">Hooks saved for the next task.</p>}
+          </>
+        )}
+        {hooksError && <p role="alert">{hooksError}</p>}
+      </section>
     </div>,
     document.body,
   );
@@ -683,6 +839,8 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
             allowNetwork={data.harnessNetworkAlways}
             onSetNetworkAlways={data.onSetNetworkAlways}
             onGetIsolationEngine={data.onGetIsolationEngine}
+            onGetHooks={data.onGetHooks}
+            onSetHooks={data.onSetHooks}
             onClose={() => setSettingsPosition(null)}
             triggerRef={settingsTriggerRef}
           />

@@ -46,14 +46,16 @@
   background: var(--gl-neutral-button-hover);
 }
 .harness-node-settings-trigger:focus-visible,
-.harness-node-settings-popover :is(button, select):focus-visible {
+.harness-node-settings-popover :is(button, select, input):focus-visible {
   outline: 2px solid var(--gl-graph-selection);
   outline-offset: 2px;
 }
 .harness-node-settings-popover {
   z-index: var(--gl-z-popover, 10000);
   box-sizing: border-box;
-  width: 254px;
+  width: min(350px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
   padding: 12px;
   border: 1px solid var(--gl-graph-border);
   border-radius: 8px;
@@ -79,7 +81,8 @@
 }
 .harness-node-settings-heading button:hover { background: var(--gl-neutral-button-hover); }
 .harness-node-settings-field { display: grid; gap: 6px; }
-.harness-node-settings-field select {
+.harness-node-settings-field :is(select, input[type="text"]) {
+  box-sizing: border-box;
   width: 100%;
   border: 1px solid var(--gl-graph-border);
   border-radius: 5px;
@@ -132,6 +135,42 @@
   cursor: pointer;
 }
 .harness-node-allow-rules li button:hover { background: var(--gl-neutral-button-hover); }
+.harness-node-hooks {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--gl-graph-border);
+}
+.harness-node-hooks > strong { font-size: 12px; }
+.harness-node-hooks-warning { font-size: 11px; }
+.harness-node-hooks ul {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+  display: grid;
+  gap: 8px;
+}
+.harness-node-hook-row {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--gl-graph-border);
+  border-radius: 5px;
+}
+.harness-node-hook-enabled { display: inline-flex; gap: 6px; align-items: center; }
+.harness-node-hook-actions { display: flex; gap: 8px; margin-top: 8px; }
+.harness-node-hook-actions button,
+.harness-node-hook-remove {
+  border: 1px solid var(--gl-graph-border);
+  border-radius: 4px;
+  padding: 5px 7px;
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-neutral-button-background);
+  cursor: pointer;
+}
+.harness-node-hook-actions button:hover:not(:disabled),
+.harness-node-hook-remove:hover { background: var(--gl-neutral-button-hover); }
+.harness-node-hook-actions button:disabled { opacity: .55; cursor: default; }
+
 .harness-approval-allow-explanation {
   font-size: 11px;
   color: var(--gl-surface-text-secondary);

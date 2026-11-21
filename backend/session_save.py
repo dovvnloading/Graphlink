@@ -641,6 +641,7 @@ def _serialize_harness_node(raw_node: SceneNode) -> dict[str, Any]:
         "workspace_path": node.state.harness_workspace_path,
         "shell": node.state.harness_shell,
         "shell_allow_rules": list(node.state.harness_shell_allow_rules),
+        "hooks": [dict(hook) for hook in node.state.harness_hooks],
         "execution_profile": node.state.harness_execution_profile,
         "permission_mode": node.state.harness_permission_mode,
         "task_permission_mode": node.state.harness_task_permission_mode,

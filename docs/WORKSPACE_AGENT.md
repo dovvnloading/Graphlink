@@ -113,6 +113,49 @@ In Autonomous, each explicit Isolated `shell.exec` network request requires a fr
 
 Autonomous cannot be chosen under Host. Switching Isolated → Host resets an Autonomous preference to Ask. Changing mode during a running task affects only subsequent tasks. **Opening a saved or imported graph resets the live preference to Ask and clears shell approval rules and broad network grants;** the previous task mode remains audit-only. The card shows the last task's effective mode; the append-only workspace transcript audits the mode and execution profile for each task. [Permission-mode details](WORKSPACE_PERMISSION_MODES.md).
 
+## Workspace command hooks
+
+Hooks are **off by default** and are configured separately for each Agent card's
+workspace. Open **Agent settings → Workspace hooks**, choose **Add hook**, enter a
+command and phase, check **Enabled**, then **Save hooks**. Up to eight commands
+may be saved; edits take effect at the **start of the next task**, not in the
+middle of a running task. Saved workspace hooks survive a graph save/reopen.
+Removing a hook and saving stops it from running on subsequent tasks.
+
+- **Before tool** runs before each proposed tool invocation. A zero exit code
+  allows that tool to proceed; a **nonzero exit**, timeout, denied approval or
+  missing isolation engine **blocks the tool**. Its command output is shown as
+  the reason to the Agent and in the run's activity. Other proposed tools may
+  continue, but the blocked call is never executed.
+- **After tool** runs after the tool returns. Successful command output, if
+  nonempty, is attached as a clearly labeled note to that tool's actual result
+  in the Agent transcript, so the Agent can read it on the next model turn.
+  A failed/denied after hook is audited, but does not overwrite the real
+  tool result.
+- **End of run** runs once on a live, normally ending or failed task. Its
+  output and exit status are audited; a failure is reported alongside the
+  terminal status. **Stop** does not launch new commands after cancellation.
+
+**Security:** These are **local commands**, not passive notifications. Use
+only commands you trust: on **Host** they run with your local account's file
+access, and Isolated uses the selected container isolation policy (and fails
+closed if no engine is installed). Every enabled hook goes through the usual
+`shell.exec` policy and **fresh user approval**, even under Autonomous or
+when a regular shell prefix was previously approved. Hook subprocesses have
+a **10-second timeout** and guarded process-tree cleanup. They request no
+optional Isolated network grant (Host commands are not network-sandboxed),
+no inherited provider credentials or application secrets (only the shell
+tool's allowlisted process environment), and no conversation/tool arguments
+on stdin or in environment variables. They still can read files available
+in their workspace; do not put secrets in hook commands or accessible files.
+
+Each invocation, including denied and timed-out attempts, appears in
+**Agent activity** as `hook.before_tool`, `hook.after_tool` or
+`hook.end_run`. The workspace's append-only JSONL transcript contains
+corresponding `hook` audit records for start and outcome. These records
+are separate from model tool-call messages, so a future follow-up retains
+a structurally valid transcript.
+
 ## Python: execution, environments and installs
 
 Ask the Agent to use **`python.exec`** for analysis, scripts or data transformations. It is a

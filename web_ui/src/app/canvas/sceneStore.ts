@@ -31,6 +31,7 @@ import type { FontControlState } from "../../lib/bridge-core/generated/font-cont
 import type { ScenePatch, StateListener, StreamListener, WsTransport } from "../../lib/ws/transport";
 import type { BridgeRejection } from "../../lib/bridge-core/islandState";
 import type { EditorDraft, Sources, ScienceResult } from "./scientificWorkbench";
+import type { HarnessHook } from "./HarnessNodeView";
 import { announce } from "../announcer";
 import { describeNodeRunTransition } from "./nodeRunAnnouncements";
 import {
@@ -1428,6 +1429,24 @@ export class SceneStore {
 
   revealHarnessWorkspace(nodeId: string): void {
     this.transport.fireIntent("harness", "revealWorkspace", [nodeId]);
+  }
+
+  async getHarnessHooks(nodeId: string): Promise<HarnessHook[]> {
+    const raw: unknown = await this.transport.request("harness", "getHooks", [nodeId]);
+    if (!Array.isArray(raw)) throw new Error("Invalid agent hooks response.");
+    return raw.map((item: unknown): HarnessHook => {
+      if (item === null || typeof item !== "object") throw new Error("Invalid agent hook.");
+      const row = item as Record<string, unknown>;
+      if ((row.phase !== "before_tool" && row.phase !== "after_tool" && row.phase !== "end_run")
+          || typeof row.command !== "string" || typeof row.enabled !== "boolean") {
+        throw new Error("Invalid agent hook.");
+      }
+      return { phase: row.phase, command: row.command, enabled: row.enabled };
+    });
+  }
+
+  async setHarnessHooks(nodeId: string, hooks: HarnessHook[]): Promise<void> {
+    await this.transport.request("harness", "setHooks", [nodeId, hooks]);
   }
 
   setHarnessShell(nodeId: string, shell: string): void {

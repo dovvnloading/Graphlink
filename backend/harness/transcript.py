@@ -356,6 +356,25 @@ def append_task_start(
     })
 
 
+def append_hook_event(
+    workspace: Path, *, run_id: str, phase: str, command: str, tool: str,
+    outcome: str, result: str, elapsed_ms: int,
+) -> None:
+    """Audit command and result without fabricating a model tool message.
+
+    Only 'msg' records are replayed into model history. Hook events remain
+    queryable on disk across resumes, including denied/blocked executions.
+    """
+    path = transcript_path(workspace)
+    _ensure_meta(path, None, None)
+    _emit(path, {
+        "t": "hook", "run_id": run_id, "phase": phase,
+        "command": command, "tool": tool,
+        "outcome": outcome, "result": result, "elapsed_ms": elapsed_ms,
+        "created": time.time(),
+    })
+
+
 def append_compaction(workspace: Path, content: str, *, tail: list[dict] | None = None) -> None:
     """Atomically record the summary AND retained tail of a compaction.
 

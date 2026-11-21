@@ -344,6 +344,8 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("harness", "listWorkspaceFiles", "B", "read-only: lists files and directories in the currently authorized workspace without modifying the document"),
     Classified("harness", "readWorkspaceFile", "B", "read-only: previews a file in the currently authorized workspace without modifying the document"),
     Classified("harness", "revealWorkspace", "B", "read-only: opens the authorized workspace in the native file manager without modifying the document"),
+    Classified("harness", "getHooks", "B", "read-only: returns editable workspace hook definitions; never grants execution"),
+    Classified("harness", "setHooks", "B", "run-config: opt-in local command definitions; undo must not silently restore execution behavior"),
     Classified("harness", "setShell", "B", "run-config: persists the node shell choice for subsequent tasks, not an in-flight execution"),
     Classified("harness", "removeShellAllowRule", "B", "security: immediately revokes a node's saved shell prefix; undo must not silently restore execution consent"),
     Classified("harness", "setExecutionProfile", "B", "run-config: persists the node execution profile for subsequent tasks and retires idle sessions; not wrapped in an undo command"),
