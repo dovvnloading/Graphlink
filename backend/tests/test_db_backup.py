@@ -96,6 +96,10 @@ def test_concurrent_backups_have_independent_sqlite_staging_files(db_path, monke
     import backend.db_backup as backup_module
 
     _make_real_db(db_path, title="Keep Me")
+    # Force a same-second publish collision even when the threads straddle a
+    # real second boundary; staging paths must still be independent.
+    fixed_timestamp = "20260120T120000Z"
+    monkeypatch.setattr(backup_module, "_timestamp_now", lambda: fixed_timestamp)
     barrier = threading.Barrier(2)
     real_replace = backup_module.os.replace
     sources = []
@@ -120,7 +124,7 @@ def test_concurrent_backups_have_independent_sqlite_staging_files(db_path, monke
         futures = [pool.submit(take_backup, db_path) for _ in range(2)]
         paths = [future.result(timeout=20) for future in futures]
 
-    assert paths[0] == paths[1]  # Same one-second backup name, atomic winner.
+    assert paths == [backups_dir_for(db_path) / backup_filename(fixed_timestamp)] * 2
     assert sources[0] != sources[1], "backups must use separate temp paths"
     assert not list(backups_dir_for(db_path).glob("*.tmp"))
     conn = sqlite3.connect(paths[0])
