@@ -364,16 +364,7 @@
 .chat-node-edit-panel p[role="alert"] { margin: 0; color: var(--gl-semantic-status-error); }
 
 .node-heading-row .chat-node-status-badge {
-  width: 5px;
-  height: 5px;
-}
-
-.chat-node-status-badge[data-status="active"] {
-  opacity: 0;
-}
-
-.chat-node:is(:hover, :focus-within) .chat-node-status-badge[data-status="active"] {
-  opacity: 1;
+  max-width: 120px;
 }
 
 .chat-node-metadata {
