@@ -109,6 +109,48 @@ class GitHubRestClient:
             return response.content
         return response.json()
 
+
+    def post_pull_review_comment(self, owner, repo, number, *, body, commit_id, path, line):
+        """Only an explicitly approved Review Lens inline comment uses this write path.
+
+        No caller-supplied URL, redirects, arbitrary hosts, response bodies in
+        errors, or unauthenticated writes. The token never enters scene state.
+        """
+        import re
+
+        segment = re.compile(r"[A-Za-z0-9._-]+")
+        if any(not segment.fullmatch(part) or part in {".", ".."} for part in (owner, repo)):
+            raise RuntimeError("Invalid GitHub repository for the review comment.")
+        if type(number) is not int or number <= 0 or type(line) is not int or line <= 0:
+            raise RuntimeError("Invalid pull-request number or comment line.")
+        url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{number}/comments"
+        headers = self.build_headers(url)
+        # Check the actual header being sent, not a token read that could
+        # disappear before build_headers() runs.
+        if "Authorization" not in headers:
+            raise RuntimeError("Connect Gitlink to GitHub in Settings > Integrations before posting.")
+        try:
+            response = requests.post(
+                url,
+                headers=headers,
+                json={"body": body, "commit_id": commit_id, "path": path, "line": line, "side": "RIGHT"},
+                timeout=25,
+                allow_redirects=False,
+            )
+        except requests.RequestException:
+            raise RuntimeError("Could not reach GitHub to post the comment. Try again.") from None
+        if response.status_code == 401:
+            raise RuntimeError("Gitlink's GitHub token was rejected. Update it in Settings > Integrations.")
+        if response.status_code == 403:
+            raise RuntimeError("Gitlink's GitHub connection lacks permission to comment on this pull request.")
+        if response.status_code == 404:
+            raise RuntimeError("The pull request no longer exists or is not accessible. Refresh Review Lens.")
+        if response.status_code == 422:
+            raise RuntimeError("The selected pull-request line is no longer commentable. Refresh the diff.")
+        if response.status_code < 200 or response.status_code >= 300:
+            raise RuntimeError(f"GitHub could not post the comment (HTTP {response.status_code}).")
+        return True
+
     def _download_bounded(self, url, params, timeout, expect_json, max_bytes):
         """Bound GitHub binary downloads and restrict each redirect hop."""
         if expect_json or type(max_bytes) is not int or max_bytes <= 0:

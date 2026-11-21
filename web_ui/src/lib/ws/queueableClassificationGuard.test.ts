@@ -130,6 +130,12 @@ describe("queueable intent classification (ADR-003 stage 3.6)", () => {
     expect(sites.some((s) => s.intent === "sendMessage" && !s.queueable)).toBe(true);
   });
 
+  it("Review Lens posting is a non-queueable request, never an offline-replayed fireIntent", () => {
+    const source = readFileSync(join(APP_SRC, "canvas", "sceneStore.ts"), "utf8");
+    expect(source).toMatch(/postCodeReviewComment\(nodeId[\s\S]{0,650}?this\.transport\.request\("scene", "postCodeReviewComment"/);
+    expect(collectFireIntentCallSites().filter((site) => site.intent === "postCodeReviewComment")).toEqual([]);
+  });
+
   it("never marks a non-idempotent toggle* intent queueable", () => {
     const offenders = collectFireIntentCallSites()
       .filter((s) => s.queueable)

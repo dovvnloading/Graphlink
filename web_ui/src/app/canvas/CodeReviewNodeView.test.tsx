@@ -1,11 +1,10 @@
 import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { OverlayProvider } from "../overlays/overlays";
 
-// Rendered directly (not through a real <ReactFlow nodes=.../> mount) - a
-// bare ReactFlowProvider is enough (the ArtifactNodeView/WebResearchNodeView
-// precedent). No OverlayProvider: unlike GitlinkNodeView, this card has no
-// <Dialog> confirmation anywhere (dismissal is a direct intent, undoable).
+// Rendered under the same OverlayProvider as Gitlink's in-canvas approval
+// dialog. It traps focus, supports Escape and restores focus to the opener.
 
 import { CodeReviewNodeView, type CodeReviewFlowNode } from "./CodeReviewNodeView";
 
@@ -51,6 +50,9 @@ function baseData(overrides: Partial<CodeReviewFlowNode["data"]> = {}): CodeRevi
     onCancel: vi.fn(),
     onAsk: vi.fn(),
     onDismissFinding: vi.fn(),
+    onPreviewComment: vi.fn().mockResolvedValue({ error: "Preview unavailable." }),
+    onPostComment: vi.fn().mockResolvedValue({ posted: true }),
+    onProposeFix: vi.fn().mockResolvedValue({ nodeId: "gl-2" }),
     onToggleCollapse: vi.fn(),
     onDelete: vi.fn(),
     ...overrides,
@@ -61,9 +63,11 @@ function renderReviewNode(overrides: Partial<CodeReviewFlowNode["data"]> = {}) {
   const data = baseData(overrides);
   const props = { id: "cr-1", selected: false, data } as unknown as NodeProps<CodeReviewFlowNode>;
   const utils = render(
-    <ReactFlowProvider>
-      <CodeReviewNodeView {...props} />
-    </ReactFlowProvider>,
+    <OverlayProvider>
+      <ReactFlowProvider>
+        <CodeReviewNodeView {...props} />
+      </ReactFlowProvider>
+    </OverlayProvider>,
   );
   return { data, ...utils };
 }
@@ -182,11 +186,13 @@ describe("Walkthrough tab", () => {
       codeReviewQa: [{ question: "Where is auth checked?", answer: "In auth.py." }],
     };
     rerender(
-      <ReactFlowProvider>
-        <CodeReviewNodeView
-          {...({ id: "cr-1", selected: false, data: answered } as unknown as NodeProps<CodeReviewFlowNode>)}
-        />
-      </ReactFlowProvider>,
+      <OverlayProvider>
+        <ReactFlowProvider>
+          <CodeReviewNodeView
+            {...({ id: "cr-1", selected: false, data: answered } as unknown as NodeProps<CodeReviewFlowNode>)}
+          />
+        </ReactFlowProvider>
+      </OverlayProvider>,
     );
     expect((screen.getByLabelText("Ask about this diff") as HTMLInputElement).value).toBe("");
   });
@@ -501,5 +507,100 @@ describe("dismissed count line", () => {
     switchTab("Findings");
     // Used to render "1 dismissed - undo restores it." with the noun gone.
     expect(screen.getByText(/1 dismissed finding/)).toBeTruthy();
+  });
+});
+
+
+describe("Review Lens phase-2 GitHub action approval", () => {
+  const anchored = {
+    codeReviewState: "reviewed",
+    codeReviewRepo: "o/r",
+    codeReviewPrNumber: 3,
+    codeReviewFindings: [{
+      id: "f1", severity: "high", tier: "red", category: "Security",
+      path: "src/worker.py", line: 2, title: "Unsafe call",
+      evidence: "unguarded call", impact: "may fail", recommendation: "add guard",
+    }],
+  };
+  const exact = {
+    previewId: "opaque-server-preview", pr: "o/r#3", path: "src/worker.py", line: 2,
+    body: "**[Review Lens · HIGH] Unsafe call**\n\nExact text from the server.",
+  };
+
+  it("renders exact body/file/line and never posts on preview or cancellation", async () => {
+    const onPreviewComment = vi.fn().mockResolvedValue(exact);
+    const onPostComment = vi.fn().mockResolvedValue({ posted: true });
+    renderReviewNode({ ...anchored, onPreviewComment, onPostComment });
+    switchTab("Findings");
+    fireEvent.click(screen.getByRole("button", { name: "Preview GitHub comment for finding: Unsafe call" }));
+    await waitFor(() => expect(screen.getByRole("dialog", { name: "Post Review Lens comment to GitHub?" })).toBeTruthy());
+    const dialog = screen.getByRole("dialog", { name: "Post Review Lens comment to GitHub?" });
+    expect(dialog.textContent).toContain("o/r#3");
+    expect(dialog.textContent).toContain("src/worker.py");
+    expect(dialog.textContent).toContain("New-side line");
+    expect(screen.getByRole("region", { name: "Exact GitHub comment text" }).textContent).toBe(exact.body);
+    expect(onPreviewComment).toHaveBeenCalledWith("f1");
+    expect(onPostComment).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onPostComment).not.toHaveBeenCalled();
+  });
+
+  it("requires an explicit labelled approval click, sends only the opaque preview ID, and reports success", async () => {
+    const onPostComment = vi.fn().mockResolvedValue({ posted: true });
+    renderReviewNode({
+      ...anchored, onPreviewComment: vi.fn().mockResolvedValue(exact), onPostComment,
+    });
+    switchTab("Findings");
+    fireEvent.click(screen.getByRole("button", { name: "Preview GitHub comment for finding: Unsafe call" }));
+    await screen.findByRole("dialog", { name: "Post Review Lens comment to GitHub?" });
+    expect(onPostComment).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", {
+      name: "Approve and post this exact review comment to GitHub",
+    }));
+    await waitFor(() => expect(onPostComment).toHaveBeenCalledTimes(1));
+    expect(onPostComment).toHaveBeenCalledWith("opaque-server-preview");
+    await waitFor(() => expect(screen.getByText("Review comment posted to the pull request.")).toBeTruthy());
+  });
+
+  it("supports Escape to cancel, without approval", async () => {
+    const onPostComment = vi.fn();
+    renderReviewNode({ ...anchored, onPreviewComment: vi.fn().mockResolvedValue(exact), onPostComment });
+    switchTab("Findings");
+    fireEvent.click(screen.getByRole("button", { name: "Preview GitHub comment for finding: Unsafe call" }));
+    await screen.findByRole("dialog", { name: "Post Review Lens comment to GitHub?" });
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Post Review Lens comment to GitHub?" })).toBeNull());
+    expect(onPostComment).not.toHaveBeenCalled();
+  });
+
+  it("creates a Gitlink fix draft via the finding ID, without posting", async () => {
+    const onProposeFix = vi.fn().mockResolvedValue({ nodeId: "gl-new" });
+    const onPostComment = vi.fn();
+    renderReviewNode({ ...anchored, onProposeFix, onPostComment });
+    switchTab("Findings");
+    fireEvent.click(screen.getByRole("button", { name: "Propose Gitlink fix for finding: Unsafe call" }));
+    await waitFor(() => expect(onProposeFix).toHaveBeenCalledWith("f1"));
+    expect(onPostComment).not.toHaveBeenCalled();
+    expect(screen.getByText(/Gitlink fix draft created on the canvas/)).toBeTruthy();
+  });
+
+  it("refuses unanchored findings and presents a screen-reader error if the PR is stale", async () => {
+    const onPreviewComment = vi.fn().mockResolvedValue({ error: "The pull request no longer exists." });
+    const { rerender, data } = renderReviewNode({ ...anchored, onPreviewComment });
+    switchTab("Findings");
+    fireEvent.click(screen.getByRole("button", { name: "Preview GitHub comment for finding: Unsafe call" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("no longer exists"));
+    expect(data.onPostComment).not.toHaveBeenCalled();
+    rerender(
+      <OverlayProvider>
+        <ReactFlowProvider>
+          <CodeReviewNodeView {...({ id: "cr-1", selected: false, data: {
+            ...data, codeReviewFindings: [{ ...anchored.codeReviewFindings[0], line: 0 }],
+          } } as unknown as NodeProps<CodeReviewFlowNode>)} />
+        </ReactFlowProvider>
+      </OverlayProvider>,
+    );
+    expect(screen.getByRole("button", { name: "Preview GitHub comment for finding: Unsafe call" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Propose Gitlink fix for finding: Unsafe call" }).hasAttribute("disabled")).toBe(true);
   });
 });

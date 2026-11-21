@@ -222,6 +222,9 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("scene", "cancelCodeReviewRequest", "B", "run-lifecycle: cancel"),
     Classified("scene", "askCodeReviewQuestion", "B", "run-lifecycle: answers one follow-up over the cached diff"),
     Classified("scene", "dismissCodeReviewFinding", "A", "content: dismissal flag is document state"),
+    Classified("scene", "previewCodeReviewComment", "B", "read-only: fetches and binds an authenticated, expiring PR comment preview"),
+    Classified("scene", "postCodeReviewComment", "B", "external-store: approved GitHub PR comment cannot be undone in the scene"),
+    Classified("scene", "proposeCodeReviewFix", "A", "content: creates an undoable Gitlink draft; no external write"),
 
     # -- backend/api/intents_groups.py (scene) -------------------------------
     Classified("scene", "addNote", "A", "content: create"),
