@@ -27,6 +27,7 @@ import {
 import type { ArtifactFlowNode } from "./ArtifactNodeView";
 import type { ChartFlowNode } from "./ChartNodeView";
 import type { ChatFlowNode } from "./ChatNodeView";
+import type { KnowledgeCitationSource } from "./ChatCitationChips";
 import type { CodeFlowNode } from "./CodeNodeView";
 import type { CodeReviewFlowNode } from "./CodeReviewNodeView";
 import type { CodeSandboxFlowNode } from "./CodeSandboxNodeView";
@@ -568,7 +569,7 @@ function buildSceneIndexes(scene: SceneState): SceneIndexes {
 interface DispatcherLive {
   n: SceneNodeRow;
   store: SceneStore;
-  onOpenDocumentView: (markdown: string, sourceLabel: string) => void;
+  onOpenDocumentView: (markdown: string, sourceLabel: string, citation?: KnowledgeCitationSource) => void;
   onToggleBranchFocus: (nodeId: string) => void;
   // ADR-018 stage 18.3: optional - only the chat dispatcher's own call
   // site below supplies it; every other kind's getDispatcher call omits
@@ -669,6 +670,8 @@ function makeChatFns(id: string, liveRef: { current: DispatcherLive }) {
       if (n.content.trim()) onOpenDocumentView(n.content, n.isUser ? "Your message" : "Assistant message");
       else store.showInfoNotification(NO_DOCUMENT_VIEW_CONTENT_MESSAGE);
     },
+    onOpenCitation: (source: KnowledgeCitationSource) =>
+      liveRef.current.onOpenDocumentView("", source.documentTitle, source),
     onToggleBranchFocus: () => liveRef.current.onToggleBranchFocus(id),
     // ADR-002 Workstream 1: stages this node as sceneStore's
     // replyTargetNodeId - the composer's next Send then reads and consumes
@@ -1108,7 +1111,7 @@ function makeChartFns(id: string, liveRef: { current: DispatcherLive }) {
 export function toFlowNodes(
   scene: SceneState,
   store: SceneStore,
-  onOpenDocumentView: (markdown: string, sourceLabel: string) => void = () => {},
+  onOpenDocumentView: (markdown: string, sourceLabel: string, citation?: KnowledgeCitationSource) => void = () => {},
   branchFocusOriginId: string | null = null,
   onToggleBranchFocus: (nodeId: string) => void = () => {},
   // ADR-002 Workstream 1 ("Branch status and lifecycle") - "Focus Accepted
@@ -2644,7 +2647,7 @@ function CanvasInner({
   hudContainer,
 }: {
   store: SceneStore;
-  onOpenDocumentView: (markdown: string, sourceLabel: string) => void;
+  onOpenDocumentView: (markdown: string, sourceLabel: string, citation?: KnowledgeCitationSource) => void;
   // ADR-018 stage 18.3: passed straight through to toFlowNodes - see that
   // function's own comment on why a getter, not a subscribed value.
   getComposerRoute: () => { provider: string; modelId: string };
@@ -3208,7 +3211,7 @@ export function SceneCanvas({
   hudContainer = null,
 }: {
   store: SceneStore;
-  onOpenDocumentView: (markdown: string, sourceLabel: string) => void;
+  onOpenDocumentView: (markdown: string, sourceLabel: string, citation?: KnowledgeCitationSource) => void;
   getComposerRoute?: () => { provider: string; modelId: string };
   /** Where the zoom dock and minimap render; see CanvasInner's own prop. */
   hudContainer?: HTMLElement | null;
