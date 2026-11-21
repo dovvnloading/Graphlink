@@ -64,6 +64,18 @@ class OllamaInventoryModelPayload:
 
 
 @dataclass
+class OllamaModelCheckPayload:
+    """Transient result for one inventory model; tool calls are never run."""
+
+    name: str
+    status: str
+    loadSeconds: float | None
+    tokensPerSecond: float | None
+    toolCallingWorks: bool | None
+    message: str
+
+
+@dataclass
 class McpServerConfigPayload:
     """One configured MCP server - the wire counterpart of backend/
     mcp_client.py's McpServerConfig, sourced from SettingsManager.
@@ -191,6 +203,7 @@ class AppSettingsStatePayload:
     ollamaContextAvailableMemoryBytes: int
     ollamaScannedModels: list[str]
     ollamaInventory: list[OllamaInventoryModelPayload]
+    ollamaModelChecks: list[OllamaModelCheckPayload]
     ollamaInventorySource: str
     ollamaServerReachable: bool | None
     ollamaServerStatus: str

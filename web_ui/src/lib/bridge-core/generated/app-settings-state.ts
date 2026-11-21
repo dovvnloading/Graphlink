@@ -43,6 +43,15 @@ export interface OllamaInventoryModel {
   source: string;
 }
 
+export interface OllamaModelCheck {
+  name: string;
+  status: string;
+  loadSeconds?: number | null;
+  tokensPerSecond?: number | null;
+  toolCallingWorks?: boolean | null;
+  message: string;
+}
+
 export interface McpServerConfig {
   id: string;
   name: string;
@@ -103,6 +112,7 @@ export interface AppSettingsState {
   ollamaContextAvailableMemoryBytes: number;
   ollamaScannedModels: string[];
   ollamaInventory: OllamaInventoryModel[];
+  ollamaModelChecks: OllamaModelCheck[];
   ollamaInventorySource: string;
   ollamaServerReachable?: boolean | null;
   ollamaServerStatus: string;
@@ -180,6 +190,15 @@ const OLLAMA_INVENTORY_MODEL_FIELDS: WireFields = [
   ["source", "s", 0],
 ];
 
+const OLLAMA_MODEL_CHECK_FIELDS: WireFields = [
+  ["name", "s", 0],
+  ["status", "s", 0],
+  ["loadSeconds", "n", 1],
+  ["tokensPerSecond", "n", 1],
+  ["toolCallingWorks", "b", 1],
+  ["message", "s", 0],
+];
+
 const MCP_SERVER_CONFIG_FIELDS: WireFields = [
   ["id", "s", 0],
   ["name", "s", 0],
@@ -240,6 +259,7 @@ const APP_SETTINGS_STATE_FIELDS: WireFields = [
   ["ollamaContextAvailableMemoryBytes", "n", 0],
   ["ollamaScannedModels", { a: "s" }, 0],
   ["ollamaInventory", { a: { o: OLLAMA_INVENTORY_MODEL_FIELDS } }, 0],
+  ["ollamaModelChecks", { a: { o: OLLAMA_MODEL_CHECK_FIELDS } }, 0],
   ["ollamaInventorySource", "s", 0],
   ["ollamaServerReachable", "b", 1],
   ["ollamaServerStatus", "s", 0],

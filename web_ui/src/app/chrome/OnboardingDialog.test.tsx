@@ -62,6 +62,7 @@ const settingsSnapshot: AppSettingsState = {
   ollamaContextAvailableMemoryBytes: 0,
   ollamaScannedModels: [],
   ollamaInventory: [],
+  ollamaModelChecks: [],
   ollamaInventorySource: "",
   ollamaServerReachable: null,
   ollamaServerStatus: "checking",

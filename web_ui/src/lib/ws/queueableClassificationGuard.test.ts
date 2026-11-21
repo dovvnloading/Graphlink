@@ -169,9 +169,12 @@ describe("queueable intent classification (ADR-003 stage 3.6)", () => {
     // Ollama health checks are ephemeral, and starting a daemon is a one-shot
     // side effect; neither may be replayed after reconnecting from offline.
     // Per-model Ollama metadata inspection and its idempotent setter.
-    expect(sites).toHaveLength(56);
+    // Model Check and cancellation are session-only: neither can be replayed after reconnect.
+    expect(sites).toHaveLength(58);
     expect(sites.filter((s) => s.intent === "setOllamaContextWindow").map((s) => s.queueable)).toEqual([true]);
     expect(sites.filter((s) => s.intent === "inspectOllamaContextModel").map((s) => s.queueable)).toEqual([false]);
+    expect(sites.filter((s) => s.intent === "checkOllamaModel").map((s) => s.queueable)).toEqual([false]);
+    expect(sites.filter((s) => s.intent === "cancelOllamaModelCheck").map((s) => s.queueable)).toEqual([false]);
     expect(sites.filter((s) => s.intent === "revokeHarnessTrustedDir").map((s) => s.queueable)).toEqual([true]);
     // Downloads, cancellation and deletion must never be offline-replayed.
     for (const intent of ["pullOllamaModel", "cancelOllamaPull", "removeOllamaModel"]) {

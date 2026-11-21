@@ -402,6 +402,8 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("app-settings", "cancelOllamaPull", "B", "run-lifecycle: cancels an active model download"),
     Classified("app-settings", "removeOllamaModel", "B", "external-store: removes a local Ollama model"),
     Classified("app-settings", "pickOllamaScanFolder", "B", "run-lifecycle: native folder pick + scan"),
+    Classified("app-settings", "checkOllamaModel", "B", "read-only: transient local-model timing and tool-call probe"),
+    Classified("app-settings", "cancelOllamaModelCheck", "B", "run-lifecycle: interrupts a model probe"),
     # -- backend/api/intents_settings_knowledge.py (app-settings) ------------
     Classified("app-settings", "scanKnowledgeOllamaModels", "B", "read-only: list installed local embedding models"),
     Classified("app-settings", "setKnowledgeEmbedding", "B", "preference: persisted knowledge embedding choice and consent"),
