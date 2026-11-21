@@ -22,6 +22,10 @@ _METADATA_DIRS = frozenset({".git", ".hg", ".svn"})
 _NETWORK_WORDS = re.compile(r"(?i)(?:https?://|ftp://|git@|www\.|\b(?:curl|wget|ssh|scp|sftp|rsync|telnet|nc|ncat|ping)\b)")
 _SAFE_LS_FLAGS = frozenset({"-a", "-l", "-la", "-al", "-1", "-h", "-lh", "-lah", "-alh"})
 _SAFE_FILE_COMMANDS = frozenset({"cat", "head", "tail", "wc", "touch"})
+# Host PowerShell read-only commands with literal, workspace-bound operands.
+# Isolated execution uses /bin/sh regardless of the preferred host shell.
+_POWERSHELL_LIST_READS = frozenset({"get-childitem", "gci", "dir"})
+_POWERSHELL_FILE_READS = frozenset({"get-item", "gi", "get-content", "gc"})
 # A shell prefix is suitable for disclosure, not proof of harmless execution.
 # No interpreter, build tool, wrapper, path-qualified executable or Git helper
 # qualifies for unprompted Autonomous execution.
@@ -58,11 +62,11 @@ def _within(root: Path, raw: str, *, container_path: bool = False) -> bool:
 
 
 def _safe_shell(command: object, root: Path, shell: str, *, isolated: bool = False) -> bool:
-    """Auto-approve only a small, inspectable shell grammar.
+    """Accept only a small, inspectable shell grammar for approval reuse.
 
-    Shells and interpreters execute scripts, extensions and environment-defined
-    helpers even when the command line itself looks local. The Isolated shell
-    always executes with /bin/sh, irrespective of the Host shell preference.
+    This is also the Autonomous Isolated auto-approval gate. Shells and
+    interpreters can execute scripts even when a command looks local; the
+    Isolated shell always uses /bin/sh, regardless of Host shell preference.
     """
     if not isinstance(command, str) or not command.strip() or len(command) > 4000:
         return False
@@ -86,13 +90,27 @@ def _safe_shell(command: object, root: Path, shell: str, *, isolated: bool = Fal
             return False
         words = segment.split()
         program, args = words[0].lower(), words[1:]
-        if program == "echo":
-            continue
-        if program == "pwd":
+        if selected == "powershell" and program in {"get-location", "gl"}:
             if args:
                 return False
             continue
-        if program == "ls":
+        if selected == "powershell" and (
+            program in _POWERSHELL_LIST_READS or program in _POWERSHELL_FILE_READS
+        ):
+            paths = args
+            if program in _POWERSHELL_FILE_READS and not paths:
+                return False
+            # Provider-qualified paths (env:, HKLM:), splatting and cmdlet
+            # parameters are not literal workspace-relative file operands.
+            if any(path.startswith("-") or ":" in path or "@" in path for path in paths):
+                return False
+        elif program == "echo":
+            continue
+        elif program == "pwd":
+            if args:
+                return False
+            continue
+        elif program == "ls":
             paths = [arg for arg in args if arg not in _SAFE_LS_FLAGS]
             if any(arg.startswith("-") for arg in paths):
                 return False
