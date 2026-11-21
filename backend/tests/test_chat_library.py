@@ -1829,9 +1829,13 @@ def test_reopening_saved_agent_and_new_chat_disarm_live_tool_grants(db_path, tmp
 
 def test_fresh_session_keeps_default_workspace_for_knowledge_watches_search_and_save(db_path, tmp_path):
     """Regression: Knowledge Library and agent tools must work before any chat is opened."""
-    from backend.api.intents_knowledge import register_knowledge_watched_folder_intents
+    from backend.api.intents_knowledge import (
+        register_knowledge_document_intents, register_knowledge_watched_folder_intents,
+    )
     from backend.harness.loop import HarnessRunContext
     from backend.knowledge_chunking import chunk_text
+    from backend.knowledge_jobs import KnowledgeIngestManager
+    from backend.knowledge_uploads import KnowledgeDropUploads
     from backend.knowledge_watches import WatchedFolderService
     from backend.providers.base import ToolCall
     from backend.tools import KNOWLEDGE_READ, ToolRegistry
@@ -1879,7 +1883,14 @@ def test_fresh_session_keeps_default_workspace_for_knowledge_watches_search_and_
     ) == [str(legacy_file.resolve())]
     assert len(knowledge_store_module.list_documents(knowledge_db, collection_id=unrelated_collection)) == 1
 
-    # The watched-folder list must not raise a "select a workspace" error.
+    # The actual Knowledge Library list exposes the migrated file before
+    # opening or creating a chat; the watched-folder list also works.
+    register_knowledge_document_intents(
+        bus, document, KnowledgeIngestManager(bus, knowledge_db),
+        KnowledgeDropUploads(knowledge_db), knowledge_db,
+    )
+    library = asyncio.run(bus.dispatch_intent("knowledge", "listDocuments", []))
+    assert [row["documentId"] for row in library["documents"]] == [old.document_id]
     register_knowledge_watched_folder_intents(bus, document, WatchedFolderService(knowledge_db))
     assert asyncio.run(bus.dispatch_intent("knowledge", "listWatchedFolders", [])) == {"folders": []}
 
