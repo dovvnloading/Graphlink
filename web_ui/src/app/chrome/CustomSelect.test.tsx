@@ -152,4 +152,33 @@ describe("CustomSelect", () => {
     await user.click(trigger);
     expect(trigger).toHaveAttribute("aria-expanded", "true");
   });
+
+  it("opens with ArrowDown, focuses the selected option, and supports Home/End/Enter", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<CustomSelect ariaLabel="Pick one" value="b" options={OPTIONS} onChange={onChange} />);
+    const trigger = screen.getByRole("button", { name: "Pick one" });
+    trigger.focus();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("button", { name: /^Option B/ })).toHaveFocus();
+    await user.keyboard("{Home}");
+    expect(screen.getByRole("button", { name: "Option A" })).toHaveFocus();
+    await user.keyboard("{End}{Enter}");
+    expect(onChange).toHaveBeenCalledWith("c");
+    expect(screen.queryByRole("dialog", { name: "Pick one" })).toBeNull();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("Tab dismisses the portaled menu and restores focus to its trigger", async () => {
+    const user = userEvent.setup();
+    render(<CustomSelect ariaLabel="Pick one" value="a" options={OPTIONS} onChange={vi.fn()} />);
+    const trigger = screen.getByRole("button", { name: "Pick one" });
+    await user.click(trigger);
+    expect(screen.getByRole("button", { name: "Option A" })).toHaveFocus();
+    await user.keyboard("{Tab}");
+    expect(screen.queryByRole("dialog", { name: "Pick one" })).toBeNull();
+    expect(trigger).toHaveFocus();
+  });
+
+
 });
