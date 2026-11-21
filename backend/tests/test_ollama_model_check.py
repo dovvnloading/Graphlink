@@ -3,8 +3,9 @@
 import asyncio
 
 import pytest
+from pydantic import ByteSize
 
-from backend import ollama_model_check
+from backend import ollama_inventory, ollama_model_check
 from backend.api import intents_ollama_model_check, intents_settings_ollama
 from backend.events import SessionBus
 from backend.settings import register_settings
@@ -34,7 +35,7 @@ def test_probe_reports_daemon_load_duration_speed_and_real_tool_call(monkeypatch
     }
     assert len(calls) == 3
     assert calls[-1] == "closed"
-    assert all(call["model"] == "installed:latest" and call["keep_alive"] == 0 for call in calls[:2])
+    assert all(call["model"] == "installed:latest" and call["keep_alive"] == "5m" for call in calls[:2])
     assert calls[0]["options"]["num_predict"] <= 32
     assert calls[1]["tools"][0]["function"]["name"] == "graphlink_model_check"
 
@@ -78,9 +79,23 @@ def _registered_bus(tmp_path, monkeypatch):
                    "source": "server", "server_reachable": True, "scan_mode": "server",
                    "scan_path": "", "locations": []},
     )
+    # Successful Checks now query /api/ps once to refresh the card. Never
+    # contact a real Ollama daemon during these async unit tests.
+    monkeypatch.setattr(ollama_inventory.ollama, "ps", lambda: {"models": []})
     bus = SessionBus("ollama-check-test")
     register_settings(bus, manager)
     return bus, manager
+
+
+async def _wait_for_check(recorder, model_name, status):
+    """Allow the off-loop /api/ps refresh to finish before inspecting payloads."""
+    for _ in range(200):
+        if recorder.messages:
+            rows = recorder.messages[-1].get("payload", {}).get("ollamaModelChecks", [])
+            if any(row["name"] == model_name and row["status"] == status for row in rows):
+                return
+        await asyncio.sleep(0.01)
+    pytest.fail(f"{model_name} Check did not reach {status}")
 
 
 def test_check_uses_only_inventory_and_never_persists_settings(tmp_path, monkeypatch):
@@ -106,9 +121,7 @@ def test_check_uses_only_inventory_and_never_persists_settings(tmp_path, monkeyp
                             lambda *_: pytest.fail("check attempted to write scan settings"))
         await bus.dispatch_intent("app-settings", "checkOllamaModel", ["other:not-installed"])
         await bus.dispatch_intent("app-settings", "checkOllamaModel", ["first:latest"])
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-        await bus.publish("app-settings")
+        await _wait_for_check(recorder, "first:latest", "complete")
         assert manager.get_ollama_model_assignments() == assignments_before_check
         assert manager.state_file.read_bytes() == settings_before_check
 
@@ -125,6 +138,46 @@ def test_check_uses_only_inventory_and_never_persists_settings(tmp_path, monkeyp
     rows = recorder.messages[-1]["payload"]["ollamaModelChecks"]
     assert rows == [{"name": "first:latest", "status": "complete", "loadSeconds": 0.4,
                      "tokensPerSecond": 24.0, "toolCallingWorks": True, "message": ""}]
+
+
+def test_check_updates_card_residency_after_loading_and_keeps_weights(tmp_path, monkeypatch):
+    bus, manager = _registered_bus(tmp_path, monkeypatch)
+    monkeypatch.setattr(intents_ollama_model_check, "probe_ollama_model", lambda _model: _finished_probe())
+    monkeypatch.setattr(ollama_inventory.ollama, "ps", lambda: {"models": [{
+        "name": "first:latest", "size": ByteSize(5_000_000_000),
+        "size_vram": ByteSize(3_000_000_000),
+    }]})
+
+    class Recorder:
+        messages = []
+
+        async def send_json(self, data):
+            self.messages.append(data)
+
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    async def scenario():
+        await bus.dispatch_intent("app-settings", "scanOllamaSystem", [])
+        # A Check must not write settings or change the selected model.
+        before = manager.state_file.read_bytes()
+        await bus.dispatch_intent("app-settings", "checkOllamaModel", ["first:latest"])
+        await _wait_for_check(recorder, "first:latest", "complete")
+        assert manager.state_file.read_bytes() == before
+
+    asyncio.run(scenario())
+    data = recorder.messages[-1]["payload"]
+    loaded = {row["name"]: row for row in data["ollamaInventory"]}
+    assert loaded["first:latest"]["loaded"] is True
+    assert loaded["first:latest"]["memoryBytes"] == 5_000_000_000
+    assert loaded["first:latest"]["vramBytes"] == 3_000_000_000
+    assert loaded["second:latest"]["loaded"] is False
+    assert data["ollamaModelChecks"][0]["status"] == "complete"
+
+
+async def _finished_probe():
+    return {"loadSeconds": 0.5, "tokensPerSecond": 30.0,
+            "toolCallingWorks": True, "message": ""}
 
 
 def test_cancel_interrupts_running_check_and_a_new_check_can_start(tmp_path, monkeypatch):
@@ -159,12 +212,9 @@ def test_cancel_interrupts_running_check_and_a_new_check_can_start(tmp_path, mon
         await bus.dispatch_intent("app-settings", "checkOllamaModel", ["second:latest"])
         await bus.dispatch_intent("app-settings", "cancelOllamaModelCheck", ["second:latest"])
         await bus.dispatch_intent("app-settings", "cancelOllamaModelCheck", ["first:latest"])
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+        await _wait_for_check(recorder, "first:latest", "cancelled")
         await bus.dispatch_intent("app-settings", "checkOllamaModel", ["second:latest"])
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-        await bus.publish("app-settings")
+        await _wait_for_check(recorder, "second:latest", "complete")
         assert manager.get_ollama_model_assignments() == assignments_before_check
         assert manager.state_file.read_bytes() == settings_before_check
 
@@ -195,9 +245,7 @@ def test_daemon_error_is_reported_and_next_check_is_allowed(tmp_path, monkeypatc
 
         monkeypatch.setattr(intents_ollama_model_check, "probe_ollama_model", boom)
         await bus.dispatch_intent("app-settings", "checkOllamaModel", ["first:latest"])
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-        await bus.publish("app-settings")
+        await _wait_for_check(recorder, "first:latest", "error")
 
     class Recorder:
         messages = []
@@ -358,8 +406,7 @@ def test_check_error_with_empty_exception_text_has_actionable_message(tmp_path, 
         await bus.dispatch_intent("app-settings", "scanOllamaSystem", [])
         monkeypatch.setattr(intents_ollama_model_check, "probe_ollama_model", no_response)
         await bus.dispatch_intent("app-settings", "checkOllamaModel", ["first:latest"])
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+        await _wait_for_check(recorder, "first:latest", "error")
 
     asyncio.run(exercise())
     row = recorder.messages[-1]["payload"]["ollamaModelChecks"][0]
