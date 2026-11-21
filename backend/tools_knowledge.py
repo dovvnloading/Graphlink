@@ -16,7 +16,7 @@ from pathlib import Path
 from backend.domain.graph import SceneDocument
 from backend.knowledge_retrieval import hybrid_search
 from backend.knowledge_embedding_config import configured_hybrid_search
-from backend.knowledge_store import DEFAULT_DB_PATH
+from backend.knowledge_store import DEFAULT_DB_PATH, display_source_label
 from backend.providers.base import ToolCall, ToolSpec
 from backend.tools import KNOWLEDGE_READ, RunContext, ToolRegistry, ToolResult
 
@@ -56,8 +56,8 @@ def _format_results(results: list[dict]) -> str:
             "citation_id": r["citation_id"],
             "citation": f"[{r['citation_id']}]",
             "document_title": r["document_title"],
-            "source_uri": r["source_uri"],
-            "source_file": r["source_file"],
+            "source_uri": display_source_label(r["source_uri"], r["document_title"]),
+            "source_file": display_source_label(r["source_file"], r["document_title"]),
             "section": r["section"],
             "chunk_id": r["chunk_id"],
             "offset_start": r["offset_start"],

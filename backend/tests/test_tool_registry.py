@@ -243,6 +243,35 @@ def test_always_policy_memory_does_not_leak_across_separate_run_contexts():
     assert len(prompted) == 2, "approval memory is per-RunContext, never global to the registry"
 
 
+def test_pre_approval_check_returns_an_error_before_prompt_or_handler():
+    registry = ToolRegistry()
+    prompted = []
+    executed = []
+
+    async def check(call, _ctx):
+        return "File does not exist" if call.arguments.get("path") == "missing.md" else None
+
+    async def handler(call, _ctx):
+        executed.append(call)
+        return ToolResult(content="ok")
+
+    async def approve(call):
+        prompted.append(call)
+        return True
+
+    registry.register(
+        ECHO_SPEC, handler, scopes={FS_READ}, approval="once", pre_approval_check=check,
+    )
+    ctx = RunContext(granted_scopes=frozenset({FS_READ}), request_approval=approve)
+
+    invalid = _run(registry.invoke(ToolCall("bad", "echo", {"path": "missing.md"}), ctx))
+    assert invalid.is_error and "does not exist" in invalid.content
+    assert prompted == [] and executed == []
+
+    valid = _run(registry.invoke(ToolCall("ok", "echo", {"path": "present.md"}), ctx))
+    assert not valid.is_error and len(prompted) == len(executed) == 1
+
+
 # -- handler exceptions become error results, not raises --------------------
 
 

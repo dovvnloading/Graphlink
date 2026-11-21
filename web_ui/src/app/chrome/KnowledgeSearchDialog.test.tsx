@@ -217,6 +217,25 @@ describe("KnowledgeSearchDialog", () => {
     expect(screen.queryByRole("link", { name: "Open source" })).not.toBeInTheDocument();
   });
 
+  it("shows dropped-file names rather than private Windows or POSIX upload paths", async () => {
+    const windowsPath = String.raw`C:\Users\Ada\.graphlink\knowledge\uploads\id\0\lighthouse.md`;
+    const posixPath = "/home/ada/.graphlink/knowledge/uploads/id/1/notes.md";
+    const { user, request } = await setup();
+    request.mockResolvedValueOnce({ results: [
+      { ...RESULT_B, sourceUri: windowsPath, sourceFile: windowsPath, documentTitle: "Lighthouse" },
+      { ...RESULT_B, chunkId: 3, documentId: 13, sourceUri: posixPath,
+        sourceFile: posixPath, documentTitle: "Notes" },
+    ] });
+
+    await user.type(screen.getByPlaceholderText(/search your ingested knowledge base/i), "query");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    expect(await screen.findByText("2 sources used")).toBeInTheDocument();
+    expect(screen.getByText("lighthouse.md")).toBeInTheDocument();
+    expect(screen.getByText("notes.md")).toBeInTheDocument();
+    expect(screen.queryByText(windowsPath)).not.toBeInTheDocument();
+    expect(screen.queryByText(posixPath)).not.toBeInTheDocument();
+  });
+
   it("a failed request shows an error instead of a silent empty state", async () => {
     const { user, request } = await setup();
     request.mockRejectedValueOnce(new Error("boom"));
@@ -266,6 +285,40 @@ describe("KnowledgeSearchDialog", () => {
     expect(screen.getByText("4")).toBeInTheDocument();
     expect(screen.getByText("Indexed")).toBeInTheDocument();
     expect(screen.getByText("MD")).toBeInTheDocument();
+  });
+
+  it("labels indexed chats and branches readably with their stored sizes", async () => {
+    const { user, request } = await setup();
+    const chat = { ...LIBRARY_DOCUMENT, documentId: 27, title: "Saved chat",
+      type: "text/graph", sourceUri: "graph:27", sizeBytes: 1536, canReindex: false };
+    const branch = { ...LIBRARY_DOCUMENT, documentId: 28, title: "Indexed branch",
+      type: "text/branch", sourceUri: "branch:abc", sizeBytes: 128, canReindex: false };
+    request.mockImplementation(async (_topic, intent) =>
+      intent === "listDocuments" ? { documents: [chat, branch] } : {},
+    );
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+
+    const chatRow = (await screen.findByText("Saved chat")).closest("tr");
+    const branchRow = screen.getByText("Indexed branch").closest("tr");
+    expect(chatRow).not.toBeNull();
+    expect(branchRow).not.toBeNull();
+    expect(within(chatRow as HTMLElement).getByText("Chat")).toBeInTheDocument();
+    expect(within(chatRow as HTMLElement).getByText("1.5 KiB")).toBeInTheDocument();
+    expect(within(branchRow as HTMLElement).getByText("Chat branch")).toBeInTheDocument();
+    expect(within(branchRow as HTMLElement).getByText("128 B")).toBeInTheDocument();
+    expect(screen.queryByText("text/graph")).not.toBeInTheDocument();
+  });
+
+  it("does not leak a local path through the Library document title tooltip", async () => {
+    const privatePath = String.raw`C:\Users\Ada\.graphlink\knowledge\uploads\id\0\guide.md`;
+    const { user, request } = await setup();
+    request.mockImplementation(async (_topic, intent) =>
+      intent === "listDocuments" ? {
+        documents: [{ ...LIBRARY_DOCUMENT, sourceUri: privatePath }],
+      } : {},
+    );
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(await screen.findByText("guide.md")).toHaveAttribute("title", "guide.md");
   });
 
   it("opens indexed content in the existing Document View", async () => {

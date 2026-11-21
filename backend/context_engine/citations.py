@@ -15,6 +15,7 @@ from typing import Iterable, Sequence
 from backend.context_engine.assembler import (
     ContextAssembler, ContextBudgetError, ContextCandidate, ContextPlan,
 )
+from backend.knowledge_store import display_source_label
 
 CITATION_RECORD_NAME = "graphlink.knowledge.citations"
 CITATION_RECORD_ID = "graphlink-knowledge-citations-v1"
@@ -69,7 +70,7 @@ def knowledge_candidates(hits: Iterable[dict]) -> list[ContextCandidate]:
     for hit in _eligible_hits(hits):
         citation_id = hit["citation_id"]
         title = str(hit.get("document_title") or "Untitled source")
-        source_file = str(hit.get("source_file") or hit.get("source_uri") or "")
+        source_file = display_source_label(str(hit.get("source_file") or hit.get("source_uri") or ""), title)
         section = str(hit.get("section") or "Unsectioned")
         passage = (
             f"Citation ID: [{citation_id}]\nTitle: {title}\n"
@@ -161,8 +162,10 @@ def citation_record_for_reply(reply: str) -> dict | None:
         rows.append({
             "citationId": hit["citation_id"],
             "documentTitle": str(hit.get("document_title") or "Untitled source"),
-            "sourceUri": str(hit.get("source_uri") or ""),
-            "sourceFile": str(hit.get("source_file") or hit.get("source_uri") or ""),
+            "sourceUri": display_source_label(
+                str(hit.get("source_uri") or ""), str(hit.get("document_title") or "")),
+            "sourceFile": display_source_label(
+                str(hit.get("source_file") or hit.get("source_uri") or ""), str(hit.get("document_title") or "")),
             "section": str(hit.get("section") or "Unsectioned"),
             "documentId": int(hit.get("document_id") or 0),
             "chunkId": int(hit.get("chunk_id") or 0),
@@ -215,7 +218,7 @@ def inspected_reply_citations(document, origins: Sequence[str]) -> dict | None:
                     "sources": [{
                         "citationId": str(source["citationId"]),
                         "documentTitle": str(source["documentTitle"]),
-                        "sourceFile": str(source["sourceFile"]),
+                        "sourceFile": display_source_label(str(source["sourceFile"]), str(source["documentTitle"])),
                         "section": str(source["section"]),
                         "cited": bool(source["cited"]),
                     } for source in payload["sources"]],

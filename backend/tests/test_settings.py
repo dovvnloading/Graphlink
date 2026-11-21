@@ -2734,3 +2734,43 @@ def test_knowledge_test_status_reports_synthetic_model_response(manager, monkeyp
     assert inputs
     assert recorder.messages[-1]["payload"]["knowledgeTestStatus"] == "done"
     assert "768 dimensions" in recorder.messages[-1]["payload"]["knowledgeNotice"]
+
+
+def test_knowledge_test_publishes_running_during_cold_ollama_load(manager, monkeypatch):
+    import threading
+
+    from backend.api import intents_settings_knowledge
+
+    bus = SessionBus("settings-knowledge-cold-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+    started = threading.Event()
+    release = threading.Event()
+
+    def cold_embedding(*_args):
+        started.set()
+        if not release.wait(5):
+            raise AssertionError("Cold embedding test was not released")
+        return 768
+
+    monkeypatch.setattr(intents_settings_knowledge, "test_embedding_choice", cold_embedding)
+
+    async def exercise():
+        test_task = asyncio.create_task(bus.dispatch_intent(
+            "app-settings", "testKnowledgeEmbedding",
+            ["ollama", "nomic-embed-text:latest", "", False],
+        ))
+        try:
+            assert await asyncio.wait_for(asyncio.to_thread(started.wait, 5), timeout=6)
+            payload = recorder.messages[-1]["payload"]
+            assert payload["knowledgeTestStatus"] == "running"
+            assert payload["knowledgeNotice"] == ""
+        finally:
+            release.set()
+        await test_task
+
+    asyncio.run(exercise())
+    payload = recorder.messages[-1]["payload"]
+    assert payload["knowledgeTestStatus"] == "done"
+    assert "768 dimensions" in payload["knowledgeNotice"]

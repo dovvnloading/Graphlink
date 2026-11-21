@@ -3,6 +3,7 @@ import type { WsTransport } from "../../lib/ws/transport";
 import { Dialog, useOverlays } from "../overlays/overlays";
 import type { KnowledgeCitationSource } from "../canvas/ChatCitationChips";
 import { KnowledgeEmbeddingStatus } from "./KnowledgeEmbeddingStatus";
+import { knowledgeSourceLabel } from "../knowledgeSourceLabel";
 
 /**
  * ADR-017 stage 17.5: the "Knowledge" search panel - a human-driven,
@@ -101,6 +102,8 @@ function formatAdded(value: string): string {
 }
 
 function formatType(document: KnowledgeLibraryDocument): string {
+  if (document.type === "text/graph") return "Chat";
+  if (document.type === "text/branch") return "Chat branch";
   const extension = /\.([a-z0-9]+)$/i.exec(document.title)?.[1];
   return extension ? extension.toUpperCase() : document.type;
 }
@@ -152,6 +155,7 @@ function KnowledgeResultCard({
   onOpenCitation?: (source: KnowledgeCitationSource) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const sourceLabel = knowledgeSourceLabel(result.sourceFile ?? result.sourceUri, result.documentTitle);
   const canOpenCitation = Boolean(onOpenCitation && /^kb:[0-9a-f]{20}$/.test(result.citationId ?? "") &&
     Number.isSafeInteger(result.documentId) && Number.isSafeInteger(result.chunkId) &&
     result.offsetStart >= 0 && result.offsetEnd >= result.offsetStart);
@@ -166,7 +170,9 @@ function KnowledgeResultCard({
         onClick={() => setExpanded((value) => !value)}
       >
         <span className="knowledge-result-title">{result.documentTitle}</span>
-        <span className="knowledge-result-source">{result.sourceUri}</span>
+        {sourceLabel !== result.documentTitle && (
+          <span className="knowledge-result-source">{sourceLabel}</span>
+        )}
         {(typeof result.rankSignals?.fts5 === "number" || typeof result.rankSignals?.vector === "number") && (
           <span className="knowledge-result-signals" role="group" aria-label="Match signals">
             {typeof result.rankSignals?.fts5 === "number" && (
@@ -196,7 +202,8 @@ function KnowledgeResultCard({
                 onClick={() => onOpenCitation?.({
                   citationId: result.citationId ?? "", documentId: result.documentId,
                   chunkId: result.chunkId, documentTitle: result.documentTitle,
-                  sourceUri: result.sourceUri, sourceFile: result.sourceFile ?? result.sourceUri,
+                  sourceUri: result.sourceUri,
+                  sourceFile: result.sourceFile ?? result.sourceUri,
                   section: result.section ?? "Unsectioned", offsetStart: result.offsetStart,
                   offsetEnd: result.offsetEnd, excerpt: result.text, cited: true,
                 })}
@@ -625,7 +632,7 @@ export function KnowledgeSearchDialog({
               <tbody>
                 {visibleDocuments.map((doc) => (
                   <tr key={doc.documentId}>
-                    <td className="knowledge-library-title" title={doc.sourceUri}>{doc.title}</td>
+                    <td className="knowledge-library-title" title={knowledgeSourceLabel(doc.sourceUri, doc.title)}>{doc.title}</td>
                     <td>{formatType(doc)}</td><td>{formatSize(doc.sizeBytes)}</td>
                     <td>{doc.chunks}</td><td>{formatAdded(doc.addedAt)}</td>
                     <td>{doc.status === "indexed" ? "Indexed" : doc.status}</td>
