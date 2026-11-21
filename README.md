@@ -76,7 +76,7 @@ Open **Knowledge** in the top bar to import files or folders, search indexed pas
 
 ### Edit and re-run branches
 
-You can edit a sent **You** message in place or save the revision as a new branch. Message versions can be switched and compared in Document View; changed inputs can mark replies **Out of date** and derived cards **Upstream changed**. **Re-run from here** previews the affected chat path and regenerates only ordinary chat replies—not agents, Builder, code sandbox, tool, plugin, or data-bound nodes. See the [branch editing and re-run user guide](docs/BRANCH_RERUN.md) for keyboard steps, scope choices, cancellation, and undo.
+You can edit a sent **You** message in place or save the revision as a new branch. Message versions can be switched and compared in Document View; changed inputs can mark replies **Out of date** and derived cards **Upstream changed**. **Re-run from here** previews one path or all branches below and regenerates only ordinary chat replies—not agents, Builder, code sandbox, tool, plugin, or data-bound nodes. See the [branch editing and re-run user guide](docs/BRANCH_RERUN.md) for keyboard steps, scope choices, cancellation, and undo.
 
 ### Connect text to a note
 
