@@ -99,47 +99,71 @@ export function Composer({
   const selectedNodeId = useSyncExternalStore(sceneStore.subscribe, sceneStore.getSelectedNodeId);
   const selectedAgent = scene.nodes.find((n) => n.id === selectedNodeId && n.kind === "harness");
 
-  // The server owns the collection existence check and branch ancestry.
-  // Do not cache a workspace default locally: an indexed document can make
-  // an otherwise untouched branch switch from off to on after a scene update.
-  // A result belongs to the scene revision and branch that requested it.
-  // Derive the loading state instead of synchronously resetting it in an effect.
+  // A fresh scene's initial snapshot may have the SAME revision (0) as the
+  // placeholder. Track the snapshot itself so a lookup rejected before the
+  // socket opens is retried on load, as well as on later scene updates.
+  // Library imports/removals do not change the scene, so they have their own
+  // small versioned topic. Both signals invalidate in-flight lookups.
+  const [knowledgeLibraryRevision, setKnowledgeLibraryRevision] = useState<number | null>(null);
+  useEffect(() => sceneStore.subscribeKnowledgeLibrary((payload) => {
+    if (typeof payload.revision === "number") setKnowledgeLibraryRevision(payload.revision);
+  }), [sceneStore]);
+
   const knowledgeTargetNodeId = replyTargetNode?.id ?? null;
   const [knowledgeResult, setKnowledgeResult] = useState<{
     store: SceneStore;
     targetNodeId: string | null;
-    revision: number;
+    sceneSnapshot: object;
+    libraryRevision: number | null;
     preference: ChatKnowledgePreference | null;
   } | null>(null);
-  const knowledgePreference = knowledgeResult?.store === sceneStore &&
+  const knowledgeResolved = knowledgeResult?.store === sceneStore &&
     knowledgeResult.targetNodeId === knowledgeTargetNodeId &&
-    knowledgeResult.revision === scene.revision
-      ? knowledgeResult.preference
-      : null;
+    knowledgeResult.sceneSnapshot === scene &&
+    knowledgeResult.libraryRevision === knowledgeLibraryRevision;
+  const knowledgePreference = knowledgeResolved ? knowledgeResult!.preference : null;
+  const knowledgeCheckFailed = knowledgeResolved && knowledgeResult!.preference === null;
   const [knowledgeUpdating, setKnowledgeUpdating] = useState(false);
   useEffect(() => {
     let current = true;
     void sceneStore.getChatKnowledgePreference(knowledgeTargetNodeId).then(
       (preference) => {
-        if (current) setKnowledgeResult({
-          store: sceneStore, targetNodeId: knowledgeTargetNodeId, revision: scene.revision, preference,
+        if (current) setKnowledgeResult((previous) => {
+          // A root toggle is only persisted with the first Send. A library
+          // refresh must not erase that explicit, unsent choice.
+          const unsentOverride = preference.nodeId === null &&
+            previous?.store === sceneStore &&
+            previous.sceneSnapshot === scene &&
+            previous.targetNodeId === knowledgeTargetNodeId &&
+            previous.preference?.nodeId === null
+              ? previous.preference.override
+              : null;
+          return {
+            store: sceneStore, targetNodeId: knowledgeTargetNodeId,
+            sceneSnapshot: scene, libraryRevision: knowledgeLibraryRevision,
+            preference: unsentOverride === null
+              ? preference
+              : { ...preference, enabled: unsentOverride, override: unsentOverride },
+          };
         });
       },
       () => {
         if (current) setKnowledgeResult({
-          store: sceneStore, targetNodeId: knowledgeTargetNodeId, revision: scene.revision, preference: null,
+          store: sceneStore, targetNodeId: knowledgeTargetNodeId,
+          sceneSnapshot: scene, libraryRevision: knowledgeLibraryRevision, preference: null,
         });
       },
     );
     return () => { current = false; };
-  }, [sceneStore, knowledgeTargetNodeId, scene.revision]);
+  }, [sceneStore, knowledgeTargetNodeId, scene, knowledgeLibraryRevision]);
 
   function updateKnowledgePreference(
     next: (current: ChatKnowledgePreference | null) => ChatKnowledgePreference | null,
   ) {
     setKnowledgeResult((result) => result?.store === sceneStore &&
       result.targetNodeId === knowledgeTargetNodeId &&
-      result.revision === scene.revision
+      result.sceneSnapshot === scene &&
+      result.libraryRevision === knowledgeLibraryRevision
         ? { ...result, preference: next(result.preference) }
         : result);
   }
@@ -439,9 +463,11 @@ export function Composer({
             aria-label="Use knowledge"
             aria-pressed={knowledgePreference?.enabled ?? false}
             disabled={!knowledgePreference || !composer.request.canSend || knowledgeUpdating || agentMode}
-            title={!knowledgePreference ? "Checking workspace knowledge…" : knowledgePreference.override === null
-              ? "Uses knowledge automatically when this workspace has documents"
-              : "Knowledge retrieval overridden for this branch"}
+            title={!knowledgePreference
+              ? (knowledgeCheckFailed ? "Could not check workspace knowledge" : "Checking workspace knowledge…")
+              : knowledgePreference.override === null
+                ? "Uses knowledge automatically when this workspace has documents"
+                : "Knowledge retrieval overridden for this branch"}
             onClick={toggleUseKnowledge}
           >
             <Icon name="knowledge" />
