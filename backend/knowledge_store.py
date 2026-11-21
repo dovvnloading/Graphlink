@@ -1540,6 +1540,41 @@ def upsert_embeddings(db_path: Path, model_id: str, rows: list[tuple[int, int, b
         conn.close()
 
 
+def cold_collection_embedding_batch(
+    db_path: Path, model_id: str, *, collection_id: int, max_chunks: int,
+) -> list[dict[str, Any]]:
+    """Return one small collection's chunks only if its model cache is empty.
+
+    A collection larger than max_chunks, or one with any committed vectors,
+    must be indexed by the normal background job rather than by search.
+    The bound is applied in SQLite so a cold search never loads the corpus.
+    """
+    if max_chunks < 1:
+        raise ValueError("max_chunks must be positive.")
+    conn = _connect(db_path)
+    try:
+        cached = conn.execute(
+            "SELECT 1 FROM embeddings e "
+            "JOIN chunks c ON c.id = e.chunk_id "
+            "JOIN documents d ON d.id = c.document_id "
+            "WHERE e.model_id = ? AND d.collection_id = ? LIMIT 1",
+            (model_id, collection_id),
+        ).fetchone()
+        if cached is not None:
+            return []
+        rows = conn.execute(
+            "SELECT c.id, c.text FROM chunks c "
+            "JOIN documents d ON d.id = c.document_id "
+            "WHERE d.collection_id = ? ORDER BY c.id LIMIT ?",
+            (collection_id, max_chunks + 1),
+        ).fetchall()
+        if len(rows) > max_chunks:
+            return []
+        return [{"chunk_id": row[0], "text": row[1]} for row in rows]
+    finally:
+        conn.close()
+
+
 def chunks_pending_embedding(
     db_path: Path, model_id: str, *, collection_id: int | None = None,
 ) -> list[dict[str, Any]]:
