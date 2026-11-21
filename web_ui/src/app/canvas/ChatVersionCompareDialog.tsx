@@ -51,8 +51,8 @@ function VersionPane({
   version: ChatVersionSnapshot | null;
   chunks: ChatDiffChunk[] | null;
   unavailable: boolean;
-  paneRef: RefObject<HTMLElement | null>;
-  onKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
+  paneRef: RefObject<HTMLDivElement | null>;
+  onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
 }) {
   return (
     <section className="chat-version-compare-pane">
@@ -101,8 +101,8 @@ export function ChatVersionCompareDialog({
   const [loaded, setLoaded] = useState<{ key: string; pair: ChatVersionComparison } | null>(null);
   const [computed, setComputed] = useState<{ key: string; diff: ChatWordDiff } | null>(null);
   const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
-  const leftRef = useRef<HTMLElement>(null);
-  const rightRef = useRef<HTMLElement>(null);
+  const leftRef = useRef<HTMLDivElement>(null);
+  const rightRef = useRef<HTMLDivElement>(null);
   const leftId = useId();
   const rightId = useId();
   const requestKey = target.nodeId + ":" + leftIndex + ":" + rightIndex;
@@ -142,7 +142,7 @@ export function ChatVersionCompareDialog({
   const error = failure?.key === requestKey ? failure.message : "";
   const count = pair?.versionCount ?? target.versionCount;
 
-  const switchPane = (event: KeyboardEvent<HTMLElement>) => {
+  const switchPane = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!event.altKey || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) return;
     event.preventDefault();
     if (event.key === "ArrowLeft") leftRef.current?.focus();

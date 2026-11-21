@@ -362,19 +362,22 @@ describe("toFlowNodes (R4.3c parentChatNodeId derivation)", () => {
       undefined, undefined, undefined, openComparison,
     );
     const first = toNodes(scene)[0];
-    const data = first.data as { onCompareVersions: () => void };
+    if (first.type !== "chat") throw new Error("Expected a chat node");
+    const data = first.data;
     data.onCompareVersions();
     expect(openComparison).toHaveBeenLastCalledWith("chat-1", 3, 2);
 
     // No new view render and no new callback on an unchanged scene.
     const second = toNodes(scene)[0];
+    if (second.type !== "chat") throw new Error("Expected a chat node");
     expect(second).toBe(first);
     expect(second.data.onCompareVersions).toBe(data.onCompareVersions);
 
     const newer = baseScene({ nodes: [{ ...original, versionIndex: 1 }], edges: [] });
     const third = toNodes(newer)[0];
+    if (third.type !== "chat") throw new Error("Expected a chat node");
     expect(third.data.onCompareVersions).toBe(data.onCompareVersions);
-    (third.data as { onCompareVersions: () => void }).onCompareVersions();
+    third.data.onCompareVersions();
     expect(openComparison).toHaveBeenLastCalledWith("chat-1", 3, 1);
   });
 
