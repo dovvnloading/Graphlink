@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { ReactFlowProvider } from "@xyflow/react";
 import { describe, expect, it, vi } from "vitest";
 import { HarnessNodeView, approvalPanDelta, type HarnessNodeData } from "./HarnessNodeView";
+import { ModelCapabilityContext } from "../context/ModelCapabilityContext";
+import type { ModelCapabilityPreview } from "../chrome/composerStore";
 
 // Same minimal-NodeProps-inside-ReactFlowProvider shape as
 // PlanNodeView.test.tsx - the established node-view test pattern.
@@ -69,9 +71,10 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
   };
 }
 
-function renderHarness(data: HarnessNodeData) {
+function renderHarness(data: HarnessNodeData, capabilities: ModelCapabilityPreview | null = null) {
   return render(
-    <ReactFlowProvider>
+    <ModelCapabilityContext.Provider value={capabilities}>
+      <ReactFlowProvider>
       <HarnessNodeView
         id="n1"
         type="harness"
@@ -87,7 +90,8 @@ function renderHarness(data: HarnessNodeData) {
         draggable
         parentId={undefined}
       />
-    </ReactFlowProvider>,
+      </ReactFlowProvider>
+    </ModelCapabilityContext.Provider>,
   );
 }
 
@@ -108,6 +112,43 @@ describe("Agent approval viewport navigation", () => {
 });
 
 describe("HarnessNodeView", () => {
+  it("warns before a run and recommends a confirmed installed tool-capable model", () => {
+    const selected: ModelCapabilityPreview = {
+      provider: "Ollama (Local)", modelId: "text-only:latest", tools: false, vision: false,
+      suggestedToolModel: { provider: "Ollama (Local)", modelId: "tool-model:latest" },
+    };
+    const idle = makeData({ harnessStatus: "done", pendingRequestId: null });
+    const { unmount } = renderHarness(idle, selected);
+    expect(screen.getByText(/text-only:latest does not support tool calling/)).toBeInTheDocument();
+    expect(screen.getByText(/Try installed Ollama model tool-model:latest/)).toBeInTheDocument();
+    unmount();
+
+    renderHarness(makeData(), selected);
+    expect(screen.queryByText(/does not support tool calling/)).toBeNull();
+  });
+
+  it("remains silent when tool support is unknown or confirmed", () => {
+    const idle = makeData({ harnessStatus: "done", pendingRequestId: null });
+    const unknown: ModelCapabilityPreview = {
+      provider: "OpenAI", modelId: "unknown", tools: null, vision: null, suggestedToolModel: null,
+    };
+    const { unmount } = renderHarness(idle, unknown);
+    expect(screen.queryByText(/does not support tool calling/)).toBeNull();
+    unmount();
+
+    renderHarness(idle, { ...unknown, tools: true });
+    expect(screen.queryByText(/does not support tool calling/)).toBeNull();
+  });
+
+  it("warns without inventing an installed suggestion", () => {
+    const idle = makeData({ harnessStatus: "done", pendingRequestId: null });
+    renderHarness(idle, {
+      provider: "OpenAI", modelId: "text-only", tools: false, vision: null, suggestedToolModel: null,
+    });
+    expect(screen.getByText(/Choose an installed tool-capable model/)).toBeInTheDocument();
+    expect(screen.queryByText(/Try installed Ollama model/)).toBeNull();
+  });
+
   it("preserves oversized follow-up drafts rather than sending partial tasks", async () => {
     const user = userEvent.setup();
     const data = makeData({ harnessStatus: "done", pendingRequestId: null });

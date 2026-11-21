@@ -25,6 +25,7 @@ import type { DocumentCitationTarget } from "./canvas/DocumentViewMarkdown";
 import { AppBar } from "./chrome/AppBar";
 import { Composer } from "./chrome/Composer";
 import { ComposerStore } from "./chrome/composerStore";
+import { ModelCapabilityProvider } from "./context/ModelCapabilityContext";
 import { NotificationBanner } from "./chrome/NotificationBanner";
 import { OnboardingDialog } from "./chrome/OnboardingDialog";
 import { OverlayProvider, useOverlays } from "./overlays/overlays";
@@ -423,6 +424,7 @@ function App() {
                     so this costs nothing layout-wise, and every other child
                     here simply ignores a Context it doesn't consume. */}
                 <ExecutionLimitsProvider transport={transport}>
+                  <ModelCapabilityProvider store={composerStore}>
                   <div className="graph-stage">
                     {/* ADR-012 stage 12.5: wraps both the canvas (NodeMarkdown's
                         own search-highlighting read) and SearchOverlay (the
@@ -524,6 +526,7 @@ function App() {
                   <LazySurface overlayName="library">
                     <ChatLibraryDialog transport={transport} store={sceneStore} />
                   </LazySurface>
+                  </ModelCapabilityProvider>
                 </ExecutionLimitsProvider>
               </div>
             </div>

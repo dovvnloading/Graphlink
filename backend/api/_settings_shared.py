@@ -353,14 +353,12 @@ class SettingsSessionState:
     ollama_pull_message: str = ""
     ollama_pull_completed: int = 0
     ollama_pull_total: int = 0
-    ollama_installed_models: list[str] = field(default_factory=list)
-    ollama_installed_status: str = "idle"
-    ollama_installed_error: str = ""
     ollama_remove_status: str = "idle"
     ollama_remove_model: str = ""
     ollama_notice: str = ""
-    knowledge_ollama_models: list[str] = field(default_factory=list)
-    knowledge_ollama_capable_models: list[str] = field(default_factory=list)
+    ollama_inventory: list[dict] = field(default_factory=list)
+    ollama_inventory_source: str = ""
+    ollama_server_reachable: bool | None = None
     knowledge_scan_status: str = "idle"
     knowledge_test_status: str = "idle"
     knowledge_notice: str = ""

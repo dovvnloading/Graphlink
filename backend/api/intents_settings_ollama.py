@@ -9,6 +9,7 @@ change.
 from __future__ import annotations
 
 import asyncio
+from typing import Awaitable, Callable
 import threading
 
 import ollama
@@ -27,12 +28,13 @@ from backend.api._settings_shared import (
     run_locked,
 )
 from backend.events import SessionBus
+from backend.ollama_inventory import build_ollama_inventory
 from graphlink_settings_store import SettingsManager
 
 
 def register_settings_ollama_intents(
     bus: SessionBus, manager: SettingsManager, state: SettingsSessionState
-) -> None:
+) -> Callable[[], Awaitable[None]]:
     async def set_ollama_reasoning_level(level: str):
         # Checked and applied inside the SAME to_thread hop, not split across
         # an await boundary: a concurrent mode switch (the toolbar's provider
@@ -119,20 +121,20 @@ def register_settings_ollama_intents(
         # pick_ollama_scan_folder (below) can share it with a real path
         # instead of duplicating the scan/persist/report sequence.
         state.ollama_scan_status = "running"
+        state.knowledge_scan_status = "running"
         state.ollama_notice = ""
+        state.knowledge_notice = ""
         await bus.publish("app-settings")
 
         try:
-            # scan_local_ollama_models never raises for "Ollama not
-            # running" - that's reported via the returned server_reachable/
-            # server_error fields (which legacy's own worker/bridge never
-            # surfaced either; matched here, not newly dropped). Only a
-            # genuine, unexpected exception (e.g. a filesystem error
-            # walking a manifest folder) reaches this except.
-            results = await asyncio.to_thread(api_provider.scan_local_ollama_models, scan_path)
+            # /api/tags is authoritative when running; disk manifests are
+            # scanned only while offline or when a folder is explicitly chosen.
+            results = await asyncio.to_thread(build_ollama_inventory, scan_path)
         except Exception as exc:  # noqa: BLE001 - no secret in this path to redact
             state.ollama_scan_status = "error"
+            state.knowledge_scan_status = "error"
             state.ollama_notice = f"Scan failed: {exc}"
+            state.knowledge_notice = f"Could not refresh Ollama models: {exc}"
             await bus.publish("app-settings")
             return
 
@@ -161,10 +163,29 @@ def register_settings_ollama_intents(
             await asyncio.to_thread(run_locked, _persist)
         except Exception as exc:  # noqa: BLE001 - no secret in this path to redact
             state.ollama_scan_status = "error"
+            state.knowledge_scan_status = "error"
             state.ollama_notice = f"Scan failed: {exc}"
+            state.knowledge_notice = f"Could not refresh Ollama models: {exc}"
             await bus.publish("app-settings")
             return
+        # The completed snapshot is shared by both Settings pages and only
+        # published after the scan cache has been persisted successfully.
+        state.ollama_inventory = list(results.get("inventory", []))
+        state.ollama_inventory_source = str(results.get("source", ""))
+        state.ollama_server_reachable = results.get("server_reachable")
         state.ollama_scan_status = "done"
+        state.knowledge_scan_status = "done"
+        capable = any("embeddings" in row["capabilities"] for row in state.ollama_inventory)
+        if state.ollama_inventory_source == "folder":
+            state.knowledge_notice = (
+                "Ollama model names were read from disk; start the server and refresh "
+                "to verify embedding capabilities."
+            )
+        elif not capable:
+            state.knowledge_notice = (
+                "No embedding-capable Ollama models confirmed. "
+                "Try refreshing or pulling nomic-embed-text."
+            )
         await bus.publish("app-settings")
 
     async def scan_ollama_system():
@@ -203,29 +224,14 @@ def register_settings_ollama_intents(
     bus.register_intent("app-settings", "setOllamaModelAssignment", set_ollama_model_assignment)
     bus.register_intent("app-settings", "scanOllamaSystem", scan_ollama_system)
     bus.register_intent("app-settings", "pickOllamaScanFolder", pick_ollama_scan_folder)
-    register_ollama_model_management_intents(bus, manager, state)
+    register_ollama_model_management_intents(bus, manager, state, refresh_inventory=scan_ollama_system)
+    return scan_ollama_system
 
 
 def register_ollama_model_management_intents(
-    bus: SessionBus, manager: SettingsManager, state: SettingsSessionState
+    bus: SessionBus, manager: SettingsManager, state: SettingsSessionState,
+    *, refresh_inventory: Callable[[], Awaitable[None]],
 ) -> None:
-    def _installed_model_names() -> list[str]:
-        """Only the Ollama daemon's installed models are removable.
-
-        The saved system/folder scan cache may include manifests from other
-        directories or stale entries, so it is not an authority for deletion.
-        """
-        response = ollama.list()
-        entries = response.get("models", []) if isinstance(response, dict) else getattr(response, "models", [])
-        models = set()
-        for entry in entries or []:
-            name = (entry.get("model") or entry.get("name", "")) if isinstance(entry, dict) else (
-                getattr(entry, "model", None) or getattr(entry, "name", "")
-            )
-            if name:
-                models.add(str(name).strip())
-        return sorted(models - {""}, key=str.lower)
-
     def _update_scan_cache(model_name: str, *, remove: bool = False) -> None:
         """Update the existing discovery cache without erasing scan provenance."""
         existing = manager.get_ollama_scanned_models()
@@ -239,22 +245,6 @@ def register_ollama_model_management_intents(
             manager.get_ollama_model_scan_path(),
             manager.get_ollama_model_scan_locations(),
         )
-
-    async def refresh_ollama_installed_models():
-        if state.ollama_installed_status == "running" or state.ollama_remove_status == "running":
-            return
-        state.ollama_installed_status = "running"
-        state.ollama_installed_error = ""
-        await bus.publish("app-settings")
-        try:
-            names = await asyncio.to_thread(_installed_model_names)
-        except Exception as exc:  # noqa: BLE001 - report daemon/unavailable errors to the user
-            state.ollama_installed_status = "error"
-            state.ollama_installed_error = f"Could not list installed Ollama models: {exc}"
-        else:
-            state.ollama_installed_models = names
-            state.ollama_installed_status = "done"
-        await bus.publish("app-settings")
 
     active_pull_cancel: threading.Event | None = None
 
@@ -339,11 +329,8 @@ def register_ollama_model_management_intents(
                 api_provider.set_current_ollama_model(model_name)
 
             await asyncio.to_thread(run_locked, _persist)
-            state.ollama_installed_models = sorted(
-                {*state.ollama_installed_models, model_name}, key=str.lower
-            )
-            state.ollama_installed_status = "done"
-            state.ollama_installed_error = ""
+            # Rebuild the same live inventory used by Settings and Knowledge.
+            await refresh_inventory()
             state.ollama_pull_status = "done"
             state.ollama_pull_message = "Download complete."
             state.ollama_notice = ""
@@ -383,7 +370,13 @@ def register_ollama_model_management_intents(
             state.ollama_notice = "Model name cannot be empty."
             await bus.publish("app-settings")
             return
-        if state.ollama_remove_status == "running" or state.ollama_pull_status in ("running", "cancelling"):
+        if state.ollama_remove_status == "running" or state.ollama_pull_status in ("running", "cancelling") or state.ollama_scan_status == "running":
+            return
+        if state.ollama_inventory_source != "server" or not any(
+            row["name"] == model_name for row in state.ollama_inventory
+        ):
+            state.ollama_notice = "Refresh the Ollama server inventory before removing this model."
+            await bus.publish("app-settings")
             return
         state.ollama_remove_status = "running"
         state.ollama_remove_model = model_name
@@ -391,10 +384,10 @@ def register_ollama_model_management_intents(
         await bus.publish("app-settings")
         try:
             await asyncio.to_thread(ollama.delete, model_name)
-            # The daemon has deleted it even if a subsequent settings write
-            # fails; keep the displayed installed list truthful.
-            state.ollama_installed_models = [
-                name for name in state.ollama_installed_models if name != model_name
+            # Deletion succeeded on the daemon; immediately remove the row
+            # from the shared snapshot even if a settings write fails later.
+            state.ollama_inventory = [
+                row for row in state.ollama_inventory if row["name"] != model_name
             ]
 
             def _persist() -> None:
@@ -414,6 +407,7 @@ def register_ollama_model_management_intents(
                 api_provider.sync_ollama_models(manager)
 
             await asyncio.to_thread(run_locked, _persist)
+            await refresh_inventory()
             state.ollama_remove_status = "done"
         except Exception as exc:  # noqa: BLE001 - report filesystem/server/settings errors
             state.ollama_remove_status = "error"
@@ -424,5 +418,4 @@ def register_ollama_model_management_intents(
 
     bus.register_intent("app-settings", "pullOllamaModel", pull_ollama_model)
     bus.register_intent("app-settings", "cancelOllamaPull", cancel_ollama_pull)
-    bus.register_intent("app-settings", "refreshOllamaInstalledModels", refresh_ollama_installed_models)
     bus.register_intent("app-settings", "removeOllamaModel", remove_ollama_model)

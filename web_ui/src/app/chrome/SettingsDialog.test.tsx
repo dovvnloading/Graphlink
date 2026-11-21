@@ -13,6 +13,12 @@ import { WsTimeoutError, type WsTransport } from "../../lib/ws/transport";
 // Integrations are exercised indirectly through the same render/subscribe
 // path and are lower-risk (no async network-shaped intents, no secrets).
 
+const makeServerInventoryRow = (name: string) => ({
+  name, sizeBytes: null, family: "", parameterSize: "", quantization: "",
+  capabilities: [], trainedContextLength: null, loaded: false,
+  memoryBytes: null, vramBytes: null, source: "server",
+});
+
 const snapshot = {
   schemaVersion: 1,
   minCompatibleSchemaVersion: 1,
@@ -69,6 +75,9 @@ const snapshot = {
   ollamaCurrentModel: "",
   ollamaModelAssignments: {},
   ollamaScannedModels: [],
+  ollamaInventory: [],
+  ollamaInventorySource: "",
+  ollamaServerReachable: null,
   ollamaScanSummary: "No saved scan yet. Run a system scan or choose a folder to build the local model list.",
   ollamaScanStatus: "idle",
   ollamaPullStatus: "idle",
@@ -76,9 +85,6 @@ const snapshot = {
   ollamaPullMessage: "",
   ollamaPullCompleted: 0,
   ollamaPullTotal: 0,
-  ollamaInstalledModels: [],
-  ollamaInstalledStatus: "idle",
-  ollamaInstalledError: "",
   ollamaRemoveStatus: "idle",
   ollamaRemoveModel: "",
   ollamaNotice: "",
@@ -360,6 +366,26 @@ describe("SettingsDialog", () => {
     expect(screen.getByText("Auto - no compatible installed model found")).toBeInTheDocument();
   });
 
+  it("renders inventory metadata and loaded memory from the shared Ollama snapshot", async () => {
+    const { user, push } = setup();
+    await goToOllama(user, push, {
+      ollamaInventory: [{
+        ...ollamaInventoryRow("vision:latest", ["chat", "tools", "vision", "thinking"]),
+        sizeBytes: 4294967296, memoryBytes: 5368709120, vramBytes: 3221225472,
+        family: "qwen", parameterSize: "7B", quantization: "Q4_K_M",
+        trainedContextLength: 131072, loaded: true,
+      }],
+      ollamaInventorySource: "server",
+      ollamaServerReachable: true,
+    });
+
+    expect(screen.getByText("vision:latest")).toBeInTheDocument();
+    expect(screen.getByText(/5.0 GiB memory in use/)).toBeInTheDocument();
+    expect(screen.getByText(/4.0 GiB on disk/)).toBeInTheDocument();
+    expect(screen.getByText(/Trained context: 131,072 tokens/)).toBeInTheDocument();
+    expect(screen.getByText(/chat, tools, vision, thinking/)).toBeInTheDocument();
+  });
+
   it("System Scan fires scanOllamaSystem and disables while running", async () => {
     const { user, push, intents } = setup();
     await goToOllama(user, push, { ollamaScanStatus: "running" });
@@ -453,7 +479,7 @@ describe("SettingsDialog", () => {
     const { user, push, intents } = setup();
     await goToOllama(user, push);
 
-    expect(intents).toContainEqual(["app-settings", "refreshOllamaInstalledModels", []]);
+    expect(intents).toContainEqual(["app-settings", "scanOllamaSystem", []]);
     expect(intents.some(([, action]) => action === "pullOllamaModel")).toBe(false);
     expect(intents.some(([, action]) => action === "removeOllamaModel")).toBe(false);
     expect(screen.getByText(/Tool-capable chat \(~2\.5 GB\)/)).toBeInTheDocument();
@@ -467,7 +493,7 @@ describe("SettingsDialog", () => {
 
   it("indicates installed recommendations and disables redundant pulls", async () => {
     const { user, push, intents } = setup();
-    await goToOllama(user, push, { ollamaInstalledModels: ["qwen3:4b"], ollamaInstalledStatus: "done" });
+    await goToOllama(user, push, { ollamaInventory: [makeServerInventoryRow("qwen3:4b")], ollamaInventorySource: "server" });
 
     expect(screen.getByRole("button", { name: "Pull qwen3:4b" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Pull gemma3:4b" })).toBeEnabled();
@@ -504,7 +530,7 @@ describe("SettingsDialog", () => {
 
   it("requires explicit confirmation before removing any installed model", async () => {
     const { user, push, intents } = setup();
-    await goToOllama(user, push, { ollamaInstalledModels: ["gemma3:4b"], ollamaInstalledStatus: "done" });
+    await goToOllama(user, push, { ollamaInventory: [makeServerInventoryRow("gemma3:4b")], ollamaInventorySource: "server" });
 
     await user.click(screen.getByRole("button", { name: "Remove gemma3:4b" }));
     expect(screen.getByRole("group", { name: "Confirm removal of gemma3:4b" })).toBeInTheDocument();
@@ -519,16 +545,19 @@ describe("SettingsDialog", () => {
     expect(intents.filter(([, action]) => action === "removeOllamaModel")).toHaveLength(1);
   });
 
-  it("refreshes installed models on demand and surfaces daemon errors", async () => {
+  it("refreshes the shared inventory and warns when Ollama is offline", async () => {
     const { user, push, intents } = setup();
     await goToOllama(user, push, {
-      ollamaInstalledStatus: "error",
-      ollamaInstalledError: "Could not list installed Ollama models: connection refused",
+      ollamaInventorySource: "folder",
+      ollamaServerReachable: false,
+      ollamaScanStatus: "done",
+      ollamaInventory: [{ ...makeServerInventoryRow("stale:model"), source: "folder" }],
     });
-    expect(screen.getByRole("alert")).toHaveTextContent("connection refused");
-    const before = intents.filter(([, action]) => action === "refreshOllamaInstalledModels").length;
+    expect(screen.getByRole("alert")).toHaveTextContent("Ollama is unavailable");
+    expect(screen.queryByRole("button", { name: "Remove stale:model" })).toBeNull();
+    const before = intents.filter(([, action]) => action === "scanOllamaSystem").length;
     await user.click(screen.getByRole("button", { name: "Refresh installed models" }));
-    expect(intents.filter(([, action]) => action === "refreshOllamaInstalledModels")).toHaveLength(before + 1);
+    expect(intents.filter(([, action]) => action === "scanOllamaSystem")).toHaveLength(before + 1);
   });
 
   it("an ollamaNotice renders as an inline error", async () => {
@@ -1475,6 +1504,14 @@ describe("parseEnvLines (MCP server env field)", () => {
   });
 });
 
+function ollamaInventoryRow(name: string, capabilities: string[] = []) {
+  return {
+    name, sizeBytes: null, family: "llama", parameterSize: "7B",
+    quantization: "Q4_K_M", capabilities, trainedContextLength: 32768,
+    loaded: false, memoryBytes: null, vramBytes: null, source: "server",
+  };
+}
+
 describe("Settings > Knowledge embedding source", () => {
   async function openKnowledge(
     overrides: Record<string, unknown> = {},
@@ -1490,19 +1527,22 @@ describe("Settings > Knowledge embedding source", () => {
     const { user, intents } = await openKnowledge();
     expect(screen.getByRole("button", { name: "Embedding source" })).toHaveTextContent("Off (keyword search)");
     expect(screen.getByText(/No document embeddings are generated/)).toBeInTheDocument();
-    expect(intents).not.toContainEqual(["app-settings", "scanKnowledgeOllamaModels", []]);
+    expect(intents).not.toContainEqual(["app-settings", "scanOllamaSystem", []]);
     await user.click(screen.getByRole("button", { name: "Save choice" }));
     expect(intents).toContainEqual(["app-settings", "setKnowledgeEmbedding", ["off", "", "", false]]);
   });
 
   it("sorts installed embedding models first and recommends installed nomic-embed-text", async () => {
     const { user, push, intents, requests } = await openKnowledge({
-      knowledgeOllamaModels: ["llama3:latest", "mxbai-embed-large:latest", "nomic-embed-text:latest"],
-      knowledgeOllamaCapableModels: ["mxbai-embed-large:latest", "nomic-embed-text:latest"],
+      ollamaInventory: [
+        ollamaInventoryRow("llama3:latest", ["chat"]),
+        ollamaInventoryRow("mxbai-embed-large:latest", ["embeddings"]),
+        ollamaInventoryRow("nomic-embed-text:latest", ["embeddings"]),
+      ],
     });
     await user.click(screen.getByRole("button", { name: "Embedding source" }));
     await user.click(await screen.findByRole("button", { name: /^Ollama \(local\)/ }));
-    expect(intents).toContainEqual(["app-settings", "scanKnowledgeOllamaModels", []]);
+    expect(intents).toContainEqual(["app-settings", "scanOllamaSystem", []]);
     const models = screen.getByRole("combobox", { name: "Installed Ollama embedding model" });
     const options = within(models).getAllByRole("option");
     expect(options.map((option) => option.getAttribute("value"))).toEqual([
@@ -1518,8 +1558,11 @@ describe("Settings > Knowledge embedding source", () => {
     ]);
     act(() => push({
       ...snapshot, activeSection: "knowledge",
-      knowledgeOllamaModels: ["llama3:latest", "mxbai-embed-large:latest", "nomic-embed-text:latest"],
-      knowledgeOllamaCapableModels: ["mxbai-embed-large:latest", "nomic-embed-text:latest"],
+      ollamaInventory: [
+        ollamaInventoryRow("llama3:latest", ["chat"]),
+        ollamaInventoryRow("mxbai-embed-large:latest", ["embeddings"]),
+        ollamaInventoryRow("nomic-embed-text:latest", ["embeddings"]),
+      ],
       knowledgeTestStatus: "done", knowledgeNotice: "Embedding test succeeded (768 dimensions).",
     }));
     expect(screen.getByRole("status")).toHaveTextContent("Embedding test succeeded");
@@ -1527,8 +1570,7 @@ describe("Settings > Knowledge embedding source", () => {
 
   it("keeps testing during a cold load and never shows a stale timeout after a late success", async () => {
     const models = {
-      knowledgeOllamaModels: ["nomic-embed-text:latest"],
-      knowledgeOllamaCapableModels: ["nomic-embed-text:latest"],
+      ollamaInventory: [ollamaInventoryRow("nomic-embed-text:latest", ["embeddings"])],
     };
     const { user, push, transport, intents, requests } = await openKnowledge(models);
     await user.click(screen.getByRole("button", { name: "Embedding source" }));

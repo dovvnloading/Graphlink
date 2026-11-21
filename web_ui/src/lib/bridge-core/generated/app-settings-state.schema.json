@@ -329,16 +329,60 @@
     "ollamaCurrentModel": {
       "type": "string"
     },
-    "ollamaInstalledError": {
-      "type": "string"
-    },
-    "ollamaInstalledModels": {
+    "ollamaInventory": {
       "items": {
-        "type": "string"
+        "additionalProperties": false,
+        "properties": {
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "family": {
+            "type": "string"
+          },
+          "loaded": {
+            "type": "boolean"
+          },
+          "memoryBytes": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "parameterSize": {
+            "type": "string"
+          },
+          "quantization": {
+            "type": "string"
+          },
+          "sizeBytes": {
+            "type": "integer"
+          },
+          "source": {
+            "type": "string"
+          },
+          "trainedContextLength": {
+            "type": "integer"
+          },
+          "vramBytes": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "family",
+          "parameterSize",
+          "quantization",
+          "capabilities",
+          "source"
+        ],
+        "type": "object"
       },
       "type": "array"
     },
-    "ollamaInstalledStatus": {
+    "ollamaInventorySource": {
       "type": "string"
     },
     "ollamaModelAssignments": {
@@ -385,6 +429,9 @@
         "type": "string"
       },
       "type": "array"
+    },
+    "ollamaServerReachable": {
+      "type": "boolean"
     },
     "providerMode": {
       "type": "string"
@@ -446,6 +493,8 @@
     "ollamaCurrentModel",
     "ollamaModelAssignments",
     "ollamaScannedModels",
+    "ollamaInventory",
+    "ollamaInventorySource",
     "ollamaScanSummary",
     "ollamaScanStatus",
     "ollamaPullStatus",
@@ -453,9 +502,6 @@
     "ollamaPullMessage",
     "ollamaPullCompleted",
     "ollamaPullTotal",
-    "ollamaInstalledModels",
-    "ollamaInstalledStatus",
-    "ollamaInstalledError",
     "ollamaRemoveStatus",
     "ollamaRemoveModel",
     "ollamaNotice",

@@ -1,7 +1,7 @@
 """WebSocket intents backing Settings > Knowledge.
 
-The model scanner uses the running Ollama server's installed models, not
-filesystem manifests. All probing, testing, and disk persistence run in a
+Model discovery is shared with Settings > Ollama, including its offline
+manifest fallback. All probing, testing, and disk persistence run in a
 worker thread so the settings WebSocket never blocks other sessions.
 """
 
@@ -20,43 +20,12 @@ from graphlink_settings_store import SettingsManager
 
 def register_settings_knowledge_intents(
     bus: SessionBus, manager: SettingsManager, state: SettingsSessionState,
-    *, on_embedding_changed: Callable[[], Awaitable[object]] | None = None,
+    *, refresh_inventory: Callable[[], Awaitable[None]],
+    on_embedding_changed: Callable[[], Awaitable[object]] | None = None,
 ) -> None:
     async def scan_knowledge_ollama_models() -> None:
-        if state.knowledge_scan_status == "running":
-            return
-        state.knowledge_scan_status = "running"
-        state.knowledge_notice = ""
-        await bus.publish("app-settings")
-
-        def scan() -> tuple[list[str], list[str]]:
-            descriptors, reachable, error = api_provider._list_model_descriptors_from_running_ollama()
-            if not reachable:
-                raise RuntimeError(f"Ollama is unavailable: {error}")
-            installed = sorted({item.model_id for item in descriptors}, key=str.casefold)
-            capable = {name for name in installed if api_provider.ollama_supports_embedding(name)}
-            ordered = sorted(
-                installed,
-                key=lambda name: (
-                    name not in capable,
-                    not name.casefold().startswith("nomic-embed-text"),
-                    name.casefold(),
-                ),
-            )
-            return ordered, [name for name in ordered if name in capable]
-
-        try:
-            models, capable_models = await asyncio.to_thread(scan)
-        except Exception as exc:
-            state.knowledge_scan_status = "error"
-            state.knowledge_notice = f"Could not list installed Ollama models: {exc}"
-        else:
-            state.knowledge_ollama_models = models
-            state.knowledge_ollama_capable_models = capable_models
-            state.knowledge_scan_status = "done"
-            if not capable_models:
-                state.knowledge_notice = "No embedding-capable Ollama models installed. Try pulling nomic-embed-text."
-        await bus.publish("app-settings")
+        # Backwards-compatible intent; both pages invoke one inventory path.
+        await refresh_inventory()
 
     async def set_knowledge_embedding(
         source: str, model: str = "", cloud_provider: str = "", cloud_opt_in: bool = False,

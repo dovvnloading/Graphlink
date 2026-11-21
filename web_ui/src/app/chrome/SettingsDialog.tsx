@@ -54,48 +54,6 @@ const OLLAMA_RECOMMENDED_MODELS = [
   { id: "gemma3:4b", purpose: "Vision and image understanding", size: "3.4 GB" },
 ] as const;
 
-function formatOllamaBytes(bytes: number): string {
-  return bytes >= 1_000_000_000
-    ? (bytes / 1_000_000_000).toFixed(1) + " GB"
-    : (bytes / 1_000_000).toFixed(1) + " MB";
-}
-const LLAMA_CPP_MODELS_DATALIST_ID = "settings-llama-cpp-scanned-models";
-
-// R8a: reasoning went from a 2-value Mode (Thinking/Quick) to a graded
-// 4-value Level shared by both local providers here and the composer's own
-// Reasoning popover (backend/composer.py's REASONING_OPTIONS) - same ids,
-// same labels, so a user never has to learn two different vocabularies.
-const REASONING_LEVEL_OPTIONS = [
-  { id: "off", label: "Off" },
-  { id: "low", label: "Low" },
-  { id: "medium", label: "Medium" },
-  { id: "high", label: "High" },
-] as const;
-
-// ADR-018 stage 18.4: mirrors graphlink_model_catalog.AUTO_POLICIES - the
-// policy the auto rung of the resolution chain applies when neither an
-// explicit task assignment nor a node/branch pin resolves a model.
-const AUTO_MODEL_POLICY_OPTIONS = [
-  { id: "cheapest-capable", label: "Cheapest Capable" },
-  { id: "fastest", label: "Fastest" },
-  { id: "best-quality", label: "Best Quality" },
-] as const;
-
-// ADR-012 stage 12.2: mirrors SettingsManager.THEMES (graphlink_settings_store.py).
-const THEME_OPTIONS = [
-  { id: "system", label: "Match System" },
-  { id: "light", label: "Light" },
-  { id: "dark", label: "Dark" },
-] as const;
-
-// Llama.cpp has no per-task assignment concept like Ollama's OLLAMA_TASKS -
-// just one global chat model path plus an optional title/naming override
-// (api_provider.py's _get_llama_cpp_model_path: chart/web-validate/web-
-// summarize all silently fall back to the chat model path).
-function basename(path: string): string {
-  return path.split(/[\\/]/).pop() || path;
-}
-
 const NOTIFICATION_TYPE_LABELS: Record<string, string> = {
   info: "Info",
   success: "Success",
@@ -159,6 +117,9 @@ const initialState: AppSettingsState = {
   ollamaCurrentModel: "",
   ollamaModelAssignments: {},
   ollamaScannedModels: [],
+  ollamaInventory: [],
+  ollamaInventorySource: "",
+  ollamaServerReachable: null,
   ollamaScanSummary: "",
   ollamaScanStatus: "idle",
   ollamaPullStatus: "idle",
@@ -166,9 +127,6 @@ const initialState: AppSettingsState = {
   ollamaPullMessage: "",
   ollamaPullCompleted: 0,
   ollamaPullTotal: 0,
-  ollamaInstalledModels: [],
-  ollamaInstalledStatus: "idle",
-  ollamaInstalledError: "",
   ollamaRemoveStatus: "idle",
   ollamaRemoveModel: "",
   ollamaNotice: "",
@@ -827,19 +785,27 @@ function OllamaTaskField({
   );
 }
 
+function formatOllamaBytes(value: number | null | undefined): string {
+  if (value == null) return "Unknown";
+  if (value === 0) return "0 B";
+  const unit = Math.min(Math.floor(Math.log(value) / Math.log(1024)), 4);
+  return `${(value / (1024 ** unit)).toFixed(1)} ${["B", "KiB", "MiB", "GiB", "TiB"][unit]}`;
+}
+
 function OllamaPage({ state, transport }: { state: AppSettingsState; transport: WsTransport }) {
   const [draftPullModel, setDraftPullModel] = useState("");
   const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
   const pulling = state.ollamaPullStatus === "running" || state.ollamaPullStatus === "cancelling";
-  const busy = pulling || state.ollamaRemoveStatus === "running";
+  const busy = pulling || state.ollamaRemoveStatus === "running" || state.ollamaScanStatus === "running";
+  const installedModels = state.ollamaInventorySource === "server" ? state.ollamaInventory : [];
   const percent = state.ollamaPullTotal > 0
     ? Math.min(100, Math.round((100 * state.ollamaPullCompleted) / state.ollamaPullTotal))
     : null;
 
-  // Listing installed models is read-only: opening Settings never starts a
-  // pull. Every download and deletion requires an explicit button click.
+  // Refresh the shared Ollama/Knowledge inventory on page open. Only explicit
+  // Pull and Remove clicks mutate the installed models on the daemon.
   useEffect(() => {
-    transport.fireIntent("app-settings", "refreshOllamaInstalledModels", []);
+    transport.fireIntent("app-settings", "scanOllamaSystem", []);
   }, [transport]);
 
   return (
@@ -869,7 +835,7 @@ function OllamaPage({ state, transport }: { state: AppSettingsState; transport: 
         <button
           type="button"
           className="settings-button"
-          disabled={state.ollamaScanStatus === "running"}
+          disabled={busy}
           onClick={() => transport.fireIntent("app-settings", "scanOllamaSystem", [])}
         >
           {state.ollamaScanStatus === "running" ? "Scanning..." : "System Scan"}
@@ -877,13 +843,99 @@ function OllamaPage({ state, transport }: { state: AppSettingsState; transport: 
         <button
           type="button"
           className="settings-button"
-          disabled={state.ollamaScanStatus === "running"}
+          disabled={busy}
           onClick={() => transport.fireIntent("app-settings", "pickOllamaScanFolder", [])}
         >
           Scan Folder...
         </button>
       </div>
       <p className="settings-update-status">{state.ollamaScanSummary}</p>
+      {state.ollamaInventorySource === "folder" && (
+        <p className="settings-field-hint">
+          Models were found on disk. Run System Scan with Ollama running to inspect capabilities and memory usage.
+        </p>
+      )}
+
+      <fieldset className="settings-fieldset">
+        <legend>Local model inventory</legend>
+        <div className="settings-button-row">
+          <button
+            type="button"
+            className="settings-button"
+            disabled={busy}
+            onClick={() => transport.fireIntent("app-settings", "scanOllamaSystem", [])}
+          >
+            {state.ollamaScanStatus === "running" ? "Refreshing..." : "Refresh installed models"}
+          </button>
+        </div>
+        {state.ollamaServerReachable === false && (
+          <p role="alert" className="settings-update-status" data-level="error">
+            Ollama is unavailable. Start the daemon and refresh to manage installed models; disk scan results cannot be removed here.
+          </p>
+        )}
+        {state.ollamaInventory.length === 0 && (
+          <p className="settings-field-hint">
+            {state.ollamaInventorySource === "server"
+              ? "No models installed in this Ollama instance."
+              : "Run a system scan to inspect installed models."}
+          </p>
+        )}
+        {state.ollamaInventory.map((model) => (
+          <div className="settings-field" key={model.name}>
+            <strong>{model.name}</strong>
+            <span className="settings-field-hint">
+              {model.loaded === true
+                ? `Loaded · ${formatOllamaBytes(model.memoryBytes)} memory in use · ${formatOllamaBytes(model.vramBytes)} VRAM`
+                : model.loaded === false ? "Not loaded" : "Load state unavailable"}
+            </span>
+            <span className="settings-field-hint">
+              {formatOllamaBytes(model.sizeBytes)} on disk · {model.family || "Unknown family"} ·
+              {" "}{model.parameterSize || "Unknown parameter size"} · {model.quantization || "Unknown quantization"}
+              {" "}· Trained context: {model.trainedContextLength?.toLocaleString() ?? "Unknown"} tokens
+            </span>
+            <span className="settings-field-hint">
+              Capabilities: {model.capabilities.join(", ") || "Unavailable"}
+            </span>
+            {model.source === "server" && (
+              <button
+                type="button"
+                className="settings-button"
+                aria-label={"Remove " + model.name}
+                disabled={busy}
+                onClick={() => setPendingRemoval(model.name)}
+              >
+                Remove
+              </button>
+            )}
+          </div>
+        ))}
+        {pendingRemoval && (
+          <div role="group" aria-label={"Confirm removal of " + pendingRemoval}>
+            <p className="settings-update-status">
+              Remove {pendingRemoval} from Ollama? This deletes the local model files.
+            </p>
+            <div className="settings-button-row">
+              <button
+                type="button"
+                className="settings-button"
+                disabled={busy}
+                onClick={() => {
+                  transport.fireIntent("app-settings", "removeOllamaModel", [pendingRemoval]);
+                  setPendingRemoval(null);
+                }}
+              >
+                Confirm remove
+              </button>
+              <button type="button" className="settings-button" onClick={() => setPendingRemoval(null)}>
+                Keep model
+              </button>
+            </div>
+          </div>
+        )}
+        {state.ollamaRemoveStatus === "running" && (
+          <p role="status" className="settings-update-status">Removing {state.ollamaRemoveModel}...</p>
+        )}
+      </fieldset>
 
       <datalist id={OLLAMA_MODELS_DATALIST_ID}>
         {state.ollamaScannedModels.map((model) => (
@@ -909,7 +961,7 @@ function OllamaPage({ state, transport }: { state: AppSettingsState; transport: 
           Sizes are approximate; nothing downloads until you click Pull.
         </p>
         {OLLAMA_RECOMMENDED_MODELS.map((model) => {
-          const installed = state.ollamaInstalledModels.includes(model.id);
+          const installed = installedModels.some((row) => row.name === model.id);
           return (
             <div className="settings-button-row" key={model.id}>
               <span>
@@ -983,68 +1035,6 @@ function OllamaPage({ state, transport }: { state: AppSettingsState; transport: 
       {state.ollamaPullStatus === "cancelled" && (
         <p role="status" className="settings-update-status">Download cancelled.</p>
       )}
-
-      <fieldset className="settings-fieldset">
-        <legend>Installed Ollama models</legend>
-        <div className="settings-button-row">
-          <button
-            type="button"
-            className="settings-button"
-            disabled={busy || state.ollamaInstalledStatus === "running"}
-            onClick={() => transport.fireIntent("app-settings", "refreshOllamaInstalledModels", [])}
-          >
-            {state.ollamaInstalledStatus === "running" ? "Refreshing..." : "Refresh installed models"}
-          </button>
-        </div>
-        {state.ollamaInstalledError && (
-          <p role="alert" className="settings-update-status" data-level="error">
-            {state.ollamaInstalledError}
-          </p>
-        )}
-        {state.ollamaInstalledStatus === "done" && state.ollamaInstalledModels.length === 0 && (
-          <p className="settings-update-status">No models installed in this Ollama instance.</p>
-        )}
-        {state.ollamaInstalledModels.map((model) => (
-          <div className="settings-button-row" key={model}>
-            <span>{model}</span>
-            <button
-              type="button"
-              className="settings-button"
-              aria-label={"Remove " + model}
-              disabled={busy}
-              onClick={() => setPendingRemoval(model)}
-            >
-              Remove
-            </button>
-          </div>
-        ))}
-        {pendingRemoval && (
-          <div role="group" aria-label={"Confirm removal of " + pendingRemoval}>
-            <p className="settings-update-status">
-              Remove {pendingRemoval} from Ollama? This deletes the local model files.
-            </p>
-            <div className="settings-button-row">
-              <button
-                type="button"
-                className="settings-button"
-                disabled={busy}
-                onClick={() => {
-                  transport.fireIntent("app-settings", "removeOllamaModel", [pendingRemoval]);
-                  setPendingRemoval(null);
-                }}
-              >
-                Confirm remove
-              </button>
-              <button type="button" className="settings-button" onClick={() => setPendingRemoval(null)}>
-                Keep model
-              </button>
-            </div>
-          </div>
-        )}
-        {state.ollamaRemoveStatus === "running" && (
-          <p role="status" className="settings-update-status">Removing {state.ollamaRemoveModel}...</p>
-        )}
-      </fieldset>
 
       {state.ollamaNotice && (
         <p className="settings-update-status" data-level="error">

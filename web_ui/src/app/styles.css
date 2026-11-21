@@ -3027,6 +3027,17 @@ body {
   font-size: 11px;
 }
 
+.harness-node-model-warning,
+.composer-model-capability-warning {
+  margin: 4px 0;
+  padding: 6px 8px;
+  border-left: 3px solid var(--gl-semantic-status-warning);
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-surface-inset);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .composer-agent-error {
   margin: 4px 0;
   color: var(--gl-surface-text-primary);

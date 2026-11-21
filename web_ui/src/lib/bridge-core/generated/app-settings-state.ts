@@ -29,6 +29,20 @@ export interface ApiModelDescriptor {
   available: boolean;
 }
 
+export interface OllamaInventoryModel {
+  name: string;
+  sizeBytes?: number | null;
+  family: string;
+  parameterSize: string;
+  quantization: string;
+  capabilities: string[];
+  trainedContextLength?: number | null;
+  loaded?: boolean | null;
+  memoryBytes?: number | null;
+  vramBytes?: number | null;
+  source: string;
+}
+
 export interface McpServerConfig {
   id: string;
   name: string;
@@ -80,6 +94,9 @@ export interface AppSettingsState {
   ollamaCurrentModel: string;
   ollamaModelAssignments: Record<string, string>;
   ollamaScannedModels: string[];
+  ollamaInventory: OllamaInventoryModel[];
+  ollamaInventorySource: string;
+  ollamaServerReachable?: boolean | null;
   ollamaScanSummary: string;
   ollamaScanStatus: string;
   ollamaPullStatus: string;
@@ -87,9 +104,6 @@ export interface AppSettingsState {
   ollamaPullMessage: string;
   ollamaPullCompleted: number;
   ollamaPullTotal: number;
-  ollamaInstalledModels: string[];
-  ollamaInstalledStatus: string;
-  ollamaInstalledError: string;
   ollamaRemoveStatus: string;
   ollamaRemoveModel: string;
   ollamaNotice: string;
@@ -139,6 +153,20 @@ const API_MODEL_DESCRIPTOR_FIELDS: WireFields = [
   ["capabilities", { a: "s" }, 0],
   ["ready", "b", 0],
   ["available", "b", 0],
+];
+
+const OLLAMA_INVENTORY_MODEL_FIELDS: WireFields = [
+  ["name", "s", 0],
+  ["sizeBytes", "n", 1],
+  ["family", "s", 0],
+  ["parameterSize", "s", 0],
+  ["quantization", "s", 0],
+  ["capabilities", { a: "s" }, 0],
+  ["trainedContextLength", "n", 1],
+  ["loaded", "b", 1],
+  ["memoryBytes", "n", 1],
+  ["vramBytes", "n", 1],
+  ["source", "s", 0],
 ];
 
 const MCP_SERVER_CONFIG_FIELDS: WireFields = [
@@ -192,6 +220,9 @@ const APP_SETTINGS_STATE_FIELDS: WireFields = [
   ["ollamaCurrentModel", "s", 0],
   ["ollamaModelAssignments", { d: "s" }, 0],
   ["ollamaScannedModels", { a: "s" }, 0],
+  ["ollamaInventory", { a: { o: OLLAMA_INVENTORY_MODEL_FIELDS } }, 0],
+  ["ollamaInventorySource", "s", 0],
+  ["ollamaServerReachable", "b", 1],
   ["ollamaScanSummary", "s", 0],
   ["ollamaScanStatus", "s", 0],
   ["ollamaPullStatus", "s", 0],
@@ -199,9 +230,6 @@ const APP_SETTINGS_STATE_FIELDS: WireFields = [
   ["ollamaPullMessage", "s", 0],
   ["ollamaPullCompleted", "n", 0],
   ["ollamaPullTotal", "n", 0],
-  ["ollamaInstalledModels", { a: "s" }, 0],
-  ["ollamaInstalledStatus", "s", 0],
-  ["ollamaInstalledError", "s", 0],
   ["ollamaRemoveStatus", "s", 0],
   ["ollamaRemoveModel", "s", 0],
   ["ollamaNotice", "s", 0],
