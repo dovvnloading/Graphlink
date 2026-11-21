@@ -84,6 +84,15 @@ export interface AppSettingsState {
   ollamaScanStatus: string;
   ollamaPullStatus: string;
   ollamaNotice: string;
+  knowledgeEmbeddingSource: string;
+  knowledgeEmbeddingModel: string;
+  knowledgeCloudProvider: string;
+  knowledgeCloudOptIn: boolean;
+  knowledgeOllamaModels: string[];
+  knowledgeOllamaCapableModels: string[];
+  knowledgeScanStatus: string;
+  knowledgeTestStatus: string;
+  knowledgeNotice: string;
   llamaCppReasoningLevel: string;
   llamaCppChatModelPath: string;
   llamaCppTitleModelPath: string;
@@ -178,6 +187,15 @@ const APP_SETTINGS_STATE_FIELDS: WireFields = [
   ["ollamaScanStatus", "s", 0],
   ["ollamaPullStatus", "s", 0],
   ["ollamaNotice", "s", 0],
+  ["knowledgeEmbeddingSource", "s", 0],
+  ["knowledgeEmbeddingModel", "s", 0],
+  ["knowledgeCloudProvider", "s", 0],
+  ["knowledgeCloudOptIn", "b", 0],
+  ["knowledgeOllamaModels", { a: "s" }, 0],
+  ["knowledgeOllamaCapableModels", { a: "s" }, 0],
+  ["knowledgeScanStatus", "s", 0],
+  ["knowledgeTestStatus", "s", 0],
+  ["knowledgeNotice", "s", 0],
   ["llamaCppReasoningLevel", "s", 0],
   ["llamaCppChatModelPath", "s", 0],
   ["llamaCppTitleModelPath", "s", 0],

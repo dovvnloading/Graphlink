@@ -391,6 +391,10 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("app-settings", "scanOllamaSystem", "B", "run-lifecycle: scans/caches locally installed models"),
     Classified("app-settings", "pullOllamaModel", "B", "run-lifecycle: downloads a model"),
     Classified("app-settings", "pickOllamaScanFolder", "B", "run-lifecycle: native folder pick + scan"),
+    # -- backend/api/intents_settings_knowledge.py (app-settings) ------------
+    Classified("app-settings", "scanKnowledgeOllamaModels", "B", "read-only: list installed local embedding models"),
+    Classified("app-settings", "setKnowledgeEmbedding", "B", "preference: persisted knowledge embedding choice and consent"),
+    Classified("app-settings", "testKnowledgeEmbedding", "B", "read-only: test synthetic text against selected embedding endpoint"),
 
     # -- backend/api/intents_settings_llama_cpp.py (app-settings) -----------
     Classified("app-settings", "setLlamaCppReasoningLevel", "B", "preference: reasoning level"),

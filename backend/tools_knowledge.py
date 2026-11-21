@@ -15,6 +15,7 @@ from pathlib import Path
 
 from backend.domain.graph import SceneDocument
 from backend.knowledge_retrieval import hybrid_search
+from backend.knowledge_embedding_config import configured_hybrid_search
 from backend.knowledge_store import DEFAULT_DB_PATH
 from backend.providers.base import ToolCall, ToolSpec
 from backend.tools import KNOWLEDGE_READ, RunContext, ToolRegistry, ToolResult
@@ -96,11 +97,14 @@ def make_knowledge_search_handler(
     db_path: Path | None = None, *,
     document: SceneDocument | None = None,
     embedding_provider=None, embedding_model_id: str | None = None,
+    settings_manager=None,
 ):
     """Bind search to the live session document, not to model arguments.
 
     An absent document/workspace is a refusal, never the unscoped
     collection_id=None search (which would read every workspace).
+    A supplied embedding provider takes precedence over persisted settings;
+    the latter is used only after the workspace has been scoped.
     """
     resolved_db_path = db_path if db_path is not None else DEFAULT_DB_PATH
 
@@ -122,6 +126,14 @@ def make_knowledge_search_handler(
             collection_id = _existing_workspace_collection(resolved_db_path, workspace_id)
             if collection_id is None:
                 return []
+            if embedding_provider is None and settings_manager is not None:
+                # A persisted opt-in enables embedding only inside the
+                # already-resolved current workspace collection. The helper
+                # enforces cloud consent and falls back to keyword search.
+                return configured_hybrid_search(
+                    resolved_db_path, query, settings_manager=settings_manager,
+                    collection_id=collection_id, k=k,
+                )
             return hybrid_search(
                 resolved_db_path, query,
                 embedding_provider=embedding_provider, embedding_model_id=embedding_model_id,
@@ -141,6 +153,7 @@ def register_knowledge_tools(
     registry: ToolRegistry, *, db_path: Path | None = None,
     document: SceneDocument | None = None,
     embedding_provider=None, embedding_model_id: str | None = None,
+    settings_manager=None,
 ) -> None:
     """The shared Builder/Agent read-only registration; no write capability."""
     registry.register(
@@ -148,6 +161,7 @@ def register_knowledge_tools(
         make_knowledge_search_handler(
             db_path, document=document,
             embedding_provider=embedding_provider, embedding_model_id=embedding_model_id,
+            settings_manager=settings_manager,
         ),
         scopes={KNOWLEDGE_READ},
         approval="auto",

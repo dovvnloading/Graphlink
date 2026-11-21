@@ -73,6 +73,15 @@ const snapshot = {
   ollamaScanStatus: "idle",
   ollamaPullStatus: "idle",
   ollamaNotice: "",
+  knowledgeEmbeddingSource: "off",
+  knowledgeEmbeddingModel: "",
+  knowledgeCloudProvider: "OpenAI",
+  knowledgeCloudOptIn: false,
+  knowledgeOllamaModels: [],
+  knowledgeOllamaCapableModels: [],
+  knowledgeScanStatus: "idle",
+  knowledgeTestStatus: "idle",
+  knowledgeNotice: "",
   llamaCppReasoningLevel: "high",
   llamaCppChatModelPath: "",
   llamaCppTitleModelPath: "",
@@ -1365,5 +1374,75 @@ describe("parseEnvLines (MCP server env field)", () => {
 
   it("trims whitespace around keys and values and tolerates CRLF", () => {
     expect(parseEnvLines("  A = 1 \r\n B=2\r\n")).toEqual({ A: "1", B: "2" });
+  });
+});
+
+describe("Settings > Knowledge embedding source", () => {
+  async function openKnowledge(
+    overrides: Record<string, unknown> = {},
+  ) {
+    const fixture = setup();
+    await fixture.user.click(screen.getByText("open settings"));
+    await fixture.user.click(screen.getByRole("button", { name: "Knowledge" }));
+    act(() => fixture.push({ ...snapshot, ...overrides, activeSection: "knowledge" }));
+    return fixture;
+  }
+
+  it("defaults to keyword-only Off and sends no Ollama scan request", async () => {
+    const { user, intents } = await openKnowledge();
+    expect(screen.getByRole("button", { name: "Embedding source" })).toHaveTextContent("Off (keyword search)");
+    expect(screen.getByText(/No document embeddings are generated/)).toBeInTheDocument();
+    expect(intents).not.toContainEqual(["app-settings", "scanKnowledgeOllamaModels", []]);
+    await user.click(screen.getByRole("button", { name: "Save choice" }));
+    expect(intents).toContainEqual(["app-settings", "setKnowledgeEmbedding", ["off", "", "", false]]);
+  });
+
+  it("sorts installed embedding models first and recommends installed nomic-embed-text", async () => {
+    const { user, push, intents } = await openKnowledge({
+      knowledgeOllamaModels: ["llama3:latest", "mxbai-embed-large:latest", "nomic-embed-text:latest"],
+      knowledgeOllamaCapableModels: ["mxbai-embed-large:latest", "nomic-embed-text:latest"],
+    });
+    await user.click(screen.getByRole("button", { name: "Embedding source" }));
+    await user.click(await screen.findByRole("button", { name: /^Ollama \(local\)/ }));
+    expect(intents).toContainEqual(["app-settings", "scanKnowledgeOllamaModels", []]);
+    const models = screen.getByRole("combobox", { name: "Installed Ollama embedding model" });
+    const options = within(models).getAllByRole("option");
+    expect(options.map((option) => option.getAttribute("value"))).toEqual([
+      "nomic-embed-text:latest", "mxbai-embed-large:latest", "llama3:latest",
+    ]);
+    expect(options[2]).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Test" }));
+    expect(intents).toContainEqual([
+      "app-settings", "testKnowledgeEmbedding", ["ollama", "nomic-embed-text:latest", "", false],
+    ]);
+    act(() => push({
+      ...snapshot, activeSection: "knowledge",
+      knowledgeOllamaModels: ["llama3:latest", "mxbai-embed-large:latest", "nomic-embed-text:latest"],
+      knowledgeOllamaCapableModels: ["mxbai-embed-large:latest", "nomic-embed-text:latest"],
+      knowledgeTestStatus: "done", knowledgeNotice: "Embedding test succeeded (768 dimensions).",
+    }));
+    expect(screen.getByRole("status")).toHaveTextContent("Embedding test succeeded");
+  });
+
+  it("requires explicit consent before a cloud Test or Save", async () => {
+    const { user, intents } = await openKnowledge();
+    await user.click(screen.getByRole("button", { name: "Embedding source" }));
+    await user.click(await screen.findByRole("button", { name: /^Cloud \(OpenAI-compatible\)/ }));
+    expect(screen.getByText(/document passages and search queries/)).toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: "Cloud embedding model ID" }), "text-embedding-3-small");
+    expect(screen.getByRole("button", { name: "Test" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save choice" })).toBeDisabled();
+    const consent = screen.getByRole("checkbox", { name: /document text leaves the machine/i });
+    await user.click(consent);
+    await user.click(screen.getByRole("button", { name: "Test" }));
+    await user.click(screen.getByRole("button", { name: "Save choice" }));
+    expect(intents).toContainEqual([
+      "app-settings", "testKnowledgeEmbedding", ["cloud", "text-embedding-3-small", "OpenAI-Compatible", true],
+    ]);
+    expect(intents).toContainEqual([
+      "app-settings", "setKnowledgeEmbedding", ["cloud", "text-embedding-3-small", "OpenAI-Compatible", true],
+    ]);
+    await user.click(consent);
+    expect(screen.getByRole("button", { name: "Save choice" })).toBeDisabled();
   });
 });

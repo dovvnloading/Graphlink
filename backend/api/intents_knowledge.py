@@ -30,7 +30,7 @@ from backend.domain.graph import SceneDocument, SceneError
 from backend.events import SessionBus
 from backend.knowledge_chunking import chunk_text
 from backend.knowledge_ingest import IngestError, is_supported_knowledge_file
-from backend.knowledge_retrieval import hybrid_search
+from backend.knowledge_embedding_config import configured_hybrid_search
 from backend.knowledge_store import (
     DEFAULT_DB_PATH, get_or_create_workspace_collection, replace_branch_document_with_chunks,
 )
@@ -157,6 +157,7 @@ def register_knowledge_intents(
     bus: SessionBus,
     document: SceneDocument,
     notifications: NotificationState | None = None,
+    settings_manager=None,
     watch_service: WatchedFolderService | None = None,
 ) -> None:
     publish_scene = make_publish_scene(bus)
@@ -175,7 +176,10 @@ def register_knowledge_intents(
         # blocking SQLite I/O against the SAME underlying database file.
         def _search():
             collection_id = _resolve_workspace_collection_id(document, db_path)
-            return hybrid_search(db_path, query, k=k, collection_id=collection_id)
+            return configured_hybrid_search(
+                db_path, query, k=k, collection_id=collection_id,
+                settings_manager=settings_manager,
+            )
 
         # Adversarial-review finding: hybrid_search() does real blocking
         # SQLite I/O (and, when an embedding provider is wired, a network
