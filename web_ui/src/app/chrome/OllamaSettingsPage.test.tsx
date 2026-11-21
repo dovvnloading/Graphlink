@@ -156,13 +156,20 @@ describe("Settings > Ollama", () => {
 
   it("shows reasoning levels, current model, server states and the start action", async () => {
     const { user, intents, update } = setup({ ollamaCurrentModel: "llama:latest", ollamaServerStatus: "installed" });
+    expect(screen.getByRole("status", { name: "Ollama server status" })).toHaveTextContent("Installed, not responding");
     expect(screen.getByText("llama:latest")).toBeInTheDocument();
     await user.click(screen.getByLabelText("Low"));
     expect(intents).toContainEqual(["app-settings", "setOllamaReasoningLevel", ["low"]]);
     await user.click(screen.getByRole("button", { name: "Start Ollama" }));
     expect(intents).toContainEqual(["app-settings", "startOllama", []]);
-    update({ ollamaServerStatus: "running" });
+    update({ ollamaStartStatus: "starting" });
+    expect(screen.getByRole("button", { name: "Start Ollama" })).toBeDisabled();
+    expect(screen.getByText(/Starting Ollama and waiting/)).toHaveAttribute("role", "status");
+    update({ ollamaServerStatus: "running", ollamaServerReachable: true, ollamaStartStatus: "idle" });
     expect(screen.queryByRole("button", { name: "Start Ollama" })).toBeNull();
+    expect(screen.getByRole("status", { name: "Ollama server status" })).toHaveTextContent("Connected");
+    await user.click(screen.getByRole("button", { name: "Check Ollama status" }));
+    expect(intents).toContainEqual(["app-settings", "checkOllamaStatus", []]);
   });
 
   it("renders model cards with sizes, capability badges, trained context and loaded memory", () => {
@@ -201,6 +208,8 @@ describe("Settings > Ollama", () => {
     expect(screen.getByText(/Trained context: Unverified/)).toBeInTheDocument();
     expect(screen.getByText(/Disk scan only/)).toBeInTheDocument();
     expect(screen.getByText("Capabilities unavailable")).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Capabilities for disk:latest" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Check disk:latest" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Remove disk:latest" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Context window for disk:latest" }));
     expect(screen.getByRole("button", { name: "8k" })).toBeInTheDocument();
@@ -209,7 +218,7 @@ describe("Settings > Ollama", () => {
 
   it("each card owns its context window and applies the verified trained limit", async () => {
     const { user, intents } = setup({
-      ollamaInventorySource: "server",
+      ollamaInventorySource: "server", ollamaServerReachable: true, ollamaServerStatus: "running",
       ollamaInventory: [
         inventoryModel("small:latest", { trainedContextLength: 16384 }),
         inventoryModel("large:latest", { trainedContextLength: 131072 }),
@@ -309,9 +318,12 @@ describe("Settings > Ollama", () => {
     const input = screen.getByRole("combobox", { name: "Chat Model (custom model ID)" });
     await user.type(input, "my-model:latest");
     expect(input).toHaveValue("my-model:latest");
-    expect(intents).toContainEqual([
+    expect(intents).not.toContainEqual([
       "app-settings", "setOllamaModelAssignment", ["task_chat", "my-model:latest"],
     ]);
+    await user.click(screen.getByRole("button", { name: "Save Chat Model ID" }));
+    expect(intents.filter(([, action, args]) => action === "setOllamaModelAssignment" && args[0] === "task_chat"))
+      .toEqual([["app-settings", "setOllamaModelAssignment", ["task_chat", "my-model:latest"]]]);
   });
 
   it("selects installed models with keyboard arrows/Enter and closes with Escape without losing focus", async () => {
@@ -333,6 +345,7 @@ describe("Settings > Ollama", () => {
 
   it("checks one model without changing assignments and cancels only the running check", async () => {
     const { user, intents, update } = setup({
+      ollamaInventorySource: "server", ollamaServerReachable: true, ollamaServerStatus: "running",
       ollamaInventory: [inventoryModel("first:latest"), inventoryModel("second:latest")],
     });
     await user.click(screen.getByRole("button", { name: "Check first:latest" }));
@@ -355,14 +368,14 @@ describe("Settings > Ollama", () => {
       tokensPerSecond: 42.5, toolCallingWorks: false, message: "Tool probe not supported.",
     }] });
     const card = within(screen.getByRole("group", { name: "first:latest" }));
-    expect(card.getByText(/Load: 2.25 s/)).toHaveTextContent("42.5 tokens/s");
-    expect(card.getByText(/Tool calling: Not working/)).toBeInTheDocument();
-    expect(card.getByText("Tool probe not supported.")).toBeInTheDocument();
+    expect(card.getByText(/Sample load time: 2.25 s/)).toHaveTextContent("42.5 tokens/s");
+    expect(card.getByText(/Tool probe: No tool call returned/)).toHaveAttribute("data-level", "warning");
+    expect(card.getByText(/Tool probe not supported/)).toBeInTheDocument();
     update({ ollamaModelChecks: [{
       name: "first:latest", status: "error", loadSeconds: null,
       tokensPerSecond: null, toolCallingWorks: null, message: "Check failed: daemon offline",
     }] });
-    expect(card.getByText("Check failed: daemon offline")).toHaveAttribute("data-level", "error");
+    expect(card.getByRole("alert")).toHaveTextContent("Check failed: daemon offline");
   });
 
   it("keeps removal confirmation inside the card, supports Escape/Keep, and requires explicit confirmation", async () => {
@@ -372,7 +385,7 @@ describe("Settings > Ollama", () => {
     });
     const remove = screen.getByRole("button", { name: "Remove gemma3:4b" });
     await user.click(remove);
-    expect(screen.getByRole("button", { name: "Confirm remove" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Confirm remove gemma3:4b" })).toHaveFocus();
     expect(intents.some(([, action]) => action === "removeOllamaModel")).toBe(false);
     await user.keyboard("{Escape}");
     expect(remove).toHaveFocus();
@@ -386,13 +399,12 @@ describe("Settings > Ollama", () => {
   });
 
   it("scans and refreshes, supports manual pull, and cancels running downloads", async () => {
-    const { user, intents, update } = setup();
-    await user.click(screen.getByRole("button", { name: "System Scan" }));
+    const { user, intents, update } = setup({ ollamaServerStatus: "running", ollamaServerReachable: true });
     await user.click(screen.getByRole("button", { name: "Refresh installed models" }));
-    expect(intents.filter(([, action]) => action === "scanOllamaSystem")).toHaveLength(3);
+    expect(intents.filter(([, action]) => action === "scanOllamaSystem")).toHaveLength(2);
     expect(screen.getByRole("button", { name: "Pull qwen3:4b" })).toBeEnabled();
-    await user.type(screen.getByRole("combobox", { name: "Validate and Pull Model" }), "custom:tag");
-    await user.click(screen.getByRole("button", { name: "Validate and Pull Model" }));
+    await user.type(screen.getByRole("combobox", { name: "Model ID to download" }), "custom:tag");
+    await user.click(screen.getByRole("button", { name: "Download model" }));
     expect(intents).toContainEqual(["app-settings", "pullOllamaModel", ["custom:tag"]]);
     update({
       ollamaPullStatus: "running", ollamaPullModel: "custom:tag",
@@ -402,19 +414,130 @@ describe("Settings > Ollama", () => {
       .toHaveAttribute("value", "500");
     await user.click(screen.getByRole("button", { name: "Cancel download" }));
     expect(intents).toContainEqual(["app-settings", "cancelOllamaPull", []]);
-    expect(screen.getByRole("button", { name: "System Scan" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Refresh installed models" })).toBeDisabled();
   });
 
   it("shows installed recommendations, offline notice and errors without attempting model changes", async () => {
     const { user, intents, update } = setup({
-      ollamaInventorySource: "server", ollamaInventory: [inventoryModel("qwen3:4b")],
+      ollamaInventorySource: "server", ollamaServerReachable: true, ollamaServerStatus: "running",
+      ollamaInventory: [inventoryModel("qwen3:4b")],
     });
     expect(screen.getByRole("button", { name: "Pull qwen3:4b" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Pull gemma3:4b" })).toBeEnabled();
-    update({ ollamaInventorySource: "folder", ollamaServerReachable: false, ollamaNotice: "Daemon offline." });
-    expect(screen.getByRole("alert")).toHaveTextContent("Ollama is unavailable");
-    expect(screen.getByText("Daemon offline.")).toHaveAttribute("data-level", "error");
-    await user.click(screen.getByRole("button", { name: "Scan Folder..." }));
+    update({ ollamaInventorySource: "folder", ollamaServerReachable: false,
+      ollamaServerStatus: "installed", ollamaNotice: "Daemon offline." });
+    expect(screen.getByText(/Ollama is not responding/)).toHaveAttribute("role", "status");
+    expect(screen.getByText("Daemon offline.")).toHaveAttribute("role", "alert");
+    expect(screen.getByRole("button", { name: "Pull gemma3:4b" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Scan model folder…" }));
     expect(intents).toContainEqual(["app-settings", "pickOllamaScanFolder", []]);
+  });
+
+  it("explains first-time installation and offers keyboard-operable recovery without attempting downloads", async () => {
+    const { user, intents, update } = setup({
+      ollamaServerStatus: "not_found", ollamaServerReachable: false,
+    });
+    expect(screen.getByRole("status", { name: "Ollama server status" })).toHaveTextContent("Not detected");
+    expect(screen.getByRole("link", { name: /Install Ollama/ }))
+      .toHaveAttribute("href", "https://ollama.com/download");
+    expect(screen.queryByRole("button", { name: "Start Ollama" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Pull qwen3:4b" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Download model" })).toBeDisabled();
+    expect(intents.some(([, intent]) => intent === "pullOllamaModel")).toBe(false);
+
+    const check = screen.getByRole("button", { name: "Check Ollama status" });
+    check.focus();
+    await user.keyboard("{Enter}");
+    expect(intents).toContainEqual(["app-settings", "checkOllamaStatus", []]);
+    update({ ollamaStartError: "Graphlink could not find an Ollama installation." });
+    expect(screen.getByRole("alert")).toHaveTextContent("Graphlink could not find");
+    update({ ollamaServerStatus: "installed", ollamaStartError: "" });
+    expect(screen.getByRole("button", { name: "Start Ollama" })).toBeEnabled();
+  });
+
+  it("reveals selected values and traverses the portaled task picker with a single Tab", async () => {
+    const { user } = setup();
+    const field = screen.getByRole("button", { name: "Chat Model" });
+    expect(field).toHaveAccessibleDescription("Selected: Auto - choose a compatible installed model");
+    field.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("button", { name: "Auto - choose a compatible installed model" }))
+      .toHaveAttribute("aria-pressed", "true");
+    await user.keyboard("{Tab}");
+    expect(screen.queryByRole("dialog", { name: "Chat Model" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Chat Naming Model" })).toHaveFocus();
+  });
+
+  it("filters known embedding-only models from text tasks and warns on an existing incompatible assignment", async () => {
+    const { user, update } = setup({
+      ollamaInventorySource: "server",
+      ollamaInventory: [
+        inventoryModel("nomic-embed-text:latest", { capabilities: ["embeddings"] }),
+        inventoryModel("chat:latest", { capabilities: ["chat", "tools"] }),
+        inventoryModel("unverified:latest", { capabilities: [] }),
+      ],
+      ollamaModelAssignments: { task_chat: "nomic-embed-text:latest" },
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent(/embedding-only model and cannot generate text/);
+    await user.click(screen.getByRole("button", { name: "Chat Model" }));
+    expect(screen.queryByRole("button", { name: "nomic-embed-text:latest" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "chat:latest" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "unverified:latest" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "chat:latest" }));
+    update({ ollamaModelAssignments: { task_chat: "chat:latest" } });
+    expect(screen.queryByText(/embedding-only model and cannot generate text/)).not.toBeInTheDocument();
+  });
+
+  it("does not misrepresent a saved context larger than a model's trained limit", async () => {
+    const { user, intents } = setup({
+      ollamaInventorySource: "server", ollamaServerReachable: true, ollamaServerStatus: "running",
+      ollamaInventory: [inventoryModel("six-k:latest", { trainedContextLength: 6000 })],
+      ollamaContextWindows: { "six-k:latest": 8192 },
+    });
+    const card = within(screen.getByRole("group", { name: "six-k:latest" }));
+    expect(card.getByRole("button", { name: "Context window for six-k:latest" })).toHaveTextContent("4k");
+    expect(card.getByRole("status")).toHaveTextContent(/saved 8,192-token window.*supported presets/);
+    await user.click(card.getByRole("button", { name: "Context window for six-k:latest" }));
+    expect(screen.queryByRole("button", { name: "8k" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "4k" }));
+    expect(intents).toContainEqual(["app-settings", "setOllamaContextWindow", ["six-k:latest", 4096]]);
+  });
+
+  it("saves custom model IDs only on explicit confirmation or Enter, not for each keystroke", async () => {
+    const { user, intents } = setup();
+    await chooseOption(user, "Chat Model", "Custom model ID...");
+    const input = screen.getByRole("combobox", { name: "Chat Model (custom model ID)" });
+    await user.type(input, "local:7b");
+    expect(intents.some(([, action]) => action === "setOllamaModelAssignment")).toBe(false);
+    await user.keyboard("{Enter}");
+    expect(intents.filter(([, action]) => action === "setOllamaModelAssignment"))
+      .toEqual([["app-settings", "setOllamaModelAssignment", ["task_chat", "local:7b"]]]);
+    expect(screen.getByRole("button", { name: "Save Chat Model ID" })).toBeEnabled();
+  });
+
+  it("announces downloading, cancellation and completion without implying a model was selected", () => {
+    const { update, intents } = setup({ ollamaServerStatus: "running", ollamaServerReachable: true });
+    update({ ollamaPullStatus: "running", ollamaPullModel: "qwen3:4b",
+      ollamaPullMessage: "downloading", ollamaPullCompleted: 2, ollamaPullTotal: 10 });
+    expect(screen.getByRole("progressbar", { name: "Download progress for qwen3:4b" }))
+      .toHaveAttribute("value", "2");
+    update({ ollamaPullStatus: "cancelled", ollamaPullModel: "qwen3:4b" });
+    expect(screen.getByText("Download cancelled.")).toHaveAttribute("role", "status");
+    update({ ollamaPullStatus: "done", ollamaPullModel: "qwen3:4b" });
+    expect(screen.getByText("Downloaded qwen3:4b.")).toHaveAttribute("role", "status");
+    expect(intents.some(([, action]) => action === "setOllamaModelAssignment")).toBe(false);
+  });
+
+  it("moves focus to removal feedback after the removed card disappears", async () => {
+    const { user, update } = setup({
+      ollamaInventorySource: "server", ollamaServerReachable: true,
+      ollamaInventory: [inventoryModel("old:latest")],
+    });
+    await user.click(screen.getByRole("button", { name: "Remove old:latest" }));
+    await user.click(screen.getByRole("button", { name: "Confirm remove old:latest" }));
+    update({ ollamaInventory: [], ollamaRemoveStatus: "done" });
+    const message = screen.getByText("Removed old:latest from Ollama.");
+    expect(message).toHaveAttribute("role", "status");
+    expect(message).toHaveFocus();
   });
 });

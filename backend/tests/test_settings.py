@@ -1688,7 +1688,7 @@ def test_pull_ollama_model_rejects_an_empty_model_name(manager, monkeypatch):
     assert recorder.messages[-1]["payload"]["ollamaNotice"] == "Model name cannot be empty."
 
 
-def test_pull_ollama_model_success_invalidates_cache_and_sets_current_model(manager, monkeypatch):
+def test_pull_ollama_model_success_invalidates_cache_and_refreshes_auto_route(manager, monkeypatch):
     _isolate_ollama_task_config(monkeypatch)
     calls = []
 
@@ -1734,8 +1734,8 @@ def test_pull_ollama_model_success_invalidates_cache_and_sets_current_model(mana
     "raw_error,expected_fragment",
     [
         ("model 'bogus' not found", "was not found on the Ollama hub"),
-        ("connection refused", "Is Ollama running?"),
-        ("some other disk i/o failure", "unexpected error occurred"),
+        ("connection refused", "Check Ollama status"),
+        ("some other disk i/o failure", "Could not download"),
     ],
 )
 def test_pull_ollama_model_maps_errors_to_friendly_messages(manager, monkeypatch, raw_error, expected_fragment):
@@ -3135,10 +3135,17 @@ def test_start_ollama_reports_starting_then_running_without_model_download(manag
     calls = []
     monkeypatch.setattr(intents_settings_ollama_module, "start_installed_ollama", lambda: calls.append("start") or True)
     monkeypatch.setattr(intents_settings_ollama_module, "check_ollama_server_status", lambda: "running")
-    monkeypatch.setattr(
-        intents_settings_ollama_module, "build_ollama_inventory",
-        lambda *_args: pytest.fail("starting Ollama must not scan or pull a model"),
-    )
+    scans = []
+    def _scan(_path):
+        scans.append("scan")
+        return {
+            "models": [], "inventory": [], "source": "server",
+            "server_reachable": True, "server_status": "running",
+            "scan_mode": "server", "scan_path": "", "locations": [],
+        }
+
+    monkeypatch.setattr(intents_settings_ollama_module, "build_ollama_inventory", _scan)
+    monkeypatch.setattr(ollama, "pull", lambda *_args, **_kwargs: pytest.fail("Start must not download models"))
     bus = SessionBus("settings-start-ollama-test")
     register_settings(bus, manager)
     recorder = Recorder()
@@ -3147,7 +3154,9 @@ def test_start_ollama_reports_starting_then_running_without_model_download(manag
     asyncio.run(bus.dispatch_intent("app-settings", "startOllama", []))
 
     assert calls == ["start"]
+    assert scans == ["scan"]
     assert any(item["payload"]["ollamaStartStatus"] == "starting" for item in recorder.messages)
+    assert any(item["payload"]["ollamaScanStatus"] == "done" for item in recorder.messages)
     payload = recorder.messages[-1]["payload"]
     assert payload["ollamaStartStatus"] == "idle"
     assert payload["ollamaServerStatus"] == "running"
@@ -3168,7 +3177,14 @@ def test_start_ollama_refuses_uninstalled_app_and_surfaces_spawn_failures(manage
     payload = recorder.messages[-1]["payload"]
     assert payload["ollamaServerStatus"] == "not_found"
     assert payload["ollamaStartStatus"] == "idle"
-    assert "not installed" in payload["ollamaStartError"]
+    assert "could not find" in payload["ollamaStartError"].lower()
+
+    # The user can start Ollama outside Graphlink after an initial failed
+    # launch. The next health check must clear an obsolete error banner.
+    monkeypatch.setattr(intents_settings_ollama_module, "check_ollama_server_status", lambda: "running")
+    asyncio.run(bus.dispatch_intent("app-settings", "checkOllamaStatus", []))
+    assert recorder.messages[-1]["payload"]["ollamaServerStatus"] == "running"
+    assert recorder.messages[-1]["payload"]["ollamaStartError"] == ""
 
     def spawn_failed():
         raise OSError("permission denied")
@@ -3178,3 +3194,65 @@ def test_start_ollama_refuses_uninstalled_app_and_surfaces_spawn_failures(manage
     payload = recorder.messages[-1]["payload"]
     assert payload["ollamaStartStatus"] == "idle"
     assert "permission denied" in payload["ollamaStartError"]
+
+
+def test_verified_embedding_only_model_is_not_an_auto_chat_route_even_after_restart(manager, monkeypatch):
+    _isolate_ollama_task_config(monkeypatch)
+    monkeypatch.setattr(ollama, "list", lambda: {"models": [
+        {"model": "nomic-embed-text:latest"}, {"model": "qwen3:4b"},
+    ]})
+    monkeypatch.setattr(ollama, "show", lambda name: {
+        "capabilities": ["embedding"] if name.startswith("nomic") else ["completion"],
+    })
+    monkeypatch.setattr(ollama, "ps", lambda: {"models": []})
+    bus = SessionBus("settings-ollama-auto-capabilities-test")
+    register_settings(bus, manager)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "scanOllamaSystem", []))
+    assert manager.get_ollama_scanned_models() == ["nomic-embed-text:latest", "qwen3:4b"]
+    assert manager.get_ollama_verified_capabilities() == {
+        "nomic-embed-text:latest": ["embeddings"], "qwen3:4b": ["chat"],
+    }
+    assert config.OLLAMA_MODELS[config.TASK_CHAT] == "qwen3:4b"
+
+    restored = SettingsManager(manager.state_file)
+    config.sync_ollama_task_models(restored)
+    assert config.OLLAMA_MODELS[config.TASK_CHAT] == "qwen3:4b"
+
+    # When the only installed model is an embedding model, Auto is unconfigured,
+    # rather than silently routing a chat request to an incompatible model.
+    restored.set_ollama_model_scan_cache(
+        ["nomic-embed-text:latest"], "server", verified_capabilities={
+            "nomic-embed-text:latest": ["embeddings"],
+        },
+    )
+    config.sync_ollama_task_models(restored)
+    assert config.OLLAMA_MODELS[config.TASK_CHAT] == ""
+
+
+def test_pulling_embedding_model_does_not_replace_explicit_chat_route(manager, monkeypatch):
+    _isolate_ollama_task_config(monkeypatch)
+    manager.set_ollama_chat_model("qwen3:4b")
+    monkeypatch.setattr(ollama, "pull", lambda _name, *, stream=False: iter([{"status": "success"}]))
+    monkeypatch.setattr(ollama, "list", lambda: {"models": [
+        {"model": "nomic-embed-text:latest"}, {"model": "qwen3:4b"},
+    ]})
+    monkeypatch.setattr(ollama, "show", lambda name: {
+        "capabilities": ["embedding"] if name.startswith("nomic") else ["completion"],
+    })
+    monkeypatch.setattr(ollama, "ps", lambda: {"models": []})
+    monkeypatch.setattr(
+        api_provider, "set_current_ollama_model",
+        lambda _model: pytest.fail("Pull should never explicitly change the chat selection"),
+    )
+    bus = SessionBus("settings-pull-embedding-retains-chat-test")
+    register_settings(bus, manager)
+
+    asyncio.run(bus.dispatch_intent(
+        "app-settings", "pullOllamaModel", ["nomic-embed-text:latest"],
+    ))
+    assert manager.get_ollama_model_assignments()["task_chat"] == {
+        "mode": "explicit", "model_id": "qwen3:4b",
+    }
+    assert config.OLLAMA_MODELS[config.TASK_CHAT] == "qwen3:4b"
+    assert manager.get_ollama_verified_capabilities()["nomic-embed-text:latest"] == ["embeddings"]

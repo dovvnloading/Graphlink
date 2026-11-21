@@ -62,7 +62,7 @@ async def probe_ollama_model(model_name: str) -> dict[str, float | bool | str | 
         "loadSeconds": round(load_ns / 1_000_000_000, 2) if load_ns is not None else None,
         "tokensPerSecond": round(eval_count * 1_000_000_000 / eval_ns, 1)
         if eval_count is not None and eval_ns is not None and eval_ns > 0 else None,
-        "toolCallingWorks": False,
+        "toolCallingWorks": None,
         "message": "",
     }
     try:
@@ -77,6 +77,11 @@ async def probe_ollama_model(model_name: str) -> dict[str, float | bool | str | 
         report["toolCallingWorks"] = works
         if not works:
             report["message"] = "The model did not return the requested tool call."
-    except Exception as exc:  # noqa: BLE001 - an unsupported tools API is a negative probe, not a failed timing run
-        report["message"] = f"Tool probe failed: {str(exc)[:240]}"
+    except Exception as exc:  # noqa: BLE001 - timings remain valid even if the tool probe fails
+        # A rejected or failed tools request is UNKNOWN, not evidence that
+        # the model returned no tool call. Some Ollama versions reject the
+        # request before it reaches a tool-capable model.
+        report["toolCallingWorks"] = None
+        detail = str(exc).strip()[:240] or "Ollama did not respond to the tool request"
+        report["message"] = f"Could not run tool probe: {detail}"
     return report

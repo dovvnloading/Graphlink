@@ -74,7 +74,30 @@ def sync_ollama_task_models(settings_manager):
     cached_models = []
     if hasattr(settings_manager, "get_ollama_scanned_models"):
         cached_models = settings_manager.get_ollama_scanned_models()
-    catalog = [ModelDescriptor(model_id=model, provider=LOCAL_PROVIDER_OLLAMA) for model in cached_models]
+    # /api/show identifies embedding-only models. A bare disk-scan name has
+    # unknown capabilities, but once a server has verified an embedding-only
+    # model, Auto must never route chat, naming or summaries to it. Persisted
+    # observations survive a restart; newer server scans replace them.
+    verified = (
+        settings_manager.get_ollama_verified_capabilities()
+        if hasattr(settings_manager, "get_ollama_verified_capabilities") else {}
+    )
+    def routing_capabilities(model_id: str) -> frozenset[str]:
+        observed = set(verified.get(model_id.casefold(), []))
+        if "embeddings" in observed and "chat" not in observed:
+            return frozenset({"embeddings"})
+        # Ollama's metadata doesn't say whether a chat model can generate
+        # code, so preserve unknown capability semantics for text models;
+        # assigning just {"text"} would wrongly disable Auto chart models.
+        return frozenset()
+
+    catalog = [
+        ModelDescriptor(
+            model_id=model, provider=LOCAL_PROVIDER_OLLAMA,
+            capabilities=routing_capabilities(model),
+        )
+        for model in cached_models
+    ]
     chat_model = resolve_task_model(TASK_CHAT, assignments, catalog)
     for task in (TASK_CHAT, TASK_TITLE, TASK_CHART, TASK_WEB_VALIDATE, TASK_WEB_SUMMARIZE):
         OLLAMA_MODELS[task] = resolve_task_model(

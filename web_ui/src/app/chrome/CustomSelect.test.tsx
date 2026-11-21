@@ -169,15 +169,40 @@ describe("CustomSelect", () => {
     expect(trigger).toHaveFocus();
   });
 
-  it("Tab dismisses the portaled menu and restores focus to its trigger", async () => {
+  it("Tab and Shift+Tab leave the portaled menu at the next or previous control", async () => {
     const user = userEvent.setup();
-    render(<CustomSelect ariaLabel="Pick one" value="a" options={OPTIONS} onChange={vi.fn()} />);
+    render(
+      <div>
+        <button type="button">Previous</button>
+        <CustomSelect ariaLabel="Pick one" value="a" options={OPTIONS} onChange={vi.fn()} />
+        <button type="button">Next</button>
+      </div>,
+    );
     const trigger = screen.getByRole("button", { name: "Pick one" });
     await user.click(trigger);
     expect(screen.getByRole("button", { name: "Option A" })).toHaveFocus();
     await user.keyboard("{Tab}");
     expect(screen.queryByRole("dialog", { name: "Pick one" })).toBeNull();
-    expect(trigger).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Next" })).toHaveFocus();
+    await user.click(trigger);
+    await user.keyboard("{Shift>}{Tab}{/Shift}");
+    expect(screen.getByRole("button", { name: "Previous" })).toHaveFocus();
+  });
+
+  it("exposes its selected value and the chosen option to assistive technology", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <CustomSelect ariaLabel="Pick one" value="b" options={OPTIONS} onChange={vi.fn()} />,
+    );
+    const trigger = screen.getByRole("button", { name: "Pick one" });
+    expect(trigger).toHaveAccessibleDescription("Selected: Option B");
+    await user.click(trigger);
+    expect(trigger).toHaveAttribute("aria-controls", screen.getByRole("dialog").id);
+    expect(screen.getByRole("button", { name: /^Option B/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Option A" })).toHaveAttribute("aria-pressed", "false");
+    await user.keyboard("{Escape}");
+    rerender(<CustomSelect ariaLabel="Pick one" value="c" options={OPTIONS} onChange={vi.fn()} />);
+    expect(trigger).toHaveAccessibleDescription("Selected: Option C");
   });
 
 

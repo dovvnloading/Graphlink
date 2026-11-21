@@ -40,10 +40,10 @@ const OLLAMA_RECOMMENDED_MODELS = [
 ] as const;
 
 const OLLAMA_SERVER_STATUS_LABELS: Record<string, string> = {
-  checking: "Checking...",
-  running: "Running",
-  installed: "Installed but not running",
-  not_found: "Not found",
+  checking: "Checking for the Ollama server…",
+  running: "Connected",
+  installed: "Installed, not responding",
+  not_found: "Not detected",
 };
 
 
@@ -62,10 +62,18 @@ function OllamaTaskField({
 }: {
   task: OllamaTask;
   value: string;
-  installedModels: string[];
+  installedModels: InventoryModel[];
   transport: WsTransport;
 }) {
-  const resolvedMode = assignmentMode(value, installedModels);
+  // Known embedding-only models cannot complete chat, naming, or other text
+  // tasks. Unknown capabilities remain selectable rather than being guessed
+  // incompatible when /api/show is unavailable.
+  const chatModels = installedModels.filter(
+    (model) => !(model.capabilities.includes("embeddings") && !model.capabilities.includes("chat")),
+  ).map((model) => model.name);
+  const incompatible = installedModels.find((model) =>
+    model.name === value && model.capabilities.includes("embeddings") && !model.capabilities.includes("chat"));
+  const resolvedMode = assignmentMode(value, chatModels);
   const [localMode, setLocalMode] = useState<string | null>(null);
   const [lastValue, setLastValue] = useState(value);
   const [draftId, setDraftId] = useState(resolvedMode === "custom" ? value : "");
@@ -82,9 +90,16 @@ function OllamaTaskField({
   const options = [
     ...(task !== "task_chat" ? [{ id: "inherit", label: "Use chat model" }] : []),
     { id: "auto", label: "Auto - choose a compatible installed model" },
-    ...installedModels.map((name) => ({ id: name, label: name })),
+    ...chatModels.map((name) => ({ id: name, label: name })),
     { id: "custom", label: "Custom model ID..." },
   ];
+
+  const saveCustomId = () => {
+    const id = draftId.trim();
+    if (id && id !== value) {
+      transport.fireIntent("app-settings", "setOllamaModelAssignment", [task, id], undefined, true);
+    }
+  };
 
   return (
     <>
@@ -105,21 +120,39 @@ function OllamaTaskField({
         />
       </div>
       {uiMode === "custom" && (
-        <label className="settings-field">
-          <span className="settings-field-label">{OLLAMA_TASK_LABELS[task]} (custom model ID)</span>
+        <div className="settings-field">
+          <label className="settings-field-label" htmlFor={`ollama-task-custom-${task}`}>
+            {OLLAMA_TASK_LABELS[task]} (custom model ID)
+          </label>
           <input
+            id={`ollama-task-custom-${task}`}
             type="text"
             className="settings-select"
             list={OLLAMA_MODELS_DATALIST_ID}
             aria-label={OLLAMA_TASK_LABELS[task] + " (custom model ID)"}
             spellCheck={false}
             value={draftId}
-            onChange={(event) => {
-              setDraftId(event.target.value);
-              transport.fireIntent("app-settings", "setOllamaModelAssignment", [task, event.target.value], undefined, true);
+            onChange={(event) => setDraftId(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                saveCustomId();
+              }
             }}
           />
-        </label>
+          <span className="settings-field-hint">
+            Enter the exact model ID, then save. Choosing Auto clears a custom assignment.
+          </span>
+          <button type="button" className="settings-button"
+            disabled={!draftId.trim() || draftId.trim() === value}
+            onClick={saveCustomId}>Save {OLLAMA_TASK_LABELS[task]} ID</button>
+        </div>
+      )}
+      {incompatible && (
+        <p className="settings-update-status" role="alert" data-level="error">
+          {value} is an embedding-only model and cannot generate text for {OLLAMA_TASK_LABELS[task].toLowerCase()}.
+          Choose a chat-capable model instead.
+        </p>
       )}
     </>
   );
@@ -138,7 +171,7 @@ type InventoryModel = AppSettingsState["ollamaInventory"][number];
 type ModelCheck = AppSettingsState["ollamaModelChecks"][number];
 
 function OllamaModelCard({
-  model, report, state, transport, busy, checkInProgress, onInspect,
+  model, report, state, transport, busy, checkInProgress, onInspect, onRemoveRequest,
 }: {
   model: InventoryModel;
   report?: ModelCheck;
@@ -147,6 +180,7 @@ function OllamaModelCard({
   busy: boolean;
   checkInProgress: boolean;
   onInspect: (name: string) => void;
+  onRemoveRequest: (name: string) => void;
 }) {
   const headingId = useId();
   const removeButtonRef = useRef<HTMLButtonElement>(null);
@@ -169,8 +203,14 @@ function OllamaModelCard({
   const trainedLimit = model.source === "server" && typeof model.trainedContextLength === "number"
     && model.trainedContextLength > 0 ? model.trainedContextLength : 0;
   const optionLimit = trainedLimit || 8192;
+  const choices = OLLAMA_CONTEXT_CHOICES.filter((choice) => choice.tokens <= optionLimit);
   const savedWindow = state.ollamaContextWindows[model.name.toLowerCase()] ?? 8192;
-  const activeWindow = Math.min(savedWindow, optionLimit);
+  // The trained limit may not equal a preset (for example 6k). Never show
+  // "Select…" for a value that cannot be chosen, or imply that clamping
+  // silently changed the persisted preference.
+  const activeWindow = choices.some((choice) => choice.tokens === savedWindow)
+    ? savedWindow : (choices[choices.length - 1]?.tokens ?? 0);
+  const windowNeedsSaving = activeWindow !== savedWindow;
   const contextReady = state.ollamaContextModel.toLowerCase() === model.name.toLowerCase()
     && state.ollamaContextStatus === "ready";
   const memoryEstimate = contextReady
@@ -178,11 +218,12 @@ function OllamaModelCard({
     : 0;
   const availableMemory = state.ollamaContextAvailableMemoryBytes;
   const exceedsMemory = contextReady && availableMemory > 0 && memoryEstimate > availableMemory;
-  const canRemove = model.source === "server" && state.ollamaServerReachable !== false;
+  const canRemove = model.source === "server" && state.ollamaServerReachable === true;
+  const canCheck = canRemove;
 
   return (
     <article className="settings-ollama-model-card" role="group" aria-labelledby={headingId}
-      onFocusCapture={() => onInspect(model.name)}>
+      onFocusCapture={() => { if (canCheck) onInspect(model.name); }}>
       <div className="settings-ollama-card-header">
         <h3 id={headingId} className="settings-ollama-model-name">{model.name}</h3>
         <span className="settings-ollama-state">
@@ -197,7 +238,7 @@ function OllamaModelCard({
           <span>{formatOllamaBytes(model.memoryBytes)} memory in use · {formatOllamaBytes(model.vramBytes)} VRAM</span>
         )}
       </div>
-      <div className="settings-ollama-capabilities" aria-label={"Capabilities for " + model.name}>
+      <div className="settings-ollama-capabilities" role="group" aria-label={"Capabilities for " + model.name}>
         {model.capabilities.length
           ? model.capabilities.map((capability) => (
             <span className="settings-ollama-capability" key={capability}>{capability}</span>
@@ -212,17 +253,23 @@ function OllamaModelCard({
         <CustomSelect
           ariaLabel={"Context window for " + model.name}
           value={String(activeWindow)}
-          disabled={optionLimit < 4096}
-          options={OLLAMA_CONTEXT_CHOICES
-            .filter((choice) => choice.tokens <= optionLimit)
-            .map((choice) => ({ id: String(choice.tokens), label: choice.label }))}
+          disabled={choices.length === 0}
+          options={choices.map((choice) => ({ id: String(choice.tokens), label: choice.label }))}
           onChange={(choice) => {
-            onInspect(model.name);
+            if (canCheck) onInspect(model.name);
             transport.fireIntent("app-settings", "setOllamaContextWindow", [model.name, Number(choice)], undefined, true);
           }}
         />
       </div>
-      {contextReady && (
+      {windowNeedsSaving && (
+        <p className="settings-field-hint" role="status">
+          The saved {savedWindow.toLocaleString()}-token window is not one of this model's
+          supported presets. {activeWindow
+            ? "The displayed value is a suggestion; select it to save the new setting."
+            : "No preset fits the trained limit (below 4,096 tokens)."}
+        </p>
+      )}
+      {contextReady && activeWindow > 0 && (
         <div className="settings-ollama-memory-details">
           <p className="settings-update-status">
             Estimated {state.ollamaContextModelSizeBytes > 0 ? "model weights + KV cache" : "KV cache (weights unavailable)"}:
@@ -253,7 +300,8 @@ function OllamaModelCard({
       )}
       <div className="settings-button-row settings-ollama-card-actions">
         <button type="button" className="settings-button" aria-label={"Check " + model.name}
-          disabled={checkInProgress || busy}
+          disabled={checkInProgress || busy || !canCheck}
+          title={!canCheck ? "A server-verified model and a running Ollama server are required to check a model" : undefined}
           onClick={() => transport.fireIntent("app-settings", "checkOllamaModel", [model.name])}>
           {report?.status === "running" ? "Checking..." : "Check"}
         </button>
@@ -270,18 +318,20 @@ function OllamaModelCard({
         )}
       </div>
       {report && (
-        <p className="settings-update-status" role="status" data-level={report.status === "error" ? "error" : undefined}>
-          {report.status === "running" ? "Checking model..." :
+        <p className="settings-update-status"
+          role={report.status === "error" ? "alert" : "status"}
+          data-level={report.status === "error" ? "error" :
+            report.status === "complete" && (report.toolCallingWorks === false || report.message)
+              ? "warning" : undefined}>
+          {report.status === "running" ? "Checking model…" :
             report.status === "cancelled" ? "Check cancelled." :
             report.status === "error" ? report.message :
-            "Load: " + (report.loadSeconds == null ? "Unavailable" : report.loadSeconds.toFixed(2) + " s") +
-            " · Speed: " + (report.tokensPerSecond == null ? "Unavailable" : report.tokensPerSecond.toFixed(1) + " tokens/s") +
-            " · Tool calling: " + (report.toolCallingWorks === true ? "Works" :
-              report.toolCallingWorks === false ? "Not working" : "Unavailable")}
+            "Sample load time: " + (report.loadSeconds == null ? "Unavailable" : report.loadSeconds.toFixed(2) + " s") +
+            " · Sample generation speed: " + (report.tokensPerSecond == null ? "Unavailable" : report.tokensPerSecond.toFixed(1) + " tokens/s") +
+            " · Tool probe: " + (report.toolCallingWorks === true ? "Tool call returned" :
+              report.toolCallingWorks === false ? "No tool call returned" : "Unavailable")}
+          {report.status === "complete" && report.message && (" · " + report.message)}
         </p>
-      )}
-      {report?.status === "complete" && report.message && (
-        <span className="settings-field-hint">{report.message}</span>
       )}
       {confirming && canRemove && (
         <div role="group" aria-label={"Confirm removal of " + model.name} className="settings-ollama-removal">
@@ -289,7 +339,9 @@ function OllamaModelCard({
           <div className="settings-button-row">
             <button ref={confirmRef} type="button" className="settings-button" disabled={busy}
               onKeyDown={onConfirmKeyDown}
+              aria-label={"Confirm remove " + model.name}
               onClick={() => {
+                onRemoveRequest(model.name);
                 transport.fireIntent("app-settings", "removeOllamaModel", [model.name]);
                 setConfirming(false);
               }}>Confirm remove</button>
@@ -308,12 +360,16 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
 
   const [draftPullModel, setDraftPullModel] = useState("");
   const [inspectedModel, setInspectedModel] = useState("");
+  const [lastRemovedModel, setLastRemovedModel] = useState("");
+  const removeFeedbackRef = useRef<HTMLParagraphElement>(null);
   const checkInProgress = state.ollamaModelChecks.some((check) => check.status === "running");
   const pulling = state.ollamaPullStatus === "running" || state.ollamaPullStatus === "cancelling";
   const busy = pulling || state.ollamaRemoveStatus === "running" || state.ollamaScanStatus === "running";
   const installedModels = state.ollamaInventorySource === "server"
-    ? state.ollamaInventory.filter((model) => model.source === "server").map((model) => model.name)
+    ? state.ollamaInventory.filter((model) => model.source === "server")
     : [];
+  const installedModelNames = installedModels.map((model) => model.name);
+  const canDownload = state.ollamaServerStatus === "running" && state.ollamaServerReachable === true;
   const contextModel = state.ollamaInventory.find((model) => model.name === inspectedModel)?.name
     ?? state.ollamaInventory.find((model) => model.name === state.ollamaCurrentModel)?.name
     ?? state.ollamaInventory[0]?.name ?? "";
@@ -322,8 +378,18 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
     : null;
 
   useEffect(() => {
-    if (contextModel) transport.fireIntent("app-settings", "inspectOllamaContextModel", [contextModel]);
-  }, [contextModel, transport, state.ollamaScanStatus]);
+    const model = installedModels.find((entry) => entry.name === contextModel);
+    if (model && canDownload) transport.fireIntent("app-settings", "inspectOllamaContextModel", [contextModel]);
+  // Reinspect only when the selected model or scan/server status changes;
+  // keyboard traversal of offline inventory must not make failing daemon calls.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contextModel, transport, state.ollamaScanStatus, canDownload]);
+
+  useEffect(() => {
+    if (state.ollamaRemoveStatus === "done" && lastRemovedModel && document.activeElement === document.body) {
+      removeFeedbackRef.current?.focus();
+    }
+  }, [state.ollamaRemoveStatus, lastRemovedModel]);
 
   // Refresh the shared Ollama/Knowledge inventory on page open. Only explicit
   // Pull and Remove clicks mutate models installed on the daemon.
@@ -337,8 +403,22 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
       <ProviderModeSwitch mode={MODE_OLLAMA_LOCAL} state={state} transport={transport} />
 
       <p className="settings-update-status" role="status" aria-label="Ollama server status">
-        Ollama server: {OLLAMA_SERVER_STATUS_LABELS[state.ollamaServerStatus] ?? "Checking..."}
+        Ollama server: {OLLAMA_SERVER_STATUS_LABELS[state.ollamaServerStatus] ?? "Status unavailable"}
       </p>
+      {state.ollamaServerStatus === "not_found" && (
+        <p className="settings-update-status">
+          Graphlink could not detect Ollama on this computer.{" "}
+          <a href="https://ollama.com/download" target="_blank" rel="noopener noreferrer">
+            Install Ollama (official download)
+          </a>, launch the application, then select Check Ollama status. Graphlink does not install it for you.
+        </p>
+      )}
+      {state.ollamaServerStatus === "installed" && (
+        <p className="settings-update-status">
+          Ollama is installed, but its server is not responding. Select Start Ollama to launch it.
+          If you started Ollama outside Graphlink, select Check Ollama status instead.
+        </p>
+      )}
       {state.ollamaServerStatus === "installed" && (
         <div className="settings-button-row">
           <button
@@ -351,8 +431,17 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
           </button>
         </div>
       )}
+      <div className="settings-button-row">
+        <button type="button" className="settings-button"
+          disabled={state.ollamaStartStatus === "starting"}
+          onClick={() => transport.fireIntent("app-settings", "checkOllamaStatus", [])}>
+          Check Ollama status
+        </button>
+      </div>
       {state.ollamaStartStatus === "starting" && (
-        <p className="settings-update-status">Starting Ollama...</p>
+        <p className="settings-update-status" role="status">
+          Starting Ollama and waiting for its server to respond…
+        </p>
       )}
       {state.ollamaStartError && (
         <p className="settings-update-status" role="alert" data-level="error">
@@ -384,30 +473,27 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
           type="button"
           className="settings-button"
           disabled={busy}
-          onClick={() => transport.fireIntent("app-settings", "scanOllamaSystem", [])}
-        >
-          {state.ollamaScanStatus === "running" ? "Scanning..." : "System Scan"}
-        </button>
-        <button
-          type="button"
-          className="settings-button"
-          disabled={busy}
           onClick={() => transport.fireIntent("app-settings", "pickOllamaScanFolder", [])}
         >
-          Scan Folder...
+          Scan model folder…
         </button>
       </div>
       <p className="settings-update-status">{state.ollamaScanSummary}</p>
+      {state.ollamaScanStatus === "running" && (
+        <p className="settings-update-status" role="status">Scanning for Ollama models…</p>
+      )}
       {state.ollamaInventorySource === "folder" && (
         <p className="settings-field-hint">
-          Models were found on disk. Run System Scan with Ollama running to inspect capabilities and memory usage.
+          Models were found on disk. With Ollama running, select Refresh installed models to verify capabilities and memory use.
         </p>
       )}
 
       <fieldset className="settings-fieldset">
         <legend>Local model inventory</legend>
         <p className="settings-field-hint">
-          Check loads a model and runs brief probes. Results are reports only: no settings change and tool calls are never executed.
+          Check temporarily loads a server-verified model and runs two short prompts.
+          It reports sample load and generation speed plus whether the model returned a test tool call.
+          No tool is executed and no Graphlink model assignment is changed.
         </p>
         <div className="settings-button-row">
           <button
@@ -420,15 +506,16 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
           </button>
         </div>
         {state.ollamaServerReachable === false && (
-          <p role="alert" className="settings-update-status" data-level="error">
-            Ollama is unavailable. Start the daemon and refresh to manage installed models; disk scan results cannot be removed here.
+          <p role="status" className="settings-update-status" data-level="warning">
+            Ollama is not responding. Start the installed server or check its status, then refresh models.
+            Disk-only entries cannot be checked or removed here.
           </p>
         )}
         {state.ollamaInventory.length === 0 && (
           <p className="settings-field-hint">
             {state.ollamaInventorySource === "server"
-              ? "No models installed in this Ollama instance."
-              : "Run a system scan to inspect installed models."}
+              ? "No models installed in this Ollama server. Download a recommended chat model below to begin."
+              : "No models verified yet. Start Ollama and refresh, or scan a model folder for offline information."}
           </p>
         )}
 
@@ -437,12 +524,17 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
             <OllamaModelCard key={model.name} model={model}
               report={state.ollamaModelChecks.find((check) => check.name === model.name)}
               state={state} transport={transport} busy={busy} checkInProgress={checkInProgress}
-              onInspect={setInspectedModel}
+              onInspect={setInspectedModel} onRemoveRequest={setLastRemovedModel}
             />
           ))}
         </div>
         {state.ollamaRemoveStatus === "running" && (
-          <p role="status" className="settings-update-status">Removing {state.ollamaRemoveModel}...</p>
+          <p role="status" className="settings-update-status">Removing {state.ollamaRemoveModel}…</p>
+        )}
+        {state.ollamaRemoveStatus === "done" && lastRemovedModel && (
+          <p ref={removeFeedbackRef} tabIndex={-1} role="status" className="settings-update-status">
+            Removed {lastRemovedModel} from Ollama.
+          </p>
         )}
 
 
@@ -456,6 +548,10 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
 
       <fieldset className="settings-fieldset">
         <legend>Model Selection (per task)</legend>
+        <p className="settings-field-hint">
+          Known embedding-only models cannot be assigned to text-generation tasks.
+          Selecting a model here changes the task assignment; downloading or checking one does not.
+        </p>
         {OLLAMA_TASKS.map((task) => (
           <OllamaTaskField
             key={task}
@@ -472,10 +568,10 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
       <fieldset className="settings-fieldset">
         <legend>Download recommended models</legend>
         <p className="settings-update-status">
-          Sizes are approximate; nothing downloads until you click Pull.
+          Sizes are approximate. Downloading is opt-in and does not change your selected chat model.
         </p>
         {OLLAMA_RECOMMENDED_MODELS.map((model) => {
-          const installed = installedModels.includes(model.id);
+          const installed = installedModelNames.includes(model.id);
           return (
             <div className="settings-button-row" key={model.id}>
               <span>
@@ -485,7 +581,8 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
                 type="button"
                 className="settings-button"
                 aria-label={"Pull " + model.id}
-                disabled={busy || installed}
+                disabled={busy || installed || !canDownload}
+                title={!canDownload ? "Start or connect to Ollama before downloading models" : undefined}
                 onClick={() => transport.fireIntent("app-settings", "pullOllamaModel", [model.id])}
               >
                 {installed ? "Installed" : "Pull"}
@@ -495,14 +592,19 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
         })}
       </fieldset>
 
+      {!canDownload && (
+        <p className="settings-field-hint">
+          Downloads require a reachable Ollama server. Install and start Ollama above before pulling models.
+        </p>
+      )}
       <label className="settings-field">
-        <span className="settings-field-label">Validate and Pull Model</span>
+        <span className="settings-field-label">Model ID to download</span>
         <input
           type="text"
           className="settings-select"
           list={OLLAMA_MODELS_DATALIST_ID}
           placeholder="Advanced model ID entry"
-          aria-label="Validate and Pull Model"
+          aria-label="Model ID to download"
           value={draftPullModel}
           onChange={(event) => setDraftPullModel(event.target.value)}
         />
@@ -511,10 +613,10 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
         <button
           type="button"
           className="settings-button settings-button-primary"
-          disabled={draftPullModel.trim().length === 0 || busy}
+          disabled={draftPullModel.trim().length === 0 || busy || !canDownload}
           onClick={() => transport.fireIntent("app-settings", "pullOllamaModel", [draftPullModel.trim()])}
         >
-          {pulling ? "Downloading..." : "Validate and Pull Model"}
+          {pulling ? "Downloading…" : "Download model"}
         </button>
       </div>
 
@@ -551,7 +653,7 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
       )}
 
       {state.ollamaNotice && (
-        <p className="settings-update-status" data-level="error">
+        <p className="settings-update-status" role="alert" data-level="error">
           {state.ollamaNotice}
         </p>
       )}

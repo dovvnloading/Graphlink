@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
 /**
@@ -67,6 +67,8 @@ export function CustomSelect({
   placeholder?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const selectedDescriptionId = useId();
+  const panelId = useId();
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const [placement, setPlacement] = useState<{ top: number; left: number; minWidth: number } | null>(null);
@@ -103,6 +105,24 @@ export function CustomSelect({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  const movePastSelect = (reverse: boolean) => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    // The popup is portaled outside Settings' modal. Native Tab cannot
+    // traverse from its options to the next field in the modal, and the
+    // modal's focus backstop would redirect to the first rail control.
+    // Resolve the next focusable from the original trigger's position.
+    const scope = trigger.closest<HTMLElement>('[role="dialog"][aria-modal="true"]') ?? document.body;
+    const focusables = [...scope.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), ' +
+      'textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+    )].filter((node) => !panelRef.current?.contains(node));
+    const index = focusables.indexOf(trigger);
+    const next = focusables[(index + (reverse ? -1 : 1) + focusables.length) % focusables.length];
+    setOpen(false);
+    (next ?? trigger).focus();
+  };
+
   const onOptionKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
     const buttons = [...(panelRef.current?.querySelectorAll<HTMLButtonElement>(".reasoning-option") ?? [])];
     if (!buttons.length) return;
@@ -115,12 +135,8 @@ export function CustomSelect({
       event.preventDefault();
       buttons[event.key === "Home" ? 0 : buttons.length - 1].focus();
     } else if (event.key === "Tab") {
-      // A portaled panel sits outside its parent modal's focus trap: native
-      // Tab would be redirected to the first Settings control instead of the
-      // next option. Exit cleanly, then Tab from the trigger to keep going.
       event.preventDefault();
-      setOpen(false);
-      triggerRef.current?.focus();
+      movePastSelect(event.shiftKey);
     }
   };
 
@@ -134,7 +150,9 @@ export function CustomSelect({
         className="custom-select-trigger"
         aria-haspopup="dialog"
         aria-expanded={open}
+        aria-controls={open ? panelId : undefined}
         aria-label={ariaLabel}
+        aria-describedby={selectedDescriptionId}
         disabled={disabled}
         onClick={() => setOpen((isOpen) => !isOpen)}
         onKeyDown={(event) => {
@@ -147,10 +165,14 @@ export function CustomSelect({
         <span className="custom-select-value">{selected ? selected.label : placeholder}</span>
         <ChevronIcon />
       </button>
+      <span id={selectedDescriptionId} className="sr-only">
+        Selected: {selected?.label ?? "none"}
+      </span>
       {open &&
         createPortal(
           <div
             ref={panelRef}
+            id={panelId}
             role="dialog"
             aria-modal="false"
             aria-label={ariaLabel}
@@ -163,6 +185,7 @@ export function CustomSelect({
                 key={option.id}
                 type="button"
                 className={"reasoning-option" + (option.id === value ? " active" : "")}
+                aria-pressed={option.id === value}
                 onKeyDown={onOptionKeyDown}
                 onClick={() => {
                   onChange(option.id);

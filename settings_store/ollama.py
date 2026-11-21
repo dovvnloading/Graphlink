@@ -136,6 +136,19 @@ class OllamaSettingsOps(SettingsManagerParts):
             return []
         return [str(model).strip() for model in models if str(model).strip()]
 
+    def get_ollama_verified_capabilities(self) -> dict[str, list[str]]:
+        """Last verified /api/show capabilities, not inferred from folder names."""
+        raw = self.state.get("ollama_verified_capabilities", {})
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            name.strip().casefold(): sorted(set(capabilities))
+            for name, capabilities in raw.items()
+            if isinstance(name, str) and name.strip()
+            and isinstance(capabilities, list)
+            and all(isinstance(capability, str) for capability in capabilities)
+        }
+
     def get_ollama_model_scan_mode(self):
         return str(self.state.get("ollama_model_scan_mode", "")).strip()
 
@@ -148,7 +161,11 @@ class OllamaSettingsOps(SettingsManagerParts):
             return []
         return [str(location).strip() for location in locations if str(location).strip()]
 
-    def set_ollama_model_scan_cache(self, models: list[str], scan_mode: str = "", scan_path: str = "", locations: list[str] | None = None):
+    def set_ollama_model_scan_cache(
+        self, models: list[str], scan_mode: str = "", scan_path: str = "",
+        locations: list[str] | None = None, *,
+        verified_capabilities: dict[str, list[str]] | None = None,
+    ):
         self.state["ollama_scanned_models"] = sorted(
             {str(model).strip() for model in (models or []) if str(model).strip()},
             key=str.lower,
@@ -159,4 +176,18 @@ class OllamaSettingsOps(SettingsManagerParts):
             {str(location).strip() for location in (locations or []) if str(location).strip()},
             key=str.lower,
         )
+        # A server scan refreshes the verified snapshot. Offline/manual
+        # folder scans have no new capability evidence, so retain verified
+        # observations only for model IDs still present in the scan.
+        observed = (
+            self.get_ollama_verified_capabilities()
+            if verified_capabilities is None else verified_capabilities
+        )
+        installed = {model.casefold() for model in self.state["ollama_scanned_models"]}
+        self.state["ollama_verified_capabilities"] = {
+            name.strip().casefold(): sorted(set(caps))
+            for name, caps in observed.items()
+            if isinstance(name, str) and name.strip().casefold() in installed
+            and isinstance(caps, list) and all(isinstance(cap, str) for cap in caps)
+        }
         self._save_state()

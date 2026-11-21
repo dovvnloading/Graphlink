@@ -59,7 +59,7 @@ describe("shared local/cloud model picker", () => {
     mount(store);
     const trigger = screen.getByRole("button", { name: "Choose a model" });
     await user.click(trigger);
-    expect(await screen.findByText("No models configured yet.")).toBeVisible();
+    expect(await screen.findByText(/No models available. Start Ollama/)).toBeVisible();
     expect(loadPickerModels).toHaveBeenCalledOnce();
     expect(screen.getByRole("searchbox", { name: "Search models" })).toHaveFocus();
 
@@ -86,6 +86,7 @@ describe("shared local/cloud model picker", () => {
     const embed = screen.getByRole("button", { name: /nomic-embed-text/ });
     expect(within(embed).getByText("embeddings")).toBeVisible();
     expect(embed).toBeDisabled();
+    expect(embed).toHaveAccessibleName(/Embedding-only · unavailable for chat or agent tasks/);
     expect(screen.getByRole("button", { name: /Anthropic Claude · claude-test/ })).toBeEnabled();
   });
 
@@ -114,7 +115,64 @@ describe("shared local/cloud model picker", () => {
     loadPickerModels.mockRejectedValue(new Error("daemon offline"));
     mount(store);
     await user.click(screen.getByRole("button", { name: "Choose a model" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Unable to load models.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load available models.");
+    expect(screen.getByRole("button", { name: "Retry model list" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Set up a local model" })).toBeEnabled();
+  });
+
+  it("shows a specific explanation when search finds embedding-only models", async () => {
+    const user = userEvent.setup();
+    const { store, selectPickerModel } = makeStore([embedding]);
+    mount(store);
+    await user.click(screen.getByRole("button", { name: "Choose a model" }));
+    expect(await screen.findByText(/None of these models supports chat/)).toHaveAttribute("role", "status");
+    const item = screen.getByRole("button", { name: /nomic-embed-text/ });
+    expect(item).toBeDisabled();
+    expect(item).toHaveAccessibleName(/Embedding-only · unavailable for chat or agent tasks/);
+    expect(selectPickerModel).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Set up a local model" })).toBeEnabled();
+  });
+
+  it("retries after a failed model discovery and allows keyboard selection", async () => {
+    const user = userEvent.setup();
+    const { store, loadPickerModels, selectPickerModel } = makeStore([]);
+    loadPickerModels.mockRejectedValueOnce(new Error("Ollama not started")).mockResolvedValueOnce([local]);
+    mount(store);
+    await user.click(screen.getByRole("button", { name: "Choose a model" }));
+    await screen.findByRole("alert");
+    await user.click(screen.getByRole("button", { name: "Retry model list" }));
+    const option = await screen.findByRole("button", { name: /Ollama · qwen3:8b/ });
+    expect(option).toBeEnabled();
+    const search = screen.getByRole("searchbox", { name: "Search models" });
+    expect(search).toHaveFocus();
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(selectPickerModel).toHaveBeenCalledWith("Ollama", "qwen3:8b");
+    expect(loadPickerModels).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the same keyboard-accessible selection flow for agent popovers", async () => {
+    const user = userEvent.setup();
+    const { store, selectPickerModel } = makeStore([local]);
+    function AgentHost() {
+      const overlays = useOverlays();
+      const name = "agent-model-node-test";
+      return (
+        <>
+          <button data-overlay-trigger={name}
+            onClick={() => overlays.toggle(name, "popover")}>Choose agent model</button>
+          {overlays.isOpen(name) && <ModelPicker name={name} store={store} />}
+        </>
+      );
+    }
+    render(<OverlayProvider><AgentHost /></OverlayProvider>);
+    const trigger = screen.getByRole("button", { name: "Choose agent model" });
+    trigger.focus();
+    await user.keyboard("{Enter}");
+    const search = screen.getByRole("searchbox", { name: "Search models" });
+    expect(search).toHaveFocus();
+    await screen.findByRole("button", { name: /Ollama · qwen3:8b/ });
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(selectPickerModel).toHaveBeenCalledExactlyOnceWith("Ollama", "qwen3:8b");
+    expect(trigger).toHaveFocus();
   });
 });

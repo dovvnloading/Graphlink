@@ -16,7 +16,14 @@ def register_ollama_model_check_intents(bus: SessionBus, state: SettingsSessionS
         model_name = model_name.strip()
         # Only probe models from the SAME inventory used by Settings/Knowledge.
         # Never allow an arbitrary model ID to trigger a download or inference.
-        if not model_name or not any(row.get("name") == model_name for row in state.ollama_inventory):
+        if (
+            not model_name or state.ollama_server_reachable is not True
+            or state.ollama_inventory_source != "server"
+            or not any(row.get("name") == model_name and row.get("source") == "server"
+                       for row in state.ollama_inventory)
+        ):
+            # A manifest-only model cannot be loaded/checked while the daemon
+            # is stopped; never report a simulated result as a real probe.
             return
         if state.ollama_check_task is not None and not state.ollama_check_task.done():
             return
@@ -41,7 +48,11 @@ def register_ollama_model_check_intents(bus: SessionBus, state: SettingsSessionS
                 report["message"] = "Check cancelled."
             except Exception as exc:  # noqa: BLE001 - report daemon failures to the user
                 report["status"] = "error"
-                report["message"] = f"Check failed: {str(exc)[:240]}"
+                detail = str(exc).strip()[:240] or "Ollama did not respond"
+                report["message"] = (
+                    f"Could not check {model_name}: {detail}. "
+                    "Check Ollama status, then retry."
+                )
             finally:
                 state.ollama_check_task = None
                 state.ollama_check_name = ""
