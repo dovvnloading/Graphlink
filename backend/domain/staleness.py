@@ -9,7 +9,6 @@ node. Secondary, reference and association edges do not change ancestry.
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 from typing import TYPE_CHECKING, Any
@@ -25,7 +24,10 @@ _ROOT = hashlib.sha256(b"graphlink/branch-history/v1").digest()
 
 def _bytes_as_json(value: Any) -> dict[str, str]:
     if isinstance(value, (bytes, bytearray)):
-        return {"bytes": base64.b64encode(value).decode("ascii")}
+        # Hash raw bytes rather than base64-encoding large images on every
+        # publish. This is stable across save/load and keeps event-loop
+        # work/memory bounded by SHA-256's streaming C implementation.
+        return {"bytes_sha256": hashlib.sha256(value).hexdigest()}
     raise TypeError(f"unsupported branch content: {type(value).__name__}")
 
 
