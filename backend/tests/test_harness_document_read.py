@@ -195,6 +195,26 @@ def test_pdf_ascii_wrapped_flate_is_read_by_fs_and_attachment_pipeline(fs, filte
     assert "ASCII wrapped page" in stage_file(str(path)).extracted_text
 
 
+@pytest.mark.parametrize(
+    ("alias", "canonical"),
+    [("/A85", "/ASCII85Decode"), ("/AHx", "/ASCIIHexDecode")],
+)
+def test_pdf_ascii_alias_is_normalized_after_bounded_preflight(tmp_path, alias, canonical):
+    from backend import attachments
+    from pypdf import PdfReader
+
+    path = tmp_path / "alias.pdf"
+    _ascii_flate_pdf(path, alias)
+    reader = PdfReader(path)
+    page = reader.pages[0]
+    stream = page["/Contents"].get_object()
+    assert str(stream["/Filter"][0]) == alias
+
+    assert attachments._check_pdf_content_size(page) > 0
+    assert str(stream["/Filter"][0]) == canonical
+    assert "ASCII wrapped page" in page.extract_text()
+
+
 @pytest.mark.parametrize("filter_name", ["/ASCII85Decode", "/ASCIIHexDecode"])
 def test_pdf_ascii_wrapped_flate_still_rejects_expansion_bombs(fs, monkeypatch, filter_name):
     from backend import attachments
