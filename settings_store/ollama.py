@@ -136,7 +136,8 @@ class OllamaSettingsOps(SettingsManagerParts):
         models = self.state.get("ollama_scanned_models", [])
         if not isinstance(models, list):
             return []
-        return [str(model).strip() for model in models if str(model).strip()]
+        return [model.strip() for model in models
+                if isinstance(model, str) and valid_ollama_model_name(model.strip())]
 
     def get_ollama_model_scan_mode(self):
         return str(self.state.get("ollama_model_scan_mode", "")).strip()
@@ -152,7 +153,8 @@ class OllamaSettingsOps(SettingsManagerParts):
 
     def set_ollama_model_scan_cache(self, models: list[str], scan_mode: str = "", scan_path: str = "", locations: list[str] | None = None):
         self.state["ollama_scanned_models"] = sorted(
-            {str(model).strip() for model in (models or []) if str(model).strip()},
+            {model.strip() for model in (models or [])
+             if isinstance(model, str) and valid_ollama_model_name(model.strip())},
             key=str.lower,
         )
         self.state["ollama_model_scan_mode"] = str(scan_mode or "").strip()
