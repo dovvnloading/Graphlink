@@ -238,6 +238,8 @@ def register_knowledge_intents(
     document: SceneDocument,
     notifications: NotificationState | None = None,
     settings_manager=None,
+    composer_document=None,
+    agent_dispatcher=None,
 ) -> None:
     publish_scene = make_publish_scene(bus)
     ingest_jobs = KnowledgeIngestManager(bus, DEFAULT_DB_PATH)
