@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 import { Popover, useOverlays } from "../overlays/overlays";
 import type { ComposerStore, PickerModel } from "./composerStore";
 
@@ -24,6 +24,7 @@ export function ModelPicker({ store, name = "model" }: { store: ComposerStore; n
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
   const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
@@ -81,6 +82,7 @@ export function ModelPicker({ store, name = "model" }: { store: ComposerStore; n
   return (
     <Popover anchored name={name} label="Choose a model" className="reasoning-popover model-picker-popover">
       <input
+        ref={searchRef}
         type="search"
         className="model-picker-search"
         aria-label="Search models"
