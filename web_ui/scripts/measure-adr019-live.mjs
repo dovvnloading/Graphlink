@@ -7,7 +7,7 @@
  * real app (with deterministic offline *model* responses), and reads OS RSS.
  */
 import { spawn, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, createWriteStream } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, openSync, closeSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -17,7 +17,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { chromium } from "@playwright/test";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const PYTHON = process.env.GRAPHLINK_PERF_PYTHON || (process.platform === "win32" ? "python" : "python");
+const PYTHON = process.env.GRAPHLINK_PERF_PYTHON || "python";
 const MODULE = "backend.tests.perf.live_backend";
 const MIB = 1024 * 1024;
 const WORKLOADS = [100, 500];
@@ -65,7 +65,7 @@ function isolatedEnvironment(profile) {
   for (const directory of [home, appData, localAppData, cache]) {
     mkdirSync(directory, { recursive: true });
   }
-  return {
+  const env = {
     ...process.env,
     HOME: home,
     USERPROFILE: home,
@@ -74,6 +74,13 @@ function isolatedEnvironment(profile) {
     XDG_CONFIG_HOME: join(profile, "config"),
     XDG_CACHE_HOME: cache,
   };
+  // Prevent ambient developer credentials from influencing an explicitly
+  // unauthenticated, offline benchmark backend.
+  delete env.GRAPHLINK_DEV_AUTH_TOKEN;
+  for (const key of Object.keys(env)) {
+    if (/(?:_API_KEY|_ACCESS_TOKEN|_SECRET_KEY|_PASSWORD)$/.test(key)) delete env[key];
+  }
+  return env;
 }
 
 async function unusedLoopbackPort() {
@@ -325,14 +332,17 @@ async function measureOne(nodeCount, keepProfile) {
     const fixture = JSON.parse(seeded.trim().split(/\r?\n/).at(-1));
     const port = await unusedLoopbackPort();
     const url = "http://127.0.0.1:" + port;
-    const stdout = createWriteStream(join(profile, "backend.stdout.log"));
-    const stderr = createWriteStream(join(profile, "backend.stderr.log"));
+    const stdoutFd = openSync(join(profile, "backend.stdout.log"), "w");
+    const stderrFd = openSync(join(profile, "backend.stderr.log"), "w");
     const started = performance.now();
-    backend = spawn(PYTHON, ["-m", MODULE, "serve", "--profile", profile, "--port", String(port)], {
-      cwd: ROOT, env, stdio: ["ignore", stdout, stderr], windowsHide: true,
-    });
-    stdout.end();
-    stderr.end();
+    try {
+      backend = spawn(PYTHON, ["-m", MODULE, "serve", "--profile", profile, "--port", String(port)], {
+        cwd: ROOT, env, stdio: ["ignore", stdoutFd, stderrFd], windowsHide: true,
+      });
+    } finally {
+      closeSync(stdoutFd);
+      closeSync(stderrFd);
+    }
     await waitForBackend(url, backend);
     browser = await chromium.launch({ headless: true });
     const context = await browser.newContext({
@@ -419,7 +429,6 @@ async function main() {
     report.error = error instanceof Error ? error.stack || error.message : String(error);
     throw error;
   } finally {
-    const { writeFileSync } = await import("node:fs");
     mkdirSync(dirname(output), { recursive: true });
     writeFileSync(output, JSON.stringify(report, null, 2) + "\n", "utf8");
     globalThis.console.log("ADR-019 live report:", output);
