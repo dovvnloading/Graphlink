@@ -77,6 +77,7 @@ function makeSceneStore(
     scene?: object;
     selectedNodeId?: string | null;
     isolationEngine?: "docker" | "podman" | null;
+    knowledgePreference?: { nodeId: string | null; hasDocuments: boolean; enabled: boolean; override: boolean | null };
   } = {},
 ) {
   const sendMessage = vi.fn();
@@ -86,6 +87,10 @@ function makeSceneStore(
   );
   const setReplyTargetNodeId = vi.fn();
   const setSynthesizeTargetNodeIds = vi.fn();
+  const getChatKnowledgePreference = vi.fn().mockResolvedValue(
+    overrides.knowledgePreference ?? { nodeId: null, hasDocuments: false, enabled: false, override: null },
+  );
+  const setChatUseKnowledge = vi.fn().mockResolvedValue(undefined);
   const scene = { ...initialSceneState, ...overrides.scene };
   const replyTargetNodeId = overrides.replyTargetNodeId ?? null;
   const synthesizeTargetNodeIds = overrides.synthesizeTargetNodeIds ?? null;
@@ -95,6 +100,8 @@ function makeSceneStore(
     getHarnessIsolationEngine,
     setReplyTargetNodeId,
     setSynthesizeTargetNodeIds,
+    getChatKnowledgePreference,
+    setChatUseKnowledge,
     subscribe: () => () => {},
     getScene: () => scene,
     getSelectedNodeId: () => overrides.selectedNodeId ?? null,
@@ -102,10 +109,53 @@ function makeSceneStore(
     getSynthesizeTargetNodeIds: () => synthesizeTargetNodeIds,
   };
   return { sceneStore, sendMessage, sendComposerAgentMessage, getHarnessIsolationEngine,
-    setReplyTargetNodeId, setSynthesizeTargetNodeIds };
+    setReplyTargetNodeId, setSynthesizeTargetNodeIds, getChatKnowledgePreference, setChatUseKnowledge };
 }
 
 describe("Composer", () => {
+  it("defaults Use knowledge on for a workspace with documents and can turn it off before first Send", async () => {
+    const user = userEvent.setup();
+    const { store } = makeStore({ composer: {
+      draft: { ...initialComposerState.draft, text: "Find the runbook" },
+      request: { ...initialComposerState.request, canSend: true },
+    } });
+    const { sceneStore, sendMessage } = makeSceneStore({ knowledgePreference: {
+      nodeId: null, hasDocuments: true, enabled: true, override: null,
+    } });
+    render(<OverlayProvider>
+      {/* @ts-expect-error - minimal test store */}
+      <Composer store={store} sceneStore={sceneStore} />
+    </OverlayProvider>);
+    const toggle = screen.getByRole("button", { name: "Use knowledge" });
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-pressed", "true"));
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(sendMessage).toHaveBeenCalledWith("Find the runbook", false);
+  });
+
+  it("persists a Use knowledge override on an existing branch", async () => {
+    const user = userEvent.setup();
+    const { store } = makeStore({ composer: {
+      draft: { ...initialComposerState.draft, text: "Ask without retrieval" },
+      request: { ...initialComposerState.request, canSend: true },
+    } });
+    const { sceneStore, sendMessage, setChatUseKnowledge } = makeSceneStore({ knowledgePreference: {
+      nodeId: "n2", hasDocuments: true, enabled: true, override: null,
+    } });
+    render(<OverlayProvider>
+      {/* @ts-expect-error - minimal test store */}
+      <Composer store={store} sceneStore={sceneStore} />
+    </OverlayProvider>);
+    const toggle = screen.getByRole("button", { name: "Use knowledge" });
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-pressed", "true"));
+    await user.click(toggle);
+    await waitFor(() => expect(setChatUseKnowledge).toHaveBeenCalledWith("n2", false));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send message" })).not.toBeDisabled());
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(sendMessage).toHaveBeenCalledWith("Ask without retrieval");
+  });
+
 
   it("agent toggle routes to the selected agent with the composer model instead of ordinary chat", async () => {
     const user = userEvent.setup();

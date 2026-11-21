@@ -2956,6 +2956,9 @@ body {
   background-color: var(--gl-neutral-button-hover);
 }
 
+.composer-knowledge-toggle { white-space: nowrap; }
+.composer-knowledge-toggle[aria-pressed="true"] .icon { stroke-width: 2; }
+
 .composer-agent-target {
   display: flex;
   align-items: center;
@@ -4864,6 +4867,22 @@ mark.document-view-search-match {
 mark.document-view-search-match-current {
   background-color: var(--gl-semantic-search-highlight);
   color: var(--gl-surface-inset-deep, var(--gl-surface-window));
+}
+
+/* Cited knowledge reuses the Document View reader, with a persistent
+   passage highlight independent of the user's optional Find query. */
+.document-view-panel-scroll .document-view-cited-passage {
+  background-color: color-mix(in srgb, var(--gl-semantic-search-highlight) 25%, transparent);
+  outline: 1px solid var(--gl-semantic-search-highlight);
+  outline-offset: 2px;
+  scroll-margin-top: 12px;
+}
+.document-view-citation-notice {
+  margin: 0;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--gl-surface-border);
+  color: var(--gl-surface-text-muted);
+  font-size: 11px;
 }
 
 /* Standard visually-hidden technique (content present for assistive tech,

@@ -17,10 +17,14 @@ export function ContextInspectorLauncher({
   sceneStore,
   composerStore,
   transport,
+  useKnowledge = null,
+  targetNodeId,
 }: {
   sceneStore: SceneStore;
   composerStore: ComposerStore;
   transport: WsTransport;
+  useKnowledge?: boolean | null;
+  targetNodeId?: string | null;
 }) {
   const scene = useSyncExternalStore(sceneStore.subscribe, sceneStore.getScene);
   const selectedId = useSyncExternalStore(sceneStore.subscribe, sceneStore.getSelectedNodeId);
@@ -32,9 +36,11 @@ export function ContextInspectorLauncher({
   const selected = scene.nodes.find((node) => node.id === selectedId && node.kind === "chat");
   const replyTarget = scene.nodes.find((node) => node.id === replyTargetId && node.kind === "chat");
   const lastChat = scene.nodes.filter((node) => node.kind === "chat").slice(-1)[0];
-  const nodeId = replyTarget?.id ?? selected?.id ?? lastChat?.id ?? null;
+  const nodeId = targetNodeId === undefined
+    ? replyTarget?.id ?? selected?.id ?? lastChat?.id ?? null
+    : targetNodeId;
 
-  const requestKey = `${nodeId ?? ""}:${revision}`;
+  const requestKey = `${nodeId ?? ""}:${useKnowledge ?? "auto"}:${revision}`;
   const currentResponse = response?.key === requestKey ? response : null;
   const preview = currentResponse?.preview;
   const error = currentResponse?.error;
@@ -46,7 +52,8 @@ export function ContextInspectorLauncher({
     // Snapshot draft at request time, rather than requerying on every
     // keystroke. Refresh is explicit to avoid a flood of network requests.
     const draft = composerStore.getComposer().draft.text;
-    void transport.request("scene", "inspectChatContext", [nodeId, draft]).then(
+    const args = useKnowledge === null ? [nodeId, draft] : [nodeId, draft, useKnowledge];
+    void transport.request("scene", "inspectChatContext", args).then(
       (result) => {
         if (disposed) return;
         setResponse({ key: requestKey, preview: result as ContextPreview, error: null });
@@ -57,7 +64,7 @@ export function ContextInspectorLauncher({
       },
     );
     return () => { disposed = true; };
-  }, [isOpen, nodeId, requestKey, transport, composerStore]);
+  }, [isOpen, nodeId, requestKey, transport, composerStore, useKnowledge]);
 
   return (
     <div className="context-inspector-launcher">

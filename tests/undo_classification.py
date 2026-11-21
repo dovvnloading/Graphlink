@@ -267,6 +267,8 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("scene", "listComparisonModels", "B", "read-only: configured comparison catalog; does not mutate graph or settings"),
     Classified("scene", "regenerateResponse", "A", "content: delete-then-recreate of a node's content, one composite undo"),
     Classified("scene", "inspectChatContext", "B", "read-only: previews the next chat send's sources and budget without a graph mutation"),
+    Classified("scene", "getChatKnowledgePreference", "B", "read-only: resolves branch preference and workspace document presence"),
+    Classified("scene", "setChatUseKnowledge", "A", "content: persists a per-chat-branch knowledge retrieval override"),
     Classified("scene", "cancelChatRequest", "B", "run-lifecycle: cancel"),
 
     # -- backend/api/intents_chat_image.py (scene) ---------------------------
@@ -417,6 +419,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
 
     # -- backend/api/intents_knowledge.py (knowledge, scene) - ADR-017 stage 17.5 --
     Classified("knowledge", "search", "B", "read-only: queries the local knowledge store, no document mutation"),
+    Classified("knowledge", "openCitation", "B", "read-only: verifies and reads a workspace-scoped indexed source"),
     Classified("knowledge", "addFiles", "B", "external-store: launches a local knowledge import job, not a scene undo"),
     Classified("knowledge", "addFolder", "B", "external-store: launches a local folder import job, not a scene undo"),
     Classified("knowledge", "addChatAttachment", "B", "external-store: imports a staged chat attachment into workspace knowledge"),

@@ -512,6 +512,11 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
             # matching the dataclass default ("no pin").
             override_provider=str(payload.get("override_provider", "") or ""),
             override_model_id=str(payload.get("override_model_id", "") or ""),
+            # Older saves have no override; reject malformed values instead
+            # of coercing e.g. a string "false" to True.
+            use_knowledge=(
+                payload.get("use_knowledge") if isinstance(payload.get("use_knowledge"), bool) else None
+            ),
         ),
     )
 

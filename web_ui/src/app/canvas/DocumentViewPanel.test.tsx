@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DocumentViewPanel } from "./DocumentViewPanel";
@@ -48,6 +48,38 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof DocumentView
   };
   return render(<DocumentViewPanel {...props} />);
 }
+
+describe("Document View knowledge citation focus", () => {
+  it("highlights the cited markdown passage and scrolls to it without opening Find", async () => {
+    const raw = ["# Runbook", "", "Unrelated introduction.", "", "Restore the **encrypted snapshot** carefully.", "", "Final check."].join("\n");
+    const start = raw.indexOf("Restore the");
+    const end = start + "Restore the **encrypted snapshot** carefully.".length;
+    const originalRect = HTMLElement.prototype.getBoundingClientRect;
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const top = this.classList.contains("document-view-cited-passage") ? 260
+        : this.classList.contains("document-view-panel-scroll") ? 40 : 0;
+      return { ...originalRect.call(this), top, bottom: top + 100 } as DOMRect;
+    });
+    try {
+      const { container } = renderPanel({
+        content: raw,
+        sourceLabel: "Runbook",
+        citation: { citationId: "kb:0123456789abcdef0123", offsetStart: start, offsetEnd: end },
+      });
+      await waitFor(() => {
+        const mark = container.querySelector(".document-view-cited-passage");
+        expect(mark).not.toBeNull();
+        expect(mark).toHaveTextContent("Restore the encrypted snapshot carefully.");
+      }, LAZY_BODY_TIMEOUT);
+      const scrollArea = container.querySelector(".document-view-panel-scroll") as HTMLDivElement;
+      await waitFor(() => expect(scrollArea.scrollTop).toBe(220), LAZY_BODY_TIMEOUT);
+      expect(screen.getByText(/Cited knowledge passage/)).toHaveTextContent("untrusted reference text");
+      expect(screen.queryByRole("search")).not.toBeInTheDocument();
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+});
 
 describe("DocumentViewPanel", () => {
   it("renders the fixed title and the passed markdown content", async () => {

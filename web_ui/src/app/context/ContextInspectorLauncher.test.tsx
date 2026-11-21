@@ -68,6 +68,18 @@ describe("Context Inspector", () => {
     expect(screen.queryByRole("region", { name: "Next chat context" })).not.toBeInTheDocument();
   });
 
+  it("uses the composer's knowledge choice and branch as the preview target", async () => {
+    const f = fixture({ selected: "n1" });
+    render(<ContextInspectorLauncher
+      sceneStore={f.sceneStore} composerStore={f.composerStore} transport={f.transport}
+      useKnowledge={false} targetNodeId="n2"
+    />);
+    fireEvent.click(screen.getByRole("button", { name: "Context Inspector" }));
+    await waitFor(() => expect(f.request).toHaveBeenCalledWith(
+      "scene", "inspectChatContext", ["n2", "draft one", false],
+    ));
+  });
+
   it("disables itself when no chat exists", () => {
     const f = fixture({ noChat: true });
     render(<ContextInspectorLauncher sceneStore={f.sceneStore} composerStore={f.composerStore} transport={f.transport} />);

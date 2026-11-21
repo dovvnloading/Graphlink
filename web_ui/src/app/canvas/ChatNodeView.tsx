@@ -7,7 +7,7 @@ import { downloadTextFile } from "./downloadTextFile";
 import { GROUP_MONO_COLORS, GROUP_NAMED_COLORS } from "./GroupColorPicker";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
-import { ChatCitationChips, KNOWLEDGE_CITATION_RECORD } from "./ChatCitationChips";
+import { ChatCitationChips, KNOWLEDGE_CITATION_RECORD, citationsForReply, type KnowledgeCitationSource } from "./ChatCitationChips";
 import { ChatScienceCard, type ScienceReferenceData } from "./ChatScienceCard";
 import { NodeMenu } from "./NodeMenu";
 import { NodeHeading } from "./NodeHeading";
@@ -90,6 +90,7 @@ export interface ChatNodeData extends Record<string, unknown> {
   onGenerateKeyTakeaway: () => void;
   onGenerateExplainerNote: () => void;
   onOpenDocumentView: () => void;
+  onOpenCitation: (source: KnowledgeCitationSource) => void;
   onScrollChange: (value: number) => void;
   isBranchFocusActive: boolean;
   onToggleBranchFocus: () => void;
@@ -741,6 +742,7 @@ export function chatNodePropsAreEqual(prev: NodeProps<ChatFlowNode>, next: NodeP
     a.onGenerateKeyTakeaway === b.onGenerateKeyTakeaway &&
     a.onGenerateExplainerNote === b.onGenerateExplainerNote &&
     a.onOpenDocumentView === b.onOpenDocumentView &&
+    a.onOpenCitation === b.onOpenCitation &&
     a.onScrollChange === b.onScrollChange &&
     a.onToggleBranchFocus === b.onToggleBranchFocus &&
     a.onBranchFromHere === b.onBranchFromHere &&
@@ -857,6 +859,8 @@ export const ChatNodeView = memo(function ChatNodeView({
 
   // Citation provenance uses a reserved structured row, not a model tool call.
   const visibleToolInvocations = data.toolInvocations.filter((item) => item.name !== KNOWLEDGE_CITATION_RECORD);
+  const replyCitations = !data.isUser && !data.pendingRequestId
+    ? citationsForReply(data.content, data.toolInvocations) : undefined;
   const hasUsage = data.promptTokens != null || data.completionTokens != null;
   const hasMetadata = Boolean(data.model || data.overrideModelId || hasUsage);
   // At map scale, keep a bounded plain-text excerpt; mounting Markdown for every
@@ -999,7 +1003,8 @@ export const ChatNodeView = memo(function ChatNodeView({
               {data.pendingRequestId && !streamedContent ? (
                 <span className="chat-node-streaming-placeholder">Waiting for response…</span>
               ) : (
-                <NodeMarkdown content={data.pendingRequestId ? streamedContent : data.content} />
+                <NodeMarkdown content={data.pendingRequestId ? streamedContent : data.content}
+                    citations={replyCitations} onCitationClick={data.onOpenCitation} />
               )}
             </div>
             {contentOverflows && !contentExpanded && (
@@ -1007,7 +1012,7 @@ export const ChatNodeView = memo(function ChatNodeView({
             )}
           </div>
           {!data.isUser && !data.pendingRequestId && (
-            <ChatCitationChips content={data.content} toolInvocations={data.toolInvocations} />
+            <ChatCitationChips citations={replyCitations ?? []} onOpenCitation={data.onOpenCitation} />
           )}
           {contentOverflows && (
             <button
