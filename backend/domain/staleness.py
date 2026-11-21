@@ -145,7 +145,7 @@ def fingerprint_for_reply(
 
 def scene_staleness(document: SceneDocument) -> dict[str, str]:
     """Sparse per-node publish statuses; all pre-feature graphs return {}."""
-    if not any(
+    if not document.nonchat_upstream_fingerprints and not any(
         isinstance(node.state, ChatState) and node.state.reply_history_fingerprint
         for node in document.nodes.values()
     ):
