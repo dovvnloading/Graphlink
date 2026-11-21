@@ -14,7 +14,8 @@ import json
 
 
 from backend.knowledge_chunking import chunk_text
-from backend.knowledge_store import add_document_with_chunks
+from backend.knowledge_store import add_document_with_chunks, get_or_create_workspace_collection
+from backend.domain.graph import SceneDocument
 from backend.providers.base import ToolCall
 from backend.tools import KNOWLEDGE_READ, GRAPH_READ, RunContext, ToolRegistry
 from backend.tools_knowledge import KNOWLEDGE_SEARCH_SPEC, register_knowledge_tools
@@ -25,6 +26,8 @@ def _run(coro):
 
 
 def _ingest(db_path, *, text="The quick brown fox jumps over the lazy dog.", **kwargs):
+    if "collection_id" not in kwargs:
+        kwargs["collection_id"] = get_or_create_workspace_collection(db_path, 1)
     return add_document_with_chunks(
         db_path,
         source_uri=kwargs.pop("source_uri", "fox.txt"),
@@ -44,8 +47,10 @@ def _ctx(granted_scopes=(KNOWLEDGE_READ,)) -> RunContext:
 
 
 def _registry(db_path) -> ToolRegistry:
+    document = SceneDocument()
+    document.current_workspace_id = 1
     registry = ToolRegistry()
-    register_knowledge_tools(registry, db_path=db_path)
+    register_knowledge_tools(registry, db_path=db_path, document=document)
     return registry
 
 
@@ -81,13 +86,17 @@ class TestInvocation:
             )
         )
         assert result.is_error is False
-        payload = json.loads(result.content)
+        payload = json.loads(result.content)["results"]
         assert len(payload) == 1
         assert payload[0]["document_title"] == "Fox Story"
         assert payload[0]["source_uri"] == "fox.txt"
         assert "fox" in payload[0]["text"].lower()
         assert isinstance(payload[0]["offset_start"], int)
         assert isinstance(payload[0]["offset_end"], int)
+        assert payload[0]["citation_id"].startswith("kb:")
+        assert payload[0]["citation"] == f"[{payload[0]['citation_id']}]"
+        assert payload[0]["trust_label"] == "untrusted data"
+        assert "UNTRUSTED DATA" in json.loads(result.content)["trust_notice"]
 
     def test_no_matches_is_a_successful_empty_result_not_an_error(self, tmp_path):
         db_path = tmp_path / "knowledge.db"
@@ -114,7 +123,7 @@ class TestInvocation:
                 _ctx(),
             )
         )
-        payload = json.loads(result.content)
+        payload = json.loads(result.content)["results"]
         assert len(payload) == 1
 
     # -- SECURITY-FIX: knowledge.search must scope to the CALLING SESSION's
@@ -129,26 +138,25 @@ class TestInvocation:
 
     def test_a_model_supplied_collection_id_is_ignored_not_honored(self, tmp_path):
         db_path = tmp_path / "knowledge.db"
-        _ingest(db_path, text="Alpha content about pandas.", collection_id=1, source_uri="a.txt")
-        _ingest(db_path, text="Beta content about pandas.", collection_id=2, source_uri="b.txt")
-        # No `document` bound (same as _registry's default) - a hostile/
-        # malformed tool-call arguments dict naming collection_id must not
-        # reach hybrid_search at all; both collections are still found,
-        # proving the argument was never read rather than merely
-        # overridden to the "no filter" value by coincidence.
+        first = get_or_create_workspace_collection(db_path, 1)
+        second = get_or_create_workspace_collection(db_path, 2)
+        _ingest(db_path, text="Alpha content about pandas.", collection_id=first, source_uri="a.txt")
+        _ingest(db_path, text="Beta content about pandas.", collection_id=second, source_uri="b.txt")
+        # The model's arbitrary collection_id never overrides the current
+        # workspace's collection. Without context, search fails closed.
         registry = _registry(db_path)
 
         result = _run(
             registry.invoke(
                 ToolCall(
                     id="1", name="knowledge.search",
-                    arguments={"query": "pandas", "collection_id": 1},
+                    arguments={"query": "pandas", "collection_id": second},
                 ),
                 _ctx(),
             )
         )
-        payload = json.loads(result.content)
-        assert {row["source_uri"] for row in payload} == {"a.txt", "b.txt"}
+        payload = json.loads(result.content)["results"]
+        assert {row["source_uri"] for row in payload} == {"a.txt"}
 
     def test_search_is_scoped_to_the_documents_own_workspace_regardless_of_model_input(self, tmp_path):
         from backend.domain.graph import SceneDocument
@@ -181,7 +189,7 @@ class TestInvocation:
                 _ctx(),
             )
         )
-        payload = json.loads(result.content)
+        payload = json.loads(result.content)["results"]
         assert len(payload) == 1
         assert payload[0]["source_uri"] == "mine.txt"
 
@@ -220,6 +228,59 @@ class TestInvocation:
                 _ctx(),
             )
         )
-        payload = json.loads(result.content)
+        payload = json.loads(result.content)["results"]
         from backend.tools_knowledge import _MAX_K
         assert len(payload) == _MAX_K
+
+
+def test_missing_document_or_workspace_fails_closed(tmp_path):
+    db_path = tmp_path / "knowledge.db"
+    _ingest(db_path)
+    registry = ToolRegistry()
+    register_knowledge_tools(registry, db_path=db_path)  # Not bound to any workspace.
+    result = _run(registry.invoke(ToolCall("1", "knowledge.search", {"query": "fox"}), _ctx()))
+    assert result.is_error and "current workspace" in result.content
+
+    document = SceneDocument()
+    registry = ToolRegistry()
+    register_knowledge_tools(registry, db_path=db_path, document=document)
+    result = _run(registry.invoke(ToolCall("2", "knowledge.search", {"query": "fox"}), _ctx()))
+    assert result.is_error and "current workspace" in result.content
+
+
+def test_search_miss_does_not_create_database_or_workspace_collection(tmp_path):
+    db_path = tmp_path / "missing.db"
+    registry = _registry(db_path)
+    result = _run(registry.invoke(ToolCall("1", "knowledge.search", {"query": "anything"}), _ctx()))
+    assert not result.is_error and json.loads(result.content)["results"] == []
+    assert not db_path.exists()
+
+    # A database with only workspace 2's collection is also a scoped miss:
+    # neither a new collection nor another workspace's hits are returned.
+    other = get_or_create_workspace_collection(db_path, 2)
+    _ingest(db_path, text="Another workspace has otters.", collection_id=other)
+    result = _run(registry.invoke(ToolCall("2", "knowledge.search", {"query": "otters"}), _ctx()))
+    assert not result.is_error and json.loads(result.content)["results"] == []
+    from backend.tools_knowledge import _existing_workspace_collection
+    assert _existing_workspace_collection(db_path, 1) is None
+
+
+def test_search_uses_live_workspace_not_registration_time_snapshot(tmp_path):
+    db_path = tmp_path / "knowledge.db"
+    first = get_or_create_workspace_collection(db_path, 1)
+    second = get_or_create_workspace_collection(db_path, 2)
+    _ingest(db_path, text="My canary guide.", collection_id=first, source_uri="first.md")
+    _ingest(db_path, text="Their canary guide.", collection_id=second, source_uri="second.md")
+    document = SceneDocument()
+    document.current_workspace_id = 1
+    registry = ToolRegistry()
+    register_knowledge_tools(registry, document=document, db_path=db_path)
+
+    def search():
+        response = _run(registry.invoke(ToolCall("1", "knowledge.search", {"query": "canary"}), _ctx()))
+        assert not response.is_error
+        return json.loads(response.content)["results"][0]["source_uri"]
+
+    assert search() == "first.md"
+    document.current_workspace_id = 2
+    assert search() == "second.md"

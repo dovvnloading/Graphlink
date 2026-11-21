@@ -69,6 +69,7 @@ from backend.tools import (
     GRAPH_MUTATE,
     GRAPH_READ,
     KNOWLEDGE_READ,
+    KNOWLEDGE_WRITE,
     NET_FETCH,
     PROVIDER_CALL,
     RunContext,
@@ -84,7 +85,7 @@ from backend.tools import (
 # run_harness wires up - the scope-model split ADR-007 names and the
 # builder already follows.
 HARNESS_GRANTED_SCOPES = frozenset({
-    FS_READ, FS_WRITE, CODE_EXECUTE, KNOWLEDGE_READ, NET_FETCH, PROVIDER_CALL,
+    FS_READ, FS_WRITE, CODE_EXECUTE, KNOWLEDGE_READ, KNOWLEDGE_WRITE, NET_FETCH, PROVIDER_CALL,
     # §3.2.6: "existing graph.* ... tools compose in unchanged", and §3.3's
     # invariant that run_id is stamped on all canvas mutations so undo-by-run
     # works across harness runs (HarnessRunContext carries run_id, which
@@ -375,6 +376,12 @@ def _approval_summary(
         return f"shell.session {action} {name}".rstrip()
     if call.name in ("fs.write", "fs.edit"):
         return preview_harness_file_change(call, workspace_root).summary
+    if call.name == "knowledge.add":
+        return (
+            "knowledge.add — ingest a file into the current workspace's persistent knowledge collection.\n"
+            f"File: {call.arguments.get('path')!r}\n"
+            "Its extracted text will be searchable after this task. Approval is for this call only."
+        )
     if call.name == "web.fetch":
         # Disclose the entire redirect target URL, not a truncated JSON blob.
         return f"web.fetch domain {call.arguments['domain']}\nURL: {call.arguments['url']}"
