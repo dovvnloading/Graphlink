@@ -198,21 +198,27 @@ def test_saved_proofs_survive_new_ids_and_detect_real_content_edits():
     assert _states(loaded)[loaded_reply.id] == "out_of_date"
 
 
-def test_publish_hashes_each_message_once_even_on_a_deep_branch():
+def test_publish_reuses_unchanged_lineage_even_on_a_deep_branch():
     doc = SceneDocument()
     parent = doc.add_chat_node(0, 0, "Start", True)
     for i in range(250):
         parent = doc.add_chat_node(0, 0, f"Turn {i}", i % 2 == 0, parent_id=parent.id)
     reply = _answer(doc, parent)
+    doc.scene_payload()  # Warm the digest cache; first traversal still hashes every message.
+
     import backend.domain.staleness as staleness
     with patch.object(staleness, "_message_input", wraps=staleness._message_input) as hash_message:
         doc.scene_payload()
-        assert hash_message.call_count == len(doc.nodes)
         doc.take_dirty_patch_ops()
-        assert hash_message.call_count == 2 * len(doc.nodes)
-    # The existing 500-node event-loop watchdog additionally guards wall time.
-    doc.update_chat_node_content(parent.id, "Different")
-    assert _states(doc)[reply.id] == "out_of_date"
+        parent.x = 25  # Geometry is excluded from model-visible history.
+        doc.scene_payload()
+        assert hash_message.call_count == 0
+
+        doc.update_chat_node_content(parent.id, "Different")
+        assert _states(doc)[reply.id] == "out_of_date"
+        # Only the edited parent and the reply downstream of it need hashing,
+        # not all 250 unmodified ancestors on every full/patch publish.
+        assert hash_message.call_count == 2
 
 
 def test_only_selected_version_changes_downstream_staleness():

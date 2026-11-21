@@ -729,10 +729,16 @@ def _fields_for(state_type: type) -> tuple[_Entry, ...]:
 def _put_non_default(wire: dict[str, Any], source: object, entries: tuple[_Entry, ...]) -> None:
     for key, attr, transform, default in entries:
         value = getattr(source, attr)
-        if transform is not None:
-            value = transform(value)
+        # Most fields (including empty history/tool calls and empty chart
+        # data) already equal their wire defaults before any conversion.
+        # Avoid allocating a fresh list/dict only to compare and discard it.
+        # All transforms used by these tables preserve their own defaults.
         if value is default or (value.__class__ is default.__class__ and value == default):
             continue
+        if transform is not None:
+            value = transform(value)
+            if value is default or (value.__class__ is default.__class__ and value == default):
+                continue
         wire[key] = value
 
 

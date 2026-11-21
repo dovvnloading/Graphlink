@@ -74,6 +74,34 @@ def _reply_digest(history_digest: bytes, provider: str | None, model: str | None
     return "v1:" + hashlib.sha256(b"graphlink/reply/v1\0" + history_digest + route).hexdigest()
 
 
+def _immutable_message_signature(node) -> tuple[Any, ...] | None:
+    """Cheap key for the inputs _message_input actually reads.
+
+    Plain-text messages use immutable strings and scalar routing settings, so
+    their lineage digest can be reused until one of those values (or their
+    structural parent digest) changes. Multimodal parts can be edited *inside*
+    their list/dicts without a mutator call; never cache those messages.
+    This also keeps directly edited/restored nodes correct without relying on
+    a perfect dirty-id marking discipline.
+    """
+    if type(node.content) is not str:
+        return None
+    if isinstance(node.state, ChatState):
+        if type(node.state) is not ChatState:
+            return None
+        parts = node.state.content_parts
+        if parts is not None and (type(parts) is not list or parts):
+            return None
+        settings = (
+            node.state.is_user, node.state.override_provider,
+            node.state.override_model_id, node.state.use_knowledge,
+        )
+        if any(type(value) not in (str, bool, type(None)) for value in settings):
+            return None
+        return (True, node.content, *settings)
+    return (False, node.content)
+
+
 def _lineage(document: SceneDocument) -> tuple[dict[str, bytes], dict[str, str]]:
     parents = _parents(document)
     hashes: dict[str, bytes] = {}
@@ -132,9 +160,26 @@ def _lineage(document: SceneDocument) -> tuple[dict[str, bytes], dict[str, str]]
                 if upstream_changed:
                     statuses[item] = "upstream_changed"
 
-            hashes[item] = hashlib.sha256(prior + _message_input(node)).digest()
+            # A full snapshot and the patch differ both traverse this lineage.
+            # Rehash only changed message inputs or descendants of a changed
+            # ancestor. The digest itself is unchanged (same SHA-256 inputs).
+            # Cache on the node, not on node-id: removing/reloading/replacing a
+            # node can never accidentally inherit an old node's hash.
+            signature = _immutable_message_signature(node)
+            cache = getattr(node, "_staleness_digest_cache", None)
+            parent_id = parents.get(item)
+            if signature is not None and cache is not None and cache[:3] == (parent_id, prior, signature):
+                digest = cache[3]
+            else:
+                digest = hashlib.sha256(prior + _message_input(node)).digest()
+                if signature is not None:
+                    node._staleness_digest_cache = (parent_id, prior, signature, digest)
+                else:
+                    # In-place edits to content_parts must always be visible.
+                    node.__dict__.pop("_staleness_digest_cache", None)
+            hashes[item] = digest
             affected[item] = upstream_changed
-            prior = hashes[item]
+            prior = digest
     return hashes, statuses
 
 

@@ -22,7 +22,7 @@ from hypothesis import strategies as st
 import backend.domain.node_states as node_states
 from backend.domain.graph import SceneDocument
 from backend.domain.model import SceneNode
-from backend.domain.node_wire import IDENTITY_KEYS, WIRE_DEFAULTS, _NODE_FIELDS, _fields_for, wire_keys
+from backend.domain.node_wire import IDENTITY_KEYS, WIRE_DEFAULTS, _NODE_FIELDS, _STATE_FIELDS, _fields_for, wire_keys
 from backend.tests.conftest import client_row
 from graphlink_wire_schema import NO_DEFAULT, wire_default
 
@@ -89,6 +89,22 @@ def test_no_field_is_owned_twice():
         keys = [entry[0] for entry in _fields_for(state_class)]
         assert len(keys) == len(set(keys)), state_class.__name__
         assert not node_level & set(keys), state_class.__name__
+
+
+def test_transforms_never_turn_an_input_wire_default_into_a_nondefault():
+    # _put_non_default now checks for raw defaults *before* applying
+    # transforms. Lock the prerequisite down as the field tables grow.
+    # versionCount/len is different: its raw input is a list and the wire
+    # default is an int, so it can never be skipped by the raw comparison.
+    for entries in (_NODE_FIELDS, *_STATE_FIELDS.values()):
+        for key, _attr, transform, default in entries:
+            if transform is None:
+                continue
+            try:
+                converted = transform(default)
+            except (TypeError, ValueError, AttributeError):
+                continue  # Raw value cannot equal this wire default.
+            assert type(converted) is type(default) and converted == default, key
 
 
 # -- omission ------------------------------------------------------------------
