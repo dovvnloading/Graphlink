@@ -64,12 +64,12 @@ def main() -> None:
     encode_ms = _median_ms(lambda: json.dumps(payload))
     combined_ms = _median_ms(lambda: json.dumps(doc.scene_payload()))
     sys.stdout.write(
-        f"LARGE: {len(doc.nodes)} nodes / {len(doc.edges)} edges (changed-history badge active)\\n"
-        f"staleness pass: {staleness_ms:.3f} ms\\n"
-        f"node rows (staleness subtracted, approximate): {rows_ms:.3f} ms\\n"
-        f"payload build: {build_ms:.3f} ms\\n"
-        f"json.dumps(payload): {encode_ms:.3f} ms\\n"
-        f"build + serialize: {combined_ms:.3f} ms\\n\\n"
+        f"LARGE: {len(doc.nodes)} nodes / {len(doc.edges)} edges (changed-history badge active)\n"
+        f"staleness pass: {staleness_ms:.3f} ms\n"
+        f"node rows (staleness subtracted, approximate): {rows_ms:.3f} ms\n"
+        f"payload build: {build_ms:.3f} ms\n"
+        f"json.dumps(payload): {encode_ms:.3f} ms\n"
+        f"build + serialize: {combined_ms:.3f} ms\n\n"
     )
 
     profiler = cProfile.Profile()
