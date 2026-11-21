@@ -53,7 +53,7 @@ import { CurvedEdge, OrthogonalEdge } from "./OrthogonalEdge";
 import type { ThinkingFlowNode } from "./ThinkingNodeView";
 import type { WebResearchFlowNode } from "./WebResearchNodeView";
 import type { PlanFlowNode, PlanStepData } from "./PlanNodeView";
-import type { HarnessFlowNode } from "./HarnessNodeView";
+import type { HarnessFlowNode, HarnessHook } from "./HarnessNodeView";
 import { harnessFileDocumentMarkdown } from "./harnessWorkspaceFiles";
 import {
   GRAPH_FIT_OPTIONS,
@@ -1014,6 +1014,9 @@ function makeHarnessFns(id: string, liveRef: { current: DispatcherLive }) {
     onSetPermissionMode: (mode: string) => liveRef.current.store.setHarnessPermissionMode(id, mode),
     onSetNetworkAlways: (enabled: boolean) => liveRef.current.store.setHarnessNetworkAlways(id, enabled),
     onGetIsolationEngine: () => liveRef.current.store.getHarnessIsolationEngine(),
+    onGetHooks: () => liveRef.current.store.getHarnessHooks(id),
+    onSetHooks: (hooks: HarnessHook[]) =>
+      liveRef.current.store.setHarnessHooks(id, hooks),
   };
 }
 

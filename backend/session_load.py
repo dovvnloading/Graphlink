@@ -1150,6 +1150,7 @@ def _restore_harness_payload(payload: dict[str, Any]) -> SceneNode:
     x, y = _position(payload)
     goal = str(payload.get("goal", ""))
     from backend.harness.permission_modes import ASK, normalize_permission_mode
+    from backend.harness.hooks import validated_hooks
 
     raw_status = str(payload.get("harness_status", "idle") or "idle")
     status = raw_status if raw_status in _HARNESS_TERMINAL_STATUSES + ("idle",) else "interrupted"
@@ -1188,6 +1189,7 @@ def _restore_harness_payload(payload: dict[str, Any]) -> SceneNode:
             # Saved and imported session JSON is untrusted data, not
             # authorization. A reopened Agent starts with no active grants.
             harness_shell_allow_rules=[],
+            harness_hooks=validated_hooks(payload.get("hooks", [])),
             harness_execution_profile=normalize_execution_profile(payload.get("execution_profile", "host")),
             harness_permission_mode=ASK,
             harness_task_permission_mode=normalize_permission_mode(payload.get("task_permission_mode", "ask")),

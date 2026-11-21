@@ -1206,6 +1206,9 @@ class HarnessState(NodeState):
     # Durable, node-local grants: entries are "effective-shell<TAB>prefix".
     # They are created only by explicit shell approval and may be revoked.
     harness_shell_allow_rules: list[str] = field(default_factory=list)
+    # Explicit, opt-in per-workspace commands; never execution grants.
+    # Snapshotted by each task and still require the shell approval gate.
+    harness_hooks: list[dict[str, Any]] = field(default_factory=list)
     harness_execution_profile: str = "host"
     # User preference (persisted) and mode captured at the latest task claim.
     harness_permission_mode: str = "ask"

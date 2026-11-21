@@ -147,7 +147,7 @@ SHELL_EXEC_SPEC = ToolSpec(
 )
 
 
-def _run_command(command: str, cwd, cancel_event, on_output=None, shell: str = "auto", profile: str = "host", allow_network: bool = False) -> tuple[str, "int | None", str]:
+def _run_command(command: str, cwd, cancel_event, on_output=None, shell: str = "auto", profile: str = "host", allow_network: bool = False, timeout_seconds: float = SHELL_EXEC_TIMEOUT_SECONDS) -> tuple[str, "int | None", str]:
     """Blocking worker (called via to_thread): returns (output, exit_code,
     ended) where ended is "ok" | "timeout" | "cancelled". Guarded spawn,
     then a poll loop so cancel/timeout kill the whole tree promptly.
@@ -221,7 +221,7 @@ def _run_command(command: str, cwd, cancel_event, on_output=None, shell: str = "
 
         reader = threading.Thread(target=_drain, name="shell-exec-reader", daemon=True)
         reader.start()
-        deadline = time.monotonic() + SHELL_EXEC_TIMEOUT_SECONDS
+        deadline = time.monotonic() + timeout_seconds
         while True:
             if process.poll() is not None:
                 # The process is gone; give the reader a moment to finish
@@ -457,11 +457,17 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
         if on_output is not None:
             on_output("")  # the live row starts only after approval
         try:
-            output, exit_code, ended = await asyncio.to_thread(
-                _run_command, command, workspace, cancel_event, on_output,
-                getattr(ctx, "harness_shell", "auto"),
-                profile, allow_network,
+            args = (
+                command, workspace, cancel_event, on_output,
+                getattr(ctx, "harness_shell", "auto"), profile, allow_network,
             )
+            # The default tool keeps the usual deadline/signature. Hooks
+            # receive a short process-tree timeout, not asyncio.wait_for on
+            # a thread that would keep executing after the waiter leaves.
+            hook_timeout = getattr(ctx, "harness_shell_timeout_seconds", None)
+            if hook_timeout is not None:
+                args += (hook_timeout,)
+            output, exit_code, ended = await asyncio.to_thread(_run_command, *args)
         except (ShellUnavailableError, IsolationUnavailableError, OSError) as exc:
             return ToolResult(content=f"Could not launch the selected shell: {exc}", is_error=True)
         finally:
@@ -477,7 +483,7 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
             # Whatever it printed before it was killed is the diagnostic -
             # a build that hung after 300 lines of progress is a different
             # problem from one that hung with nothing to say.
-            killed = f"Command timed out after {SHELL_EXEC_TIMEOUT_SECONDS}s and was killed."
+            killed = f"Command timed out after {hook_timeout or SHELL_EXEC_TIMEOUT_SECONDS}s and was killed."
             return ToolResult(
                 content=f"{killed}\n{output}" if output else killed,
                 is_error=True,

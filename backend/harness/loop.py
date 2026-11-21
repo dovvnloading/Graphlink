@@ -41,6 +41,7 @@ import graphlink_task_config as config
 from backend.domain.node_states import HarnessState
 from backend.harness import context as context_module
 from backend.harness import shell_policy
+from backend.harness.hooks import HOOK_OUTPUT_CHARS, HOOK_TIMEOUT_SECONDS, validated_hooks
 from backend.harness.shell_selection import normalize_shell
 from backend.harness.shell_isolation import normalize_execution_profile
 from backend.harness.permission_modes import effective_permission_mode, requires_explicit_workspace_approval
@@ -53,6 +54,7 @@ from backend.harness.retry import (
 )
 from backend.harness.transcript import (
     append_compaction,
+    append_hook_event,
     append_message,
     append_task_start,
     build_profile,
@@ -216,6 +218,8 @@ class HarnessRunContext(RunContext):
     harness_shell: str = "auto"
     harness_execution_profile: str = "host"
     harness_permission_mode: str = "ask"
+    # Present only for separate, freshly approved hook commands.
+    harness_shell_timeout_seconds: int | None = None
     # Only the explicit node setting can outlive a task; temporary consent
     # stays in this per-run context, never in the dispatcher/session store.
     harness_network_always: bool = False
@@ -429,6 +433,8 @@ async def _execute_tool_calls(
     *,
     stop_handle=None,
     record_stopped_output: Callable[[ToolCall, str | None, int], None] | None = None,
+    before_call: Callable[[ToolCall], Awaitable[ToolResult | None]] | None = None,
+    after_call: Callable[[ToolCall, ToolResult], Awaitable[ToolResult]] | None = None,
 ) -> None:
     """Run consecutive parallel-safe reads together, preserving model order.
 
@@ -447,6 +453,13 @@ async def _execute_tool_calls(
             return max(0, round((
                 time.monotonic() - started - ctx.approval_wait_seconds.get(call.id, 0.0)
             ) * 1000))
+
+        # A rejected before-tool hook returns an ordinary tool result so
+        # the provider's assistant/tool_call pairing stays well-formed.
+        if before_call is not None:
+            blocked = await before_call(call)
+            if blocked is not None:
+                return blocked, elapsed_ms()
 
         # Both streaming tools are non-parallel execution barriers. Set a
         # per-call sink only for them; parallel-safe reads continue to share
@@ -497,6 +510,8 @@ async def _execute_tool_calls(
                 ctx.on_tool_output = None
                 finished = True
                 await pump
+        if after_call is not None:
+            result = await after_call(call, result)
         return result, elapsed_ms()
 
     semaphore = asyncio.Semaphore(_MAX_CONCURRENT_READS)
@@ -507,7 +522,8 @@ async def _execute_tool_calls(
 
     index = 0
     while index < len(calls):
-        if not registry.parallel_safe_for(calls[index].name):
+        if (before_call is not None or after_call is not None
+                or not registry.parallel_safe_for(calls[index].name)):
             call = calls[index]
             result, elapsed_ms = await invoke_timed(call)
             await record_result(call, result, elapsed_ms)
@@ -579,12 +595,30 @@ async def run_harness(
     if cancel_event.is_set() or not _alive():
         return
 
+    # A task snapshots its hook preferences once. UI edits while a tool or
+    # approval is in flight apply to the next task, never this one.
+    configured_hooks = tuple(
+        hook for hook in validated_hooks(node.state.harness_hooks) if hook["enabled"]
+    )
+    hook_audit_ready = False
+    end_hooks_ran = False
+
     # Set once the workspace resolves, below; _land flushes through it. None
     # until then, so a failure BEFORE the workspace exists has nothing to
     # flush and skips the barrier rather than erroring inside the error path.
     workspace_for_flush = None
 
     async def _land(status: str, detail: str, *, reply: str | None = None) -> None:
+        nonlocal end_hooks_ran
+        # End hooks run before the transcript flush, once per live terminal
+        # path. Stop has already revoked its run slot and cancellation token:
+        # do not spawn a new local command after Stop.
+        if hook_audit_ready and not end_hooks_ran and not cancel_event.is_set() and _alive():
+            end_hooks_ran = True
+            results = await _run_hooks("end_run", f"run {status}")
+            failures = [result.content for result in results if result.is_error]
+            if failures:
+                detail += " End-run hook error: " + _truncate(failures[0], 250)
         # §2.6's flush barrier, placed HERE rather than at each call site so
         # every terminal path (done, failed, stopped) is covered by
         # construction: the transcript must be fully on disk before the node
@@ -692,6 +726,7 @@ async def run_harness(
         # commands like git status; never promise an inert "Always allow".
         can_save_shell_rules = (
             not network_offered
+            and not call.id.startswith("hook-")
             and not requires_explicit_workspace_approval(call, ctx)
             and bool(shell_rules)
             and len(set(node.state.harness_shell_allow_rules + shell_rules))
@@ -725,6 +760,12 @@ async def run_harness(
                     call, shell=ctx.harness_shell, profile=ctx.harness_execution_profile,
                     network_status=network_status,
                 )
+            )
+        if call.id.startswith("hook-"):
+            phase = call.id.split("-", 2)[1].replace("_", " ")
+            node.state.harness_approval_summary = (
+                f"Workspace {phase} hook (local command; approval required):\n"
+                + node.state.harness_approval_summary
             )
         # Token binding is independent of whether a durable grant is useful.
         # An 'always' tool (especially graph.delete_node) cannot offer a
@@ -859,6 +900,117 @@ async def run_harness(
         settings_manager=settings_manager,
         runtime=runtime,
     )
+
+    async def _run_hooks(phase: str, target: str = "") -> list[ToolResult]:
+        """Execute one phase through the real shell registry and approval gate.
+
+        The hook context deliberately carries no provider, runtime, model,
+        transcript, tool arguments/results, or secrets. Subprocesses get the
+        shell tool's allowlisted environment and DEVNULL stdin. No implicit
+        network grant, saved shell prefix, or Autonomous bypass is inherited.
+        """
+        results: list[ToolResult] = []
+        for hook in configured_hooks:
+            if hook["phase"] != phase:
+                continue
+            if cancel_event.is_set() or not _alive():
+                raise api_provider.RequestCancelledError("stopped")
+            call = ToolCall(
+                id=f"hook-{phase}-{uuid.uuid4().hex}",
+                name="shell.exec",
+                arguments={"command": hook["command"], "network": False},
+            )
+            hook_ctx = HarnessRunContext(
+                granted_scopes=frozenset({CODE_EXECUTE}),
+                request_approval=request_approval,
+                cancel=CancelToken(cancel_event),
+                offered_tool_names=frozenset({"shell.exec"}),
+                shell_allow_rules=[],
+                harness_node_id=harness_node_id,
+                harness_workspace_id=ctx.harness_workspace_id,
+                harness_workspace_dir=ctx.harness_workspace_dir,
+                harness_shell=ctx.harness_shell,
+                harness_execution_profile=ctx.harness_execution_profile,
+                harness_permission_mode="ask",
+                harness_shell_timeout_seconds=HOOK_TIMEOUT_SECONDS,
+            )
+            started = time.monotonic()
+            row = _log_activity(
+                node, tool=f"hook.{phase}",
+                summary=_truncate(f"{hook['command']} ({target or 'run'})", _ACTIVITY_SUMMARY_CAP),
+                outcome="running", elapsed_ms=0,
+            )
+            append_hook_event(
+                transcript_dir, run_id=request_id, phase=phase,
+                command=hook["command"], tool=target,
+                outcome="running", result="Started", elapsed_ms=0,
+            )
+            await bus.publish("scene")
+            try:
+                result = await registry.invoke(call, hook_ctx)
+            except api_provider.RequestCancelledError:
+                row["outcome"] = "stopped"
+                row["summary"] = "Stopped during hook execution."
+                append_hook_event(
+                    transcript_dir, run_id=request_id, phase=phase,
+                    command=hook["command"], tool=target,
+                    outcome="stopped", result=row["summary"],
+                    elapsed_ms=round((time.monotonic() - started) * 1000),
+                )
+                raise
+            except Exception as exc:
+                # An unexpected registry error still fails closed for a
+                # before hook, with an audited reason instead of a silent
+                # permission bypass.
+                result = ToolResult(
+                    content=f"Hook execution failed: {type(exc).__name__}", is_error=True,
+                )
+            elapsed = round((time.monotonic() - started) * 1000)
+            outcome = "error" if result.is_error else "ok"
+            excerpt = _truncate(result.content, HOOK_OUTPUT_CHARS)
+            row.update({
+                "summary": _truncate(f"{hook['command']}\n{excerpt}", _ACTIVITY_SUMMARY_CAP),
+                "outcome": outcome, "elapsedMs": elapsed,
+            })
+            append_hook_event(
+                transcript_dir, run_id=request_id, phase=phase,
+                command=hook["command"], tool=target,
+                outcome=outcome, result=excerpt, elapsed_ms=elapsed,
+            )
+            await bus.publish("scene")
+            results.append(result)
+            if phase == "before_tool" and result.is_error:
+                break
+        return results
+
+    async def _before_tool(call: ToolCall) -> ToolResult | None:
+        for result in await _run_hooks("before_tool", call.name):
+            if result.is_error:
+                return ToolResult(
+                    content=(
+                        f"Blocked by workspace before-tool hook for {call.name}: "
+                        + _truncate(result.content, HOOK_OUTPUT_CHARS)
+                    ),
+                    is_error=True,
+                )
+        return None
+
+    async def _after_tool(call: ToolCall, result: ToolResult) -> ToolResult:
+        notes: list[str] = []
+        for hook_result in await _run_hooks("after_tool", call.name):
+            if not hook_result.is_error and hook_result.content.startswith("exit code 0\n"):
+                note = hook_result.content.split("\n", 1)[1].strip()
+                if note:
+                    notes.append(_truncate(note, HOOK_OUTPUT_CHARS))
+        if not notes:
+            return result
+        # Attach the note to the REAL tool result; an extra synthetic role
+        # 'tool' message would invalidate provider tool-call pairing.
+        return ToolResult(
+            content=result.content + "\n[Workspace after-tool hook note]\n" + "\n".join(notes),
+            is_error=result.is_error,
+            image_bytes=result.image_bytes,
+        )
 
     node.state.harness_status = "running"
     node.state.harness_status_detail = ""
@@ -1016,6 +1168,7 @@ async def run_harness(
         # profile/root stamp the meta line when this is the file's very
         # first write; ignored on every later append.
         append_message(transcript_dir, user_message, profile=profile, root=root)
+        hook_audit_ready = True
 
         # Keep image previews for exactly one model turn, not in the durable
         # tool transcript. The loop sends at most eight images per turn.
@@ -1309,6 +1462,8 @@ async def run_harness(
             await _execute_tool_calls(
                 tool_calls, registry, ctx, record_result, record_progress=record_progress,
                 stop_handle=handle, record_stopped_output=record_stopped_output,
+                before_call=_before_tool if configured_hooks else None,
+                after_call=_after_tool if configured_hooks else None,
             )
     except api_provider.RequestCancelledError:
         await _land("stopped", "Stopped by user.")

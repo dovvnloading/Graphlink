@@ -18,6 +18,7 @@ from backend.api._shared import make_publish_scene
 from backend.api.intents_harness_workspace import register_harness_workspace_intents
 from backend.domain.graph import SceneDocument
 from backend.domain.node_states import HarnessState
+from backend.harness.hooks import validated_hooks
 from backend.harness.shell_selection import VALID_SHELLS
 from backend.harness.shell_isolation import VALID_EXECUTION_PROFILES, available_engine
 from backend.harness.permission_modes import AUTONOMOUS, VALID_PERMISSION_MODES
@@ -309,6 +310,25 @@ def register_harness_preferences_intents(
             node.state.harness_shell_allow_rules.remove(rule)
             await publish_scene()
 
+    async def get_hooks(node_id):
+        """Return the workspace's editable hooks. This never grants execution."""
+        node = document.nodes.get(node_id)
+        if node is None or not isinstance(node.state, HarnessState):
+            raise ValueError("Agent workspace not found.")
+        return validated_hooks(node.state.harness_hooks)
+
+    async def set_hooks(node_id, hooks):
+        """An explicit configuration edit, not an approval or an undo target."""
+        node = document.nodes.get(node_id)
+        if node is None or not isinstance(node.state, HarnessState):
+            raise ValueError("Agent workspace not found.")
+        normalized = validated_hooks(hooks, strict=True)
+        node.state.harness_hooks = normalized
+        await publish_scene()
+        return normalized
+
+    bus.register_intent("harness", "getHooks", get_hooks)
+    bus.register_intent("harness", "setHooks", set_hooks)
     bus.register_intent("harness", "setShell", set_shell)
     bus.register_intent("harness", "removeShellAllowRule", remove_shell_allow_rule)
     bus.register_intent("harness", "setExecutionProfile", set_execution_profile)

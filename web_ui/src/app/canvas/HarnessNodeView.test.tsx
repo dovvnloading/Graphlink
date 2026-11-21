@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { ReactFlowProvider } from "@xyflow/react";
 import { describe, expect, it, vi } from "vitest";
-import { HarnessNodeView, approvalPanDelta, type HarnessNodeData } from "./HarnessNodeView";
+import { HarnessNodeView, approvalPanDelta, type HarnessHook, type HarnessNodeData } from "./HarnessNodeView";
 import { ModelCapabilityContext, ComposerModelStoreContext } from "../context/ModelCapabilityContext";
 import { OverlayProvider } from "../overlays/overlays";
 import { initialComposerState, type ComposerStore } from "../chrome/composerStore";
@@ -69,6 +69,8 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     onSetPermissionMode: vi.fn(),
     onSetNetworkAlways: vi.fn(),
     onGetIsolationEngine: vi.fn(async () => "docker"),
+    onGetHooks: vi.fn(async () => []),
+    onSetHooks: vi.fn(async () => {}),
     ...overrides,
   };
 }
@@ -265,6 +267,79 @@ describe("HarnessNodeView", () => {
     expect(screen.getByText("Working…")).toBeInTheDocument();
     expect(screen.getByText("Turns 3 (max 16/task)")).toBeInTheDocument();
     expect(screen.getByText("Tokens 4,321")).toBeInTheDocument();
+  });
+
+  it("lists saved hooks, edits phases and commands, and saves only on explicit action", async () => {
+    const user = userEvent.setup();
+    const hooks: HarnessHook[] = [{ phase: "before_tool", command: "echo check", enabled: true }];
+    const data = makeData({
+      onGetHooks: vi.fn(async () => hooks),
+    });
+    renderHarness(data);
+    await user.click(screen.getByRole("button", { name: "Agent settings" }));
+    const dialog = screen.getByRole("dialog", { name: "Agent settings" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(await within(dialog).findByRole("list", { name: "Agent hooks" })).toBeInTheDocument();
+    expect(within(dialog).getByText(/run local commands with your workspace access/)).toBeInTheDocument();
+    expect(within(dialog).getByRole("textbox", { name: "Hook command 1" })).toHaveValue("echo check");
+    await user.selectOptions(within(dialog).getByRole("combobox", { name: "Hook phase 1" }), "after_tool");
+    await user.clear(within(dialog).getByRole("textbox", { name: "Hook command 1" }));
+    await user.type(within(dialog).getByRole("textbox", { name: "Hook command 1" }), "echo result");
+    await user.click(within(dialog).getByRole("checkbox", { name: "Enable hook 1" }));
+    expect(data.onSetHooks).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", { name: "Save hooks" }));
+    await waitFor(() => expect(data.onSetHooks).toHaveBeenCalledWith([
+      { phase: "after_tool", command: "echo result", enabled: false },
+    ]));
+    expect(await within(dialog).findByText("Hooks saved for the next task.")).toBeInTheDocument();
+  });
+
+  it("adds disabled hooks, prevents saving blanks, and removes configured hooks", async () => {
+    const user = userEvent.setup();
+    const data = makeData();
+    renderHarness(data);
+    await user.click(screen.getByRole("button", { name: "Agent settings" }));
+    const dialog = screen.getByRole("dialog", { name: "Agent settings" });
+    await within(dialog).findByText("No hooks configured. Hooks are off by default.");
+    await user.click(within(dialog).getByRole("button", { name: "Add hook" }));
+    expect(within(dialog).getByRole("checkbox", { name: "Enable hook 1" })).not.toBeChecked();
+    expect(within(dialog).getByRole("button", { name: "Save hooks" })).toBeDisabled();
+    await user.type(within(dialog).getByRole("textbox", { name: "Hook command 1" }), "echo hello");
+    await user.click(within(dialog).getByRole("button", { name: "Remove hook 1" }));
+    expect(within(dialog).queryByRole("textbox", { name: "Hook command 1" })).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Save hooks" }));
+    await waitFor(() => expect(data.onSetHooks).toHaveBeenCalledWith([]));
+  });
+
+  it("keeps keyboard focus within the settings dialog and restores its trigger on Escape", async () => {
+    const user = userEvent.setup();
+    renderHarness(makeData());
+    const trigger = screen.getByRole("button", { name: "Agent settings" });
+    await user.click(trigger);
+    const dialog = screen.getByRole("dialog", { name: "Agent settings" });
+    await within(dialog).findByText("No hooks configured. Hooks are off by default.");
+    const close = within(dialog).getByRole("button", { name: "Close agent settings" });
+    close.focus();
+    await user.keyboard("{Shift>}{Tab}{/Shift}");
+    expect(within(dialog).getByRole("button", { name: "Save hooks" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Agent settings" })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("reports hook-save errors without pretending an unsafe configuration was saved", async () => {
+    const user = userEvent.setup();
+    const hooks: HarnessHook[] = [{ phase: "end_run", command: "echo end", enabled: false }];
+    renderHarness(makeData({
+      onSetHooks: vi.fn(async () => { throw new Error("denied"); }),
+      onGetHooks: vi.fn(async () => hooks),
+    }));
+    await user.click(screen.getByRole("button", { name: "Agent settings" }));
+    const dialog = screen.getByRole("dialog", { name: "Agent settings" });
+    await within(dialog).findByRole("textbox", { name: "Hook command 1" });
+    await user.click(within(dialog).getByRole("button", { name: "Save hooks" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Could not save agent hooks");
+    expect(within(dialog).queryByText("Hooks saved for the next task.")).not.toBeInTheDocument();
   });
 
   it("opens settings with Bash on non-Windows and explains next-task timing", async () => {
