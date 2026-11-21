@@ -1081,7 +1081,7 @@ async def run_harness(
             if compacted is None:
                 return False
             history, _summary = compacted
-            append_compaction(transcript_dir, history[0]["content"])
+            append_compaction(transcript_dir, history[0]["content"], tail=history[1:])
             node.state.harness_compactions += 1
             node.state.harness_context_tokens = _estimated_input(history)
             await bus.publish("scene")
