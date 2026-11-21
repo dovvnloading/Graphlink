@@ -8,6 +8,7 @@ import { Dialog, useOverlays } from "../overlays/overlays";
 import { CustomSelect } from "./CustomSelect";
 import { CloudProviderSettings } from "./CloudProviderSettings";
 import { KnowledgeSettingsPage } from "./KnowledgeSettingsPage";
+import { ModelPricingSettings } from "./ModelPricingSettings";
 import { OllamaSettingsPage } from "./OllamaSettingsPage";
 import { formatLocalModelBytes, ProviderModeSwitch, REASONING_LEVEL_OPTIONS } from "./LocalProviderSettings";
 
@@ -22,6 +23,7 @@ import { formatLocalModelBytes, ProviderModeSwitch, REASONING_LEVEL_OPTIONS } fr
 
 const SECTIONS = [
   "General",
+  "Model pricing",
   "Knowledge",
   "Ollama (Local)",
   "Llama.cpp (Local)",
@@ -118,6 +120,8 @@ const initialState: AppSettingsState = {
   apiKeySource: {},
   apiModels: {},
   apiModelCatalog: [],
+  pricingOverrides: [],
+  effectiveModelPrices: [],
   apiCatalogBaseUrl: "",
   apiCatalogStatus: "idle",
   apiCatalogMessage: "Model catalog has not been refreshed yet.",
@@ -1534,6 +1538,8 @@ export function SettingsDialog({ transport }: { transport: WsTransport }) {
         <div className="settings-page" role="region" aria-label={activeSection}>
           {activeSection === "General" ? (
             <GeneralPage state={state} transport={transport} />
+          ) : activeSection === "Model pricing" ? (
+            <ModelPricingSettings state={state} transport={transport} />
           ) : activeSection === "Knowledge" ? (
             <KnowledgeSettingsPage
               key={JSON.stringify([
