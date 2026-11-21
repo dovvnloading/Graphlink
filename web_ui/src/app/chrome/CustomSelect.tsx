@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
 /**
@@ -103,7 +103,7 @@ export function CustomSelect({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const onPanelKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+  const onPanelKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const buttons = [...(panelRef.current?.querySelectorAll<HTMLButtonElement>(".reasoning-option") ?? [])];
     if (!buttons.length) return;
     const focused = buttons.findIndex((button) => button === document.activeElement);
