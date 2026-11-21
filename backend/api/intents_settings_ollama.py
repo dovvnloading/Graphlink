@@ -18,7 +18,7 @@ import graphlink_task_config as config
 from graphlink_model_catalog import AUTO_MODEL, INHERIT_MODEL
 from backend.ollama_context import (
     CONTEXT_CHOICES, DEFAULT_CONTEXT_WINDOW, available_memory_bytes,
-    kv_bytes_per_token,
+    estimated_kv_cache_bytes,
 )
 
 from backend.api._settings_shared import (
@@ -600,8 +600,13 @@ def _verified_inventory_context_limit(row: dict | None) -> int | None:
     return length if type(length) is int and 0 < length <= 1_000_000 else None
 
 
-def _inspect_ollama_context(model: str) -> tuple[int, int]:
-    """Get KV geometry and RAM; trained length and weights come from inventory."""
+def _inspect_ollama_context(model: str, window: int) -> tuple[int, int]:
+    """Get effective KV bytes/token for this served window and available RAM.
+
+    The existing wire field is per-token, so divide the window-specific KV
+    allocation by the inspected window (rounding up). A new context setting
+    causes another inspection rather than extrapolating across sliding caps.
+    """
     try:
         try:
             response = ollama.show(model)
@@ -610,11 +615,11 @@ def _inspect_ollama_context(model: str) -> tuple[int, int]:
         info = api_provider._extract_response_field(response, "model_info")
         if info is None:
             info = api_provider._extract_response_field(response, "modelinfo")
-        kv_bytes = kv_bytes_per_token(info)
+        kv_cache_bytes = estimated_kv_cache_bytes(info, window)
     except Exception:
         # Missing metadata can only change this approximate memory estimate.
-        kv_bytes = kv_bytes_per_token({})
-    return kv_bytes, available_memory_bytes()
+        kv_cache_bytes = estimated_kv_cache_bytes({}, window)
+    return (kv_cache_bytes + window - 1) // window, available_memory_bytes()
 
 
 def register_ollama_context_intents(
@@ -645,13 +650,20 @@ def register_ollama_context_intents(
         state.ollama_context_available_memory_bytes = 0
         await bus.publish("app-settings")
         # Never issue /api/show for an arbitrary name supplied via WebSocket.
-        if _inventory_context_model(state, model) is None:
+        row = _inventory_context_model(state, model)
+        if row is None:
             state.ollama_context_status = "error"
             state.ollama_context_notice = "Refresh the Ollama server inventory before inspecting this model."
             await bus.publish("app-settings")
             return
+        # Mirror the card's supported-preset fallback so the estimate always
+        # corresponds to the displayed window, even with a stale saved value.
+        option_limit = _verified_inventory_context_limit(row) or DEFAULT_CONTEXT_WINDOW
+        choices = [choice for choice in CONTEXT_CHOICES if choice <= option_limit]
+        saved_window = manager.get_ollama_context_windows().get(model.casefold(), DEFAULT_CONTEXT_WINDOW)
+        window = saved_window if saved_window in choices else (choices[-1] if choices else DEFAULT_CONTEXT_WINDOW)
         try:
-            kv_bytes, available = await asyncio.to_thread(_inspect_ollama_context, model)
+            kv_bytes, available = await asyncio.to_thread(_inspect_ollama_context, model, window)
         except Exception as exc:  # noqa: BLE001 - inspection failures must not disable Settings
             if inspection_generation == generation:
                 state.ollama_context_status = "error"
@@ -683,9 +695,14 @@ def register_ollama_context_intents(
         # Do not coerce strings, booleans, floats or arbitrary integers from
         # the WebSocket into a serving allocation. Only verified installed
         # models may trigger /api/show or accept a new override.
+        row = _inventory_context_model(state, model)
         if (not valid_ollama_model_name(model) or type(value) is not int
-                or value not in CONTEXT_CHOICES or _inventory_context_model(state, model) is None):
+                or value not in CONTEXT_CHOICES or row is None):
             state.ollama_context_notice = "Choose a verified installed Ollama model and context window."
+            await bus.publish("app-settings")
+            return
+        if "embeddings" in row.get("capabilities", []) and "chat" not in row.get("capabilities", []):
+            state.ollama_context_notice = "Embedding-only models do not have a chat context window."
             await bus.publish("app-settings")
             return
 
