@@ -84,10 +84,8 @@ def register_settings_ollama_intents(
         await republish_composer_reasoning(bus)
 
     async def set_ollama_model_assignment(task: str, value: str):
-        # Coerced before use, matching every intent in this file post the
-        # R7.4a audit: task ends up as a dict key below, and a client can
-        # send any JSON type over the wire with zero validation anywhere
-        # in the dispatch path.
+        # Intent args are raw JSON; a forged WS request cannot turn an
+        # arbitrary value into a task key or persist a path-like model ID.
         if not isinstance(task, str) or task not in OLLAMA_TASK_KEYS or not isinstance(value, str):
             return
         value = value.strip()
