@@ -11,6 +11,7 @@
  */
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +23,19 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const VIEWPORT = { width: 1440, height: 900 };
 const THEMES = ["dark", "light"];
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+
+// Never mistake somebody else's server on 8802 for the backend we spawned.
+// Apart from protecting capture isolation, a busy port should fail startup
+// rather than silently producing screenshots of an unrelated user's state.
+async function assertPortAvailable() {
+  await new Promise((done, fail) => {
+    const probe = createServer();
+    probe.once("error", (error) => fail(new Error(`Port ${PORT} is unavailable: ${errorLine(error)}`)));
+    probe.listen(PORT, "127.0.0.1", () => {
+      probe.close((error) => error ? fail(error) : done());
+    });
+  });
+}
 
 // Check the resolved target as well as its spelling: a symlink outside the
 // checkout can otherwise resolve to a directory *inside* the repository.
@@ -227,8 +241,10 @@ async function captureTheme(page, theme, capture, interrupted) {
 
   const barSurfaces = [
     "Library", "View", "Plugins", "Pins", "Global Search", "Knowledge",
-    "Builder", "Agent", "Organize", "Export methods",
+    "Builder", "Agent", "Organize",
   ];
+  // "Export methods" triggers a download, not a panel. The app-bar shot
+  // already includes that button without invoking filesystem side effects.
   for (const name of barSurfaces) {
     await shot(`App bar: ${name}`, `appbar-${slug(name)}`, async () => {
       await dismiss(page);
@@ -418,6 +434,7 @@ async function main() {
   process.on("SIGINT", onSigint);
 
   try {
+    await assertPortAvailable();
     console.log("seeding the demo graph...");
     await run("python", ["tools/seed_demo_graph.py", join(dataDir, "chats.db")], env);
     if (interrupted) throw new Error("Capture interrupted");
