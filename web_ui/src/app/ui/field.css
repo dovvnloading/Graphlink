@@ -1,0 +1,15 @@
+.gl-field { display: grid; gap: var(--gl-space-1-5); min-width: 0; }
+.gl-field-label { color: var(--gl-surface-text-primary); font-size: var(--gl-text-sm); font-weight: var(--gl-weight-medium); line-height: var(--gl-leading-sm); }
+.gl-field-required { color: var(--gl-surface-text-secondary); }
+.gl-field-body { display: grid; gap: var(--gl-space-1-5); min-width: 0; }
+.gl-field-description { color: var(--gl-surface-text-muted); font-size: var(--gl-text-xs); line-height: var(--gl-leading-xs); }
+.gl-field-error { display: flex; align-items: center; gap: var(--gl-space-1); color: var(--gl-surface-text-primary); font-size: var(--gl-text-xs); line-height: var(--gl-leading-xs); }
+.gl-field-error .gl-icon { color: var(--gl-semantic-status-error); }
+.gl-field-inline { grid-template-columns: 200px minmax(0, 1fr); align-items: start; column-gap: var(--gl-space-4); }
+.gl-field-inline .gl-field-label { padding-top: var(--gl-space-1); }
+.gl-form-row { min-width: 0; }
+.gl-field-group { display: grid; gap: var(--gl-space-4); min-width: 0; }
+.gl-field-group-header { display: grid; gap: var(--gl-space-1); }
+.gl-field-group-title { margin: 0; font-size: var(--gl-text-sm); font-weight: var(--gl-weight-semibold); line-height: var(--gl-leading-sm); color: var(--gl-surface-text-primary); }
+.gl-field-group-description { margin: 0; font-size: var(--gl-text-xs); line-height: var(--gl-leading-xs); color: var(--gl-surface-text-muted); }
+.gl-field-group-rows { display: grid; gap: var(--gl-space-3); }
