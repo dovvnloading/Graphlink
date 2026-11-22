@@ -37,12 +37,12 @@ describe("kit Select", () => {
     const { user, onChange, trigger } = setup();
     trigger.focus();
     await user.keyboard("{ArrowDown}");
-    expect(screen.getByRole("listbox")).toBeInTheDocument();
-    expect(trigger).toHaveAttribute("aria-activedescendant", screen.getByRole("option", { name: "Delta" }).id);
+    expect(screen.getByRole("listbox")).toHaveFocus();
+    expect(screen.getByRole("listbox")).toHaveAttribute("aria-activedescendant", screen.getByRole("option", { name: "Delta" }).id);
     await user.keyboard("{Home}");
-    expect(trigger).toHaveAttribute("aria-activedescendant", screen.getByRole("option", { name: "Alpha" }).id);
+    expect(screen.getByRole("listbox")).toHaveAttribute("aria-activedescendant", screen.getByRole("option", { name: "Alpha" }).id);
     await user.keyboard("{End}{ArrowDown}{ArrowUp}{Enter}");
-    expect(onChange).toHaveBeenCalledWith("Echo");
+    expect(onChange).toHaveBeenCalledWith("e");
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(trigger).toHaveFocus();
   });
@@ -51,7 +51,7 @@ describe("kit Select", () => {
     const { user, trigger, onChange } = setup();
     await user.click(trigger);
     await user.keyboard("d");
-    expect(trigger).toHaveAttribute("aria-activedescendant", screen.getByRole("option", { name: "Delta" }).id);
+    expect(screen.getByRole("listbox")).toHaveAttribute("aria-activedescendant", screen.getByRole("option", { name: "Delta" }).id);
     await user.keyboard("{Enter}");
     expect(onChange).toHaveBeenCalledWith("d");
   });
