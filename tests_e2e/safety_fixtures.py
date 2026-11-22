@@ -15,6 +15,7 @@ from pathlib import Path
 import platform
 import subprocess
 import threading
+import venv
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -23,7 +24,7 @@ from fastapi import APIRouter, HTTPException
 from backend.agents import _build_gitlink_preview_text, _fingerprint_changes
 from backend.domain.model import SceneNode
 from backend.domain.node_states import HarnessState
-from backend.harness.python_env import ensure_python_environment
+from backend.harness.python_env import managed_venv_dir
 from backend.providers.base import ToolCall
 from backend.session_context import get_session_context
 from graphlink_plugins.gitlink import apply_transaction
@@ -84,12 +85,13 @@ class SafetyFixtures:
         self.lock = threading.Lock()
         self.sequence = 0
         self.initial_files: dict = {}
-        # Bootstrap a real managed venv before the browser takes up the test
-        # account's POSIX thread/process allowance. Its approved REPL will use
-        # the ordinary workspace lookup and the normal per-process guard.
+        # The fixture uses only the standard library. Build its interpreter as
+        # trusted test setup; the harness still validates and runs it through
+        # the normal managed lookup and process guard after approval.
         self.python_case = root / "python-case"
         self.python_workspace_id = uuid4().hex[:12]
-        ensure_python_environment(self.python_workspace_id, self.python_case / "checkout", is_scratch=False)
+        fixture_venv = managed_venv_dir(self.python_workspace_id, self.python_case / "checkout", is_scratch=False)
+        venv.EnvBuilder(with_pip=False).create(fixture_venv)
         router = APIRouter(prefix="/api/e2e")
         router.add_api_route("/prepare/{kind}", self.prepare, methods=["POST"])
         router.add_api_route("/action/{action}", self.action, methods=["POST"])
