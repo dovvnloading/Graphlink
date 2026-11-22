@@ -1,0 +1,239 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import { Icon, type IconSize } from "./Icon";
+import { iconDefinitions, iconNames, iconRegistry, type GlyphPrimitive } from "./registry";
+import { chromeGlyphs } from "./glyphs/chrome";
+import iconsSection from "../gallery/sections/Icons";
+const css = readFileSync(join(process.cwd(), "src/app/ui/icons/icon.css"), "utf-8");
+
+const allowedPrimitives = new Set(["path", "circle", "rect", "line", "polyline"]);
+const coordinateNumbers = (s: string): number[] =>
+  [...s.matchAll(/-?\d+(?:\.\d+)?/g)].map((match) => Number(match[0]));
+
+function checkCoordinate(value: number) {
+  expect(Number.isFinite(value)).toBe(true);
+  expect(value).toBeGreaterThanOrEqual(1.5);
+  expect(value).toBeLessThanOrEqual(18.5);
+  expect(value * 2).toBe(Math.round(value * 2));
+}
+
+function checkPrimitive(primitive: GlyphPrimitive) {
+  expect(allowedPrimitives.has(primitive.type)).toBe(true);
+  switch (primitive.type) {
+    case "path":
+      expect(primitive.d).toMatch(/^M /);
+      expect(primitive.d).not.toMatch(/[^MLHVQCZ0-9.\s-]/);
+      coordinateNumbers(primitive.d).forEach(checkCoordinate);
+      break;
+    case "polyline":
+      expect(coordinateNumbers(primitive.points).length % 2).toBe(0);
+      coordinateNumbers(primitive.points).forEach(checkCoordinate);
+      break;
+    case "line":
+      [primitive.x1, primitive.y1, primitive.x2, primitive.y2].forEach(checkCoordinate);
+      break;
+    case "circle":
+      [primitive.cx, primitive.cy].forEach(checkCoordinate);
+      expect(primitive.r).toBeGreaterThan(0);
+      expect(primitive.cx - primitive.r).toBeGreaterThanOrEqual(1.5);
+      expect(primitive.cy - primitive.r).toBeGreaterThanOrEqual(1.5);
+      expect(primitive.cx + primitive.r).toBeLessThanOrEqual(18.5);
+      expect(primitive.cy + primitive.r).toBeLessThanOrEqual(18.5);
+      if (primitive.fill) expect(primitive.r).toBeLessThanOrEqual(1.25);
+      break;
+    case "rect":
+      [primitive.x, primitive.y].forEach(checkCoordinate);
+      expect(primitive.width).toBeGreaterThanOrEqual(2);
+      expect(primitive.height).toBeGreaterThanOrEqual(2);
+      checkCoordinate(primitive.x + primitive.width);
+      checkCoordinate(primitive.y + primitive.height);
+      expect(primitive.rx).toBe(Math.min(primitive.width, primitive.height) < 8 ? 1.5 : 2);
+      expect(primitive.fill).toBeUndefined();
+      break;
+  }
+}
+
+describe("icon registry", () => {
+  it("includes the chrome batch and allows later batches to extend the registry", () => {
+    expect(Object.keys(chromeGlyphs).length).toBe(73); // 72 catalog names plus the send alias.
+    expect(iconNames).toEqual(expect.arrayContaining(Object.keys(chromeGlyphs)));
+    expect(new Set(iconNames).size).toBe(iconNames.length);
+  });
+
+  it.each(iconNames)("%s renders a 20-unit SVG from real primitives", (name) => {
+    const { container } = render(<Icon name={name} />);
+    const svg = container.querySelector("svg");
+    expect(svg).toHaveAttribute("viewBox", "0 0 20 20");
+    expect(svg).toHaveAttribute("fill", "none");
+    expect(svg).toHaveAttribute("stroke", "currentColor");
+    expect(svg).toHaveAttribute("stroke-width", "1.5");
+    expect(svg).toHaveAttribute("stroke-linecap", "round");
+    expect(svg).toHaveAttribute("stroke-linejoin", "round");
+    expect(svg).toHaveAttribute("focusable", "false");
+    expect(svg).toHaveClass("gl-icon", "gl-icon--md");
+    expect(svg).toHaveAttribute("aria-hidden", "true");
+    expect(svg).not.toHaveAttribute("role");
+    expect(svg).not.toHaveAttribute("aria-label");
+    expect(svg?.children.length).toBeGreaterThan(0);
+    expect(svg?.children.length).toBe(iconRegistry[name].length);
+    for (const child of Array.from(svg?.children ?? [])) {
+      expect(allowedPrimitives.has(child.tagName.toLowerCase())).toBe(true);
+    }
+  });
+
+  it("only stores the five primitive kinds, with coordinates inside the safe area", () => {
+    for (const [name, glyph] of Object.entries(iconRegistry)) {
+      expect(glyph.length, name).toBeGreaterThan(0);
+      for (const primitive of glyph) checkPrimitive(primitive);
+    }
+  });
+
+  it("stores geometry without raw colours, CSS properties or glyph-specific stroke weights", () => {
+    const allowedShapes: Record<GlyphPrimitive["type"], string[][]> = {
+      path: [["type", "d"]],
+      circle: [["type", "cx", "cy", "r"], ["type", "cx", "cy", "r", "fill"]],
+      rect: [["type", "x", "y", "width", "height", "rx"], ["type", "x", "y", "width", "height", "rx", "fill"]],
+      line: [["type", "x1", "y1", "x2", "y2"]],
+      polyline: [["type", "points"]],
+    };
+    for (const [name, glyph] of Object.entries(iconRegistry)) {
+      for (const primitive of glyph) {
+        expect(allowedPrimitives.has(primitive.type), name).toBe(true);
+        const keys = Object.keys(primitive).sort();
+        const permittedKeySets = allowedShapes[primitive.type].map((shape) => [...shape].sort());
+        expect(permittedKeySets, name).toContainEqual(keys);
+        for (const [key, value] of Object.entries(primitive)) {
+          if (key === "type") {
+            expect(allowedPrimitives.has(value as string), name).toBe(true);
+          } else if (key === "fill") {
+            expect(typeof value, name).toBe("boolean");
+          } else if (key === "d" || key === "points") {
+            expect(typeof value, name).toBe("string");
+            expect(value, name).toMatch(/^[0-9 ,.MmLlHhVvCcSsQqTtAaZz-]+$/);
+          } else {
+            expect(typeof value, name).toBe("number");
+            expect(Number.isFinite(value), name).toBe(true);
+          }
+        }
+        expect("stroke" in primitive || "color" in primitive || "strokeWidth" in primitive).toBe(false);
+      }
+    }
+  });
+
+  it("resolves every alias to its target's concrete primitive array", () => {
+    const aliases = Object.entries(iconDefinitions).filter(([, definition]) => "alias" in definition);
+    expect(aliases.length).toBeGreaterThan(0);
+    for (const [name, definition] of aliases) {
+      if (!("alias" in definition)) continue;
+      expect(iconNames).toContain(definition.alias);
+      expect(iconRegistry[name as keyof typeof iconRegistry])
+        .toBe(iconRegistry[definition.alias as keyof typeof iconRegistry]);
+    }
+    expect(iconRegistry.send).toBe(iconRegistry["arrow-up"]);
+  });
+
+  it("keeps refresh and rerun on one clockwise arc with an open head and inset play", () => {
+    expect(iconRegistry.refresh).toHaveLength(2);
+    expect(iconRegistry.rerun).toHaveLength(3);
+    const [arc, head] = iconRegistry.refresh;
+    expect(iconRegistry.rerun[0]).toBe(arc);
+    expect(iconRegistry.rerun[1]).toBe(head);
+    if (arc?.type !== "path" || head?.type !== "polyline") {
+      throw new Error("Circular arrows must use one path and one open polyline");
+    }
+
+    const arcCoords = coordinateNumbers(arc.d);
+    const [startX, startY] = arcCoords;
+    const endX = arcCoords[arcCoords.length - 2];
+    const endY = arcCoords[arcCoords.length - 1];
+    expect([startX, startY]).toEqual([16.5, 10]);
+    const gapDegrees = Math.abs((Math.atan2(endY - 10, endX - 10) * 180) / Math.PI);
+    expect(gapDegrees).toBeGreaterThan(50);
+    expect(gapDegrees).toBeLessThan(70);
+
+    const [ax, ay, tipX, tipY, bx, by] = coordinateNumbers(head.points);
+    const first = [ax - tipX, ay - tipY];
+    const second = [bx - tipX, by - tipY];
+    for (const stroke of [first, second]) {
+      expect(Math.hypot(...stroke)).toBeGreaterThanOrEqual(2.5);
+      expect(Math.hypot(...stroke)).toBeLessThanOrEqual(3.5);
+    }
+    expect(first[0] * second[0] + first[1] * second[1]).toBe(0);
+
+    const playTriangle = iconRegistry.rerun[2];
+    if (playTriangle?.type !== "polyline") {
+      throw new Error("Rerun must have a stroked play triangle");
+    }
+    const trianglePoints = coordinateNumbers(playTriangle.points);
+    const triangleRadii = [];
+    for (let index = 0; index < trianglePoints.length; index += 2) {
+      triangleRadii.push(Math.hypot(trianglePoints[index] - 10, trianglePoints[index + 1] - 10));
+    }
+    // The triangle stays >= 2.5 units inside the circular arc at all points.
+    expect(startX - 10 - Math.max(...triangleRadii)).toBeGreaterThanOrEqual(2.5);
+  });
+});
+
+describe("Icon component", () => {
+  it("keeps decorative icons hidden but makes explicitly labelled icons accessible", () => {
+    const { rerender } = render(<Icon name="search" />);
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    rerender(<Icon name="search" label="Search all chats" />);
+    expect(screen.getByRole("img", { name: "Search all chats" })).toHaveAttribute("focusable", "false");
+    expect(screen.getByRole("img", { name: "Search all chats" })).not.toHaveAttribute("aria-hidden");
+  });
+
+  it("passes custom classes and fills only explicit filled variants or small dots", () => {
+    const { container, rerender } = render(<Icon name="star-filled" className="my-custom-class" />);
+    expect(container.querySelector("svg")).toHaveClass("my-custom-class");
+    expect(container.querySelector("path")).toHaveAttribute("fill", "currentColor");
+    expect(container.querySelector("path")).toHaveAttribute("stroke", "none");
+    rerender(<Icon name="star" />);
+    expect(container.querySelector("path")).not.toHaveAttribute("fill", "currentColor");
+    rerender(<Icon name="pin-filled" />);
+    expect(container.querySelector("path")).toHaveAttribute("fill", "currentColor");
+    rerender(<Icon name="more-horizontal" />);
+    for (const dot of Array.from(container.querySelectorAll("circle"))) {
+      expect(dot).toHaveAttribute("fill", "currentColor");
+      expect(dot).toHaveAttribute("stroke", "none");
+    }
+  });
+
+  const sizes: { size: IconSize; token: string; fallback: number }[] = [
+    { size: "xs", token: "xs", fallback: 12 },
+    { size: "sm", token: "sm", fallback: 14 },
+    { size: "md", token: "md", fallback: 16 },
+    { size: "lg", token: "lg", fallback: 20 },
+    { size: "xl", token: "xl", fallback: 24 },
+    { size: "2xl", token: "2xl", fallback: 32 },
+    { size: "3xl", token: "3xl", fallback: 40 },
+  ];
+  it.each(sizes)("uses the $size size class and --gl-icon-$token token with a $fallback px fallback", ({ size, token, fallback }) => {
+    const { container } = render(<Icon name="check" size={size} />);
+    expect(container.querySelector("svg")).toHaveClass("gl-icon--" + size);
+    expect(css).toContain(".gl-icon--" + size + " {");
+    expect(css).toContain("var(--gl-icon-" + token + ", " + fallback + "px)");
+  });
+});
+
+describe("gallery icon baselines", () => {
+  it("shows every icon at the review sizes and can overlay all four keylines", () => {
+    const Component = iconsSection.Component;
+    const { container } = render(<Component theme="dark" />);
+    expect(container.querySelectorAll(".gl-icon-gallery-card").length).toBe(iconNames.length);
+    expect(container.querySelectorAll(".gl-icon-gallery-size").length).toBe(iconNames.length * 4);
+    expect(container.querySelectorAll(".gl-icon-guide-grid").length).toBe(0);
+
+    const toggle = screen.getByRole("button", { name: "Show keylines" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(toggle);
+    expect(screen.getByRole("button", { name: "Hide keylines" })).toHaveAttribute("aria-pressed", "true");
+    expect(container.querySelectorAll(".gl-icon-guide-grid").length).toBe(iconNames.length);
+    expect(container.querySelectorAll(".gl-icon-guide-circle").length).toBe(iconNames.length);
+    expect(container.querySelectorAll(".gl-icon-guide-square").length).toBe(iconNames.length);
+    expect(container.querySelectorAll(".gl-icon-guide-portrait").length).toBe(iconNames.length);
+    expect(container.querySelectorAll(".gl-icon-guide-landscape").length).toBe(iconNames.length);
+  });
+});
