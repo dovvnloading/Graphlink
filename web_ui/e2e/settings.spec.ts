@@ -31,3 +31,30 @@ test("opens Settings and renders the real provider/general section tabs", async 
   await expect(general).toHaveAttribute("aria-current", "page");
   await expect(dialog.getByRole("region", { name: "General" })).toBeVisible();
 });
+
+// The kit Select is an independent nested overlay, not a second dialog.
+test("Escape closes only the nested listbox before closing Settings", async ({ page }) => {
+  await gotoApp(page);
+  const opener = page.locator('[data-overlay-trigger="settings"]');
+  await opener.click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Close Settings" })).not.toBeFocused();
+  await dialog.getByRole("navigation", { name: "Settings sections" })
+    .getByRole("button", { name: "General", exact: true }).click();
+
+  const theme = dialog.getByRole("button", { name: "Theme" });
+  await theme.click();
+  const listbox = page.getByRole("listbox", { name: "Theme" });
+  await expect(listbox).toBeVisible();
+  await expect(listbox.getByRole("option", { name: "Dark" })).toBeVisible();
+  await expect(listbox).toBeFocused();
+
+  await page.keyboard.press("Escape");
+  await expect(listbox).toBeHidden();
+  await expect(dialog).toBeVisible();
+  await expect(theme).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(opener).toBeFocused();
+});
