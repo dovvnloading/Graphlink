@@ -1,4 +1,4 @@
-import { lazy, StrictMode, Suspense, useEffect, useState } from "react";
+import { lazy, StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "../lib/ui/base.css";
@@ -15,27 +15,32 @@ import "../lib/tokens/gl-vars-dev.css";
 import "./styles.css";
 import "./canvas/workspace.css";
 
-// The visual-review gallery is opt-in. React.lazy doesn't fetch its chunk on
-// ordinary app boots, including desktop launches carrying #token=... .
+// The opt-in gallery stays in a separate chunk; ordinary launches keep the
+// original <StrictMode><App /></StrictMode> tree and do not fetch it.
 const Gallery = lazy(() => import("./ui/gallery/Gallery"));
+const startsInGallery = window.location.hash === "#gallery";
+const root = createRoot(document.getElementById("root")!);
 
-function Root() {
-  const [showGallery, setShowGallery] = useState(() => window.location.hash === "#gallery");
-  useEffect(() => {
-    const onHashChange = () => setShowGallery(window.location.hash === "#gallery");
-    window.addEventListener("hashchange", onHashChange);
-    return () => window.removeEventListener("hashchange", onHashChange);
-  }, []);
-
-  return showGallery ? (
-    <Suspense fallback={<p role="status">Loading gallery…</p>}>
-      <Gallery />
-    </Suspense>
-  ) : <App />;
+if (startsInGallery) {
+  root.render(
+    <StrictMode>
+      <Suspense fallback={<p role="status">Loading gallery…</p>}>
+        <Gallery />
+      </Suspense>
+    </StrictMode>,
+  );
+} else {
+  root.render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
 }
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <Root />
-  </StrictMode>,
-);
+// Switch routes with a reload, not an in-place remount. Unrelated hashes,
+// including desktop #token=... and the composer skip link, must not reload.
+window.addEventListener("hashchange", () => {
+  if ((window.location.hash === "#gallery") !== startsInGallery) {
+    window.location.reload();
+  }
+});
