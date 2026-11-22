@@ -30,11 +30,7 @@ describe("CustomSelect", () => {
     const panel = screen.getByRole("listbox", { name: "Pick one" });
     expect(panel).toBeInTheDocument();
     for (const option of OPTIONS) {
-      // A regex, not an exact string: an option WITH a description (like
-      // Option B here) gets its description text folded into its own
-      // accessible name too (both are plain text inside the same <button>,
-      // no aria-hidden on either) - matching Composer.tsx's own Reasoning
-      // picker exactly, which this component deliberately reuses verbatim.
+      // A description remains part of a listbox option's accessible name.
       expect(screen.getByRole("option", { name: new RegExp("^" + option.label) })).toBeInTheDocument();
     }
   });
@@ -102,11 +98,8 @@ describe("CustomSelect", () => {
   it("Escape closes the panel and calls event.preventDefault(), so a parent's own Escape-closes-everything listener (overlays.tsx's own contract) does not also fire", async () => {
     const user = userEvent.setup();
     const parentEscapeHandler = vi.fn();
-    // Mirrors overlays.tsx's own OverlayProvider Escape listener: bubble
-    // phase, gated on event.defaultPrevented - the exact contract this
-    // component's own Escape handler (capture phase, preventDefault) must
-    // satisfy so opening a CustomSelect inside an already-open Settings
-    // Dialog can close ITS OWN panel without also closing the dialog.
+    // Mirrors OverlayProvider's bubble-phase, defaultPrevented-gated Escape
+    // listener: the focused listbox handles this Escape, not its host dialog.
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && !event.defaultPrevented) parentEscapeHandler();
     });
@@ -162,7 +155,8 @@ describe("CustomSelect", () => {
     await user.keyboard("{ArrowDown}");
     const listbox = screen.getByRole("listbox", { name: "Pick one" });
     expect(listbox).toHaveFocus();
-    expect(listbox).toHaveAttribute("aria-activedescendant", screen.getByRole("option", { name: /^Option B/ }).id);
+    // ArrowDown starts on the next enabled option after the selected value.
+    expect(listbox).toHaveAttribute("aria-activedescendant", screen.getByRole("option", { name: "Option C" }).id);
     await user.keyboard("{Home}");
     expect(listbox).toHaveAttribute("aria-activedescendant", screen.getByRole("option", { name: "Option A" }).id);
     await user.keyboard("{End}{Enter}");
