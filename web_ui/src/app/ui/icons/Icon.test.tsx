@@ -1,10 +1,10 @@
-import { readFileSync } from "node:fs";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { Icon, type IconSize } from "./Icon";
 import { iconDefinitions, iconNames, iconRegistry, type GlyphPrimitive } from "./registry";
 import { chromeGlyphs } from "./glyphs/chrome";
 import iconsSection from "../gallery/sections/Icons";
+import css from "./icon.css?raw";
 
 const allowedPrimitives = new Set(["path", "circle", "rect", "line", "polyline"]);
 const coordinateNumbers = (s: string): number[] =>
@@ -108,7 +108,49 @@ describe("icon registry", () => {
         .toBe(iconRegistry[definition.alias as keyof typeof iconRegistry]);
     }
     expect(iconRegistry.send).toBe(iconRegistry["arrow-up"]);
+  
+ 
+  it("keeps refresh and rerun on one clockwise arc with an open head and inset play", () => {
+    expect(iconRegistry.refresh).toHaveLength(2);
+    expect(iconRegistry.rerun).toHaveLength(3);
+    const [arc, head] = iconRegistry.refresh;
+    expect(iconRegistry.rerun[0]).toBe(arc);
+    expect(iconRegistry.rerun[1]).toBe(head);
+    if (arc?.type !== "path" || head?.type !== "polyline") {
+      throw new Error("Circular arrows must use one path and one open polyline");
+    }
+
+    const arcCoords = coordinateNumbers(arc.d);
+    const [startX, startY] = arcCoords;
+    const endX = arcCoords[arcCoords.length - 2];
+    const endY = arcCoords[arcCoords.length - 1];
+    expect([startX, startY]).toEqual([16.5, 10]);
+    const gapDegrees = Math.abs((Math.atan2(endY - 10, endX - 10) * 180) / Math.PI);
+    expect(gapDegrees).toBeGreaterThan(50);
+    expect(gapDegrees).toBeLessThan(70);
+
+    const [ax, ay, tipX, tipY, bx, by] = coordinateNumbers(head.points);
+    const first = [ax - tipX, ay - tipY];
+    const second = [bx - tipX, by - tipY];
+    for (const stroke of [first, second]) {
+      expect(Math.hypot(...stroke)).toBeGreaterThanOrEqual(2.5);
+      expect(Math.hypot(...stroke)).toBeLessThanOrEqual(3.5);
+    }
+    expect(first[0] * second[0] + first[1] * second[1]).toBe(0);
+
+    const playTriangle = iconRegistry.rerun[2];
+    if (playTriangle?.type !== "polyline") {
+      throw new Error("Rerun must have a stroked play triangle");
+    }
+    const trianglePoints = coordinateNumbers(playTriangle.points);
+    const triangleRadii = [];
+    for (let index = 0; index < trianglePoints.length; index += 2) {
+      triangleRadii.push(Math.hypot(trianglePoints[index] - 10, trianglePoints[index + 1] - 10));
+    }
+    // The triangle stays >= 2.5 units inside the circular arc at all points.
+    expect(startX - 10 - Math.max(...triangleRadii)).toBeGreaterThanOrEqual(2.5);
   });
+});
 });
 
 describe("Icon component", () => {
@@ -145,7 +187,6 @@ describe("Icon component", () => {
     { size: "2xl", token: "2xl", fallback: 32 },
     { size: "3xl", token: "3xl", fallback: 40 },
   ];
-  const css = readFileSync(new URL("./icon.css", import.meta.url), "utf8");
   it.each(sizes)("uses the $size size class and --gl-icon-$token token with a $fallback px fallback", ({ size, token, fallback }) => {
     const { container } = render(<Icon name="check" size={size} />);
     expect(container.querySelector("svg")).toHaveClass("gl-icon--" + size);

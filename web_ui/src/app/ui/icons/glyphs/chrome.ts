@@ -18,6 +18,16 @@ const starOutline = path(
 );
 const pinHead = path("M 6 4 L 14 4 L 13 7.5 L 15.5 11 L 4.5 11 L 7 7.5 Z");
 
+// Shared clockwise r~6.5 arc with a ~60-degree gap at the top-right.
+// The two-stroke arrowhead sits in that gap, clear of the circle interior strokes.
+const clockwiseArrowArc = path(
+  "M 16.5 10 C 16.5 13.5 13.5 16.5 10 16.5 " +
+  "C 6.5 16.5 3.5 13.5 3.5 10 " +
+  "C 3.5 6.5 6.5 3.5 10 3.5 " +
+  "C 11.5 3.5 12.5 4 13.5 4.5",
+);
+const clockwiseArrowHead = polyline("11 6 13.5 4.5 12 2");
+
 export const chromeGlyphs = {
   close: [line(6, 6, 14, 14), line(14, 6, 6, 14)],
   check: [polyline("5 10.5 8.5 14 15 6.5")],
@@ -119,14 +129,11 @@ export const chromeGlyphs = {
     line(3.5, 5.5, 16.5, 5.5), line(8, 3, 12, 3),
     line(8.5, 10, 8.5, 15), line(11.5, 10, 11.5, 15),
   ],
-  refresh: [
-    path("M 4.5 7 C 2.5 12 5.5 16.5 10.5 17 C 15 17 17 12.5 16 8 C 14.5 3.5 9.5 2.5 6 4.5"),
-    polyline("12 8 16 8 16.5 4"),
-  ],
+  refresh: [clockwiseArrowArc, clockwiseArrowHead],
   rerun: [
-    path("M 5 6 C 2.5 10 4.5 16 10 17 C 15.5 17 18 11 15 6"),
-    polyline("12 6 15 6 15 3"),
-    polyline("8 7.5 8 12.5 12.5 10 8 7.5"),
+    clockwiseArrowArc,
+    clockwiseArrowHead,
+    polyline("8.5 7.5 13 10 8.5 12.5 8.5 7.5"),
   ],
   play: [polyline("7 5 15 10 7 15 7 5")],
   pause: [line(7, 5, 7, 15), line(13, 5, 13, 15)],
