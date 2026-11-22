@@ -1,0 +1,39 @@
+.gl-toggle-button {
+  box-sizing: border-box;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--gl-space-1-5);
+  min-width: var(--gl-control-h-md);
+  height: var(--gl-control-h-md);
+  padding: 0 var(--gl-space-2);
+  border: 1px solid transparent;
+  border-radius: var(--gl-radius-sm);
+  background-color: transparent;
+  color: var(--gl-surface-text-primary);
+  font-family: var(--gl-font-family);
+  font-size: var(--gl-text-sm);
+  font-weight: var(--gl-weight-medium);
+  cursor: pointer;
+}
+.gl-toggle-button--sm { min-width: var(--gl-control-h-sm); height: var(--gl-control-h-sm); }
+.gl-toggle-button--md { min-width: var(--gl-control-h-md); height: var(--gl-control-h-md); }
+.gl-toggle-button--lg { min-width: var(--gl-control-h-lg); height: var(--gl-control-h-lg); }
+.gl-toggle-button--pressed { background-image: linear-gradient(var(--gl-state-selected), var(--gl-state-selected)); }
+.gl-toggle-button--pressed::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: var(--gl-space-1);
+  bottom: var(--gl-space-1);
+  width: var(--gl-space-0-5);
+  border-radius: var(--gl-radius-xs);
+  background-color: var(--gl-accent);
+}
+.gl-toggle-button-pressed-icon { stroke-width: 2; }
+.gl-toggle-button-label { white-space: nowrap; }
+.gl-toggle-button:hover:not(:disabled) { background-color: var(--gl-state-hover); }
+.gl-toggle-button:active:not(:disabled) { background-color: var(--gl-state-pressed); }
+.gl-toggle-button:focus-visible { outline: 2px solid var(--gl-focus-ring); outline-offset: 2px; }
+.gl-toggle-button:disabled { opacity: .45; cursor: not-allowed; }

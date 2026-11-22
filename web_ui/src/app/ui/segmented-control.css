@@ -1,0 +1,51 @@
+.gl-segmented-control {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: stretch;
+  gap: var(--gl-space-0-5);
+  padding: 0;
+  border: 0;
+  border-radius: var(--gl-radius-sm);
+  background-color: var(--gl-surface-inset);
+}
+.gl-segmented-control--sm { min-height: var(--gl-control-h-sm); }
+.gl-segmented-control--md { min-height: var(--gl-control-h-md); }
+.gl-segmented-control-segment {
+  box-sizing: border-box;
+  display: inline-flex;
+  position: relative;
+  align-items: center;
+  justify-content: center;
+  gap: var(--gl-space-1-5);
+  min-width: var(--gl-control-h-sm);
+  height: var(--gl-control-h-md);
+  padding: 0 var(--gl-space-2);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-xs);
+  color: var(--gl-surface-text-secondary);
+  background-color: transparent;
+  font-family: var(--gl-font-family);
+  font-size: var(--gl-text-sm);
+  font-weight: var(--gl-weight-medium);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.gl-segmented-control-segment--selected {
+  background-image: linear-gradient(var(--gl-state-selected), var(--gl-state-selected));
+  color: var(--gl-surface-text-primary);
+}
+.gl-segmented-control-segment--selected::before {
+  content: "";
+  position: absolute;
+  top: var(--gl-space-1);
+  bottom: var(--gl-space-1);
+  left: 0;
+  width: var(--gl-space-0-5);
+  border-radius: var(--gl-radius-xs);
+  background-color: var(--gl-accent);
+}
+.gl-segmented-control-segment:hover:not(:disabled) { background-color: var(--gl-state-hover); }
+.gl-segmented-control-segment:active:not(:disabled) { background-color: var(--gl-state-pressed); }
+.gl-segmented-control-segment:focus-visible { outline: 2px solid var(--gl-focus-ring); outline-offset: 2px; }
+.gl-segmented-control-segment:disabled { opacity: .45; cursor: not-allowed; }
+.gl-segmented-control-segment--sm { height: var(--gl-control-h-sm); }

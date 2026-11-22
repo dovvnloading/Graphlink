@@ -1,0 +1,60 @@
+.gl-button {
+  --gl-button-icon-size: var(--gl-icon-md);
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--gl-space-1-5);
+  min-width: var(--gl-control-h-sm);
+  min-height: var(--gl-control-h-md);
+  padding: 0 var(--gl-space-2);
+  border: 1px solid transparent;
+  border-radius: var(--gl-radius-sm);
+  background-color: transparent;
+  color: var(--gl-surface-text-primary);
+  font-family: var(--gl-font-family);
+  font-size: var(--gl-text-sm);
+  font-weight: var(--gl-weight-medium);
+  line-height: var(--gl-leading-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--gl-motion-fast) var(--gl-ease);
+}
+.gl-button--sm { --gl-button-icon-size: var(--gl-icon-sm); min-height: var(--gl-control-h-sm); padding-inline: var(--gl-space-1-5); }
+.gl-button--md { min-height: var(--gl-control-h-md); }
+.gl-button--lg { --gl-button-icon-size: var(--gl-icon-lg); min-height: var(--gl-control-h-lg); padding-inline: var(--gl-space-3); }
+.gl-button--primary {
+  background-color: var(--gl-surface-text-primary);
+  border-color: var(--gl-surface-text-primary);
+  color: var(--gl-surface-window);
+}
+.gl-button--secondary {
+  background-color: var(--gl-surface-raised);
+  border-color: var(--gl-surface-border);
+}
+.gl-button--ghost { background-color: transparent; }
+.gl-button--full-width { width: 100%; }
+.gl-button:hover:not(:disabled) { background-image: linear-gradient(var(--gl-state-hover), var(--gl-state-hover)); }
+.gl-button:active:not(:disabled) { background-image: linear-gradient(var(--gl-state-pressed), var(--gl-state-pressed)); }
+.gl-button:focus-visible { outline: 2px solid var(--gl-focus-ring); outline-offset: 2px; }
+.gl-button:disabled { opacity: .45; cursor: not-allowed; }
+.gl-button-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: var(--gl-button-icon-size);
+  height: var(--gl-button-icon-size);
+}
+.gl-button-label { display: inline-flex; align-items: center; min-width: 0; }
+.gl-button-disabled-reason {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
