@@ -1,5 +1,6 @@
 import {
   createContext,
+  useId,
   useCallback,
   useContext,
   useEffect,
@@ -11,6 +12,8 @@ import {
   type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
+import { Icon } from "../ui/icons/Icon";
+import "../ui/overlay.css";
 
 /**
  * The SPA overlay system (Qt-removal plan R2) - the OverlayManager contract
@@ -36,18 +39,26 @@ import { createPortal } from "react-dom";
  *   click state (audit B6).
  */
 
+
 export type OverlayTier = "popover" | "dialog";
+type Layer = { name: string; tier: OverlayTier; parent: string | null; trigger: HTMLElement | null; state: "open" | "closing" };
 
 export interface OverlayContextValue {
   openSurface: string | null;
   open: (name: string, tier: OverlayTier) => void;
+  openNested: (name: string, tier: OverlayTier, trigger?: HTMLElement | null) => void;
   close: () => void;
+  closeLayer: (name: string) => void;
   toggle: (name: string, tier: OverlayTier) => void;
   isOpen: (name: string) => boolean;
+  isClosing: (name: string) => boolean;
+  isNested: (name: string) => boolean;
+  isTopmost: (name: string) => boolean;
   registerSurfaceElement: (name: string, element: HTMLElement | null) => void;
 }
 
 const OverlayContext = createContext<OverlayContextValue | null>(null);
+const EXIT_MS = 120;
 
 export function useOverlays(): OverlayContextValue {
   const context = useContext(OverlayContext);
@@ -56,114 +67,140 @@ export function useOverlays(): OverlayContextValue {
 }
 
 export function OverlayProvider({ children }: { children: ReactNode }) {
-  const [openSurface, setOpenSurface] = useState<string | null>(null);
-  const [openTier, setOpenTier] = useState<OverlayTier | null>(null);
+  const [layers, setLayers] = useState<Layer[]>([]);
+  const layersRef = useRef<Layer[]>([]);
   const surfaceElements = useRef(new Map<string, HTMLElement>());
-  const restoreFocusRef = useRef<HTMLElement | null>(null);
+  const exitTimers = useRef(new Map<string, number>());
 
-  const open = useCallback(
-    (name: string, tier: OverlayTier) => {
-      // Only capture a new restore target when nothing is currently open.
-      // The system is single-open: opening surface B while A is already
-      // showing replaces A without ever calling close() - unconditionally
-      // overwriting restoreFocusRef here used to clobber A's own opener
-      // with document.activeElement (an element inside A, about to
-      // unmount), so closing B later tried to restore focus onto a
-      // detached node, silently failed the document.contains() check in
-      // close() below, and left focus on document.body instead of back on
-      // A's original trigger.
-      if (openSurface === null) {
-        restoreFocusRef.current = document.activeElement as HTMLElement | null;
-      }
-      setOpenSurface(name);
-      setOpenTier(tier);
-    },
-    [openSurface],
-  );
-
-  const close = useCallback(() => {
-    setOpenSurface(null);
-    setOpenTier(null);
-    const restore = restoreFocusRef.current;
-    restoreFocusRef.current = null;
-    // Restore focus to the opener - half of the dialog focus contract.
-    if (restore && document.contains(restore)) restore.focus();
+  const publish = useCallback((next: Layer[]) => {
+    layersRef.current = next;
+    setLayers(next);
   }, []);
 
-  const toggle = useCallback(
-    (name: string, tier: OverlayTier) => {
-      if (openSurface === name) close();
-      else open(name, tier);
-    },
-    [close, open, openSurface],
+  const scheduleRemoval = useCallback((name: string) => {
+    const previous = exitTimers.current.get(name);
+    if (previous !== undefined) window.clearTimeout(previous);
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) {
+      publish(layersRef.current.filter((layer) => !(layer.name === name && layer.state === "closing")));
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      exitTimers.current.delete(name);
+      publish(layersRef.current.filter((layer) => !(layer.name === name && layer.state === "closing")));
+    }, EXIT_MS);
+    exitTimers.current.set(name, timer);
+  }, [publish]);
+
+  useEffect(() => () => {
+    for (const timer of exitTimers.current.values()) window.clearTimeout(timer);
+    exitTimers.current.clear();
+  }, []);
+
+  const dismiss = useCallback((name?: string) => {
+    const active = layersRef.current.filter((layer) => layer.state === "open");
+    const index = name ? active.findIndex((layer) => layer.name === name) : active.length - 1;
+    if (index < 0) return;
+    const closing = active.slice(index);
+    const names = new Set(closing.map((layer) => layer.name));
+    const trigger = active[index].trigger;
+    publish(layersRef.current.map((layer) => names.has(layer.name) ? { ...layer, state: "closing" as const } : layer));
+    for (const layer of closing) scheduleRemoval(layer.name);
+    if (trigger && document.contains(trigger)) trigger.focus();
+  }, [publish, scheduleRemoval]);
+
+  const close = useCallback(() => dismiss(), [dismiss]);
+  const closeLayer = useCallback((name: string) => dismiss(name), [dismiss]);
+
+  const activate = useCallback((name: string, tier: OverlayTier, nested: boolean, opener?: HTMLElement | null) => {
+    const active = layersRef.current.filter((layer) => layer.state === "open");
+    if (active.some((layer) => layer.name === name)) return;
+    const root = active[0];
+    const focused = document.activeElement;
+    const trigger = opener ?? (focused instanceof HTMLElement ? focused : null);
+    const rootTrigger = root?.trigger ?? trigger;
+    const parent = nested && root ? active[active.length - 1].name : null;
+    const oldTimer = exitTimers.current.get(name);
+    if (oldTimer !== undefined) window.clearTimeout(oldTimer);
+    exitTimers.current.delete(name);
+    const previous = layersRef.current.filter((layer) => layer.name !== name);
+    const replaced = new Set((parent ? [] : active).map((layer) => layer.name));
+    publish([
+      ...previous.map((layer) => replaced.has(layer.name) ? { ...layer, state: "closing" as const } : layer),
+      { name, tier, trigger: parent ? trigger : rootTrigger, parent, state: "open" },
+    ]);
+    for (const layer of active) if (replaced.has(layer.name)) scheduleRemoval(layer.name);
+  }, [publish, scheduleRemoval]);
+
+  const openNested = useCallback(
+    (name: string, tier: OverlayTier, trigger?: HTMLElement | null) => activate(name, tier, true, trigger),
+    [activate],
   );
 
-  const isOpen = useCallback((name: string) => openSurface === name, [openSurface]);
+  const open = useCallback((name: string, tier: OverlayTier) => {
+    const active = layersRef.current.filter((layer) => layer.state === "open");
+    const root = active[0];
+    const focused = document.activeElement;
+    // Existing child popovers/dialogs can nest without changing their call sites.
+    const inside = root?.tier === "dialog" && active.some((layer) => {
+      const panel = surfaceElements.current.get(layer.name);
+      return panel && focused instanceof Node && panel.contains(focused);
+    });
+    activate(name, tier, Boolean(inside));
+  }, [activate]);
+
+  const toggle = useCallback((name: string, tier: OverlayTier) => {
+    if (layersRef.current.some((layer) => layer.name === name && layer.state === "open")) dismiss(name);
+    else open(name, tier);
+  }, [dismiss, open]);
 
   const registerSurfaceElement = useCallback((name: string, element: HTMLElement | null) => {
     if (element) surfaceElements.current.set(name, element);
     else surfaceElements.current.delete(name);
   }, []);
 
-  // Escape closes the open surface. R8a (UI/UX issue list finding #16):
-  // this used to run on document's CAPTURE phase and call
-  // stopPropagation() unconditionally - which wins even with focus inside
-  // an input, but wins TOO completely: capture fires before the event ever
-  // reaches React's own bubble-phase dispatch (React delegates listeners to
-  // the root container, itself a document descendant), so stopping it here
-  // meant an inline editor's own Escape handler - Chat Library's rename
-  // input, a Note's or a Frame/Container's inline label editor - could
-  // never run at all while any overlay was open, even one unrelated to it
-  // (a note being edited on the canvas behind an open Pins popover, say).
-  // Escape looked like it did nothing, or worse, closed the wrong thing.
-  //
-  // Now on the BUBBLE phase instead, and gated on event.defaultPrevented:
-  // an inner handler that wants to claim Escape calls
-  // event.preventDefault() (the standard way to say "I'm handling this"),
-  // which this listener checks for since it fires last, after the event
-  // has already bubbled through every more-specific handler beneath it.
-  // Handlers that don't call preventDefault (there's no browser default
-  // action to prevent for a bare Escape - it's purely a convention this
-  // provider now depends on) are unaffected: Escape still closes the
-  // overlay exactly as before. NodeMenu.tsx's own Escape handling is a
-  // separate, deliberately different pattern (capture phase + an
-  // unconditional stopPropagation of its own) and is unaffected by this
-  // change - it already wins the race against this listener regardless of
-  // which phase this one runs on, since capture always fires first.
+  const active = layers.filter((layer) => layer.state === "open");
+  const openSurface = active.find((layer) => layer.parent === null)?.name ?? null;
+  const topmost = active[active.length - 1]?.name ?? null;
+  const isOpen = useCallback((name: string) => layers.some((layer) =>
+    layer.name === name && layer.state === "open"), [layers]);
+  const isClosing = useCallback((name: string) => layers.some((layer) =>
+    layer.name === name && layer.state === "closing"), [layers]);
+  const isNested = useCallback((name: string) => layers.some((layer) =>
+    layer.name === name && layer.parent !== null), [layers]);
+  const isTopmost = useCallback((name: string) => name === topmost, [topmost]);
+
+  // Escape is bubble-phase, so inline editors may claim it first.
   useEffect(() => {
-    if (openSurface === null) return;
+    if (!topmost) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !event.defaultPrevented) {
-        close();
-      }
+      if (event.key === "Escape" && !event.defaultPrevented) close();
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [openSurface, close]);
+  }, [topmost, close]);
 
-  // Outside-click light-dismiss for POPOVERS only. pointerdown, not click:
-  // the press dismisses AND still lands on what was pressed. The surface's
-  // own trigger (data-overlay-trigger={name}) is exempt - otherwise its
-  // pointerdown would light-dismiss and its click would immediately reopen,
-  // making the chip a can't-close toggle.
+  // Light dismiss only the uppermost popover. Its own trigger is exempt.
   useEffect(() => {
-    if (openSurface === null || openTier !== "popover") return;
+    const openLayers = layers.filter((layer) => layer.state === "open");
+    const top = openLayers[openLayers.length - 1];
+    if (!top || top.tier !== "popover") return;
     const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as HTMLElement;
-      const trigger = target.closest?.("[data-overlay-trigger]");
-      if (trigger?.getAttribute("data-overlay-trigger") === openSurface) return;
-      const element = surfaceElements.current.get(openSurface);
-      if (element && !element.contains(event.target as Node)) close();
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (top.trigger?.contains(target)) return;
+      if (target instanceof Element &&
+          target.closest("[data-overlay-trigger]")?.getAttribute("data-overlay-trigger") === top.name) return;
+      const panel = surfaceElements.current.get(top.name);
+      if (!panel?.contains(target)) close();
     };
     document.addEventListener("pointerdown", onPointerDown, true);
     return () => document.removeEventListener("pointerdown", onPointerDown, true);
-  }, [openSurface, openTier, close]);
+  }, [layers, close]); // updates when the top changes
 
   const value = useMemo(
-    () => ({ openSurface, open, close, toggle, isOpen, registerSurfaceElement }),
-    [openSurface, open, close, toggle, isOpen, registerSurfaceElement],
+    () => ({ openSurface, open, openNested, close, closeLayer, toggle, isOpen, isClosing, isNested, isTopmost, registerSurfaceElement }),
+    [openSurface, open, openNested, close, closeLayer, toggle, isOpen, isClosing, isNested, isTopmost, registerSurfaceElement],
   );
-
   return <OverlayContext.Provider value={value}>{children}</OverlayContext.Provider>;
 }
 
@@ -247,59 +284,41 @@ function useAnchoredPlacement(
 /** Anchored light surface. Render it where it should appear (CSS positions
  * it, unless `anchored` is set - see useAnchoredPlacement above); it mounts
  * only while open. The opener button stays outside. */
+
 export function Popover({
-  name,
-  label,
-  className,
-  anchored,
-  children,
+  name, label, className, anchored, children,
 }: {
-  name: string;
-  label: string;
-  className?: string;
-  /** Portal to document.body and position from the trigger's own rect
-   * rather than relying on CSS to place a wrapper div at a fixed corner. */
-  anchored?: boolean;
-  children: ReactNode;
+  name: string; label: string; className?: string; anchored?: boolean; children: ReactNode;
 }) {
   const overlays = useOverlays();
   const ref = useRef<HTMLDivElement | null>(null);
   const isOpen = overlays.isOpen(name);
-  const anchorPlacement = useAnchoredPlacement(ref, name, isOpen && !!anchored);
+  const closing = overlays.isClosing(name);
+  const placement = useAnchoredPlacement(ref, name, isOpen && !!anchored);
 
   useEffect(() => {
+    if (!isOpen) return;
     overlays.registerSurfaceElement(name, ref.current);
     return () => overlays.registerSurfaceElement(name, null);
-  });
+  }, [isOpen, name, overlays.registerSurfaceElement]);
 
-  // R8a (UI/UX issue list finding #19): opening a popover via keyboard
-  // (Enter on its trigger button) left focus sitting on the trigger - the
-  // panel's own controls were reachable only by continuing to Tab through
-  // whatever else sits between the trigger and the panel in DOM order (the
-  // rest of the app bar, for View/Plugins/Pins). Focus RESTORATION on
-  // close is already handled generically by open()/close() above for every
-  // overlay tier; moving focus IN on open is the other half, specific to
-  // this component (Dialog already does it in its own effect).
   useEffect(() => {
     if (!isOpen) return;
     const panel = ref.current;
-    if (!panel) return;
-    const first = panel.querySelector<HTMLElement>(FOCUSABLE);
-    (first ?? panel).focus();
+    if (panel) (panel.querySelector<HTMLElement>(FOCUSABLE) ?? panel).focus();
   }, [isOpen]);
 
-  if (!isOpen) return null;
+  if (!isOpen && !closing) return null;
   const panel = (
     <div
-      ref={ref}
-      role="dialog"
-      aria-modal="false"
-      aria-label={label}
-      tabIndex={-1}
+      ref={ref} role="dialog" aria-modal="false" aria-label={label}
+      aria-hidden={closing ? true : undefined} tabIndex={-1}
+      data-state={closing ? "closing" : "open"}
+      data-nested={overlays.isNested(name) ? "" : undefined}
       className={`overlay-popover ${anchored ? "overlay-popover-anchored" : ""} ${className ?? ""}`}
-      style={anchored && anchorPlacement ? { top: anchorPlacement.top, left: anchorPlacement.left } : undefined}
+      style={anchored && placement ? { top: placement.top, left: placement.left } : undefined}
     >
-      {children}
+      {isOpen ? children : null}
     </div>
   );
   return anchored ? createPortal(panel, document.body) : panel;
@@ -407,81 +426,102 @@ export function useFocusEscapeBackstop(
   }, [active, panelRef, focusableSelector]);
 }
 
-/** Centered modal surface with scrim + focus trap + mandatory titled header
- * and close button (the audit-B5 rule: every dialog is closeable on sight). */
+
+/** A scrolling dialog with an optional sticky footer and nested-layer support. */
 export function Dialog({
-  name,
-  title,
-  className,
-  children,
+  name, title, description, size = "md", footer, status, className, children,
 }: {
-  name: string;
-  title: string;
-  className?: string;
-  children: ReactNode;
+  name: string; title: string; description?: string; size?: "sm" | "md" | "lg" | "xl";
+  footer?: ReactNode; status?: ReactNode; className?: string; children: ReactNode;
 }) {
   const overlays = useOverlays();
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const titleRef = useRef<HTMLSpanElement | null>(null);
+  const titleId = useId();
+  const descriptionId = useId();
   const isOpen = overlays.isOpen(name);
+  const closing = overlays.isClosing(name);
+  const topmost = overlays.isTopmost(name);
 
   useEffect(() => {
+    if (!isOpen) return;
     overlays.registerSurfaceElement(name, panelRef.current);
     return () => overlays.registerSurfaceElement(name, null);
-  });
+  }, [isOpen, name, overlays.registerSurfaceElement]);
 
-  // Focus trap: focus the panel on open; Tab cycles within it.
   useEffect(() => {
     if (!isOpen) return;
     const panel = panelRef.current;
     if (!panel) return;
-    const focusableIn = () => [...panel.querySelectorAll<HTMLElement>(FOCUSABLE)];
-    const first = focusableIn()[0];
-    (first ?? panel).focus();
+    const preferred = panel.querySelector<HTMLElement>("[data-autofocus]:not([disabled])");
+    const field = panel.querySelector<HTMLElement>(
+      'input:not([disabled]):not([type="hidden"]), textarea:not([disabled]), select:not([disabled])',
+    );
+    (preferred ?? field ?? titleRef.current)?.focus();
+  }, [isOpen]);
 
+  // Only the top dialog traps Tab; its portaled nested layers may take focus.
+  useEffect(() => {
+    if (!isOpen || !topmost) return;
+    const panel = panelRef.current;
+    if (!panel) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Tab") return;
-      const focusables = focusableIn();
-      if (focusables.length === 0) return;
-      const firstEl = focusables[0];
-      const lastEl = focusables[focusables.length - 1];
-      if (event.shiftKey && document.activeElement === firstEl) {
+      const focusables = [...panel.querySelectorAll<HTMLElement>(FOCUSABLE)];
+      if (!focusables.length) {
         event.preventDefault();
-        lastEl.focus();
-      } else if (!event.shiftKey && document.activeElement === lastEl) {
+        titleRef.current?.focus();
+        return;
+      }
+      const first = focusables[0], last = focusables[focusables.length - 1];
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === titleRef.current)) {
         event.preventDefault();
-        firstEl.focus();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
       }
     };
     panel.addEventListener("keydown", onKeyDown);
     return () => panel.removeEventListener("keydown", onKeyDown);
-  }, [isOpen]);
+  }, [isOpen, topmost]);
 
-  useFocusEscapeBackstop(panelRef, isOpen, FOCUSABLE);
+  useFocusEscapeBackstop(panelRef, isOpen && topmost, FOCUSABLE);
 
-  if (!isOpen) return null;
-  return (
-    <div className="overlay-scrim" onPointerDown={(e) => e.target === e.currentTarget && overlays.close()}>
-      <div
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        tabIndex={-1}
+  if (!isOpen && !closing) return null;
+  const shell = (
+    <div className="overlay-scrim" data-state={closing ? "closing" : "open"}
+      data-nested={overlays.isNested(name) ? "" : undefined}
+      aria-hidden={closing ? true : undefined}
+      onPointerDown={(event) => {
+        if (isOpen && topmost && event.target === event.currentTarget) overlays.closeLayer(name);
+      }}
+    >
+      <div ref={panelRef} role="dialog" aria-modal="true"
+        aria-labelledby={titleId} aria-describedby={description ? descriptionId : undefined}
+        data-state={closing ? "closing" : "open"} data-size={size} tabIndex={-1}
         className={`overlay-dialog ${className ?? ""}`}
       >
         <header className="overlay-dialog-header">
-          <span className="overlay-dialog-title">{title}</span>
-          <button
-            type="button"
-            className="overlay-dialog-close"
-            aria-label={`Close ${title}`}
-            onClick={overlays.close}
-          >
-            ×
-          </button>
+          <div className="overlay-dialog-heading">
+            <span ref={titleRef} id={titleId} tabIndex={-1} role="heading" aria-level={2}
+              className="overlay-dialog-title">{title}</span>
+            {description && <p id={descriptionId} className="overlay-dialog-description">{description}</p>}
+          </div>
+          {isOpen && <button type="button" className="overlay-dialog-close"
+            aria-label={`Close ${title}`} onClick={() => overlays.closeLayer(name)}>
+            <Icon name="close" />
+          </button>}
         </header>
-        <div className="overlay-dialog-body">{children}</div>
+        <div className="overlay-dialog-body">{isOpen ? children : null}</div>
+        {isOpen && (footer !== undefined || status !== undefined) && (
+          <footer className="overlay-dialog-footer">
+            <span className="overlay-dialog-status">{status}</span>
+            <div className="overlay-dialog-actions">{footer}</div>
+          </footer>
+        )}
       </div>
     </div>
   );
+  return overlays.isNested(name) ? createPortal(shell, document.body) : shell;
 }

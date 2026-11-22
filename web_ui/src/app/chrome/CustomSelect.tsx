@@ -1,49 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
-import { createPortal } from "react-dom";
-
-/**
- * A custom-styled select, matching the app's existing custom dropdown
- * convention (Composer.tsx's own Reasoning/Model pickers) rather than a
- * native OS `<select>` - built for Settings' own selects (API Provider,
- * per-task Ollama model mode, Llama.cpp scanned-model pickers), which were
- * the one place in the app still using bare `<select className="settings-
- * select">` while everywhere else (Composer, View/Plugins/Pins) already has
- * a styled, app-consistent dropdown.
- *
- * Deliberately NOT built on the shared Popover/useOverlays() system
- * (../overlays/overlays), even though every other floating panel in the app
- * is. That system is single-open BY DESIGN (opening any one surface closes
- * whatever else is open) - correct for app-chrome popovers that are never
- * expected to coexist with a modal dialog, but WRONG here: this component's
- * whole reason to exist is being usable INSIDE an already-open Dialog
- * (Settings). Routing through useOverlays() would make opening a dropdown
- * flip the registry's openSurface away from "settings", which Settings'
- * own <Dialog name="settings"> reads as "I'm not open anymore" and
- * unmounts entirely - the same class of bug CodeExecutionApprovalPanel.tsx's
- * own module doc already identified and avoided for an analogous reason
- * (two of ITS panels can be open at once; here, one of THESE needs to be
- * open ALONGSIDE an already-open dialog). This component keeps its own
- * fully independent open/closed state instead, mirroring NodeMenu.tsx's
- * posture (also deliberately outside the overlay registry, for the same
- * "must nest inside/alongside other things" reason) rather than Popover's.
- *
- * Visually reuses .overlay-popover/.overlay-popover-anchored and
- * .reasoning-option/-label/-description VERBATIM for the panel and its
- * option rows - not a lookalike reimplementation, the literal same classes
- * Composer's own Reasoning/Model pickers render through Popover, so this is
- * pixel-identical to the rest of the app's custom dropdowns by
- * construction. Only the trigger button (.custom-select-trigger) is new
- * CSS, styled to fill the same box .settings-select's native <select> used
- * to occupy.
- *
- * Positioning mirrors overlays.tsx's own useAnchoredPlacement (flip above
- * the trigger if there's no room below, clamp horizontally) but reads a
- * local ref directly instead of a named data-overlay-trigger lookup, since
- * this component has no registry entry to look itself up by.
- */
-
-const ANCHOR_MARGIN = 8;
-const ANCHOR_GAP = 4;
+import { Select } from "../ui/Select";
 
 export interface CustomSelectOption {
   id: string;
@@ -52,12 +7,7 @@ export interface CustomSelectOption {
 }
 
 export function CustomSelect({
-  value,
-  options,
-  onChange,
-  ariaLabel,
-  disabled,
-  placeholder = "Select…",
+  value, options, onChange, ariaLabel, disabled, placeholder,
 }: {
   value: string;
   options: CustomSelectOption[];
@@ -66,186 +16,14 @@ export function CustomSelect({
   disabled?: boolean;
   placeholder?: string;
 }) {
-  const [open, setOpen] = useState(false);
-  const selectedDescriptionId = useId();
-  const panelId = useId();
-  const triggerRef = useRef<HTMLButtonElement | null>(null);
-  const panelRef = useRef<HTMLDivElement | null>(null);
-  const [placement, setPlacement] = useState<{ top: number; left: number; minWidth: number } | null>(null);
-
-  useLayoutEffect(() => {
-    if (!open) return;
-    const trigger = triggerRef.current;
-    const panel = panelRef.current;
-    if (!trigger || !panel) return;
-    const triggerRect = trigger.getBoundingClientRect();
-    const panelRect = panel.getBoundingClientRect();
-    const top =
-      triggerRect.bottom + panelRect.height + ANCHOR_GAP > window.innerHeight
-        ? Math.max(ANCHOR_MARGIN, triggerRect.top - panelRect.height - ANCHOR_GAP)
-        : triggerRect.bottom + ANCHOR_GAP;
-    const left = Math.min(
-      Math.max(ANCHOR_MARGIN, triggerRect.left),
-      window.innerWidth - panelRect.width - ANCHOR_MARGIN,
-    );
-    setPlacement({ top, left, minWidth: triggerRect.width });
-  }, [open]);
-
-  useOutsideDismiss(open, triggerRef, panelRef, () => setOpen(false));
-
-  // The options are portaled outside the Settings dialog's Tab trap. Move
-  // focus into the popup explicitly; Arrow/Home/End work without a mouse,
-  // and Escape/selection return focus to the trigger.
-  useEffect(() => {
-    if (!open) return;
-    const selectedIndex = Math.max(0, options.findIndex((option) => option.id === value));
-    panelRef.current?.querySelectorAll<HTMLButtonElement>(".reasoning-option")[selectedIndex]?.focus();
-    // The opening selection is intentional; live option updates should not
-    // steal focus from a keyboard user moving within the open popup.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-
-  const movePastSelect = (reverse: boolean) => {
-    const trigger = triggerRef.current;
-    if (!trigger) return;
-    // The popup is portaled outside Settings' modal. Native Tab cannot
-    // traverse from its options to the next field in the modal, and the
-    // modal's focus backstop would redirect to the first rail control.
-    // Resolve the next focusable from the original trigger's position.
-    const scope = trigger.closest<HTMLElement>('[role="dialog"][aria-modal="true"]') ?? document.body;
-    const focusables = [...scope.querySelectorAll<HTMLElement>(
-      'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), ' +
-      'textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
-    )].filter((node) => !panelRef.current?.contains(node));
-    const index = focusables.indexOf(trigger);
-    const next = focusables[(index + (reverse ? -1 : 1) + focusables.length) % focusables.length];
-    setOpen(false);
-    (next ?? trigger).focus();
-  };
-
-  const onOptionKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
-    const buttons = [...(panelRef.current?.querySelectorAll<HTMLButtonElement>(".reasoning-option") ?? [])];
-    if (!buttons.length) return;
-    const focused = buttons.findIndex((button) => button === document.activeElement);
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      const delta = event.key === "ArrowDown" ? 1 : -1;
-      buttons[(focused + delta + buttons.length) % buttons.length].focus();
-    } else if (event.key === "Home" || event.key === "End") {
-      event.preventDefault();
-      buttons[event.key === "Home" ? 0 : buttons.length - 1].focus();
-    } else if (event.key === "Tab") {
-      event.preventDefault();
-      movePastSelect(event.shiftKey);
-    }
-  };
-
-  const selected = options.find((option) => option.id === value);
-
   return (
-    <>
-      <button
-        ref={triggerRef}
-        type="button"
-        className="custom-select-trigger"
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-controls={open ? panelId : undefined}
-        aria-label={ariaLabel}
-        aria-describedby={selectedDescriptionId}
-        disabled={disabled}
-        onClick={() => setOpen((isOpen) => !isOpen)}
-        onKeyDown={(event) => {
-          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-            event.preventDefault();
-            setOpen(true);
-          }
-        }}
-      >
-        <span className="custom-select-value">{selected ? selected.label : placeholder}</span>
-        <ChevronIcon />
-      </button>
-      <span id={selectedDescriptionId} className="sr-only">
-        Selected: {selected?.label ?? "none"}
-      </span>
-      {open &&
-        createPortal(
-          <div
-            ref={panelRef}
-            id={panelId}
-            role="dialog"
-            aria-modal="false"
-            aria-label={ariaLabel}
-            tabIndex={-1}
-            className="overlay-popover overlay-popover-anchored custom-select-panel"
-            style={placement ? { top: placement.top, left: placement.left, minWidth: placement.minWidth } : undefined}
-          >
-            {options.map((option) => (
-              <button
-                key={option.id}
-                type="button"
-                className={"reasoning-option" + (option.id === value ? " active" : "")}
-                aria-pressed={option.id === value}
-                onKeyDown={onOptionKeyDown}
-                onClick={() => {
-                  onChange(option.id);
-                  setOpen(false);
-                  triggerRef.current?.focus();
-                }}
-              >
-                <span className="reasoning-option-label">{option.label}</span>
-                {option.description && <span className="reasoning-option-description">{option.description}</span>}
-              </button>
-            ))}
-          </div>,
-          document.body,
-        )}
-    </>
+    <Select
+      value={value}
+      options={options.map(({ id, label, description }) => ({ value: id, label, description }))}
+      onChange={onChange}
+      ariaLabel={ariaLabel}
+      disabled={disabled}
+      placeholder={placeholder}
+    />
   );
-}
-
-function ChevronIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24" className="icon custom-select-chevron">
-      <path d="m7 10 5 5 5-5" />
-    </svg>
-  );
-}
-
-// Outside-pointerdown + Escape dismiss, scoped to this instance's own
-// trigger/panel refs - deliberately NOT the shared overlays.tsx listeners
-// (see this file's own module doc for why). Escape calls
-// event.preventDefault() so the SAME keypress doesn't also bubble up into
-// overlays.tsx's own document-level Escape handler and close the whole
-// parent Dialog (Settings) - that handler explicitly checks
-// event.defaultPrevented for exactly this "something more specific already
-// claimed it" case (see its own comment).
-function useOutsideDismiss(
-  open: boolean,
-  triggerRef: RefObject<HTMLButtonElement | null>,
-  panelRef: RefObject<HTMLDivElement | null>,
-  close: () => void,
-) {
-  useEffect(() => {
-    if (!open) return;
-    function onPointerDown(event: PointerEvent) {
-      const target = event.target as Node;
-      if (panelRef.current?.contains(target)) return;
-      if (triggerRef.current?.contains(target)) return;
-      close();
-    }
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      close();
-      triggerRef.current?.focus();
-    }
-    document.addEventListener("pointerdown", onPointerDown, true);
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown, true);
-      document.removeEventListener("keydown", onKeyDown, true);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
 }

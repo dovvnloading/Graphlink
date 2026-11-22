@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Dialog, OverlayProvider, Popover, useOverlays } from "./overlays";
+import { Select } from "../ui/Select";
 
 function Chrome() {
   const overlays = useOverlays();
@@ -265,6 +266,111 @@ describe("overlay system (the OverlayManager contract)", () => {
     await user.keyboard("{Escape}");
 
     expect(document.activeElement).toBe(settingsOpener);
+  });
+});
+
+
+describe("nested overlay stack v2", () => {
+  function Layers() {
+    const overlays = useOverlays();
+    const [selected, setSelected] = useState("a");
+    return (
+      <>
+        <button type="button" onClick={() => overlays.open("root", "dialog")}>Open root</button>
+        <Dialog name="root" title="Root dialog" description="A dialog with nested layers">
+          <input aria-label="Main field" />
+          <Select
+            label="Inside selection"
+            value={selected}
+            options={[{ value: "a", label: "Alpha" }, { value: "b", label: "Beta" }]}
+            onChange={setSelected}
+          />
+          <button type="button" onClick={() => overlays.openNested("confirm", "dialog")}>Request confirmation</button>
+          <Dialog name="confirm" title="Confirm action" size="sm"
+            footer={<button type="button" onClick={() => overlays.close()}>Cancel</button>}>
+            <p>Are you sure?</p>
+          </Dialog>
+        </Dialog>
+      </>
+    );
+  }
+
+  function start() {
+    const user = userEvent.setup();
+    render(<OverlayProvider><Layers /></OverlayProvider>);
+    return user;
+  }
+
+  it("Escape dismisses a nested Select listbox without closing the hosting dialog", async () => {
+    const user = start();
+    await user.click(screen.getByRole("button", { name: "Open root" }));
+    const dialog = screen.getByRole("dialog", { name: "Root dialog" });
+    expect(screen.getByRole("textbox", { name: "Main field" })).toHaveFocus();
+    const trigger = screen.getByRole("button", { name: "Inside selection" });
+    await user.click(trigger);
+    expect(screen.getByRole("listbox", { name: "Inside selection" })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(dialog).toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Root dialog" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Open root" })).toHaveFocus();
+  });
+
+  it("a nested confirm keeps its parent and restores focus layer by layer", async () => {
+    const user = start();
+    const opener = screen.getByRole("button", { name: "Open root" });
+    await user.click(opener);
+    const confirmTrigger = screen.getByRole("button", { name: "Request confirmation" });
+    await user.click(confirmTrigger);
+    expect(screen.getByRole("dialog", { name: "Confirm action" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Root dialog" })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Confirm action" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Root dialog" })).toBeInTheDocument();
+    expect(confirmTrigger).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(opener).toHaveFocus();
+  });
+
+  it("starts focus at an explicit data-autofocus field, never at Close", async () => {
+    const user = userEvent.setup();
+    function Initial() {
+      const overlays = useOverlays();
+      return <>
+        <button type="button" onClick={() => overlays.open("initial", "dialog")}>Show initial</button>
+        <Dialog name="initial" title="Focus policy"><button type="button">Secondary</button>
+          <input aria-label="First field" /><input aria-label="Preferred field" data-autofocus />
+        </Dialog>
+      </>;
+    }
+    render(<OverlayProvider><Initial /></OverlayProvider>);
+    await user.click(screen.getByRole("button", { name: "Show initial" }));
+    expect(screen.getByRole("textbox", { name: "Preferred field" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Close Focus policy" })).not.toHaveFocus();
+  });
+
+  it("focuses the title when a dialog has no form fields", async () => {
+    const user = userEvent.setup();
+    function ReadOnly() {
+      const overlays = useOverlays();
+      return <>
+        <button type="button" onClick={() => overlays.open("read-only", "dialog")}>Read it</button>
+        <Dialog name="read-only" title="Read-only"><p>Information only</p></Dialog>
+      </>;
+    }
+    render(<OverlayProvider><ReadOnly /></OverlayProvider>);
+    await user.click(screen.getByRole("button", { name: "Read it" }));
+    expect(screen.getByRole("heading", { name: "Read-only" })).toHaveFocus();
+  });
+
+  it("renders a closing phase before removing the overlay shell", async () => {
+    const user = start();
+    await user.click(screen.getByRole("button", { name: "Open root" }));
+    await user.keyboard("{Escape}");
+    expect(document.querySelector(".overlay-dialog[data-state='closing']")).not.toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Root dialog" })).toBeNull();
   });
 });
 
