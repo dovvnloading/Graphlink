@@ -107,7 +107,7 @@ test("keeps reviewed import data and keyboard actions within the focused workben
     const apply = dialog.getByRole("button", { name: "Apply reviewed table" });
     for (const [width, height, forcedColors] of [[1440, 1200, "none"], [640, 360, "none"], [320, 720, "active"]] as const) {
       await page.setViewportSize({ width, height });
-      await page.emulateMedia({ forcedColors, reducedMotion: "reduce" });
+      await page.emulateMedia({ forcedColors, colorScheme: width === 640 ? "dark" : "light", reducedMotion: "reduce" });
       await apply.focus();
       await expect(apply).toBeFocused();
       await expect.poll(() => apply.evaluate((el) => {
@@ -124,7 +124,7 @@ test("keeps reviewed import data and keyboard actions within the focused workben
   } finally {
     await page.keyboard.press("Escape");
     await page.setViewportSize({ width: 1440, height: 1200 });
-    await page.emulateMedia({ forcedColors: "none" });
+    await page.emulateMedia({ forcedColors: "none", colorScheme: null });
     await grantCore(page, priorGrant);
   }
 });

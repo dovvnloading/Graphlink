@@ -39,6 +39,22 @@ export function ScientificWorkspace({ Editor, children }: {
   const focus = readScientificFocus(overlays.openSurface);
   const [slots, setSlots] = useState<ReadonlyMap<string, Slot>>(() => new Map());
   const [dialogBody, setDialogBody] = useState<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const scroller = dialogBody?.closest<HTMLElement>(".overlay-dialog-body");
+    if (!dialogBody || !scroller) return;
+    const resize = new ResizeObserver(() => {
+      const active = document.activeElement;
+      if (!(active instanceof HTMLElement) || !dialogBody.contains(active)) return;
+      const bounds = scroller.getBoundingClientRect();
+      const field = active.getBoundingClientRect();
+      if (field.top < bounds.top || field.bottom > bounds.bottom
+          || field.left < bounds.left || field.right > bounds.right) {
+        active.scrollIntoView({ block: "nearest", inline: "nearest" });
+      }
+    });
+    resize.observe(scroller);
+    return () => resize.disconnect();
+  }, [dialogBody]);
   const register = useCallback<RegisterSlot>((id, slot) => {
     setSlots(previous => {
       const old = previous.get(id);
