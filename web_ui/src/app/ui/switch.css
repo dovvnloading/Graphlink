@@ -4,10 +4,11 @@
 .gl-switch-track { box-sizing: border-box; display: flex; align-items: center; width: var(--gl-space-10); height: var(--gl-space-5); padding: var(--gl-space-0-5); border: 1px solid var(--gl-surface-border-strong); border-radius: var(--gl-radius-full); background: var(--gl-surface-field); transition: background var(--gl-motion-fast) var(--gl-ease); }
 .gl-switch-knob { width: var(--gl-space-4); height: var(--gl-space-4); border-radius: var(--gl-radius-full); background: var(--gl-surface-text-primary); transition: transform var(--gl-motion-fast) var(--gl-ease); }
 :where(.gl-switch-input:checked) + .gl-switch-track { background: var(--gl-accent); border-color: var(--gl-accent); }
-:where(.gl-switch-input:checked) + .gl-switch-track .gl-switch-knob { background: var(--gl-surface-inset-deep); transform: translateX(var(--gl-space-5)); }
+:where(.gl-switch-input:checked + .gl-switch-track) .gl-switch-knob { background: var(--gl-surface-inset-deep); transform: translateX(var(--gl-space-5)); }
 :where(.gl-switch-input:focus-visible) + .gl-switch-track { outline: 2px solid var(--gl-focus-ring); outline-offset: 2px; }
 .gl-switch-copy { display: grid; gap: var(--gl-space-1); padding-top: var(--gl-space-0-5); }
 .gl-switch-label { font-size: var(--gl-text-sm); font-weight: var(--gl-weight-medium); line-height: var(--gl-leading-sm); }
 .gl-switch-description { color: var(--gl-surface-text-muted); font-size: var(--gl-text-xs); line-height: var(--gl-leading-xs); }
 .gl-switch-error { color: var(--gl-surface-text-primary); font-size: var(--gl-text-xs); }
 .gl-switch-disabled { opacity: .45; cursor: not-allowed; }
+:where(.gl-switch:active) .gl-switch-track { border-color: var(--gl-accent); }

@@ -1,4 +1,5 @@
 .gl-text-area { box-sizing: border-box; display: block; width: 100%; min-width: 0; padding: var(--gl-space-2) var(--gl-space-3); border: 1px solid var(--gl-surface-border-strong); border-radius: var(--gl-radius-sm); background: var(--gl-surface-field); color: var(--gl-surface-text-primary); font-family: var(--gl-font-family); font-size: var(--gl-text-sm); line-height: var(--gl-leading-sm); resize: none; overflow-y: hidden; }
+.gl-text-area:hover { border-color: var(--gl-accent); }
 .gl-text-area::placeholder { color: var(--gl-surface-text-muted); opacity: 1; }
 .gl-text-area:focus-visible { outline: 2px solid var(--gl-focus-ring); outline-offset: 2px; }
 .gl-text-area:disabled { opacity: .45; cursor: not-allowed; }

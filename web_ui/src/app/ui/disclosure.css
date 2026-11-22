@@ -9,5 +9,5 @@
 .gl-disclosure-content { padding: var(--gl-space-2) var(--gl-space-4); font-size: var(--gl-text-sm); }
 .gl-disclosure-content[hidden] { display: none; }
 .gl-disclosure-section { border: 1px solid var(--gl-surface-border); border-radius: var(--gl-radius-md); background: var(--gl-surface-raised); }
-.gl-disclosure-section .gl-disclosure-trigger { box-sizing: border-box; width: 100%; min-height: var(--gl-control-h-lg); padding: var(--gl-space-3); border-radius: var(--gl-radius-md); font-weight: var(--gl-weight-semibold); }
-.gl-disclosure-section .gl-disclosure-content { border-top: 1px solid var(--gl-surface-divider); padding: var(--gl-space-3); }
+:where(.gl-disclosure-section) .gl-disclosure-trigger { box-sizing: border-box; width: 100%; min-height: var(--gl-control-h-lg); padding: var(--gl-space-3); border-radius: var(--gl-radius-md); font-weight: var(--gl-weight-semibold); }
+:where(.gl-disclosure-section) .gl-disclosure-content { border-top: 1px solid var(--gl-surface-divider); padding: var(--gl-space-3); }

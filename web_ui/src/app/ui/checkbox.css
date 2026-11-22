@@ -2,13 +2,14 @@
 .gl-checkbox-control { position: relative; display: inline-grid; place-items: center; flex: none; width: var(--gl-control-h-sm); height: var(--gl-control-h-sm); }
 .gl-checkbox-input { position: absolute; width: 1px; height: 1px; margin: 0; padding: 0; opacity: 0; overflow: hidden; }
 .gl-checkbox-box { box-sizing: border-box; display: grid; place-items: center; width: var(--gl-space-4); height: var(--gl-space-4); border: 1px solid var(--gl-surface-border-strong); border-radius: var(--gl-radius-xs); background: var(--gl-surface-field); transition: background var(--gl-motion-fast) var(--gl-ease), border-color var(--gl-motion-fast) var(--gl-ease); }
-.gl-checkbox-box .gl-icon { opacity: 0; }
+.gl-checkbox-box :where(.gl-icon) { opacity: 0; }
 :where(.gl-checkbox-input:checked, .gl-checkbox-input:indeterminate) + .gl-checkbox-box { background: var(--gl-accent); border-color: var(--gl-accent); color: var(--gl-surface-inset-deep); }
 :where(.gl-checkbox-input:checked, .gl-checkbox-input:indeterminate) + .gl-checkbox-box .gl-icon { opacity: 1; }
 :where(.gl-checkbox-input:focus-visible) + .gl-checkbox-box { outline: 2px solid var(--gl-focus-ring); outline-offset: 2px; }
-.gl-checkbox:hover .gl-checkbox-box { border-color: var(--gl-accent); }
+:where(.gl-checkbox:hover) .gl-checkbox-box { border-color: var(--gl-accent); }
 .gl-checkbox-copy { display: grid; gap: var(--gl-space-1); padding-top: var(--gl-space-0-5); }
 .gl-checkbox-label { line-height: var(--gl-leading-sm); font-weight: var(--gl-weight-medium); }
 .gl-checkbox-description { color: var(--gl-surface-text-muted); font-size: var(--gl-text-xs); line-height: var(--gl-leading-xs); }
 .gl-checkbox-error { display: flex; align-items: center; gap: var(--gl-space-1); font-size: var(--gl-text-xs); color: var(--gl-surface-text-primary); }
 .gl-checkbox-disabled { opacity: .45; cursor: not-allowed; }
+:where(.gl-checkbox:active) .gl-checkbox-box { border-color: var(--gl-accent); }

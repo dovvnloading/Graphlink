@@ -13,7 +13,8 @@
 .gl-radio-description { font-size: var(--gl-text-xs); color: var(--gl-surface-text-muted); line-height: var(--gl-leading-xs); }
 .gl-radio-disabled { opacity: .45; cursor: not-allowed; }
 .gl-radio-card { align-items: center; padding: var(--gl-space-3); border: 1px solid var(--gl-surface-border); border-radius: var(--gl-radius-md); background: var(--gl-surface-field); transition: background var(--gl-motion-fast) var(--gl-ease); }
-.gl-radio-card:hover { background: var(--gl-state-hover); }
+.gl-radio-card:where(:not(.gl-radio-disabled)):hover { background: var(--gl-state-hover); }
+.gl-radio-card:active { background: var(--gl-state-pressed); }
 .gl-radio-card:where(.gl-radio-selected) { background: var(--gl-state-selected); border-color: var(--gl-surface-border-strong); }
 .gl-radio-card:where(.gl-radio-selected)::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 2px; border-radius: var(--gl-radius-xs) 0 0 var(--gl-radius-xs); background: var(--gl-accent); }
 .gl-radio-check { margin-left: auto; color: var(--gl-accent); }
