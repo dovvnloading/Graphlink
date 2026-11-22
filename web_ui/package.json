@@ -19,7 +19,8 @@
     "check:schema": "python ../contracts/codegen.py --check",
     "check": "npm run check:paths && npm run check:schema && npm run typecheck && npm run lint && npm run test && npm run build",
     "capture:screenshots": "node scripts/capture-screenshots.mjs",
-    "capture:gifs": "node scripts/capture-gifs.mjs"
+    "capture:gifs": "node scripts/capture-gifs.mjs",
+    "capture:ui": "node scripts/capture-ui.mjs"
   },
   "overrides": {
     "eslint-plugin-jsx-a11y": {
