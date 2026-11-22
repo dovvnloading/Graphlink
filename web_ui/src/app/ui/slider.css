@@ -1,0 +1,16 @@
+.gl-slider { display: grid; gap: var(--gl-space-2); min-width: 0; color: var(--gl-surface-text-primary); }
+.gl-slider-disabled { opacity: .45; cursor: not-allowed; }
+.gl-slider-row { display: flex; align-items: center; gap: var(--gl-space-3); }
+.gl-slider-rail { display: flex; align-items: center; position: relative; flex: 1; min-width: 0; height: var(--gl-control-h-sm); }
+.gl-slider-track { position: absolute; left: 0; right: 0; height: var(--gl-space-1); border-radius: var(--gl-radius-full); background: var(--gl-surface-border-strong); overflow: hidden; pointer-events: none; }
+.gl-slider-fill { display: block; height: 100%; border-radius: var(--gl-radius-full); background: var(--gl-accent); }
+.gl-slider-input { position: relative; box-sizing: border-box; display: block; width: 100%; height: var(--gl-control-h-sm); margin: 0; padding: 0; border: 0; background: transparent; cursor: pointer; appearance: none; }
+.gl-slider-input::-webkit-slider-runnable-track { height: var(--gl-space-1); background: transparent; }
+.gl-slider-input::-moz-range-track { height: var(--gl-space-1); background: transparent; }
+.gl-slider-input::-webkit-slider-thumb { box-sizing: border-box; width: var(--gl-space-4); height: var(--gl-space-4); margin-top: calc(-1 * var(--gl-space-1-5)); border: 2px solid var(--gl-surface-field); border-radius: var(--gl-radius-full); background: var(--gl-accent); appearance: none; }
+.gl-slider-input::-moz-range-thumb { box-sizing: border-box; width: var(--gl-space-4); height: var(--gl-space-4); border: 2px solid var(--gl-surface-field); border-radius: var(--gl-radius-full); background: var(--gl-accent); }
+.gl-slider-input:focus-visible { outline: 2px solid var(--gl-focus-ring); outline-offset: 2px; border-radius: var(--gl-radius-sm); }
+.gl-slider-input:disabled { cursor: not-allowed; }
+.gl-slider-value { font-size: var(--gl-text-xs); font-family: var(--gl-font-mono); min-width: var(--gl-space-10); text-align: right; }
+.gl-slider-ticks { position: relative; height: var(--gl-leading-xs); margin: 0 var(--gl-space-2); color: var(--gl-surface-text-muted); }
+.gl-slider-tick { position: absolute; transform: translateX(-50%); white-space: nowrap; font-size: var(--gl-text-2xs); line-height: var(--gl-leading-2xs); }
