@@ -7,6 +7,7 @@ rehydrates this cache. The graph and scene wire carry only bounded metadata.
 """
 from __future__ import annotations
 
+import atexit
 import base64
 import os
 import threading
@@ -17,7 +18,9 @@ import io
 import json
 import math
 import re
+import shutil
 import tempfile
+import time
 from collections import OrderedDict
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -39,19 +42,67 @@ TABLE_MAX_CELL_CHARS = 65_536
 MISSING_DEFAULT = ("", "NA", "N/A", "null")
 KINDS = frozenset(("numeric", "text", "categorical", "datetime", "boolean"))
 _REF = re.compile(r"[0-9a-f]{64}")
-_STAGING_DIR = tempfile.TemporaryDirectory(prefix="graphlink-scientific-")
-_STAGING = AssetStore(Path(_STAGING_DIR.name))
+_STAGING_DIR: tempfile.TemporaryDirectory[str] | None = None
+_STAGING: AssetStore | None = None
 _WORKER_STORE: ContextVar[AssetStore | None] = ContextVar("scientific_table_worker_store", default=None)
-_CSV_DIR = tempfile.TemporaryDirectory(prefix="graphlink-scientific-csv-")
+_CSV_DIR: tempfile.TemporaryDirectory[str] | None = None
 _CSV_CACHE: OrderedDict[str, Path] = OrderedDict()
 _CSV_LOCK = threading.Lock()
+_TEMP_DIR_LOCK = threading.Lock()
+_STALE_DIRECTORIES_SWEPT = False
 CSV_CHUNK_BYTES = 192 * 1024
 CSV_MAX_BYTES = 256 * 1024 * 1024
 
 
+def _sweep_stale_directories() -> None:
+    """Best-effort removal of scientific scratch directories left by dead processes."""
+    cutoff = time.time() - 24 * 60 * 60
+    try:
+        with os.scandir(tempfile.gettempdir()) as entries:
+            for entry in entries:
+                try:
+                    if (not entry.name.startswith(("graphlink-scientific-", "graphlink-scientific-csv-"))
+                            or not entry.is_dir(follow_symlinks=False)
+                            or entry.stat(follow_symlinks=False).st_mtime >= cutoff):
+                        continue
+                    shutil.rmtree(entry.path, ignore_errors=True)
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+
+def _new_temporary_directory(prefix: str) -> tempfile.TemporaryDirectory[str]:
+    """Called only with _TEMP_DIR_LOCK held, on the first real store/export use."""
+    global _STALE_DIRECTORIES_SWEPT
+    if not _STALE_DIRECTORIES_SWEPT:
+        _sweep_stale_directories()
+        _STALE_DIRECTORIES_SWEPT = True
+    directory = tempfile.TemporaryDirectory(prefix=prefix, ignore_cleanup_errors=True)
+    atexit.register(directory.cleanup)
+    return directory
+
+
+def _staging_store() -> AssetStore:
+    global _STAGING_DIR, _STAGING
+    with _TEMP_DIR_LOCK:
+        if _STAGING is None:
+            _STAGING_DIR = _new_temporary_directory("graphlink-scientific-")
+            _STAGING = AssetStore(Path(_STAGING_DIR.name))
+        return _STAGING
+
+
+def _csv_directory() -> Path:
+    global _CSV_DIR
+    with _TEMP_DIR_LOCK:
+        if _CSV_DIR is None:
+            _CSV_DIR = _new_temporary_directory("graphlink-scientific-csv-")
+        return Path(_CSV_DIR.name)
+
+
 def table_store_root() -> str:
     """The parent-owned staging directory, passed only to a trusted worker."""
-    return str(_STAGING.root)
+    return str(_staging_store().root)
 
 
 @contextmanager
@@ -245,7 +296,7 @@ def parse_table(source: bytes, *, fmt: str = "csv", missing: list[str] | None = 
     if expected_preview is not None and receipt["receiptHash"] != expected_preview:
         raise ValueError("Source or parsing options changed. Preview the table again.")
     if not preview_only:
-        _STAGING.put(encoded)
+        _staging_store().put(encoded)
     return {
         "version": 1, "asset_ref": ref, "mime_type": "application/json",
         "rowCount": len(rows), "columnCount": len(columns), "columns": columns,
@@ -304,7 +355,7 @@ def stage_result_table(table: dict, *, pack: str, operation_id: str) -> dict:
     encoded = canonical_bytes(payload)
     if len(encoded) > TABLE_MAX_ASSET_BYTES:
         raise ValueError("The generated table asset exceeds 128 MiB.")
-    ref = (_WORKER_STORE.get() or _STAGING).put(encoded)
+    ref = (_WORKER_STORE.get() or _staging_store()).put(encoded)
     receipt = {
         "fileHash": fingerprint(table),
         "parseOptions": {"source": "operation", "packId": pack, "operationId": operation_id},
@@ -389,7 +440,7 @@ def stage_from_saved(data: dict) -> None:
         if table_metadata_valid(table):
             raw = store.get(table["asset_ref"], max_bytes=TABLE_MAX_ASSET_BYTES)
             if raw is not None:
-                _STAGING.put(raw)
+                _staging_store().put(raw)
 
 
 def persist_table(data: dict) -> dict:
@@ -405,7 +456,7 @@ def persist_table(data: dict) -> dict:
         if not table_metadata_valid(table):
             raise OSError("Scientific table metadata has a damaged receipt.")
         ref = table["asset_ref"]
-        raw = _STAGING.get(ref, max_bytes=TABLE_MAX_ASSET_BYTES)
+        raw = _staging_store().get(ref, max_bytes=TABLE_MAX_ASSET_BYTES)
         if raw is not None:
             if store.put(raw) != ref:
                 raise OSError("Scientific table asset digest changed during save.")
@@ -417,7 +468,7 @@ def persist_table(data: dict) -> dict:
 def read_table(meta: dict) -> dict:
     if not table_metadata_valid(meta):
         raise ValueError("The scientific table's import receipt is damaged.")
-    raw = (_WORKER_STORE.get() or _STAGING).get(meta["asset_ref"], max_bytes=TABLE_MAX_ASSET_BYTES)
+    raw = (_WORKER_STORE.get() or _staging_store()).get(meta["asset_ref"], max_bytes=TABLE_MAX_ASSET_BYTES)
     if raw is None:
         raise ValueError("The scientific table asset is missing. Restore the workspace asset and reopen.")
     try:
@@ -467,11 +518,12 @@ def table_csv_chunk(meta: dict, offset: int = 0) -> dict:
         file = _CSV_CACHE.get(ref)
         if file is None:
             table = read_table(meta)
-            file = Path(_CSV_DIR.name) / (ref + ".csv")
+            directory = _csv_directory()
+            file = directory / (ref + ".csv")
             temporary: Path | None = None
             try:
                 with tempfile.NamedTemporaryFile(
-                    mode="w", encoding="utf-8", newline="", dir=_CSV_DIR.name,
+                    mode="w", encoding="utf-8", newline="", dir=directory,
                     suffix=".tmp", delete=False,
                 ) as handle:
                     temporary = Path(handle.name)
