@@ -7,9 +7,11 @@ import type { SceneStore, ScienceEditorSession } from "./sceneStore";
 import { downloadBlob } from "./downloadTextFile";
 import { writeTableCsv } from "./tableCsv";
 import { createLinearScale } from "./charts/chartScales";
+import { ScienceArrayInput } from "./ScienceArrayInput";
+import { ScienceColumnBinding, type FetchTableColumn } from "./ScienceColumnBinding";
 import { ScientificResultViews } from "./ScientificResultViews";
 import {
-  chartableScienceTypes, columnChoices, compatibleOptions, connectedInputText, draftInputs, FieldError, fieldText, formatMeasurement, formatScienceNumber, formatScienceRange, formatScienceSummary, formatScienceValue, matchesSource, parseInputs, readableScienceKey, readScienceState, resultMeasurement, sourceOptions,
+  isImportedTable, type ScientificImportedTable, chartableScienceTypes, columnChoices, compatibleOptions, connectedInputText, currentSource, draftInputs, FieldError, fieldText, formatMeasurement, formatScienceNumber, formatScienceRange, formatScienceSummary, formatScienceValue, matchesSource, parseInputs, readableScienceKey, readScienceState, resultMeasurement, sourceOptions,
   type EditorDraft, type ScienceField, type ScienceLimits, type ScienceOperation, type ScienceParent, type SciencePlot, type ScienceResult,
   type ScienceChartLink, type ScienceChartType, type ScienceState, type ScienceRunnerConfiguration, type ScientificColumnType, type Sources, type SourceOption, type SourceReference,
 } from "./scientificWorkbench";
@@ -253,12 +255,12 @@ function Results({ result, title, headlineKey, exportJson, exportCsv, exportMeth
   </section>;
 }
 
-function FieldEditor({ field, value, onEdit, options, onImport, imported, errorId, stale, chosenUnit, unitSetter, columnOptions }: {
+function FieldEditor({ field, value, onEdit, options, onImport, imported, errorId, stale, chosenUnit, unitSetter, columnOptions, limits }: {
   field: ScienceField; value: string; onEdit: (value: string) => void;
   options: SourceOption[]; onImport: (option: SourceOption) => void; imported?: string; errorId?: string; stale: boolean;
   columnOptions: Array<{ index: number; label: string; type: ScientificColumnType }>;
   /** The unit typed into this field's unit-setting sibling (field.unit_field) and that sibling's label. */
-  chosenUnit?: string; unitSetter?: string;
+  chosenUnit?: string; unitSetter?: string; limits?: ScienceLimits;
 }) {
   const [helpOpen, setHelpOpen] = useState(false);
   const unitOverridden = !!chosenUnit && chosenUnit !== (field.default_unit || field.unit || "1");
@@ -294,6 +296,8 @@ function FieldEditor({ field, value, onEdit, options, onImport, imported, errorI
         onChange={(e) => onEdit(e.target.value)} />
       : <textarea {...common} rows={field.kind === "matrix" || field.kind === "text" ? 3 : 2}
         onChange={(e) => onEdit(e.target.value)} spellCheck={field.kind === "text"} />}
+    {(field.kind === "vector" || field.kind === "matrix") && <ScienceArrayInput
+      field={field} limits={limits} value={value} onEdit={onEdit} />}
     {helpOpen && <div id={id + "-help"} className="science-field-help">
       {field.description && <p>{field.description}</p>}
       {dimensioned && unitOverridden && <p>Unit: {chosenUnit}, set by {unitSetter ?? field.unit_field}.
@@ -318,15 +322,6 @@ function FieldEditor({ field, value, onEdit, options, onImport, imported, errorI
   </div>;
 }
 
-// Reuse the established plugin transport without broadening sceneStore's API.
-function tableIntent(store: SceneStore, pluginId: string, name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const endpoint = store as unknown as { scientificIntent: (id: string, action: string, input: Record<string, unknown>) => Promise<Record<string, unknown>> };
-  return endpoint.scientificIntent(pluginId, name, args);
-}
-
-type FetchTableColumn = (option: SourceOption, op: ScienceOperation, field: ScienceField, unitInputs: Record<string, string>) =>
-  Promise<{ values: Array<number | string>; reference: SourceReference }>;
-
 function binaryBase64(bytes: Uint8Array): string {
   const chunks: string[] = [];
   for (let i = 0; i < bytes.length; i += 32768) {
@@ -344,8 +339,30 @@ function TableEditor({ state, nodeId, pluginId, store }: {
   const [text, setText] = useState("Name,Temperature (degC),Observed\nA,22.5,true\nB,NA,false");
   const [missing, setMissing] = useState("NA,N/A,null");
   const [overrides, setOverrides] = useState("{}");
+  const columnTypes = useMemo((): Record<string, string> | undefined => {
+    try {
+      const parsed: unknown = JSON.parse(overrides);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && Object.values(parsed).every(
+        value => ["numeric", "text", "categorical", "datetime", "boolean"].includes(value))) {
+        return parsed as Record<string, string>;
+      }
+    } catch { /* Incomplete JSON stays editable until the next preview. */ }
+    return undefined;
+  }, [overrides]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const generation = useRef(0);
+  const pending = useRef(false);
+  const [schema, setSchema] = useState<ScientificImportedTable | null>(null);
+  const [review, setReview] = useState<{ table: ScientificImportedTable; runToken: string;
+    args: Record<string, unknown>; previousToken: string | undefined } | null>(null);
+  const validReview = review?.previousToken === state.runToken ? review : null;
+  function invalidate(clearSchema = false) {
+    generation.current++;
+    setReview(null);
+    setError("");
+    if (clearSchema) setSchema(null);
+  }
   const [exporting, setExporting] = useState(false);
   const table = state.table;
   const rowsLimit = state.limits?.tableRows ?? 100000;
@@ -354,17 +371,23 @@ function TableEditor({ state, nodeId, pluginId, store }: {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy) return;
+    if (pending.current) return;
+    pending.current = true;
+    const version = generation.current;
     setError("");
     setBusy(true);
     try {
-      const parsed: unknown = JSON.parse(overrides);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) ||
-          Object.values(parsed).some((value) => !["numeric", "text", "categorical", "datetime", "boolean"].includes(String(value))))
+      if (validReview) {
+        await store.scientificTableIntent(pluginId, "import_table", { ...validReview.args,
+          expected_run: validReview.runToken, expected_preview: validReview.table.provenance.receiptHash });
+        if (generation.current === version) invalidate(true);
+        return;
+      }
+      if (!columnTypes)
         throw new Error("Column types must map headers to numeric, text, categorical, datetime or boolean.");
       const args: Record<string, unknown> = {
         node_id: nodeId, format, missing_values: ["", ...missing.split(",").map((v) => v.trim()).filter(Boolean)],
-        column_types: parsed, ...(state.runToken && { expected_run: state.runToken }),
+        column_types: columnTypes, ...(state.runToken && { expected_run: state.runToken }),
       };
       if (source === "file") {
         if (!file) throw new Error("Choose a CSV or TSV file.");
@@ -377,10 +400,20 @@ function TableEditor({ state, nodeId, pluginId, store }: {
           throw new Error("Pasted table data exceeds the import size limit.");
         args.text = text;
       }
-      await tableIntent(store, pluginId, "import_table", args);
+      if (generation.current !== version) return;
+      const response = await store.scientificTableIntent(pluginId, "preview_table", args);
+      if (generation.current !== version) return;
+      if (!isImportedTable(response.table) || typeof response.runToken !== "string" || !response.runToken)
+        throw new Error("The table preview could not be verified. Preview the source again.");
+      setSchema(response.table);
+      setReview({ table: response.table, runToken: response.runToken, args, previousToken: state.runToken });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not import the table.");
+      if (generation.current === version) {
+        setReview(null);
+        setError(e instanceof Error ? e.message : "Could not import the table.");
+      }
     } finally {
+      pending.current = false;
       setBusy(false);
     }
   }
@@ -389,12 +422,12 @@ function TableEditor({ state, nodeId, pluginId, store }: {
   // result sections; an imported table shows one status line by default.
   return <section className="science-data-table" aria-label="Typed data table">
     {table && <p role="status">{table.sourceName} · {table.rowCount.toLocaleString()} rows · {table.columnCount} columns</p>}
-    <ResultDisclosure label={table ? "Replace data table" : "Import a data table"} onClose={() => setFile(null)}>
+    <ResultDisclosure label={table ? "Replace data table" : "Import a data table"} onClose={() => { invalidate(true); setFile(null); }}>
     <p>Import mixed data and missing values. Tables support {rowsLimit.toLocaleString()} rows and {cellsLimit.toLocaleString()} cells, stored outside the graph.</p>
-    <form onSubmit={submit}>
+    <form onSubmit={submit} onChange={() => invalidate()}>
       <fieldset disabled={busy}>
         <label>Data source
-          <select aria-label="Table data source" value={source} onChange={(e) => { setSource(e.target.value as "paste" | "file"); setFile(null); }}>
+          <select aria-label="Table data source" value={source} onChange={(e) => { invalidate(true); setSource(e.target.value as "paste" | "file"); setFile(null); }}>
             <option value="paste">Paste CSV / TSV</option><option value="file">Choose a file</option>
           </select>
         </label>
@@ -408,7 +441,7 @@ function TableEditor({ state, nodeId, pluginId, store }: {
             <input type="file" aria-label="CSV or TSV file" accept=".csv,.tsv,text/csv,text/tab-separated-values"
               onChange={(e) => {
                 const next = e.target.files?.[0] ?? null;
-                setFile(next);
+                invalidate(true); setFile(next);
                 if (next?.name.toLowerCase().endsWith(".tsv")) setFormat("tsv");
                 if (next?.name.toLowerCase().endsWith(".csv")) setFormat("csv");
               }} />
@@ -419,10 +452,41 @@ function TableEditor({ state, nodeId, pluginId, store }: {
         <label>Missing-value markers (comma-separated; blank always missing)
           <input type="text" aria-label="Missing-value markers" value={missing} onChange={(e) => setMissing(e.target.value)} />
         </label>
-        <label>Column type overrides (JSON, optional)
-          <textarea rows={2} aria-label="Column type overrides" value={overrides} onChange={(e) => setOverrides(e.target.value)} />
-        </label>
-        <button type="submit" className="science-run">{busy ? "Importing…" : "Import typed table"}</button>
+        {schema && <div className="science-table">
+          <table aria-label="Review column types"><thead><tr>
+            <th scope="col">Column</th><th scope="col">Type</th><th scope="col">Unit</th><th scope="col">Missing</th>
+          </tr></thead><tbody>{schema.columns.map((col) => <tr key={col.label}>
+            <th scope="row">{col.label}</th><td><select aria-label={`Type for ${col.label}`}
+              value={columnTypes?.[col.label] ?? ""} disabled={!columnTypes}
+              onChange={(e) => {
+                const next = { ...columnTypes };
+                if (e.target.value) next[col.label] = e.target.value;
+                else delete next[col.label];
+                setOverrides(JSON.stringify(next));
+              }}>
+              <option value="">Infer from data</option>
+              {["numeric", "text", "categorical", "datetime", "boolean"].map((kind) => <option key={kind}>{kind}</option>)}
+            </select>{validReview && <small>{col.type}</small>}</td>
+            <td>{col.unit || "—"}</td><td>{col.missingCount}</td>
+          </tr>)}</tbody></table>
+        </div>}
+        <details><summary>Advanced column overrides</summary>
+          <label>Column type overrides (JSON)
+            <textarea rows={2} aria-label="Column type overrides" value={overrides} onChange={(e) => setOverrides(e.target.value)} />
+          </label>
+        </details>
+        {validReview && <div className="science-table">
+          <p role="status">{validReview.table.sourceName} · {validReview.table.rowCount} rows · {validReview.table.columnCount} columns.
+            Showing the first {validReview.table.preview.length} rows and {validReview.table.previewColumns} columns.</p>
+          <table aria-label="Pending import preview"><thead><tr>
+            {validReview.table.columns.slice(0, validReview.table.previewColumns).map((col) =>
+              <th scope="col" key={col.label}>{col.label}</th>)}
+          </tr></thead><tbody>{validReview.table.preview.map((row, i) =>
+            <tr key={i}>{row.map((cell, j) => <td key={j}>{cell === null ? "Missing" : formatScienceValue(cell)}</td>)}</tr>)}
+          </tbody></table>
+        </div>}
+        <button type="submit" className="science-run">{validReview
+          ? (busy ? "Applying…" : "Apply reviewed table") : (busy ? "Previewing…" : "Preview table")}</button>
       </fieldset>
     </form>
     </ResultDisclosure>
@@ -497,7 +561,7 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
   }
   const conflict = changed && draft.dirty;
   const bound = Object.entries(draft.sources);
-  const stale = bound.some(([, ref]) => !options.some((option) => matchesSource(option, ref)));
+  const stale = bound.some(([, ref]) => !currentSource(options, ref));
   const pending = useRef(false);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -568,11 +632,11 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
           {op.fields.map((field) => {
             const available = compatibleOptions(field, options, limits);
             const source = draft.sources[field.key];
-            const previous = source && available.find((option) => matchesSource(option, source));
+            const previous = source && currentSource(available, source);
             const chosenUnit = field.unit_field ? draft.values[field.unit_field]?.trim() : undefined;
             const unitSetter = op.fields.find((other) => other.key === field.unit_field)?.label;
             return <FieldEditor key={field.key} field={field} value={draft.values[field.key] ?? ""} options={available}
-              columnOptions={columnChoices(field, draft.values)}
+              columnOptions={columnChoices(field, draft.values)} limits={limits}
               chosenUnit={chosenUnit || undefined} unitSetter={unitSetter} stale={!!source && !previous} errorId={error?.field === field.key ? errorId : undefined}
               imported={source && (previous?.label ?? "Result changed or disconnected. Select its current value or edit this input.")}
               onEdit={(value) => {
@@ -614,6 +678,18 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
           })}
         </div>
       </div>
+      <ScienceColumnBinding options={options} op={op} values={draft.values} maxPoints={limits?.points ?? 1024}
+        fetchColumn={fetchTableColumn} apply={(columns) => {
+          setDraft((old) => {
+            const values = { ...old.values }, sources = { ...old.sources };
+            for (const field of op.fields) {
+              const column = columns[field.key];
+              if (column) { values[field.key] = fieldText(field, column.values); sources[field.key] = column.reference; }
+            }
+            return { ...old, dirty: true, values, sources };
+          });
+          setError(null);
+        }} />
       {bound.some(([, ref]) => options.some((option) => matchesSource(option, ref) && option.uncertainty)) &&
         <label>Uncertainty propagation method
           <select aria-label="Uncertainty propagation method" value={uncertaintyMethod}
@@ -638,8 +714,16 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
           Save for Graph Runner
         </button>
         <button type="button" onClick={() => {
-          setDraft({ ...restoreDraft(op, null, revision), dirty: true }); setError(null);
+          const example = { ...restoreDraft(op, null, revision), dirty: true };
+          if (session.replacedExamples.get(op.id)?.example !== draft) session.replacedExamples.set(op.id, { before: draft, example });
+          else return;
+          setDraft(example); setError(null);
         }}>Load example</button>
+        {session.replacedExamples.get(op.id)?.example === draft && <button type="button" onClick={() => {
+          const previous = session.replacedExamples.get(op.id);
+          if (previous) setDraft(previous.before);
+          session.replacedExamples.delete(op.id); setError(null);
+        }}>Undo load example</button>}
       </div>
       {configured?.operationId === op.id && <small role="status">Saved as an explicit Graph Runner step.</small>}
     </fieldset>
@@ -701,13 +785,15 @@ export const ScientificNodeView = memo(function ScientificNodeView({ data, id, s
         exportMethods={() => data.store.exportScientificMethods(data.pluginId, id, state.runToken)}
         exportCsv={() => data.store.exportScientificTableCsv(data.pluginId, id, "result", state.runToken)}
         tableEditor={<TableEditor state={state} nodeId={id} pluginId={data.pluginId} store={data.store} />}
-        fetchTableColumn={async (option, operation, field, unitInputs) => {
+        fetchTableColumn={async (option, operation, field, unitInputs, selection) => {
           if (!option.tableColumn) throw new Error("Choose a typed table column.");
           const { nodeId, column, policy, start, end } = option.tableColumn;
-          const answer = await tableIntent(data.store, data.pluginId, "table_column", {
+          const answer = await data.store.scientificTableIntent(data.pluginId, "table_column", {
             node_id: id, source_node_id: nodeId, column, policy, start, end,
             table_source: option.tableColumn.source ?? "import",
             operation_id: operation.id, field_key: field.key, unit_inputs: unitInputs,
+            ...(selection?.completeColumns && { complete_columns: selection.completeColumns }),
+            ...(selection?.assumedUnit && { assumed_unit: selection.assumedUnit }),
             expected_hash: option.reference.resultHash, expected_receipt: option.reference.receiptHash,
           });
           if (!Array.isArray(answer.values) || !answer.values.every((n) => typeof n === "number" && Number.isFinite(n))
@@ -717,7 +803,9 @@ export const ScientificNodeView = memo(function ScientificNodeView({ data, id, s
           if (!Array.isArray(literals) || literals.length !== answer.values.length || !literals.every(
             (item) => typeof item === "string" || typeof item === "number" && Number.isFinite(item),
           )) throw new Error("The table column input units could not be verified.");
-          return { values: literals as Array<number | string>, reference: answer.reference as SourceReference };
+          return { values: literals as Array<number | string>, reference: answer.reference as SourceReference,
+            normalizedPreview: Array.isArray(answer.normalizedPreview) && answer.normalizedPreview.every((v) =>
+              typeof v === "number" && Number.isFinite(v)) ? answer.normalizedPreview as number[] : undefined };
         }}
         charts={data.charts ?? []}
         onChart={(chartType) => data.store.generateChart(id, chartType)}

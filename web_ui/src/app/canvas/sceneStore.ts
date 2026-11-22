@@ -308,6 +308,7 @@ export interface OrganizationOptions {
 export class ScienceEditorSession {
   selected?: string;
   readonly drafts = new Map<string, EditorDraft>();
+  readonly replacedExamples = new Map<string, { before: EditorDraft; example: EditorDraft }>();
   constructor(readonly nodeKey?: string) {}
   selectOperation(id: string) { this.selected = id; }
 }
@@ -2072,7 +2073,7 @@ export class SceneStore {
     // The server kills each worker by 600 s at the latest. Do not let the
     // transport's generic 10 s timeout abandon a longer scientific run.
     const call = [pluginId, name, args];
-    const answer = name === "run" || name === "export_table_csv"
+    const answer = ["run", "export_table_csv", "preview_table", "import_table"].includes(name)
       ? await this.transport.request("app-plugins", "invokePluginIntent", call,
         name === "run" ? 615_000 : 120_000)
       : await this.transport.request("app-plugins", "invokePluginIntent", call);
@@ -2081,6 +2082,11 @@ export class SceneStore {
       throw new Error(answer.error);
     }
     throw new Error("Check this pack’s grant in Settings and the notification banner.");
+  }
+
+  async scientificTableIntent(pluginId: string, action: "preview_table" | "import_table" | "table_column",
+    args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.scientificIntent(pluginId, action, args);
   }
 
   async configureScientificRunner(pluginId: string, nodeId: string, operationId: string,

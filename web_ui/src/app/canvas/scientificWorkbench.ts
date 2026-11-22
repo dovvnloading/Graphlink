@@ -431,7 +431,7 @@ function isResult(value: unknown): value is ScienceResult {
     && plot.x.length === plot.y.length);
 }
 
-function isImportedTable(value: unknown): value is ScientificImportedTable {
+export function isImportedTable(value: unknown): value is ScientificImportedTable {
   if (!record(value) || value.version !== 1 || typeof value.asset_ref !== "string"
       || !Number.isSafeInteger(value.rowCount) || (value.rowCount as number) < 1
       || !Array.isArray(value.columns) || !Number.isSafeInteger(value.columnCount)
@@ -757,6 +757,21 @@ export function matchesSource(option: SourceOption, source: SourceReference): bo
     reference.selector.length === source.selector.length && reference.selector.every((part, i) => part === source.selector[i]);
 }
 
+
+/** A reviewed binding may use any bounded row window, while the quick picker
+ * offers the first window. Match the verified source/column, retaining the
+ * saved mask, policy and interval rather than replacing them with defaults. */
+export function currentSource(options: SourceOption[], source: SourceReference): SourceOption | undefined {
+  if (!source.binding) return options.find((option) => matchesSource(option, source));
+  const base = options.find((option) => option.tableColumn &&
+    option.reference.selector[0] === source.selector[0] && option.reference.selector[1] === source.selector[1] &&
+    (source.sourceKey ? option.reference.sourceKey === source.sourceKey : option.reference.nodeId === source.nodeId) &&
+    option.reference.resultHash === source.resultHash && option.reference.receiptHash === source.receiptHash);
+  if (!base) return undefined;
+  const { columnLabel, retained, omitted, sourceUnit, targetUnit } = source.binding;
+  const [, , , start, end] = source.selector;
+  return { ...base, label: `${columnLabel} · rows ${Number(start) + 1}–${end} · ${retained} retained, ${omitted} omitted · ${sourceUnit || "unlabeled"} → ${targetUnit}` };
+}
 
 /** These are the four existing ChartSpec types, not new renderers. The menu
  * only offers shapes that fit the chart canonicalizer's exact limits. */

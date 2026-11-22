@@ -243,6 +243,22 @@ describe("scientific workbench card", () => {
     await waitFor(() => expect(screen.getByText("Run calculation")).toBeEnabled());
   });
 
+  it("restores edited source bindings after loading an example, including across remount", async () => {
+    const { request, remount } = mount();
+    const source = screen.getByRole("combobox", { name: "Import Samples from a connected result" }) as HTMLSelectElement;
+    const option = Array.from(source.options).find((item) => item.text === "Samples · y")!;
+    fireEvent.change(source, { target: { value: option.value } });
+    fireEvent.click(screen.getByRole("button", { name: "Load example" }));
+    expect(screen.getByLabelText("Samples (m)")).toHaveValue("[1,2,3]");
+    remount(JSON.stringify(state));
+    fireEvent.click(screen.getByRole("button", { name: "Undo load example" }));
+    expect(screen.getByLabelText("Samples (m)")).toHaveValue("[1,8,3]");
+    fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
+    await waitFor(() => expect(request.mock.lastCall?.[2]?.[2]).toMatchObject({
+      sources: { samples: { selector: ["column", 1], resultHash: "abc" } },
+    }));
+  });
+
   it("renders persisted runs, plots irregular x coordinates, and exports the committed artifacts", async () => {
     const save = vi.spyOn(download, "downloadBlob").mockImplementation(() => {});
     try {
@@ -673,7 +689,7 @@ describe("typed table import and numeric selections", () => {
     } }));
     openImporter();
     fireEvent.change(screen.getByLabelText("Pasted table text"), { target: { value: "x\n😀" } });
-    fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("exceeds the import size limit");
     expect(request).not.toHaveBeenCalled();
   });
@@ -684,14 +700,36 @@ describe("typed table import and numeric selections", () => {
     fireEvent.change(screen.getByLabelText("Table format"), { target: { value: "tsv" } });
     fireEvent.change(screen.getByLabelText("Pasted table text"), { target: { value: "X\tFlag\n1\ttrue" } });
     fireEvent.change(screen.getByLabelText("Missing-value markers"), { target: { value: "NA,missing" } });
+    fireEvent.click(screen.getByText("Advanced column overrides"));
     fireEvent.change(screen.getByLabelText("Column type overrides"), { target: { value: '{"Flag":"boolean"}' } });
-    fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
+    request.mockResolvedValueOnce({ ok: true, table: meta, runToken: "reviewed-token" });
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
     await waitFor(() => expect(request).toHaveBeenCalledWith("app-plugins", "invokePluginIntent", [
-      "science_mathematics", "import_table", {
+      "science_mathematics", "preview_table", {
         node_id: "target", format: "tsv", text: "X\tFlag\n1\ttrue",
         missing_values: ["", "NA", "missing"], column_types: { Flag: "boolean" },
       },
-    ]));
+    ], 120_000));
+    expect(await screen.findByRole("table", { name: "Pending import preview" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Apply reviewed table" }));
+    await waitFor(() => expect(request).toHaveBeenLastCalledWith("app-plugins", "invokePluginIntent", [
+      "science_mathematics", "import_table", expect.objectContaining({
+        expected_run: "reviewed-token", expected_preview: meta.provenance.receiptHash,
+        format: "tsv", text: "X\tFlag\n1\ttrue", column_types: { Flag: "boolean" },
+      }),
+    ], 120_000));
+  });
+
+  it("requires another preview after editing a reviewed column type", async () => {
+    const { request } = mount();
+    openImporter();
+    request.mockResolvedValueOnce({ ok: true, table: meta, runToken: "reviewed-token" });
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
+    await screen.findByRole("button", { name: "Apply reviewed table" });
+    fireEvent.change(screen.getByRole("combobox", { name: "Type for Station" }), { target: { value: "categorical" } });
+    expect(screen.queryByRole("button", { name: "Apply reviewed table" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Preview table" })).toBeEnabled();
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("imports file bytes rather than decoding and repasting CSV into the field", async () => {
@@ -701,10 +739,10 @@ describe("typed table import and numeric selections", () => {
     const file = new File(["Time (s)\tValue\n0\t1"], "samples.tsv", { type: "text/tab-separated-values" });
     Object.defineProperty(file, "arrayBuffer", { value: async () => new TextEncoder().encode("Time (s)\tValue\n0\t1").buffer });
     fireEvent.change(screen.getByLabelText("CSV or TSV file"), { target: { files: [file] } });
-    fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
     await waitFor(() => expect(request).toHaveBeenCalled());
     const args = request.mock.lastCall?.[2]?.[2] as Record<string, unknown>;
-    expect(request.mock.lastCall?.[2]?.[1]).toBe("import_table");
+    expect(request.mock.lastCall?.[2]?.[1]).toBe("preview_table");
     expect(args.format).toBe("tsv");
     expect(args.filename).toBe("samples.tsv");
     expect(atob(args.encoded_file as string)).toBe("Time (s)\tValue\n0\t1");
@@ -726,14 +764,14 @@ describe("typed table import and numeric selections", () => {
     const newInput = screen.getByLabelText("CSV or TSV file") as HTMLInputElement;
     expect(newInput).not.toBe(oldInput);
     expect(newInput.files).toHaveLength(0);
-    fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Choose a CSV or TSV file.");
     expect(request).not.toHaveBeenCalled();
 
     const freshFile = new File(["X\n2"], "fresh.csv", { type: "text/csv" });
     Object.defineProperty(freshFile, "arrayBuffer", { value: async () => new TextEncoder().encode("X\n2").buffer });
     fireEvent.change(newInput, { target: { files: [freshFile] } });
-    fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
     await waitFor(() => expect(request).toHaveBeenCalledOnce());
     const args = request.mock.lastCall?.[2]?.[2] as Record<string, unknown>;
     expect(args.filename).toBe("fresh.csv");
@@ -750,7 +788,7 @@ describe("typed table import and numeric selections", () => {
     fireEvent.change(screen.getByLabelText("Table data source"), { target: { value: "paste" } });
     fireEvent.change(screen.getByLabelText("Table data source"), { target: { value: "file" } });
     expect((screen.getByLabelText("CSV or TSV file") as HTMLInputElement).files).toHaveLength(0);
-    fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Choose a CSV or TSV file.");
     expect(request).not.toHaveBeenCalled();
   });
@@ -791,6 +829,47 @@ describe("typed table import and numeric selections", () => {
     expect(request.mock.lastCall?.[2]?.[2]).toMatchObject({
       inputs: { samples: [10, 20] }, sources: { samples: reference },
     });
+  });
+
+  it("reviews paired columns in an editable window before atomically applying verified inputs", async () => {
+    const paired = {
+      ...operation, fields: [operation.fields[0], { ...operation.fields[0], key: "other", label: "Other" }],
+      example: { samples: [1, 2, 3], other: [4, 5, 6] }, pairedFields: [["samples", "other"]],
+    };
+    const table = { ...meta, columns: [
+      { ...meta.columns[0], label: "A (mm)", unit: "mm" }, { ...meta.columns[0], label: "B", unit: "" },
+    ] };
+    const upstream = { nodeId: "parent", title: "Observations", raw: JSON.stringify({
+      ...state, nodeKey: "d".repeat(32), table, latest: null,
+    }) };
+    const raw = JSON.stringify({ ...state, operations: [paired] });
+    const { request, remount } = mount(raw, [upstream]);
+    fireEvent.click(screen.getByText("Bind table columns"));
+    fireEvent.change(await screen.findByLabelText("Column for Samples"), { target: { value: "0" } });
+    fireEvent.change(screen.getByLabelText("Column for Other"), { target: { value: "1" } });
+    fireEvent.change(screen.getByLabelText("Source unit assumption for Other"), { target: { value: "mm" } });
+    fireEvent.change(screen.getByLabelText("First data row"), { target: { value: "2" } });
+    fireEvent.change(screen.getByLabelText("Missing observations"), { target: { value: "complete" } });
+    const choices = [0, 1].map((idx) => ({
+      nodeId: "parent", sourceKey: "d".repeat(32), resultHash: table.asset_ref,
+      receiptHash: table.provenance.receiptHash, selector: ["table_column", idx, "drop", 1, 3],
+      binding: { sourceUnit: "mm", targetUnit: "m", retained: 1, omitted: 1, rowDigest: "b".repeat(64),
+        columnLabel: table.columns[idx].label, completeColumns: [0, 1], ...(idx === 1 && { assumedUnit: "mm" }) },
+    }));
+    for (const reference of choices) request.mockResolvedValueOnce({ ok: true, values: [12.5],
+      inputs: ["12.5 mm"], normalizedPreview: [.0125], reference });
+    fireEvent.click(screen.getByRole("button", { name: "Preview bindings" }));
+    const apply = await screen.findByRole("button", { name: "Apply reviewed bindings" });
+    expect(screen.getByLabelText("Samples (m)")).toHaveValue("[1,2,3]");
+    expect(screen.getByRole("region", { name: "Verified binding preview" })).toHaveTextContent("0.0125");
+    expect(request.mock.calls[1][2]?.[2]).toMatchObject({ start: 1, end: 3, policy: "drop", complete_columns: [0, 1], assumed_unit: "mm" });
+    fireEvent.click(apply);
+    remount(raw);
+    expect(screen.getByLabelText("Samples (m)")).toHaveValue('["12.5 mm"]');
+    fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
+    await waitFor(() => expect(request.mock.lastCall?.[2]?.[2]).toMatchObject({
+      inputs: { samples: ["12.5 mm"], other: ["12.5 mm"] }, sources: { samples: choices[0], other: choices[1] },
+    }));
   });
 
   it("binds a complete typed table and selects text and numeric group fields in the form", async () => {

@@ -699,6 +699,33 @@ def test_chart_receipt_freshness_detects_equal_numbers_from_different_sources(se
     assert document.nodes[chart_id].state.chart_data["values"] == [1, 2, 3]
 
 
+def test_import_preview_does_not_stage_and_apply_requires_reviewed_bytes_and_options(session, monkeypatch):
+    from graphlink_plugins.scientific.data_table import _STAGING
+
+    document, bus, _, _ = session
+    grant(bus, "core")
+    node = dispatch(bus, "executePlugin", "Scientific Core")
+    args = {"node_id": node, "text": "Time (s),Group\n1,X\nNA,Y"}
+    before = document.nodes[node].state
+
+    def call(action, **extra):
+        return dispatch(bus, "invokePluginIntent", "science_core", action, {**args, **extra})
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(_STAGING, "put", lambda *args: pytest.fail("Preview or mismatched apply wrote an asset"))
+        preview = call("preview_table")
+        table = preview["table"]
+        pinned = {"expected_run": preview["runToken"], "expected_preview": table["provenance"]["receiptHash"]}
+        assert table["preview"] == [[1, "X"], [None, "Y"]]
+        assert table["columns"][0]["unit"] == "s"
+        assert not call("import_table", **pinned, column_types={"Group": "text"})["ok"]
+        assert not call("import_table", **pinned, text="Time (s),Group\n9,Z")["ok"]
+        assert document.nodes[node].state is before
+    assert call("import_table", **pinned)["ok"]
+    assert envelope(document, node)["table"] == table
+    assert call("import_table", **pinned)["conflict"]
+
+
 def test_typed_table_import_link_drop_and_asset_roundtrip(session, tmp_path):
     """A table is separate from the unchanged legacy operation/result receipt."""
     import hashlib
