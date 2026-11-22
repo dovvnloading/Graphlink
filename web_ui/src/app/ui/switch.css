@@ -9,6 +9,6 @@
 .gl-switch-copy { display: grid; gap: var(--gl-space-1); padding-top: var(--gl-space-0-5); }
 .gl-switch-label { font-size: var(--gl-text-sm); font-weight: var(--gl-weight-medium); line-height: var(--gl-leading-sm); }
 .gl-switch-description { color: var(--gl-surface-text-muted); font-size: var(--gl-text-xs); line-height: var(--gl-leading-xs); }
-.gl-switch-error { color: var(--gl-surface-text-primary); font-size: var(--gl-text-xs); }
+.gl-switch-error { display: flex; align-items: center; gap: var(--gl-space-1); color: var(--gl-surface-text-primary); font-size: var(--gl-text-xs); }
 .gl-switch-disabled { opacity: .45; cursor: not-allowed; }
 :where(.gl-switch:active) .gl-switch-track { border-color: var(--gl-accent); }

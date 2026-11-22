@@ -1,4 +1,5 @@
 import { useId, useState, type InputHTMLAttributes } from "react";
+import { Icon } from "./icons/Icon";
 import "./switch.css";
 
 export type SwitchProps = Omit<InputHTMLAttributes<HTMLInputElement>, "type" | "size" | "checked" | "defaultChecked"> & {
@@ -48,7 +49,7 @@ export function Switch({
       <span className="gl-switch-copy">
         <span className="gl-switch-label" id={labelId}>{label}</span>
         {description && <span className="gl-switch-description" id={descriptionId}>{description}</span>}
-        {error && <span className="gl-switch-error" id={errorId}>{error}</span>}
+        {error && <span className="gl-switch-error" id={errorId}><Icon name="status-error" size="sm" />{error}</span>}
       </span>
     </label>
   );
