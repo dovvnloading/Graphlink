@@ -1,4 +1,5 @@
 .gl-button {
+  position: relative;
   --gl-button-icon-size: var(--gl-icon-md);
   box-sizing: border-box;
   display: inline-flex;
@@ -46,7 +47,16 @@
   width: var(--gl-button-icon-size);
   height: var(--gl-button-icon-size);
 }
+.gl-button-loading-indicator {
+  position: absolute;
+  inset: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
 .gl-button-label { display: inline-flex; align-items: center; min-width: 0; }
+.gl-button-label--loading { opacity: 0; }
 .gl-button-disabled-reason {
   position: absolute;
   width: 1px;

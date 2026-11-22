@@ -42,6 +42,20 @@ describe("Button", () => {
     expect(container.querySelector(".gl-button-icon .gl-spinner-arc")).toBeInTheDocument();
   });
 
+
+  it("uses an overlay when loading without a leading icon, preserving the accessible label", () => {
+    const { container, rerender } = render(<Button>Save changes</Button>);
+    const button = screen.getByRole("button", { name: "Save changes" });
+    expect(container.querySelector(".gl-button-loading-indicator")).not.toBeInTheDocument();
+    rerender(<Button loading>Save changes</Button>);
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleName("Save changes");
+    expect(container.querySelector(".gl-button-loading-indicator .gl-spinner")).toHaveAttribute("aria-hidden", "true");
+    expect(container.querySelector(".gl-button-label")).toHaveClass("gl-button-label--loading");
+    expect(container.querySelector(".gl-button-icon")).not.toBeInTheDocument();
+  });
+
   it("exposes the disabled reason through aria-describedby without a title tooltip", () => {
     render(<Button disabled disabledReason="Requires a workspace" aria-describedby="external">Save changes</Button>);
     const button = screen.getByRole("button", { name: "Save changes" });

@@ -35,7 +35,7 @@ export function SegmentedControl({
 
   function handleKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
     if (disabled || options.length === 0) return;
-    let next = index;
+    let next: number;
     switch (event.key) {
       case "ArrowRight":
       case "ArrowDown":

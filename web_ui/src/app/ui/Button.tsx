@@ -42,6 +42,7 @@ export function Button({
   const reasonVisibleToAT = disabled && Boolean(disabledReason);
   const describedBy = [rest["aria-describedby"], reasonVisibleToAT ? reasonId : undefined].filter(Boolean).join(" ") || undefined;
   const leadingIcon = destructive ? "trash" : iconStart;
+  const loadingWithoutLeadingIcon = loading && !leadingIcon;
 
   return (
     <>
@@ -58,13 +59,13 @@ export function Button({
         data-destructive={destructive ? "true" : undefined}
       >
         {(loading || leadingIcon) && (
-          <span className="gl-button-icon">
+          <span className={loadingWithoutLeadingIcon ? "gl-button-loading-indicator" : "gl-button-icon"}>
             {loading
               ? <Spinner size={spinnerSizes[size]} decorative />
               : <Icon name={leadingIcon as IconName} size={iconSizes[size]} />}
           </span>
         )}
-        <span className="gl-button-label">{children}</span>
+        <span className={loadingWithoutLeadingIcon ? "gl-button-label gl-button-label--loading" : "gl-button-label"}>{children}</span>
         {iconEnd && <span className="gl-button-icon"><Icon name={iconEnd} size={iconSizes[size]} /></span>}
       </button>
       {reasonVisibleToAT && <span id={reasonId} className="gl-button-disabled-reason">{disabledReason}</span>}
