@@ -4,6 +4,8 @@ This document is the reference for every visible part of the Graphlink web UI (`
 
 Some tokens, icons and components listed here are introduced progressively. Until a token exists in `web_ui/src/lib/tokens/gl-vars-dev.css`, or a component exists in `web_ui/src/app/ui/`, this document is its specification.
 
+The UI kit (`web_ui/src/app/ui/`, including its `icons/`, `gallery/` and `format.ts`) and the UI ratchet files (`web_ui/src/lib/ui-ratchets.test.ts`, `web_ui/src/lib/ui-ratchet-inventory.ts`) are planned and do not exist yet. The `app/ui/**` paths below refer to that future kit. Existing legacy token values may differ from the target values specified here until migrated.
+
 ## 1. Identity
 
 - **Graphite monochrome.** The UI is deliberately monochrome. No new hues anywhere.
@@ -13,11 +15,11 @@ Some tokens, icons and components listed here are introduced progressively. Unti
   - the active-state indicator of toggles and segmented controls;
   - progress fills;
   - the selected row's leading bar.
-- **Focus ring** is the high-contrast near-white `--gl-focus-ring`; focus must never blend in.
+- **Focus ring** is the high-contrast `--gl-focus-ring` (near-white in dark theme, near-black in light theme); focus must never blend in.
 - **Primary action = inverted fill**: near-white fill with near-black text in the dark theme; near-black fill with white text in the light theme.
   - Exactly one primary action per surface.
   - Secondary = subtle raised fill. Ghost = transparent.
-- **Destructive actions are never distinguished by colour.** They carry a trash or alert icon, an explicit verb ("Delete chat") and a confirmation step in which the destructive verb is the primary button.
+- **Destructive actions are never distinguished by colour.** They carry a `trash` or `status-warning` (alert) icon, an explicit verb ("Delete chat") and a confirmation step in which the destructive verb is the primary button.
 
 ## 2. Tokens
 
@@ -78,7 +80,7 @@ Migration mapping: 2–4px → xs; 5–7px → sm; 8–10px → md; 11–24px �
 
 ### 2.4 Elevation and layering
 
-- **Surfaces:** `--gl-surface-canvas`, `--gl-surface-raised` and `--gl-surface-overlay`, alongside `--gl-surface-window`, `-field`, `-inset` and `-inset-deep`.
+- **Surfaces:** `--gl-surface-canvas`, `--gl-surface-raised` and `--gl-surface-overlay`, alongside `--gl-surface-window`, `--gl-surface-field`, `--gl-surface-inset` and `--gl-surface-inset-deep`.
   - Dark: overlay (popover, menu, dialog) is lighter than raised (node).
   - Light: canvas `#F2F2F2`, raised `#FFFFFF` with a border, overlay `#FFFFFF` with a shadow. Dialogs are never darker than cards.
 - **Shadows:** `--gl-shadow-1` (resting card), `--gl-shadow-2` (hover/raised), `--gl-shadow-popover` (`0 8px 28px rgba(0,0,0,.45)`), `--gl-shadow-dialog` (`0 12px 40px rgba(0,0,0,.55)`). Light-theme versions use about 40% of those alphas.
@@ -86,11 +88,9 @@ Migration mapping: 2–4px → xs; 5–7px → sm; 8–10px → md; 11–24px �
 - **Z-index:** one ordered scale in `gl-vars-dev.css`:
 
   ```
-  canvas-hud < app-layer < search < popover < node-menu < toast < scrim < dialog
-    < dialog-popover (nested) < approval < tooltip < skip-link
-  ```
-
-  Includes `--gl-z-popover` and `--gl-z-tooltip`. A raw z-index is allowed only for local stacking (0, 1 or 2 inside one component) and React Flow group nodes (−1, −2).
+  --gl-z-canvas-hud < --gl-z-app-layer < --gl-z-search < --gl-z-popover < --gl-z-node-menu < --gl-z-toast < --gl-z-scrim < --gl-z-dialog
+    < --gl-z-dialog-popover (nested) < --gl-z-approval < --gl-z-tooltip < --gl-z-skip-link
+  ``` A raw z-index is allowed only for local stacking (0, 1 or 2 inside one component) and React Flow group nodes (−1, −2).
 
 ### 2.5 Motion
 
@@ -104,7 +104,7 @@ Migration mapping: 2–4px → xs; 5–7px → sm; 8–10px → md; 11–24px �
 
 - **Heights:** `--gl-control-h-sm` 24px, `--gl-control-h-md` 28px (default), `--gl-control-h-lg` 32px. The composer input auto-grows.
 - **Hit targets:** at least 24×24px (WCAG 2.5.8), including node-header action buttons.
-- **Icon sizes:** `--gl-icon-xs` 12px, `--gl-icon-sm` 14px, `--gl-icon-md` 16px (default), `--gl-icon-lg` 20px, `--gl-icon-xl` 24px, `--gl-icon-2xl` 32px (empty states, also 40px).
+- **Icon sizes:** `--gl-icon-xs` 12px, `--gl-icon-sm` 14px, `--gl-icon-md` 16px (default), `--gl-icon-lg` 20px, `--gl-icon-xl` 24px, `--gl-icon-2xl` 32px (empty states), `--gl-icon-3xl` 40px (large empty states).
 - **State layers** (washes over the control's surface):
 
   | State | Dark wash | Light wash |
@@ -121,13 +121,13 @@ Migration mapping: 2–4px → xs; 5–7px → sm; 8–10px → md; 11–24px �
 ### 3.1 Grammar
 
 1. **Grid:** 20×20 viewBox, live area 2–18. Keylines: circle r=8; square 14×14 (3–17); portrait 12×16; landscape 16×12.
-2. **Stroke:** `fill="none" stroke="currentColor" stroke-width="1.5"`, round caps and joins, coordinates on the 0.5 grid. Rendered at 12, 14, 16, 20, 24 and 32px, scaling naturally. `<Icon>` never changes the stroke width.
+2. **Stroke:** `fill="none" stroke="currentColor" stroke-width="1.5"`, round caps and joins, coordinates on the 0.5 grid. Rendered at 12, 14, 16, 20, 24, 32 and 40px, scaling naturally. `<Icon>` never changes the stroke width.
 3. **Detail:** parallel strokes at least 2.5 units apart (smaller gaps merge into a blob at 16px); no detail smaller than 2 units; at most 3 primary marks; no letters or text inside icons.
 4. **Corners:** rects use rx 2, or rx 1.5 when under 8 units.
 5. **Fills:** only for dots (r ≤ 1.25) and explicit `-filled` toggle variants (`star-filled`, `pin-filled`), drawn with `fill="currentColor" stroke="none"`.
-6. **Semantics:** arrows point in the action's direction; `external-link` only for things that leave the app; `send` is arrow-up, `run` a stroked play triangle, `stop` a rounded square. Confusable pairs have different silhouettes: branch / repo / merge; agent / code / runner; refresh / rerun / history / stale; favourite star / final-deliverable flag.
+6. **Semantics:** arrows point in the action's direction; `external-link` only for things that leave the app; `arrow-up` (send) is arrow-up, `play` (run) a stroked play triangle, `stop` a rounded square. Confusable pairs have different silhouettes: branch / repo / merge; agent / code / runner; refresh / rerun / history / stale; favourite star / final-deliverable flag.
 7. **Status set** (distinct silhouettes so grey-only status reads): success = check in circle; error = x in octagon; warning = ! in triangle; info = i in circle; pending = dashed circle; running = Spinner (static fallback: circle with centre dot); skipped = circle with skip-arrow; cancelled = circle with slash; stale = circular arrow with a dot; approval = shield with !.
-8. **Contract:** `<Icon name size label?>` renders `<svg viewBox="0 0 20 20" class="gl-icon" aria-hidden="true" focusable="false">`; with `label` it renders `role="img" aria-label`. A control's accessible name comes from the control, never from its icon.
+8. **Contract:** `<Icon name size label?>` renders `<svg viewBox="0 0 20 20" class="gl-icon" focusable="false">`; without `label` it renders `aria-hidden="true"`, and with `label` it renders `role="img" aria-label`. A control's accessible name comes from the control, never from its icon.
 9. **Storage:** path data lives in `web_ui/src/app/ui/icons/glyphs/{chrome,nodes,status,feature}.ts`; the registry imports all four files.
 10. **Aliases** are registry entries pointing at another glyph, so one concept never has two drawings.
 
@@ -272,11 +272,11 @@ Badges reuse `history` (Superseded), `flag` (Final deliverable), `merge` (Synthe
 
 ## 4. Component kit
 
-All kit components live in `web_ui/src/app/ui/`, one component per file, imported directly from that file (there is no barrel `index.ts`). Each has co-located CSS (`gl-*` classes), a gallery section file, and Vitest tests for roles and accessible names, keyboard behaviour, and every variant and state. Once the kit is complete its APIs are frozen; later changes must be additive.
+Kit components will live in `web_ui/src/app/ui/`, one component per file, imported directly from that file (there is no barrel `index.ts`). Each will have co-located CSS (`gl-*` classes), a gallery section file, and Vitest tests for roles and accessible names, keyboard behaviour, and every variant and state. Once the kit is complete its APIs are frozen; later changes must be additive.
 
 | Component | Contract |
 | --- | --- |
-| **Icon** | Props: `name: IconName`, `size: xs\|sm\|md\|lg\|xl\|2xl` (default md = 16), `label?`, `className?`. Grammar §3.1; `aria-hidden` without `label`, `role="img"` with it. Tests: every registry name renders; glyphs use only path, circle, rect, line or polyline; coordinates stay inside [1.5, 18.5]; no colours; aliases resolve. |
+| **Icon** | Props: `name: IconName`, `size: xs\|sm\|md\|lg\|xl\|2xl\|3xl` (default md = 16), `label?`, `className?`. Grammar §3.1; `aria-hidden` without `label`, `role="img"` with it. Tests: every registry name renders; glyphs use only path, circle, rect, line or polyline; coordinates stay inside [1.5, 18.5]; no colours; aliases resolve. |
 | **Button** | Props: `variant: primary\|secondary\|ghost`, `size: sm\|md\|lg`, `iconStart`, `iconEnd`, `loading` (Spinner replaces `iconStart`, width kept, `aria-busy`), `disabled` + `disabledReason` (shown in a Tooltip), `destructive` (leading `trash` icon, `data-destructive`, colour unchanged), `fullWidth`. Always `type="button"` unless `type="submit"`. One primary per surface. |
 | **IconButton** | Props: `icon`, `label` (required; becomes `aria-label` and the tooltip), `shortcut?` (a `Kbd` in the tooltip), `size: sm(24)\|md(28)\|lg(32)`, `variant: ghost (default)\|secondary\|primary`. Dev-time console error if `label` is empty. No `title` attribute. |
 | **ToggleButton** | `aria-pressed`; optional icon and label; pressed = selected wash plus an icon-weight change. |
@@ -287,7 +287,7 @@ All kit components live in `web_ui/src/app/ui/`, one component per file, importe
 | **NumberField** | Minus/plus stepper IconButtons, `min`/`max`/`step`, unit suffix, arrows and PageUp/PageDown. Native spinners hidden. |
 | **Slider** | Native range input restyled (track, fill, thumb), optional tick and value labels, full keyboard support. |
 | **Select** | Button trigger plus a listbox on the nested overlay layer. Options `{value, label, description?, icon?, group?, disabled?}`; a search field above 8 options (combobox pattern); type-ahead; Home/End; Enter/Esc. No "Selected: X" echo. Replaces native `<select>` and `CustomSelect`. |
-| **Field / FormRow / FieldGroup** | Field: label (13 medium), control, description (12 muted), error (12, with `status-warning` icon), linked by `aria-describedby`. FormRow: `inline` (200px label column, Settings) or `stacked` (dialogs). FieldGroup: section header (13 semibold, sentence case), optional description, rows. Replaces fieldset/legend boxes and uppercase kickers. |
+| **Field / FormRow / FieldGroup** | Field: label (13 medium), control, description (12 muted), error (12, with `status-error` icon), linked by `aria-describedby`. FormRow: `inline` (200px label column, Settings) or `stacked` (dialogs). FieldGroup: section header (13 semibold, sentence case), optional description, rows. Replaces fieldset/legend boxes and uppercase kickers. |
 | **Disclosure** | Button (`chevron-right` rotating to down) plus a region with `aria-expanded`/`aria-controls`; variants `inline` and `section`. Replaces `<details>`. |
 | **Tabs** | `tablist` with arrow-key roving, accent underline, lazy panels. |
 | **Dialog** | Sizes sm 420, md 560, lg 760, xl 960; max-height 85vh. Header: title (16 semibold), optional description, `close` IconButton. Body scrolls. Sticky footer: status text left, actions right (secondary then primary). Initial focus: `data-autofocus`, else the first form field, else the title region — never the close button. Nested layers; Escape closes the topmost layer; enter/exit motion; focus restored on close. |
@@ -307,6 +307,8 @@ All kit components live in `web_ui/src/app/ui/`, one component per file, importe
 | **Formatters** (`ui/format.ts`) | `formatCount`, `formatDuration` ("12 min 43 s", "<1 s"), `formatBytes`, `formatTokens` ("42.7k"), `formatRelativeTime` ("2 h ago"). |
 | **Scrollbars** | Native scrollbars themed through `scrollbar-color`. Windows 11 Fluent overlay scrollbars ignore `::-webkit-scrollbar`. |
 
+The Formatters and Scrollbars entries describe supporting utilities and styles, not standalone kit components.
+
 ## 5. Copy style
 
 - **Sentence case for every UI string**: titles, buttons, menu items, tabs, settings labels, palette commands, tooltips. Proper nouns keep their case: Graphlink, Ollama, Llama.cpp, Fal.ai, MCP, API, GitHub, Python, Docker, Podman. Examples: "Open library", "Branch from here", "Mark as final deliverable", "Show token counter".
@@ -323,7 +325,7 @@ All kit components live in `web_ui/src/app/ui/`, one component per file, importe
 
 ## 6. Architecture rules
 
-- **Kit location:** `web_ui/src/app/ui/`, one component per file with co-located CSS. No barrel file: surfaces import each component from its own file. `ui/icons/` holds the icon registry; `ui/gallery/` is the `#gallery` hash route (lazy-loaded, linked from nowhere) used for visual review.
+- **Kit location:** `web_ui/src/app/ui/`, one component per file with co-located CSS. No barrel file: surfaces import each component from its own file. `ui/icons/` will hold the icon registry; `ui/gallery/` will provide the `#gallery` hash route (lazy-loaded, linked from nowhere) used for visual review.
 - **Class namespace:** kit classes are `gl-*` with single-class specificity. Surface classes keep their own prefixes.
 - **Cascade layers come last.** Unlayered CSS beats every layered rule, so all CSS stays unlayered and strictly class-scoped until `styles.css` has been reduced to globals; only then is everything wrapped in `@layer vendor, base, kit, surfaces, nodes, overrides`.
 - **Move or delete.** A surface change that adopts kit components deletes that surface's legacy rules from `web_ui/src/app/styles.css` in one contiguous hunk, or moves them into the surface's own CSS file. Never add rules to `styles.css`; never reformat neighbouring rules. This also stops legacy descendant selectors (`.settings-page button`) from overriding kit styles.
@@ -333,7 +335,7 @@ All kit components live in `web_ui/src/app/ui/`, one component per file, importe
 
 ## 7. UI ratchets
 
-`web_ui/src/lib/ui-ratchets.test.ts` enforces these rules with exact per-file inventories in `web_ui/src/lib/ui-ratchet-inventory.ts`. Numbers may only go down: when you touch a file, lower its entries to the new exact counts. `app/styles.css` totals are maxima.
+When introduced, `web_ui/src/lib/ui-ratchets.test.ts` will enforce these rules with exact per-file inventories in `web_ui/src/lib/ui-ratchet-inventory.ts`. Numbers may only go down: when you touch a file, lower its entries to the new exact counts. `app/styles.css` totals are maxima.
 
 | Rule | What is counted | Target | Why |
 | --- | --- | --- | --- |
