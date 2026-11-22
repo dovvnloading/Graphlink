@@ -44,7 +44,7 @@ export default function Gallery() {
               type="button"
               className={`gl-gallery-theme-button${theme === choice ? " is-active" : ""}`}
               aria-pressed={theme === choice}
-              onClick={() => setTheme(choice)}
+              onClick={() => { applyTheme(choice); setTheme(choice); }}
             >
               {choice === "dark" ? "Dark" : "Light"}
             </button>

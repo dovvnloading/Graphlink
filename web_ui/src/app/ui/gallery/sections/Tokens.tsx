@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import type { GallerySection } from "../Gallery";
 
 type Token = { name: string; value: string };
@@ -45,9 +44,9 @@ function readTokens(): Record<TokenGroup, Token[]> {
   return result;
 }
 
-function Tokens({ theme }: { theme: "dark" | "light" }) {
-  const [groups, setGroups] = useState(readTokens);
-  useEffect(() => { setGroups(readTokens()); }, [theme]);
+function Tokens() {
+  // The gallery sets data-theme before each render after a switch.
+  const groups = readTokens();
   const count = GROUPS.reduce((total, group) => total + groups[group].length, 0);
 
   return (
