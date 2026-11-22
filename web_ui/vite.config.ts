@@ -2,7 +2,6 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import tailwindcss from "@tailwindcss/vite";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -17,7 +16,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // between. `npm run dev` and `npm run build` now just build the app.
 
 export default defineConfig({
-  plugins: [tailwindcss(), react()],
+  plugins: [react()],
   base: "./",
   root: resolve(__dirname, "src/app"),
   // The desktop shell's live dev-server mode (GRAPHLINK_FRONTEND_DEV_URL)
