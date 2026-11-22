@@ -118,7 +118,15 @@ CHART_MAX_WIDTH = 2400.0
 CHART_MAX_HEIGHT = 1800.0
 
 
-class SceneError(ValueError):
+class UserFacingError(Exception):
+    """Its message is shown to the user verbatim.
+
+    Never include secrets, tokens, API keys, file contents, absolute user paths,
+    or stack detail.
+    """
+
+
+class SceneError(UserFacingError, ValueError):
     """A scene intent referenced something that does not exist or is invalid.
     Raised so the WS layer reports it to the caller instead of crashing."""
 
