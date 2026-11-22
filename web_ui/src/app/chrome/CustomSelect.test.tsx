@@ -24,10 +24,10 @@ describe("CustomSelect", () => {
     const user = userEvent.setup();
     render(<CustomSelect ariaLabel="Pick one" value="a" options={OPTIONS} onChange={vi.fn()} />);
 
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("listbox")).toBeNull();
     await user.click(screen.getByRole("button", { name: "Pick one" }));
 
-    const panel = screen.getByRole("dialog", { name: "Pick one" });
+    const panel = screen.getByRole("listbox", { name: "Pick one" });
     expect(panel).toBeInTheDocument();
     for (const option of OPTIONS) {
       // A regex, not an exact string: an option WITH a description (like
@@ -35,7 +35,7 @@ describe("CustomSelect", () => {
       // accessible name too (both are plain text inside the same <button>,
       // no aria-hidden on either) - matching Composer.tsx's own Reasoning
       // picker exactly, which this component deliberately reuses verbatim.
-      expect(screen.getByRole("button", { name: new RegExp("^" + option.label) })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: new RegExp("^" + option.label) })).toBeInTheDocument();
     }
   });
 
@@ -44,7 +44,7 @@ describe("CustomSelect", () => {
     const { container } = render(<CustomSelect ariaLabel="Pick one" value="a" options={OPTIONS} onChange={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "Pick one" }));
 
-    const panel = screen.getByRole("dialog", { name: "Pick one" });
+    const panel = screen.getByRole("listbox", { name: "Pick one" });
     expect(container.contains(panel)).toBe(false);
     expect(document.body.contains(panel)).toBe(true);
   });
@@ -64,9 +64,9 @@ describe("CustomSelect", () => {
 
     // Option B's own accessible name also folds in its description text -
     // see the "listing every option" test's own comment.
-    expect(screen.getByRole("button", { name: /^Option B/ })).toHaveClass("active");
-    expect(screen.getByRole("button", { name: "Option A" })).not.toHaveClass("active");
-    expect(screen.getByRole("button", { name: "Option C" })).not.toHaveClass("active");
+    expect(screen.getByRole("option", { name: /^Option B/ })).toHaveClass("is-active");
+    expect(screen.getByRole("option", { name: "Option A" })).not.toHaveClass("is-active");
+    expect(screen.getByRole("option", { name: "Option C" })).not.toHaveClass("is-active");
   });
 
   it("clicking an option calls onChange with its id and closes the panel", async () => {
@@ -75,10 +75,10 @@ describe("CustomSelect", () => {
     render(<CustomSelect ariaLabel="Pick one" value="a" options={OPTIONS} onChange={onChange} />);
     await user.click(screen.getByRole("button", { name: "Pick one" }));
 
-    await user.click(screen.getByRole("button", { name: "Option C" }));
+    await user.click(screen.getByRole("option", { name: "Option C" }));
 
     expect(onChange).toHaveBeenCalledWith("c");
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("listbox")).toBeNull();
   });
 
   it("clicking outside the panel closes it without calling onChange", async () => {
@@ -91,11 +91,11 @@ describe("CustomSelect", () => {
       </div>,
     );
     await user.click(screen.getByRole("button", { name: "Pick one" }));
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Elsewhere" }));
 
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("listbox")).toBeNull();
     expect(onChange).not.toHaveBeenCalled();
   });
 
@@ -113,11 +113,11 @@ describe("CustomSelect", () => {
 
     render(<CustomSelect ariaLabel="Pick one" value="a" options={OPTIONS} onChange={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "Pick one" }));
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
 
     await user.keyboard("{Escape}");
 
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("listbox")).toBeNull();
     expect(parentEscapeHandler).not.toHaveBeenCalled();
   });
 
@@ -138,7 +138,7 @@ describe("CustomSelect", () => {
     const trigger = screen.getByRole("button", { name: "Pick one" });
     expect(trigger).toBeDisabled();
     await user.click(trigger);
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("listbox")).toBeNull();
   });
 
   it("sets aria-haspopup and aria-expanded reflecting the panel's real open state", async () => {
@@ -146,7 +146,7 @@ describe("CustomSelect", () => {
     render(<CustomSelect ariaLabel="Pick one" value="a" options={OPTIONS} onChange={vi.fn()} />);
     const trigger = screen.getByRole("button", { name: "Pick one" });
 
-    expect(trigger).toHaveAttribute("aria-haspopup", "dialog");
+    expect(trigger).toHaveAttribute("aria-haspopup", "listbox");
     expect(trigger).toHaveAttribute("aria-expanded", "false");
 
     await user.click(trigger);
@@ -160,12 +160,14 @@ describe("CustomSelect", () => {
     const trigger = screen.getByRole("button", { name: "Pick one" });
     trigger.focus();
     await user.keyboard("{ArrowDown}");
-    expect(screen.getByRole("button", { name: /^Option B/ })).toHaveFocus();
+    const listbox = screen.getByRole("listbox", { name: "Pick one" });
+    expect(listbox).toHaveFocus();
+    expect(listbox).toHaveAttribute("aria-activedescendant", screen.getByRole("option", { name: /^Option B/ }).id);
     await user.keyboard("{Home}");
-    expect(screen.getByRole("button", { name: "Option A" })).toHaveFocus();
+    expect(listbox).toHaveAttribute("aria-activedescendant", screen.getByRole("option", { name: "Option A" }).id);
     await user.keyboard("{End}{Enter}");
     expect(onChange).toHaveBeenCalledWith("c");
-    expect(screen.queryByRole("dialog", { name: "Pick one" })).toBeNull();
+    expect(screen.queryByRole("listbox", { name: "Pick one" })).toBeNull();
     expect(trigger).toHaveFocus();
   });
 
@@ -180,9 +182,9 @@ describe("CustomSelect", () => {
     );
     const trigger = screen.getByRole("button", { name: "Pick one" });
     await user.click(trigger);
-    expect(screen.getByRole("button", { name: "Option A" })).toHaveFocus();
+    expect(screen.getByRole("listbox", { name: "Pick one" })).toHaveFocus();
     await user.keyboard("{Tab}");
-    expect(screen.queryByRole("dialog", { name: "Pick one" })).toBeNull();
+    expect(screen.queryByRole("listbox", { name: "Pick one" })).toBeNull();
     expect(screen.getByRole("button", { name: "Next" })).toHaveFocus();
     await user.click(trigger);
     await user.keyboard("{Shift>}{Tab}{/Shift}");
@@ -195,14 +197,16 @@ describe("CustomSelect", () => {
       <CustomSelect ariaLabel="Pick one" value="b" options={OPTIONS} onChange={vi.fn()} />,
     );
     const trigger = screen.getByRole("button", { name: "Pick one" });
-    expect(trigger).toHaveAccessibleDescription("Selected: Option B");
+    expect(trigger).toHaveTextContent("Option B");
+    expect(trigger).not.toHaveAccessibleDescription(/Selected:/);
     await user.click(trigger);
-    expect(trigger).toHaveAttribute("aria-controls", screen.getByRole("dialog").id);
-    expect(screen.getByRole("button", { name: /^Option B/ })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "Option A" })).toHaveAttribute("aria-pressed", "false");
+    expect(trigger).toHaveAttribute("aria-controls", screen.getByRole("listbox").id);
+    expect(screen.getByRole("option", { name: /^Option B/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("option", { name: "Option A" })).toHaveAttribute("aria-selected", "false");
     await user.keyboard("{Escape}");
     rerender(<CustomSelect ariaLabel="Pick one" value="c" options={OPTIONS} onChange={vi.fn()} />);
-    expect(trigger).toHaveAccessibleDescription("Selected: Option C");
+    expect(trigger).toHaveTextContent("Option C");
+    expect(trigger).not.toHaveAccessibleDescription(/Selected:/);
   });
 
 
