@@ -24,7 +24,7 @@ export function Field({
   label, description, error, id, required, layout = "stacked", className, children,
 }: FieldProps) {
   const generated = useId();
-  const controlId = id ?? (isValidElement(children) && children.props.id) ?? generated;
+  const controlId = id ?? (isValidElement(children) ? children.props.id : undefined) ?? generated;
   const descriptionId = description ? controlId + "-description" : undefined;
   const errorId = error ? controlId + "-error" : undefined;
   const existing = isValidElement(children) ? children.props["aria-describedby"] : undefined;
