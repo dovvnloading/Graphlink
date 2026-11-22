@@ -551,9 +551,27 @@ async def _invoke_discovered_plugin_intent(
         await bus.publish("notification")
         return None
 
+    def run_background_scene_job(job):
+        async def settle():
+            try:
+                await job
+            finally:
+                await bus.publish("scene")
+
+        task = asyncio.create_task(settle())
+        bus.plugin_background_tasks.add(task)
+
+        def settled(completed):
+            bus.plugin_background_tasks.discard(completed)
+            if not completed.cancelled() and (error := completed.exception()) is not None:
+                logger.error("Background plugin scene job failed", exc_info=error)
+
+        task.add_done_callback(settled)
+
     run_ctx = PluginRunContext(
         plugin_id=plugin_id, notifications=notifications,
         is_plugin_granted=lambda target: _is_plugin_granted(settings_manager, target),
+        run_background_scene_job=run_background_scene_job,
     )
     if inspect.iscoroutinefunction(spec.handler):
         result = await spec.handler(canvas_document, run_ctx, *extra_args)

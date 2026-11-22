@@ -920,6 +920,7 @@ OPERATIONS = (
         {"predictors": [[1], [2], [3], [4], [5]], "response": [2.1, 4.2, 5.9, 8.0, 10.2],
          "weights": [1, 2, 1, 2, 1]}, _linear,
         headline="r_squared",
+        paired_fields=(("response", "weights"),),
     ),
     Operation(
         "nonlinear_least_squares", "Levenberg–Marquardt nonlinear fit",
@@ -933,6 +934,7 @@ OPERATIONS = (
          "y": [1.8, 3.2, 4.3, 5.1, 5.6], "weights": [1, 1, 1, 1, 1],
          "initial_parameters": [8, 0.25]}, _nonlinear,
         headline="parameter_0",
+        paired_fields=(("x", "y", "weights"),),
     ),
     Operation(
         "custom_nonlinear_least_squares", "Custom expression nonlinear least squares",
@@ -945,6 +947,7 @@ OPERATIONS = (
          "x": [0,1,2,3,4,5,6,7,8,9], "y": [1.1,2,2.9,4.2,5,6.1,6.9,8.1,9,10.2],
          "weights": [1]*10}, _custom_nonlinear,
         headline="estimate_a",
+        paired_fields=(("x", "y", "weights"),),
     ),
     Operation(
         "compare_models", "Compare models by corrected Akaike information",
@@ -958,6 +961,7 @@ OPERATIONS = (
                    '{"name":"quadratic","expression":"a+b*x+c*x^2",'
                    '"parameters":{"a":0,"b":1,"c":0.01}}]'}, _compare_models,
         headline="best_model",
+        paired_fields=(("x", "y", "weights"),),
     ),
     Operation(
         "welch_t_test", "Welch two-sample t test", "Two-sided Welch t test; independent samples and unequal population variances.",
@@ -972,5 +976,6 @@ OPERATIONS = (
          Field("expected", "Expected counts (fixed in advance)", "vector")),
         {"observed": [25, 30, 45], "expected": [30, 30, 40]}, _chi_square,
         headline="p_value",
+        paired_fields=(("observed", "expected"),),
     ),
 )

@@ -16,6 +16,7 @@ from typing import Any
 from .units import parse_unit, dimension_name, convert_decimal_measurement, interval_temperature_unit
 
 VERSION = "1.2.0"
+UNCERTAINTY_METHODS = ("auto", "gum", "monte_carlo")
 MAX_POINTS = 1024
 MAX_COLUMNS = 32
 MAX_CELLS = 4096
@@ -186,8 +187,20 @@ class Operation:
     # The result value a 390px workbench node shows first, e.g. "km" for a
     # Michaelis–Menten fit. Empty leaves the choice to the node.
     headline: str = ""
+    # Fields in one group refer to the same observations, in order.
+    paired_fields: tuple[tuple[str, ...], ...] = ()
+    output_units: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self):
+        vectors = {field.key for field in self.fields if field.kind == "vector"}
+        grouped = [key for group in self.paired_fields for key in group]
+        if (any(len(group) < 2 for group in self.paired_fields) or len(set(grouped)) != len(grouped)
+                or not set(grouped) <= vectors):
+            raise ValueError("Paired fields must name distinct vector inputs.")
+        if len(dict(self.output_units)) != len(self.output_units):
+            raise ValueError("Output unit keys must be unique.")
+        for _, symbol in self.output_units:
+            parse_unit(symbol)
         if not isinstance(self.headline, str):
             raise ValueError("An operation headline must be a result value key.")
         for field in self.fields:
@@ -220,6 +233,10 @@ class Operation:
             "id": self.id, "title": self.title, "description": self.description,
             "fields": fields, "example": self.example,
         }
+        if self.paired_fields:
+            description["pairedFields"] = self.paired_fields
+        if self.output_units:
+            description["outputUnits"] = dict(self.output_units)
         if self.methods:
             description["methods"] = self.methods
         if self.citations:
@@ -483,6 +500,9 @@ def calculate_result(pack: str, operation: Operation, inputs: dict, sources: dic
             "inputHash": input_hash, "resultHash": result_hash,
             "createdAt": datetime.now(UTC).isoformat(), "sources": sources or {},
             "referenceData": reference_data,
+            **({"outputUnits": dict(operation.output_units)} if operation.output_units else {}),
+            **({"requestedUncertaintyMethod": uncertainty_method}
+               if uncertainty_inputs or uncertainty_method != "auto" else {}),
             **({"inputUnits": input_units} if input_units is not None else {}),
         },
     }
@@ -502,6 +522,17 @@ def _source_valid(ref: dict) -> bool:
         return False
     if ref.get("sourceKey") is not None and not _NODE_KEY.fullmatch(ref["sourceKey"]):
         return False
+    binding = ref.get("binding")
+    if binding is not None:
+        selector = ref.get("selector")
+        if (not isinstance(binding, dict) or not isinstance(selector, list) or len(selector) != 5
+                or selector[0] not in ("table_column", "result_table_column")
+                or not all(isinstance(binding.get(k), str) for k in ("columnLabel", "sourceUnit", "targetUnit"))
+                or not _DIGEST.fullmatch(binding.get("rowDigest", ""))
+                or type(binding.get("retained")) is not int or not 1 <= binding["retained"] <= MAX_POINTS
+                or type(binding.get("omitted")) is not int or not 0 <= binding["omitted"] < MAX_POINTS
+                or binding["omitted"] + binding["retained"] != selector[4] - selector[3]):
+            return False
     match ref.get("selector"):
         case ["plot", "x" | "y"] | ["table"] | ["typed_table"] | ["result_table"] | ["values", str()]:
             return True
@@ -532,6 +563,13 @@ def readable_result(data: dict, pack: str) -> bool:
         if (created_at.utcoffset() != UTC.utcoffset(created_at)
                 or receipt["packId"] != pack or receipt["operationId"] != result["operationId"]
                 or not _OPERATION_ID.fullmatch(result["operationId"])):
+            return False
+        output_units = receipt.get("outputUnits", {})
+        if not isinstance(output_units, dict) or not all(
+                isinstance(key, str) and key in result["values"] and isinstance(symbol, str) and parse_unit(symbol)
+                for key, symbol in output_units.items()):
+            return False
+        if receipt.get("requestedUncertaintyMethod", "auto") not in UNCERTAINTY_METHODS:
             return False
         sources = receipt["sources"]
         if (not isinstance(sources, dict) or sources.keys() - result["inputs"].keys()

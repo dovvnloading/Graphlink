@@ -2,7 +2,7 @@ import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
-import type { WsTransport } from "../../lib/ws/transport";
+import { WsTimeoutError, type WsTransport } from "../../lib/ws/transport";
 import { SceneStore } from "./sceneStore";
 import { ScientificNodeView, type ScientificFlowNode } from "./ScientificNodeView";
 import { readScienceState, type ScienceChartLink, type ScienceState, type ScienceResult } from "./scientificWorkbench";
@@ -36,8 +36,8 @@ function mount(raw = JSON.stringify(state), parents = [parent], charts: ScienceC
     const props = { id: "target", data: { title: "Mathematics", raw: value, pluginId: "science_mathematics", parents: currentParents, charts: currentCharts, store } } as NodeProps<ScientificFlowNode>;
     return <ScientificNodeView {...props} />;
   }
-  const view = render(draw(raw), { wrapper: ReactFlowProvider });
-  return { request, fireIntent, generateChart, remount: (value: string) => { view.unmount(); render(draw(value), { wrapper: ReactFlowProvider }); }, refresh: (value: string, currentParents = parents, currentCharts = charts) => view.rerender(draw(value, currentParents, currentCharts)) };
+  let view = render(draw(raw), { wrapper: ReactFlowProvider });
+  return { request, fireIntent, generateChart, remount: (value: string) => { view.unmount(); view = render(draw(value), { wrapper: ReactFlowProvider }); }, refresh: (value: string, currentParents = parents, currentCharts = charts) => view.rerender(draw(value, currentParents, currentCharts)) };
 }
 
 function openImporter() {
@@ -521,24 +521,50 @@ describe("scientific workbench card", () => {
     expect(screen.getByLabelText("Samples (m)")).toHaveValue("[1,2,3]");
   });
 
-  it("cancels an in-flight scientific worker without disabling the Cancel control", async () => {
+  it("reconciles a lost start acknowledgement after remount and cancels only that attempt", async () => {
+    const base = { ...state, runToken: "last", nodeKey: "same-node", attemptProtocol: 1 };
+    const { request, remount } = mount(JSON.stringify(base));
+    const seen: string[] = [];
+    let id = "", stopped = false;
+    const view = (status: string) => ({ attemptId: id, operationId: "integral", status, startedAtMs: Date.now(),
+      ...(status === "cancelled" && { error: "Stopped before commit.", errorType: "cancelled", elapsedMs: 42 }) });
+    request.mockImplementation(async (_topic, _intent, args) => {
+      const [, action, input] = args as [string, string, { attempt_id: string }];
+      seen.push(action);
+      if (action === "start_attempt") {
+        id = input.attempt_id;
+        throw new WsTimeoutError("Lost acknowledgement");
+      }
+      expect(input.attempt_id).toBe(id);
+      if (action === "cancel_attempt") stopped = true;
+      return { ok: true, attempt: view(stopped ? "cancelled" : "running") };
+    });
+    fireEvent.change(screen.getByLabelText("Samples (m)"), { target: { value: "[7,8]" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
+    expect(await screen.findByText("Checking run status…")).toBeVisible();
+    remount(JSON.stringify({ ...base, attempt: view("running") }));
+    expect(screen.getByLabelText("Samples (m)")).toHaveValue("[7,8]");
+    expect(screen.getByRole("button", { name: "Run calculation" })).toBeDisabled();
+    await waitFor(() => expect(seen).toContain("status_attempt"));
+    expect(await screen.findByText("Running Integrate samples…")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel calculation" }));
+    await waitFor(() => expect(seen).toContain("cancel_attempt"));
+    remount(JSON.stringify({ ...base, attempt: view("cancelled") }));
+    expect(await screen.findByText("Stopped before commit.")).toBeVisible();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Run calculation" })).toBeEnabled(), { timeout: 3000 });
+    expect(seen.filter((name) => name === "start_attempt")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Cancel calculation" })).toBeNull();
+  });
+
+  it("keeps older synchronous hosts usable while limiting Stop to hosts with attempt controls", async () => {
     const { request } = mount();
-    let finishRun: (value: unknown) => void = () => {};
-    request.mockReturnValueOnce(new Promise((resolve) => { finishRun = resolve; }));
+    let finish: (value: unknown) => void = () => {};
+    request.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
     fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
     expect(screen.getByRole("button", { name: "Run calculation" })).toBeDisabled();
-    expect(screen.getByRole("status")).toHaveTextContent("Running calculation…");
-    const cancel = screen.getByRole("button", { name: "Cancel calculation" });
-    expect(cancel).toBeEnabled();
-    fireEvent.click(cancel);
-    expect(request).toHaveBeenNthCalledWith(2, "app-plugins", "invokePluginIntent", [
-      "science_mathematics", "cancel", { node_id: "target", operation_id: "integral" },
-    ]);
-    finishRun({ ok: false, errorType: "cancelled", elapsedMs: 42,
-      error: "Scientific calculation cancelled after 42 ms." });
-    expect(await screen.findByRole("alert")).toHaveTextContent("cancelled after 42 ms");
-    await waitFor(() => expect(screen.getByRole("button", { name: "Run calculation" })).toBeEnabled());
     expect(screen.queryByRole("button", { name: "Cancel calculation" })).toBeNull();
+    finish({ ok: true });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Run calculation" })).toBeEnabled());
   });
 
   it("shows a typed timed-out run without replacing the last successful result", async () => {
@@ -930,4 +956,21 @@ describe("explicit Scientific Graph Runner configuration", () => {
     refresh(JSON.stringify({ ...state, runToken: "restored-after-undo", runner: null }));
     expect(screen.queryByText("Saved as an explicit Graph Runner step.")).toBeNull();
   });
+});
+
+it("restores a saved scalar unit literal and indicates when the recipe diverges", async () => {
+  const { request } = mount(JSON.stringify({ ...state, runner: {
+    version: 2, operationId: "scale", inputs: { length: "25 mm" }, sources: {},
+    uncertaintyMethod: "monte_carlo",
+  } }), []);
+  const field = screen.getByRole("textbox", { name: "Length (m)" });
+  expect(field).toHaveValue("25 mm");
+  expect(screen.getByText("Saved as an explicit Graph Runner step.")).toBeVisible();
+  fireEvent.change(field, { target: { value: "30 mm" } });
+  expect(screen.getByText("Changes not saved to Graph Runner.")).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Save for Graph Runner" }));
+  await waitFor(() => expect(request).toHaveBeenCalledWith("app-plugins", "invokePluginIntent", [
+    "science_mathematics", "configure_runner", { node_id: "target", operation_id: "scale",
+      inputs: { length: "30 mm" }, sources: {}, uncertainty_method: "monte_carlo" },
+  ]));
 });

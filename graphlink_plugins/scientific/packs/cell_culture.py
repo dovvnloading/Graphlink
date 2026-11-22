@@ -676,6 +676,7 @@ OPERATIONS = (
         },
         cell_count_viability,
         headline="viable_cells_per_ml",
+        paired_fields=(("live_counts", "dead_counts"),),
     ),
     Operation(
         "seeding_plan", "Viable-cell seeding preparation",
@@ -738,6 +739,7 @@ OPERATIONS = (
          "plated_volume_ml": 0.1},
         plate_count_cfu,
         headline="cfu_per_ml",
+        paired_fields=(("colony_counts", "reciprocal_dilutions"),),
     ),
     Operation(
         "microplate_map", "96/384-well microplate map",
@@ -772,6 +774,7 @@ OPERATIONS = (
          "reciprocal_dilutions": [1, 10, 100], "inoculum_volume_ml": 1},
         most_probable_number,
         headline="mpn_per_ml",
+        paired_fields=(("positive_tubes", "total_tubes", "reciprocal_dilutions"),),
     ),
     Operation(
         "growth_curve_parameters", "Culture growth-curve parameters",
@@ -794,6 +797,7 @@ OPERATIONS = (
         },
         growth_curve_parameters,
         headline="maximum_specific_growth_rate",
+        paired_fields=(("time", "abundance"),),
     ),
     Operation(
         "doubling_time", "Two-point culture doubling time",

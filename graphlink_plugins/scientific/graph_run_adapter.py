@@ -10,9 +10,10 @@ from collections.abc import Callable
 from typing import Any
 
 from backend.domain.model import SceneError
+from graphlink_plugins.scientific.bindings import column_binding
 from graphlink_plugins.scientific.catalog import PACKS, operations
-from graphlink_plugins.scientific.core import VERSION, Operation, fingerprint, readable_result, validated_inputs_with_units
-from graphlink_plugins.scientific.data_table import numeric_column, table_metadata_valid
+from graphlink_plugins.scientific.core import UNCERTAINTY_METHODS, VERSION, Operation, fingerprint, readable_result, validated_inputs_with_units
+from graphlink_plugins.scientific.data_table import table_metadata_valid
 from graphlink_plugins.scientific.propagation import connected_measurement, result_unit
 from graphlink_plugins.scientific.reference_data import references_for_operation
 from graphlink_plugins.scientific.workbench import (
@@ -31,7 +32,9 @@ def _configuration(node: Any) -> tuple[str, Operation, dict[str, Any]]:
     pack = node.kind.removeprefix("science_").split(".", 1)[0]
     state = node.state.data
     config = state["runner"]
-    if (pack not in PACKS or config.get("version") != 1
+    if (pack not in PACKS or type(config.get("version")) is not int or config["version"] not in (1, 2)
+            or config.get("uncertaintyMethod", "auto") not in UNCERTAINTY_METHODS
+            or (config["version"] == 2 and "uncertaintyMethod" not in config)
             or not isinstance(config.get("operationId"), str)
             or not isinstance(config.get("inputs"), dict)
             or not isinstance(config.get("sources"), dict)
@@ -137,6 +140,8 @@ def _stable_sources(sources: dict) -> dict:
         field: {
             "sourceKey": ref.get("sourceKey"), "selector": ref.get("selector"),
             "resultHash": ref.get("resultHash"), "receiptHash": ref.get("receiptHash"),
+            **({"binding": ref["binding"]} if "binding" in ref else {}),
+            **({"assumedUnit": ref["assumedUnit"]} if "assumedUnit" in ref else {}),
         }
         for field, ref in sorted(sources.items())
     }
@@ -144,12 +149,16 @@ def _stable_sources(sources: dict) -> dict:
 
 def config_hash(node: Any) -> str:
     pack, operation, config = _configuration(node)
-    return fingerprint([
+    identity = [
         "science_runner_v1", pack, VERSION, operation.id, node.state.data.get("nodeKey"),
         {key: value for key, value in config["inputs"].items() if key not in config["sources"]},
-        {field: {"sourceKey": ref.get("sourceKey"), "selector": ref.get("selector")}
+        {field: {"sourceKey": ref.get("sourceKey"), "selector": ref.get("selector"),
+                 **({"binding": ref["binding"]} if "binding" in ref else {})}
          for field, ref in sorted(config["sources"].items())},
-    ])
+    ]
+    if config.get("uncertaintyMethod", "auto") != "auto":
+        identity.append(config["uncertaintyMethod"])
+    return fingerprint(identity)
 
 
 def output_hash(node: Any) -> str:
@@ -184,6 +193,7 @@ def prepare(document: Any, node: Any, granted: Any) -> tuple[Any, dict, dict, st
         _verify_lineage(document, source, granted, set(), checked_sources)
         selector = saved["selector"]
         latest: dict[str, Any] | None = None
+        evidence = None
         if selector == ["typed_table"]:
             table = source_data.get("table")
             if not table_metadata_valid(table):
@@ -195,10 +205,7 @@ def prepare(document: Any, node: Any, granted: Any) -> tuple[Any, dict, dict, st
             table = source_data.get("table")
             if not table_metadata_valid(table):
                 raise SceneError("The connected typed table is unavailable.")
-            try:
-                value = numeric_column(table, *selector[1:])
-            except (ValueError, IndexError, KeyError, TypeError) as exc:
-                raise SceneError("The connected typed table selection is invalid.") from exc
+            value = None  # Resolved with its target units below.
             result_hash = table["asset_ref"]
             receipt_hash = table["provenance"]["receiptHash"]
         elif selector == ["result_table"] or (
@@ -210,10 +217,7 @@ def prepare(document: Any, node: Any, granted: Any) -> tuple[Any, dict, dict, st
             if selector == ["result_table"]:
                 value = table
             else:
-                try:
-                    value = numeric_column(table, *selector[1:])
-                except (ValueError, IndexError, KeyError, TypeError) as exc:
-                    raise SceneError("The connected result column is unavailable.") from exc
+                value = None  # Resolved with its target units below.
             result_hash = latest["provenance"]["resultHash"]
             receipt_hash = latest["provenance"]["receiptHash"]
         else:
@@ -229,7 +233,20 @@ def prepare(document: Any, node: Any, granted: Any) -> tuple[Any, dict, dict, st
         # Keep a linked scalar's *source* unit, rather than silently treating
         # a centimetre output as metres after replacing the saved literal.
         numeric_field = next((item for item in operation.fields if item.key == field), None)
-        if (numeric_field is not None and numeric_field.kind in {"number", "integer"}
+        if len(selector) == 5 and selector[0] in ("table_column", "result_table_column"):
+            saved_binding = saved.get("binding")
+            try:
+                _, value, _, evidence = column_binding(table, selector, numeric_field, raw, saved_binding)
+            except ValueError as exc:
+                raise SceneError(f"{field}: {exc}") from exc
+            if saved_binding:
+                if any(saved_binding.get(k) != evidence.get(k) for k in
+                       ("sourceUnit", "targetUnit", "columnLabel", "completeLabels")):
+                    raise SceneError(f"{field}: the bound column or unit changed. Review the runner configuration.")
+            elif evidence["sourceUnit"] and evidence["sourceUnit"] != evidence["targetUnit"]:
+                raise SceneError(f"{field}: review this legacy column's source and target units before replay.")
+            raw[field] = value
+        elif (numeric_field is not None and numeric_field.kind in {"number", "integer"}
                 and len(selector) == 2 and selector[0] == "values"
                 and isinstance(selector[1], str) and type(value) in (int, float)):
             try:
@@ -238,13 +255,15 @@ def prepare(document: Any, node: Any, granted: Any) -> tuple[Any, dict, dict, st
                 measurement = connected_measurement(latest, selector, source_data["nodeKey"])
             except ValueError as exc:
                 raise SceneError(str(exc)) from exc
-            unit = measurement["unit"] if measurement is not None else result_unit(selector[1])
+            unit = result_unit(selector[1], latest["provenance"].get("outputUnits")) or (
+                measurement["unit"] if measurement else "")
             raw[field] = f"{value} {unit}" if unit else value
         else:
             raw[field] = value
         references[field] = {
             "nodeId": source.id, "sourceKey": source_data["nodeKey"],
             "selector": selector, "resultHash": result_hash, "receiptHash": receipt_hash,
+            **({"binding": evidence} if evidence else {}),
         }
     try:
         inputs, input_units = validated_inputs_with_units(operation, raw)
@@ -257,8 +276,11 @@ def prepare(document: Any, node: Any, granted: Any) -> tuple[Any, dict, dict, st
     current = node.state.data.get("latest")
     if isinstance(current, dict) and node.content != current["summary"]:
         raise SceneError("The scientific output has manual edits; review them before running.")
+    requested = config.get("uncertaintyMethod", "auto")
     same = bool(
         isinstance(current, dict) and current["provenance"]["packVersion"] == VERSION
+        and current["provenance"].get("requestedUncertaintyMethod",
+                                      None if current.get("uncertainty") else "auto") == requested
         and current["operationId"] == operation.id
         and current["inputs"] == inputs
         and current["provenance"].get("inputUnits") == input_units
@@ -267,5 +289,8 @@ def prepare(document: Any, node: Any, granted: Any) -> tuple[Any, dict, dict, st
     )
     # Dispatch the original validated literals so the worker retains submitted
     # units in provenance; pin the normalized values AND unit choices for replay.
-    digest = fingerprint([VERSION, operation.id, inputs, input_units, _stable_sources(sources), reference_data])
+    identity = [VERSION, operation.id, inputs, input_units, _stable_sources(sources), reference_data]
+    if requested != "auto":
+        identity.append(requested)
+    digest = fingerprint(identity)
     return operation, raw, sources, digest, same

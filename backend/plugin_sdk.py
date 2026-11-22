@@ -116,7 +116,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Awaitable, Callable, Literal
 
 # Python 3.12+ is the documented and package-declared floor; tomllib is
 # available from the standard library on every supported interpreter.
@@ -333,6 +333,9 @@ class PluginRunContext:
     spawn_x: float | None = None
     spawn_y: float | None = None
     is_plugin_granted: Callable[[str], bool] | None = None
+    # Trusted in-process jobs settle on the event loop and publish a scene update
+    # even when the requesting socket disconnects before completion.
+    run_background_scene_job: Callable[[Awaitable[None]], None] | None = None
 
 
 @dataclass(frozen=True)
