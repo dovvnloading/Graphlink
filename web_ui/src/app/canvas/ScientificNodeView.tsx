@@ -10,9 +10,13 @@ import type { SceneStore, ScienceEditorSession } from "./sceneStore";
 import { downloadBlob } from "./downloadTextFile";
 import { writeTableCsv } from "./tableCsv";
 import { createLinearScale } from "./charts/chartScales";
+import { ScienceTableSource } from "./ScienceTableSource";
+import { ScienceArrayInput } from "./ScienceArrayInput";
+import { ScienceColumnBinding, type FetchTableColumn } from "./ScienceColumnBinding";
+import { ScientificDataTable } from "./ScientificDataTable";
 import { ScientificResultViews } from "./ScientificResultViews";
 import {
-  chartableScienceTypes, columnChoices, compatibleOptions, connectedInputText, draftInputs, FieldError, fieldText, formatMeasurement, formatScienceNumber, formatScienceRange, formatScienceSummary, formatScienceValue, matchesSource, parseInputs, readableScienceKey, readScienceState, resultMeasurement, sourceOptions,
+  isResult, exactScienceNumber, isImportedTable, type ScientificImportedTable, chartableScienceTypes, columnChoices, compatibleOptions, connectedInputText, currentSource, draftInputs, FieldError, fieldText, formatMeasurement, formatScienceNumber, formatScienceRange, formatScienceSummary, formatScienceValue, matchesSource, parseInputs, readableScienceKey, readScienceState, resultMeasurement, sourceOptions,
   type EditorDraft, type ScienceAttempt, type ScienceField, type ScienceLimits, type ScienceOperation, type ScienceParent, type SciencePlot, type ScienceResult,
   type ScienceChartLink, type ScienceChartType, type ScienceState, type ScienceRunnerConfiguration, type ScientificColumnType, type Sources, type SourceOption, type SourceReference,
 } from "./scientificWorkbench";
@@ -35,7 +39,7 @@ function scienceScale(values: number[], from: number, to: number) {
   return { low, high, at: (n: number) => position(n / divisor) };
 }
 
-function Plot({ plot }: { plot: SciencePlot }) {
+function Plot({ plot, scatter }: { plot: SciencePlot; scatter: boolean }) {
   const x = scienceScale(plot.x, 10, 310);
   const y = scienceScale(plot.y, 98, 8);
   const points = plot.x.map((v, i) => `${x.at(v)},${y.at(plot.y[i])}`).join(" ");
@@ -45,11 +49,13 @@ function Plot({ plot }: { plot: SciencePlot }) {
     <span>{plot.yLabel} · {formatScienceRange(y.low, y.high)}</span>
     <svg viewBox="0 0 320 110" role="img" aria-label={`${plot.title}. ${plot.yLabel} versus ${plot.xLabel}, ${plot.x.length} points.`}>
       <path d="M10 8V98H310" fill="none" stroke="currentColor" opacity=".4" />
-      <polyline points={points} fill="none" stroke="currentColor" strokeWidth="1.8" />
-      {plot.x.length <= 48 && plot.x.map((v, i) =>
+      {!scatter && <polyline points={points} fill="none" stroke="currentColor" strokeWidth="1.8" />}
+      {(scatter || plot.x.length <= 48) && plot.x.map((v, i) =>
         <circle key={i} cx={x.at(v)} cy={y.at(plot.y[i])} r="2.4" fill="currentColor"><title>{v}, {plot.y[i]}</title></circle>)}
     </svg>
     <span>{plot.xLabel} · {formatScienceRange(x.low, x.high)}</span>
+    <ScientificDataTable title="Exact plot coordinates" columns={["Point", plot.xLabel, plot.yLabel]}
+      rows={() => plot.x.map((value, index) => [String(index + 1), exactScienceNumber(value), exactScienceNumber(plot.y[index])])} />
   </figure>;
 }
 
@@ -86,32 +92,35 @@ function headlineScienceValue(result: ScienceResult, declared?: string): [string
 }
 
 /** Closed disclosures do not mount wide plots, tables or thousands of cells. */
-function ResultDisclosure({ label, children, className = "", onClose }: {
-  label: string; children: ReactNode; className?: string; onClose?: () => void;
+function ResultDisclosure({ label, children, className = "", onClose, defaultOpen = false }: {
+  label: string; children: ReactNode; className?: string; onClose?: () => void; defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   return <details className={`science-result-disclosure ${className}`.trim()} open={open}>
     <summary onClick={(event) => { event.preventDefault(); if (open) onClose?.(); setOpen((previous) => !previous); }}>{label}</summary>
     {open && children}
   </details>;
 }
 
-function Results({ result, title, headlineKey, exportJson, exportCsv, exportMethods, onChart, onRefresh, onDiscuss, charts }: {
-  result: ScienceResult; title: string; headlineKey?: string; exportJson: () => Promise<string>; exportCsv: () => Promise<Blob>;
+function Results({ result, title, headlineKey, scatter, freshness, exportJson, exportCsv, exportMethods, onChart, onRefresh, onDiscuss, charts }: {
+  result: ScienceResult; title: string; headlineKey?: string; scatter: boolean; freshness: string; exportJson: () => Promise<string>; exportCsv: () => Promise<Blob>;
   exportMethods: () => Promise<string>;
   onChart: (type: ScienceChartType) => void; onRefresh: (chart: ScienceChartLink) => void;
   onDiscuss: (result: ScienceResult) => void; charts: ScienceChartLink[];
 }) {
   const [exporting, setExporting] = useState(false);
   const [copying, setCopying] = useState(false);
+  const [exactValues, setExactValues] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
   const { table, tableAsset, plot, provenance } = result;
   const chartTypes = chartableScienceTypes(result);
   const [chartType, setChartType] = useState<ScienceChartType>(chartTypes[0] ?? "scatter");
   const baseName = `${provenance.packId}-${result.operationId}`;
-  const csv = table ?? (plot ? { columns: [plot.xLabel, plot.yLabel], rows: plot.x.map((v, i) => [v, plot.y[i]]) } : { columns: ["Metric", "Value"], rows: Object.entries(result.values) });
   const values = Object.entries(result.values);
+  const warnings = [...new Set([result.values.warning, result.values.warnings].flatMap(value =>
+    (Array.isArray(value) ? value : [value]).filter((item): item is string =>
+      typeof item === "string" && !!item.trim() && item.trim().toLowerCase() !== "none")))];
   const headline = headlineScienceValue(result, headlineKey);
   const measurement = headline && resultMeasurement(result, headline[0]);
   const uncertaintyUnavailable = headline && result.uncertainty?.unsupportedOutputs?.[headline[0]];
@@ -121,6 +130,7 @@ function Results({ result, title, headlineKey, exportJson, exportCsv, exportMeth
   return <section className="science-results" aria-label="Latest result">
     <div className="science-result-head">
       <h4>Last successful run · {title}</h4>
+      {freshness && <p role="note" className="science-result-notice">{freshness}</p>}
       {headline ? <div className="science-result-highlight">
         <span title={headline[0]}>{readableScienceKey(headline[0])}</span>
         <strong>{uncertaintyUnavailable ? `${formatScienceValue(headline[1])} · uncertainty unavailable`
@@ -133,15 +143,22 @@ function Results({ result, title, headlineKey, exportJson, exportCsv, exportMeth
         {formattedSummary}
       </p>
     </div>
+    {warnings.length > 0 && <section className="science-result-warning" aria-label="Result warnings">
+      <strong>Result warnings</strong><ul>{warnings.map(warning => <li key={warning}>{warning}</li>)}</ul>
+    </section>}
     <div className="science-result-sections">
       {longSummary && <ResultDisclosure label="Read full summary">
         <p>{formattedSummary}</p>
       </ResultDisclosure>}
       {values.length > 0 && <ResultDisclosure label={`All values · ${values.length}`}>
+        <label className="science-precision"><input type="checkbox" checked={exactValues}
+          onChange={event => setExactValues(event.target.checked)} />Show stored precision</label>
         <dl className="science-result-values">{values.map(([label, value]) => {
           const measured = resultMeasurement(result, label);
           const unpropagatable = result.uncertainty?.unsupportedOutputs?.[label];
-          return <div key={label}><dt>{label}</dt><dd>{unpropagatable ? `${formatScienceValue(value)} · uncertainty unavailable` : measured ? formatMeasurement(measured) : formatScienceValue(value)}</dd></div>;
+          return <div key={label}><dt>{label}</dt><dd>{exactValues
+            ? formatScienceValue(value, true) + (measured?.unit ? " " + measured.unit : "") + (unpropagatable ? " · uncertainty unavailable" : "")
+            : unpropagatable ? `${formatScienceValue(value)} · uncertainty unavailable` : measured ? formatMeasurement(measured) : formatScienceValue(value)}</dd></div>;
         })}</dl>
       </ResultDisclosure>}
       {result.uncertainty && <ResultDisclosure className="science-uncertainty-budget"
@@ -151,12 +168,21 @@ function Results({ result, title, headlineKey, exportJson, exportCsv, exportMeth
           <h5>{name} · {formatMeasurement(measured)}</h5>
           {measured.interval && <small>{Math.round((measured.coverageProbability ?? 0.95) * 100)}% {measured.method === "monte_carlo" ? "Monte Carlo quantile coverage interval" : "coverage interval"} [{numberCell(measured.interval[0])}, {numberCell(measured.interval[1])}]{measured.method === "monte_carlo" ? " · Gaussian input model" : ` · coverage factor k = ${numberCell(measured.coverageFactor)}`}</small>}
           {measured.budgetNote && <small>{measured.budgetNote}</small>}
+          <details><summary>Stored measurement values</summary><dl className="science-result-values">
+            <div><dt>Estimate</dt><dd>{exactScienceNumber(measured.value)} {measured.unit}</dd></div>
+            <div><dt>Standard uncertainty</dt><dd>{exactScienceNumber(measured.standardUncertainty)} {measured.unit}</dd></div>
+            {measured.interval && <div><dt>Coverage interval</dt><dd>{measured.interval.map(exactScienceNumber).join(" to ")} {measured.unit}</dd></div>}
+            {measured.coverageProbability !== undefined && <div><dt>Coverage probability</dt><dd>{exactScienceNumber(measured.coverageProbability)}</dd></div>}
+            {measured.method !== "monte_carlo" && <div><dt>Coverage factor</dt><dd>{exactScienceNumber(measured.coverageFactor)}</dd></div>}
+            {measured.monteCarloMean !== undefined && <div><dt>Monte Carlo mean</dt><dd>{exactScienceNumber(measured.monteCarloMean)} {measured.unit}</dd></div>}
+            {measured.monteCarloTrials !== undefined && <div><dt>Monte Carlo trials</dt><dd>{measured.monteCarloTrials}</dd></div>}
+          </dl></details>
           {measured.budget && <table aria-label={`Uncertainty budget for ${name}`}>
             <thead><tr><th>Contributing input</th><th>Standard uncertainty</th><th>Sensitivity</th><th>Signed contribution</th><th>Variance / covariance</th></tr></thead>
             <tbody>{measured.budget.map((entry, index) => <tr key={index}>
               <td>{entry.input}{entry.kind === "covariance" ? " (shared source)" : entry.unit ? ` (${entry.unit})` : ""}</td>
-              <td>{numberCell(entry.standardUncertainty)}</td><td>{numberCell(entry.sensitivity)}</td>
-              <td>{numberCell(entry.signedContribution)}</td><td>{numberCell(entry.variance)}</td>
+              <td>{exactScienceNumber(entry.standardUncertainty)}</td><td>{exactScienceNumber(entry.sensitivity)}</td>
+              <td>{exactScienceNumber(entry.signedContribution)}</td><td>{exactScienceNumber(entry.variance)}</td>
             </tr>)}</tbody>
           </table>}
         </section>)}
@@ -165,7 +191,7 @@ function Results({ result, title, headlineKey, exportJson, exportCsv, exportMeth
       </ResultDisclosure>}
       {(!!result.views?.length || !!plot) && <ResultDisclosure label="Plots & views">
         {result.views && <ScientificResultViews views={result.views} />}
-        {plot && !result.views?.some((view) => view.type === "survival_curve") && <Plot plot={plot} />}
+        {plot && !result.views?.some((view) => view.type === "survival_curve") && <Plot plot={plot} scatter={scatter} />}
       </ResultDisclosure>}
       {(table || tableAsset) && <ResultDisclosure label={`Tables · ${tableRows.toLocaleString()} ${tableRows === 1 ? "row" : "rows"}`}>
         <div className="science-result-table-content">
@@ -226,6 +252,14 @@ function Results({ result, title, headlineKey, exportJson, exportCsv, exportMeth
           if (tableAsset) {
             downloadBlob(await exportCsv(), `${baseName}.csv`);
           } else {
+            const saved: unknown = JSON.parse(await exportJson());
+            if (!isResult(saved) || saved.operationId !== result.operationId
+                || saved.provenance.resultHash !== provenance.resultHash
+                || (saved.provenance.receiptHash ?? saved.provenance.resultHash) !== (provenance.receiptHash ?? provenance.resultHash))
+              throw new Error("The result changed. Review the current run before exporting.");
+            const xy = saved.plot;
+            const csv = saved.table ?? (xy ? { columns: [xy.xLabel, xy.yLabel], rows: xy.x.map((v, i) => [v, xy.y[i]]) }
+              : { columns: ["Metric", "Value"], rows: Object.entries(saved.values) });
             saveText(writeTableCsv([csv.columns.map(csvCell), ...csv.rows.map((row) => row.map(csvCell))]),
               `${baseName}.csv`, "text/csv;charset=utf-8");
           }
@@ -256,12 +290,12 @@ function Results({ result, title, headlineKey, exportJson, exportCsv, exportMeth
   </section>;
 }
 
-function FieldEditor({ field, value, onEdit, options, onImport, imported, errorId, stale, chosenUnit, unitSetter, columnOptions }: {
+function FieldEditor({ field, value, onEdit, options, onImport, imported, errorId, stale, chosenUnit, unitSetter, columnOptions, limits }: {
   field: ScienceField; value: string; onEdit: (value: string) => void;
   options: SourceOption[]; onImport: (option: SourceOption) => void; imported?: string; errorId?: string; stale: boolean;
   columnOptions: Array<{ index: number; label: string; type: ScientificColumnType }>;
   /** The unit typed into this field's unit-setting sibling (field.unit_field) and that sibling's label. */
-  chosenUnit?: string; unitSetter?: string;
+  chosenUnit?: string; unitSetter?: string; limits?: ScienceLimits;
 }) {
   const [helpOpen, setHelpOpen] = useState(false);
   const unitOverridden = !!chosenUnit && chosenUnit !== (field.default_unit || field.unit || "1");
@@ -291,12 +325,14 @@ function FieldEditor({ field, value, onEdit, options, onImport, imported, errorI
         {columnOptions.map((col) => <option key={col.index} value={col.index}>{col.label} · {col.type}</option>)}
       </select>
       : field.kind === "table"
-      ? <input {...common} type="text" value={value ? "Connected typed table selected" : "Select a connected typed table below"} readOnly />
+      ? <input {...common} type="text" value={value ? "Connected typed table selected" : options.length ? "Select a connected typed table below" : "Connect a source table to choose columns"} readOnly />
       : field.kind === "number" || field.kind === "integer"
       ? <input {...common} type="text" inputMode="text"
         onChange={(e) => onEdit(e.target.value)} />
       : <textarea {...common} rows={field.kind === "matrix" || field.kind === "text" ? 3 : 2}
         onChange={(e) => onEdit(e.target.value)} spellCheck={field.kind === "text"} />}
+    {(field.kind === "vector" || field.kind === "matrix") && <ScienceArrayInput
+      field={field} limits={limits} value={value} onEdit={onEdit} />}
     {helpOpen && <div id={id + "-help"} className="science-field-help">
       {field.description && <p>{field.description}</p>}
       {dimensioned && unitOverridden && <p>Unit: {chosenUnit}, set by {unitSetter ?? field.unit_field}.
@@ -321,15 +357,6 @@ function FieldEditor({ field, value, onEdit, options, onImport, imported, errorI
   </div>;
 }
 
-// Reuse the established plugin transport without broadening sceneStore's API.
-function tableIntent(store: SceneStore, pluginId: string, name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const endpoint = store as unknown as { scientificIntent: (id: string, action: string, input: Record<string, unknown>) => Promise<Record<string, unknown>> };
-  return endpoint.scientificIntent(pluginId, name, args);
-}
-
-type FetchTableColumn = (option: SourceOption, op: ScienceOperation, field: ScienceField, unitInputs: Record<string, string>) =>
-  Promise<{ values: Array<number | string>; reference: SourceReference }>;
-
 function binaryBase64(bytes: Uint8Array): string {
   const chunks: string[] = [];
   for (let i = 0; i < bytes.length; i += 32768) {
@@ -338,8 +365,8 @@ function binaryBase64(bytes: Uint8Array): string {
   return btoa(chunks.join(""));
 }
 
-function TableEditor({ state, nodeId, pluginId, store }: {
-  state: ScienceState; nodeId: string; pluginId: string; store: SceneStore;
+function TableEditor({ state, nodeId, pluginId, store, defaultOpen = false }: {
+  state: ScienceState; nodeId: string; pluginId: string; store: SceneStore; defaultOpen?: boolean;
 }) {
   const [source, setSource] = useState<"paste" | "file">("paste");
   const [format, setFormat] = useState<"csv" | "tsv">("csv");
@@ -347,8 +374,30 @@ function TableEditor({ state, nodeId, pluginId, store }: {
   const [text, setText] = useState("Name,Temperature (degC),Observed\nA,22.5,true\nB,NA,false");
   const [missing, setMissing] = useState("NA,N/A,null");
   const [overrides, setOverrides] = useState("{}");
+  const columnTypes = useMemo((): Record<string, string> | undefined => {
+    try {
+      const parsed: unknown = JSON.parse(overrides);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && Object.values(parsed).every(
+        value => ["numeric", "text", "categorical", "datetime", "boolean"].includes(value))) {
+        return parsed as Record<string, string>;
+      }
+    } catch { /* Incomplete JSON stays editable until the next preview. */ }
+    return undefined;
+  }, [overrides]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const generation = useRef(0);
+  const pending = useRef(false);
+  const [schema, setSchema] = useState<ScientificImportedTable | null>(null);
+  const [review, setReview] = useState<{ table: ScientificImportedTable; runToken: string;
+    args: Record<string, unknown>; previousToken: string | undefined } | null>(null);
+  const validReview = review?.previousToken === state.runToken ? review : null;
+  function invalidate(clearSchema = false) {
+    generation.current++;
+    setReview(null);
+    setError("");
+    if (clearSchema) setSchema(null);
+  }
   const [exporting, setExporting] = useState(false);
   const table = state.table;
   const rowsLimit = state.limits?.tableRows ?? 100000;
@@ -357,17 +406,23 @@ function TableEditor({ state, nodeId, pluginId, store }: {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy) return;
+    if (pending.current) return;
+    pending.current = true;
+    const version = generation.current;
     setError("");
     setBusy(true);
     try {
-      const parsed: unknown = JSON.parse(overrides);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) ||
-          Object.values(parsed).some((value) => !["numeric", "text", "categorical", "datetime", "boolean"].includes(String(value))))
+      if (validReview) {
+        await store.scientificTableIntent(pluginId, "import_table", { ...validReview.args,
+          expected_run: validReview.runToken, expected_preview: validReview.table.provenance.receiptHash });
+        if (generation.current === version) invalidate(true);
+        return;
+      }
+      if (!columnTypes)
         throw new Error("Column types must map headers to numeric, text, categorical, datetime or boolean.");
       const args: Record<string, unknown> = {
         node_id: nodeId, format, missing_values: ["", ...missing.split(",").map((v) => v.trim()).filter(Boolean)],
-        column_types: parsed, ...(state.runToken && { expected_run: state.runToken }),
+        column_types: columnTypes, ...(state.runToken && { expected_run: state.runToken }),
       };
       if (source === "file") {
         if (!file) throw new Error("Choose a CSV or TSV file.");
@@ -380,10 +435,20 @@ function TableEditor({ state, nodeId, pluginId, store }: {
           throw new Error("Pasted table data exceeds the import size limit.");
         args.text = text;
       }
-      await tableIntent(store, pluginId, "import_table", args);
+      if (generation.current !== version) return;
+      const response = await store.scientificTableIntent(pluginId, "preview_table", args);
+      if (generation.current !== version) return;
+      if (!isImportedTable(response.table) || typeof response.runToken !== "string" || !response.runToken)
+        throw new Error("The table preview could not be verified. Preview the source again.");
+      setSchema(response.table);
+      setReview({ table: response.table, runToken: response.runToken, args, previousToken: state.runToken });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not import the table.");
+      if (generation.current === version) {
+        setReview(null);
+        setError(e instanceof Error ? e.message : "Could not import the table.");
+      }
     } finally {
+      pending.current = false;
       setBusy(false);
     }
   }
@@ -392,12 +457,12 @@ function TableEditor({ state, nodeId, pluginId, store }: {
   // result sections; an imported table shows one status line by default.
   return <section className="science-data-table" aria-label="Typed data table">
     {table && <p role="status">{table.sourceName} · {table.rowCount.toLocaleString()} rows · {table.columnCount} columns</p>}
-    <ResultDisclosure label={table ? "Replace data table" : "Import a data table"} onClose={() => setFile(null)}>
+    <ResultDisclosure defaultOpen={defaultOpen} label={table ? "Replace data table" : "Import a data table"} onClose={() => { invalidate(true); setFile(null); }}>
     <p>Import mixed data and missing values. Tables support {rowsLimit.toLocaleString()} rows and {cellsLimit.toLocaleString()} cells, stored outside the graph.</p>
-    <form onSubmit={submit}>
+    <form onSubmit={submit} onChange={() => invalidate()}>
       <fieldset disabled={busy}>
         <label>Data source
-          <select aria-label="Table data source" value={source} onChange={(e) => { setSource(e.target.value as "paste" | "file"); setFile(null); }}>
+          <select aria-label="Table data source" value={source} onChange={(e) => { invalidate(true); setSource(e.target.value as "paste" | "file"); setFile(null); }}>
             <option value="paste">Paste CSV / TSV</option><option value="file">Choose a file</option>
           </select>
         </label>
@@ -411,7 +476,7 @@ function TableEditor({ state, nodeId, pluginId, store }: {
             <input type="file" aria-label="CSV or TSV file" accept=".csv,.tsv,text/csv,text/tab-separated-values"
               onChange={(e) => {
                 const next = e.target.files?.[0] ?? null;
-                setFile(next);
+                invalidate(true); setFile(next);
                 if (next?.name.toLowerCase().endsWith(".tsv")) setFormat("tsv");
                 if (next?.name.toLowerCase().endsWith(".csv")) setFormat("csv");
               }} />
@@ -422,10 +487,41 @@ function TableEditor({ state, nodeId, pluginId, store }: {
         <label>Missing-value markers (comma-separated; blank always missing)
           <input type="text" aria-label="Missing-value markers" value={missing} onChange={(e) => setMissing(e.target.value)} />
         </label>
-        <label>Column type overrides (JSON, optional)
-          <textarea rows={2} aria-label="Column type overrides" value={overrides} onChange={(e) => setOverrides(e.target.value)} />
-        </label>
-        <button type="submit" className="science-run">{busy ? "Importing…" : "Import typed table"}</button>
+        {schema && <div className="science-table">
+          <table aria-label="Review column types"><thead><tr>
+            <th scope="col">Column</th><th scope="col">Type</th><th scope="col">Unit</th><th scope="col">Missing</th>
+          </tr></thead><tbody>{schema.columns.map((col) => <tr key={col.label}>
+            <th scope="row">{col.label}</th><td><select aria-label={`Type for ${col.label}`}
+              value={columnTypes?.[col.label] ?? ""} disabled={!columnTypes}
+              onChange={(e) => {
+                const next = { ...columnTypes };
+                if (e.target.value) next[col.label] = e.target.value;
+                else delete next[col.label];
+                setOverrides(JSON.stringify(next));
+              }}>
+              <option value="">Infer from data</option>
+              {["numeric", "text", "categorical", "datetime", "boolean"].map((kind) => <option key={kind}>{kind}</option>)}
+            </select>{validReview && <small>{col.type}</small>}</td>
+            <td>{col.unit || "—"}</td><td>{col.missingCount}</td>
+          </tr>)}</tbody></table>
+        </div>}
+        <details><summary>Advanced column overrides</summary>
+          <label>Column type overrides (JSON)
+            <textarea rows={2} aria-label="Column type overrides" value={overrides} onChange={(e) => setOverrides(e.target.value)} />
+          </label>
+        </details>
+        {validReview && <div className="science-table">
+          <p role="status">{validReview.table.sourceName} · {validReview.table.rowCount} rows · {validReview.table.columnCount} columns.
+            Showing the first {validReview.table.preview.length} rows and {validReview.table.previewColumns} columns.</p>
+          <table aria-label="Pending import preview"><thead><tr>
+            {validReview.table.columns.slice(0, validReview.table.previewColumns).map((col) =>
+              <th scope="col" key={col.label}>{col.label}</th>)}
+          </tr></thead><tbody>{validReview.table.preview.map((row, i) =>
+            <tr key={i}>{row.map((cell, j) => <td key={j}>{cell === null ? "Missing" : formatScienceValue(cell)}</td>)}</tr>)}
+          </tbody></table>
+        </div>}
+        <button type="submit" className="science-run">{validReview
+          ? (busy ? "Applying…" : "Apply reviewed table") : (busy ? "Previewing…" : "Preview table")}</button>
       </fieldset>
     </form>
     </ResultDisclosure>
@@ -487,13 +583,14 @@ function AttemptProgress({ attempt, title }: { attempt: ScienceAttempt; title: s
     <span aria-label="Elapsed time">{Math.max(0, Math.floor((now - attempt.startedAtMs) / 1000))} s</span></p>;
 }
 
-function OperationEditor({ session, op, result, configured, revision, runToken, limits, options, run, configure, cancel, fetchTableColumn, busy, setBusy, attemptProtocol, attempt, attemptTitle }: {
-  session: ScienceEditorSession; op: ScienceOperation; result: ScienceResult | null;
+function OperationEditor({ onDraftChange, session, op, result, configured, revision, runToken, limits, options, run, configure, cancel, fetchTableColumn, busy, setBusy, attemptProtocol, attempt, attemptTitle }: {
+  onDraftChange: (dirty: boolean) => void; session: ScienceEditorSession; op: ScienceOperation; result: ScienceResult | null;
   configured?: ScienceRunnerConfiguration | null; revision: string; runToken?: string; limits?: ScienceLimits;
   options: SourceOption[]; run: Run; configure: Run; cancel: Cancel; fetchTableColumn: FetchTableColumn;
   busy: boolean; setBusy: (busy: boolean) => void; attemptProtocol?: 1; attempt?: ScienceAttempt; attemptTitle?: string;
 }) {
   const [draft, setDraft] = useState(() => session.drafts.get(op.id) ?? restoreDraft(op, result, revision, options, configured));
+  useLayoutEffect(() => { onDraftChange(draft.dirty); }, [onDraftChange, draft.dirty]);
   useLayoutEffect(() => {
     if (draft.dirty) session.drafts.set(op.id, draft);
     else session.drafts.delete(op.id);
@@ -522,7 +619,7 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
   }
   const conflict = changed && draft.dirty;
   const bound = Object.entries(draft.sources);
-  const stale = bound.some(([, ref]) => !options.some((option) => matchesSource(option, ref)));
+  const stale = bound.some(([, ref]) => !currentSource(options, ref));
   const pending = useRef(false);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -597,11 +694,11 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
           {op.fields.map((field) => {
             const available = compatibleOptions(field, options, limits);
             const source = draft.sources[field.key];
-            const previous = source && available.find((option) => matchesSource(option, source));
+            const previous = source && currentSource(available, source);
             const chosenUnit = field.unit_field ? draft.values[field.unit_field]?.trim() : undefined;
             const unitSetter = op.fields.find((other) => other.key === field.unit_field)?.label;
             return <FieldEditor key={field.key} field={field} value={draft.values[field.key] ?? ""} options={available}
-              columnOptions={columnChoices(field, draft.values)}
+              columnOptions={columnChoices(field, draft.values)} limits={limits}
               chosenUnit={chosenUnit || undefined} unitSetter={unitSetter} stale={!!source && !previous} errorId={error?.field === field.key ? errorId : undefined}
               imported={source && (previous?.label ?? "Result changed or disconnected. Select its current value or edit this input.")}
               onEdit={(value) => {
@@ -643,6 +740,18 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
           })}
         </div>
       </div>
+      <ScienceColumnBinding options={options} op={op} values={draft.values} maxPoints={limits?.points ?? 1024}
+        fetchColumn={fetchTableColumn} apply={(columns) => {
+          setDraft((old) => {
+            const values = { ...old.values }, sources = { ...old.sources };
+            for (const field of op.fields) {
+              const column = columns[field.key];
+              if (column) { values[field.key] = fieldText(field, column.values); sources[field.key] = column.reference; }
+            }
+            return { ...old, dirty: true, values, sources };
+          });
+          setError(null);
+        }} />
       {bound.some(([, ref]) => options.some((option) => matchesSource(option, ref) && option.uncertainty)) &&
         <label>Uncertainty propagation method
           <select aria-label="Uncertainty propagation method" value={uncertaintyMethod}
@@ -670,8 +779,16 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
           Save for Graph Runner
         </button>
         <button type="button" onClick={() => {
-          setDraft({ ...restoreDraft(op, null, revision), dirty: true }); setError(null);
+          const example = { ...restoreDraft(op, null, revision), dirty: true };
+          if (session.replacedExamples.get(op.id)?.example !== draft) session.replacedExamples.set(op.id, { before: draft, example });
+          else return;
+          setDraft(example); setError(null);
         }}>Load example</button>
+        {session.replacedExamples.get(op.id)?.example === draft && <button type="button" onClick={() => {
+          const previous = session.replacedExamples.get(op.id);
+          if (previous) setDraft(previous.before);
+          session.replacedExamples.delete(op.id); setError(null);
+        }}>Undo load example</button>}
       </div>
       {configured && <small role="status">{savedMatches ? "Saved as an explicit Graph Runner step."
         : "Changes not saved to Graph Runner."}</small>}
@@ -693,13 +810,14 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
   </form>;
 }
 
-function Workbench({ requestedOperation, session, state, options, run, configure, cancel, fetchTableColumn, exportJson, exportCsv, exportMethods, charts, onChart, onRefresh, onDiscuss, tableEditor }: {
+function Workbench({ requestedOperation, session, state, options, run, configure, cancel, fetchTableColumn, exportJson, exportCsv, exportMethods, charts, onChart, onRefresh, onDiscuss, tableEditor, tableSource }: {
   requestedOperation?: string; session: ScienceEditorSession; state: ScienceState; options: SourceOption[]; run: Run; configure: Run; cancel: Cancel; fetchTableColumn: FetchTableColumn;
-  exportJson: () => Promise<string>; exportCsv: () => Promise<Blob>; exportMethods: () => Promise<string>; tableEditor: ReactNode;
+  exportJson: () => Promise<string>; exportCsv: () => Promise<Blob>; exportMethods: () => Promise<string>; tableEditor: ReactNode; tableSource: ReactNode;
   charts: ScienceChartLink[]; onChart: (type: ScienceChartType) => void; onRefresh: (chart: ScienceChartLink) => void;
   onDiscuss: (result: ScienceResult) => void;
 }) {
   const [selected, setSelected] = useState(session.selected ?? state.runner?.operationId ?? state.latest?.operationId ?? state.operations[0].id);
+  const [edited, setEdited] = useState(false);
   const launchSelection = state.operations.find(candidate => candidate.id === requestedOperation)?.id;
   const [lastLaunch, setLastLaunch] = useState<string>();
   if (lastLaunch !== launchSelection) {
@@ -717,6 +835,14 @@ function Workbench({ requestedOperation, session, state, options, run, configure
   const op = state.operations.find((candidate) => candidate.id === selected) ?? state.operations[0];
   const result = state.latest?.operationId === op.id ? state.latest : null;
   const latestOperation = state.operations.find((candidate) => candidate.id === state.latest?.operationId);
+  const changedSource = Object.values(state.latest?.provenance.sources ?? {}).some(source =>
+    !options.some(option => matchesSource(option, source)));
+  const freshness = [
+    state.latest && !result ? "Viewing a saved result for a different operation." :
+      edited ? "Inputs have been edited since the displayed run." :
+      state.runner?.operationId === op.id && result ? "The editor uses the saved Graph Runner configuration." : "",
+    changedSource ? "A source of this saved result has changed or is unavailable." : "",
+  ].filter(Boolean).join(" ");
   const revision = (state.runToken ?? JSON.stringify(state.latest?.provenance ?? null)) + "|" + JSON.stringify(state.runner ?? null);
   return <>
     <div className="science-operation-picker">
@@ -725,7 +851,9 @@ function Workbench({ requestedOperation, session, state, options, run, configure
         {state.operations.map((operation) => <option key={operation.id} value={operation.id}>{operation.title}</option>)}
       </select>
     </div>
-    <OperationEditor key={op.id} session={session} op={op} result={result} configured={state.runner}
+    {op.fields.some((field) => field.kind === "table") && !options.some((item) =>
+      ["typed_table", "result_table"].includes(String(item.reference.selector[0]))) && tableSource}
+    <OperationEditor key={op.id} onDraftChange={setEdited} session={session} op={op} result={result} configured={state.runner}
       revision={revision} runToken={state.runToken} limits={state.limits}
       options={options} run={run} configure={configure} cancel={cancel} fetchTableColumn={fetchTableColumn}
       busy={busy} setBusy={setBusy} attemptProtocol={state.attemptProtocol} attempt={state.attempt}
@@ -733,6 +861,7 @@ function Workbench({ requestedOperation, session, state, options, run, configure
     {tableEditor}
     {state.latest && <Results key={revision} result={state.latest} exportJson={exportJson} exportCsv={exportCsv} exportMethods={exportMethods}
       charts={charts} onChart={onChart} onRefresh={onRefresh} onDiscuss={onDiscuss}
+      freshness={freshness} scatter={latestOperation?.plotMark === "scatter"}
       title={latestOperation?.title ?? state.latest.operationId} headlineKey={latestOperation?.headline} />}
   </>;
 }
@@ -752,14 +881,19 @@ export function ScientificEditor({ data, id, requestedOperation }: ScienceEditor
         exportJson={() => data.store.exportScientificResult(data.pluginId, id, state.runToken)}
         exportMethods={() => data.store.exportScientificMethods(data.pluginId, id, state.runToken)}
         exportCsv={() => data.store.exportScientificTableCsv(data.pluginId, id, "result", state.runToken)}
+        tableSource={<ScienceTableSource targetId={id} packTitle={state.packTitle ?? data.title} store={data.store}
+          renderImporter={(source) => <TableEditor key={source.id} defaultOpen state={source.state}
+            nodeId={source.id} pluginId={source.pluginId} store={data.store} />} />}
         tableEditor={<TableEditor state={state} nodeId={id} pluginId={data.pluginId} store={data.store} />}
-        fetchTableColumn={async (option, operation, field, unitInputs) => {
+        fetchTableColumn={async (option, operation, field, unitInputs, selection) => {
           if (!option.tableColumn) throw new Error("Choose a typed table column.");
           const { nodeId, column, policy, start, end } = option.tableColumn;
-          const answer = await tableIntent(data.store, data.pluginId, "table_column", {
+          const answer = await data.store.scientificTableIntent(data.pluginId, "table_column", {
             node_id: id, source_node_id: nodeId, column, policy, start, end,
             table_source: option.tableColumn.source ?? "import",
             operation_id: operation.id, field_key: field.key, unit_inputs: unitInputs,
+            ...(selection?.completeColumns && { complete_columns: selection.completeColumns }),
+            ...(selection?.assumedUnit && { assumed_unit: selection.assumedUnit }),
             expected_hash: option.reference.resultHash, expected_receipt: option.reference.receiptHash,
           });
           if (!Array.isArray(answer.values) || !answer.values.every((n) => typeof n === "number" && Number.isFinite(n))
@@ -769,11 +903,13 @@ export function ScientificEditor({ data, id, requestedOperation }: ScienceEditor
           if (!Array.isArray(literals) || literals.length !== answer.values.length || !literals.every(
             (item) => typeof item === "string" || typeof item === "number" && Number.isFinite(item),
           )) throw new Error("The table column input units could not be verified.");
-          return { values: literals as Array<number | string>, reference: answer.reference as SourceReference };
+          return { values: literals as Array<number | string>, reference: answer.reference as SourceReference,
+            normalizedPreview: Array.isArray(answer.normalizedPreview) && answer.normalizedPreview.every((v) =>
+              typeof v === "number" && Number.isFinite(v)) ? answer.normalizedPreview as number[] : undefined };
         }}
         charts={data.charts ?? []}
-        onChart={(chartType) => data.store.generateChart(id, chartType)}
-        onRefresh={(chart) => data.store.generateChart(chart.id, chart.chartType)}
+        onChart={(chartType) => data.store.generateChart(id, chartType, state.latest?.provenance.receiptHash ?? state.latest?.provenance.resultHash)}
+        onRefresh={(chart) => data.store.generateChart(chart.id, chart.chartType, state.latest?.provenance.receiptHash ?? state.latest?.provenance.resultHash)}
         onDiscuss={(result) => data.store.discussScientificResult(
           id, result.provenance.resultHash, result.provenance.receiptHash ?? result.provenance.resultHash,
         )}

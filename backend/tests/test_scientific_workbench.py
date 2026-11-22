@@ -642,7 +642,14 @@ def test_chart_this_result_is_connected_receipted_refreshable_and_undoable(sessi
     assert len([n for n in document.nodes.values() if n.kind == "chart"]) == 1
     receipt = envelope(document, source)["latest"]["provenance"]["receiptHash"]
 
-    assert asyncio.run(bus.dispatch_intent("scene", "generateChart", [chart_id, "scatter"])) == chart_id
+    old_options = {"expectedScienceReceipt": first_receipt["receiptHash"]}
+    for target in (source, chart_id):
+        assert asyncio.run(bus.dispatch_intent("scene", "generateChart", [target, "scatter", old_options])) is None
+    assert len([n for n in document.nodes.values() if n.kind == "chart"]) == 1
+    assert document.nodes[chart_id].state.chart_data["values"] == [1, 2, 4]
+    assert asyncio.run(bus.dispatch_intent("scene", "generateChart", [
+        chart_id, "scatter", {"expectedScienceReceipt": receipt},
+    ])) == chart_id
     assert document.nodes[chart_id].state.chart_data["values"] == [1, 3, 9]
     assert document.nodes[chart_id].state.chart_data["scienceReceipt"]["receiptHash"] == receipt
     assert document.nodes[chart_id].state.chart_error == ""
@@ -720,6 +727,33 @@ def test_chart_receipt_freshness_detects_equal_numbers_from_different_sources(se
     assert updated["receiptHash"] != before
     assert "refresh" in document.nodes[chart_id].state.chart_error
     assert document.nodes[chart_id].state.chart_data["values"] == [1, 2, 3]
+
+
+def test_import_preview_does_not_stage_and_apply_requires_reviewed_bytes_and_options(session, monkeypatch):
+    from graphlink_plugins.scientific.data_table import _STAGING
+
+    document, bus, _, _ = session
+    grant(bus, "core")
+    node = dispatch(bus, "executePlugin", "Scientific Core")
+    args = {"node_id": node, "text": "Time (s),Group\n1,X\nNA,Y"}
+    before = document.nodes[node].state
+
+    def call(action, **extra):
+        return dispatch(bus, "invokePluginIntent", "science_core", action, {**args, **extra})
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(_STAGING, "put", lambda *args: pytest.fail("Preview or mismatched apply wrote an asset"))
+        preview = call("preview_table")
+        table = preview["table"]
+        pinned = {"expected_run": preview["runToken"], "expected_preview": table["provenance"]["receiptHash"]}
+        assert table["preview"] == [[1, "X"], [None, "Y"]]
+        assert table["columns"][0]["unit"] == "s"
+        assert not call("import_table", **pinned, column_types={"Group": "text"})["ok"]
+        assert not call("import_table", **pinned, text="Time (s),Group\n9,Z")["ok"]
+        assert document.nodes[node].state is before
+    assert call("import_table", **pinned)["ok"]
+    assert envelope(document, node)["table"] == table
+    assert call("import_table", **pinned)["conflict"]
 
 
 def test_typed_table_import_link_drop_and_asset_roundtrip(session, tmp_path):
@@ -1475,7 +1509,7 @@ def test_paired_table_columns_require_original_row_identity_for_manual_and_runne
     source = dispatch(bus, "executePlugin", "Scientific Core")
     target = dispatch(bus, "executePlugin", "Scientific Core", source)
     assert dispatch(bus, "invokePluginIntent", "science_core", "import_table", {
-        "node_id": source, "text": "X,Y\n1,10\nNA,20\n3,NA\n4,40",
+        "node_id": source, "text": "X (mm),Y (s)\n1,10\nNA,20\n3,NA\n4,40",
     })["ok"]
 
     def choose(pack, node, operation, field, index, **options):
@@ -1508,6 +1542,7 @@ def test_paired_table_columns_require_original_row_identity_for_manual_and_runne
         "node_id": target, "operation_id": "plot_xy", "inputs": inputs, "sources": refs,
     })["ok"]
     _, raw, _, _, current = prepare(document, document.nodes[target], lambda _: True)
+    assert result["provenance"]["inputUnits"] == {"x": ["mm", "mm"], "y": ["s", "s"]}
     assert raw == inputs and current
 
     independent = dispatch(bus, "executePlugin", "Fitting and Inference", source)

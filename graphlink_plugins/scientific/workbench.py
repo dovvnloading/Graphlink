@@ -111,6 +111,7 @@ class ImportTableArgs:
     column_types: dict[str, str] | None = None
     filename: str = ""
     expected_run: str | None = None
+    expected_preview: str | None = None
 
 
 @dataclass
@@ -403,7 +404,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         elif "table" in data and not table_metadata_valid(data["table"]):
             error = "The scientific table has an invalid import receipt."
         wire = json.dumps({
-            "scienceVersion": 1, "attemptProtocol": 1, "packId": pack_id, "operations": [] if error else schema,
+            "scienceVersion": 1, "attemptProtocol": 1, "packId": pack_id, "packTitle": title, "operations": [] if error else schema,
             "nodeKey": data.get("nodeKey") if isinstance(data.get("nodeKey"), str) else "",
             "latest": None if error else data.get("latest"), "error": error,
             "runner": None if error else data.get("runner"),
@@ -714,7 +715,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
             return {"ok": False, "error": "The scientific pack was disabled during export."}
         return {"ok": True, **page}
 
-    async def import_table(document, ctx, request):
+    async def parse_import(document, ctx, request, *, preview):
         node, error = _current_state(document, request.node_id, kind, request.expected_run)
         if error:
             return error
@@ -724,6 +725,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
             table = await asyncio.to_thread(
                 parse_table, raw, fmt=request.format, missing=request.missing_values,
                 hints=request.column_types, filename=request.filename,
+                preview_only=preview, expected_preview=request.expected_preview,
             )
             if ctx.is_plugin_granted is None or not ctx.is_plugin_granted(ctx.plugin_id):
                 raise ValueError("The pack was disabled during import.")
@@ -732,6 +734,8 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
         current = previous_state.data
+        if preview:
+            return {"ok": True, "table": table, "runToken": _run_token(current)}
         if current.get("table") == table:
             return {"ok": True}
 
@@ -743,6 +747,12 @@ def register_pack(host: HostContext, pack_id: str) -> None:
 
         document.record_command(f"science:{pack_id}:import_table", "user", save_import, node_ids=[node.id])
         return PluginSceneUpdate({"ok": True})
+
+    async def preview_table(document, ctx, request):
+        return await parse_import(document, ctx, request, preview=True)
+
+    async def import_table(document, ctx, request):
+        return await parse_import(document, ctx, request, preview=False)
 
     async def table_column(document, ctx, request):
         target, error = _current_state(document, request.node_id, kind, None)
@@ -799,7 +809,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
                     request.field_key in group for group in (operation.paired_fields if operation else ())
                 ):
                     raise ValueError("Select complete rows only for paired fields.")
-                values, literals, _, evidence = await asyncio.to_thread(
+                values, literals, normalized, evidence = await asyncio.to_thread(
                     column_binding, meta, selector, field, request.unit_inputs or {}, {
                         "completeColumns": request.complete_columns, "assumedUnit": request.assumed_unit,
                     },
@@ -817,7 +827,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
                 or not ctx.is_plugin_granted(source.kind.split(".", 1)[0])):
             return {"ok": False, "error": "The scientific pack was disabled during selection."}
         return {
-            "ok": True, "values": values, **({"inputs": literals} if evidence else {}),
+            "ok": True, "values": values, **({"inputs": literals, "normalizedPreview": normalized[:3]} if evidence else {}),
             "reference": {
                 "nodeId": source_id, "sourceKey": source_state.data.get("nodeKey"),
                 "resultHash": expected_hash, "receiptHash": expected_receipt,
@@ -846,5 +856,6 @@ def register_pack(host: HostContext, pack_id: str) -> None:
     host.register_intent("export_result", export_result, args_schema=ExportArgs, expose_to_builder=False)
     host.register_intent("export_methods", export_methods, args_schema=ExportArgs, expose_to_builder=False)
     host.register_intent("export_table_csv", export_table_csv, args_schema=ExportTableCsvArgs, expose_to_builder=False)
+    host.register_intent("preview_table", preview_table, args_schema=ImportTableArgs, expose_to_builder=False)
     host.register_intent("import_table", import_table, args_schema=ImportTableArgs, expose_to_builder=False)
     host.register_intent("table_column", table_column, args_schema=TableColumnArgs, expose_to_builder=False)

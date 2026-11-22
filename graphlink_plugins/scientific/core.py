@@ -190,6 +190,8 @@ class Operation:
     # Fields in one group refer to the same observations, in order.
     paired_fields: tuple[tuple[str, ...], ...] = ()
     output_units: tuple[tuple[str, str], ...] = ()
+    # Presentation metadata; leaves persisted result hashes and XY selectors unchanged.
+    plot_mark: str = ""
 
     def __post_init__(self):
         vectors = {field.key for field in self.fields if field.kind == "vector"}
@@ -203,6 +205,8 @@ class Operation:
             parse_unit(symbol)
         if not isinstance(self.headline, str):
             raise ValueError("An operation headline must be a result value key.")
+        if self.plot_mark not in ("", "scatter"):
+            raise ValueError("An operation plot mark must be scatter or unspecified.")
         for field in self.fields:
             if field.kind == "choice" and self.example.get(field.key) not in field.choices:
                 raise ValueError(f"Example for {field.key} must be an allowed choice.")
@@ -243,6 +247,8 @@ class Operation:
             description["citations"] = [asdict(citation) for citation in self.citations]
         if self.headline:
             description["headline"] = self.headline
+        if self.plot_mark:
+            description["plotMark"] = self.plot_mark
         return description
 
 

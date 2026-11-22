@@ -919,7 +919,7 @@ OPERATIONS = (
          Field("weights", "Relative inverse-variance weights", "vector")),
         {"predictors": [[1], [2], [3], [4], [5]], "response": [2.1, 4.2, 5.9, 8.0, 10.2],
          "weights": [1, 2, 1, 2, 1]}, _linear,
-        headline="r_squared",
+        headline="r_squared", plot_mark="scatter",
         paired_fields=(("response", "weights"),),
     ),
     Operation(
@@ -933,7 +933,7 @@ OPERATIONS = (
         {"model": "saturating_exponential", "x": [1, 2, 3, 4, 5],
          "y": [1.8, 3.2, 4.3, 5.1, 5.6], "weights": [1, 1, 1, 1, 1],
          "initial_parameters": [8, 0.25]}, _nonlinear,
-        headline="parameter_0",
+        headline="parameter_0", plot_mark="scatter",
         paired_fields=(("x", "y", "weights"),),
     ),
     Operation(
@@ -946,7 +946,7 @@ OPERATIONS = (
         {"expression": "a+b*x", "parameters": '{"a": {"start": 0}, "b": {"start": 1, "lower": 0}}',
          "x": [0,1,2,3,4,5,6,7,8,9], "y": [1.1,2,2.9,4.2,5,6.1,6.9,8.1,9,10.2],
          "weights": [1]*10}, _custom_nonlinear,
-        headline="estimate_a",
+        headline="estimate_a", plot_mark="scatter",
         paired_fields=(("x", "y", "weights"),),
     ),
     Operation(

@@ -328,6 +328,7 @@ export class ScienceEditorSession {
     for (const listener of this.submissionListeners) listener();
   }
   readonly drafts = new Map<string, EditorDraft>();
+  readonly replacedExamples = new Map<string, { before: EditorDraft; example: EditorDraft }>();
   constructor(readonly nodeKey?: string) {}
   selectOperation(id: string) { this.selected = id; }
 }
@@ -2092,7 +2093,7 @@ export class SceneStore {
     // The server kills each worker by 600 s at the latest. Do not let the
     // transport's generic 10 s timeout abandon a longer scientific run.
     const call = [pluginId, name, args];
-    const answer = name === "run" || name === "export_table_csv"
+    const answer = ["run", "export_table_csv", "preview_table", "import_table"].includes(name)
       ? await this.transport.request("app-plugins", "invokePluginIntent", call,
         name === "run" ? 615_000 : 120_000)
       : await this.transport.request("app-plugins", "invokePluginIntent", call);
@@ -2101,6 +2102,25 @@ export class SceneStore {
       throw new Error(answer.error);
     }
     throw new Error("Check this pack’s grant in Settings and the notification banner.");
+  }
+
+  async createScientificTableSource(packTitle: string, targetId: string): Promise<string> {
+    const target = this.scene.nodes.find((node) => node.id === targetId);
+    if (!target) throw new Error("The target workbench is no longer in this graph.");
+    // Create upstream: launching with the target selected would make the reverse edge.
+    const id = await this.transport.request("app-plugins", "executePlugin", [packTitle, null, target.x - 460, target.y]);
+    if (typeof id !== "string" || !id) throw new Error("Source creation was not confirmed. Check the graph and pack grant.");
+    return id;
+  }
+
+  async connectScientificSource(sourceId: string, targetId: string): Promise<void> {
+    const id = await this.transport.request("scene", "connectNodes", [sourceId, targetId]);
+    if (typeof id !== "string" || !id) throw new Error("The connection was not confirmed. Check the graph and retry.");
+  }
+
+  async scientificTableIntent(pluginId: string, action: "preview_table" | "import_table" | "table_column",
+    args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.scientificIntent(pluginId, action, args);
   }
 
   async configureScientificRunner(pluginId: string, nodeId: string, operationId: string,
@@ -2391,8 +2411,9 @@ export class SceneStore {
   // synchronously (ChatNodeView's Generate Chart submenu just fires-and-
   // forgets, same as its own onGenerateImage).
 
-  generateChart(parentNodeId: string, chartType: string): void {
-    this.transport.fireIntent("scene", "generateChart", [parentNodeId, chartType]);
+  generateChart(parentNodeId: string, chartType: string, expectedScienceReceipt?: string): void {
+    const args = expectedScienceReceipt ? [parentNodeId, chartType, { expectedScienceReceipt }] : [parentNodeId, chartType];
+    this.transport.fireIntent("scene", "generateChart", args);
   }
 
   // R8a: the Key Takeaway / Explainer Note agents, restored from the deleted

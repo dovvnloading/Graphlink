@@ -268,7 +268,7 @@ def prepare(document: Any, node: Any, granted: Any) -> tuple[Any, dict, dict, st
     try:
         inputs, input_units = validated_inputs_with_units(operation, raw)
         sources = _verify_sources(document, node, inputs, references, granted,
-                                  operation=operation)
+                                  operation=operation, input_units=input_units)
     except (ValueError, IndexError, TypeError, KeyError) as exc:
         raise SceneError(str(exc)) from exc
     pack = node.kind.removeprefix("science_").split(".", 1)[0]
