@@ -194,7 +194,7 @@ function SelectControl({
     }
     if (!event.altKey && !event.ctrlKey && !event.metaKey && event.key.length === 1 &&
         event.target !== searchRef.current) {
-      const now = Date.now();
+      const now = event.timeStamp;
       const found = matchTypeAhead(event.key, now);
       if (!isOpen && found) {
         openList(found.value);
@@ -249,7 +249,7 @@ function SelectControl({
               />
             )}
             <div ref={listboxRef} id={listId} className="gl-select-listbox" role="listbox"
-              tabIndex={searchable ? undefined : -1}
+              tabIndex={-1}
               aria-activedescendant={!searchable ? activeId : undefined}
               aria-label={ariaLabel ?? label ?? "Options"} aria-labelledby={label ? labelId : labelledBy}>
               {visible.length ? visible.map((option, index) => (

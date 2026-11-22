@@ -107,7 +107,15 @@ export function OverlayProvider({ children }: { children: ReactNode }) {
     pendingFocusRestore.current = { name: active[index].name, trigger };
     publish(layersRef.current.map((layer) => names.has(layer.name) ? { ...layer, state: "closing" as const } : layer));
     for (const layer of closing) scheduleRemoval(layer.name);
-    if (trigger && document.contains(trigger)) trigger.focus();
+    const focused = document.activeElement;
+    // Only restore immediately if focus still belongs to a dismissed layer.
+    // A surface may deliberately focus another control while it closes.
+    if (trigger && document.contains(trigger) &&
+        (focused === document.body || focused === trigger ||
+          (focused instanceof Node && closing.some((layer) =>
+            surfaceElements.current.get(layer.name)?.contains(focused))))) {
+      trigger.focus();
+    }
   }, [publish, scheduleRemoval]);
 
   const close = useCallback(() => dismiss(), [dismiss]);
@@ -167,18 +175,21 @@ export function OverlayProvider({ children }: { children: ReactNode }) {
   const openSurface = active.find((layer) => layer.parent === null)?.name ?? null;
   const topmost = active[active.length - 1]?.name ?? null;
 
-  // A closing dialog removes its focused children before the exit animation
-  // finishes. Restore again after that React commit if focus fell to <body>;
-  // never steal focus from another control the user reached in the meantime.
+  // A live editor can move out of a closing surface in the first React
+  // commit, dropping focus after dismiss() already restored it. Restore at
+  // that commit and once more after exit removal if needed. Never override
+  // a different control that the surface or user deliberately focused.
   useLayoutEffect(() => {
     const pending = pendingFocusRestore.current;
-    if (!pending || layers.some((layer) => layer.name === pending.name)) return;
-    pendingFocusRestore.current = null;
+    if (!pending || layers.some((layer) =>
+      layer.name === pending.name && layer.state === "open")) return;
     const trigger = pending.trigger;
     if (trigger && document.contains(trigger) &&
         (document.activeElement === document.body || document.activeElement === trigger)) {
       trigger.focus();
     }
+    // Reduced motion can remove the closing layer in the same update.
+    if (!layers.some((layer) => layer.name === pending.name)) pendingFocusRestore.current = null;
   }, [layers]);
   const isOpen = useCallback((name: string) => layers.some((layer) =>
     layer.name === name && layer.state === "open"), [layers]);

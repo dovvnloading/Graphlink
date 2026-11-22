@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Dialog, OverlayProvider, Popover, useOverlays } from "./overlays";
 import { Select } from "../ui/Select";
@@ -246,9 +246,85 @@ describe("overlay system (the OverlayManager contract)", () => {
     await user.click(screen.getByRole("textbox", { name: "first field" }));
     await user.keyboard("{Escape}");
     expect(document.activeElement).toBe(opener);
-    expect(document.querySelector(".overlay-dialog[data-state=\'closing\']")).not.toBeNull();
-    await waitFor(() => expect(document.querySelector(".overlay-dialog[data-state=\'closing\']")).toBeNull());
+    expect(document.querySelector(".overlay-dialog[data-state='closing']")).not.toBeNull();
+    await waitFor(() => expect(document.querySelector(".overlay-dialog[data-state='closing']")).toBeNull());
     expect(opener).toHaveFocus();
+  });
+
+  it("restores opener focus if a live editor moves during the closing commit", async () => {
+    function MovingEditor() {
+      const overlays = useOverlays();
+      const visible = overlays.isOpen("moving-editor");
+      const wasVisible = useRef(false);
+      useLayoutEffect(() => {
+        if (visible) {
+          wasVisible.current = true;
+        } else if (wasVisible.current) {
+          // Moving a live editor can drop focus after dismiss() focuses its opener.
+          const detached = document.createElement("input");
+          document.body.appendChild(detached);
+          detached.focus();
+          detached.remove();
+        }
+      }, [visible]);
+      return <>
+        <button type="button" onClick={() => overlays.open("moving-editor", "dialog")}>Open moving editor</button>
+        <Dialog name="moving-editor" title="Moving editor"><input aria-label="Live field" /></Dialog>
+      </>;
+    }
+
+    const user = userEvent.setup();
+    render(<OverlayProvider><MovingEditor /></OverlayProvider>);
+    const opener = screen.getByRole("button", { name: "Open moving editor" });
+    await user.click(opener);
+    expect(screen.getByRole("textbox", { name: "Live field" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Moving editor" })).toBeNull();
+    expect(opener).toHaveFocus();
+    await waitFor(() => expect(document.querySelector(".overlay-dialog[data-state='closing']")).toBeNull());
+    expect(opener).toHaveFocus();
+  });
+
+  it("does not steal focus from a control the closing surface selected", async () => {
+    function FocusHandoff() {
+      const overlays = useOverlays();
+      const destination = useRef<HTMLButtonElement>(null);
+      return <>
+        <button type="button" onClick={() => overlays.open("handoff", "dialog")}>Open handoff</button>
+        <button type="button" ref={destination}>Focus destination</button>
+        <Dialog name="handoff" title="Handoff">
+          <button type="button" onClick={() => {
+            overlays.closeLayer("handoff");
+            destination.current?.focus();
+          }}>Close and move focus</button>
+        </Dialog>
+      </>;
+    }
+
+    const user = userEvent.setup();
+    render(<OverlayProvider><FocusHandoff /></OverlayProvider>);
+    await user.click(screen.getByRole("button", { name: "Open handoff" }));
+    await user.click(screen.getByRole("button", { name: "Close and move focus" }));
+    const destination = screen.getByRole("button", { name: "Focus destination" });
+    expect(destination).toHaveFocus();
+    await waitFor(() => expect(document.querySelector(".overlay-dialog[data-state='closing']")).toBeNull());
+    expect(destination).toHaveFocus();
+  });
+
+  it("restores opener focus when reduced motion skips the closing phase", async () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
+    try {
+      const user = setup();
+      const opener = screen.getByRole("button", { name: /^Settings/ });
+      await user.click(opener);
+      await user.click(screen.getByRole("textbox", { name: "first field" }));
+      await user.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
+      expect(document.querySelector(".overlay-dialog[data-state='closing']")).toBeNull();
+      expect(opener).toHaveFocus();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("opening a second surface without closing the first does not clobber the original opener", async () => {
