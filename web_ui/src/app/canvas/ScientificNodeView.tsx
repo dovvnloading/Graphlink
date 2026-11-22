@@ -1,5 +1,8 @@
-import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode } from "react";
 import type { Node, NodeProps } from "@xyflow/react";
+import { OverlayProviderIfMissing, useOverlays } from "../overlays/overlays";
+import { scientificFocusName } from "./scientificFocus";
+import { ScientificWorkspace, useScientificSlots, type ScienceEditorProps } from "./ScientificWorkspace";
 import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
@@ -690,13 +693,22 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
   </form>;
 }
 
-function Workbench({ session, state, options, run, configure, cancel, fetchTableColumn, exportJson, exportCsv, exportMethods, charts, onChart, onRefresh, onDiscuss, tableEditor }: {
-  session: ScienceEditorSession; state: ScienceState; options: SourceOption[]; run: Run; configure: Run; cancel: Cancel; fetchTableColumn: FetchTableColumn;
+function Workbench({ requestedOperation, session, state, options, run, configure, cancel, fetchTableColumn, exportJson, exportCsv, exportMethods, charts, onChart, onRefresh, onDiscuss, tableEditor }: {
+  requestedOperation?: string; session: ScienceEditorSession; state: ScienceState; options: SourceOption[]; run: Run; configure: Run; cancel: Cancel; fetchTableColumn: FetchTableColumn;
   exportJson: () => Promise<string>; exportCsv: () => Promise<Blob>; exportMethods: () => Promise<string>; tableEditor: ReactNode;
   charts: ScienceChartLink[]; onChart: (type: ScienceChartType) => void; onRefresh: (chart: ScienceChartLink) => void;
   onDiscuss: (result: ScienceResult) => void;
 }) {
   const [selected, setSelected] = useState(session.selected ?? state.runner?.operationId ?? state.latest?.operationId ?? state.operations[0].id);
+  const launchSelection = state.operations.find(candidate => candidate.id === requestedOperation)?.id;
+  const [lastLaunch, setLastLaunch] = useState<string>();
+  if (lastLaunch !== launchSelection) {
+    setLastLaunch(launchSelection);
+    if (launchSelection) setSelected(launchSelection);
+  }
+  useLayoutEffect(() => {
+    if (launchSelection) session.selectOperation(launchSelection);
+  }, [launchSelection, session]);
   const [localBusy, setBusy] = useState(false);
   const submission = useSyncExternalStore(session.onSubmission, session.submission);
   const busy = localBusy || (submission !== undefined && submission.phase !== "finished")
@@ -725,15 +737,18 @@ function Workbench({ session, state, options, run, configure, cancel, fetchTable
   </>;
 }
 
-export const ScientificNodeView = memo(function ScientificNodeView({ data, id, selected }: NodeProps<ScientificFlowNode>) {
+export function ScientificEditor({ data, id, requestedOperation }: ScienceEditorProps) {
+  const overlays = useOverlays();
   const state = useMemo(() => readScienceState(data.raw), [data.raw]);
   const options = useMemo(() => sourceOptions(data.parents, state?.limits?.points), [data.parents, state?.limits?.points]);
-  const collapsed = useLodVisibility();
-  return <NodeShell kindClassName="scientific-node" selected={!!selected} collapsed={collapsed}
-    header={<NodeHeading glyph="chart">{data.title}</NodeHeading>} bodyClassName="science-body nodrag nopan nowheel">
-    {!data.raw ? <p role="status">Enable {data.title} in Settings → Plugins to open this workbench.</p>
+  const openSettings = () => {
+    data.store.openModelTaskSettings("plugins");
+    overlays.open("settings", "dialog");
+  };
+  return <>{!data.raw ? <><p role="status">Enable {data.title} in Settings → Plugins to open this workbench.</p>
+    <button type="button" onClick={openSettings}>Open plugin settings</button></>
       : state?.error ? <p role="alert">{state.error}</p> : state && data.pluginId === "science_" + state.packId
-      ? <Workbench key={state.nodeKey ?? id} session={data.store.scientificEditor(id, state.nodeKey)} state={state} options={options}
+      ? <Workbench requestedOperation={requestedOperation} key={state.nodeKey ?? id} session={data.store.scientificEditor(id, state.nodeKey)} state={state} options={options}
         exportJson={() => data.store.exportScientificResult(data.pluginId, id, state.runToken)}
         exportMethods={() => data.store.exportScientificMethods(data.pluginId, id, state.runToken)}
         exportCsv={() => data.store.exportScientificTableCsv(data.pluginId, id, "result", state.runToken)}
@@ -766,5 +781,28 @@ export const ScientificNodeView = memo(function ScientificNodeView({ data, id, s
         configure={(operationId, inputs, sources, token, method) => data.store.configureScientificRunner(data.pluginId, id, operationId, inputs, sources, token, method)}
         cancel={(operationId, attemptId) => data.store.cancelScientificOperation(data.pluginId, id, operationId, attemptId)} />
       : <p role="alert">This workbench version could not be loaded. Check the plugin in Settings.</p>}
-  </NodeShell>;
+  </>;
+}
+
+function ScientificCard({ data, id, selected }: NodeProps<ScientificFlowNode>) {
+  const register = useScientificSlots();
+  const overlays = useOverlays();
+  const collapsed = useLodVisibility();
+  const attach = useCallback((element: HTMLDivElement | null) => {
+    register?.(id, element ? { element, data } : null);
+  }, [id, data, register]);
+  return <NodeShell kindClassName="scientific-node" selected={!!selected} collapsed={collapsed}
+    header={<><NodeHeading glyph="chart">{data.title}</NodeHeading>
+      <button type="button" className="science-focus-trigger nodrag" aria-haspopup="dialog"
+        aria-label={"Open focused workbench for " + data.title}
+        onClick={() => overlays.open(scientificFocusName(id), "dialog")}>Focus</button></>}
+    bodyClassName="science-body nodrag nopan nowheel"><div ref={attach} /></NodeShell>;
+}
+
+export const ScientificNodeView = memo(function ScientificNodeView(props: NodeProps<ScientificFlowNode>) {
+  const slots = useScientificSlots();
+  if (slots) return <ScientificCard {...props} />;
+  return <OverlayProviderIfMissing><ScientificWorkspace Editor={ScientificEditor}>
+    <ScientificCard {...props} />
+  </ScientificWorkspace></OverlayProviderIfMissing>;
 });

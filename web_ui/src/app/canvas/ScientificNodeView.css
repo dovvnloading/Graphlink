@@ -183,3 +183,38 @@
   font-size: .85em;
   overflow-wrap: anywhere;
 }
+
+.science-editor-content { display: grid; gap: 12px; min-width: 0; }
+.science-focus-trigger {
+  margin-inline-start: auto; min-height: 28px; padding: 3px 9px; border-radius: 4px;
+  font: inherit; font-size: .9em; color: var(--gl-surface-text-primary);
+  background: var(--gl-surface-field); border: 1px solid var(--gl-surface-border);
+  cursor: pointer;
+}
+.science-focus-trigger:focus-visible, .science-focused-dialog :is(button, summary, select, input, textarea):focus-visible {
+  outline: 2px solid currentColor; outline-offset: 2px;
+}
+.overlay-dialog.science-focused-dialog {
+  width: min(1024px, calc(100vw - 32px)); min-width: 0;
+  max-width: 100%; max-height: calc(100dvh - 32px);
+  color: var(--gl-surface-text-primary);
+}
+.science-focused-dialog .overlay-dialog-body { padding: clamp(12px, 2vw, 24px); min-height: 0; overflow: auto; }
+.science-focused-dialog .science-operation-preview { white-space: normal; overflow: visible; }
+.science-focused-dialog .science-methods-content { max-height: none; overflow: visible; }
+.science-focused-dialog :is(button, select, summary) { min-height: 32px; }
+.science-focused-dialog .science-help-toggle { min-width: 32px; min-height: 32px; }
+.science-focused-dialog .science-table { max-height: min(40vh, 360px); }
+.science-focused-dialog .science-operation-editor { align-content: start; }
+@media (min-width: 780px) {
+  .science-focus-body .science-editor-content:has(.science-results) {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; column-gap: 24px;
+  }
+  .science-focus-body .science-editor-content:has(.science-results) > :not(.science-results) { grid-column: 1; }
+  .science-focus-body .science-results { grid-column: 2; grid-row: 1 / span 4; border-top: 0; padding-top: 0; }
+}
+@media (max-width: 540px) {
+  .overlay-dialog.science-focused-dialog { width: 100%; max-height: 100dvh; border-radius: 0; }
+  .science-focus-body .science-input-grid { grid-template-columns: minmax(0, 1fr); }
+  .science-focus-body .science-actions > button { min-height: 40px; }
+}

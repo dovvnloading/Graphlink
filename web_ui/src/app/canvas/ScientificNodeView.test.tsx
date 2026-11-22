@@ -1,5 +1,6 @@
 import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 import { WsTimeoutError, type WsTransport } from "../../lib/ws/transport";
 import { SceneStore } from "./sceneStore";
@@ -49,6 +50,30 @@ function expandResult(label: string | RegExp) {
 }
 
 describe("scientific workbench card", () => {
+  it("moves one live editor between surfaces and restores keyboard focus and unsaved import text", async () => {
+    const user = userEvent.setup();
+    const { request } = mount();
+    const value = screen.getByRole("textbox", { name: "Samples (m)" });
+    fireEvent.change(value, { target: { value: "[2,6]" } });
+    openImporter();
+    const pasted = screen.getByRole("textbox", { name: "Pasted table text" });
+    fireEvent.change(pasted, { target: { value: "Time,Reading\n1,3" } });
+    const opener = screen.getByRole("button", { name: "Open focused workbench for Mathematics" });
+    await user.click(opener);
+    const dialog = screen.getByRole("dialog", { name: "Mathematics workbench" });
+    expect(within(dialog).getByRole("textbox", { name: "Samples (m)" })).toBe(value);
+    expect(within(dialog).getByRole("textbox", { name: "Pasted table text" })).toBe(pasted);
+    expect(screen.getAllByRole("button", { name: "Run calculation" })).toHaveLength(1);
+    expect(within(dialog).getByRole("button", { name: "Close Mathematics workbench" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(opener).toHaveFocus();
+    expect(pasted).toBeVisible();
+    expect(pasted).toHaveValue("Time,Reading\n1,3");
+    expect(value).toHaveValue("[2,6]");
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("shows one meaningful headline and keeps full data and actions on demand", () => {
     const latestResult: ScienceResult = {
       ...result, summary: "Described 3 observations.", values: { count: 3, mean: 12, spread: [8, 10, 18] },
