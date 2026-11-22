@@ -17,6 +17,7 @@ from backend.harness.loop import HarnessRunContext
 from backend.harness.tools_python import PythonReplRegistry, register_harness_python_tool
 from backend.providers.base import ToolCall
 from backend.tools import CODE_EXECUTE, ToolRegistry
+from graphlink_execution_guard import DEFAULT_ACTIVE_PROCESS_LIMIT
 from graphlink_scratch_dirs import remove_scratch_dir_for_id
 
 
@@ -224,6 +225,7 @@ def test_managed_venv_creation_uses_secret_free_env_and_reports_failures(tmp_pat
     monkeypatch.setattr(python_env, "HARNESS_PYTHON_ENV_ROOT", tmp_path / "envs")
     monkeypatch.setenv("GRAPHLINK_FAKE_PROVIDER_SECRET", "must-not-leak")
     passed_envs = []
+    seen_process_limits = []
 
     class FailedProcess:
         returncode = 1
@@ -236,6 +238,9 @@ def test_managed_venv_creation_uses_secret_free_env_and_reports_failures(tmp_pat
             return self.returncode
 
     class Guard:
+        def __init__(self, **kwargs):
+            seen_process_limits.append(kwargs.get("active_process_limit", DEFAULT_ACTIVE_PROCESS_LIMIT))
+
         def popen_kwargs(self):
             return {}
 
@@ -253,6 +258,9 @@ def test_managed_venv_creation_uses_secret_free_env_and_reports_failures(tmp_pat
     with pytest.raises(python_env.PythonEnvironmentError, match="venv setup failed"):
         python_env.ensure_python_environment("failed-agent", project, is_scratch=False)
     assert len(passed_envs) == 1
+    # The trusted bootstrap must work on a busy POSIX UID; executed Python
+    # still uses the normal per-process-tree resource guard.
+    assert seen_process_limits == [DEFAULT_ACTIVE_PROCESS_LIMIT if sys.platform == "win32" else 0]
     assert "GRAPHLINK_FAKE_PROVIDER_SECRET" not in passed_envs[0]
     assert not python_env.managed_venv_dir(
         "failed-agent", project, is_scratch=False,
