@@ -367,14 +367,18 @@ async function captureTheme(page, theme, capture, interrupted) {
     const library = page.getByRole("dialog", { name: "Chat Library" });
     await library.waitFor({ state: "visible" });
     const openChat = library.getByRole("button", { name: /^Open chat "Events API p99 regression"/ }).first();
+    // Library rows populate asynchronously after the dialog becomes visible.
+    const openChatVisible = await openChat.waitFor({ state: "visible", timeout: 15_000 })
+      .then(() => true, () => false);
     // The isolated backend may already have the seeded graph open after the
-    // earlier theme pass. Reloading it would trigger an unsaved-chat prompt.
-    const alreadyOpen = await page.locator(".react-flow__node").count() > 0;
-    if (alreadyOpen || await openChat.count() === 0 || !await openChat.isEnabled()) {
+    // earlier theme pass. Keep it only if the library cannot reopen the seed.
+    const alreadyOpen = await page.locator(".react-flow__node").first().isVisible();
+    if (alreadyOpen && (!openChatVisible || !await openChat.isEnabled())) {
       await page.keyboard.press("Escape");
     } else {
       await openChat.click();
-      if (await library.isVisible()) await page.keyboard.press("Escape");
+      await library.waitFor({ state: "hidden", timeout: 5_000 })
+        .catch(() => page.keyboard.press("Escape"));
     }
     await dismissDialogs(page);
     await page.locator(".react-flow__node").first().waitFor({ state: "visible", timeout: 15_000 });
@@ -388,6 +392,11 @@ async function captureTheme(page, theme, capture, interrupted) {
       .filter((cls) => cls.startsWith("react-flow__node-"))
       .map((cls) => cls.slice("react-flow__node-".length))),
   )]).catch(() => []);
+  if (kinds.length === 0) {
+    await shot("Node kinds", "node-kinds", async () => {
+      throw new Error("seeded chat did not load");
+    });
+  }
   for (const kind of kinds) {
     await shot(`Node: ${kind} at 100%`, `node-${slug(kind)}`, async () => {
       await fitAll(page);
