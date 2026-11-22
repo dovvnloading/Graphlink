@@ -67,7 +67,7 @@ describe("scientific workbench card", () => {
     expect(within(dialog).getByRole("textbox", { name: "Samples (m)" })).toBe(value);
     expect(within(dialog).getByRole("textbox", { name: "Pasted table text" })).toBe(pasted);
     expect(screen.getAllByRole("button", { name: "Run calculation" })).toHaveLength(1);
-    expect(within(dialog).getByRole("combobox", { name: "Operation" })).toHaveFocus();
+    expect(within(dialog).getByRole("heading", { name: "Mathematics workbench" })).toHaveFocus();
     expect(within(dialog).getByRole("button", { name: "Close Mathematics workbench" })).not.toHaveFocus();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).toBeNull();
