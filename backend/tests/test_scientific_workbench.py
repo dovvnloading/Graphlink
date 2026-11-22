@@ -619,7 +619,14 @@ def test_chart_this_result_is_connected_receipted_refreshable_and_undoable(sessi
     assert len([n for n in document.nodes.values() if n.kind == "chart"]) == 1
     receipt = envelope(document, source)["latest"]["provenance"]["receiptHash"]
 
-    assert asyncio.run(bus.dispatch_intent("scene", "generateChart", [chart_id, "scatter"])) == chart_id
+    old_options = {"expectedScienceReceipt": first_receipt["receiptHash"]}
+    for target in (source, chart_id):
+        assert asyncio.run(bus.dispatch_intent("scene", "generateChart", [target, "scatter", old_options])) is None
+    assert len([n for n in document.nodes.values() if n.kind == "chart"]) == 1
+    assert document.nodes[chart_id].state.chart_data["values"] == [1, 2, 4]
+    assert asyncio.run(bus.dispatch_intent("scene", "generateChart", [
+        chart_id, "scatter", {"expectedScienceReceipt": receipt},
+    ])) == chart_id
     assert document.nodes[chart_id].state.chart_data["values"] == [1, 3, 9]
     assert document.nodes[chart_id].state.chart_data["scienceReceipt"]["receiptHash"] == receipt
     assert document.nodes[chart_id].state.chart_error == ""

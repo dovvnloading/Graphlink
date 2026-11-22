@@ -56,6 +56,10 @@ Scientific results may supply optional `views` alongside the established scalar 
 
 The existing `biology.kaplan_meier_logrank` operation now supplies both A and B groups as a typed survival view, including censoring times. It retains its original two-group statistics, table and single-series A plot for downstream compatibility. A view with 3–12 groups can be produced by another operation using the same contract without changing the frontend.
 
+A plate map has one keyboard stop. Use arrow keys to move between wells, Home or End within a row, and Ctrl+Home or Ctrl+End for the first or last well. Selecting a well also works by touch and shows the full reading and unit. Survival curves and volcano scatters offer paged data tables with exact stored coordinates. Forest and tree tables show full stored precision even when graphic labels are rounded. For unordered fitted residuals the plot uses independent points. An ordered trace keeps its connecting line.
+
+Warnings returned by the operation appear alongside the saved headline. **Show stored precision** in **All values** reveals values before display rounding. The uncertainty budget also exposes the stored estimate, standard uncertainty, interval and contribution values. Editing the draft or switching operations labels the previously saved output. CSV and canonical JSON remain available for exporting complete datasets and receipts.
+
 ### Unit-aware measurements and accepted syntax
 
 Enter `72 km/h` where a field expects `m/s` (normalized to 20 m/s), `2.4e-3 mol/L` for concentration, `20 °C` for absolute temperature, or `18 delta_degF` for a temperature difference (normalized to `10 delta_K`). Bare numeric values are interpreted in the field's declared/default unit. `convert_unit` takes `value` in the named `from_unit` and produces its output in `to_unit`. The runtime stores both normalized inputs and the units the user supplied in `provenance.inputUnits`. Text selectors such as `time_unit` and `abundance_unit` can determine a numerical field's effective unit; the inventory prints the **literal declared** `Field.unit`, even for these dynamic cases.

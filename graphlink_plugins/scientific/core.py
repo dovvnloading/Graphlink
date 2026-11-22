@@ -186,10 +186,14 @@ class Operation:
     # The result value a 390px workbench node shows first, e.g. "km" for a
     # Michaelis–Menten fit. Empty leaves the choice to the node.
     headline: str = ""
+    # Presentation metadata; leaves persisted result hashes and XY selectors unchanged.
+    plot_mark: str = ""
 
     def __post_init__(self):
         if not isinstance(self.headline, str):
             raise ValueError("An operation headline must be a result value key.")
+        if self.plot_mark not in ("", "scatter"):
+            raise ValueError("An operation plot mark must be scatter or unspecified.")
         for field in self.fields:
             if field.kind == "choice" and self.example.get(field.key) not in field.choices:
                 raise ValueError(f"Example for {field.key} must be an allowed choice.")
@@ -226,6 +230,8 @@ class Operation:
             description["citations"] = [asdict(citation) for citation in self.citations]
         if self.headline:
             description["headline"] = self.headline
+        if self.plot_mark:
+            description["plotMark"] = self.plot_mark
         return description
 
 

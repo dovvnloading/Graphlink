@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { describe, it, expect, vi } from "vitest";
 import type { WsTransport } from "../../lib/ws/transport";
 import { SceneStore } from "./sceneStore";
+import { ScientificDataTable } from "./ScientificDataTable";
 import { ScientificNodeView, type ScientificFlowNode } from "./ScientificNodeView";
 import { readScienceState, type ScienceChartLink, type ScienceState, type ScienceResult } from "./scientificWorkbench";
 import * as download from "./downloadTextFile";
@@ -49,6 +50,49 @@ function expandResult(label: string | RegExp) {
 }
 
 describe("scientific workbench card", () => {
+  it("puts recorded warnings next to the saved result and distinguishes changed inputs and operation", () => {
+    const latest = { ...result, values: { distance: 0.1234567890123456, warning: "Inspect the fitted residuals." } };
+    mount(JSON.stringify({ ...state, latest }));
+    const region = screen.getByRole("region", { name: "Latest result" });
+    expect(within(region).getByRole("region", { name: "Result warnings" })).toHaveTextContent("Inspect the fitted residuals.");
+    expandResult("All values · 2");
+    fireEvent.click(within(region).getByRole("checkbox", { name: "Show stored precision" }));
+    expect(within(region).getByText("0.1234567890123456")).toBeVisible();
+    fireEvent.change(screen.getByRole("textbox", { name: "Samples (m)" }), { target: { value: "[1,4]" } });
+    expect(within(region).getByRole("note")).toHaveTextContent("Inputs have been edited");
+    fireEvent.change(screen.getByRole("combobox", { name: "Operation" }), { target: { value: "scale" } });
+    expect(within(region).getByRole("note")).toHaveTextContent("different operation");
+    expect(within(region).getByText("0.1234567890123456")).toBeVisible();
+  });
+
+  it("renders declared residuals as independent observations and preserves their exact submitted order", () => {
+    const plot = { x: [2, 1, 3], y: [.1234567890123456, -.5, .75], title: "Residuals", xLabel: "X", yLabel: "Residual" };
+    mount(JSON.stringify({ ...state, operations: [{ ...operation, plotMark: "scatter" }],
+      latest: { ...result, plot } }));
+    expandResult("Plots & views");
+    const svg = screen.getByRole("img", { name: /Residuals/ });
+    expect(svg.querySelector("polyline")).toBeNull();
+    expect(svg.querySelectorAll("circle")).toHaveLength(3);
+    fireEvent.click(screen.getByText("Exact plot coordinates"));
+    const rows = within(screen.getByRole("table", { name: "Exact plot coordinates" })).getAllByRole("row");
+    expect(rows[1]).toHaveTextContent("120.1234567890123456");
+    expect(rows[2]).toHaveTextContent("21-0.5");
+  });
+
+  it("paginates exact data and keeps rows readable when a new result is shorter", () => {
+    const rows = Array.from({ length: 41 }, (_, i) => [String(i + 1)]);
+    const table = (count: number) => <ScientificDataTable title="Sample values" columns={["Sample"]} rows={() => rows.slice(0, count)} />;
+    const view = render(table(41));
+    fireEvent.click(screen.getByText("Sample values"));
+    expect(within(screen.getByRole("table")).getAllByRole("row")).toHaveLength(41);
+    fireEvent.click(screen.getByRole("button", { name: "Next rows" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Rows 41–41 of 41");
+    expect(screen.getByRole("rowheader", { name: "41" })).toBeVisible();
+    view.rerender(table(3));
+    expect(screen.getByRole("rowheader", { name: "1" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Next rows" })).toBeNull();
+  });
+
   it("shows one meaningful headline and keeps full data and actions on demand", () => {
     const latestResult: ScienceResult = {
       ...result, summary: "Described 3 observations.", values: { count: 3, mean: 12, spread: [8, 10, 18] },
@@ -129,7 +173,12 @@ describe("scientific workbench card", () => {
     expect(svg.querySelector(".science-volcano-fdr-threshold")).toHaveAttribute("stroke-dasharray", "4 4");
     expect(svg.querySelector("polyline")).toBeNull();
     const down = svg.querySelector(".science-volcano-down")!;
-    expect(Number.isFinite(Number(down.getAttribute("cy")))).toBe(true);
+    expect(down.tagName.toLowerCase()).toBe("path");
+    expect(down.getAttribute("d")).not.toMatch(/NaN|Infinity/);
+    expect(svg.querySelector(".science-volcano-other")?.tagName.toLowerCase()).toBe("circle");
+    fireEvent.click(screen.getByText("Volcano feature data"));
+    const data = screen.getByRole("table", { name: "Volcano feature data" });
+    expect(within(data).getByRole("row", { name: /GeneDown/ })).toHaveTextContent("GeneDown-2.20Down in B");
     expect(screen.getByText(/Up in B: 1/)).toBeVisible();
     expect(screen.getByText(/Down in B: 1/)).toBeVisible();
     expect(screen.getByText(/Other tested: 1/)).toBeVisible();
@@ -190,14 +239,14 @@ describe("scientific workbench card", () => {
     expect(screen.getByRole("button", { name: "Chart this" })).toBeEnabled();
     expect(screen.getByRole("combobox", { name: "Chart type" })).toHaveValue("scatter");
     fireEvent.click(screen.getByRole("button", { name: "Chart this" }));
-    expect(generateChart).toHaveBeenCalledWith("target", "scatter");
+    expect(generateChart).toHaveBeenCalledWith("target", "scatter", "abc");
     fireEvent.change(screen.getByRole("combobox", { name: "Chart type" }), { target: { value: "heatmap" } });
     fireEvent.click(screen.getByRole("button", { name: "Chart this" }));
-    expect(generateChart).toHaveBeenCalledWith("target", "heatmap");
+    expect(generateChart).toHaveBeenCalledWith("target", "heatmap", "abc");
     expect(screen.getByText("Source changed · refresh to update")).toBeVisible();
     expect(screen.getByText(/Receipt bbbbbbbbbbbb/)).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Refresh chart" }));
-    expect(generateChart).toHaveBeenCalledWith("child-chart", "scatter");
+    expect(generateChart).toHaveBeenCalledWith("child-chart", "scatter", "abc");
   });
 
   it("only runs on submit, validates numeric arrays, and preserves the draft on a backend error", async () => {
@@ -260,7 +309,9 @@ describe("scientific workbench card", () => {
       expandResult("Actions & exports");
       fireEvent.click(screen.getByText("Export JSON"));
       await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+      request.mockResolvedValueOnce({ ok: true, json: canonical });
       fireEvent.click(screen.getByText("Export CSV"));
+      await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
       expect(save.mock.calls.map(([, name]) => name)).toEqual(["mathematics-integral.json", "mathematics-integral.csv"]);
       expect(await save.mock.calls[0][0].text()).toBe(canonical);
       expect(await save.mock.calls[1][0].text()).toBe("x,y\r\n0,1\r\n2,8\r\n10,3");
@@ -460,15 +511,30 @@ describe("scientific workbench card", () => {
     expect(screen.getByText("Time (s) · -1.79769 × 10³⁰⁸ to 1.79769 × 10³⁰⁸")).toBeVisible();
   });
 
+  it("refuses inline CSV when the server has advanced past the visible receipt", async () => {
+    const save = vi.spyOn(download, "downloadBlob").mockImplementation(() => {});
+    try {
+      const { request } = mount(JSON.stringify({ ...state, latest: result }));
+      request.mockResolvedValueOnce({ ok: true, json: JSON.stringify({ ...result, provenance: { ...result.provenance, receiptHash: "new" } }) });
+      expandResult("Actions & exports");
+      fireEvent.click(screen.getByText("Export CSV"));
+      expect(await screen.findByRole("alert")).toHaveTextContent("result changed");
+      expect(save).not.toHaveBeenCalled();
+    } finally { save.mockRestore(); }
+  });
+
   it("exports every result row, escapes CSV cells and retains small signed values beyond the preview", async () => {
     const save = vi.spyOn(download, "downloadBlob").mockImplementation(() => {});
     try {
       const rows = Array.from({ length: 42 }, (_, i) => [i === 41 ? -Number.MIN_VALUE : i, i === 41 ? 'a,"b"' : "=formula"]);
-      mount(JSON.stringify({ ...state, latest: { ...result, table: { columns: ["Measurement", "Label"], rows } } }));
+      const saved = { ...result, table: { columns: ["Measurement", "Label"], rows } };
+      const { request } = mount(JSON.stringify({ ...state, latest: saved }));
+      request.mockResolvedValueOnce({ ok: true, json: JSON.stringify(saved) });
       expandResult("Tables · 42 rows");
       expect(screen.getAllByRole("row")).toHaveLength(31);
       expandResult("Actions & exports");
       fireEvent.click(screen.getByText("Export CSV"));
+      await waitFor(() => expect(save).toHaveBeenCalledOnce());
       const csv = await save.mock.calls[0][0].text();
       expect(csv.split("\r\n")).toHaveLength(43);
       expect(csv).toContain("0,'=formula");
@@ -554,7 +620,17 @@ describe("scientific workbench card", () => {
     expandResult("Plots & views");
     const large = screen.getByRole("table", { name: "384-well plate map" });
     expect(within(large).getAllByRole("row")).toHaveLength(17);
-    expect(within(large).getByRole("cell", { name: "P24: 5 RFU" })).toBeInTheDocument();
+    const first = within(large).getByRole("button", { name: "A1: empty" });
+    const last = within(large).getByRole("button", { name: "P24: 5 RFU" });
+    expect(large.querySelectorAll('button[tabindex="0"]')).toHaveLength(1);
+    fireEvent.keyDown(first, { key: "End", ctrlKey: true });
+    expect(last).toHaveFocus();
+    expect(last).toHaveAttribute("tabindex", "0");
+    expect(screen.getByText("P24", { selector: ".science-well-readout strong" }).parentElement).toHaveTextContent("P24 · 5 RFU");
+    fireEvent.keyDown(last, { key: "ArrowLeft" });
+    expect(within(large).getByRole("button", { name: "P23: empty" })).toHaveFocus();
+    fireEvent.click(first);
+    expect(first).toHaveAttribute("tabindex", "0");
   });
 
   it("renders all survival groups as step curves with censor ticks and a legend", () => {
@@ -573,6 +649,11 @@ describe("scientific workbench card", () => {
       /H.*V/.test(path.getAttribute("d") ?? ""))).toBe(true);
     expect(svg.querySelectorAll("line[stroke-width='2']")).toHaveLength(2);
     expect(screen.getByText("C · 0 censor times")).toBeVisible();
+    const keys = [...document.querySelectorAll(".science-survival-key line")];
+    expect(keys.map(key => key.getAttribute("stroke-dasharray")))
+      .toEqual([...svg.querySelectorAll("g path")].map(curve => curve.getAttribute("stroke-dasharray")));
+    fireEvent.click(screen.getByText("Survival curve data"));
+    expect(within(screen.getByRole("table", { name: "Survival curve data" })).getByRole("row", { name: "A 4 0.5 Yes" })).toBeVisible();
     // The legacy single-series plot is retained for connections, not displayed twice.
     expect(screen.queryByRole("img", { name: /Distance/ })).toBeNull();
     expect(screen.getByRole("table", { name: "Result table" })).toBeInTheDocument();

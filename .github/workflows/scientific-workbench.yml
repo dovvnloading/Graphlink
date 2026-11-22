@@ -1,0 +1,57 @@
+name: Scientific workbench browser checks
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/scientific-workbench.yml"
+      - "graphlink_plugins/scientific/**"
+      - "backend/api/intents_chart.py"
+      - "backend/plugins.py"
+      - "backend/plugin_sdk.py"
+      - "web_ui/src/app/canvas/*cien*"
+      - "web_ui/src/app/canvas/sceneStore.ts"
+      - "web_ui/src/app/canvas/SceneCanvas.tsx"
+      - "web_ui/src/app/chrome/*lugin*"
+      - "web_ui/e2e/*workbench*.spec.ts"
+      - "web_ui/playwright.config.ts"
+      - "web_ui/package-lock.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scientific-workbench-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  browser:
+    name: Scientific workbench in Chromium
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: web_ui/.nvmrc
+          cache: npm
+          cache-dependency-path: web_ui/package-lock.json
+      - run: pip install -r requirements.txt
+      - run: npm ci
+        working-directory: web_ui
+      - run: npm run build
+        working-directory: web_ui
+      - run: npx playwright install --with-deps chromium
+        working-directory: web_ui
+      - run: npx playwright test --retries=0 --trace=retain-on-failure workbench
+        working-directory: web_ui
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure()
+        with:
+          name: scientific-workbench-browser-failure
+          path: web_ui/test-results/
+          retention-days: 7

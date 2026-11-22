@@ -7,9 +7,10 @@ import type { SceneStore, ScienceEditorSession } from "./sceneStore";
 import { downloadBlob } from "./downloadTextFile";
 import { writeTableCsv } from "./tableCsv";
 import { createLinearScale } from "./charts/chartScales";
+import { ScientificDataTable } from "./ScientificDataTable";
 import { ScientificResultViews } from "./ScientificResultViews";
 import {
-  chartableScienceTypes, columnChoices, compatibleOptions, connectedInputText, draftInputs, FieldError, fieldText, formatMeasurement, formatScienceNumber, formatScienceRange, formatScienceSummary, formatScienceValue, matchesSource, parseInputs, readableScienceKey, readScienceState, resultMeasurement, sourceOptions,
+  isResult, chartableScienceTypes, columnChoices, compatibleOptions, connectedInputText, draftInputs, exactScienceNumber, FieldError, fieldText, formatMeasurement, formatScienceNumber, formatScienceRange, formatScienceSummary, formatScienceValue, matchesSource, parseInputs, readableScienceKey, readScienceState, resultMeasurement, sourceOptions,
   type EditorDraft, type ScienceField, type ScienceLimits, type ScienceOperation, type ScienceParent, type SciencePlot, type ScienceResult,
   type ScienceChartLink, type ScienceChartType, type ScienceState, type ScienceRunnerConfiguration, type ScientificColumnType, type Sources, type SourceOption, type SourceReference,
 } from "./scientificWorkbench";
@@ -32,7 +33,7 @@ function scienceScale(values: number[], from: number, to: number) {
   return { low, high, at: (n: number) => position(n / divisor) };
 }
 
-function Plot({ plot }: { plot: SciencePlot }) {
+function Plot({ plot, scatter }: { plot: SciencePlot; scatter: boolean }) {
   const x = scienceScale(plot.x, 10, 310);
   const y = scienceScale(plot.y, 98, 8);
   const points = plot.x.map((v, i) => `${x.at(v)},${y.at(plot.y[i])}`).join(" ");
@@ -42,11 +43,13 @@ function Plot({ plot }: { plot: SciencePlot }) {
     <span>{plot.yLabel} · {formatScienceRange(y.low, y.high)}</span>
     <svg viewBox="0 0 320 110" role="img" aria-label={`${plot.title}. ${plot.yLabel} versus ${plot.xLabel}, ${plot.x.length} points.`}>
       <path d="M10 8V98H310" fill="none" stroke="currentColor" opacity=".4" />
-      <polyline points={points} fill="none" stroke="currentColor" strokeWidth="1.8" />
-      {plot.x.length <= 48 && plot.x.map((v, i) =>
+      {!scatter && <polyline points={points} fill="none" stroke="currentColor" strokeWidth="1.8" />}
+      {(scatter || plot.x.length <= 48) && plot.x.map((v, i) =>
         <circle key={i} cx={x.at(v)} cy={y.at(plot.y[i])} r="2.4" fill="currentColor"><title>{v}, {plot.y[i]}</title></circle>)}
     </svg>
     <span>{plot.xLabel} · {formatScienceRange(x.low, x.high)}</span>
+    <ScientificDataTable title="Exact plot coordinates" columns={["Point", plot.xLabel, plot.yLabel]}
+      rows={() => plot.x.map((value, index) => [String(index + 1), exactScienceNumber(value), exactScienceNumber(plot.y[index])])} />
   </figure>;
 }
 
@@ -93,22 +96,25 @@ function ResultDisclosure({ label, children, className = "", onClose }: {
   </details>;
 }
 
-function Results({ result, title, headlineKey, exportJson, exportCsv, exportMethods, onChart, onRefresh, onDiscuss, charts }: {
-  result: ScienceResult; title: string; headlineKey?: string; exportJson: () => Promise<string>; exportCsv: () => Promise<Blob>;
+function Results({ result, title, headlineKey, scatter, freshness, exportJson, exportCsv, exportMethods, onChart, onRefresh, onDiscuss, charts }: {
+  result: ScienceResult; title: string; headlineKey?: string; scatter: boolean; freshness: string; exportJson: () => Promise<string>; exportCsv: () => Promise<Blob>;
   exportMethods: () => Promise<string>;
   onChart: (type: ScienceChartType) => void; onRefresh: (chart: ScienceChartLink) => void;
   onDiscuss: (result: ScienceResult) => void; charts: ScienceChartLink[];
 }) {
   const [exporting, setExporting] = useState(false);
   const [copying, setCopying] = useState(false);
+  const [exactValues, setExactValues] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
   const { table, tableAsset, plot, provenance } = result;
   const chartTypes = chartableScienceTypes(result);
   const [chartType, setChartType] = useState<ScienceChartType>(chartTypes[0] ?? "scatter");
   const baseName = `${provenance.packId}-${result.operationId}`;
-  const csv = table ?? (plot ? { columns: [plot.xLabel, plot.yLabel], rows: plot.x.map((v, i) => [v, plot.y[i]]) } : { columns: ["Metric", "Value"], rows: Object.entries(result.values) });
   const values = Object.entries(result.values);
+  const warnings = [...new Set([result.values.warning, result.values.warnings].flatMap(value =>
+    (Array.isArray(value) ? value : [value]).filter((item): item is string =>
+      typeof item === "string" && !!item.trim() && item.trim().toLowerCase() !== "none")))];
   const headline = headlineScienceValue(result, headlineKey);
   const measurement = headline && resultMeasurement(result, headline[0]);
   const uncertaintyUnavailable = headline && result.uncertainty?.unsupportedOutputs?.[headline[0]];
@@ -118,6 +124,7 @@ function Results({ result, title, headlineKey, exportJson, exportCsv, exportMeth
   return <section className="science-results" aria-label="Latest result">
     <div className="science-result-head">
       <h4>Last successful run · {title}</h4>
+      {freshness && <p role="note" className="science-result-notice">{freshness}</p>}
       {headline ? <div className="science-result-highlight">
         <span title={headline[0]}>{readableScienceKey(headline[0])}</span>
         <strong>{uncertaintyUnavailable ? `${formatScienceValue(headline[1])} · uncertainty unavailable`
@@ -130,15 +137,22 @@ function Results({ result, title, headlineKey, exportJson, exportCsv, exportMeth
         {formattedSummary}
       </p>
     </div>
+    {warnings.length > 0 && <section className="science-result-warning" aria-label="Result warnings">
+      <strong>Result warnings</strong><ul>{warnings.map(warning => <li key={warning}>{warning}</li>)}</ul>
+    </section>}
     <div className="science-result-sections">
       {longSummary && <ResultDisclosure label="Read full summary">
         <p>{formattedSummary}</p>
       </ResultDisclosure>}
       {values.length > 0 && <ResultDisclosure label={`All values · ${values.length}`}>
+        <label className="science-precision"><input type="checkbox" checked={exactValues}
+          onChange={event => setExactValues(event.target.checked)} />Show stored precision</label>
         <dl className="science-result-values">{values.map(([label, value]) => {
           const measured = resultMeasurement(result, label);
           const unpropagatable = result.uncertainty?.unsupportedOutputs?.[label];
-          return <div key={label}><dt>{label}</dt><dd>{unpropagatable ? `${formatScienceValue(value)} · uncertainty unavailable` : measured ? formatMeasurement(measured) : formatScienceValue(value)}</dd></div>;
+          return <div key={label}><dt>{label}</dt><dd>{exactValues
+            ? formatScienceValue(value, true) + (measured?.unit ? " " + measured.unit : "") + (unpropagatable ? " · uncertainty unavailable" : "")
+            : unpropagatable ? `${formatScienceValue(value)} · uncertainty unavailable` : measured ? formatMeasurement(measured) : formatScienceValue(value)}</dd></div>;
         })}</dl>
       </ResultDisclosure>}
       {result.uncertainty && <ResultDisclosure className="science-uncertainty-budget"
@@ -148,12 +162,21 @@ function Results({ result, title, headlineKey, exportJson, exportCsv, exportMeth
           <h5>{name} · {formatMeasurement(measured)}</h5>
           {measured.interval && <small>{Math.round((measured.coverageProbability ?? 0.95) * 100)}% {measured.method === "monte_carlo" ? "Monte Carlo quantile coverage interval" : "coverage interval"} [{numberCell(measured.interval[0])}, {numberCell(measured.interval[1])}]{measured.method === "monte_carlo" ? " · Gaussian input model" : ` · coverage factor k = ${numberCell(measured.coverageFactor)}`}</small>}
           {measured.budgetNote && <small>{measured.budgetNote}</small>}
+          <details><summary>Stored measurement values</summary><dl className="science-result-values">
+            <div><dt>Estimate</dt><dd>{exactScienceNumber(measured.value)} {measured.unit}</dd></div>
+            <div><dt>Standard uncertainty</dt><dd>{exactScienceNumber(measured.standardUncertainty)} {measured.unit}</dd></div>
+            {measured.interval && <div><dt>Coverage interval</dt><dd>{measured.interval.map(exactScienceNumber).join(" to ")} {measured.unit}</dd></div>}
+            {measured.coverageProbability !== undefined && <div><dt>Coverage probability</dt><dd>{exactScienceNumber(measured.coverageProbability)}</dd></div>}
+            {measured.method !== "monte_carlo" && <div><dt>Coverage factor</dt><dd>{exactScienceNumber(measured.coverageFactor)}</dd></div>}
+            {measured.monteCarloMean !== undefined && <div><dt>Monte Carlo mean</dt><dd>{exactScienceNumber(measured.monteCarloMean)} {measured.unit}</dd></div>}
+            {measured.monteCarloTrials !== undefined && <div><dt>Monte Carlo trials</dt><dd>{measured.monteCarloTrials}</dd></div>}
+          </dl></details>
           {measured.budget && <table aria-label={`Uncertainty budget for ${name}`}>
             <thead><tr><th>Contributing input</th><th>Standard uncertainty</th><th>Sensitivity</th><th>Signed contribution</th><th>Variance / covariance</th></tr></thead>
             <tbody>{measured.budget.map((entry, index) => <tr key={index}>
               <td>{entry.input}{entry.kind === "covariance" ? " (shared source)" : entry.unit ? ` (${entry.unit})` : ""}</td>
-              <td>{numberCell(entry.standardUncertainty)}</td><td>{numberCell(entry.sensitivity)}</td>
-              <td>{numberCell(entry.signedContribution)}</td><td>{numberCell(entry.variance)}</td>
+              <td>{exactScienceNumber(entry.standardUncertainty)}</td><td>{exactScienceNumber(entry.sensitivity)}</td>
+              <td>{exactScienceNumber(entry.signedContribution)}</td><td>{exactScienceNumber(entry.variance)}</td>
             </tr>)}</tbody>
           </table>}
         </section>)}
@@ -162,7 +185,7 @@ function Results({ result, title, headlineKey, exportJson, exportCsv, exportMeth
       </ResultDisclosure>}
       {(!!result.views?.length || !!plot) && <ResultDisclosure label="Plots & views">
         {result.views && <ScientificResultViews views={result.views} />}
-        {plot && !result.views?.some((view) => view.type === "survival_curve") && <Plot plot={plot} />}
+        {plot && !result.views?.some((view) => view.type === "survival_curve") && <Plot plot={plot} scatter={scatter} />}
       </ResultDisclosure>}
       {(table || tableAsset) && <ResultDisclosure label={`Tables · ${tableRows.toLocaleString()} ${tableRows === 1 ? "row" : "rows"}`}>
         <div className="science-result-table-content">
@@ -223,6 +246,14 @@ function Results({ result, title, headlineKey, exportJson, exportCsv, exportMeth
           if (tableAsset) {
             downloadBlob(await exportCsv(), `${baseName}.csv`);
           } else {
+            const saved: unknown = JSON.parse(await exportJson());
+            if (!isResult(saved) || saved.operationId !== result.operationId
+                || saved.provenance.resultHash !== provenance.resultHash
+                || (saved.provenance.receiptHash ?? saved.provenance.resultHash) !== (provenance.receiptHash ?? provenance.resultHash))
+              throw new Error("The result changed. Review the current run before exporting.");
+            const xy = saved.plot;
+            const csv = saved.table ?? (xy ? { columns: [xy.xLabel, xy.yLabel], rows: xy.x.map((v, i) => [v, xy.y[i]]) }
+              : { columns: ["Metric", "Value"], rows: Object.entries(saved.values) });
             saveText(writeTableCsv([csv.columns.map(csvCell), ...csv.rows.map((row) => row.map(csvCell))]),
               `${baseName}.csv`, "text/csv;charset=utf-8");
           }
@@ -472,13 +503,14 @@ function restoreDraft(op: ScienceOperation, result: ScienceResult | null, revisi
   return { values, sources, revision, dirty: false };
 }
 
-function OperationEditor({ session, op, result, configured, revision, runToken, limits, options, run, configure, cancel, fetchTableColumn, busy, setBusy }: {
-  session: ScienceEditorSession; op: ScienceOperation; result: ScienceResult | null;
+function OperationEditor({ onDraftChange, session, op, result, configured, revision, runToken, limits, options, run, configure, cancel, fetchTableColumn, busy, setBusy }: {
+  onDraftChange: (dirty: boolean) => void; session: ScienceEditorSession; op: ScienceOperation; result: ScienceResult | null;
   configured?: ScienceRunnerConfiguration | null; revision: string; runToken?: string; limits?: ScienceLimits;
   options: SourceOption[]; run: Run; configure: Run; cancel: Cancel; fetchTableColumn: FetchTableColumn;
   busy: boolean; setBusy: (busy: boolean) => void;
 }) {
   const [draft, setDraft] = useState(() => session.drafts.get(op.id) ?? restoreDraft(op, result, revision, options, configured));
+  useLayoutEffect(() => { onDraftChange(draft.dirty); }, [onDraftChange, draft.dirty]);
   useLayoutEffect(() => {
     if (draft.dirty) session.drafts.set(op.id, draft);
     else session.drafts.delete(op.id);
@@ -661,11 +693,20 @@ function Workbench({ session, state, options, run, configure, cancel, fetchTable
   onDiscuss: (result: ScienceResult) => void;
 }) {
   const [selected, setSelected] = useState(session.selected ?? state.runner?.operationId ?? state.latest?.operationId ?? state.operations[0].id);
+  const [edited, setEdited] = useState(false);
   const [busy, setBusy] = useState(false);
   const operationId = useId();
   const op = state.operations.find((candidate) => candidate.id === selected) ?? state.operations[0];
   const result = state.latest?.operationId === op.id ? state.latest : null;
   const latestOperation = state.operations.find((candidate) => candidate.id === state.latest?.operationId);
+  const changedSource = Object.values(state.latest?.provenance.sources ?? {}).some(source =>
+    !options.some(option => matchesSource(option, source)));
+  const freshness = [
+    state.latest && !result ? "Viewing a saved result for a different operation." :
+      edited ? "Inputs have been edited since the displayed run." :
+      state.runner?.operationId === op.id && result ? "The editor uses the saved Graph Runner configuration." : "",
+    changedSource ? "A source of this saved result has changed or is unavailable." : "",
+  ].filter(Boolean).join(" ");
   const revision = (state.runToken ?? JSON.stringify(state.latest?.provenance ?? null)) + "|" + JSON.stringify(state.runner ?? null);
   return <>
     <div className="science-operation-picker">
@@ -674,13 +715,14 @@ function Workbench({ session, state, options, run, configure, cancel, fetchTable
         {state.operations.map((operation) => <option key={operation.id} value={operation.id}>{operation.title}</option>)}
       </select>
     </div>
-    <OperationEditor key={op.id} session={session} op={op} result={result} configured={state.runner}
+    <OperationEditor key={op.id} onDraftChange={setEdited} session={session} op={op} result={result} configured={state.runner}
       revision={revision} runToken={state.runToken} limits={state.limits}
       options={options} run={run} configure={configure} cancel={cancel} fetchTableColumn={fetchTableColumn}
       busy={busy} setBusy={setBusy} />
     {tableEditor}
     {state.latest && <Results key={revision} result={state.latest} exportJson={exportJson} exportCsv={exportCsv} exportMethods={exportMethods}
       charts={charts} onChart={onChart} onRefresh={onRefresh} onDiscuss={onDiscuss}
+      freshness={freshness} scatter={latestOperation?.plotMark === "scatter"}
       title={latestOperation?.title ?? state.latest.operationId} headlineKey={latestOperation?.headline} />}
   </>;
 }
@@ -712,8 +754,8 @@ export const ScientificNodeView = memo(function ScientificNodeView({ data, id, s
           return { values: answer.values as number[], reference: answer.reference as SourceReference };
         }}
         charts={data.charts ?? []}
-        onChart={(chartType) => data.store.generateChart(id, chartType)}
-        onRefresh={(chart) => data.store.generateChart(chart.id, chart.chartType)}
+        onChart={(chartType) => data.store.generateChart(id, chartType, state.latest?.provenance.receiptHash ?? state.latest?.provenance.resultHash)}
+        onRefresh={(chart) => data.store.generateChart(chart.id, chart.chartType, state.latest?.provenance.receiptHash ?? state.latest?.provenance.resultHash)}
         onDiscuss={(result) => data.store.discussScientificResult(
           id, result.provenance.resultHash, result.provenance.receiptHash ?? result.provenance.resultHash,
         )}

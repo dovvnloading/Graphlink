@@ -1,5 +1,6 @@
-import type { CSSProperties } from "react";
-import { formatScienceNumber } from "./scientificWorkbench";
+import { useId, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { ScientificDataTable } from "./ScientificDataTable";
+import { exactScienceNumber, formatScienceNumber } from "./scientificWorkbench";
 import type { ScienceForestPlotView, SciencePhylogeneticNode, SciencePhylogeneticTreeView, SciencePlateMapView, ScienceResultView, ScienceSurvivalCurveView, ScienceVolcanoPlotView, ScienceVolcanoPoint } from "./scientificViewTypes";
 import "./ScientificResultViews.css";
 
@@ -14,6 +15,25 @@ const DASHES = ["", "6 3", "2 3", "9 2 2 2"];
 function PlateMap({ view }: { view: SciencePlateMapView }) {
   const rowCount = view.format === 96 ? 8 : 16;
   const colCount = view.format === 96 ? 12 : 24;
+  const [activeIndex, setActiveIndex] = useState(0);
+  const tableRef = useRef<HTMLTableElement>(null);
+  const hint = useId();
+  function move(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    let next = index;
+    const column = index % colCount;
+    switch (event.key) {
+      case "ArrowRight": next += column < colCount - 1 ? 1 : 0; break;
+      case "ArrowLeft": next -= column > 0 ? 1 : 0; break;
+      case "ArrowDown": next = Math.min((rowCount - 1) * colCount + column, index + colCount); break;
+      case "ArrowUp": next = Math.max(column, index - colCount); break;
+      case "Home": next = event.ctrlKey ? 0 : index - column; break;
+      case "End": next = event.ctrlKey ? view.format - 1 : index - column + colCount - 1; break;
+      default: return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    tableRef.current?.querySelector<HTMLButtonElement>('[data-well-index="' + next + '"]')?.focus();
+  }
   const values = new Map<string, number | string | null>(
     view.wells.map(({ well, value }): [string, number | string | null] => [well, value]),
   );
@@ -22,21 +42,27 @@ function PlateMap({ view }: { view: SciencePlateMapView }) {
   const maximum = numeric.length ? Math.max(...numeric) : 0;
   const count = view.wells.filter((item) => item.value !== null).length;
 
+  const selected = ROWS[Math.floor(activeIndex / colCount)] + (activeIndex % colCount + 1);
+  function reading(well: string) {
+    const value = values.get(well);
+    return value == null ? "empty" : typeof value === "number"
+      ? exactScienceNumber(value) + (view.unit ? " " + view.unit : "") : value;
+  }
   return <figure className="science-typed-view science-plate-map">
     <figcaption>{view.title}</figcaption>
     <small>{view.format} wells · {count} readings · {view.format - count} empty</small>
     <div className="science-plate-scroll">
-      <table aria-label={view.format + "-well plate map"}>
+      <table ref={tableRef} aria-label={view.format + "-well plate map"} aria-describedby={hint}>
         <thead><tr><th scope="col">Row</th>{Array.from({ length: colCount }, (_, index) =>
           <th scope="col" key={index}>{index + 1}</th>)}</tr></thead>
-        <tbody>{ROWS.slice(0, rowCount).split("").map((row) =>
+        <tbody>{ROWS.slice(0, rowCount).split("").map((row, rowIndex) =>
           <tr key={row}><th scope="row">{row}</th>
             {Array.from({ length: colCount }, (_, index) => {
               const well = row + (index + 1), value = values.get(well);
               const empty = value === undefined || value === null;
               const number = typeof value === "number";
-              const label = empty ? "empty" : number ? formatScienceNumber(value) : value;
-              const description = well + ": " + label + (number && view.unit ? " " + view.unit : "");
+              const cellIndex = rowIndex * colCount + index;
+              const description = well + ": " + reading(well);
               const range = maximum - minimum;
               const ratio = number ? maximum === minimum ? 0.5 :
                 Number.isFinite(range) ? (value - minimum) / range :
@@ -46,7 +72,12 @@ function PlateMap({ view }: { view: SciencePlateMapView }) {
                 : undefined;
               return <td key={well} aria-label={description} title={description}
                 className={empty ? "science-well-empty" : number ? "science-well-number" : "science-well-text"}>
-                <span style={fill}>{empty ? "·" : number ? "●" : String(value).slice(0, 2)}</span>
+                <button type="button" className="science-well-button" data-well-index={cellIndex}
+                  tabIndex={activeIndex === cellIndex ? 0 : -1} aria-label={description}
+                  onKeyDown={event => move(event, cellIndex)} onFocus={() => setActiveIndex(cellIndex)}
+                  onClick={() => setActiveIndex(cellIndex)}>
+                  <span style={fill}>{empty ? "·" : number ? "●" : String(value).slice(0, 2)}</span>
+                </button>
               </td>;
             })}
           </tr>)}</tbody>
@@ -54,7 +85,8 @@ function PlateMap({ view }: { view: SciencePlateMapView }) {
     </div>
     {numeric.length > 0 && <small className="science-plate-key">Numeric scale: {formatScienceNumber(minimum)}
       {" – "}{formatScienceNumber(maximum)}{view.unit ? " " + view.unit : ""}. Colors encode the observed range.</small>}
-    <small>Hover a well for its full value; screen readers announce the well readings. Blank wells are not zero.</small>
+    <p className="science-well-readout"><strong>{selected}</strong> · {reading(selected)}</p>
+    <small id={hint}>Select a well or use the arrow keys to inspect its reading. Home and End move within a row.</small>
   </figure>;
 }
 
@@ -98,19 +130,35 @@ function SurvivalCurve({ view }: { view: ScienceSurvivalCurveView }) {
       <text x="190" y="194" textAnchor="middle" className="science-survival-axis">{view.xLabel}</text>
     </svg>
     <ul className="science-survival-legend">{view.groups.map((group, index) =>
-      <li key={group.label}><span className="science-survival-line"
-        style={{ borderColor: COLORS[index], borderTopStyle: index % 2 ? "dashed" : "solid" }} />
+      <li key={group.label}><svg className="science-survival-key" viewBox="0 0 32 8" aria-hidden="true">
+        <line x1="0" y1="4" x2="32" y2="4" stroke={COLORS[index]} strokeWidth="2.2"
+          strokeDasharray={DASHES[index % DASHES.length]} /></svg>
         {group.label} · {group.censored?.length ?? 0} censor times
       </li>)}</ul>
+    <ScientificDataTable title="Survival curve data" columns={["Group", view.xLabel, "Survival probability", "Censor time"]}
+      rows={() => view.groups.flatMap(group => {
+        const censored = new Set(group.censored);
+        return group.times.map((time, i) => [group.label, exactScienceNumber(time),
+          exactScienceNumber(group.survival[i]), censored.has(time) && group.times.lastIndexOf(time) === i ? "Yes" : "—"]);
+      })} />
   </figure>;
 }
 
+
+type VolcanoClass = "up" | "down" | "other";
+function VolcanoMark({ kind, x, y, label }: { kind: VolcanoClass; x: number; y: number; label?: string }) {
+  const css = "science-volcano-point science-volcano-" + kind;
+  const title = label && <title>{label}</title>;
+  if (kind === "other") return <circle className={css} cx={x} cy={y} r="3.1">{title}</circle>;
+  const sign = kind === "up" ? 1 : -1;
+  return <path className={css} d={`M${x},${y - sign * 4}l3.8,${sign * 7}h-7.6z`}>{title}</path>;
+}
 
 /** A volcano plot is a scatter: joining features into a polyline would imply ordering. */
 function VolcanoPlot({ view }: { view: ScienceVolcanoPlotView }) {
   const points = view.points;
   const xExtent = Math.max(1, view.log2FoldChangeThreshold,
-    ...points.map((point) => Math.abs(point.log2FoldChange))) * 1.12;
+    ...points.map((point) => Math.abs(point.log2FoldChange)));
   // q=0 represents underflow, not an infinite SVG coordinate.
   const negLogQ = (q: number) => -Math.log10(Math.max(q, 1e-300));
   const yExtent = Math.max(1, negLogQ(view.fdrThreshold),
@@ -145,11 +193,8 @@ function VolcanoPlot({ view }: { view: ScienceVolcanoPlotView }) {
       <line className="science-volcano-fdr-threshold" x1="39" x2="351"
         y1={y(view.fdrThreshold)} y2={y(view.fdrThreshold)}
         stroke="currentColor" opacity=".6" strokeDasharray="4 4" />
-      {points.map((point) => <circle key={point.gene}
-        className={`science-volcano-point science-volcano-${category(point)}`}
-        cx={x(point.log2FoldChange)} cy={y(point.qValue)} r="3.1">
-        <title>{point.gene}: log2FC {formatScienceNumber(point.log2FoldChange)}, BH q {formatScienceNumber(point.qValue)}</title>
-      </circle>)}
+      {points.map(point => <VolcanoMark key={point.gene} kind={category(point)} x={x(point.log2FoldChange)} y={y(point.qValue)}
+        label={point.gene + ": log2FC " + exactScienceNumber(point.log2FoldChange) + ", BH q " + exactScienceNumber(point.qValue)} />)}
       <text x="34" y="190" textAnchor="end" className="science-volcano-axis">0</text>
       <text x="34" y="30" textAnchor="end" className="science-volcano-axis">{formatScienceNumber(yExtent)}</text>
       <text x="39" y="201" textAnchor="middle" className="science-volcano-axis">−{formatScienceNumber(xExtent)}</text>
@@ -159,11 +204,15 @@ function VolcanoPlot({ view }: { view: ScienceVolcanoPlotView }) {
       <text x="43" y="18" className="science-volcano-axis">−log10(BH q)</text>
     </svg>
     <ul className="science-volcano-legend" aria-label="Volcano significance counts">
-      <li><span className="science-volcano-key science-volcano-up" />Up in B: {counts.up}</li>
-      <li><span className="science-volcano-key science-volcano-down" />Down in B: {counts.down}</li>
-      <li><span className="science-volcano-key science-volcano-other" />Other tested: {counts.other}</li>
+      {(["up", "down", "other"] as const).map(kind => <li key={kind}>
+        <svg aria-hidden="true" className="science-volcano-key" viewBox="0 0 12 12"><VolcanoMark kind={kind} x={6} y={6} /></svg>
+        {{ up: "Up in B", down: "Down in B", other: "Other tested" }[kind]}: {counts[kind]}
+      </li>)}
     </ul>
     <small>Dashed lines: q ≤ {formatScienceNumber(view.fdrThreshold)} and |log2FC| ≥ {formatScienceNumber(view.log2FoldChangeThreshold)}. Untested genes are excluded.</small>
+    <ScientificDataTable title="Volcano feature data" columns={["Feature", "Log2 fold change", "BH q", "Classification"]}
+      rows={() => points.map(point => [point.gene, exactScienceNumber(point.log2FoldChange),
+        exactScienceNumber(point.qValue), { up: "Up in B", down: "Down in B", other: "Other tested" }[category(point)]])} />
     {floorUsed && <small>Underflowed q=0 plotted at 1e−300 (capped at −log10(q)=300).</small>}
   </figure>;
 }
@@ -217,12 +266,12 @@ function ForestPlot({ view }: { view: ScienceForestPlotView }) {
               <title>{study.label}</title>{study.label.slice(0, 24)}
             </text>
             <line x1={x(study.lower)} x2={x(study.upper)} y1={middle} y2={middle}
-              stroke="var(--gl-status-info, currentColor)" strokeWidth="2"><title>{description}</title></line>
+              stroke="var(--gl-semantic-status-info, currentColor)" strokeWidth="2"><title>{description}</title></line>
             {[study.lower, study.upper].map((edge, i) =>
               <line key={i} x1={x(edge)} x2={x(edge)} y1={middle - 4} y2={middle + 4}
-                stroke="var(--gl-status-info, currentColor)" strokeWidth="1.4" />)}
+                stroke="var(--gl-semantic-status-info, currentColor)" strokeWidth="1.4" />)}
             <rect x={x(study.estimate) - side / 2} y={middle - side / 2} width={side} height={side}
-              fill="var(--gl-status-info, currentColor)"><title>{description}</title></rect>
+              fill="var(--gl-semantic-status-info, currentColor)"><title>{description}</title></rect>
           </g>;
         })}
         <line x1="8" x2="426" y1={pooledY - 14} y2={pooledY - 14}
@@ -231,7 +280,7 @@ function ForestPlot({ view }: { view: ScienceForestPlotView }) {
         <polygon className="science-forest-diamond"
           points={[x(pooled.lower) + "," + pooledY, x(pooled.estimate) + "," + (pooledY - 9),
             x(pooled.upper) + "," + pooledY, x(pooled.estimate) + "," + (pooledY + 9)].join(" ")}
-          fill="var(--gl-status-info, currentColor)" stroke="currentColor" strokeWidth="1">
+          fill="var(--gl-semantic-status-info, currentColor)" stroke="currentColor" strokeWidth="1">
           <title>{pooledLabel + ": " + forestNumber(pooled.estimate) + " [" +
             forestNumber(pooled.lower) + ", " + forestNumber(pooled.upper) + "]"}</title>
         </polygon>
@@ -256,11 +305,11 @@ function ForestPlot({ view }: { view: ScienceForestPlotView }) {
           <thead><tr><th scope="col">Study</th><th scope="col">Estimate</th><th scope="col">Lower</th><th scope="col">Upper</th><th scope="col">Weight</th></tr></thead>
           <tbody>
             {studies.map((study) => <tr key={study.label}><th scope="row">{study.label}</th>
-              <td>{forestNumber(study.estimate)}</td><td>{forestNumber(study.lower)}</td>
-              <td>{forestNumber(study.upper)}</td><td>{study.weight === undefined ? "—" : forestNumber(study.weight)}</td>
+              <td>{exactScienceNumber(study.estimate)}</td><td>{exactScienceNumber(study.lower)}</td>
+              <td>{exactScienceNumber(study.upper)}</td><td>{study.weight === undefined ? "—" : exactScienceNumber(study.weight)}</td>
             </tr>)}
-            <tr><th scope="row">{pooledLabel}</th><td>{forestNumber(pooled.estimate)}</td>
-              <td>{forestNumber(pooled.lower)}</td><td>{forestNumber(pooled.upper)}</td><td>—</td></tr>
+            <tr><th scope="row">{pooledLabel}</th><td>{exactScienceNumber(pooled.estimate)}</td>
+              <td>{exactScienceNumber(pooled.lower)}</td><td>{exactScienceNumber(pooled.upper)}</td><td>—</td></tr>
           </tbody>
         </table>
       </div>
@@ -394,8 +443,8 @@ function PhylogeneticTree({ view }: { view: SciencePhylogeneticTreeView }) {
           <thead><tr><th scope="col">Node/taxon</th><th scope="col">Length</th><th scope="col">Support</th></tr></thead>
           <tbody>{all.filter((node) => node !== root).map((node) =>
             <tr key={node.id}><th scope="row">{name(node)}</th>
-              <td>{node.data.length === undefined ? "—" : forestNumber(node.data.length)}</td>
-              <td>{node.data.support === undefined ? "—" : forestNumber(node.data.support)}</td>
+              <td>{node.data.length === undefined ? "—" : exactScienceNumber(node.data.length)}</td>
+              <td>{node.data.support === undefined ? "—" : exactScienceNumber(node.data.support)}</td>
             </tr>)}</tbody>
         </table>
       </div>
