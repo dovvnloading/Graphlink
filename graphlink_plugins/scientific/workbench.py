@@ -15,7 +15,7 @@ from backend.domain.node_states import ChartState, PersistedPluginState, PluginS
 from backend.plugin_sdk import HostContext, PluginNodeSeed, PluginSceneUpdate
 
 from .catalog import PACKS, PACK_FAMILIES, operations
-from .core import INPUT_LIMITS, _effective_unit, canonical_bytes, fingerprint, finite, readable_result, validated_inputs_with_units
+from .core import UNCERTAINTY_METHODS, INPUT_LIMITS, _effective_unit, canonical_bytes, fingerprint, finite, readable_result, validated_inputs_with_units
 from .data_table import (
     TableState, decode_input, numeric_column, parse_table, persist_table,
     stage_from_saved, table_metadata_valid, table_csv_chunk,
@@ -44,11 +44,14 @@ class RunArgs:
 
 @dataclass
 class ConfigureRunnerArgs:
+    WIRE_OMITS_DEFAULTS: ClassVar[bool] = True
+
     node_id: str
     operation_id: str
     inputs: dict
     sources: dict | None = None
     expected_run: str | None = None
+    uncertainty_method: str = "auto"
 
 
 @dataclass
@@ -411,6 +414,8 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         operation = catalog.get(request.operation_id)
         if operation is None:
             return {"ok": False, "error": "Choose an operation registered for this pack."}
+        if request.uncertainty_method not in UNCERTAINTY_METHODS:
+            return {"ok": False, "error": "Uncertainty method must be auto, gum or monte_carlo."}
         try:
             inputs, _input_units = validated_inputs_with_units(operation, request.inputs)
             sources = _verify_sources(
@@ -422,6 +427,9 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         configuration = {
             "version": 1, "operationId": operation.id, "inputs": dict(request.inputs), "sources": sources,
         }
+        if request.uncertainty_method != "auto":
+            # Older runners must reject forced methods they cannot reproduce.
+            configuration.update(version=2, uncertaintyMethod=request.uncertainty_method)
         prior = node.state.data
         if prior.get("runner") == configuration:
             return {"ok": True}
@@ -466,7 +474,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
             sources = _verify_sources(document, node, inputs, request.sources if request.sources is not None else {},
                                       ctx.is_plugin_granted, uncertainty_inputs,
                                       operation=op)
-            if request.uncertainty_method not in ("auto", "gum", "monte_carlo"):
+            if request.uncertainty_method not in UNCERTAINTY_METHODS:
                 raise ValueError("Uncertainty method must be auto, gum or monte_carlo.")
             budget = execution_timeout(op)
         except ValueError as exc:
@@ -510,6 +518,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         if isinstance(latest, dict):
             previous = latest["provenance"]
             if (previous["resultHash"] == result["provenance"]["resultHash"]
+                    and previous.get("requestedUncertaintyMethod") == result["provenance"].get("requestedUncertaintyMethod")
                     and previous.get("inputUnits") == result["provenance"].get("inputUnits")
                     and previous.get("referenceData") == result["provenance"].get("referenceData")
                     and latest.get("uncertainty") == result.get("uncertainty")

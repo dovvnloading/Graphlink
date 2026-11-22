@@ -770,3 +770,40 @@ def test_valid_older_science_version_is_stale_even_when_inputs_match(tmp_path):
         assert preview["steps"][0]["status"] == "ready"
 
     asyncio.run(scenario())
+
+
+def test_runner_replays_requested_method_and_invalidates_preview(tmp_path, monkeypatch):
+    async def scenario():
+        document, bus, scene = open_session(tmp_path / "methods.db", settings_for(tmp_path))
+        methods = []
+
+        async def worker(pack, operation, inputs, sources, *, timeout_s, cancel_event,
+                         uncertainty_method, input_units=None, uncertainty_inputs=None):
+            methods.append(uncertainty_method)
+            return calculate_result(pack, operation, inputs, sources, input_units=input_units,
+                                    uncertainty_inputs=uncertainty_inputs, uncertainty_method=uncertainty_method)
+
+        monkeypatch.setattr(workbench, "execute_in_process", worker)
+        target = await node(bus, "Scientific Core")
+        args = {"node_id": target, "operation_id": "convert_unit",
+                "inputs": {"value": 25, "from_unit": "mm", "to_unit": "m"}, "sources": {}}
+        previous_preview = None
+        for index, method in enumerate(("gum", "monte_carlo", "auto")):
+            saved = await intent(bus, "core", "configure_runner", **args, uncertainty_method=method)
+            assert saved["ok"]
+            config = document.nodes[target].state.data["runner"]
+            assert config.get("uncertaintyMethod", "auto") == method
+            assert config["version"] == (1 if method == "auto" else 2)
+            preview = await scene("previewGraphRun", [])
+            assert preview["steps"][0]["status"] == "ready"
+            assert preview["previewToken"] != previous_preview
+            previous_preview = preview["previewToken"]
+            run = await scene("executeGraphRun", [], previous_preview, f"recipe-{index}", 1)
+            assert run["status"] == "completed"
+            receipt = document.nodes[target].state.data["latest"]["provenance"]
+            assert receipt.get("requestedUncertaintyMethod", "auto") == method
+            assert (await scene("previewGraphRun", []))["steps"][0]["status"] == "current"
+        assert methods == ["gum", "monte_carlo", "auto"]
+        assert not (await intent(bus, "core", "configure_runner", **args, uncertainty_method="unknown"))["ok"]
+
+    asyncio.run(scenario())

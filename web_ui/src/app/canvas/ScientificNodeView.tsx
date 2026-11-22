@@ -469,7 +469,8 @@ function restoreDraft(op: ScienceOperation, result: ScienceResult | null, revisi
       values[field.key] = connectedInputText(field, option);
     }
   }
-  return { values, sources, revision, dirty: false };
+  const method = runner ? runner.uncertaintyMethod ?? "auto" : result?.provenance.requestedUncertaintyMethod ?? "auto";
+  return { values, sources, method, revision, dirty: false };
 }
 
 function OperationEditor({ session, op, result, configured, revision, runToken, limits, options, run, configure, cancel, fetchTableColumn, busy, setBusy }: {
@@ -487,7 +488,13 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
   const [running, setRunning] = useState(false);
   const [configuring, setConfiguring] = useState(false);
   const [cancelling, setCancelling] = useState(false);
-  const [uncertaintyMethod, setUncertaintyMethod] = useState<"auto" | "gum" | "monte_carlo">("auto");
+  const uncertaintyMethod = draft.method ?? "auto";
+  const savedInputs = useMemo(() => configured?.operationId === op.id
+    ? restoreDraft(op, null, revision, options, configured) : null, [op, configured, revision, options]);
+  const savedMatches = !!savedInputs && uncertaintyMethod === savedInputs.method &&
+    op.fields.every(({ key }) => draft.values[key] === savedInputs.values[key] &&
+      JSON.stringify(draft.sources[key]) === JSON.stringify(savedInputs.sources[key]));
+  const formRef = useRef<HTMLFormElement>(null);
   const errorId = useId();
   const changed = draft.revision !== revision;
   if (changed && !draft.dirty) {
@@ -528,21 +535,22 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
     let inputs: Record<string, unknown>;
     try { inputs = parseInputs(op, draft.values, limits); }
     catch (e) {
-      setError({ message: e instanceof Error ? e.message : "Check the inputs.",
-        field: e instanceof FieldError ? e.key : undefined });
+      const field = e instanceof FieldError ? e.key : undefined;
+      setError({ message: e instanceof Error ? e.message : "Check the inputs.", field });
+      if (field) (formRef.current?.elements.namedItem(field) as HTMLElement | null)?.focus();
       return;
     }
     pending.current = true;
     setConfiguring(true);
     setBusy(true);
     try {
-      await configure(op.id, inputs, draft.sources, runToken);
+      await configure(op.id, inputs, draft.sources, runToken, uncertaintyMethod);
       setDraft((old) => ({ ...old, dirty: false }));
     } catch (e) { setError({ message: e instanceof Error ? e.message : "Could not save the runner configuration." }); }
     finally { pending.current = false; setConfiguring(false); setBusy(false); }
   }
 
-  return <form className="science-operation-editor" onSubmit={submit}>
+  return <form ref={formRef} className="science-operation-editor" onSubmit={submit}>
     <div className="science-operation-context">
       {op.description && <p className="science-operation-preview" title={op.description}>{op.description}</p>}
       {(op.description || op.methods || op.citations?.length) && <details className="science-methods">
@@ -614,7 +622,10 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
       {bound.some(([, ref]) => options.some((option) => matchesSource(option, ref) && option.uncertainty)) &&
         <label>Uncertainty propagation method
           <select aria-label="Uncertainty propagation method" value={uncertaintyMethod}
-            onChange={(event) => setUncertaintyMethod(event.target.value as "auto" | "gum" | "monte_carlo")}>
+            onChange={(event) => {
+              const method = event.target.value as "auto" | "gum" | "monte_carlo";
+              setDraft((old) => ({ ...old, method, dirty: true }));
+            }}>
             <option value="auto">Automatic · first-order GUM or Monte Carlo for strong nonlinearity</option>
             <option value="gum">First-order GUM</option>
             <option value="monte_carlo">Monte Carlo · JCGM 101 (Gaussian input model)</option>
@@ -638,7 +649,8 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
           setDraft({ ...restoreDraft(op, null, revision), dirty: true }); setError(null);
         }}>Load example</button>
       </div>
-      {configured?.operationId === op.id && <small role="status">Saved as an explicit Graph Runner step.</small>}
+      {configured && <small role="status">{savedMatches ? "Saved as an explicit Graph Runner step."
+        : "Changes not saved to Graph Runner."}</small>}
     </fieldset>
     {busy && <p role="status">{running ? "Running calculation…" : configuring ? "Saving Graph Runner configuration…" : "Loading selected table column…"}</p>}
     {/* Outside the disabled fieldset; only real calculations can be cancelled, not table-column imports. */}
@@ -718,7 +730,7 @@ export const ScientificNodeView = memo(function ScientificNodeView({ data, id, s
           id, result.provenance.resultHash, result.provenance.receiptHash ?? result.provenance.resultHash,
         )}
         run={(operationId, inputs, sources, token, method) => data.store.runScientificOperation(data.pluginId, id, operationId, inputs, sources, token, method)}
-        configure={(operationId, inputs, sources, token) => data.store.configureScientificRunner(data.pluginId, id, operationId, inputs, sources, token)}
+        configure={(operationId, inputs, sources, token, method) => data.store.configureScientificRunner(data.pluginId, id, operationId, inputs, sources, token, method)}
         cancel={(operationId) => data.store.cancelScientificOperation(data.pluginId, id, operationId)} />
       : <p role="alert">This workbench version could not be loaded. Check the plugin in Settings.</p>}
   </NodeShell>;

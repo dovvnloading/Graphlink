@@ -16,6 +16,7 @@ from typing import Any
 from .units import parse_unit, dimension_name, convert_decimal_measurement, interval_temperature_unit
 
 VERSION = "1.2.0"
+UNCERTAINTY_METHODS = ("auto", "gum", "monte_carlo")
 MAX_POINTS = 1024
 MAX_COLUMNS = 32
 MAX_CELLS = 4096
@@ -483,6 +484,8 @@ def calculate_result(pack: str, operation: Operation, inputs: dict, sources: dic
             "inputHash": input_hash, "resultHash": result_hash,
             "createdAt": datetime.now(UTC).isoformat(), "sources": sources or {},
             "referenceData": reference_data,
+            **({"requestedUncertaintyMethod": uncertainty_method}
+               if uncertainty_inputs or uncertainty_method != "auto" else {}),
             **({"inputUnits": input_units} if input_units is not None else {}),
         },
     }
@@ -532,6 +535,8 @@ def readable_result(data: dict, pack: str) -> bool:
         if (created_at.utcoffset() != UTC.utcoffset(created_at)
                 or receipt["packId"] != pack or receipt["operationId"] != result["operationId"]
                 or not _OPERATION_ID.fullmatch(result["operationId"])):
+            return False
+        if receipt.get("requestedUncertaintyMethod", "auto") not in UNCERTAINTY_METHODS:
             return False
         sources = receipt["sources"]
         if (not isinstance(sources, dict) or sources.keys() - result["inputs"].keys()
