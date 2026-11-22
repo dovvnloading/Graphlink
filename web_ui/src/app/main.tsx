@@ -1,4 +1,4 @@
-import { StrictMode } from "react";
+import { lazy, StrictMode, Suspense, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "../lib/ui/base.css";
@@ -15,8 +15,27 @@ import "../lib/tokens/gl-vars-dev.css";
 import "./styles.css";
 import "./canvas/workspace.css";
 
+// The visual-review gallery is opt-in. React.lazy doesn't fetch its chunk on
+// ordinary app boots, including desktop launches carrying #token=... .
+const Gallery = lazy(() => import("./ui/gallery/Gallery"));
+
+function Root() {
+  const [showGallery, setShowGallery] = useState(() => window.location.hash === "#gallery");
+  useEffect(() => {
+    const onHashChange = () => setShowGallery(window.location.hash === "#gallery");
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  return showGallery ? (
+    <Suspense fallback={<p role="status">Loading gallery…</p>}>
+      <Gallery />
+    </Suspense>
+  ) : <App />;
+}
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <Root />
   </StrictMode>,
 );
