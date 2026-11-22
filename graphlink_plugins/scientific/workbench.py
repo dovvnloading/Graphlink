@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import time
 from dataclasses import dataclass
@@ -12,11 +13,12 @@ from uuid import uuid4
 from weakref import WeakKeyDictionary
 
 from backend.domain.node_states import ChartState, PersistedPluginState, PluginStateSnapshot
-from backend.plugin_sdk import HostContext, PluginNodeSeed, PluginSceneUpdate
+from backend.plugin_sdk import HostContext, PluginNodeSeed, PluginSceneUpdate, SciencePickerOperation
 
+from .attempts import AttemptLedger
 from .bindings import column_binding, paired_rows
 from .catalog import PACKS, PACK_FAMILIES, operations
-from .core import INPUT_LIMITS, _effective_unit, _unit_field, canonical_bytes, fingerprint, finite, readable_result, validated_inputs_with_units
+from .core import UNCERTAINTY_METHODS, INPUT_LIMITS, _effective_unit, _unit_field, canonical_bytes, fingerprint, finite, readable_result, validated_inputs_with_units
 from .data_table import (
     TableState, decode_input, numeric_column, parse_table, persist_table,
     read_table, stage_from_saved, table_metadata_valid, table_csv_chunk,
@@ -43,13 +45,27 @@ class RunArgs:
     uncertainty_method: str = "auto"
 
 
+@dataclass(kw_only=True)
+class StartAttemptArgs(RunArgs):
+    attempt_id: str
+
+
+@dataclass
+class AttemptArgs:
+    node_id: str
+    attempt_id: str
+
+
 @dataclass
 class ConfigureRunnerArgs:
+    WIRE_OMITS_DEFAULTS: ClassVar[bool] = True
+
     node_id: str
     operation_id: str
     inputs: dict
     sources: dict | None = None
     expected_run: str | None = None
+    uncertainty_method: str = "auto"
 
 
 @dataclass
@@ -79,6 +95,7 @@ class _ActiveCalculation:
     operation_id: str
     cancel_event: asyncio.Event
     started_at: float
+    attempt_id: str | None = None
 
 
 @dataclass
@@ -353,8 +370,9 @@ def register_pack(host: HostContext, pack_id: str) -> None:
     catalog = {op.id: op for op in operations(pack_id)}
     schema = [op.describe() for op in catalog.values()]
     kind = f"science_{pack_id}.workbench"
-    # Scoped to this host/session, never persisted as a result or receipt.
-    active: dict[str, _ActiveCalculation] = {}
+    # Plugin registration can be shared by several documents with identical wire IDs.
+    active: dict[tuple[int, str], _ActiveCalculation] = {}
+    attempts = AttemptLedger()
 
     def seed(document, ctx, parent):
         return PluginNodeSeed(title=title, state=PluginStateSnapshot.from_data({"version": 1, "latest": None, "nodeKey": uuid4().hex}))
@@ -363,12 +381,20 @@ def register_pack(host: HostContext, pack_id: str) -> None:
     # snapshots can safely reuse validated wire JSON across pans and undo.
     wire_cache: WeakKeyDictionary[PluginStateSnapshot, str] = WeakKeyDictionary()
 
+    def live_wire(node, base):
+        attempt = attempts.current(node)
+        if attempt is None:
+            return {"science": base}
+        # Immutable result snapshots cache only the persistent portion. Attempts
+        # never enter a saved file, run token, chart receipt or undo command.
+        return {"science": base[:-1] + ',"attempt":' + json.dumps(attempt.wire(), separators=(",", ":")) + "}"}
+
     def serialize(node):
         state = node.state
         if type(state) is PluginStateSnapshot:
             cached = wire_cache.get(state)
             if cached is not None:
-                return {"science": cached}
+                return live_wire(node, cached)
         data = state.data if type(state) in STATE_TYPES else {}
         error = ""
         if type(state) is PersistedPluginState and state.unresolved_asset_ref:
@@ -378,7 +404,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         elif "table" in data and not table_metadata_valid(data["table"]):
             error = "The scientific table has an invalid import receipt."
         wire = json.dumps({
-            "scienceVersion": 1, "packId": pack_id, "operations": [] if error else schema,
+            "scienceVersion": 1, "attemptProtocol": 1, "packId": pack_id, "packTitle": title, "operations": [] if error else schema,
             "nodeKey": data.get("nodeKey") if isinstance(data.get("nodeKey"), str) else "",
             "latest": None if error else data.get("latest"), "error": error,
             "runner": None if error else data.get("runner"),
@@ -387,7 +413,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         }, separators=(",", ":"), allow_nan=False)
         if type(state) is PluginStateSnapshot:
             wire_cache[state] = wire
-        return {"science": wire}
+        return live_wire(node, wire)
 
     def serialize_saved(node):
         # The host calls this under the actual session_save asset-store context.
@@ -411,6 +437,8 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         operation = catalog.get(request.operation_id)
         if operation is None:
             return {"ok": False, "error": "Choose an operation registered for this pack."}
+        if request.uncertainty_method not in UNCERTAINTY_METHODS:
+            return {"ok": False, "error": "Uncertainty method must be auto, gum or monte_carlo."}
         try:
             inputs, _input_units = validated_inputs_with_units(operation, request.inputs)
             sources = _verify_sources(
@@ -422,6 +450,9 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         configuration = {
             "version": 1, "operationId": operation.id, "inputs": dict(request.inputs), "sources": sources,
         }
+        if request.uncertainty_method != "auto":
+            # Older runners must reject forced methods they cannot reproduce.
+            configuration.update(version=2, uncertaintyMethod=request.uncertainty_method)
         prior = node.state.data
         if prior.get("runner") == configuration:
             return {"ok": True}
@@ -436,7 +467,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         )
         return PluginSceneUpdate({"ok": True})
 
-    async def run(document, ctx, request):
+    def prepare_run(document, ctx, request, attempt_id=None):
         node, error = _current_state(document, request.node_id, kind, request.expected_run)
         if error:
             return error
@@ -457,7 +488,8 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         op = catalog.get(request.operation_id)
         if op is None:
             return {"ok": False, "error": "Choose an operation registered for this pack."}
-        if request.node_id in active:
+        slot = (id(document), request.node_id)
+        if slot in active:
             return {"ok": False, "errorType": "busy", "error": "A calculation is already running on this scientific node."}
         state = node.state
         try:
@@ -466,7 +498,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
             sources = _verify_sources(document, node, inputs, request.sources if request.sources is not None else {},
                                       ctx.is_plugin_granted, uncertainty_inputs,
                                       operation=op, input_units=input_units)
-            if request.uncertainty_method not in ("auto", "gum", "monte_carlo"):
+            if request.uncertainty_method not in UNCERTAINTY_METHODS:
                 raise ValueError("Uncertainty method must be auto, gum or monte_carlo.")
             budget = execution_timeout(op)
         except ValueError as exc:
@@ -474,8 +506,13 @@ def register_pack(host: HostContext, pack_id: str) -> None:
 
         # All graph reads and the eventual undoable commit remain in this
         # event loop. Only detached, validated inputs enter the spawn worker.
-        ticket = _ActiveCalculation(op.id, asyncio.Event(), time.monotonic())
-        active[request.node_id] = ticket
+        ticket = _ActiveCalculation(op.id, asyncio.Event(), time.monotonic(), attempt_id)
+        active[slot] = ticket
+        return execute(document, ctx, request, node, state, op, inputs, input_units,
+                       uncertainty_inputs, sources, budget, slot, ticket)
+
+    async def execute(document, ctx, request, node, state, op, inputs, input_units,
+                      uncertainty_inputs, sources, budget, slot, ticket):
         try:
             result = await execute_in_process(
                 pack_id, op, inputs, sources, timeout_s=budget, cancel_event=ticket.cancel_event,
@@ -503,13 +540,14 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         finally:
             # Cancelled and timed-out requests never write a latest artifact,
             # change the node body, or add an undo command.
-            if active.get(request.node_id) is ticket:
-                active.pop(request.node_id)
+            if active.get(slot) is ticket:
+                active.pop(slot)
 
         latest = state.data.get("latest")
         if isinstance(latest, dict):
             previous = latest["provenance"]
             if (previous["resultHash"] == result["provenance"]["resultHash"]
+                    and previous.get("requestedUncertaintyMethod") == result["provenance"].get("requestedUncertaintyMethod")
                     and previous.get("inputUnits") == result["provenance"].get("inputUnits")
                     and previous.get("referenceData") == result["provenance"].get("referenceData")
                     and latest.get("uncertainty") == result.get("uncertainty")
@@ -554,11 +592,80 @@ def register_pack(host: HostContext, pack_id: str) -> None:
                                 node_ids=[node.id, *chart_children], run_id=request.graph_run_id)
         return PluginSceneUpdate({"ok": True})
 
+    async def run(document, ctx, request):
+        calculation = prepare_run(document, ctx, request)
+        return calculation if isinstance(calculation, dict) else await calculation
+
+    def start_attempt(document, ctx, request):
+        node = document.nodes.get(request.node_id)
+        if node is None or node.kind != kind or request.graph_run_id is not None:
+            return {"ok": False, "error": "Select a workbench for this manual calculation."}
+        if request.operation_id not in catalog:
+            return {"ok": False, "error": "Choose an operation registered for this pack."}
+        if ctx.run_background_scene_job is None:
+            return {"ok": False, "error": "This host does not support background calculations."}
+        request_hash = fingerprint([request.operation_id, request.inputs, request.sources,
+                                    request.expected_run, request.uncertainty_method])
+        # A retry after a lost reply can arrive after a successful commit
+        # changed expected_run. Resolve its identity before checking that token.
+        existing = attempts.get(node, request.attempt_id)
+        if existing is not None:
+            if existing.request_hash != request_hash:
+                return {"ok": False, "errorType": "conflict", "error": "This attempt ID belongs to different inputs."}
+            return {"ok": True, "attempt": existing.wire()}
+        slot = (id(document), request.node_id)
+        if slot in active:
+            return {"ok": False, "errorType": "busy", "error": "A calculation is already running on this workbench."}
+        try:
+            attempt = attempts.reserve(node, request.attempt_id, request.operation_id, request_hash)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        try:
+            calculation = prepare_run(document, ctx, request, request.attempt_id)
+        except Exception:
+            logging.getLogger(__name__).exception("Scientific attempt preparation failed")
+            calculation = {"errorType": "worker_error", "error": "The scientific calculation could not start."}
+        if isinstance(calculation, dict):
+            attempt.finish(calculation)
+            return PluginSceneUpdate({"ok": True, "attempt": attempt.wire()})
+
+        async def settle():
+            try:
+                outcome = await calculation
+                result = outcome.result if isinstance(outcome, PluginSceneUpdate) else outcome
+                latest = node.state.data.get("latest") if result.get("ok") else None
+                receipt = latest["provenance"] if latest else {}
+                attempt.finish(result, receipt.get("receiptHash") or receipt.get("resultHash", ""))
+            except asyncio.CancelledError:
+                attempt.finish({"errorType": "cancelled", "error": "The calculation was interrupted."})
+                raise
+            except Exception:
+                logging.getLogger(__name__).exception("Scientific calculation failed before acknowledgement")
+                attempt.finish({"errorType": "worker_error", "error": "The scientific calculation could not finish."})
+
+        ctx.run_background_scene_job(settle())
+        return PluginSceneUpdate({"ok": True, "attempt": attempt.wire()})
+
+    def status_attempt(document, ctx, request):
+        current = attempts.get(document.nodes.get(request.node_id), request.attempt_id)
+        return {"ok": True, "attempt": current.wire() if current is not None else None}
+
+    def cancel_attempt(document, ctx, request):
+        current = attempts.get(document.nodes.get(request.node_id), request.attempt_id)
+        if current is None:
+            return {"ok": False, "errorType": "not_running", "error": "This calculation attempt is unavailable."}
+        ticket = active.get((id(document), request.node_id))
+        if ticket is not None and ticket.attempt_id == request.attempt_id and current.status == "running":
+            current.status = "cancelling"
+            ticket.cancel_event.set()
+            return PluginSceneUpdate({"ok": True, "attempt": current.wire()})
+        return {"ok": True, "attempt": current.wire()}
+
     def cancel(document, ctx, request):
         # Key by the live run rather than the mutable node snapshot: Cancel
         # must still work if an editor changed the node during calculation.
-        ticket = active.get(request.node_id)
-        if ticket is None or ticket.operation_id != request.operation_id:
+        ticket = active.get((id(document), request.node_id))
+        if ticket is None or ticket.attempt_id is not None or ticket.operation_id != request.operation_id:
             return {"ok": False, "errorType": "not_running", "error": "That scientific calculation is not running."}
         # The suspended run owns the worker. Its wakeable cancellation signal
         # causes execute_in_process to terminate and reap that process.
@@ -735,9 +842,16 @@ def register_pack(host: HostContext, pack_id: str) -> None:
     host.register_picker_entry(
         node_kind="workbench", name=title, description=description,
         category="Biology Workbench" if PACK_FAMILIES.get(pack_id) == "biology" else "Scientific Workbench",
+        science_operations=tuple(
+            SciencePickerOperation(op.id, op.title, op.description, tuple(field.kind for field in op.fields))
+            for op in catalog.values()
+        ),
     )
     host.register_intent("configure_runner", configure_runner, args_schema=ConfigureRunnerArgs, expose_to_builder=False)
     host.register_intent("run", run, args_schema=RunArgs, expose_to_builder=False)
+    host.register_intent("start_attempt", start_attempt, args_schema=StartAttemptArgs, expose_to_builder=False)
+    host.register_intent("status_attempt", status_attempt, args_schema=AttemptArgs, expose_to_builder=False)
+    host.register_intent("cancel_attempt", cancel_attempt, args_schema=AttemptArgs, expose_to_builder=False)
     host.register_intent("cancel", cancel, args_schema=CancelArgs, expose_to_builder=False)
     host.register_intent("export_result", export_result, args_schema=ExportArgs, expose_to_builder=False)
     host.register_intent("export_methods", export_methods, args_schema=ExportArgs, expose_to_builder=False)

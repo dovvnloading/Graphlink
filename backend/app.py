@@ -363,7 +363,7 @@ def _evict_idle_session(bus: SessionBus) -> bool:
         # during setup) has no dispatcher/document to tear down - safe to
         # evict outright rather than getting stuck vetoing forever.
         return True
-    if context.agent_dispatcher.has_in_flight_runs():
+    if context.agent_dispatcher.has_in_flight_runs() or bus.plugin_background_tasks:
         return False
     mutation_guard = getattr(bus, "chat_mutation_guard", None)
     if mutation_guard is not None and mutation_guard.get("active"):

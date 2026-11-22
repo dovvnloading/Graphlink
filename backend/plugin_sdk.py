@@ -116,7 +116,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Awaitable, Callable, Literal
 
 # Python 3.12+ is the documented and package-declared floor; tomllib is
 # available from the standard library on every supported interpreter.
@@ -333,6 +333,9 @@ class PluginRunContext:
     spawn_x: float | None = None
     spawn_y: float | None = None
     is_plugin_granted: Callable[[str], bool] | None = None
+    # Trusted in-process jobs settle on the event loop and publish a scene update
+    # even when the requesting socket disconnects before completion.
+    run_background_scene_job: Callable[[Awaitable[None]], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -357,6 +360,14 @@ class NodeKindSpec:
 
 
 @dataclass(frozen=True)
+class SciencePickerOperation:
+    id: str
+    title: str
+    description: str
+    input_kinds: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class PickerEntrySpec:
     plugin_id: str
     name: str  # the picker label AND executePlugin's dispatch key - same
@@ -364,6 +375,7 @@ class PickerEntrySpec:
     description: str
     category: str
     node_kind: str  # references a NodeKindSpec.kind, same plugin
+    science_operations: tuple[SciencePickerOperation, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -605,6 +617,7 @@ class HostContext:
 
     def register_picker_entry(
         self, *, node_kind: str, name: str, description: str, category: str = "More Plugins",
+        science_operations: tuple[SciencePickerOperation, ...] = (),
     ) -> None:
         """Adds one row to the Plugins picker. PluginPicker.tsx already
         renders whatever the "app-plugins" topic sends (fully data-driven,
@@ -627,7 +640,7 @@ class HostContext:
             )
         self._picker_entries[name] = PickerEntrySpec(
             plugin_id=self.plugin_id, name=name, description=description,
-            category=category, node_kind=namespaced,
+            category=category, node_kind=namespaced, science_operations=science_operations,
         )
 
     def register_builtin_plugin(

@@ -295,8 +295,21 @@ def plugins_payload(
     plugin_registry: "PluginRegistry | None" = None,
     settings_manager: "SettingsManager | None" = None,
 ) -> dict[str, Any]:
+    categories = get_plugin_categories(plugin_registry)
+    if plugin_registry is not None and settings_manager is not None:
+        grants = settings_manager.get_plugin_grants()
+        for category in categories:
+            for row in category["plugins"]:
+                entry = plugin_registry.picker_entries.get(row["name"])
+                if (entry and entry.science_operations and grants.get(entry.plugin_id, False)
+                        and entry.node_kind == f"{entry.plugin_id}.workbench"):
+                    # Metadata captured at approved activation. Listing never imports or runs a pack.
+                    row["scienceOperations"] = [
+                        {"id": op.id, "title": op.title, "description": op.description, "inputKinds": list(op.input_kinds)}
+                        for op in entry.science_operations
+                    ]
     return {
-        "categories": get_plugin_categories(plugin_registry),
+        "categories": categories,
         # ADR-014 stage 14.4: the Settings > Plugins grants list - see
         # _plugin_grants_payload's own docstring.
         "grants": _plugin_grants_payload(plugin_registry, settings_manager),
@@ -541,9 +554,27 @@ async def _invoke_discovered_plugin_intent(
         await bus.publish("notification")
         return None
 
+    def run_background_scene_job(job):
+        async def settle():
+            try:
+                await job
+            finally:
+                await bus.publish("scene")
+
+        task = asyncio.create_task(settle())
+        bus.plugin_background_tasks.add(task)
+
+        def settled(completed):
+            bus.plugin_background_tasks.discard(completed)
+            if not completed.cancelled() and (error := completed.exception()) is not None:
+                logger.error("Background plugin scene job failed", exc_info=error)
+
+        task.add_done_callback(settled)
+
     run_ctx = PluginRunContext(
         plugin_id=plugin_id, notifications=notifications,
         is_plugin_granted=lambda target: _is_plugin_granted(settings_manager, target),
+        run_background_scene_job=run_background_scene_job,
     )
     if inspect.iscoroutinefunction(spec.handler):
         result = await spec.handler(canvas_document, run_ctx, *extra_args)

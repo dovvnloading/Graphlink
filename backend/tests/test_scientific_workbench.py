@@ -57,6 +57,29 @@ def envelope(document, node_id):
     return json.loads(document._plugin_state_wire(document.nodes[node_id])["science"])
 
 
+def test_picker_search_catalog_follows_live_grants_without_creating_nodes(session):
+    document, bus, registry, settings = session
+
+    def searchable():
+        return {
+            row["name"]: row["scienceOperations"]
+            for group in plugins_payload(registry, settings)["categories"]
+            for row in group["plugins"] if row.get("scienceOperations")
+        }
+
+    assert searchable() == {}
+    grant(bus, "core")
+    assert searchable() == {
+        PACKS["core"][0]: [
+            {"id": op.id, "title": op.title, "description": op.description, "inputKinds": [f.kind for f in op.fields]}
+            for op in operations("core")
+        ]
+    }
+    dispatch(bus, "setPluginGrant", "science_core", False)
+    assert searchable() == {}
+    assert not document.nodes
+
+
 def test_manifest_to_canvas_and_run_for_every_example(session):
     document, bus, registry, settings = session
     assert not registry.node_kinds
@@ -1479,7 +1502,7 @@ def test_paired_table_columns_require_original_row_identity_for_manual_and_runne
     source = dispatch(bus, "executePlugin", "Scientific Core")
     target = dispatch(bus, "executePlugin", "Scientific Core", source)
     assert dispatch(bus, "invokePluginIntent", "science_core", "import_table", {
-        "node_id": source, "text": "X,Y\n1,10\nNA,20\n3,NA\n4,40",
+        "node_id": source, "text": "X (mm),Y (s)\n1,10\nNA,20\n3,NA\n4,40",
     })["ok"]
 
     def choose(pack, node, operation, field, index, **options):
@@ -1512,6 +1535,7 @@ def test_paired_table_columns_require_original_row_identity_for_manual_and_runne
         "node_id": target, "operation_id": "plot_xy", "inputs": inputs, "sources": refs,
     })["ok"]
     _, raw, _, _, current = prepare(document, document.nodes[target], lambda _: True)
+    assert result["provenance"]["inputUnits"] == {"x": ["mm", "mm"], "y": ["s", "s"]}
     assert raw == inputs and current
 
     independent = dispatch(bus, "executePlugin", "Fitting and Inference", source)

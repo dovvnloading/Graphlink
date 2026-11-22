@@ -60,7 +60,13 @@ export interface ScienceLimits {
 const V1_LIMITS: ScienceLimits = { points: 1024, columns: 32, cells: 4096, text: 65536 };
 
 export type Sources = Record<string, SourceReference>;
-export interface EditorDraft { values: Record<string, string>; sources: Sources; revision: string; dirty: boolean }
+export type UncertaintyMethod = "auto" | "gum" | "monte_carlo";
+
+function validMethod(value: unknown): value is UncertaintyMethod {
+  return value === "auto" || value === "gum" || value === "monte_carlo";
+}
+
+export interface EditorDraft { method?: UncertaintyMethod; values: Record<string, string>; sources: Sources; revision: string; dirty: boolean }
 export interface ScienceTable { columns: string[]; rows: unknown[][] }
 export type ScientificColumnType = "numeric" | "text" | "categorical" | "datetime" | "boolean";
 export interface ScientificTableColumn {
@@ -269,19 +275,45 @@ export interface ScienceResult {
   /** Typed layouts supplement (rather than replace) legacy tables and plots. */
   views?: ScienceResultView[];
   uncertainty?: ScientificUncertainty;
-  provenance: Record<string, unknown> & { resultHash: string; receiptHash?: string; sources?: Sources; outputUnits?: Record<string, string> };
+  provenance: Record<string, unknown> & { resultHash: string; receiptHash?: string; sources?: Sources; outputUnits?: Record<string, string>; requestedUncertaintyMethod?: UncertaintyMethod };
 }
 
 export interface ScienceRunnerConfiguration {
-  version: 1;
+  version: 1 | 2;
+  uncertaintyMethod?: UncertaintyMethod;
   operationId: string;
   inputs: Record<string, unknown>;
   sources: Sources;
 }
 
+export interface ScienceAttempt {
+  attemptId: string;
+  operationId: string;
+  status: "running" | "cancelling" | "succeeded" | "cancelled" | "failed";
+  startedAtMs: number;
+  elapsedMs?: number;
+  errorType?: string;
+  error?: string;
+  receiptHash?: string;
+}
+
+export function isScienceAttempt(value: unknown): value is ScienceAttempt {
+  return record(value) && typeof value.attemptId === "string" && /^[a-f0-9]{32}$/.test(value.attemptId)
+    && typeof value.operationId === "string" && typeof value.status === "string"
+    && ["running", "cancelling", "succeeded", "cancelled", "failed"].includes(value.status)
+    && Number.isSafeInteger(value.startedAtMs)
+    && (value.elapsedMs === undefined || Number.isSafeInteger(value.elapsedMs))
+    && (value.errorType === undefined || typeof value.errorType === "string")
+    && (value.error === undefined || typeof value.error === "string")
+    && (value.receiptHash === undefined || typeof value.receiptHash === "string");
+}
+
 export interface ScienceState {
+  attemptProtocol?: 1;
+  attempt?: ScienceAttempt;
   scienceVersion: 1;
   packId: string;
+  packTitle?: string;
   nodeKey?: string;
   runToken?: string;
   limits?: ScienceLimits;
@@ -404,6 +436,7 @@ function isResult(value: unknown): value is ScienceResult {
   if (!record(value) || typeof value.operationId !== "string" || typeof value.summary !== "string" ||
       !record(value.inputs) || !record(value.values) || !record(value.provenance) ||
       typeof value.provenance.resultHash !== "string" ||
+      (value.provenance.requestedUncertaintyMethod !== undefined && !validMethod(value.provenance.requestedUncertaintyMethod)) ||
       (value.provenance.receiptHash !== undefined && typeof value.provenance.receiptHash !== "string")) return false;
   const resultValues = value.values;
   const sources = value.provenance.sources;
@@ -455,14 +488,17 @@ export function readScienceState(raw: string): ScienceState | null {
   try {
     const value: unknown = JSON.parse(raw);
     if (record(value) && value.scienceVersion === 1 && typeof value.packId === "string" &&
+        (value.packTitle === undefined || typeof value.packTitle === "string") &&
         Array.isArray(value.operations) && (value.operations.length || (typeof value.error === "string" && value.error)) &&
         (value.nodeKey == null || typeof value.nodeKey === "string") &&
         (value.error === undefined || typeof value.error === "string") &&
         (value.runToken === undefined || typeof value.runToken === "string") &&
         (value.limits === undefined || (record(value.limits) && Object.keys(V1_LIMITS).every((k) =>
           Number.isSafeInteger((value.limits as Record<string, unknown>)[k]) && Number((value.limits as Record<string, unknown>)[k]) > 0))) &&
-        value.operations.every(isOperation) &&
-        (value.runner == null || (record(value.runner) && value.runner.version === 1 &&
+        (value.attempt === undefined || isScienceAttempt(value.attempt)) && value.operations.every(isOperation) &&
+        (value.runner == null || (record(value.runner) &&
+          ((value.runner.version === 1 && value.runner.uncertaintyMethod === undefined) ||
+           (value.runner.version === 2 && validMethod(value.runner.uncertaintyMethod))) &&
           typeof value.runner.operationId === "string" && record(value.runner.inputs) &&
           isSources(value.runner.sources))) &&
         (value.table == null || isImportedTable(value.table)) &&
@@ -481,6 +517,7 @@ export function fieldText(field: ScienceField, value: unknown): string {
   if (value == null) return "";
   if (field.kind === "text" || field.kind === "choice") return String(value);
   if (typeof value === "number") return editableNumber(value);
+  if (typeof value === "string" && (field.kind === "number" || field.kind === "integer")) return value;
   if (Array.isArray(value)) return "[" + value.map((part) => typeof part === "string" ? JSON.stringify(part) : fieldText(field, part)).join(",") + "]";
   return JSON.stringify(value);
 }
