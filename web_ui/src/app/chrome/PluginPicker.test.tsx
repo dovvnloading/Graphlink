@@ -69,6 +69,8 @@ function OpenPluginsButton() {
       <button type="button" onClick={() => overlays.toggle("plugins", "popover")}>
         open plugins
       </button>
+      {overlays.isOpen("scientific-workbench/n-17/describe") && <p>Selected scientific operation</p>}
+      {overlays.isOpen("settings") && <p>Settings opened</p>}
       {overlays.isOpen("graph-runner") && <p>Runner opened</p>}
     </>
   );
@@ -88,6 +90,37 @@ function setup(store: SceneStore = new SceneStore({ subscribe: vi.fn(), intent: 
 }
 
 describe("PluginPicker", () => {
+  it("opens the requested operation only after one acknowledged pack launch at the selected parent and spawn", async () => {
+    const { user, request, push, store } = setup();
+    store.setSelectedNodeId("parent");
+    store.setViewportCenterProvider(() => ({ x: 75, y: 20 }));
+    act(() => push({ ...snapshot, categories: [{
+      name: "Scientific Workbench", description: "", plugins: [{ name: "Statistics", description: "Measure a sample.",
+        scienceOperations: [{ id: "describe", title: "Describe samples" }] }],
+    }] }));
+    let finish!: (id: string) => void;
+    request.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    await user.click(screen.getByText("open plugins"));
+    await user.type(screen.getByRole("searchbox"), "describe samples{Enter}{Enter}");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith("app-plugins", "executePlugin", ["Statistics", "parent", 75, 20]);
+    expect(screen.getByRole("status")).toHaveTextContent("Opening");
+    await act(async () => finish("n-17"));
+    expect(screen.getByText("Selected scientific operation")).toBeVisible();
+  });
+
+  it("offers settings for a disabled scientific pack without creating a node or granting it", async () => {
+    const { user, push, request, store } = setup();
+    const settings = vi.spyOn(store, "openModelTaskSettings").mockImplementation(() => {});
+    act(() => push({ ...snapshot, grants: [{ pluginId: "science_statistics", name: "Statistics", scopes: [], granted: false }] }));
+    await user.click(screen.getByText("open plugins"));
+    await user.type(screen.getByRole("searchbox"), "statistics");
+    await user.click(screen.getByRole("button", { name: /Statistics · Disabled/ }));
+    expect(settings).toHaveBeenCalledWith("plugins");
+    expect(screen.getByText("Settings opened")).toBeVisible();
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("opens Graph Runner only after the registered action returns its panel", async () => {
     const { user, request, push } = setup();
     act(() => push({ ...snapshot, categories: [{

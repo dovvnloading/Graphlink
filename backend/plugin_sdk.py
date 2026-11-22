@@ -364,6 +364,7 @@ class PickerEntrySpec:
     description: str
     category: str
     node_kind: str  # references a NodeKindSpec.kind, same plugin
+    science_operations: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -605,6 +606,7 @@ class HostContext:
 
     def register_picker_entry(
         self, *, node_kind: str, name: str, description: str, category: str = "More Plugins",
+        science_operations: tuple[tuple[str, str], ...] = (),
     ) -> None:
         """Adds one row to the Plugins picker. PluginPicker.tsx already
         renders whatever the "app-plugins" topic sends (fully data-driven,
@@ -627,7 +629,7 @@ class HostContext:
             )
         self._picker_entries[name] = PickerEntrySpec(
             plugin_id=self.plugin_id, name=name, description=description,
-            category=category, node_kind=namespaced,
+            category=category, node_kind=namespaced, science_operations=science_operations,
         )
 
     def register_builtin_plugin(

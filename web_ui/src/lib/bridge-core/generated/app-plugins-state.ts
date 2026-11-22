@@ -15,6 +15,12 @@ export interface AppPluginCategory {
 export interface AppPluginEntry {
   name: string;
   description: string;
+  scienceOperations?: AppScienceOperation[] | null;
+}
+
+export interface AppScienceOperation {
+  id: string;
+  title: string;
 }
 
 export interface AppPluginGrant {
@@ -32,9 +38,15 @@ export interface AppPluginsState {
   minCompatibleSchemaVersion?: number | null;
 }
 
+const APP_SCIENCE_OPERATION_FIELDS: WireFields = [
+  ["id", "s", 0],
+  ["title", "s", 0],
+];
+
 const APP_PLUGIN_ENTRY_FIELDS: WireFields = [
   ["name", "s", 0],
   ["description", "s", 0],
+  ["scienceOperations", { a: { o: APP_SCIENCE_OPERATION_FIELDS } }, 1],
 ];
 
 const APP_PLUGIN_CATEGORY_FIELDS: WireFields = [

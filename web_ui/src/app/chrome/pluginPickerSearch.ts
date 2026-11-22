@@ -1,9 +1,10 @@
-import type { AppPluginCategory, AppPluginEntry } from "../../lib/bridge-core/generated/app-plugins-state";
+import type { AppPluginCategory, AppPluginEntry, AppScienceOperation } from "../../lib/bridge-core/generated/app-plugins-state";
 
 /** A backend picker entry together with its category for cross-category search. */
 export interface PluginSearchHit {
   categoryName: string;
   plugin: AppPluginEntry;
+  operation?: AppScienceOperation;
 }
 
 function normalize(value: string): string {
@@ -27,6 +28,15 @@ export function searchPlugins(categories: readonly AppPluginCategory[], query: s
       const name = normalize(plugin.name);
       const description = normalize(plugin.description);
       const haystack = name + " " + description + " " + categoryText;
+      for (const operation of plugin.scienceOperations ?? []) {
+        const title = normalize(operation.title);
+        const id = normalize(operation.id);
+        const operationText = title + " " + id + " " + id.replaceAll("_", " ");
+        if (!terms.some(term => operationText.includes(term))) continue;
+        if (!terms.every(term => (name + " " + operationText).includes(term))) continue;
+        const rank = title === phrase ? -1 : title.startsWith(phrase) ? 1 : 2;
+        ranked.push({ hit: { categoryName: category.name, plugin, operation }, rank, order: ranked.length });
+      }
       if (!terms.every((term) => haystack.includes(term))) continue;
       const rank = name.startsWith(phrase) ? 0
         : name.includes(phrase) ? 1

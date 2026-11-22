@@ -708,6 +708,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
     host.register_picker_entry(
         node_kind="workbench", name=title, description=description,
         category="Biology Workbench" if PACK_FAMILIES.get(pack_id) == "biology" else "Scientific Workbench",
+        science_operations=tuple((op.id, op.title) for op in catalog.values()),
     )
     host.register_intent("configure_runner", configure_runner, args_schema=ConfigureRunnerArgs, expose_to_builder=False)
     host.register_intent("run", run, args_schema=RunArgs, expose_to_builder=False)

@@ -57,6 +57,26 @@ def envelope(document, node_id):
     return json.loads(document._plugin_state_wire(document.nodes[node_id])["science"])
 
 
+def test_picker_search_catalog_follows_live_grants_without_creating_nodes(session):
+    document, bus, registry, settings = session
+
+    def searchable():
+        return {
+            row["name"]: row["scienceOperations"]
+            for group in plugins_payload(registry, settings)["categories"]
+            for row in group["plugins"] if row.get("scienceOperations")
+        }
+
+    assert searchable() == {}
+    grant(bus, "core")
+    assert searchable() == {
+        PACKS["core"][0]: [{"id": op.id, "title": op.title} for op in operations("core")]
+    }
+    dispatch(bus, "setPluginGrant", "science_core", False)
+    assert searchable() == {}
+    assert not document.nodes
+
+
 def test_manifest_to_canvas_and_run_for_every_example(session):
     document, bus, registry, settings = session
     assert not registry.node_kinds

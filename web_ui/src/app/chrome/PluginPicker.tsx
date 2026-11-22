@@ -3,6 +3,7 @@ import type { WsTransport } from "../../lib/ws/transport";
 import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
 import type { AppPluginsState } from "../../lib/bridge-core/generated/app-plugins-state";
 import type { SceneStore } from "../canvas/sceneStore";
+import { scientificFocusName } from "../canvas/scientificFocus";
 import { Popover, useOverlays } from "../overlays/overlays";
 import { searchPlugins, type PluginSearchHit } from "./pluginPickerSearch";
 
@@ -28,6 +29,8 @@ export function PluginPicker({ transport, store }: { transport: WsTransport; sto
   const [query, setQuery] = useState("");
   const [launchError, setLaunchError] = useState("");
   const launchAttempt = useRef(0);
+  const pending = useRef(false);
+  const [launching, setLaunching] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const rowRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const hintId = useId();
@@ -40,7 +43,7 @@ export function PluginPicker({ transport, store }: { transport: WsTransport; sto
     });
   }, [transport]);
 
-  useEffect(() => () => { launchAttempt.current++; }, [isOpen]);
+  useEffect(() => () => { launchAttempt.current++; pending.current = false; }, [isOpen]);
 
   // The picker stays mounted when its Popover is closed. Reset only on a
   // fresh open, so a partially typed search is not erased during browsing.
@@ -50,6 +53,7 @@ export function PluginPicker({ transport, store }: { transport: WsTransport; sto
     if (isOpen) {
       setQuery("");
       setLaunchError("");
+      setLaunching(false);
     }
   }
 
@@ -64,21 +68,55 @@ export function PluginPicker({ transport, store }: { transport: WsTransport; sto
     ? searchPlugins(state.categories, query)
     : (activeCategory?.plugins.map((plugin) => ({ categoryName: activeCategory.name, plugin })) ?? []);
 
-  function executePlugin(name: string) {
+  const disabledPacks = state.grants.filter(grant => !grant.granted && grant.pluginId.startsWith("science_"));
+  const inactiveHits = isSearching ? disabledPacks.filter(grant =>
+    grant.name.toLowerCase().includes(query.trim().toLowerCase())
+    && !visiblePlugins.some(hit => hit.plugin.name === grant.name)) : [];
+
+  function openPluginSettings() {
+    store.openModelTaskSettings("plugins");
+    overlays.open("settings", "dialog");
+  }
+
+  function executePlugin(hit: PluginSearchHit) {
+    if (pending.current) return;
+    const name = hit.plugin.name;
+    if (disabledPacks.some(grant => grant.name === name)) {
+      openPluginSettings();
+      return;
+    }
     const spawn = store.getSpawnPoint();
     const args = [name, store.getSelectedNodeId(), spawn.x, spawn.y];
-    if (name === "Graph Runner") {
+    const scientific = hit.plugin.scienceOperations != null;
+    if (name === "Graph Runner" || scientific) {
+      pending.current = true;
+      setLaunching(true);
       const attempt = ++launchAttempt.current;
       setLaunchError("");
       void transport.request("app-plugins", "executePlugin", args).then((result) => {
         if (attempt !== launchAttempt.current) return;
-        if (typeof result === "object" && result !== null && "open_panel" in result && result.open_panel === "graph-runner") {
+        if (scientific) {
+          if (typeof result !== "string" || !result) {
+            setLaunchError(name + " could not open. Check its grant in Settings and try again.");
+          } else if (hit.operation) {
+            overlays.open(scientificFocusName(result, hit.operation.id), "dialog");
+          } else {
+            overlays.close();
+          }
+        } else if (typeof result === "object" && result !== null && "open_panel" in result && result.open_panel === "graph-runner") {
           overlays.open("graph-runner", "dialog");
         } else {
           setLaunchError("Graph Runner could not open. Try again.");
         }
       }).catch((reason) => {
-        if (attempt === launchAttempt.current) setLaunchError(reason instanceof Error ? reason.message : String(reason));
+        if (attempt === launchAttempt.current) setLaunchError(
+          (reason instanceof Error ? reason.message : String(reason)) + (scientific ? " Check the graph before trying again." : "")
+        );
+      }).finally(() => {
+        if (attempt === launchAttempt.current) {
+          pending.current = false;
+          setLaunching(false);
+        }
       });
       return;
     }
@@ -98,7 +136,7 @@ export function PluginPicker({ transport, store }: { transport: WsTransport; sto
       // The first result is ranked by name relevance; Enter from the search
       // field activates it without requiring a mouse or an extra Tab.
       event.preventDefault();
-      executePlugin(visiblePlugins[0].plugin.name);
+      executePlugin(visiblePlugins[0]);
     }
   }
 
@@ -150,7 +188,14 @@ export function PluginPicker({ transport, store }: { transport: WsTransport; sto
       <p id={hintId} className="plugin-picker-hint">
         Search all categories. Use the arrow keys to move through results and Enter to open a plugin.
       </p>
+      {launching && <p role="status" className="plugin-picker-hint">Opening selection…</p>}
       {launchError && <p role="alert" className="plugin-picker-hint">{launchError}</p>}
+      {(launchError || (visiblePlugins.length === 0 && inactiveHits.length === 0)) && state.grants.some(grant => !grant.granted) &&
+        <button type="button" className="plugin-picker-clear-btn" onClick={openPluginSettings}>Open plugin settings</button>}
+      {inactiveHits.map(grant =>
+          <button type="button" key={grant.pluginId} className="plugin-picker-row" onClick={openPluginSettings}>
+            {grant.name} · Disabled · Open settings
+          </button>)}
       <div className="plugin-picker-main">
         {!isSearching && (
           <div className="plugin-picker-rail">
@@ -173,39 +218,40 @@ export function PluginPicker({ transport, store }: { transport: WsTransport; sto
 
         <div className="plugin-picker-content">
           {state.categories.length === 0 ? (
-            <p className="plugin-picker-empty">No plugins are available.</p>
+            <p className="plugin-picker-empty">{inactiveHits.length ? "Enable this pack to browse its operations." : "No plugins are available."}</p>
           ) : (
             <>
               <div className="plugin-picker-header">
                 <p className="plugin-picker-title">{isSearching ? "Search results" : activeCategory?.name}</p>
                 <p className="plugin-picker-meta" aria-live="polite">
                   {visiblePlugins.length} {isSearching ? "matching " : ""}
-                  plugin{visiblePlugins.length !== 1 ? "s" : ""}
+                  {isSearching ? "result" : "plugin"}{visiblePlugins.length !== 1 ? "s" : ""}
                 </p>
               </div>
               {visiblePlugins.length === 0 ? (
                 <p className="plugin-picker-empty">
-                  {isSearching ? "No plugins match this search." : "No plugins in this category."}
+                  {inactiveHits.length ? "Enable this pack to browse its operations." : isSearching ? "No plugins match this search." : "No plugins in this category."}
                 </p>
               ) : (
                 <ul
                   className="plugin-picker-list"
                   aria-label={isSearching ? "Plugin search results" : (activeCategory?.name ?? "") + " plugins"}
                 >
-                  {visiblePlugins.map(({ plugin, categoryName }, index) => (
-                    <li key={categoryName + ":" + plugin.name}>
+                  {visiblePlugins.map((hit, index) => (
+                    <li key={hit.categoryName + ":" + hit.plugin.name + ":" + (hit.operation?.id ?? "")}>
                       <button
                         ref={(element) => { rowRefs.current[index] = element; }}
                         type="button"
                         className="plugin-picker-row"
                         onKeyDown={(event) => handleRowKeyDown(event, index)}
-                        onClick={() => executePlugin(plugin.name)}
+                        disabled={launching}
+                        onClick={() => executePlugin(hit)}
                       >
                         <span className="plugin-picker-row-copy">
-                          <span className="plugin-picker-row-label">{plugin.name}</span>
-                          <span className="plugin-picker-row-description">{plugin.description}</span>
+                          <span className="plugin-picker-row-label">{hit.operation?.title ?? hit.plugin.name}</span>
+                          <span className="plugin-picker-row-description">{disabledPacks.some(grant => grant.name === hit.plugin.name) ? "Disabled · Open settings" : hit.operation ? hit.plugin.name : hit.plugin.description}</span>
                           {isSearching && (
-                            <span className="plugin-picker-row-category">{categoryName}</span>
+                            <span className="plugin-picker-row-category">{hit.categoryName}</span>
                           )}
                         </span>
                         <span className="plugin-picker-row-chevron" aria-hidden="true">

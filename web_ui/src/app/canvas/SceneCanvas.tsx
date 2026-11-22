@@ -10,7 +10,7 @@ import {
   type NodeChange,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import type { SceneEdgeRow, SceneNodeRow, SceneState } from "../../lib/bridge-core/generated/scene-state";
 import type { StreamListener } from "../../lib/ws/transport";
@@ -44,6 +44,7 @@ import type { ImageFlowNode } from "./ImageNodeView";
 import type { MediaMode } from "./falMediaStudioModel";
 import type { FalMediaFlowNode } from "./FalMediaNodeView";
 import type { NoteFlowNode } from "./NoteNodeView";
+import { ScientificWorkspace, type ScienceEditorProps } from "./ScientificWorkspace";
 import type { ScientificFlowNode } from "./ScientificNodeView";
 import { scientificFlowNode, isScienceKind } from "./scientificScene";
 import type { ModelFlowNode } from "./ModelNodeView";
@@ -112,6 +113,11 @@ export type SceneFlowNode =
   | ChartFlowNode
   | PlanFlowNode
   | HarnessFlowNode;
+
+const LazyScientificEditor = lazy(() => import("./ScientificNodeView").then(module => ({ default: module.ScientificEditor })));
+function CanvasScientificEditor(props: ScienceEditorProps) {
+  return <Suspense fallback={<p role="status">Opening workbench…</p>}><LazyScientificEditor {...props} /></Suspense>;
+}
 
 const NODE_TYPES = {
   placeholder: PlaceholderNodeView,
@@ -3180,6 +3186,7 @@ function CanvasInner({
       data-testid="scene-canvas"
     >
       <RunBoundNodesContext.Provider value={openBoundNodes}>
+      <ScientificWorkspace Editor={CanvasScientificEditor}>
       <ReactFlow
         /* Uncontrolled node state, deliberately. With a controlled `nodes`
            prop, every drag frame travels app state -> re-render -> React
@@ -3353,6 +3360,7 @@ function CanvasInner({
       </ReactFlow>
       {scene.nodes.length === 0 && <EmptyGraph store={store} />}
       <ChatRerunDialog store={store} nodeId={rerunNodeId} onRunBoundNodes={openBoundNodes} />
+      </ScientificWorkspace>
       </RunBoundNodesContext.Provider>
     </div>
   );
