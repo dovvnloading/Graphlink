@@ -329,6 +329,7 @@ This is the practical lookup map for where code actually lives today.
 - `graphlink_chart_data.py` - canonical chart-data validation/schemas + the shared respond_json prompt (ADR-013 stage 13.3); `graphlink_chart_rendering.py` - chart rendering to PNG.
 - `graphlink_artifact_agent.py`, `graphlink_chat_agent.py` - LLM-facing agent logic `backend/agents.py`/`backend/canvas.py` call into.
 - `graphlink_wire_schema.py` - dataclass -> JSON Schema generation + payload validation (ADR-003 stage 3.2). Shared by `contracts/codegen.py` (dev-time TS generation) and `backend/events.py` (runtime intent-arg validation) - lives at the repo root, not inside `contracts/`, specifically so the runtime backend can import it (`contracts/` is excluded from the shipped wheel).
+- `docs/DESIGN_SYSTEM.md` - Graphlink web UI design tokens, icon catalog, component kit, copy style, UI ratchets and review checklist.
 
 ## Where To Edit When...
 
