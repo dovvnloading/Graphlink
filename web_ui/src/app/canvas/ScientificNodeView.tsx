@@ -324,7 +324,8 @@ function tableIntent(store: SceneStore, pluginId: string, name: string, args: Re
   return endpoint.scientificIntent(pluginId, name, args);
 }
 
-type FetchTableColumn = (option: SourceOption) => Promise<{ values: number[]; reference: SourceReference }>;
+type FetchTableColumn = (option: SourceOption, op: ScienceOperation, field: ScienceField, unitInputs: Record<string, string>) =>
+  Promise<{ values: Array<number | string>; reference: SourceReference }>;
 
 function binaryBase64(bytes: Uint8Array): string {
   const chunks: string[] = [];
@@ -596,7 +597,9 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
                   pending.current = true;
                   setBusy(true);
                   setError(null);
-                  void fetchTableColumn(option).then(({ values, reference }) => {
+                  const unitInputs = Object.fromEntries(op.fields.filter((item) => item.kind === "text" && (
+                    item.key.endsWith("_unit") || item.key === "from_scale")).map((item) => [item.key, draft.values[item.key]]));
+                  void fetchTableColumn(option, op, field, unitInputs).then(({ values, reference }) => {
                     setDraft((old) => ({ ...old, dirty: true, values: { ...old.values, [field.key]: fieldText(field, values) },
                       sources: { ...old.sources, [field.key]: reference } }));
                   }).catch((e) => {
@@ -710,18 +713,23 @@ export const ScientificNodeView = memo(function ScientificNodeView({ data, id, s
         exportMethods={() => data.store.exportScientificMethods(data.pluginId, id, state.runToken)}
         exportCsv={() => data.store.exportScientificTableCsv(data.pluginId, id, "result", state.runToken)}
         tableEditor={<TableEditor state={state} nodeId={id} pluginId={data.pluginId} store={data.store} />}
-        fetchTableColumn={async (option) => {
+        fetchTableColumn={async (option, operation, field, unitInputs) => {
           if (!option.tableColumn) throw new Error("Choose a typed table column.");
           const { nodeId, column, policy, start, end } = option.tableColumn;
           const answer = await tableIntent(data.store, data.pluginId, "table_column", {
             node_id: id, source_node_id: nodeId, column, policy, start, end,
             table_source: option.tableColumn.source ?? "import",
+            operation_id: operation.id, field_key: field.key, unit_inputs: unitInputs,
             expected_hash: option.reference.resultHash, expected_receipt: option.reference.receiptHash,
           });
           if (!Array.isArray(answer.values) || !answer.values.every((n) => typeof n === "number" && Number.isFinite(n))
               || typeof answer.reference !== "object" || answer.reference === null)
             throw new Error("The table column response was not valid.");
-          return { values: answer.values as number[], reference: answer.reference as SourceReference };
+          const literals = answer.inputs ?? answer.values;
+          if (!Array.isArray(literals) || literals.length !== answer.values.length || !literals.every(
+            (item) => typeof item === "string" || typeof item === "number" && Number.isFinite(item),
+          )) throw new Error("The table column input units could not be verified.");
+          return { values: literals as Array<number | string>, reference: answer.reference as SourceReference };
         }}
         charts={data.charts ?? []}
         onChart={(chartType) => data.store.generateChart(id, chartType)}

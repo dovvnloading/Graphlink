@@ -648,6 +648,7 @@ OPERATIONS: tuple[Operation, ...] = (
             ),
         ),
         headline="pooled_density_per_m2",
+        paired_fields=(("counts", "area_m2"),),
     ),
     Operation(
         "community_overlap",
@@ -677,6 +678,7 @@ OPERATIONS: tuple[Operation, ...] = (
             ),
         ),
         headline="jaccard_similarity",
+        paired_fields=(("site_a_counts", "site_b_counts"),),
     ),
     Operation(
         "logistic_growth_fit", "Fit logistic population growth",
@@ -701,6 +703,7 @@ OPERATIONS: tuple[Operation, ...] = (
             ),
         ),
         headline="carrying_capacity",
+        paired_fields=(("time", "abundance"),),
     ),
     Operation(
         "gompertz_growth_fit", "Fit Gompertz population growth",
@@ -725,6 +728,7 @@ OPERATIONS: tuple[Operation, ...] = (
             ),
         ),
         headline="carrying_capacity",
+        paired_fields=(("time", "abundance"),),
     ),
     Operation(
         "michaelis_menten_fit", "Fit Michaelis–Menten enzyme kinetics",
@@ -749,6 +753,7 @@ OPERATIONS: tuple[Operation, ...] = (
             ),
         ),
         headline="km",
+        paired_fields=(("substrate", "initial_rate"),),
     ),
     Operation(
         "dose_response_4pl_fit", "Fit dose–response (4PL)",
@@ -777,6 +782,7 @@ OPERATIONS: tuple[Operation, ...] = (
             ),
         ),
         headline="potency_concentration",
+        paired_fields=(("concentration", "response"),),
     ),
     Operation(
         "lotka_volterra", "Simulate Lotka–Volterra predator–prey",
@@ -867,6 +873,7 @@ OPERATIONS: tuple[Operation, ...] = (
             ),
         ),
         headline="logrank_p_value",
+        paired_fields=(("time_a", "event_a"), ("time_b", "event_b")),
     ),
     Operation(
         "richness_rarefaction", "Species richness: Chao1 and rarefaction",

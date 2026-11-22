@@ -469,6 +469,7 @@ OPERATIONS = (
         {**_INHIBITION_EXAMPLE, "model": "competitive"}, inhibition_model_fit,
         methods=_INHIBITION_METHOD, citations=(_INHIBITION_CITATION,),
         headline="ki",
+        paired_fields=(("substrate", "inhibitor", "initial_rate"),),
     ),
     Operation(
         "inhibition_model_compare", "Compare enzyme inhibition models",
@@ -477,6 +478,7 @@ OPERATIONS = (
         methods=_INHIBITION_METHOD + " Rank on finite AICc, with delta AICc and normalized Akaike weights.",
         citations=(_INHIBITION_CITATION,),
         headline="best_model",
+        paired_fields=(("substrate", "inhibitor", "initial_rate"),),
     ),
     Operation(
         "catalytic_constants", "Catalytic turnover and efficiency",
@@ -517,6 +519,7 @@ OPERATIONS = (
         citations=(Citation("Hill (1910), The possible effects of aggregation of the molecules of haemoglobin",
                             "https://doi.org/10.1113/jphysiol.1910.sp001386"),),
         headline="hill_coefficient",
+        paired_fields=(("substrate", "initial_rate"),),
     ),
     Operation(
         "cheng_prusoff_ki", "Convert IC50 to competitive Ki",

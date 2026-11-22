@@ -89,6 +89,7 @@ OPERATIONS: tuple[Operation, ...] = (
         {"mass_kg": 1.0, "stiffness_n_m": 4.0, "amplitude_m": 0.1},
         _oscillator,
         headline="angular_frequency_rad_s",
+        output_units=(("period_s", "s"), ("frequency_hz", "Hz"), ("angular_frequency_rad_s", "rad/s")),
     ),
     Operation(
         "thermal_layers",
@@ -104,6 +105,7 @@ OPERATIONS: tuple[Operation, ...] = (
         {"thickness_m": [0.1, 0.02], "conductivity_w_mk": [0.2, 0.04], "area_m2": 2, "left_k": 295, "right_k": 275},
         _conduction,
         headline="heat_flux_w_m2",
+        paired_fields=(("thickness_m", "conductivity_w_mk"),),
     ),
     Operation(
         "sensible_heat",

@@ -14,11 +14,12 @@ from weakref import WeakKeyDictionary
 from backend.domain.node_states import ChartState, PersistedPluginState, PluginStateSnapshot
 from backend.plugin_sdk import HostContext, PluginNodeSeed, PluginSceneUpdate
 
+from .bindings import column_binding, paired_rows
 from .catalog import PACKS, PACK_FAMILIES, operations
-from .core import UNCERTAINTY_METHODS, INPUT_LIMITS, _effective_unit, canonical_bytes, fingerprint, finite, readable_result, validated_inputs_with_units
+from .core import UNCERTAINTY_METHODS, INPUT_LIMITS, _effective_unit, _unit_field, canonical_bytes, fingerprint, finite, readable_result, validated_inputs_with_units
 from .data_table import (
     TableState, decode_input, numeric_column, parse_table, persist_table,
-    stage_from_saved, table_metadata_valid, table_csv_chunk,
+    read_table, stage_from_saved, table_metadata_valid, table_csv_chunk,
 )
 from .execution import ExecutionFailure, execute_in_process, execution_timeout
 from .methods import render_result_methods
@@ -112,6 +113,11 @@ class TableColumnArgs:
     expected_hash: str | None = None
     expected_receipt: str | None = None
     table_source: str = "import"
+    operation_id: str | None = None
+    field_key: str | None = None
+    unit_inputs: dict | None = None
+    complete_columns: list[int] | None = None
+    assumed_unit: str | None = None
 
 
 def _run_token(data: dict) -> str:
@@ -159,7 +165,7 @@ def _extract(result: dict, selector: list):
 
 def _verify_sources(document, node, inputs: dict, sources: dict, granted,
                     uncertainty_inputs: dict | None = None, *,
-                    operation=None) -> dict:
+                    operation=None, input_units: dict | None = None) -> dict:
     """Verify cited outputs and normalize linked measurements into input units.
 
     Only an immutable, receipt-validated source determines a linked value's
@@ -178,6 +184,7 @@ def _verify_sources(document, node, inputs: dict, sources: dict, granted,
         raise ValueError("A linked field does not belong to this operation.")
     incoming = {edge.source for edge in document.edges.values() if edge.target == node.id}
     verified = {}
+    tables = {}
     for key, citation in sources.items():
         if not isinstance(citation, dict):
             raise ValueError("Each linked field must identify a source.")
@@ -204,69 +211,46 @@ def _verify_sources(document, node, inputs: dict, sources: dict, granted,
             raise ValueError("Enable the source pack before using its result.")
         if not readable_result(source.state.data, plugin_id.removeprefix("science_")):
             raise ValueError("The source scientific result is unavailable or damaged.")
-        # A generated table is part of the producing run's receipt; changing
-        # that run invalidates both whole-table and bounded-column links.
-        if selector == ["result_table"] or (
-                len(selector) == 5 and selector[0] == "result_table_column"):
-            latest = source.state.data.get("latest")
-            table = latest.get("tableAsset") if isinstance(latest, dict) else None
-            if not isinstance(table, dict) or not table_metadata_valid(table):
-                raise ValueError("The connected source has no readable result table.")
-            receipt = latest["provenance"]
-            if (citation.get("resultHash") != receipt["resultHash"]
-                    or citation.get("receiptHash") != receipt["receiptHash"]):
-                raise ValueError("The connected result table changed. Select its current table.")
-            if selector == ["result_table"]:
+        if selector and selector[0] in ("result_table", "result_table_column", "typed_table", "table_column"):
+            generated = selector[0] in ("result_table", "result_table_column")
+            latest = source.state.data.get("latest") if generated else None
+            table = latest.get("tableAsset") if isinstance(latest, dict) else source.state.data.get("table")
+            if (generated and not isinstance(latest, dict)) or not table_metadata_valid(table):
+                label = "result table" if generated else "typed table"
+                raise ValueError(f"The connected source has no readable {label}.")
+            receipt = latest["provenance"] if generated else table["provenance"]
+            digest = receipt["resultHash"] if generated else table["asset_ref"]
+            if citation.get("resultHash") != digest or citation.get("receiptHash") != receipt["receiptHash"]:
+                raise ValueError("The connected table changed. Select its current table or column.")
+            ref = {
+                "nodeId": source_id, "sourceKey": source.state.data.get("nodeKey"),
+                "resultHash": digest, "receiptHash": receipt["receiptHash"], "selector": selector,
+                "packId": plugin_id.removeprefix("science_"),
+                "operationId": latest["operationId"] if generated else "data_table",
+            }
+            if selector in (["typed_table"], ["result_table"]):
                 if fields.get(key) is None or fields[key].kind != "table" or inputs[key] != table:
-                    raise ValueError("The supplied result table differs from the connected table.")
+                    raise ValueError("The supplied table differs from the connected table.")
+            elif len(selector) == 5 and selector[0] in ("result_table_column", "table_column"):
+                table_key = (table["asset_ref"], table["provenance"]["receiptHash"])
+                if table_key not in tables:
+                    tables[table_key] = read_table(table)
+                _, _, normalized, evidence = column_binding(
+                    table, selector, fields.get(key), inputs, citation.get("binding"), table=tables[table_key],
+                )
+                if normalized != inputs[key]:
+                    raise ValueError(f"{key}: the supplied measurements differ from the selected column. "
+                                     "Review its units and row selection.")
+                if citation.get("binding") is not None and citation["binding"] != evidence:
+                    raise ValueError(f"{key}: the connected column or its units changed. Review its binding.")
+                if citation.get("binding") is None and evidence["sourceUnit"] != evidence["targetUnit"] and evidence["sourceUnit"]:
+                    raise ValueError(f"{key}: review the source and target units before reusing this legacy binding.")
+                ref["binding"] = evidence
+                if input_units is not None:
+                    input_units[key] = [evidence["sourceUnit"] or evidence["targetUnit"]] * len(normalized)
             else:
-                _, column, policy, start, end = selector
-                if numeric_column(table, column, policy, start, end) != inputs[key]:
-                    raise ValueError("The supplied measurements differ from the selected result column.")
-            verified[key] = {
-                "nodeId": source_id, "sourceKey": source.state.data.get("nodeKey"),
-                "resultHash": receipt["resultHash"], "receiptHash": receipt["receiptHash"],
-                "selector": selector, "packId": receipt["packId"],
-                "operationId": latest["operationId"],
-            }
-            continue
-        # Imported tables have their own immutable, content-addressed receipt,
-        # independent of the source node's last numerical calculation.
-        if selector == ["typed_table"]:
-            table = source.state.data.get("table")
-            if fields.get(key) is None or fields[key].kind != "table" or not table_metadata_valid(table):
-                raise ValueError("The connected source has no readable typed table input.")
-            receipt = table["provenance"]
-            if (citation.get("resultHash") != table["asset_ref"]
-                    or citation.get("receiptHash") != receipt["receiptHash"]):
-                raise ValueError("The connected table changed. Select its current table.")
-            if inputs[key] != table:
-                raise ValueError("The supplied table differs from the connected table.")
-            verified[key] = {
-                "nodeId": source_id, "sourceKey": source.state.data.get("nodeKey"),
-                "resultHash": table["asset_ref"], "receiptHash": receipt["receiptHash"],
-                "selector": selector, "packId": source.kind.removeprefix("science_").split(".")[0],
-                "operationId": "data_table",
-            }
-            continue
-        if (len(selector) == 5 and selector[0] == "table_column"):
-            _, column, policy, start, end = selector
-            table = source.state.data.get("table")
-            if not table_metadata_valid(table):
-                raise ValueError("The connected source has no readable typed table.")
-            receipt = table["provenance"]
-            if (citation.get("resultHash") != table["asset_ref"]
-                    or citation.get("receiptHash") != receipt["receiptHash"]):
-                raise ValueError("The connected table changed. Select its current column.")
-            selected = numeric_column(table, column, policy, start, end)
-            if selected != inputs[key]:
-                raise ValueError("The supplied measurements differ from the selected table column.")
-            verified[key] = {
-                "nodeId": source_id, "sourceKey": source.state.data.get("nodeKey"),
-                "resultHash": table["asset_ref"], "receiptHash": receipt["receiptHash"],
-                "selector": selector, "packId": source.kind.removeprefix("science_").split(".")[0],
-                "operationId": "data_table",
-            }
+                raise ValueError("Invalid typed table selector.")
+            verified[key] = ref
             continue
         latest = source.state.data.get("latest")
         if not isinstance(latest, dict) or not isinstance(latest.get("provenance"), dict):
@@ -287,9 +271,20 @@ def _verify_sources(document, node, inputs: dict, sources: dict, granted,
             from .propagation import connected_measurement, result_unit
             identity = source.state.data.get("nodeKey") or receipt_hash or digest
             measurement = connected_measurement(latest, selector, identity)
-            source_unit = measurement["unit"] if measurement else result_unit(selector[1])
+            declared = result_unit(selector[1], latest["provenance"].get("outputUnits"))
+            if measurement and declared and measurement.get("unit") and measurement["unit"] != declared:
+                raise ValueError("The saved uncertainty unit conflicts with the declared output unit. Rerun the source.")
+            source_unit = declared or (measurement["unit"] if measurement else "")
         field = fields.get(key)
-        target_unit = _effective_unit(field, inputs) if field and field.kind == "number" else ""
+        target_unit = _effective_unit(field, inputs) if field and field.kind in {"number", "integer"} else ""
+        assumed_unit = None
+        if target_unit and target_unit != "1" and not source_unit and type(selected) in (int, float):
+            setter = _unit_field(field, inputs)
+            if setter is None or not isinstance(inputs.get(setter), str):
+                raise ValueError(f"{key}: the connected result has no declared unit. Supply a measured literal with units.")
+            # The configured sibling (e.g. from_unit) is the user's explicit
+            # interpretation of the otherwise unitless published number.
+            source_unit = assumed_unit = target_unit
         normalized_source = selected
         if target_unit and source_unit and type(selected) in (int, float):
             try:
@@ -336,8 +331,12 @@ def _verify_sources(document, node, inputs: dict, sources: dict, granted,
         verified[key] = {"nodeId": source_id, "sourceKey": source.state.data.get("nodeKey"),
                          "resultHash": digest, "selector": selector,
                          "packId": latest["provenance"]["packId"], "operationId": latest["operationId"]}
+        if assumed_unit:
+            verified[key]["assumedUnit"] = assumed_unit
         if receipt_hash:
             verified[key]["receiptHash"] = receipt_hash
+    if operation:
+        paired_rows(operation, verified)
     return verified
 
 
@@ -345,7 +344,7 @@ def _same_sources(previous: dict, current: dict) -> bool:
     # Scene IDs are allocated again on reopen. The durable key identifies
     # the same source node when comparing otherwise identical receipts.
     def identity(ref):
-        return (ref.get("sourceKey") or ref.get("nodeId"), ref.get("receiptHash"), ref.get("resultHash"), ref.get("selector"))
+        return (ref.get("sourceKey") or ref.get("nodeId"), ref.get("receiptHash"), ref.get("resultHash"), ref.get("selector"), ref.get("binding"), ref.get("assumedUnit"))
 
     return (previous.keys() == current.keys()
             and all(isinstance(previous[k], dict) and identity(previous[k]) == identity(current[k]) for k in current))
@@ -473,7 +472,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
             uncertainty_inputs: dict = {}
             sources = _verify_sources(document, node, inputs, request.sources if request.sources is not None else {},
                                       ctx.is_plugin_granted, uncertainty_inputs,
-                                      operation=op)
+                                      operation=op, input_units=input_units)
             if request.uncertainty_method not in UNCERTAINTY_METHODS:
                 raise ValueError("Uncertainty method must be auto, gum or monte_carlo.")
             budget = execution_timeout(op)
@@ -684,10 +683,29 @@ def register_pack(host: HostContext, pack_id: str) -> None:
             return {"ok": False, "conflict": True, "error": "The table changed; select its current column."}
         source_state = source.state
         target_state = target.state
+        end = meta["rowCount"] if request.end is None else request.end
+        selector = [selector_name, request.column, request.policy, request.start, end]
+        evidence = None
         try:
-            values = await asyncio.to_thread(
-                numeric_column, meta, request.column, request.policy, request.start, request.end,
-            )
+            if request.operation_id is None and request.field_key is None:
+                if request.complete_columns is not None or request.assumed_unit is not None:
+                    raise ValueError("Choose the target operation and vector field for this binding.")
+                values = await asyncio.to_thread(
+                    numeric_column, meta, request.column, request.policy, request.start, request.end,
+                )
+                literals = values
+            else:
+                operation = catalog.get(request.operation_id)
+                field = next((f for f in operation.fields if f.key == request.field_key), None) if operation else None
+                if request.complete_columns is not None and not any(
+                    request.field_key in group for group in (operation.paired_fields if operation else ())
+                ):
+                    raise ValueError("Select complete rows only for paired fields.")
+                values, literals, _, evidence = await asyncio.to_thread(
+                    column_binding, meta, selector, field, request.unit_inputs or {}, {
+                        "completeColumns": request.complete_columns, "assumedUnit": request.assumed_unit,
+                    },
+                )
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
         if document.nodes.get(source_id) is not source or source.state is not source_state:
@@ -701,12 +719,11 @@ def register_pack(host: HostContext, pack_id: str) -> None:
                 or not ctx.is_plugin_granted(source.kind.split(".", 1)[0])):
             return {"ok": False, "error": "The scientific pack was disabled during selection."}
         return {
-            "ok": True, "values": values,
+            "ok": True, "values": values, **({"inputs": literals} if evidence else {}),
             "reference": {
                 "nodeId": source_id, "sourceKey": source_state.data.get("nodeKey"),
                 "resultHash": expected_hash, "receiptHash": expected_receipt,
-                "selector": [selector_name, request.column, request.policy, request.start,
-                             meta["rowCount"] if request.end is None else request.end],
+                "selector": selector, **({"binding": evidence} if evidence else {}),
             },
         }
 

@@ -137,6 +137,7 @@ OPERATIONS = (
         {"x": [1, 2, 3, 4, 5], "y": [2, 4, 5, 8, 11]},
         _regression,
         headline="slope",
+        paired_fields=(("x", "y"),),
     ),
     Operation(
         "weighted_summary",
@@ -146,6 +147,7 @@ OPERATIONS = (
         {"observations": [2, 4, 10], "weights": [1, 2, 1]},
         _weighted,
         headline="weighted_mean",
+        paired_fields=(("observations", "weights"),),
     ),
     Operation(
         "grouped_table_summary",
