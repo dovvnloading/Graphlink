@@ -105,7 +105,7 @@ test("keeps reviewed import data and keyboard actions within the focused workben
     await dialog.getByRole("button", { name: "Preview table", exact: true }).click();
     await expect(dialog.getByRole("table", { name: "Pending import preview" })).toContainText("Missing");
     const apply = dialog.getByRole("button", { name: "Apply reviewed table" });
-    for (const [width, height, forcedColors] of [[640, 360, "none"], [320, 720, "active"]] as const) {
+    for (const [width, height, forcedColors] of [[1440, 1200, "none"], [640, 360, "none"], [320, 720, "active"]] as const) {
       await page.setViewportSize({ width, height });
       await page.emulateMedia({ forcedColors, reducedMotion: "reduce" });
       await apply.focus();
@@ -115,7 +115,9 @@ test("keeps reviewed import data and keyboard actions within the focused workben
         return box.width > 0 && box.left >= -1 && box.right <= document.documentElement.clientWidth + 1
           && box.top >= -1 && box.bottom <= window.innerHeight + 1;
       })).toBe(true);
-      await testInfo.attach(`reviewed-import-${width}`, { body: await page.screenshot(), contentType: "image/png" });
+      const image = testInfo.outputPath(`reviewed-import-${width}.png`);
+      await page.screenshot({ path: image });
+      await testInfo.attach(`reviewed-import-${width}`, { path: image, contentType: "image/png" });
     }
     await apply.press("Enter");
     await expect(dialog.getByRole("status").filter({ hasText: "Pasted data · 3 rows · 2 columns" })).toBeVisible();

@@ -76,6 +76,14 @@ jobs:
         if: ${{ !cancelled() && (steps.release.outcome == 'success' || steps.release.outcome == 'failure') }}
         run: npm run test:e2e:safety -- --retries=0 --trace=retain-on-failure
         working-directory: web_ui
+      - name: Preserve workbench screenshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: scientific-workbench-review
+          path: web_ui/test-results/**/reviewed-import-*.png
+          if-no-files-found: warn
+          retention-days: 14
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
