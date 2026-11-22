@@ -5671,6 +5671,19 @@ mark.document-view-search-match-current {
   overflow: hidden;
 }
 
+.plugin-picker-operation .plugin-picker-row-label {
+  white-space: normal;
+}
+
+.plugin-picker-operation .plugin-picker-row-description {
+  display: block;
+}
+
+.plugin-picker-row-inputs {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
 .plugin-picker-row-chevron {
   flex-shrink: 0;
   font-size: 16px;

@@ -57,6 +57,29 @@ def envelope(document, node_id):
     return json.loads(document._plugin_state_wire(document.nodes[node_id])["science"])
 
 
+def test_picker_search_catalog_follows_live_grants_without_creating_nodes(session):
+    document, bus, registry, settings = session
+
+    def searchable():
+        return {
+            row["name"]: row["scienceOperations"]
+            for group in plugins_payload(registry, settings)["categories"]
+            for row in group["plugins"] if row.get("scienceOperations")
+        }
+
+    assert searchable() == {}
+    grant(bus, "core")
+    assert searchable() == {
+        PACKS["core"][0]: [
+            {"id": op.id, "title": op.title, "description": op.description, "inputKinds": [f.kind for f in op.fields]}
+            for op in operations("core")
+        ]
+    }
+    dispatch(bus, "setPluginGrant", "science_core", False)
+    assert searchable() == {}
+    assert not document.nodes
+
+
 def test_manifest_to_canvas_and_run_for_every_example(session):
     document, bus, registry, settings = session
     assert not registry.node_kinds
@@ -704,6 +727,33 @@ def test_chart_receipt_freshness_detects_equal_numbers_from_different_sources(se
     assert updated["receiptHash"] != before
     assert "refresh" in document.nodes[chart_id].state.chart_error
     assert document.nodes[chart_id].state.chart_data["values"] == [1, 2, 3]
+
+
+def test_import_preview_does_not_stage_and_apply_requires_reviewed_bytes_and_options(session, monkeypatch):
+    from graphlink_plugins.scientific.data_table import _STAGING
+
+    document, bus, _, _ = session
+    grant(bus, "core")
+    node = dispatch(bus, "executePlugin", "Scientific Core")
+    args = {"node_id": node, "text": "Time (s),Group\n1,X\nNA,Y"}
+    before = document.nodes[node].state
+
+    def call(action, **extra):
+        return dispatch(bus, "invokePluginIntent", "science_core", action, {**args, **extra})
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(_STAGING, "put", lambda *args: pytest.fail("Preview or mismatched apply wrote an asset"))
+        preview = call("preview_table")
+        table = preview["table"]
+        pinned = {"expected_run": preview["runToken"], "expected_preview": table["provenance"]["receiptHash"]}
+        assert table["preview"] == [[1, "X"], [None, "Y"]]
+        assert table["columns"][0]["unit"] == "s"
+        assert not call("import_table", **pinned, column_types={"Group": "text"})["ok"]
+        assert not call("import_table", **pinned, text="Time (s),Group\n9,Z")["ok"]
+        assert document.nodes[node].state is before
+    assert call("import_table", **pinned)["ok"]
+    assert envelope(document, node)["table"] == table
+    assert call("import_table", **pinned)["conflict"]
 
 
 def test_typed_table_import_link_drop_and_asset_roundtrip(session, tmp_path):
@@ -1448,3 +1498,120 @@ def test_scientific_discussion_context_excerpts_oversized_results():
     assert "truncated" in text and "inspect the source Workbench" in text
     assert len(text) < 16_000
 
+
+
+def test_paired_table_columns_require_original_row_identity_for_manual_and_runner(session):
+    from graphlink_plugins.scientific.graph_run_adapter import prepare
+
+    document, bus, _, _ = session
+    grant(bus, "core")
+    grant(bus, "fitting")
+    source = dispatch(bus, "executePlugin", "Scientific Core")
+    target = dispatch(bus, "executePlugin", "Scientific Core", source)
+    assert dispatch(bus, "invokePluginIntent", "science_core", "import_table", {
+        "node_id": source, "text": "X (mm),Y (s)\n1,10\nNA,20\n3,NA\n4,40",
+    })["ok"]
+
+    def choose(pack, node, operation, field, index, **options):
+        return dispatch(bus, "invokePluginIntent", "science_" + pack, "table_column", {
+            "node_id": node, "source_node_id": source, "operation_id": operation,
+            "field_key": field, "column": index, "policy": "drop", **options,
+        })
+
+    def bind(complete):
+        kwargs = {"complete_columns": [0, 1]} if complete else {}
+        selected = [choose("core", target, "plot_xy", key, i, **kwargs) for i, key in enumerate(("x", "y"))]
+        inputs = {key: item["inputs"] for key, item in zip(("x", "y"), selected)}
+        refs = {key: item["reference"] for key, item in zip(("x", "y"), selected)}
+        return {**inputs, "x_label": "X", "y_label": "Y"}, refs
+
+    inputs, refs = bind(False)
+    assert inputs["x"] == [1, 3, 4] and inputs["y"] == [10, 20, 40]
+    error = run(bus, "core", target, "plot_xy", inputs, sources=refs)
+    assert not error["ok"] and "same source rows" in error["error"]
+    assert envelope(document, target)["latest"] is None
+
+    inputs, refs = bind(True)
+    assert run(bus, "core", target, "plot_xy", inputs, sources=refs)["ok"]
+    result = envelope(document, target)["latest"]
+    assert result["table"]["rows"] == [[1, 10], [4, 40]]
+    evidence = result["provenance"]["sources"]["x"]["binding"]
+    assert (evidence["retained"], evidence["omitted"], evidence["completeColumns"]) == (2, 2, [0, 1])
+    assert evidence["rowDigest"] == refs["y"]["binding"]["rowDigest"]
+    assert dispatch(bus, "invokePluginIntent", "science_core", "configure_runner", {
+        "node_id": target, "operation_id": "plot_xy", "inputs": inputs, "sources": refs,
+    })["ok"]
+    _, raw, _, _, current = prepare(document, document.nodes[target], lambda _: True)
+    assert result["provenance"]["inputUnits"] == {"x": ["mm", "mm"], "y": ["s", "s"]}
+    assert raw == inputs and current
+
+    independent = dispatch(bus, "executePlugin", "Fitting and Inference", source)
+    a = choose("fitting", independent, "welch_t_test", "sample_a", 0)
+    b = choose("fitting", independent, "welch_t_test", "sample_b", 1)
+    op = next(o for o in operations("fitting") if o.id == "welch_t_test")
+    assert run(bus, "fitting", independent, op.id,
+               {**op.example, "sample_a": a["inputs"], "sample_b": b["inputs"]},
+               sources={"sample_a": a["reference"], "sample_b": b["reference"]})["ok"]
+
+
+def test_typed_column_units_are_verified_for_manual_runner_and_legacy_binding(session):
+    from graphlink_plugins.scientific.graph_run_adapter import prepare
+
+    document, bus, _, _ = session
+    grant(bus, "physics")
+    source = dispatch(bus, "executePlugin", "Physics")
+    target = dispatch(bus, "executePlugin", "Physics", source)
+    assert dispatch(bus, "invokePluginIntent", "science_physics", "import_table", {
+        "node_id": source, "text": "Thickness (mm),Time (s),Unlabeled\n10,10,10",
+    })["ok"]
+    select = {"node_id": target, "source_node_id": source, "operation_id": "thermal_layers", "field_key": "thickness_m"}
+
+    def column(idx, **opts):
+        return dispatch(bus, "invokePluginIntent", "science_physics", "table_column", {**select, "column": idx, **opts})
+
+    assert not column(1)["ok"]
+    assert not column(2)["ok"]
+    assert column(2, assumed_unit="mm")["reference"]["binding"]["assumedUnit"] == "mm"
+    assert not column(0, assumed_unit="m")["ok"]
+    selected = column(0)
+    assert selected["inputs"] == ["10.0 mm"] and selected["values"] == [10]
+    inputs = {"thickness_m": selected["inputs"], "conductivity_w_mk": [1], "area_m2": 1, "left_k": 300, "right_k": 290}
+    ref = selected["reference"]
+    refs = {"thickness_m": ref}
+    assert not run(bus, "physics", target, "thermal_layers", {**inputs, "thickness_m": [10]}, sources=refs)["ok"]
+    assert run(bus, "physics", target, "thermal_layers", inputs, sources=refs)["ok"]
+    latest = envelope(document, target)["latest"]
+    assert latest["inputs"]["thickness_m"] == [.01]
+    assert latest["values"]["heat_flux_w_m2"] == pytest.approx(1000)
+    assert latest["provenance"]["inputUnits"]["thickness_m"] == ["mm"]
+    assert dispatch(bus, "invokePluginIntent", "science_physics", "configure_runner", {
+        "node_id": target, "operation_id": "thermal_layers", "inputs": inputs, "sources": refs,
+    })["ok"]
+    _, raw, _, _, current = prepare(document, document.nodes[target], lambda _: True)
+    assert raw["thickness_m"] == selected["inputs"] and current
+    old_ref = {k: v for k, v in ref.items() if k != "binding"}
+    assert not run(bus, "physics", target, "thermal_layers", inputs, sources={"thickness_m": old_ref})["ok"]
+    assert envelope(document, target)["latest"] == latest
+
+
+def test_angular_frequency_links_use_declared_unit_and_reject_seconds(session):
+    document, bus, _, _ = session
+    grant(bus, "core")
+    grant(bus, "physics")
+    source = dispatch(bus, "executePlugin", "Physics")
+    target = dispatch(bus, "executePlugin", "Scientific Core", source)
+    assert run(bus, "physics", source, "spring_oscillator",
+               {"mass_kg": 1, "stiffness_n_m": 4, "amplitude_m": 1})["ok"]
+    state = envelope(document, source)
+    receipt = state["latest"]["provenance"]
+    metric = "angular_frequency_rad_s"
+    assert receipt["outputUnits"][metric] == "rad/s"
+    ref = {"nodeId": source, "sourceKey": state["nodeKey"], "resultHash": receipt["resultHash"],
+           "receiptHash": receipt["receiptHash"], "selector": ["values", metric]}
+    for wrong in ["s", "Hz"]:
+        response = run(bus, "core", target, "convert_unit", {"value": 2, "from_unit": wrong, "to_unit": wrong},
+                       sources={"value": ref})
+        assert not response["ok"] and envelope(document, target)["latest"] is None
+    assert run(bus, "core", target, "convert_unit", {"value": "2 rad/s", "from_unit": "rad/s", "to_unit": "deg/s"},
+               sources={"value": ref})["ok"]
+    assert envelope(document, target)["latest"]["values"]["value (deg/s)"] == pytest.approx(114.591559026)

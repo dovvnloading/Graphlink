@@ -263,6 +263,7 @@ async def _run_scientific_step(
             "inputs": inputs, "sources": sources,
             "expected_run": _run_token(_state_data(node)),
             "graph_run_id": run["runId"],
+            "uncertainty_method": _state_data(node)["runner"].get("uncertaintyMethod", "auto"),
         },
     ])
     if not isinstance(answer, dict) or answer.get("ok") is not True:

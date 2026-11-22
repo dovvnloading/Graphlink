@@ -35,6 +35,8 @@ export interface ScienceOperation {
   citations?: ScienceCitation[];
   /** Result value key the node shows first, declared by the operation. */
   headline?: string;
+  pairedFields?: string[][];
+  outputUnits?: Record<string, string>;
   plotMark?: "scatter";
 }
 
@@ -44,6 +46,11 @@ export interface SourceReference {
   sourceKey?: string | null;
   receiptHash?: string;
   selector: (string | number)[];
+  assumedUnit?: string;
+  binding?: {
+    columnLabel: string; sourceUnit: string; targetUnit: string; rowDigest: string;
+    retained: number; omitted: number; completeColumns?: number[]; completeLabels?: string[]; assumedUnit?: string;
+  };
 }
 
 export interface ScienceLimits {
@@ -54,7 +61,13 @@ export interface ScienceLimits {
 const V1_LIMITS: ScienceLimits = { points: 1024, columns: 32, cells: 4096, text: 65536 };
 
 export type Sources = Record<string, SourceReference>;
-export interface EditorDraft { values: Record<string, string>; sources: Sources; revision: string; dirty: boolean }
+export type UncertaintyMethod = "auto" | "gum" | "monte_carlo";
+
+function validMethod(value: unknown): value is UncertaintyMethod {
+  return value === "auto" || value === "gum" || value === "monte_carlo";
+}
+
+export interface EditorDraft { method?: UncertaintyMethod; values: Record<string, string>; sources: Sources; revision: string; dirty: boolean }
 export interface ScienceTable { columns: string[]; rows: unknown[][] }
 export type ScientificColumnType = "numeric" | "text" | "categorical" | "datetime" | "boolean";
 export interface ScientificTableColumn {
@@ -95,8 +108,11 @@ export interface ScientificUncertainty {
 }
 
 /** Recognize explicit scalar output units, including legacy pack suffixes. */
-export function resultUnit(name: string): string {
+export function resultUnit(name: string, declared?: Record<string, string>): string {
+  if (declared && Object.hasOwn(declared, name)) return declared[name];
+  if (name === "angular_frequency_rad_s") return "rad/s";
   const suffix = name.match(/\(([^()]+)\)\s*$/);
+  if (!suffix && (name.includes("_per_") || /_(?:rad|m|cm|mm|kg|mol|j|w|pa)_[a-z]+$/i.test(name))) return "";
   const short = name.match(/_(ma|mm|cm|km|kg|hz|pa|rad|deg|ohm|mol|ms|m|s|g|j|k|v|a|l)$/i);
   return suffix?.[1] ?? (short ? ({
     ma: "Ma", hz: "Hz", pa: "Pa", j: "J", k: "K", v: "V",
@@ -107,7 +123,7 @@ export function resultUnit(name: string): string {
 /** Keep the source's physical unit in a linked scalar editor. */
 export function connectedInputText(field: ScienceField, option: SourceOption): string {
   const raw = fieldText(field, option.value);
-  return field.kind === "number" && option.unit ? `${raw} ${option.unit}` : raw;
+  return (field.kind === "number" || field.kind === "integer") && option.unit ? `${raw} ${option.unit}` : raw;
 }
 
 /** Human-facing formatting only. Never round the actual result, linked inputs,
@@ -222,7 +238,7 @@ export function formatMeasurement(measurement: ScientificMeasurement): string {
 }
 
 /** Also understand pre-existing pack outputs without changing their receipts. */
-export function resultMeasurement(result: Pick<ScienceResult, "values" | "uncertainty">, name: string): ScientificMeasurement | undefined {
+export function resultMeasurement(result: Pick<ScienceResult, "values" | "uncertainty"> & Partial<Pick<ScienceResult, "provenance">>, name: string): ScientificMeasurement | undefined {
   const value = result.values[name];
   if (!finite(value)) return undefined;
   const attached = result.uncertainty?.outputs[name];
@@ -248,7 +264,7 @@ export function resultMeasurement(result: Pick<ScienceResult, "values" | "uncert
     sigma = candidates.filter((candidate) => candidate && candidate !== name).map((candidate) => result.values[candidate]).find(finite);
   }
   if (!finite(sigma) || sigma < 0 || !finite(factor) || factor <= 0) return undefined;
-  const unit = resultUnit(name);
+  const unit = resultUnit(name, result.provenance?.outputUnits);
   return { value, standardUncertainty: sigma, coverageFactor: factor,
     coverageProbability: name === "estimate" && finite(result.values.coverage_probability)
       ? result.values.coverage_probability : 0.95, unit };
@@ -266,19 +282,45 @@ export interface ScienceResult {
   /** Typed layouts supplement (rather than replace) legacy tables and plots. */
   views?: ScienceResultView[];
   uncertainty?: ScientificUncertainty;
-  provenance: Record<string, unknown> & { resultHash: string; receiptHash?: string; sources?: Sources };
+  provenance: Record<string, unknown> & { resultHash: string; receiptHash?: string; sources?: Sources; outputUnits?: Record<string, string>; requestedUncertaintyMethod?: UncertaintyMethod };
 }
 
 export interface ScienceRunnerConfiguration {
-  version: 1;
+  version: 1 | 2;
+  uncertaintyMethod?: UncertaintyMethod;
   operationId: string;
   inputs: Record<string, unknown>;
   sources: Sources;
 }
 
+export interface ScienceAttempt {
+  attemptId: string;
+  operationId: string;
+  status: "running" | "cancelling" | "succeeded" | "cancelled" | "failed";
+  startedAtMs: number;
+  elapsedMs?: number;
+  errorType?: string;
+  error?: string;
+  receiptHash?: string;
+}
+
+export function isScienceAttempt(value: unknown): value is ScienceAttempt {
+  return record(value) && typeof value.attemptId === "string" && /^[a-f0-9]{32}$/.test(value.attemptId)
+    && typeof value.operationId === "string" && typeof value.status === "string"
+    && ["running", "cancelling", "succeeded", "cancelled", "failed"].includes(value.status)
+    && Number.isSafeInteger(value.startedAtMs)
+    && (value.elapsedMs === undefined || Number.isSafeInteger(value.elapsedMs))
+    && (value.errorType === undefined || typeof value.errorType === "string")
+    && (value.error === undefined || typeof value.error === "string")
+    && (value.receiptHash === undefined || typeof value.receiptHash === "string");
+}
+
 export interface ScienceState {
+  attemptProtocol?: 1;
+  attempt?: ScienceAttempt;
   scienceVersion: 1;
   packId: string;
+  packTitle?: string;
   nodeKey?: string;
   runToken?: string;
   limits?: ScienceLimits;
@@ -350,6 +392,8 @@ function isOperation(value: unknown): value is ScienceOperation {
   return record(value) && typeof value.id === "string" && typeof value.title === "string"
     && typeof value.description === "string" && record(value.example) && Array.isArray(value.fields)
     && value.fields.every(isField)
+    && (value.pairedFields === undefined || Array.isArray(value.pairedFields) && value.pairedFields.every(strings))
+    && (value.outputUnits === undefined || record(value.outputUnits) && Object.values(value.outputUnits).every((unit) => typeof unit === "string"))
     && (value.methods === undefined || typeof value.methods === "string")
     && (value.headline === undefined || typeof value.headline === "string")
     && (value.plotMark === undefined || value.plotMark === "scatter")
@@ -400,6 +444,7 @@ export function isResult(value: unknown): value is ScienceResult {
   if (!record(value) || typeof value.operationId !== "string" || typeof value.summary !== "string" ||
       !record(value.inputs) || !record(value.values) || !record(value.provenance) ||
       typeof value.provenance.resultHash !== "string" ||
+      (value.provenance.requestedUncertaintyMethod !== undefined && !validMethod(value.provenance.requestedUncertaintyMethod)) ||
       (value.provenance.receiptHash !== undefined && typeof value.provenance.receiptHash !== "string")) return false;
   const resultValues = value.values;
   const sources = value.provenance.sources;
@@ -427,7 +472,7 @@ export function isResult(value: unknown): value is ScienceResult {
     && plot.x.length === plot.y.length);
 }
 
-function isImportedTable(value: unknown): value is ScientificImportedTable {
+export function isImportedTable(value: unknown): value is ScientificImportedTable {
   if (!record(value) || value.version !== 1 || typeof value.asset_ref !== "string"
       || !Number.isSafeInteger(value.rowCount) || (value.rowCount as number) < 1
       || !Array.isArray(value.columns) || !Number.isSafeInteger(value.columnCount)
@@ -451,14 +496,17 @@ export function readScienceState(raw: string): ScienceState | null {
   try {
     const value: unknown = JSON.parse(raw);
     if (record(value) && value.scienceVersion === 1 && typeof value.packId === "string" &&
+        (value.packTitle === undefined || typeof value.packTitle === "string") &&
         Array.isArray(value.operations) && (value.operations.length || (typeof value.error === "string" && value.error)) &&
         (value.nodeKey == null || typeof value.nodeKey === "string") &&
         (value.error === undefined || typeof value.error === "string") &&
         (value.runToken === undefined || typeof value.runToken === "string") &&
         (value.limits === undefined || (record(value.limits) && Object.keys(V1_LIMITS).every((k) =>
           Number.isSafeInteger((value.limits as Record<string, unknown>)[k]) && Number((value.limits as Record<string, unknown>)[k]) > 0))) &&
-        value.operations.every(isOperation) &&
-        (value.runner == null || (record(value.runner) && value.runner.version === 1 &&
+        (value.attempt === undefined || isScienceAttempt(value.attempt)) && value.operations.every(isOperation) &&
+        (value.runner == null || (record(value.runner) &&
+          ((value.runner.version === 1 && value.runner.uncertaintyMethod === undefined) ||
+           (value.runner.version === 2 && validMethod(value.runner.uncertaintyMethod))) &&
           typeof value.runner.operationId === "string" && record(value.runner.inputs) &&
           isSources(value.runner.sources))) &&
         (value.table == null || isImportedTable(value.table)) &&
@@ -477,6 +525,7 @@ export function fieldText(field: ScienceField, value: unknown): string {
   if (value == null) return "";
   if (field.kind === "text" || field.kind === "choice") return String(value);
   if (typeof value === "number") return editableNumber(value);
+  if (typeof value === "string" && (field.kind === "number" || field.kind === "integer")) return value;
   if (Array.isArray(value)) return "[" + value.map((part) => typeof part === "string" ? JSON.stringify(part) : fieldText(field, part)).join(",") + "]";
   return JSON.stringify(value);
 }
@@ -645,7 +694,7 @@ export function sourceOptions(parents: ScienceParent[], maxPoints = V1_LIMITS.po
           uncertainty ? " · " + formatMeasurement(uncertainty)
           + (uncertainty.method === "monte_carlo" ? " · downstream propagation requires the unavailable joint PDF" : "") :
           interval ? ` · interval [${interval[0]}, ${interval[1]}] · cannot propagate without a standard uncertainty` : "";
-        const unit = selector[0] === "values" ? uncertainty?.unit || resultUnit(name) : "";
+        const unit = selector[0] === "values" ? resultUnit(name, result.provenance.outputUnits) || uncertainty?.unit || "" : "";
         options.push({ label: `${title} · ${name}${detail}`, value,
           ...(uncertainty && { uncertainty }),
           ...(unsupported && { unpropagatable: unsupported }),
@@ -753,6 +802,21 @@ export function matchesSource(option: SourceOption, source: SourceReference): bo
     reference.selector.length === source.selector.length && reference.selector.every((part, i) => part === source.selector[i]);
 }
 
+
+/** A reviewed binding may use any bounded row window, while the quick picker
+ * offers the first window. Match the verified source/column, retaining the
+ * saved mask, policy and interval rather than replacing them with defaults. */
+export function currentSource(options: SourceOption[], source: SourceReference): SourceOption | undefined {
+  if (!source.binding) return options.find((option) => matchesSource(option, source));
+  const base = options.find((option) => option.tableColumn &&
+    option.reference.selector[0] === source.selector[0] && option.reference.selector[1] === source.selector[1] &&
+    (source.sourceKey ? option.reference.sourceKey === source.sourceKey : option.reference.nodeId === source.nodeId) &&
+    option.reference.resultHash === source.resultHash && option.reference.receiptHash === source.receiptHash);
+  if (!base) return undefined;
+  const { columnLabel, retained, omitted, sourceUnit, targetUnit } = source.binding;
+  const [, , , start, end] = source.selector;
+  return { ...base, label: `${columnLabel} · rows ${Number(start) + 1}–${end} · ${retained} retained, ${omitted} omitted · ${sourceUnit || "unlabeled"} → ${targetUnit}` };
+}
 
 /** These are the four existing ChartSpec types, not new renderers. The menu
  * only offers shapes that fit the chart canonicalizer's exact limits. */

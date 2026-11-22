@@ -1,8 +1,11 @@
 import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
-import type { WsTransport } from "../../lib/ws/transport";
-import { SceneStore } from "./sceneStore";
+import { WsTimeoutError, type WsTransport } from "../../lib/ws/transport";
+import { SceneStore, initialSceneState } from "./sceneStore";
+import { ScienceTableSource } from "./ScienceTableSource";
+import { validateSceneState } from "../../lib/bridge-core/generated/scene-state";
 import { ScientificDataTable } from "./ScientificDataTable";
 import { ScientificNodeView, type ScientificFlowNode } from "./ScientificNodeView";
 import { readScienceState, type ScienceChartLink, type ScienceState, type ScienceResult } from "./scientificWorkbench";
@@ -36,8 +39,8 @@ function mount(raw = JSON.stringify(state), parents = [parent], charts: ScienceC
     const props = { id: "target", data: { title: "Mathematics", raw: value, pluginId: "science_mathematics", parents: currentParents, charts: currentCharts, store } } as NodeProps<ScientificFlowNode>;
     return <ScientificNodeView {...props} />;
   }
-  const view = render(draw(raw), { wrapper: ReactFlowProvider });
-  return { request, fireIntent, generateChart, remount: (value: string) => { view.unmount(); render(draw(value), { wrapper: ReactFlowProvider }); }, refresh: (value: string, currentParents = parents, currentCharts = charts) => view.rerender(draw(value, currentParents, currentCharts)) };
+  let view = render(draw(raw), { wrapper: ReactFlowProvider });
+  return { request, fireIntent, generateChart, remount: (value: string) => { view.unmount(); view = render(draw(value), { wrapper: ReactFlowProvider }); }, refresh: (value: string, currentParents = parents, currentCharts = charts) => view.rerender(draw(value, currentParents, currentCharts)) };
 }
 
 function openImporter() {
@@ -50,6 +53,30 @@ function expandResult(label: string | RegExp) {
 }
 
 describe("scientific workbench card", () => {
+  it("moves one live editor between surfaces and restores keyboard focus and unsaved import text", async () => {
+    const user = userEvent.setup();
+    const { request } = mount();
+    const value = screen.getByRole("textbox", { name: "Samples (m)" });
+    fireEvent.change(value, { target: { value: "[2,6]" } });
+    openImporter();
+    const pasted = screen.getByRole("textbox", { name: "Pasted table text" });
+    fireEvent.change(pasted, { target: { value: "Time,Reading\n1,3" } });
+    const opener = screen.getByRole("button", { name: "Open focused workbench for Mathematics" });
+    await user.click(opener);
+    const dialog = screen.getByRole("dialog", { name: "Mathematics workbench" });
+    expect(within(dialog).getByRole("textbox", { name: "Samples (m)" })).toBe(value);
+    expect(within(dialog).getByRole("textbox", { name: "Pasted table text" })).toBe(pasted);
+    expect(screen.getAllByRole("button", { name: "Run calculation" })).toHaveLength(1);
+    expect(within(dialog).getByRole("button", { name: "Close Mathematics workbench" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(opener).toHaveFocus();
+    expect(pasted).toBeVisible();
+    expect(pasted).toHaveValue("Time,Reading\n1,3");
+    expect(value).toHaveValue("[2,6]");
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("puts recorded warnings next to the saved result and distinguishes changed inputs and operation", () => {
     const latest = { ...result, values: { distance: 0.1234567890123456, warning: "Inspect the fitted residuals." } };
     mount(JSON.stringify({ ...state, latest }));
@@ -290,6 +317,22 @@ describe("scientific workbench card", () => {
     fireEvent.click(screen.getByText("Run calculation"));
     expect(request.mock.lastCall?.[2]?.[2]).toMatchObject({ operation_id: "scale", inputs: { length: 5 } });
     await waitFor(() => expect(screen.getByText("Run calculation")).toBeEnabled());
+  });
+
+  it("restores edited source bindings after loading an example, including across remount", async () => {
+    const { request, remount } = mount();
+    const source = screen.getByRole("combobox", { name: "Import Samples from a connected result" }) as HTMLSelectElement;
+    const option = Array.from(source.options).find((item) => item.text === "Samples · y")!;
+    fireEvent.change(source, { target: { value: option.value } });
+    fireEvent.click(screen.getByRole("button", { name: "Load example" }));
+    expect(screen.getByLabelText("Samples (m)")).toHaveValue("[1,2,3]");
+    remount(JSON.stringify(state));
+    fireEvent.click(screen.getByRole("button", { name: "Undo load example" }));
+    expect(screen.getByLabelText("Samples (m)")).toHaveValue("[1,8,3]");
+    fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
+    await waitFor(() => expect(request.mock.lastCall?.[2]?.[2]).toMatchObject({
+      sources: { samples: { selector: ["column", 1], resultHash: "abc" } },
+    }));
   });
 
   it("renders persisted runs, plots irregular x coordinates, and exports the committed artifacts", async () => {
@@ -562,24 +605,50 @@ describe("scientific workbench card", () => {
     expect(screen.getByLabelText("Samples (m)")).toHaveValue("[1,2,3]");
   });
 
-  it("cancels an in-flight scientific worker without disabling the Cancel control", async () => {
+  it("reconciles a lost start acknowledgement after remount and cancels only that attempt", async () => {
+    const base = { ...state, runToken: "last", nodeKey: "same-node", attemptProtocol: 1 };
+    const { request, remount } = mount(JSON.stringify(base));
+    const seen: string[] = [];
+    let id = "", stopped = false;
+    const view = (status: string) => ({ attemptId: id, operationId: "integral", status, startedAtMs: Date.now(),
+      ...(status === "cancelled" && { error: "Stopped before commit.", errorType: "cancelled", elapsedMs: 42 }) });
+    request.mockImplementation(async (_topic, _intent, args) => {
+      const [, action, input] = args as [string, string, { attempt_id: string }];
+      seen.push(action);
+      if (action === "start_attempt") {
+        id = input.attempt_id;
+        throw new WsTimeoutError("Lost acknowledgement");
+      }
+      expect(input.attempt_id).toBe(id);
+      if (action === "cancel_attempt") stopped = true;
+      return { ok: true, attempt: view(stopped ? "cancelled" : "running") };
+    });
+    fireEvent.change(screen.getByLabelText("Samples (m)"), { target: { value: "[7,8]" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
+    expect(await screen.findByText("Checking run status…")).toBeVisible();
+    remount(JSON.stringify({ ...base, attempt: view("running") }));
+    expect(screen.getByLabelText("Samples (m)")).toHaveValue("[7,8]");
+    expect(screen.getByRole("button", { name: "Run calculation" })).toBeDisabled();
+    await waitFor(() => expect(seen).toContain("status_attempt"));
+    expect(await screen.findByText("Running Integrate samples…")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel calculation" }));
+    await waitFor(() => expect(seen).toContain("cancel_attempt"));
+    remount(JSON.stringify({ ...base, attempt: view("cancelled") }));
+    expect(await screen.findByText("Stopped before commit.")).toBeVisible();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Run calculation" })).toBeEnabled(), { timeout: 3000 });
+    expect(seen.filter((name) => name === "start_attempt")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Cancel calculation" })).toBeNull();
+  });
+
+  it("keeps older synchronous hosts usable while limiting Stop to hosts with attempt controls", async () => {
     const { request } = mount();
-    let finishRun: (value: unknown) => void = () => {};
-    request.mockReturnValueOnce(new Promise((resolve) => { finishRun = resolve; }));
+    let finish: (value: unknown) => void = () => {};
+    request.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
     fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
     expect(screen.getByRole("button", { name: "Run calculation" })).toBeDisabled();
-    expect(screen.getByRole("status")).toHaveTextContent("Running calculation…");
-    const cancel = screen.getByRole("button", { name: "Cancel calculation" });
-    expect(cancel).toBeEnabled();
-    fireEvent.click(cancel);
-    expect(request).toHaveBeenNthCalledWith(2, "app-plugins", "invokePluginIntent", [
-      "science_mathematics", "cancel", { node_id: "target", operation_id: "integral" },
-    ]);
-    finishRun({ ok: false, errorType: "cancelled", elapsedMs: 42,
-      error: "Scientific calculation cancelled after 42 ms." });
-    expect(await screen.findByRole("alert")).toHaveTextContent("cancelled after 42 ms");
-    await waitFor(() => expect(screen.getByRole("button", { name: "Run calculation" })).toBeEnabled());
     expect(screen.queryByRole("button", { name: "Cancel calculation" })).toBeNull();
+    finish({ ok: true });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Run calculation" })).toBeEnabled());
   });
 
   it("shows a typed timed-out run without replacing the last successful result", async () => {
@@ -743,6 +812,30 @@ describe("typed table import and numeric selections", () => {
       receiptHash: "c".repeat(64), parseOptions: { format: "tsv", missingValues: ["", "NA"] } },
   };
 
+  it("connects an existing dataset upstream and retains the selection after a rejected connection", async () => {
+    const request = vi.fn<WsTransport["request"]>().mockResolvedValueOnce(null).mockResolvedValueOnce("edge");
+    const store = new SceneStore({ request } as unknown as WsTransport);
+    const source = { title: "Measurement source", kind: "science_mathematics.workbench", x: 0, y: 0,
+      pluginState: { science: JSON.stringify({ ...state, table: meta }) } };
+    const snapshot = validateSceneState({ ...initialSceneState, nodes: [
+      { ...source, id: "source" }, { ...source, id: "target" },
+      { ...source, id: "disabled", kind: "placeholder" },
+    ] });
+    if (!snapshot.ok) throw new Error(snapshot.errors.join(", "));
+    vi.spyOn(store, "getScene").mockReturnValue(snapshot.value);
+    render(<ScienceTableSource store={store} packTitle="Mathematics" targetId="target" renderImporter={() => null} />);
+    expect(screen.getByLabelText("Source workbench")).toHaveValue("source");
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Connect selected source" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("connection was not confirmed");
+    expect(screen.getByLabelText("Source workbench")).toHaveValue("source");
+    fireEvent.click(screen.getByRole("button", { name: "Connect selected source" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenNthCalledWith(1, "scene", "connectNodes", ["source", "target"]);
+    expect(request).toHaveBeenNthCalledWith(2, "scene", "connectNodes", ["source", "target"]);
+  });
+
   it("shows a recovery error rather than crashing on a damaged saved table preview", () => {
     mount(JSON.stringify({ ...state, table: { ...meta, preview: [null] } }));
     expect(screen.getByRole("alert")).toHaveTextContent("could not be loaded");
@@ -754,7 +847,7 @@ describe("typed table import and numeric selections", () => {
     } }));
     openImporter();
     fireEvent.change(screen.getByLabelText("Pasted table text"), { target: { value: "x\n😀" } });
-    fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("exceeds the import size limit");
     expect(request).not.toHaveBeenCalled();
   });
@@ -765,14 +858,36 @@ describe("typed table import and numeric selections", () => {
     fireEvent.change(screen.getByLabelText("Table format"), { target: { value: "tsv" } });
     fireEvent.change(screen.getByLabelText("Pasted table text"), { target: { value: "X\tFlag\n1\ttrue" } });
     fireEvent.change(screen.getByLabelText("Missing-value markers"), { target: { value: "NA,missing" } });
+    fireEvent.click(screen.getByText("Advanced column overrides"));
     fireEvent.change(screen.getByLabelText("Column type overrides"), { target: { value: '{"Flag":"boolean"}' } });
-    fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
+    request.mockResolvedValueOnce({ ok: true, table: meta, runToken: "reviewed-token" });
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
     await waitFor(() => expect(request).toHaveBeenCalledWith("app-plugins", "invokePluginIntent", [
-      "science_mathematics", "import_table", {
+      "science_mathematics", "preview_table", {
         node_id: "target", format: "tsv", text: "X\tFlag\n1\ttrue",
         missing_values: ["", "NA", "missing"], column_types: { Flag: "boolean" },
       },
-    ]));
+    ], 120_000));
+    expect(await screen.findByRole("table", { name: "Pending import preview" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Apply reviewed table" }));
+    await waitFor(() => expect(request).toHaveBeenLastCalledWith("app-plugins", "invokePluginIntent", [
+      "science_mathematics", "import_table", expect.objectContaining({
+        expected_run: "reviewed-token", expected_preview: meta.provenance.receiptHash,
+        format: "tsv", text: "X\tFlag\n1\ttrue", column_types: { Flag: "boolean" },
+      }),
+    ], 120_000));
+  });
+
+  it("requires another preview after editing a reviewed column type", async () => {
+    const { request } = mount();
+    openImporter();
+    request.mockResolvedValueOnce({ ok: true, table: meta, runToken: "reviewed-token" });
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
+    await screen.findByRole("button", { name: "Apply reviewed table" });
+    fireEvent.change(screen.getByRole("combobox", { name: "Type for Station" }), { target: { value: "categorical" } });
+    expect(screen.queryByRole("button", { name: "Apply reviewed table" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Preview table" })).toBeEnabled();
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("imports file bytes rather than decoding and repasting CSV into the field", async () => {
@@ -782,10 +897,10 @@ describe("typed table import and numeric selections", () => {
     const file = new File(["Time (s)\tValue\n0\t1"], "samples.tsv", { type: "text/tab-separated-values" });
     Object.defineProperty(file, "arrayBuffer", { value: async () => new TextEncoder().encode("Time (s)\tValue\n0\t1").buffer });
     fireEvent.change(screen.getByLabelText("CSV or TSV file"), { target: { files: [file] } });
-    fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
     await waitFor(() => expect(request).toHaveBeenCalled());
     const args = request.mock.lastCall?.[2]?.[2] as Record<string, unknown>;
-    expect(request.mock.lastCall?.[2]?.[1]).toBe("import_table");
+    expect(request.mock.lastCall?.[2]?.[1]).toBe("preview_table");
     expect(args.format).toBe("tsv");
     expect(args.filename).toBe("samples.tsv");
     expect(atob(args.encoded_file as string)).toBe("Time (s)\tValue\n0\t1");
@@ -807,14 +922,14 @@ describe("typed table import and numeric selections", () => {
     const newInput = screen.getByLabelText("CSV or TSV file") as HTMLInputElement;
     expect(newInput).not.toBe(oldInput);
     expect(newInput.files).toHaveLength(0);
-    fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Choose a CSV or TSV file.");
     expect(request).not.toHaveBeenCalled();
 
     const freshFile = new File(["X\n2"], "fresh.csv", { type: "text/csv" });
     Object.defineProperty(freshFile, "arrayBuffer", { value: async () => new TextEncoder().encode("X\n2").buffer });
     fireEvent.change(newInput, { target: { files: [freshFile] } });
-    fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
     await waitFor(() => expect(request).toHaveBeenCalledOnce());
     const args = request.mock.lastCall?.[2]?.[2] as Record<string, unknown>;
     expect(args.filename).toBe("fresh.csv");
@@ -831,7 +946,7 @@ describe("typed table import and numeric selections", () => {
     fireEvent.change(screen.getByLabelText("Table data source"), { target: { value: "paste" } });
     fireEvent.change(screen.getByLabelText("Table data source"), { target: { value: "file" } });
     expect((screen.getByLabelText("CSV or TSV file") as HTMLInputElement).files).toHaveLength(0);
-    fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Choose a CSV or TSV file.");
     expect(request).not.toHaveBeenCalled();
   });
@@ -872,6 +987,47 @@ describe("typed table import and numeric selections", () => {
     expect(request.mock.lastCall?.[2]?.[2]).toMatchObject({
       inputs: { samples: [10, 20] }, sources: { samples: reference },
     });
+  });
+
+  it("reviews paired columns in an editable window before atomically applying verified inputs", async () => {
+    const paired = {
+      ...operation, fields: [operation.fields[0], { ...operation.fields[0], key: "other", label: "Other" }],
+      example: { samples: [1, 2, 3], other: [4, 5, 6] }, pairedFields: [["samples", "other"]],
+    };
+    const table = { ...meta, columns: [
+      { ...meta.columns[0], label: "A (mm)", unit: "mm" }, { ...meta.columns[0], label: "B", unit: "" },
+    ] };
+    const upstream = { nodeId: "parent", title: "Observations", raw: JSON.stringify({
+      ...state, nodeKey: "d".repeat(32), table, latest: null,
+    }) };
+    const raw = JSON.stringify({ ...state, operations: [paired] });
+    const { request, remount } = mount(raw, [upstream]);
+    fireEvent.click(screen.getByText("Bind table columns"));
+    fireEvent.change(await screen.findByLabelText("Column for Samples"), { target: { value: "0" } });
+    fireEvent.change(screen.getByLabelText("Column for Other"), { target: { value: "1" } });
+    fireEvent.change(screen.getByLabelText("Source unit assumption for Other"), { target: { value: "mm" } });
+    fireEvent.change(screen.getByLabelText("First data row"), { target: { value: "2" } });
+    fireEvent.change(screen.getByLabelText("Missing observations"), { target: { value: "complete" } });
+    const choices = [0, 1].map((idx) => ({
+      nodeId: "parent", sourceKey: "d".repeat(32), resultHash: table.asset_ref,
+      receiptHash: table.provenance.receiptHash, selector: ["table_column", idx, "drop", 1, 3],
+      binding: { sourceUnit: "mm", targetUnit: "m", retained: 1, omitted: 1, rowDigest: "b".repeat(64),
+        columnLabel: table.columns[idx].label, completeColumns: [0, 1], ...(idx === 1 && { assumedUnit: "mm" }) },
+    }));
+    for (const reference of choices) request.mockResolvedValueOnce({ ok: true, values: [12.5],
+      inputs: ["12.5 mm"], normalizedPreview: [.0125], reference });
+    fireEvent.click(screen.getByRole("button", { name: "Preview bindings" }));
+    const apply = await screen.findByRole("button", { name: "Apply reviewed bindings" });
+    expect(screen.getByLabelText("Samples (m)")).toHaveValue("[1,2,3]");
+    expect(screen.getByRole("region", { name: "Verified binding preview" })).toHaveTextContent("0.0125");
+    expect(request.mock.calls[1][2]?.[2]).toMatchObject({ start: 1, end: 3, policy: "drop", complete_columns: [0, 1], assumed_unit: "mm" });
+    fireEvent.click(apply);
+    remount(raw);
+    expect(screen.getByLabelText("Samples (m)")).toHaveValue('["12.5 mm"]');
+    fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
+    await waitFor(() => expect(request.mock.lastCall?.[2]?.[2]).toMatchObject({
+      inputs: { samples: ["12.5 mm"], other: ["12.5 mm"] }, sources: { samples: choices[0], other: choices[1] },
+    }));
   });
 
   it("binds a complete typed table and selects text and numeric group fields in the form", async () => {
@@ -986,4 +1142,21 @@ describe("explicit Scientific Graph Runner configuration", () => {
     refresh(JSON.stringify({ ...state, runToken: "restored-after-undo", runner: null }));
     expect(screen.queryByText("Saved as an explicit Graph Runner step.")).toBeNull();
   });
+});
+
+it("restores a saved scalar unit literal and indicates when the recipe diverges", async () => {
+  const { request } = mount(JSON.stringify({ ...state, runner: {
+    version: 2, operationId: "scale", inputs: { length: "25 mm" }, sources: {},
+    uncertaintyMethod: "monte_carlo",
+  } }), []);
+  const field = screen.getByRole("textbox", { name: "Length (m)" });
+  expect(field).toHaveValue("25 mm");
+  expect(screen.getByText("Saved as an explicit Graph Runner step.")).toBeVisible();
+  fireEvent.change(field, { target: { value: "30 mm" } });
+  expect(screen.getByText("Changes not saved to Graph Runner.")).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Save for Graph Runner" }));
+  await waitFor(() => expect(request).toHaveBeenCalledWith("app-plugins", "invokePluginIntent", [
+    "science_mathematics", "configure_runner", { node_id: "target", operation_id: "scale",
+      inputs: { length: "30 mm" }, sources: {}, uncertainty_method: "monte_carlo" },
+  ]));
 });

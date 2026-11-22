@@ -14,6 +14,7 @@ on:
       - "web_ui/src/app/chrome/*lugin*"
       - "web_ui/e2e/*workbench*.spec.ts"
       - "web_ui/playwright.config.ts"
+      - "web_ui/playwright.safety.config.ts"
       - "web_ui/package-lock.json"
   workflow_dispatch:
 
@@ -31,6 +32,21 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+      - name: Select browser suites
+        id: suites
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+            echo "full=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet HEAD^1 HEAD -- .github/workflows/scientific-workbench.yml web_ui/playwright.config.ts web_ui/playwright.safety.config.ts; then
+            echo "full=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "full=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
@@ -47,7 +63,18 @@ jobs:
         working-directory: web_ui
       - run: npx playwright install --with-deps chromium
         working-directory: web_ui
-      - run: npx playwright test --retries=0 --trace=retain-on-failure workbench
+      - name: Run workbench journeys
+        if: steps.suites.outputs.full == 'false'
+        run: npx playwright test --retries=0 --trace=retain-on-failure workbench
+        working-directory: web_ui
+      - name: Run full production browser suite
+        id: release
+        if: steps.suites.outputs.full == 'true'
+        run: npm run test:e2e -- --retries=0 --trace=retain-on-failure
+        working-directory: web_ui
+      - name: Run authenticated approval browser suite
+        if: ${{ !cancelled() && (steps.release.outcome == 'success' || steps.release.outcome == 'failure') }}
+        run: npm run test:e2e:safety -- --retries=0 --trace=retain-on-failure
         working-directory: web_ui
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()

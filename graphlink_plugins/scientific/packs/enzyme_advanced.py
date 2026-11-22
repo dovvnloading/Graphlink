@@ -472,7 +472,8 @@ OPERATIONS = (
                       "are optimized in log coordinates; negative signal directions are supported. "
                       "Two-site Kd values are reported in ascending order. Local Jacobian covariance SEs.",
               citations=(Citation("Langmuir (1918), adsorption and single-site saturation",
-                                  "https://doi.org/10.1021/ja02242a004"),), headline="kd"),
+                                  "https://doi.org/10.1021/ja02242a004"),), headline="kd",
+        paired_fields=(("ligand", "response"),)),
     Operation("morrison_tight_binding_fit", "Fit Morrison tight-binding inhibition",
               "Quadratic tight-binding depletion of free enzyme with fixed active-enzyme concentration.",
               (Field("inhibitor", "Total inhibitor concentration", "vector", unit="selected concentration unit"),
@@ -487,7 +488,8 @@ OPERATIONS = (
                       "top and bottom with known Etotal. Assumes reversible 1:1 tight binding, "
                       "equilibrium and concentration of active sites; Ki_app is condition-dependent.",
               citations=(Citation("Morrison (1969), reversible tight-binding inhibition",
-                                  "https://doi.org/10.1016/0005-2744(69)90420-3"),), headline="ki_app"),
+                                  "https://doi.org/10.1016/0005-2744(69)90420-3"),), headline="ki_app",
+        paired_fields=(("inhibitor", "activity"),)),
     Operation("schild_analysis", "Schild antagonist analysis",
               "Free-slope Schild regression, pA2 and departure from unit slope.",
               (Field("antagonist", "Antagonist concentration", "vector", unit="selected concentration unit"),
@@ -499,7 +501,8 @@ OPERATIONS = (
                       "Only with equilibrium, surmountable competitive antagonism and slope near 1 "
                       "does pA2 approximate pKb; dose ratios need common agonist response level.",
               citations=(Citation("Schild (1947), pA scale for drug antagonism",
-                                  "https://doi.org/10.1111/j.1476-5381.1947.tb00336.x"),), headline="pa2"),
+                                  "https://doi.org/10.1111/j.1476-5381.1947.tb00336.x"),), headline="pa2",
+        paired_fields=(("antagonist", "dose_ratio"),)),
     Operation("thermal_shift_tm", "Thermal-shift melting temperature",
               "Fit an increasing or decreasing single-transition fluorescence sigmoid to estimate Tm.",
               (Field("temperature", "Absolute temperature series", "vector", unit="selected temperature unit"),
@@ -512,5 +515,6 @@ OPERATIONS = (
                       "Temperatures are absolute points (K, Celsius or Fahrenheit); width is an interval. "
                       "One transition and approximately flat end-state baselines are assumed.",
               citations=(Citation("Niesen, Berglund and Vedadi (2007), differential scanning fluorimetry",
-                                  "https://doi.org/10.1038/nprot.2007.321"),), headline="tm"),
+                                  "https://doi.org/10.1038/nprot.2007.321"),), headline="tm",
+        paired_fields=(("temperature", "signal"),)),
 )

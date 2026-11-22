@@ -630,6 +630,7 @@ OPERATIONS = (
         {"coordinates": [0, 2, 3.5], "samples": [1, 5, 2], "targets": [0, 1, 2, 2.5, 3.5]},
         linear_resample,
         headline="observations",
+        paired_fields=(("coordinates", "samples"),),
     ),
 
     Operation(
@@ -647,6 +648,7 @@ OPERATIONS = (
          "sample_times_s": [i / 8 for i in range(8)], "window": "hann"},
         windowed_fft_spectrum,
         headline="peak_frequency_hz",
+        paired_fields=(("samples", "sample_times_s"),),
     ),
     Operation(
         "welch_psd",
@@ -664,6 +666,7 @@ OPERATIONS = (
          "window": "hann", "segment_samples": 8, "overlap_samples": 4},
         welch_psd,
         headline="peak_frequency_hz",
+        paired_fields=(("samples", "sample_times_s"),),
     ),
     Operation(
         "butterworth_filter",
@@ -685,6 +688,7 @@ OPERATIONS = (
          "filter_type": "lowpass", "order": 4, "cutoff_hz": [8]},
         butterworth_filter,
         headline="cutoff_hz",
+        paired_fields=(("samples", "sample_times_s"),),
     ),
     Operation(
         "savitzky_golay",
@@ -701,6 +705,7 @@ OPERATIONS = (
          "window_samples": 5, "polynomial_order": 2},
         savitzky_golay,
         headline="output_samples",
+        paired_fields=(("samples", "sample_times_s"),),
     ),
     Operation(
         "detect_peaks",
@@ -719,5 +724,6 @@ OPERATIONS = (
          "minimum_height": 2, "minimum_prominence": 1, "minimum_spacing_samples": 2},
         detect_peaks,
         headline="peaks_detected",
+        paired_fields=(("samples", "sample_times_s"),),
     ),
 )
