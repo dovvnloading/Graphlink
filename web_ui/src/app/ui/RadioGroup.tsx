@@ -57,10 +57,10 @@ export function RadioGroup({
   }
 
   return (
-    <fieldset className={["gl-radio-group", variant === "card" && "gl-radio-group-card", className].filter(Boolean).join(" ")}
+    <div className={["gl-radio-group", variant === "card" && "gl-radio-group-card", className].filter(Boolean).join(" ")}
       role="radiogroup" aria-labelledby={legendId} aria-describedby={errorId} aria-invalid={error ? true : undefined}
-      disabled={disabled}>
-      <legend className="gl-radio-legend" id={legendId}>{label}</legend>
+      >
+      <span className="gl-radio-legend" id={legendId}>{label}</span>
       <div className="gl-radio-options">
         {options.map((option, index) => (
           <label className={[
@@ -95,6 +95,6 @@ export function RadioGroup({
         ))}
       </div>
       {error && <span className="gl-radio-error" id={errorId}><Icon name="status-error" size="sm" />{error}</span>}
-    </fieldset>
+    </div>
   );
 }
