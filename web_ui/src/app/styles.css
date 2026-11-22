@@ -860,7 +860,7 @@ body {
   background-color: var(--gl-surface-node-body);
   border: 1px solid var(--gl-surface-border);
   border-radius: 8px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--gl-shadow-popover);
 }
 
 .chat-node-menu button {
@@ -2085,7 +2085,7 @@ body {
   padding: 12px 14px;
   min-width: 230px;
   max-width: 320px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--gl-shadow-popover);
   /* R8a (UI/UX issue list findings #4/#13 - a literal duplicate entry, one
      bug): every popover through this shared base class - View, Plugins,
      Pins, Reasoning, Model - is hosted inside .app-canvas-region, which is
@@ -2119,7 +2119,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background-color: rgba(0, 0, 0, 0.43);
+  background-color: var(--gl-scrim);
 }
 
 .overlay-dialog {
@@ -2131,7 +2131,7 @@ body {
   background-color: var(--gl-surface-node-body);
   border: 1px solid var(--gl-surface-border);
   border-radius: 12px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--gl-shadow-dialog);
   outline: none;
 }
 
@@ -3204,7 +3204,7 @@ body {
   background-color: var(--gl-surface-node-body);
   border: 1px solid var(--gl-surface-border);
   border-radius: 10px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--gl-shadow-popover);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -3416,7 +3416,7 @@ body {
      popout intentionally looks like every other floating panel in the
      app, it just isn't driven by the shared overlay system (a hover
      fold-out has no "open surface" to register - see TokenCounter.tsx). */
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--gl-shadow-popover);
 }
 
 .token-counter-row {
@@ -3689,7 +3689,7 @@ body {
   background-color: var(--gl-surface-node-body);
   border: 1px solid var(--gl-surface-border);
   border-radius: 12px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--gl-shadow-dialog);
   overflow: hidden;
 }
 
@@ -3763,7 +3763,7 @@ body {
   background-color: var(--gl-surface-node-body);
   border: 1px solid var(--gl-surface-border);
   border-radius: 9px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--gl-shadow-popover);
 }
 
 .search-overlay-input {
@@ -4976,7 +4976,7 @@ h6:hover > .document-view-heading-anchor {
      (see the file's own top-of-file comment) which pins a small, shared
      set of raw-color exceptions rather than tolerating a new one per
      component. */
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--gl-shadow-popover);
 }
 
 .document-view-toc-item {
@@ -8924,7 +8924,7 @@ mark.document-view-search-match-current {
   background-color: var(--gl-surface-node-body);
   border: 1px solid var(--gl-surface-border);
   border-radius: 8px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--gl-shadow-popover);
 }
 
 .group-color-section-label {
@@ -9063,7 +9063,7 @@ mark.document-view-search-match-current {
   background-color: var(--gl-surface-node-body);
   border: 1px solid var(--gl-surface-border);
   border-radius: 8px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--gl-shadow-popover);
   pointer-events: none;
   white-space: nowrap;
 }

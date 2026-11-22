@@ -302,7 +302,7 @@ This is the practical lookup map for where code actually lives today.
 - `api-contract/topics.ts` - `TOPIC_VALIDATORS`, validating every incoming snapshot against its generated JSON Schema before use.
 - `bridge-core/generated/` - codegen'd TS types + JSON Schemas, one pair per `contracts/` payload dataclass (11 pairs).
 - `bridge-core/islandState.ts`, `schemaVersion.ts`, `textFocus.ts` - small shared bridge helpers (naming is a holdover from the pre-SPA per-island era; there is only one app target now).
-- `tokens/gl-theme.css`, `gl-vars-dev.css` - the design-token CSS variables.
+- `tokens/gl-vars-dev.css` - the design-token CSS variables (dark and light palettes).
 - `ui/BridgeErrorState.tsx`, `base.css` - shared error-state UI and the CSS reset.
 
 ### `contracts/` (build-time codegen, not runtime application code)
