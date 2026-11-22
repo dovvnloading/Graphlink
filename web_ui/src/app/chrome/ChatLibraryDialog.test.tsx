@@ -164,7 +164,7 @@ async function chooseCustomOption(
   optionName: string,
 ) {
   await user.click(screen.getByRole("button", { name: triggerName }));
-  await user.click(await screen.findByRole("button", { name: optionName }));
+  await user.click(within(await screen.findByRole("listbox", { name: triggerName })).getByRole("option", { name: optionName }));
 }
 
 function OpenLibraryButton() {
