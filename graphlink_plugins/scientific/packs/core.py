@@ -99,5 +99,6 @@ OPERATIONS = (
     Operation("plot_xy", "Plot paired samples", "Connect measured samples in their original sequence.",
               (Field("x", "Horizontal coordinates", "vector"), Field("y", "Vertical coordinates", "vector"),
                Field("x_label", "Horizontal axis with units", "text"), Field("y_label", "Vertical axis with units", "text")),
-              {"x": [0, 1, 2], "y": [0, 2, 4], "x_label": "Time (s)", "y_label": "Distance (m)"}, _plot, headline="samples"),
+              {"x": [0, 1, 2], "y": [0, 2, 4], "x_label": "Time (s)", "y_label": "Distance (m)"}, _plot, headline="samples",
+        paired_fields=(("x", "y"),)),
 )

@@ -493,6 +493,7 @@ OPERATIONS = (
                      "https://doi.org/10.1093/biomet/33.3.183"),
         ),
         headline="net_reproductive_rate",
+        paired_fields=(("ages", "survivors", "fecundity"),),
     ),
     Operation(
         "matrix_population_projection", "Project structured populations (Leslie/Lefkovitch)",

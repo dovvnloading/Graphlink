@@ -510,6 +510,7 @@ OPERATIONS = (
                 "onset-to-onset refractory exclusion.",
         citations=_CITES[:1],
         headline="window_firing_rate_hz",
+        paired_fields=(("time_ms", "voltage_mv"),),
     ),
     Operation(
         "fick_diffusion", "Fick steady diffusion",

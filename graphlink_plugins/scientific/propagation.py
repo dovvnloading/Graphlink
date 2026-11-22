@@ -32,11 +32,19 @@ _UNIT_NAMES = {
 }
 
 
-def result_unit(name: str) -> str:
+def result_unit(name: str, declared: dict | None = None) -> str:
     """Use only an explicitly labeled result unit, never guess dimensions."""
+    if declared and name in declared:
+        return declared[name]
+    # Legacy oscillator receipts predate explicit output units. A rate's
+    # trailing "_s" is its denominator, not a declaration of seconds.
+    if name == "angular_frequency_rad_s":
+        return "rad/s"
     label = _UNIT_SUFFIX.search(name)
     if label:
         return label.group(1).strip()
+    if "_per_" in name or re.search(r"_(?:rad|m|cm|mm|kg|mol|j|w|pa)_[a-z]+$", name, re.I):
+        return ""
     # Scientific packs also label scalar output quantities with suffixes.
     for suffix, symbol in sorted(_UNIT_NAMES.items(), key=lambda item: -len(item[0])):
         if name.lower().endswith("_" + suffix):
@@ -88,7 +96,7 @@ def _native_uncertainty(result: dict, key: str) -> dict | None:
         if key == "estimate" and _numeric(values.get("coverage_lower")) and _numeric(values.get("coverage_upper")):
             interval = [values["coverage_lower"], values["coverage_upper"]]
         return {"value": value, "standardUncertainty": sigma,
-                "coverageFactor": factor, "coverageProbability": probability, "unit": result_unit(key),
+                "coverageFactor": factor, "coverageProbability": probability, "unit": result_unit(key, result.get("provenance", {}).get("outputUnits")),
                 **({"interval": interval} if interval else {})}
 
     # A confidence or bootstrap interval is not a standard uncertainty.
@@ -441,7 +449,7 @@ def propagate(operation: Operation, inputs: dict, result: dict,
             else:
                 std, estimate = gum, value
                 low, high = finite(value - factor * std, "Coverage lower"), finite(value + factor * std, "Coverage upper")
-            unit = result_unit(key)
+            unit = result_unit(key, dict(operation.output_units))
             if operation.id == "convert_unit" and key.startswith("value ("):
                 unit = inputs["to_unit"]
             if not unit and len(attached) == 1 and key in ("estimate", next(iter(attached))):

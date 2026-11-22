@@ -536,6 +536,7 @@ OPERATIONS: tuple[Operation, ...] = (
         {"flow_m3_s": [1, 2], "duration_s": [600, 600], "concentration_mg_l": [3, 6]},
         flow_weighted_concentration,
         headline="mean_concentration_mg_l",
+        paired_fields=(("flow_m3_s", "duration_s", "concentration_mg_l"),),
     ),
     Operation(
         "rainfall_runoff",
@@ -564,6 +565,7 @@ OPERATIONS: tuple[Operation, ...] = (
         {"daily_min_c": [6, 10, 12], "daily_max_c": [12, 18, 20], "base_c": 10},
         degree_days,
         headline="growing_degree_days_c",
+        paired_fields=(("daily_min_c", "daily_max_c"),),
     ),
     Operation(
         "air_quality_index",
@@ -648,6 +650,7 @@ OPERATIONS: tuple[Operation, ...] = (
          "prediction_time_day": 7},
         first_order_decay_fit,
         headline="decay_constant_per_day",
+        paired_fields=(("time_day", "concentration_mg_l"),),
     ),
     Operation(
         "rational_runoff",
@@ -725,5 +728,6 @@ OPERATIONS: tuple[Operation, ...] = (
          "observation_unit": "mg/L", "significance_level": .05},
         mann_kendall_sen,
         headline="sen_slope_per_year",
+        paired_fields=(("time_year", "observations"),),
     ),
 )

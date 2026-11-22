@@ -35,6 +35,8 @@ export interface ScienceOperation {
   citations?: ScienceCitation[];
   /** Result value key the node shows first, declared by the operation. */
   headline?: string;
+  pairedFields?: string[][];
+  outputUnits?: Record<string, string>;
 }
 
 export interface SourceReference {
@@ -43,6 +45,11 @@ export interface SourceReference {
   sourceKey?: string | null;
   receiptHash?: string;
   selector: (string | number)[];
+  assumedUnit?: string;
+  binding?: {
+    columnLabel: string; sourceUnit: string; targetUnit: string; rowDigest: string;
+    retained: number; omitted: number; completeColumns?: number[]; completeLabels?: string[]; assumedUnit?: string;
+  };
 }
 
 export interface ScienceLimits {
@@ -94,8 +101,11 @@ export interface ScientificUncertainty {
 }
 
 /** Recognize explicit scalar output units, including legacy pack suffixes. */
-export function resultUnit(name: string): string {
+export function resultUnit(name: string, declared?: Record<string, string>): string {
+  if (declared && Object.hasOwn(declared, name)) return declared[name];
+  if (name === "angular_frequency_rad_s") return "rad/s";
   const suffix = name.match(/\(([^()]+)\)\s*$/);
+  if (!suffix && (name.includes("_per_") || /_(?:rad|m|cm|mm|kg|mol|j|w|pa)_[a-z]+$/i.test(name))) return "";
   const short = name.match(/_(ma|mm|cm|km|kg|hz|pa|rad|deg|ohm|mol|ms|m|s|g|j|k|v|a|l)$/i);
   return suffix?.[1] ?? (short ? ({
     ma: "Ma", hz: "Hz", pa: "Pa", j: "J", k: "K", v: "V",
@@ -106,7 +116,7 @@ export function resultUnit(name: string): string {
 /** Keep the source's physical unit in a linked scalar editor. */
 export function connectedInputText(field: ScienceField, option: SourceOption): string {
   const raw = fieldText(field, option.value);
-  return field.kind === "number" && option.unit ? `${raw} ${option.unit}` : raw;
+  return (field.kind === "number" || field.kind === "integer") && option.unit ? `${raw} ${option.unit}` : raw;
 }
 
 /** Human-facing formatting only. Never round the actual result, linked inputs,
@@ -215,7 +225,7 @@ export function formatMeasurement(measurement: ScientificMeasurement): string {
 }
 
 /** Also understand pre-existing pack outputs without changing their receipts. */
-export function resultMeasurement(result: Pick<ScienceResult, "values" | "uncertainty">, name: string): ScientificMeasurement | undefined {
+export function resultMeasurement(result: Pick<ScienceResult, "values" | "uncertainty"> & Partial<Pick<ScienceResult, "provenance">>, name: string): ScientificMeasurement | undefined {
   const value = result.values[name];
   if (!finite(value)) return undefined;
   const attached = result.uncertainty?.outputs[name];
@@ -241,7 +251,7 @@ export function resultMeasurement(result: Pick<ScienceResult, "values" | "uncert
     sigma = candidates.filter((candidate) => candidate && candidate !== name).map((candidate) => result.values[candidate]).find(finite);
   }
   if (!finite(sigma) || sigma < 0 || !finite(factor) || factor <= 0) return undefined;
-  const unit = resultUnit(name);
+  const unit = resultUnit(name, result.provenance?.outputUnits);
   return { value, standardUncertainty: sigma, coverageFactor: factor,
     coverageProbability: name === "estimate" && finite(result.values.coverage_probability)
       ? result.values.coverage_probability : 0.95, unit };
@@ -259,7 +269,7 @@ export interface ScienceResult {
   /** Typed layouts supplement (rather than replace) legacy tables and plots. */
   views?: ScienceResultView[];
   uncertainty?: ScientificUncertainty;
-  provenance: Record<string, unknown> & { resultHash: string; receiptHash?: string; sources?: Sources };
+  provenance: Record<string, unknown> & { resultHash: string; receiptHash?: string; sources?: Sources; outputUnits?: Record<string, string> };
 }
 
 export interface ScienceRunnerConfiguration {
@@ -343,6 +353,8 @@ function isOperation(value: unknown): value is ScienceOperation {
   return record(value) && typeof value.id === "string" && typeof value.title === "string"
     && typeof value.description === "string" && record(value.example) && Array.isArray(value.fields)
     && value.fields.every(isField)
+    && (value.pairedFields === undefined || Array.isArray(value.pairedFields) && value.pairedFields.every(strings))
+    && (value.outputUnits === undefined || record(value.outputUnits) && Object.values(value.outputUnits).every((unit) => typeof unit === "string"))
     && (value.methods === undefined || typeof value.methods === "string")
     && (value.headline === undefined || typeof value.headline === "string")
     && (value.citations === undefined || Array.isArray(value.citations)
@@ -637,7 +649,7 @@ export function sourceOptions(parents: ScienceParent[], maxPoints = V1_LIMITS.po
           uncertainty ? " · " + formatMeasurement(uncertainty)
           + (uncertainty.method === "monte_carlo" ? " · downstream propagation requires the unavailable joint PDF" : "") :
           interval ? ` · interval [${interval[0]}, ${interval[1]}] · cannot propagate without a standard uncertainty` : "";
-        const unit = selector[0] === "values" ? uncertainty?.unit || resultUnit(name) : "";
+        const unit = selector[0] === "values" ? resultUnit(name, result.provenance.outputUnits) || uncertainty?.unit || "" : "";
         options.push({ label: `${title} · ${name}${detail}`, value,
           ...(uncertainty && { uncertainty }),
           ...(unsupported && { unpropagatable: unsupported }),
