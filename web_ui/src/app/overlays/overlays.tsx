@@ -71,6 +71,7 @@ export function OverlayProvider({ children }: { children: ReactNode }) {
   const layersRef = useRef<Layer[]>([]);
   const surfaceElements = useRef(new Map<string, HTMLElement>());
   const exitTimers = useRef(new Map<string, number>());
+  const pendingFocusRestore = useRef<{ name: string; trigger: HTMLElement | null } | null>(null);
 
   const publish = useCallback((next: Layer[]) => {
     layersRef.current = next;
@@ -103,6 +104,7 @@ export function OverlayProvider({ children }: { children: ReactNode }) {
     const closing = active.slice(index);
     const names = new Set(closing.map((layer) => layer.name));
     const trigger = active[index].trigger;
+    pendingFocusRestore.current = { name: active[index].name, trigger };
     publish(layersRef.current.map((layer) => names.has(layer.name) ? { ...layer, state: "closing" as const } : layer));
     for (const layer of closing) scheduleRemoval(layer.name);
     if (trigger && document.contains(trigger)) trigger.focus();
@@ -141,7 +143,10 @@ export function OverlayProvider({ children }: { children: ReactNode }) {
     const root = active[0];
     const focused = document.activeElement;
     // Existing child popovers/dialogs can nest without changing their call sites.
-    const inside = root?.tier === "dialog" && active.some((layer) => {
+    // Root dialogs remain single-open (e.g. onboarding -> Settings); only
+    // popovers opened from within a dialog can auto-nest. Nested dialogs use
+    // openNested explicitly so a top-level navigation never strands its parent.
+    const inside = tier === "popover" && root?.tier === "dialog" && active.some((layer) => {
       const panel = surfaceElements.current.get(layer.name);
       return panel && focused instanceof Node && panel.contains(focused);
     });
@@ -161,6 +166,20 @@ export function OverlayProvider({ children }: { children: ReactNode }) {
   const active = layers.filter((layer) => layer.state === "open");
   const openSurface = active.find((layer) => layer.parent === null)?.name ?? null;
   const topmost = active[active.length - 1]?.name ?? null;
+
+  // A closing dialog removes its focused children before the exit animation
+  // finishes. Restore again after that React commit if focus fell to <body>;
+  // never steal focus from another control the user reached in the meantime.
+  useLayoutEffect(() => {
+    const pending = pendingFocusRestore.current;
+    if (!pending || layers.some((layer) => layer.name === pending.name)) return;
+    pendingFocusRestore.current = null;
+    const trigger = pending.trigger;
+    if (trigger && document.contains(trigger) &&
+        (document.activeElement === document.body || document.activeElement === trigger)) {
+      trigger.focus();
+    }
+  }, [layers]);
   const isOpen = useCallback((name: string) => layers.some((layer) =>
     layer.name === name && layer.state === "open"), [layers]);
   const isClosing = useCallback((name: string) => layers.some((layer) =>
