@@ -12,7 +12,7 @@ from typing import Any
 from backend.domain.model import SceneError
 from graphlink_plugins.scientific.bindings import column_binding
 from graphlink_plugins.scientific.catalog import PACKS, operations
-from graphlink_plugins.scientific.core import VERSION, Operation, fingerprint, readable_result, validated_inputs_with_units
+from graphlink_plugins.scientific.core import UNCERTAINTY_METHODS, VERSION, Operation, fingerprint, readable_result, validated_inputs_with_units
 from graphlink_plugins.scientific.data_table import table_metadata_valid
 from graphlink_plugins.scientific.propagation import connected_measurement, result_unit
 from graphlink_plugins.scientific.reference_data import references_for_operation
@@ -32,7 +32,9 @@ def _configuration(node: Any) -> tuple[str, Operation, dict[str, Any]]:
     pack = node.kind.removeprefix("science_").split(".", 1)[0]
     state = node.state.data
     config = state["runner"]
-    if (pack not in PACKS or config.get("version") != 1
+    if (pack not in PACKS or type(config.get("version")) is not int or config["version"] not in (1, 2)
+            or config.get("uncertaintyMethod", "auto") not in UNCERTAINTY_METHODS
+            or (config["version"] == 2 and "uncertaintyMethod" not in config)
             or not isinstance(config.get("operationId"), str)
             or not isinstance(config.get("inputs"), dict)
             or not isinstance(config.get("sources"), dict)
@@ -147,13 +149,16 @@ def _stable_sources(sources: dict) -> dict:
 
 def config_hash(node: Any) -> str:
     pack, operation, config = _configuration(node)
-    return fingerprint([
+    identity = [
         "science_runner_v1", pack, VERSION, operation.id, node.state.data.get("nodeKey"),
         {key: value for key, value in config["inputs"].items() if key not in config["sources"]},
         {field: {"sourceKey": ref.get("sourceKey"), "selector": ref.get("selector"),
                  **({"binding": ref["binding"]} if "binding" in ref else {})}
          for field, ref in sorted(config["sources"].items())},
-    ])
+    ]
+    if config.get("uncertaintyMethod", "auto") != "auto":
+        identity.append(config["uncertaintyMethod"])
+    return fingerprint(identity)
 
 
 def output_hash(node: Any) -> str:
@@ -271,8 +276,11 @@ def prepare(document: Any, node: Any, granted: Any) -> tuple[Any, dict, dict, st
     current = node.state.data.get("latest")
     if isinstance(current, dict) and node.content != current["summary"]:
         raise SceneError("The scientific output has manual edits; review them before running.")
+    requested = config.get("uncertaintyMethod", "auto")
     same = bool(
         isinstance(current, dict) and current["provenance"]["packVersion"] == VERSION
+        and current["provenance"].get("requestedUncertaintyMethod",
+                                      None if current.get("uncertainty") else "auto") == requested
         and current["operationId"] == operation.id
         and current["inputs"] == inputs
         and current["provenance"].get("inputUnits") == input_units
@@ -281,5 +289,8 @@ def prepare(document: Any, node: Any, granted: Any) -> tuple[Any, dict, dict, st
     )
     # Dispatch the original validated literals so the worker retains submitted
     # units in provenance; pin the normalized values AND unit choices for replay.
-    digest = fingerprint([VERSION, operation.id, inputs, input_units, _stable_sources(sources), reference_data])
+    identity = [VERSION, operation.id, inputs, input_units, _stable_sources(sources), reference_data]
+    if requested != "auto":
+        identity.append(requested)
+    digest = fingerprint(identity)
     return operation, raw, sources, digest, same
