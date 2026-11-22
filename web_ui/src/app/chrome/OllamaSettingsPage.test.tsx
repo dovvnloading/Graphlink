@@ -150,7 +150,7 @@ async function chooseOption(
   user: ReturnType<typeof userEvent.setup>, field: string, option: string,
 ) {
   await user.click(screen.getByRole("button", { name: field }));
-  await user.click(screen.getByRole("button", { name: option }));
+  await user.click(within(screen.getByRole("listbox", { name: field })).getByRole("option", { name: option }));
 }
 
 describe("Settings > Ollama", () => {
@@ -220,8 +220,8 @@ describe("Settings > Ollama", () => {
     expect(screen.queryByRole("button", { name: "Remove disk:latest" })).toBeNull();
     expect(screen.getByRole("button", { name: "Check disk:latest" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Context window for disk:latest" }));
-    expect(screen.getByRole("button", { name: "8k" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "16k" })).toBeNull();
+    expect(screen.getByRole("option", { name: "8k" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "16k" })).toBeNull();
   });
 
   it("each card owns its context window and applies the verified trained limit", async () => {
@@ -235,9 +235,9 @@ describe("Settings > Ollama", () => {
     expect(screen.getByRole("button", { name: "Context window for small:latest" })).toHaveTextContent("8k");
     expect(screen.getByRole("button", { name: "Context window for large:latest" })).toHaveTextContent("8k");
     await user.click(screen.getByRole("button", { name: "Context window for small:latest" }));
-    expect(screen.getByRole("button", { name: "16k" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "32k" })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "16k" }));
+    expect(screen.getByRole("option", { name: "16k" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "32k" })).toBeNull();
+    await user.click(screen.getByRole("option", { name: "16k" }));
     expect(intents).toContainEqual(["app-settings", "setOllamaContextWindow", ["small:latest", 16384]]);
     await chooseOption(user, "Context window for large:latest", "32k");
     expect(intents).toContainEqual(["app-settings", "setOllamaContextWindow", ["large:latest", 32768]]);
@@ -313,7 +313,7 @@ describe("Settings > Ollama", () => {
     await chooseOption(user, "Chat Model", "Auto - choose a compatible installed model");
     expect(intents).toContainEqual(["app-settings", "setOllamaModelAssignment", ["task_chat", "auto"]]);
     await user.click(screen.getByRole("button", { name: "Chat Model" }));
-    expect(screen.queryByRole("button", { name: "Use chat model" })).toBeNull();
+    expect(screen.queryByRole("option", { name: "Use chat model" })).toBeNull();
   });
 
   it("does not present folder-discovered or datalist-only names as installed choices", async () => {
@@ -323,9 +323,9 @@ describe("Settings > Ollama", () => {
       ollamaScannedModels: ["disk:latest", "only-in-datalist:latest"],
     });
     await user.click(screen.getByRole("button", { name: "Chat Model" }));
-    expect(screen.queryByRole("button", { name: "disk:latest" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "only-in-datalist:latest" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Custom model ID..." })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "disk:latest" })).toBeNull();
+    expect(screen.queryByRole("option", { name: "only-in-datalist:latest" })).toBeNull();
+    expect(screen.getByRole("option", { name: "Custom model ID..." })).toBeInTheDocument();
   });
 
   it("preserves unknown IDs via the custom option, with multi-character typing even without server echoes", async () => {
@@ -356,12 +356,14 @@ describe("Settings > Ollama", () => {
     const trigger = screen.getByRole("button", { name: "Chat Naming Model" });
     trigger.focus();
     await user.keyboard("{Enter}");
-    expect(screen.getByRole("button", { name: "Auto - choose a compatible installed model" })).toHaveFocus();
+    const listbox = screen.getByRole("listbox", { name: "Chat Naming Model" });
+    expect(listbox).toHaveFocus();
+    expect(listbox).toHaveAttribute("aria-activedescendant", screen.getByRole("option", { name: "Auto - choose a compatible installed model" }).id);
     await user.keyboard("{ArrowDown}{Enter}");
     expect(intents).toContainEqual(["app-settings", "setOllamaModelAssignment", ["task_title", "alpha:latest"]]);
     expect(trigger).toHaveFocus();
     await user.keyboard("{Enter}{Escape}");
-    expect(screen.queryByRole("dialog", { name: "Chat Naming Model" })).toBeNull();
+    expect(screen.queryByRole("listbox", { name: "Chat Naming Model" })).toBeNull();
     expect(trigger).toHaveFocus();
   });
 
@@ -523,13 +525,14 @@ describe("Settings > Ollama", () => {
   it("reveals selected values and traverses the portaled task picker with a single Tab", async () => {
     const { user } = setup();
     const field = screen.getByRole("button", { name: "Chat Model" });
-    expect(field).toHaveAccessibleDescription("Selected: Auto - choose a compatible installed model");
+    expect(field).toHaveTextContent("Auto - choose a compatible installed model");
+    expect(field).not.toHaveAccessibleDescription(/Selected:/);
     field.focus();
     await user.keyboard("{Enter}");
-    expect(screen.getByRole("button", { name: "Auto - choose a compatible installed model" }))
-      .toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("option", { name: "Auto - choose a compatible installed model" }))
+      .toHaveAttribute("aria-selected", "true");
     await user.keyboard("{Tab}");
-    expect(screen.queryByRole("dialog", { name: "Chat Model" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("listbox", { name: "Chat Model" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Chat Naming Model" })).toHaveFocus();
   });
 
@@ -545,10 +548,10 @@ describe("Settings > Ollama", () => {
     });
     expect(screen.getByRole("alert")).toHaveTextContent(/embedding-only model and cannot generate text/);
     await user.click(screen.getByRole("button", { name: "Chat Model" }));
-    expect(screen.queryByRole("button", { name: "nomic-embed-text:latest" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "chat:latest" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "unverified:latest" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "chat:latest" }));
+    expect(screen.queryByRole("option", { name: "nomic-embed-text:latest" })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "chat:latest" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "unverified:latest" })).toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: "chat:latest" }));
     update({ ollamaModelAssignments: { task_chat: "chat:latest" } });
     expect(screen.queryByText(/embedding-only model and cannot generate text/)).not.toBeInTheDocument();
   });
@@ -619,8 +622,8 @@ describe("Settings > Ollama", () => {
     expect(card.getByRole("button", { name: "Context window for six-k:latest" })).toHaveTextContent("4k");
     expect(card.getByRole("status")).toHaveTextContent(/saved 8,192-token window.*supported presets/);
     await user.click(card.getByRole("button", { name: "Context window for six-k:latest" }));
-    expect(screen.queryByRole("button", { name: "8k" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "4k" }));
+    expect(screen.queryByRole("option", { name: "8k" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: "4k" }));
     expect(intents).toContainEqual(["app-settings", "setOllamaContextWindow", ["six-k:latest", 4096]]);
   });
 
