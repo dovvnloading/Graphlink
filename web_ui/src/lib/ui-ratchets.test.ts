@@ -36,10 +36,38 @@ function afterQuote(source: string, start: number): number {
   let i = start + 1;
   while (i < source.length) {
     if (source[i] === "\\") { i += 2; continue; }
+    if (quote === "`" && source[i] === "$" && source[i + 1] === "{") {
+      i = afterExpression(source, i + 2);
+      continue;
+    }
     if (source[i] === quote) return i + 1;
     i++;
   }
   return i;
+}
+
+// Skip a complete template interpolation, including nested objects, strings,
+// regexes, comments and other templates; those expressions are scanned below.
+function afterExpression(source: string, start: number): number {
+  let depth = 1;
+  for (let i = start; i < source.length;) {
+    if (source[i] === "'" || source[i] === '"' || source[i] === "`") {
+      i = afterQuote(source, i);
+    } else if (source[i] === "/" && source[i + 1] === "/") {
+      const end = source.indexOf("\n", i + 2);
+      i = end < 0 ? source.length : end;
+    } else if (source[i] === "/" && source[i + 1] === "*") {
+      const close = source.indexOf("*/", i + 2);
+      i = close < 0 ? source.length : close + 2;
+    } else if (source[i] === "/" && startsRegex(source, i)) {
+      i = afterRegex(source, i);
+    } else if (source[i] === "{") { depth++; i++; }
+    else if (source[i] === "}") {
+      if (--depth === 0) return i + 1;
+      i++;
+    } else { i++; }
+  }
+  return source.length;
 }
 
 function startsRegex(source: string, index: number): boolean {
@@ -96,30 +124,31 @@ function stripCssComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, blank);
 }
 
-// For static string content, template interpolation is executable JS, not a
-// string. In particular, `${...items}` must not trigger R13.
-function templateText(value: string): string {
-  let result = "";
+// Keep template literal fragments separate. Joining across an interpolation
+// could invent an ellipsis that does not exist in any single literal fragment.
+function templateFragments(value: string): { segments: string[]; expressions: string[] } {
+  const segments: string[] = [];
+  const expressions: string[] = [];
+  let from = 0;
   for (let i = 0; i < value.length;) {
+    if (value[i] === "\\") { i += 2; continue; }
     if (value[i] === "$" && value[i + 1] === "{") {
-      i += 2;
-      let depth = 1;
-      while (i < value.length && depth > 0) {
-        if (value[i] === "'" || value[i] === '"' || value[i] === "`") {
-          i = afterQuote(value, i);
-        } else if (value[i] === "{") { depth++; i++; }
-        else if (value[i] === "}") { depth--; i++; }
-        else { i++; }
-      }
-    } else { result += value[i++]; }
+      segments.push(value.slice(from, i));
+      const end = afterExpression(value, i + 2);
+      expressions.push(value.slice(i + 2, end - 1));
+      i = end;
+      from = end;
+    } else { i++; }
   }
-  return result;
+  segments.push(value.slice(from));
+  return { segments, expressions };
 }
 
-function inspectTsx(source: string) {
+function inspectTsx(source: string): { clean: string; code: string; tags: JsxTag[]; literalTexts: string[] } {
   const clean = stripTsComments(source);
   const codeParts: string[] = [];
   const literals: string[] = [];
+  const nestedExpressions: string[] = [];
   let from = 0;
   for (let i = 0; i < clean.length;) {
     if (clean[i] === "'" || clean[i] === '"' || clean[i] === "`") {
@@ -128,7 +157,11 @@ function inspectTsx(source: string) {
           /[\p{L}\p{N}]/u.test(clean[i + 1] ?? "")) { i++; continue; }
       const end = afterQuote(clean, i);
       const raw = clean.slice(i + 1, end - 1);
-      literals.push(clean[i] === "`" ? templateText(raw) : raw);
+      if (clean[i] === "`") {
+        const { segments, expressions } = templateFragments(raw);
+        literals.push(...segments);
+        nestedExpressions.push(...expressions);
+      } else { literals.push(raw); }
       codeParts.push(clean.slice(from, i), blank(clean.slice(i, end)));
       i = end;
       from = end;
@@ -143,16 +176,23 @@ function inspectTsx(source: string) {
   }
   codeParts.push(clean.slice(from));
   const code = codeParts.join("");
-  // The text on either side of a JSX expression boundary is also JSX text.
-  // Require a following tag/expression boundary, excluding TS spread/rest.
-  const jsxTexts = [...clean.matchAll(/(?:>|\})([^<>{}]+)(?=[<{])/g)]
-    .filter((match) => match[0].startsWith(">") ||
-      clean.lastIndexOf(">", match.index) > clean.lastIndexOf(";", match.index))
+  // Only tag-closing '>' may begin JSX text; comparison operators must not
+  // make surrounding JS (including spread/rest) look like rendered text.
+  const tags = jsxTags(clean, code);
+  const tagEnds = new Set(tags.map((tag) => tag.end));
+  for (const match of code.matchAll(/<\/[A-Za-z][\w.:-]*\s*>|<\/?>/g)) {
+    tagEnds.add(match.index + match[0].length - 1);
+  }
+  const jsxTexts = [...code.matchAll(/(?:>|\})([^<>{}]+)(?=[<{])/g)]
+    .filter((match) => match[0].startsWith(">")
+      ? tagEnds.has(match.index)
+      : code.lastIndexOf(">", match.index) > code.lastIndexOf(";", match.index))
     .map((match) => match[1]);
-  return { clean, code, literalTexts: [...literals, ...jsxTexts] };
+  const expressions = nestedExpressions.flatMap((expression) => inspectTsx(expression).literalTexts);
+  return { clean, code, tags, literalTexts: [...literals, ...expressions, ...jsxTexts] };
 }
 
-type JsxTag = { name: string; attributes: Map<string, string> };
+type JsxTag = { name: string; attributes: Map<string, string>; end: number };
 
 function jsxTags(clean: string, code: string): JsxTag[] {
   const tags: JsxTag[] = [];
@@ -214,7 +254,7 @@ function jsxTags(clean: string, code: string): JsxTag[] {
         k += Math.max(1, value.length);
       }
     }
-    tags.push({ name, attributes });
+    tags.push({ name, attributes, end: j });
   }
   return tags;
 }
@@ -223,19 +263,29 @@ function count(text: string, pattern: RegExp): number {
   return [...text.matchAll(pattern)].length;
 }
 
+function nativeDialogCalls(code: string): number {
+  let total = 0;
+  for (const match of code.matchAll(/\b(?:confirm|alert|prompt)\s*\(/g)) {
+    const before = code.slice(0, match.index).trimEnd();
+    const memberCall = /(?:\?\.|\.)\s*$/.test(before);
+    if (!memberCall || /\bwindow\s*(?:\?\.|\.)\s*$/.test(before)) total++;
+  }
+  return total;
+}
+
 function tsxCounts(source: string, file: string): Partial<Record<RatchetRule, number>> {
   const parsed = inspectTsx(source);
-  const tags = jsxTags(parsed.clean, parsed.code);
+  const tags = parsed.tags;
   const texts = parsed.literalTexts;
   const rawIcons = texts.reduce((sum, text) => sum + count(text, ICON_RE), 0);
   const exemptHarness = file === "app/canvas/HarnessNodeView.tsx"
-    ? count(parsed.clean, /\$\{data\.harnessCompactions\}×/g) : 0;
+    ? allowableGlyphCount(source, file, "×") : 0;
   return {
     R1: rawIcons - exemptHarness,
     R2: /^(?:app\/canvas\/charts\/|app\/canvas\/connections\/)/.test(file) ||
       ["app/canvas/ScientificResultViews.tsx", "app/canvas/OrthogonalEdge.tsx"].includes(file)
       ? 0 : tags.filter((tag) => tag.name === "svg").length,
-    R3: count(parsed.code, /\bwindow\s*(?:\?\.|\.)\s*(?:confirm|alert|prompt)\s*\(|(?<![\w.$])\b(?:confirm|alert|prompt)\s*\(/g),
+    R3: nativeDialogCalls(parsed.code),
     R4: tags.filter((tag) => tag.name === "select").length,
     R5: tags.filter((tag) => tag.name === "details").length,
     R6: tags.filter((tag) => tag.name === "input" && ["checkbox", "radio", "range"].includes(tag.attributes.get("type") ?? "")).length,
@@ -266,7 +316,7 @@ function cssDeclarations(source: string): CssDeclaration[] {
 }
 
 function isVar(value: string): boolean {
-  return /^var\(\s*--gl-[\w-]+(?:\s*,[\s\S]*)?\)$/.test(value);
+  return /^var\(\s*--[\w-]+(?:\s*,[\s\S]*)?\)$/.test(value);
 }
 
 function allowedRadius(value: string): boolean {
@@ -301,7 +351,7 @@ function cssCounts(source: string): Partial<Record<RatchetRule, number>> {
     if (/^(?:padding|margin|inset)(?:-(?:top|right|bottom|left|block(?:-start|-end)?|inline(?:-start|-end)?))?$|^(?:gap|row-gap|column-gap)$/.test(name)) {
       const raw = removeVarAndCalc(value);
       for (const match of raw.matchAll(/(?<![\w.-])(-?\d*\.?\d+)px\b/g)) {
-        if (match[1] !== "0" && match[1] !== "1") totals.R14++;
+        if (match[1] !== "1") totals.R14++;
       }
     }
   }
@@ -325,7 +375,7 @@ function allowableGlyphCount(source: string, file: string, needle: string): numb
     return count(clean, /["'] × 10["']/g);
   }
   if (file === "app/canvas/HarnessNodeView.tsx" && needle === "×") {
-    return count(clean, /\$\{data\.harnessCompactions\}×/g);
+    return count(clean, /`[^`]*\bcompacted\s+\$\{data\.harnessCompactions\}×`/g);
   }
   if (file === "app/canvas/ChatVersionCompareDialog.tsx") {
     if (needle === "−") return count(clean, /<span\s+aria-hidden="true">−\s*<\/span>/g);
@@ -431,4 +481,30 @@ describe("UI-02 detector self-tests (positive and known false-positive shapes)",
     expect(allowableGlyphCount('const s = "×";', "app/canvas/scientificWorkbench.ts", "×")).toBe(0);
     expect(tsxCounts('<button>×</button> `compacted ${data.harnessCompactions}×`', "app/canvas/HarnessNodeView.tsx").R1).toBe(1);
   });
+  it("R12 counts styles.css lines and applies to no other stylesheet", () => {
+    expect(ruleCounts(".a {}\n.b {}", "app/styles.css").R12).toBe(2);
+    expect(ruleCounts(".a {}", "app/other.css").R12).toBeUndefined();
+  });
+  it("counts only JSX text, not expressions following comparison operators", () => {
+    const code = 'const a = value > "✓" && value < limit; const b = value > [...items].length && value < limit;';
+    expect(tsxCounts(code, "app/sample.tsx").R1).toBe(1);
+    expect(tsxCounts(code, "app/sample.tsx").R13).toBe(0);
+  });
+  it("scans nested template expression strings without joining adjacent fragments", () => {
+    const code = 'const a = `value ${"Loading..."} tail`; const b = `outer ${`inner ${"✓"}`} tail`;';
+    expect(tsxCounts(code, "app/sample.tsx").R13).toBe(1);
+    expect(tsxCounts(code, "app/sample.tsx").R1).toBe(1);
+    expect(tsxCounts('const x = `one.${value}..`', "app/sample.tsx").R13).toBe(0);
+  });
+  it("accepts every CSS var() token, but not a raw 0px spacing value", () => {
+    expect(cssCounts(".x { font-size: var(--font-size); z-index: var(--layer); margin: 0px; }"))
+      .toMatchObject({ R9: 0, R11: 0, R14: 1 });
+  });
+  it("handles multiline JSX attributes and excludes non-window member dialogs", () => {
+    const jsx = '<input\n type=\n"checkbox" title=\n"Custom" />\nwindow . alert("ok"); dialogs . alert("not native");';
+    expect(tsxCounts(jsx, "app/sample.tsx").R6).toBe(1);
+    expect(tsxCounts(jsx, "app/sample.tsx").R8).toBe(1);
+    expect(tsxCounts(jsx, "app/sample.tsx").R3).toBe(1);
+  });
+
 });
