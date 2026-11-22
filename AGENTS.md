@@ -132,7 +132,7 @@ Never commit directly to `main`. Use a focused `agent/<short-kebab-slug>` branch
   arrive progressively; until one exists, docs/DESIGN_SYSTEM.md is its specification.
 - Never add: native <select>, checkbox/radio/range inputs or <details> outside the kit;
   window.confirm/alert/prompt; title= tooltips; inline <svg> icons; text or emoji glyphs
-  used as icons. web_ui/src/lib/ui-ratchets.test.ts will enforce this once introduced.
+  used as icons. web_ui/src/lib/ui-ratchets.test.ts enforces this.
 - Style only with --gl-* tokens: type, spacing, radius, elevation, z-index, motion. No raw
   font-size, border-radius or z-index values except the explicitly permitted cases in docs/DESIGN_SYSTEM.md. docs/DESIGN_SYSTEM.md lists every token.
 - Copy: sentence case, "…" never "...", formatters for numbers, durations and bytes, and
@@ -142,6 +142,6 @@ Never commit directly to `main`. Use a focused `agent/<short-kebab-slug>` branch
 - When a surface moves to the kit, delete or move its legacy rules out of
   web_ui/src/app/styles.css in one contiguous hunk; never add rules to styles.css and never
   reformat unrelated rules.
-- Once web_ui/src/lib/ui-ratchet-inventory.ts exists, lower its entries for every file
-  you touch to their new exact counts; the numbers may only go down.
+- Lower web_ui/src/lib/ui-ratchet-inventory.ts for every file you touch to its new exact
+  counts; the numbers may only go down.
 - Check both themes (dark and light) and keyboard operation for every surface you change.

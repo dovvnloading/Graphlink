@@ -4,8 +4,6 @@ This document is the reference for every visible part of the Graphlink web UI (`
 
 Some tokens, icons and components listed here are introduced progressively. Until a token exists in `web_ui/src/lib/tokens/gl-vars-dev.css`, or a component exists in `web_ui/src/app/ui/`, this document is its specification.
 
-The UI kit (`web_ui/src/app/ui/`, including its `icons/`, `gallery/` and `format.ts`) and the UI ratchet files (`web_ui/src/lib/ui-ratchets.test.ts`, `web_ui/src/lib/ui-ratchet-inventory.ts`) are planned and do not exist yet. The `app/ui/**` paths below refer to that future kit. Existing legacy token values may differ from the target values specified here until migrated.
-
 ## 1. Identity
 
 - **Graphite monochrome.** The UI is deliberately monochrome. No new hues anywhere.
@@ -90,7 +88,9 @@ Migration mapping: 2–4px → xs; 5–7px → sm; 8–10px → md; 11–24px �
   ```
   --gl-z-canvas-hud < --gl-z-app-layer < --gl-z-search < --gl-z-popover < --gl-z-node-menu < --gl-z-toast < --gl-z-scrim < --gl-z-dialog
     < --gl-z-dialog-popover (nested) < --gl-z-approval < --gl-z-tooltip < --gl-z-skip-link
-  ``` A raw z-index is allowed only for local stacking (0, 1 or 2 inside one component) and React Flow group nodes (−1, −2).
+  ```
+
+  Includes `--gl-z-popover` and `--gl-z-tooltip`. A raw z-index is allowed only for local stacking (0, 1 or 2 inside one component) and React Flow group nodes (−1, −2).
 
 ### 2.5 Motion
 
@@ -125,7 +125,7 @@ Migration mapping: 2–4px → xs; 5–7px → sm; 8–10px → md; 11–24px �
 3. **Detail:** parallel strokes at least 2.5 units apart (smaller gaps merge into a blob at 16px); no detail smaller than 2 units; at most 3 primary marks; no letters or text inside icons.
 4. **Corners:** rects use rx 2, or rx 1.5 when under 8 units.
 5. **Fills:** only for dots (r ≤ 1.25) and explicit `-filled` toggle variants (`star-filled`, `pin-filled`), drawn with `fill="currentColor" stroke="none"`.
-6. **Semantics:** arrows point in the action's direction; `external-link` only for things that leave the app; `arrow-up` (send) is arrow-up, `play` (run) a stroked play triangle, `stop` a rounded square. Confusable pairs have different silhouettes: branch / repo / merge; agent / code / runner; refresh / rerun / history / stale; favourite star / final-deliverable flag.
+6. **Semantics:** arrows point in the action's direction; `external-link` only for things that leave the app; send uses `arrow-up`, run uses `play` (a stroked triangle), `stop` is a rounded square. Confusable pairs have different silhouettes: branch / repo / merge; agent / code / runner; refresh / rerun / history / stale; favourite star / final-deliverable flag.
 7. **Status set** (distinct silhouettes so grey-only status reads): success = check in circle; error = x in octagon; warning = ! in triangle; info = i in circle; pending = dashed circle; running = Spinner (static fallback: circle with centre dot); skipped = circle with skip-arrow; cancelled = circle with slash; stale = circular arrow with a dot; approval = shield with !.
 8. **Contract:** `<Icon name size label?>` renders `<svg viewBox="0 0 20 20" class="gl-icon" focusable="false">`; without `label` it renders `aria-hidden="true"`, and with `label` it renders `role="img" aria-label`. A control's accessible name comes from the control, never from its icon.
 9. **Storage:** path data lives in `web_ui/src/app/ui/icons/glyphs/{chrome,nodes,status,feature}.ts`; the registry imports all four files.
@@ -272,7 +272,7 @@ Badges reuse `history` (Superseded), `flag` (Final deliverable), `merge` (Synthe
 
 ## 4. Component kit
 
-Kit components will live in `web_ui/src/app/ui/`, one component per file, imported directly from that file (there is no barrel `index.ts`). Each will have co-located CSS (`gl-*` classes), a gallery section file, and Vitest tests for roles and accessible names, keyboard behaviour, and every variant and state. Once the kit is complete its APIs are frozen; later changes must be additive.
+All kit components live in `web_ui/src/app/ui/`, one component per file, imported directly from that file (there is no barrel `index.ts`). Each has co-located CSS (`gl-*` classes), a gallery section file, and Vitest tests for roles and accessible names, keyboard behaviour, and every variant and state. Once the kit is complete its APIs are frozen; later changes must be additive.
 
 | Component | Contract |
 | --- | --- |
@@ -325,7 +325,7 @@ The Formatters and Scrollbars entries describe supporting utilities and styles, 
 
 ## 6. Architecture rules
 
-- **Kit location:** `web_ui/src/app/ui/`, one component per file with co-located CSS. No barrel file: surfaces import each component from its own file. `ui/icons/` will hold the icon registry; `ui/gallery/` will provide the `#gallery` hash route (lazy-loaded, linked from nowhere) used for visual review.
+- **Kit location:** `web_ui/src/app/ui/`, one component per file with co-located CSS. No barrel file: surfaces import each component from its own file. `ui/icons/` holds the icon registry; `ui/gallery/` is the `#gallery` hash route (lazy-loaded, linked from nowhere) used for visual review.
 - **Class namespace:** kit classes are `gl-*` with single-class specificity. Surface classes keep their own prefixes.
 - **Cascade layers come last.** Unlayered CSS beats every layered rule, so all CSS stays unlayered and strictly class-scoped until `styles.css` has been reduced to globals; only then is everything wrapped in `@layer vendor, base, kit, surfaces, nodes, overrides`.
 - **Move or delete.** A surface change that adopts kit components deletes that surface's legacy rules from `web_ui/src/app/styles.css` in one contiguous hunk, or moves them into the surface's own CSS file. Never add rules to `styles.css`; never reformat neighbouring rules. This also stops legacy descendant selectors (`.settings-page button`) from overriding kit styles.
@@ -335,7 +335,7 @@ The Formatters and Scrollbars entries describe supporting utilities and styles, 
 
 ## 7. UI ratchets
 
-When introduced, `web_ui/src/lib/ui-ratchets.test.ts` will enforce these rules with exact per-file inventories in `web_ui/src/lib/ui-ratchet-inventory.ts`. Numbers may only go down: when you touch a file, lower its entries to the new exact counts. `app/styles.css` totals are maxima.
+`web_ui/src/lib/ui-ratchets.test.ts` enforces these rules with exact per-file inventories in `web_ui/src/lib/ui-ratchet-inventory.ts`. Numbers may only go down: when you touch a file, lower its entries to the new exact counts. `app/styles.css` totals are maxima.
 
 | Rule | What is counted | Target | Why |
 | --- | --- | --- | --- |
