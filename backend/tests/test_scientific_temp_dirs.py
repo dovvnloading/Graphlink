@@ -87,6 +87,57 @@ def test_stale_sweep_only_removes_old_scientific_siblings(tmp_path):
     """)
 
 
+
+def test_stale_sweep_preserves_own_directories_even_if_aged(tmp_path):
+    _run_in_fresh_process(tmp_path, r"""
+        import os
+        import time
+
+        from graphlink_plugins.scientific import data_table
+
+        root = Path(sys.argv[1])
+        meta = data_table.parse_table(b"Value\n1\n")
+        data_table.table_csv_chunk(meta)
+        staging = Path(data_table.table_store_root())
+        csv_dir = next(root.glob("graphlink-scientific-csv-*"))
+        abandoned = root / "graphlink-scientific-abandoned"
+        abandoned.mkdir()
+        old = time.time() - 48 * 60 * 60
+        for path in (staging, csv_dir, abandoned):
+            os.utime(path, (old, old))
+
+        data_table._sweep_stale_directories()
+        assert staging.is_dir()
+        assert csv_dir.is_dir()
+        assert not abandoned.exists()
+        assert data_table.read_table(meta)["rows"] == [[1.0]]
+    """)
+    assert not list(tmp_path.glob("graphlink-scientific-*"))
+
+
+def test_stale_sweep_swallows_clock_and_cleanup_errors(tmp_path):
+    _run_in_fresh_process(tmp_path, r"""
+        import os
+        import time
+
+        from graphlink_plugins.scientific import data_table
+
+        root = Path(sys.argv[1])
+        locked = root / "graphlink-scientific-locked"
+        locked.mkdir()
+        old = time.time() - 48 * 60 * 60
+        os.utime(locked, (old, old))
+        with patch.object(data_table.time, "time", side_effect=OSError("clock unavailable")):
+            data_table._sweep_stale_directories()
+        assert locked.is_dir()
+        with patch.object(data_table.shutil, "rmtree", side_effect=PermissionError("locked")):
+            data_table._sweep_stale_directories()
+        assert locked.is_dir()
+        locked.rmdir()
+    """)
+    assert not list(tmp_path.glob("graphlink-scientific-*"))
+
+
 def test_worker_store_access_never_creates_private_temp_directories(tmp_path):
     _run_in_fresh_process(tmp_path, r"""
         from graphlink_plugins.scientific import data_table

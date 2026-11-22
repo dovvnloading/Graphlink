@@ -56,13 +56,20 @@ CSV_MAX_BYTES = 256 * 1024 * 1024
 
 def _sweep_stale_directories() -> None:
     """Best-effort removal of scientific scratch directories left by dead processes."""
-    cutoff = time.time() - 24 * 60 * 60
     try:
+        cutoff = time.time() - 24 * 60 * 60
+        # Be safe even if this helper is invoked again after our first use.
+        own_directories = {
+            os.path.normcase(os.path.abspath(directory.name))
+            for directory in (_STAGING_DIR, _CSV_DIR)
+            if directory is not None
+        }
         with os.scandir(tempfile.gettempdir()) as entries:
             for entry in entries:
                 try:
                     if (not entry.name.startswith(("graphlink-scientific-", "graphlink-scientific-csv-"))
                             or not entry.is_dir(follow_symlinks=False)
+                            or os.path.normcase(os.path.abspath(entry.path)) in own_directories
                             or entry.stat(follow_symlinks=False).st_mtime >= cutoff):
                         continue
                     shutil.rmtree(entry.path, ignore_errors=True)
@@ -107,7 +114,7 @@ def table_store_root() -> str:
 
 @contextmanager
 def use_table_store(root: str):
-    """A spawned process has its own staging cache; read the parent's verified assets."""
+    """Use the parent's verified staging store without allocating a worker cache."""
     token = _WORKER_STORE.set(AssetStore(Path(root)))
     try:
         yield
