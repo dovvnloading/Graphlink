@@ -12,8 +12,11 @@ async function openGraphRunner(page: Page) {
 }
 
 test("runs a grouped table and both downstream outputs, then reopens their saved run", async ({ page }, testInfo) => {
-  await openTable(page);
-  const table = page.locator(".react-flow__node-note").first();
+  const source = await openTable(page);
+  // Hold onto the original source, not a live .first() that can become the grouped table.
+  const sourceId = await source.getAttribute("data-id");
+  if (!sourceId) throw new Error("Expected an identified source table node");
+  const table = page.locator(`.react-flow__node-note[data-id="${sourceId}"]`);
   await table.getByRole("combobox", { name: "Group by" }).selectOption({ label: "Team" });
   await table.getByRole("combobox", { name: "Sum column" }).selectOption({ label: "Hours" });
   await table.getByRole("button", { name: "Create grouped table" }).click();

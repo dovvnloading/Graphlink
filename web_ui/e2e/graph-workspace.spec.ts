@@ -80,8 +80,17 @@ test("starts a graph and navigates it using the canvas controls", async ({ page 
         await trigger.click();
         const picker = page.getByRole("dialog", { name: label });
         await expect(picker).toBeInViewport({ ratio: 1 });
-        await picker.getByRole("button").first().click();
+        if (name === "model") {
+          // With no configured chat models, the only button opens Settings.
+          // Select a real model when available; otherwise dismiss the picker.
+          const option = picker.locator(".model-picker-option:enabled").first();
+          if (await option.count()) await option.click();
+          else await page.keyboard.press("Escape");
+        } else {
+          await picker.getByRole("button").first().click();
+        }
         await expect(picker).toBeHidden();
+        await expect(page.getByRole("dialog", { name: "Settings" })).toBeHidden();
         await expect(input).toHaveValue(draft);
       }
     });
