@@ -1,0 +1,28 @@
+.gl-spinner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--gl-icon-md);
+  height: var(--gl-icon-md);
+  color: currentColor;
+}
+.gl-spinner--12 { width: var(--gl-icon-xs); height: var(--gl-icon-xs); }
+.gl-spinner--14 { width: var(--gl-icon-sm); height: var(--gl-icon-sm); }
+.gl-spinner--16 { width: var(--gl-icon-md); height: var(--gl-icon-md); }
+.gl-spinner--20 { width: var(--gl-icon-lg); height: var(--gl-icon-lg); }
+.gl-spinner-arc {
+  display: block;
+  width: 100%;
+  height: 100%;
+  animation: gl-spinner-turn 0.8s linear infinite;
+}
+.gl-spinner-static { display: none; width: 100%; height: 100%; }
+
+@keyframes gl-spinner-turn {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gl-spinner-arc { display: none; animation: none; }
+  .gl-spinner-static { display: block; }
+}
