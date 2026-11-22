@@ -70,7 +70,10 @@ def test_picker_search_catalog_follows_live_grants_without_creating_nodes(sessio
     assert searchable() == {}
     grant(bus, "core")
     assert searchable() == {
-        PACKS["core"][0]: [{"id": op.id, "title": op.title} for op in operations("core")]
+        PACKS["core"][0]: [
+            {"id": op.id, "title": op.title, "description": op.description, "inputKinds": [f.kind for f in op.fields]}
+            for op in operations("core")
+        ]
     }
     dispatch(bus, "setPluginGrant", "science_core", False)
     assert searchable() == {}

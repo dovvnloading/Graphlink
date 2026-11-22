@@ -21,6 +21,8 @@ export interface AppPluginEntry {
 export interface AppScienceOperation {
   id: string;
   title: string;
+  description?: string | null;
+  inputKinds?: string[] | null;
 }
 
 export interface AppPluginGrant {
@@ -41,6 +43,8 @@ export interface AppPluginsState {
 const APP_SCIENCE_OPERATION_FIELDS: WireFields = [
   ["id", "s", 0],
   ["title", "s", 0],
+  ["description", "s", 1],
+  ["inputKinds", { a: "s" }, 1],
 ];
 
 const APP_PLUGIN_ENTRY_FIELDS: WireFields = [

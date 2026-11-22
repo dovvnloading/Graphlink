@@ -15,6 +15,8 @@ from dataclasses import dataclass
 class AppScienceOperationPayload:
     id: str
     title: str
+    description: str | None = None
+    inputKinds: list[str] | None = None
 
 
 @dataclass

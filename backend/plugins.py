@@ -304,7 +304,10 @@ def plugins_payload(
                 if (entry and entry.science_operations and grants.get(entry.plugin_id, False)
                         and entry.node_kind == f"{entry.plugin_id}.workbench"):
                     # Metadata captured at approved activation. Listing never imports or runs a pack.
-                    row["scienceOperations"] = [{"id": key, "title": title} for key, title in entry.science_operations]
+                    row["scienceOperations"] = [
+                        {"id": op.id, "title": op.title, "description": op.description, "inputKinds": list(op.input_kinds)}
+                        for op in entry.science_operations
+                    ]
     return {
         "categories": categories,
         # ADR-014 stage 14.4: the Settings > Plugins grants list - see

@@ -96,12 +96,18 @@ describe("PluginPicker", () => {
     store.setViewportCenterProvider(() => ({ x: 75, y: 20 }));
     act(() => push({ ...snapshot, categories: [{
       name: "Scientific Workbench", description: "", plugins: [{ name: "Statistics", description: "Measure a sample.",
-        scienceOperations: [{ id: "describe", title: "Describe samples" }] }],
+        scienceOperations: [{ id: "describe", title: "Describe samples", description: "Estimate the spread of paired measurements.",
+          inputKinds: ["vector", "vector", "number"] }] }],
     }] }));
     let finish!: (id: string) => void;
     request.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     await user.click(screen.getByText("open plugins"));
-    await user.type(screen.getByRole("searchbox"), "describe samples{Enter}{Enter}");
+    await user.type(screen.getByRole("searchbox"), "spread vectors");
+    const row = screen.getByRole("button", { name: /Describe samples/ });
+    expect(row).toHaveTextContent("Estimate the spread of paired measurements.");
+    expect(row).toHaveTextContent("Requires 2 vectors · 1 number");
+    expect(row).toHaveTextContent("Statistics · Scientific Workbench");
+    await user.keyboard("{Enter}{Enter}");
     expect(request).toHaveBeenCalledTimes(1);
     expect(request).toHaveBeenCalledWith("app-plugins", "executePlugin", ["Statistics", "parent", 75, 20]);
     expect(screen.getByRole("status")).toHaveTextContent("Opening");

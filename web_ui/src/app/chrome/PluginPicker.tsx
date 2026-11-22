@@ -5,7 +5,7 @@ import type { AppPluginsState } from "../../lib/bridge-core/generated/app-plugin
 import type { SceneStore } from "../canvas/sceneStore";
 import { scientificFocusName } from "../canvas/scientificFocus";
 import { Popover, useOverlays } from "../overlays/overlays";
-import { searchPlugins, type PluginSearchHit } from "./pluginPickerSearch";
+import { searchPlugins, summarizeInputKinds, type PluginSearchHit } from "./pluginPickerSearch";
 
 /**
  * Backend-driven plugin picker. A local search spans all category entries,
@@ -242,17 +242,23 @@ export function PluginPicker({ transport, store }: { transport: WsTransport; sto
                       <button
                         ref={(element) => { rowRefs.current[index] = element; }}
                         type="button"
-                        className="plugin-picker-row"
+                        className={"plugin-picker-row" + (hit.operation ? " plugin-picker-operation" : "")}
                         onKeyDown={(event) => handleRowKeyDown(event, index)}
                         disabled={launching}
                         onClick={() => executePlugin(hit)}
                       >
                         <span className="plugin-picker-row-copy">
                           <span className="plugin-picker-row-label">{hit.operation?.title ?? hit.plugin.name}</span>
-                          <span className="plugin-picker-row-description">{disabledPacks.some(grant => grant.name === hit.plugin.name) ? "Disabled · Open settings" : hit.operation ? hit.plugin.name : hit.plugin.description}</span>
-                          {isSearching && (
-                            <span className="plugin-picker-row-category">{hit.categoryName}</span>
-                          )}
+                          {hit.operation ? (<>
+                            {hit.operation.description && <span className="plugin-picker-row-description">{hit.operation.description}</span>}
+                            {hit.operation.inputKinds && <span className="plugin-picker-row-inputs">
+                              {hit.operation.inputKinds.length ? "Requires " + summarizeInputKinds(hit.operation.inputKinds) : "No inputs required"}
+                            </span>}
+                            <span className="plugin-picker-row-category">{hit.plugin.name} · {hit.categoryName}</span>
+                          </>) : (<>
+                            <span className="plugin-picker-row-description">{disabledPacks.some(grant => grant.name === hit.plugin.name) ? "Disabled · Open settings" : hit.plugin.description}</span>
+                            {isSearching && <span className="plugin-picker-row-category">{hit.categoryName}</span>}
+                          </>)}
                         </span>
                         <span className="plugin-picker-row-chevron" aria-hidden="true">
                           &rsaquo;
