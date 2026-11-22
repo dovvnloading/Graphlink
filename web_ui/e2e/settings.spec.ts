@@ -24,7 +24,10 @@ test("opens Settings and renders the real provider/general section tabs", async 
     await expect(rail.getByRole("button", { name: section, exact: true })).toBeVisible();
   }
 
-  // General is the default active section (SettingsDialog.tsx's initial
-  // state) - its own page should already be rendered without an extra click.
+  // Settings navigation is session-local on the backend; earlier specs can
+  // leave another page active even after the canvas is reset.
+  const general = rail.getByRole("button", { name: "General", exact: true });
+  await general.click();
+  await expect(general).toHaveAttribute("aria-current", "page");
   await expect(dialog.getByRole("region", { name: "General" })).toBeVisible();
 });
