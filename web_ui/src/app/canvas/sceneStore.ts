@@ -2411,8 +2411,9 @@ export class SceneStore {
   // synchronously (ChatNodeView's Generate Chart submenu just fires-and-
   // forgets, same as its own onGenerateImage).
 
-  generateChart(parentNodeId: string, chartType: string): void {
-    this.transport.fireIntent("scene", "generateChart", [parentNodeId, chartType]);
+  generateChart(parentNodeId: string, chartType: string, expectedScienceReceipt?: string): void {
+    const args = expectedScienceReceipt ? [parentNodeId, chartType, { expectedScienceReceipt }] : [parentNodeId, chartType];
+    this.transport.fireIntent("scene", "generateChart", args);
   }
 
   // R8a: the Key Takeaway / Explainer Note agents, restored from the deleted

@@ -235,3 +235,11 @@
   border: 1px solid var(--gl-surface-border);
   border-radius: 6px;
 }
+
+.science-result-notice, .science-result-warning { color: var(--gl-surface-text-primary); }
+.science-result-warning {
+  border-inline-start: 3px solid var(--gl-semantic-status-warning);
+  padding: 6px 9px; background: var(--gl-surface-field); overflow-wrap: anywhere;
+}
+.science-result-warning ul { margin: 3px 0 0; padding-inline-start: 18px; }
+.science-body .science-precision { display: flex; align-items: center; gap: 6px; }

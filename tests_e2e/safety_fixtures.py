@@ -15,13 +15,16 @@ from pathlib import Path
 import platform
 import subprocess
 import threading
+import venv
 from unittest.mock import patch
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 
 from backend.agents import _build_gitlink_preview_text, _fingerprint_changes
 from backend.domain.model import SceneNode
 from backend.domain.node_states import HarnessState
+from backend.harness.python_env import managed_venv_dir
 from backend.providers.base import ToolCall
 from backend.session_context import get_session_context
 from graphlink_plugins.gitlink import apply_transaction
@@ -82,6 +85,13 @@ class SafetyFixtures:
         self.lock = threading.Lock()
         self.sequence = 0
         self.initial_files: dict = {}
+        # The fixture uses only the standard library. Build its interpreter as
+        # trusted test setup; the harness still validates and runs it through
+        # the normal managed lookup and process guard after approval.
+        self.python_case = root / "python-case"
+        self.python_workspace_id = uuid4().hex[:12]
+        fixture_venv = managed_venv_dir(self.python_workspace_id, self.python_case / "checkout", is_scratch=False)
+        venv.EnvBuilder(with_pip=False).create(fixture_venv)
         router = APIRouter(prefix="/api/e2e")
         router.add_api_route("/prepare/{kind}", self.prepare, methods=["POST"])
         router.add_api_route("/action/{action}", self.action, methods=["POST"])
@@ -131,6 +141,13 @@ class SafetyFixtures:
         context.canvas_document.clear_for_load()
         self.sequence += 1
         self.case_root = self.root / f"case-{self.sequence}"
+        if kind.startswith("python"):
+            # The managed interpreter is keyed by both workspace ID and path.
+            # Preserve observations from the last case and start a clean project
+            # at that same path; the dispatcher above also disposed its REPL and grants.
+            if self.python_case.exists():
+                self.python_case.rename(self.case_root)
+            self.case_root = self.python_case
         self.checkout = self.case_root / "checkout"
         self.checkout.mkdir(parents=True)
         subprocess.run(
@@ -153,6 +170,7 @@ class SafetyFixtures:
         else:
             self.node = document.add_harness_node(0, 0, "Offline Python approval fixture")
             assert self.node is not None and isinstance(self.node.state, HarnessState)
+            self.node.state.harness_workspace_id = self.python_workspace_id
             self.node.state.harness_workspace_path = str(self.checkout)
             # Native folder picking is outside this test. Seed the same exact
             # trust-list entry, but let bound_root enforce it normally.
