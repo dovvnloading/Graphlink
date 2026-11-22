@@ -56,6 +56,7 @@ function SelectControl({
   const listId = `${id}-listbox`;
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const listboxRef = useRef<HTMLDivElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
   const [placement, setPlacement] = useState<{ top: number; left: number; minWidth: number } | null>(null);
   const [query, setQuery] = useState("");
@@ -103,7 +104,7 @@ function SelectControl({
   useEffect(() => {
     if (!isOpen) return;
     if (searchable) searchRef.current?.focus();
-    else triggerRef.current?.focus();
+    else listboxRef.current?.focus();
   }, [isOpen, searchable]);
 
   const openList = (initial?: string) => {
@@ -133,8 +134,7 @@ function SelectControl({
     setActiveValue(enabled[(index + direction + enabled.length) % enabled.length].value);
   };
 
-  const matchTypeAhead = (letter: string) => {
-    const now = Date.now();
+  const matchTypeAhead = (letter: string, now: number) => {
     const prefix = (now - typeAhead.current.time > 700 ? "" : typeAhead.current.text) + letter.toLocaleLowerCase();
     const candidates = options.filter((option) => !option.disabled);
     let found = candidates.find((option) => option.label.toLocaleLowerCase().startsWith(prefix));
@@ -194,10 +194,11 @@ function SelectControl({
     }
     if (!event.altKey && !event.ctrlKey && !event.metaKey && event.key.length === 1 &&
         event.target !== searchRef.current) {
-      const found = matchTypeAhead(event.key);
+      const now = Date.now();
+      const found = matchTypeAhead(event.key, now);
       if (!isOpen && found) {
         openList(found.value);
-        typeAhead.current = { text: event.key.toLocaleLowerCase(), time: Date.now() };
+        typeAhead.current = { text: event.key.toLocaleLowerCase(), time: now };
       }
     }
   };
@@ -210,7 +211,6 @@ function SelectControl({
         data-overlay-trigger={name}
         aria-haspopup="listbox" aria-expanded={isOpen}
         aria-controls={isOpen ? listId : undefined}
-        aria-activedescendant={activeId}
         aria-label={label || labelledBy ? undefined : ariaLabel}
         aria-labelledby={label ? labelId : labelledBy}
         disabled={disabled}
@@ -248,7 +248,9 @@ function SelectControl({
                 placeholder="Search options"
               />
             )}
-            <div id={listId} className="gl-select-listbox" role="listbox"
+            <div ref={listboxRef} id={listId} className="gl-select-listbox" role="listbox"
+              tabIndex={searchable ? undefined : -1}
+              aria-activedescendant={!searchable ? activeId : undefined}
               aria-label={ariaLabel ?? label ?? "Options"} aria-labelledby={label ? labelId : labelledBy}>
               {visible.length ? visible.map((option, index) => (
                 <Fragment key={option.value}>
