@@ -399,21 +399,35 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/chrome/SearchOverlay.tsx", rule: "R1", count: 3 },
 
-  { file: "app/chrome/SettingsDialog.tsx", rule: "R3", count: 4 },
-
-  { file: "app/chrome/SettingsDialog.tsx", rule: "R4", count: 1 },
-
-  { file: "app/chrome/SettingsDialog.tsx", rule: "R5", count: 4 },
-
-  { file: "app/chrome/SettingsDialog.tsx", rule: "R6", count: 6 },
-
-  { file: "app/chrome/SettingsDialog.tsx", rule: "R8", count: 2 },
-
-  { file: "app/chrome/SettingsDialog.tsx", rule: "R13", count: 11 },
+  { file: "app/chrome/SettingsDialog.tsx", rule: "R8", count: 1 },
 
   { file: "app/chrome/ViewPopover.tsx", rule: "R6", count: 2 },
 
   { file: "app/chrome/ViewPopover.tsx", rule: "R8", count: 3 },
+
+  { file: "app/chrome/settings/FalAiPage.tsx", rule: "R3", count: 4 },
+
+  { file: "app/chrome/settings/FalAiPage.tsx", rule: "R4", count: 1 },
+
+  { file: "app/chrome/settings/FalAiPage.tsx", rule: "R5", count: 4 },
+
+  { file: "app/chrome/settings/FalAiPage.tsx", rule: "R13", count: 2 },
+
+  { file: "app/chrome/settings/GeneralPage.tsx", rule: "R6", count: 3 },
+
+  { file: "app/chrome/settings/IntegrationsPage.tsx", rule: "R13", count: 1 },
+
+  { file: "app/chrome/settings/LlamaCppPage.tsx", rule: "R6", count: 1 },
+
+  { file: "app/chrome/settings/LlamaCppPage.tsx", rule: "R13", count: 6 },
+
+  { file: "app/chrome/settings/McpServersPage.tsx", rule: "R6", count: 1 },
+
+  { file: "app/chrome/settings/McpServersPage.tsx", rule: "R13", count: 2 },
+
+  { file: "app/chrome/settings/PluginsPage.tsx", rule: "R6", count: 1 },
+
+  { file: "app/chrome/settings/WorkspaceAgentPage.tsx", rule: "R8", count: 1 },
 
   { file: "app/context/ContextInspector.css", rule: "R9", count: 1 },
 
