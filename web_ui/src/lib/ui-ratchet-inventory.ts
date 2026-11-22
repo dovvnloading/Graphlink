@@ -1,13 +1,486 @@
-// Temporary source-index/count calculator; replaced by the pinned inventory before PR.
-const paths = ["web_ui/src/app/App.tsx","web_ui/src/app/canvas/AgentWorkspaceBrowser.tsx","web_ui/src/app/canvas/ArtifactNodeView.tsx","web_ui/src/app/canvas/CanvasGrid.tsx","web_ui/src/app/canvas/CanvasSearchContext.tsx","web_ui/src/app/canvas/ChartNodeView.tsx","web_ui/src/app/canvas/ChatCitationChips.tsx","web_ui/src/app/canvas/ChatNodeView.tsx","web_ui/src/app/canvas/ChatRerunDialog.tsx","web_ui/src/app/canvas/ChatScienceCard.tsx","web_ui/src/app/canvas/ChatVersionCompareDialog.tsx","web_ui/src/app/canvas/CodeExecutionApprovalPanel.tsx","web_ui/src/app/canvas/CodeNodeView.tsx","web_ui/src/app/canvas/CodeReviewNodeView.tsx","web_ui/src/app/canvas/CodeSandboxNodeView.tsx","web_ui/src/app/canvas/CollapseToggleButton.tsx","web_ui/src/app/canvas/ConversationNodeView.tsx","web_ui/src/app/canvas/DocumentNodeView.tsx","web_ui/src/app/canvas/DocumentViewMarkdown.tsx","web_ui/src/app/canvas/DocumentViewPanel.tsx","web_ui/src/app/canvas/DocumentViewSearch.tsx","web_ui/src/app/canvas/DocumentViewToc.tsx","web_ui/src/app/canvas/EmptyGraph.tsx","web_ui/src/app/canvas/ExecutionLimitsContext.tsx","web_ui/src/app/canvas/FalMediaNodeView.tsx","web_ui/src/app/canvas/FalMediaUploader.tsx","web_ui/src/app/canvas/GitlinkNodeView.tsx","web_ui/src/app/canvas/GroupColorPicker.tsx","web_ui/src/app/canvas/GroupNodeView.tsx","web_ui/src/app/canvas/HarnessNodeView.tsx","web_ui/src/app/canvas/HtmlNodeView.tsx","web_ui/src/app/canvas/ImageNodeView.tsx","web_ui/src/app/canvas/ModelNodeView.tsx","web_ui/src/app/canvas/NodeHeading.tsx","web_ui/src/app/canvas/NodeMarkdown.tsx","web_ui/src/app/canvas/NodeMenu.tsx","web_ui/src/app/canvas/NodeShell.tsx","web_ui/src/app/canvas/NoteNodeView.tsx","web_ui/src/app/canvas/NoteTextInput.tsx","web_ui/src/app/canvas/OrthogonalEdge.tsx","web_ui/src/app/canvas/PlaceholderNodeView.tsx","web_ui/src/app/canvas/PlanNodeView.tsx","web_ui/src/app/canvas/SceneCanvas.tsx","web_ui/src/app/canvas/SceneMinimap.tsx","web_ui/src/app/canvas/ScienceArrayInput.tsx","web_ui/src/app/canvas/ScienceColumnBinding.tsx","web_ui/src/app/canvas/ScienceTableSource.tsx","web_ui/src/app/canvas/ScientificDataTable.tsx","web_ui/src/app/canvas/ScientificNodeView.tsx","web_ui/src/app/canvas/ScientificResultViews.tsx","web_ui/src/app/canvas/ScientificWorkspace.tsx","web_ui/src/app/canvas/StalenessBadge.tsx","web_ui/src/app/canvas/TableContributors.tsx","web_ui/src/app/canvas/TableOutput.tsx","web_ui/src/app/canvas/TableSource.tsx","web_ui/src/app/canvas/ThinkingNodeView.tsx","web_ui/src/app/canvas/ViewportDock.tsx","web_ui/src/app/canvas/WebResearchNodeView.tsx","web_ui/src/app/canvas/charts/BarChartMarks.tsx","web_ui/src/app/canvas/charts/BoxplotChartMarks.tsx","web_ui/src/app/canvas/charts/CartesianAxes.tsx","web_ui/src/app/canvas/charts/ChartAnalysisPane.tsx","web_ui/src/app/canvas/charts/ChartOverview.tsx","web_ui/src/app/canvas/charts/ChartRenderer.tsx","web_ui/src/app/canvas/charts/ChartTooltip.tsx","web_ui/src/app/canvas/charts/HeatmapChartMarks.tsx","web_ui/src/app/canvas/charts/HistogramChartMarks.tsx","web_ui/src/app/canvas/charts/LineChartMarks.tsx","web_ui/src/app/canvas/charts/PieChartMarks.tsx","web_ui/src/app/canvas/charts/SankeyChartMarks.tsx","web_ui/src/app/canvas/charts/ScientificChartMarks.tsx","web_ui/src/app/canvas/connections/ConnectionCanvas.tsx","web_ui/src/app/canvas/lazyNodeViews.tsx","web_ui/src/app/chrome/AboutDialog.tsx","web_ui/src/app/chrome/AppBar.tsx","web_ui/src/app/chrome/AppBarIcon.tsx","web_ui/src/app/chrome/AppBarOverflowMenu.tsx","web_ui/src/app/chrome/BuilderLaunchDialog.tsx","web_ui/src/app/chrome/ChatLibraryDialog.tsx","web_ui/src/app/chrome/CloudProviderSettings.tsx","web_ui/src/app/chrome/CommandPalette.tsx","web_ui/src/app/chrome/Composer.tsx","web_ui/src/app/chrome/CustomSelect.tsx","web_ui/src/app/chrome/DiagnosticsDialog.tsx","web_ui/src/app/chrome/GlobalSearchDialog.tsx","web_ui/src/app/chrome/GlobalShortcuts.tsx","web_ui/src/app/chrome/GraphRunnerDialog.tsx","web_ui/src/app/chrome/GraphRunnerInspector.tsx","web_ui/src/app/chrome/HarnessLaunchDialog.tsx","web_ui/src/app/chrome/HarnessLaunchOptions.tsx","web_ui/src/app/chrome/HelpDialog.tsx","web_ui/src/app/chrome/KnowledgeEmbeddingStatus.tsx","web_ui/src/app/chrome/KnowledgeSearchDialog.tsx","web_ui/src/app/chrome/KnowledgeSettingsPage.tsx","web_ui/src/app/chrome/LocalProviderSettings.tsx","web_ui/src/app/chrome/ModelComparisonPicker.tsx","web_ui/src/app/chrome/ModelPicker.tsx","web_ui/src/app/chrome/ModelPricingSettings.tsx","web_ui/src/app/chrome/NotificationBanner.tsx","web_ui/src/app/chrome/OllamaSettingsPage.tsx","web_ui/src/app/chrome/OnboardingDialog.tsx","web_ui/src/app/chrome/OnboardingSteps.tsx","web_ui/src/app/chrome/OrganizationDialog.tsx","web_ui/src/app/chrome/PinOverlay.tsx","web_ui/src/app/chrome/PluginPicker.tsx","web_ui/src/app/chrome/QuickSwitcherDialog.tsx","web_ui/src/app/chrome/RunnerDisclosure.tsx","web_ui/src/app/chrome/SearchIcon.tsx","web_ui/src/app/chrome/SearchOverlay.tsx","web_ui/src/app/chrome/SettingsDialog.tsx","web_ui/src/app/chrome/TokenCounter.tsx","web_ui/src/app/chrome/ViewPopover.tsx","web_ui/src/app/context/ContextInspectorLauncher.tsx","web_ui/src/app/context/ContextInspectorPanel.tsx","web_ui/src/app/context/ModelCapabilityContext.tsx","web_ui/src/app/knowledgeFileImport.tsx","web_ui/src/app/main.tsx","web_ui/src/app/overlays/overlays.tsx","web_ui/src/lib/ui/BridgeErrorState.tsx"];
-const ICON_RE = /[×✓★☆⌕↻⟳📁📄📌♫◈▸▾▼▲◂▶◀▣▧⌄⌃⇄⧉✎⚠⚙●○↗↑↓‹›]|&(?:times|rsaquo|lsaquo);|&#9662;/gu;
-function blank(s){return s.replace(/[^\r\n]/g," ")}
-function afterQuote(s,start){const q=s[start];let i=start+1;while(i<s.length){if(s[i]==="\\"){i+=2;continue}if(s[i]===q)return i+1;i++}return i}
-function startsRegex(s,i){const b=s.slice(Math.max(0,i-48),i).trimEnd();return /(?:[=(:,!\?\[\{;|&~]|=>)$/.test(b)||/\b(?:return|throw|case|yield)\s*$/.test(b)}
-function afterRegex(s,start){let inClass=false;for(let i=start+1;i<s.length;i++){if(s[i]==="\\"){i++;continue}if(s[i]==="[")inClass=true;else if(s[i]==="]")inClass=false;else if(s[i]==="/"&&!inClass){i++;while(/[a-z]/i.test(s[i]??""))i++;return i}if(s[i]==="\n")break}return start+1}
-function stripTsComments(s){const p=[];let from=0;for(let i=0;i<s.length;){if(s[i]==="'"||s[i]==='"'||s[i]==="`"){i=afterQuote(s,i)}else if(s[i]==="/"&&s[i+1]==="/"){let end=s.indexOf("\n",i+2);if(end<0)end=s.length;p.push(s.slice(from,i),blank(s.slice(i,end)));i=end;from=end}else if(s[i]==="/"&&s[i+1]==="*"){const close=s.indexOf("*/",i+2),end=close<0?s.length:close+2;p.push(s.slice(from,i),blank(s.slice(i,end)));i=end;from=end}else if(s[i]==="/"&&startsRegex(s,i)){i=afterRegex(s,i)}else{i++}}p.push(s.slice(from));return p.join("")}
-function templateText(value){let result="";for(let i=0;i<value.length;){if(value[i]==="$"&&value[i+1]==="{"){i+=2;let depth=1;while(i<value.length&&depth>0){if(value[i]==="'"||value[i]==='"'||value[i]==="`")i=afterQuote(value,i);else if(value[i]==="{"){depth++;i++}else if(value[i]==="}"){depth--;i++}else{i++}}}else{result+=value[i++]}}return result}
-function inspectTsx(source){const clean=stripTsComments(source),codeParts=[],literals=[];let from=0;for(let i=0;i<clean.length;){if(clean[i]==="'"||clean[i]==='"'||clean[i]==="`"){if(clean[i]==="'"&&/[\p{L}\p{N}]/u.test(clean[i-1]??"")&&/[\p{L}\p{N}]/u.test(clean[i+1]??"")){i++;continue}const end=afterQuote(clean,i),raw=clean.slice(i+1,end-1);literals.push(clean[i]==="`"?templateText(raw):raw);codeParts.push(clean.slice(from,i),blank(clean.slice(i,end)));i=end;from=end}else if(clean[i]==="/"&&startsRegex(clean,i)){const end=afterRegex(clean,i);if(end>i+1){codeParts.push(clean.slice(from,i),blank(clean.slice(i,end)));i=end;from=end}else{i++}}else{i++}}codeParts.push(clean.slice(from));const code=codeParts.join("");const jsxTexts=[...clean.matchAll(/(?:>|\})([^<>{}]+)(?=[<{])/g)].filter(m=>m[0].startsWith(">")||clean.lastIndexOf(">",m.index)>clean.lastIndexOf(";",m.index)).map(m=>m[1]);return{clean,code,literalTexts:[...literals,...jsxTexts]}}
-function jsxTags(clean,code){const tags=[];for(let i=0;i<code.length;i++){if(code[i]!=="<"||!/[A-Za-z]/.test(code[i+1]??""))continue;const name=/^[A-Za-z][\w.:-]*/.exec(code.slice(i+1))?.[0];if(!name)continue;let j=i+1+name.length,depth=0;for(;j<clean.length;j++){if(clean[j]==="'"||clean[j]==='"'||clean[j]==="`"){j=afterQuote(clean,j)-1;continue}if(clean[j]==="{")depth++;else if(clean[j]==="}")depth--;else if(clean[j]===">"&&depth===0)break}if(j===clean.length)continue;const contents=clean.slice(i+1+name.length,j),attributes=new Map();for(let k=0;k<contents.length;){if(/\s|\//.test(contents[k])){k++;continue}if(contents[k]==="{"){let depth=1;k++;while(k<contents.length&&depth>0){if(contents[k]==="'"||contents[k]==='"'||contents[k]==="`"){k=afterQuote(contents,k);continue}if(contents[k]==="{")depth++;if(contents[k]==="}")depth--;k++}continue}const attr=/^[\w:-]+/.exec(contents.slice(k))?.[0];if(!attr){k++;continue}k+=attr.length;while(/\s/.test(contents[k]??""))k++;if(contents[k]!=="="){attributes.set(attr,"");continue}k++;while(/\s/.test(contents[k]??""))k++;if(contents[k]==="'"||contents[k]==='"'){const end=afterQuote(contents,k);attributes.set(attr,contents.slice(k+1,end-1));k=end}else if(contents[k]==="{"){const start=k;let depth=1;k++;while(k<contents.length&&depth>0){if(contents[k]==="'"||contents[k]==='"'||contents[k]==="`"){k=afterQuote(contents,k);continue}if(contents[k]==="{")depth++;else if(contents[k]==="}")depth--;k++}const expr=contents.slice(start+1,k-1).trim();const literal=/^(?:"([^"\\]*)"|'([^'\\]*)')$/.exec(expr);attributes.set(attr,literal?(literal[1]??literal[2]):"{dynamic}")}else{const value=/^[^\s/>]*/.exec(contents.slice(k))?.[0]??"";attributes.set(attr,value);k+=Math.max(1,value.length)}}tags.push({name,attributes})}return tags}
-function count(text,pattern){return [...text.matchAll(pattern)].length}
-function tsxCounts(source,file){const parsed=inspectTsx(source),tags=jsxTags(parsed.clean,parsed.code),texts=parsed.literalTexts,rawIcons=texts.reduce((sum,t)=>sum+count(t,ICON_RE),0);const exemptHarness=file==="app/canvas/HarnessNodeView.tsx"?count(parsed.clean,/\$\{data\.harnessCompactions\}×/g):0;return{R1:rawIcons-exemptHarness,R2:/^(?:app\/canvas\/charts\/|app\/canvas\/connections\/)/.test(file)||["app/canvas/ScientificResultViews.tsx","app/canvas/OrthogonalEdge.tsx"].includes(file)?0:tags.filter(t=>t.name==="svg").length,R3:count(parsed.code,/\bwindow\s*(?:\?\.|\.)\s*(?:confirm|alert|prompt)\s*\(|(?<![\w.$])\b(?:confirm|alert|prompt)\s*\(/g),R4:tags.filter(t=>t.name==="select").length,R5:tags.filter(t=>t.name==="details").length,R6:tags.filter(t=>t.name==="input"&&["checkbox","radio","range"].includes(t.attributes.get("type")??"")).length,R7:tags.filter(t=>["menuitem","menuitemcheckbox","menuitemradio"].includes(t.attributes.get("role")??"")).length,R8:tags.filter(t=>t.name!=="iframe"&&t.attributes.has("title")).length,R13:texts.reduce((sum,t)=>sum+count(t,/\.\.\./g),0)}}
+/**
+ * UI-02 baseline from main (626e10567a82c9aaf9b33e3bcbd75d708463537b).
+ * Keep one entry per rule/file, sorted by relative path, and leave a blank
+ * line between entries to minimize conflicts with parallel UI migrations.
+ * Zero-count files are intentionally absent: an unpinned file must stay at 0.
+ *
+ * app/styles.css pins for R9–R12 and R14 are maxima rather than exact counts,
+ * to avoid blocking unrelated ongoing CSS cleanups. All other pins are exact.
+ * See docs/DESIGN_SYSTEM.md for the replacement component conventions.
+ */
+export type RatchetRule =
+  | "R1" | "R2" | "R3" | "R4" | "R5" | "R6" | "R7"
+  | "R8" | "R9" | "R10" | "R11" | "R12" | "R13" | "R14";
+
+export const UI_RATCHET_INVENTORY: ReadonlyArray<{
+  readonly file: string;
+  readonly rule: RatchetRule;
+  readonly count: number;
+}> = [
+  { file: "app/App.tsx", rule: "R2", count: 1 },
+
+  { file: "app/App.tsx", rule: "R8", count: 1 },
+
+  { file: "app/canvas/AgentWorkspaceBrowser.tsx", rule: "R1", count: 2 },
+
+  { file: "app/canvas/AgentWorkspaceBrowser.tsx", rule: "R8", count: 3 },
+
+  { file: "app/canvas/ArtifactNodeView.tsx", rule: "R7", count: 2 },
+
+  { file: "app/canvas/ArtifactNodeView.tsx", rule: "R8", count: 1 },
+
+  { file: "app/canvas/ChartNodeView.tsx", rule: "R1", count: 1 },
+
+  { file: "app/canvas/ChartNodeView.tsx", rule: "R4", count: 3 },
+
+  { file: "app/canvas/ChartNodeView.tsx", rule: "R6", count: 2 },
+
+  { file: "app/canvas/ChartNodeView.tsx", rule: "R8", count: 1 },
+
+  { file: "app/canvas/ChatCitationChips.css", rule: "R9", count: 5 },
+
+  { file: "app/canvas/ChatCitationChips.css", rule: "R10", count: 1 },
+
+  { file: "app/canvas/ChatCitationChips.css", rule: "R14", count: 13 },
+
+  { file: "app/canvas/ChatNodeView.tsx", rule: "R1", count: 7 },
+
+  { file: "app/canvas/ChatNodeView.tsx", rule: "R2", count: 2 },
+
+  { file: "app/canvas/ChatNodeView.tsx", rule: "R5", count: 1 },
+
+  { file: "app/canvas/ChatNodeView.tsx", rule: "R7", count: 26 },
+
+  { file: "app/canvas/ChatNodeView.tsx", rule: "R8", count: 16 },
+
+  { file: "app/canvas/ChatRerunDialog.css", rule: "R9", count: 2 },
+
+  { file: "app/canvas/ChatRerunDialog.css", rule: "R10", count: 4 },
+
+  { file: "app/canvas/ChatRerunDialog.tsx", rule: "R6", count: 3 },
+
+  { file: "app/canvas/ChatRerunDialog.tsx", rule: "R8", count: 1 },
+
+  { file: "app/canvas/ChatScienceCard.tsx", rule: "R5", count: 1 },
+
+  { file: "app/canvas/ChatScienceCard.tsx", rule: "R8", count: 2 },
+
+  { file: "app/canvas/ChatVersionCompareDialog.tsx", rule: "R4", count: 2 },
+
+  { file: "app/canvas/ChatVersionCompareDialog.tsx", rule: "R8", count: 1 },
+
+  { file: "app/canvas/CodeExecutionApprovalPanel.tsx", rule: "R6", count: 1 },
+
+  { file: "app/canvas/CodeNodeView.tsx", rule: "R7", count: 5 },
+
+  { file: "app/canvas/CodeReviewNodeView.tsx", rule: "R7", count: 2 },
+
+  { file: "app/canvas/CodeReviewNodeView.tsx", rule: "R8", count: 6 },
+
+  { file: "app/canvas/CodeSandboxNodeView.tsx", rule: "R5", count: 1 },
+
+  { file: "app/canvas/CodeSandboxNodeView.tsx", rule: "R7", count: 2 },
+
+  { file: "app/canvas/CodeSandboxNodeView.tsx", rule: "R8", count: 2 },
+
+  { file: "app/canvas/CollapseToggleButton.tsx", rule: "R2", count: 1 },
+
+  { file: "app/canvas/CollapseToggleButton.tsx", rule: "R8", count: 1 },
+
+  { file: "app/canvas/ConversationNodeView.tsx", rule: "R2", count: 1 },
+
+  { file: "app/canvas/ConversationNodeView.tsx", rule: "R7", count: 5 },
+
+  { file: "app/canvas/ConversationNodeView.tsx", rule: "R8", count: 4 },
+
+  { file: "app/canvas/DocumentNodeView.tsx", rule: "R7", count: 7 },
+
+  { file: "app/canvas/DocumentNodeView.tsx", rule: "R8", count: 2 },
+
+  { file: "app/canvas/DocumentViewMarkdown.tsx", rule: "R8", count: 1 },
+
+  { file: "app/canvas/DocumentViewPanel.tsx", rule: "R8", count: 6 },
+
+  { file: "app/canvas/DocumentViewSearch.tsx", rule: "R1", count: 3 },
+
+  { file: "app/canvas/DocumentViewSearch.tsx", rule: "R8", count: 3 },
+
+  { file: "app/canvas/DocumentViewToc.tsx", rule: "R7", count: 1 },
+
+  { file: "app/canvas/DocumentViewToc.tsx", rule: "R8", count: 1 },
+
+  { file: "app/canvas/FalMediaNodeView.css", rule: "R9", count: 65 },
+
+  { file: "app/canvas/FalMediaNodeView.css", rule: "R10", count: 28 },
+
+  { file: "app/canvas/FalMediaNodeView.css", rule: "R14", count: 132 },
+
+  { file: "app/canvas/FalMediaNodeView.tsx", rule: "R1", count: 23 },
+
+  { file: "app/canvas/FalMediaNodeView.tsx", rule: "R3", count: 3 },
+
+  { file: "app/canvas/FalMediaNodeView.tsx", rule: "R4", count: 2 },
+
+  { file: "app/canvas/FalMediaNodeView.tsx", rule: "R5", count: 2 },
+
+  { file: "app/canvas/FalMediaNodeView.tsx", rule: "R6", count: 1 },
+
+  { file: "app/canvas/FalMediaNodeView.tsx", rule: "R8", count: 6 },
+
+  { file: "app/canvas/FalMediaUploader.tsx", rule: "R1", count: 1 },
+
+  { file: "app/canvas/FalMediaUploader.tsx", rule: "R3", count: 1 },
+
+  { file: "app/canvas/GitlinkNodeView.tsx", rule: "R6", count: 2 },
+
+  { file: "app/canvas/GitlinkNodeView.tsx", rule: "R7", count: 2 },
+
+  { file: "app/canvas/GitlinkNodeView.tsx", rule: "R8", count: 2 },
+
+  { file: "app/canvas/GroupColorPicker.tsx", rule: "R7", count: 4 },
+
+  { file: "app/canvas/GroupColorPicker.tsx", rule: "R8", count: 3 },
+
+  { file: "app/canvas/GroupNodeView.tsx", rule: "R2", count: 1 },
+
+  { file: "app/canvas/GroupNodeView.tsx", rule: "R8", count: 5 },
+
+  { file: "app/canvas/HarnessNodeView.tsx", rule: "R1", count: 6 },
+
+  { file: "app/canvas/HarnessNodeView.tsx", rule: "R2", count: 1 },
+
+  { file: "app/canvas/HarnessNodeView.tsx", rule: "R4", count: 4 },
+
+  { file: "app/canvas/HarnessNodeView.tsx", rule: "R5", count: 1 },
+
+  { file: "app/canvas/HarnessNodeView.tsx", rule: "R6", count: 2 },
+
+  { file: "app/canvas/HarnessNodeView.tsx", rule: "R7", count: 2 },
+
+  { file: "app/canvas/HarnessNodeView.tsx", rule: "R8", count: 9 },
+
+  { file: "app/canvas/HarnessNodeView.tsx", rule: "R13", count: 1 },
+
+  { file: "app/canvas/HtmlNodeView.tsx", rule: "R8", count: 1 },
+
+  { file: "app/canvas/ImageNodeView.tsx", rule: "R7", count: 5 },
+
+  { file: "app/canvas/NodeCards.css", rule: "R9", count: 14 },
+
+  { file: "app/canvas/NodeCards.css", rule: "R10", count: 24 },
+
+  { file: "app/canvas/NodeCards.css", rule: "R14", count: 87 },
+
+  { file: "app/canvas/NodeHeading.tsx", rule: "R2", count: 1 },
+
+  { file: "app/canvas/NodeMarkdown.tsx", rule: "R8", count: 3 },
+
+  { file: "app/canvas/NodeShell.tsx", rule: "R2", count: 1 },
+
+  { file: "app/canvas/NodeShell.tsx", rule: "R8", count: 6 },
+
+  { file: "app/canvas/NoteNodeView.tsx", rule: "R1", count: 4 },
+
+  { file: "app/canvas/NoteNodeView.tsx", rule: "R8", count: 3 },
+
+  { file: "app/canvas/NoteTextInput.tsx", rule: "R4", count: 2 },
+
+  { file: "app/canvas/NoteTextInput.tsx", rule: "R8", count: 1 },
+
+  { file: "app/canvas/PlanNodeView.tsx", rule: "R2", count: 6 },
+
+  { file: "app/canvas/PlanNodeView.tsx", rule: "R5", count: 1 },
+
+  { file: "app/canvas/PlanNodeView.tsx", rule: "R7", count: 2 },
+
+  { file: "app/canvas/PlanNodeView.tsx", rule: "R8", count: 1 },
+
+  { file: "app/canvas/PlanNodeView.tsx", rule: "R13", count: 1 },
+
+  { file: "app/canvas/SceneCanvas.tsx", rule: "R2", count: 1 },
+
+  { file: "app/canvas/SceneCanvas.tsx", rule: "R8", count: 2 },
+
+  { file: "app/canvas/SceneCanvas.tsx", rule: "R13", count: 2 },
+
+  { file: "app/canvas/SceneMinimap.css", rule: "R10", count: 2 },
+
+  { file: "app/canvas/SceneMinimap.css", rule: "R14", count: 3 },
+
+  { file: "app/canvas/SceneMinimap.tsx", rule: "R2", count: 1 },
+
+  { file: "app/canvas/SceneMinimap.tsx", rule: "R8", count: 3 },
+
+  { file: "app/canvas/ScienceArrayInput.tsx", rule: "R1", count: 1 },
+
+  { file: "app/canvas/ScienceArrayInput.tsx", rule: "R5", count: 1 },
+
+  { file: "app/canvas/ScienceColumnBinding.tsx", rule: "R4", count: 3 },
+
+  { file: "app/canvas/ScienceColumnBinding.tsx", rule: "R5", count: 1 },
+
+  { file: "app/canvas/ScienceTableSource.tsx", rule: "R4", count: 1 },
+
+  { file: "app/canvas/ScientificDataTable.tsx", rule: "R5", count: 1 },
+
+  { file: "app/canvas/ScientificNodeView.css", rule: "R9", count: 18 },
+
+  { file: "app/canvas/ScientificNodeView.css", rule: "R10", count: 5 },
+
+  { file: "app/canvas/ScientificNodeView.css", rule: "R14", count: 66 },
+
+  { file: "app/canvas/ScientificNodeView.tsx", rule: "R2", count: 1 },
+
+  { file: "app/canvas/ScientificNodeView.tsx", rule: "R4", count: 9 },
+
+  { file: "app/canvas/ScientificNodeView.tsx", rule: "R5", count: 7 },
+
+  { file: "app/canvas/ScientificNodeView.tsx", rule: "R6", count: 1 },
+
+  { file: "app/canvas/ScientificNodeView.tsx", rule: "R8", count: 8 },
+
+  { file: "app/canvas/ScientificNodeView.tsx", rule: "R13", count: 1 },
+
+  { file: "app/canvas/ScientificResultViews.css", rule: "R9", count: 6 },
+
+  { file: "app/canvas/ScientificResultViews.css", rule: "R10", count: 3 },
+
+  { file: "app/canvas/ScientificResultViews.css", rule: "R14", count: 12 },
+
+  { file: "app/canvas/ScientificResultViews.tsx", rule: "R1", count: 1 },
+
+  { file: "app/canvas/ScientificResultViews.tsx", rule: "R5", count: 2 },
+
+  { file: "app/canvas/ScientificResultViews.tsx", rule: "R8", count: 3 },
+
+  { file: "app/canvas/ScientificWorkspace.tsx", rule: "R8", count: 1 },
+
+  { file: "app/canvas/StalenessBadge.tsx", rule: "R2", count: 1 },
+
+  { file: "app/canvas/StalenessBadge.tsx", rule: "R8", count: 1 },
+
+  { file: "app/canvas/TableContributors.tsx", rule: "R4", count: 1 },
+
+  { file: "app/canvas/TableSource.tsx", rule: "R4", count: 2 },
+
+  { file: "app/canvas/TableWorkflow.css", rule: "R9", count: 1 },
+
+  { file: "app/canvas/TableWorkflow.css", rule: "R10", count: 1 },
+
+  { file: "app/canvas/TableWorkflow.css", rule: "R14", count: 17 },
+
+  { file: "app/canvas/ThinkingNodeView.tsx", rule: "R7", count: 4 },
+
+  { file: "app/canvas/ViewportDock.tsx", rule: "R2", count: 2 },
+
+  { file: "app/canvas/ViewportDock.tsx", rule: "R8", count: 4 },
+
+  { file: "app/canvas/WebResearchNodeView.tsx", rule: "R6", count: 1 },
+
+  { file: "app/canvas/WebResearchNodeView.tsx", rule: "R7", count: 2 },
+
+  { file: "app/canvas/WebResearchNodeView.tsx", rule: "R8", count: 1 },
+
+  { file: "app/canvas/charts/ChartOverview.tsx", rule: "R13", count: 6 },
+
+  { file: "app/canvas/charts/ScientificChartMarks.tsx", rule: "R13", count: 2 },
+
+  { file: "app/canvas/workspace.css", rule: "R9", count: 6 },
+
+  { file: "app/canvas/workspace.css", rule: "R10", count: 8 },
+
+  { file: "app/canvas/workspace.css", rule: "R11", count: 2 },
+
+  { file: "app/canvas/workspace.css", rule: "R14", count: 31 },
+
+  { file: "app/chrome/AboutDialog.tsx", rule: "R8", count: 1 },
+
+  { file: "app/chrome/AppBar.tsx", rule: "R8", count: 3 },
+
+  { file: "app/chrome/AppBarIcon.tsx", rule: "R2", count: 18 },
+
+  { file: "app/chrome/BuilderLaunchDialog.tsx", rule: "R5", count: 1 },
+
+  { file: "app/chrome/BuilderLaunchDialog.tsx", rule: "R6", count: 2 },
+
+  { file: "app/chrome/BuilderLaunchDialog.tsx", rule: "R8", count: 1 },
+
+  { file: "app/chrome/ChatLibraryDialog.tsx", rule: "R2", count: 10 },
+
+  { file: "app/chrome/ChatLibraryDialog.tsx", rule: "R3", count: 3 },
+
+  { file: "app/chrome/ChatLibraryDialog.tsx", rule: "R8", count: 2 },
+
+  { file: "app/chrome/ChatLibraryDialog.tsx", rule: "R13", count: 2 },
+
+  { file: "app/chrome/CloudProviderSettings.css", rule: "R9", count: 11 },
+
+  { file: "app/chrome/CloudProviderSettings.css", rule: "R10", count: 3 },
+
+  { file: "app/chrome/CloudProviderSettings.css", rule: "R14", count: 41 },
+
+  { file: "app/chrome/CloudProviderSettings.tsx", rule: "R2", count: 1 },
+
+  { file: "app/chrome/Composer.tsx", rule: "R1", count: 3 },
+
+  { file: "app/chrome/Composer.tsx", rule: "R2", count: 1 },
+
+  { file: "app/chrome/Composer.tsx", rule: "R8", count: 9 },
+
+  { file: "app/chrome/CustomSelect.tsx", rule: "R2", count: 1 },
+
+  { file: "app/chrome/CustomSelect.tsx", rule: "R13", count: 1 },
+
+  { file: "app/chrome/DiagnosticsDialog.tsx", rule: "R8", count: 1 },
+
+  { file: "app/chrome/GlobalSearchDialog.tsx", rule: "R8", count: 1 },
+
+  { file: "app/chrome/GraphRunnerDialog.css", rule: "R9", count: 3 },
+
+  { file: "app/chrome/GraphRunnerDialog.css", rule: "R10", count: 1 },
+
+  { file: "app/chrome/GraphRunnerDialog.css", rule: "R14", count: 26 },
+
+  { file: "app/chrome/GraphRunnerDialog.tsx", rule: "R4", count: 4 },
+
+  { file: "app/chrome/GraphRunnerDialog.tsx", rule: "R8", count: 1 },
+
+  { file: "app/chrome/HarnessLaunchDialog.tsx", rule: "R8", count: 2 },
+
+  { file: "app/chrome/HarnessLaunchOptions.tsx", rule: "R4", count: 1 },
+
+  { file: "app/chrome/HelpDialog.tsx", rule: "R8", count: 1 },
+
+  { file: "app/chrome/KnowledgeSearchDialog.tsx", rule: "R8", count: 7 },
+
+  { file: "app/chrome/KnowledgeSettingsPage.tsx", rule: "R4", count: 1 },
+
+  { file: "app/chrome/KnowledgeSettingsPage.tsx", rule: "R6", count: 1 },
+
+  { file: "app/chrome/KnowledgeSettingsPage.tsx", rule: "R13", count: 3 },
+
+  { file: "app/chrome/ModelComparisonPicker.tsx", rule: "R1", count: 1 },
+
+  { file: "app/chrome/ModelPicker.tsx", rule: "R1", count: 1 },
+
+  { file: "app/chrome/ModelPicker.tsx", rule: "R8", count: 1 },
+
+  { file: "app/chrome/ModelPricingSettings.css", rule: "R9", count: 1 },
+
+  { file: "app/chrome/ModelPricingSettings.css", rule: "R14", count: 6 },
+
+  { file: "app/chrome/NotificationBanner.tsx", rule: "R1", count: 1 },
+
+  { file: "app/chrome/OllamaSettingsPage.tsx", rule: "R6", count: 1 },
+
+  { file: "app/chrome/OllamaSettingsPage.tsx", rule: "R8", count: 2 },
+
+  { file: "app/chrome/OllamaSettingsPage.tsx", rule: "R13", count: 5 },
+
+  { file: "app/chrome/OnboardingDialog.tsx", rule: "R8", count: 1 },
+
+  { file: "app/chrome/OnboardingSteps.tsx", rule: "R8", count: 1 },
+
+  { file: "app/chrome/OrganizationDialog.css", rule: "R9", count: 10 },
+
+  { file: "app/chrome/OrganizationDialog.css", rule: "R10", count: 4 },
+
+  { file: "app/chrome/OrganizationDialog.css", rule: "R14", count: 23 },
+
+  { file: "app/chrome/OrganizationDialog.tsx", rule: "R2", count: 1 },
+
+  { file: "app/chrome/OrganizationDialog.tsx", rule: "R4", count: 1 },
+
+  { file: "app/chrome/OrganizationDialog.tsx", rule: "R6", count: 3 },
+
+  { file: "app/chrome/OrganizationDialog.tsx", rule: "R8", count: 2 },
+
+  { file: "app/chrome/PinOverlay.tsx", rule: "R1", count: 2 },
+
+  { file: "app/chrome/PinOverlay.tsx", rule: "R8", count: 1 },
+
+  { file: "app/chrome/PluginPicker.tsx", rule: "R1", count: 1 },
+
+  { file: "app/chrome/QuickSwitcherDialog.tsx", rule: "R3", count: 1 },
+
+  { file: "app/chrome/RunnerDisclosure.tsx", rule: "R1", count: 2 },
+
+  { file: "app/chrome/SearchIcon.tsx", rule: "R2", count: 1 },
+
+  { file: "app/chrome/SearchOverlay.tsx", rule: "R1", count: 3 },
+
+  { file: "app/chrome/SettingsDialog.tsx", rule: "R3", count: 4 },
+
+  { file: "app/chrome/SettingsDialog.tsx", rule: "R4", count: 1 },
+
+  { file: "app/chrome/SettingsDialog.tsx", rule: "R5", count: 4 },
+
+  { file: "app/chrome/SettingsDialog.tsx", rule: "R6", count: 6 },
+
+  { file: "app/chrome/SettingsDialog.tsx", rule: "R8", count: 2 },
+
+  { file: "app/chrome/SettingsDialog.tsx", rule: "R13", count: 12 },
+
+  { file: "app/chrome/ViewPopover.tsx", rule: "R6", count: 2 },
+
+  { file: "app/chrome/ViewPopover.tsx", rule: "R8", count: 3 },
+
+  { file: "app/context/ContextInspector.css", rule: "R9", count: 1 },
+
+  { file: "app/context/ContextInspector.css", rule: "R10", count: 3 },
+
+  { file: "app/context/ContextInspector.css", rule: "R14", count: 13 },
+
+  { file: "app/context/ContextInspectorLauncher.tsx", rule: "R2", count: 1 },
+
+  { file: "app/context/ContextInspectorLauncher.tsx", rule: "R8", count: 1 },
+
+  { file: "app/overlays/overlays.tsx", rule: "R1", count: 1 },
+
+  { file: "app/overlays/overlays.tsx", rule: "R13", count: 1 },
+
+  { file: "app/styles.css", rule: "R9", count: 392 },
+
+  { file: "app/styles.css", rule: "R10", count: 217 },
+
+  { file: "app/styles.css", rule: "R11", count: 3 },
+
+  { file: "app/styles.css", rule: "R12", count: 10916 },
+
+  { file: "app/styles.css", rule: "R14", count: 879 },
+
+];
+
+/** Each historical R1 exception must remain exact, too; it is not a blanket
+ * file exclusion. These are the only non-icon uses of icon-like characters.
+ * The diff signs are text in a comparison key, not replacement iconography.
+ */
+export const R1_ALLOWLIST = [
+  {
+    file: "app/canvas/ChatVersionCompareDialog.tsx",
+    needle: "+",
+    count: 1,
+    reason: "Diff legend's insertion + is semantic diff notation, not a UI icon.",
+  },
+
+  {
+    file: "app/canvas/ChatVersionCompareDialog.tsx",
+    needle: "−",
+    count: 1,
+    reason: "Diff legend's deletion minus is semantic diff notation, not a UI icon.",
+  },
+
+  {
+    file: "app/canvas/HarnessNodeView.tsx",
+    needle: "×",
+    count: 1,
+    reason: "Compaction multiplier N× is a quantity suffix, not a close icon.",
+  },
+
+  {
+    file: "app/canvas/scientificWorkbench.ts",
+    needle: "×",
+    count: 2,
+    reason: "Scientific notation uses the multiplication sign in mantissa × 10^n.",
+  },
+] as const;
