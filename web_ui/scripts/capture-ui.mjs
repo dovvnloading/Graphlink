@@ -119,13 +119,28 @@ async function dismiss(page) {
   await sleep(100);
 }
 
+// Escape closes one overlay at a time; do not let a leftover dialog obscure
+// the seeded-chat Library button (or the canvas behind it).
+async function dismissDialogs(page) {
+  const dialogs = page.locator('[role="dialog"]:visible');
+  for (let attempt = 0; attempt < 5 && await dialogs.count() > 0; attempt += 1) {
+    await page.keyboard.press("Escape");
+    await sleep(100);
+  }
+  if (await dialogs.count() > 0) throw new Error("Could not dismiss open dialogs");
+}
+
 function toolbarButton(page, label) {
   return page.getByRole("toolbar", { name: "Application bar" })
     .getByRole("button", { name: label, exact: true });
 }
 
 async function fitAll(page) {
-  await page.getByRole("button", { name: "Fit All", exact: true }).click();
+  await dismissToasts(page);
+  // ViewportDock disables Fit All until the scene contains nodes.
+  const button = page.locator('button[aria-label="Fit All"]:enabled');
+  await button.waitFor({ state: "visible", timeout: 15_000 });
+  await button.click();
   await sleep(350);
 }
 
@@ -167,7 +182,7 @@ async function centerNode(page, node) {
     ];
     let start = points[0];
     for (const point of points) {
-      if (await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.matches(".react-flow__pane"), point)) {
+      if (await page.evaluate(([x, y]) => globalThis.document.elementFromPoint(x, y)?.matches(".react-flow__pane"), point)) {
         start = point;
         break;
       }
@@ -192,12 +207,15 @@ async function zoomTo100(page) {
   const readZoom = async () => Number.parseFloat((await scale.textContent()) ?? "0");
   // Wheel zoom is anchored at the canvas center, where the target was panned.
   await page.mouse.move(canvas.x + canvas.width / 2, canvas.y + canvas.height / 2);
-  for (let i = 0; i < 30 && await readZoom() < 100; i += 1) {
+  let previous = await readZoom();
+  for (let i = 0; i < 30 && previous < 100; i += 1) {
     await page.mouse.wheel(0, -300);
     await sleep(110);
+    const current = await readZoom();
+    if (current === previous) break; // wheel zoom can stall below 100%
+    previous = current;
   }
-  const zoom = await readZoom();
-  if (zoom < 100) throw new Error(`Wheel zoom did not reach 100% (got ${zoom}%)`);
+  return readZoom(); // record the actual reached percentage, even if below 100
 }
 
 async function captureTheme(page, theme, capture, interrupted) {
@@ -299,7 +317,11 @@ async function captureTheme(page, theme, capture, interrupted) {
 
   for (const name of ["model", "reasoning"]) {
     await shot(`Composer ${name} popover`, `composer-${name}`, async () => {
-      await page.locator(`[data-overlay-trigger="${name}"]`).click();
+      const trigger = page.locator(`[data-overlay-trigger="${name}"]`);
+      if (await trigger.count() === 0 || !await trigger.isVisible()) {
+        return { skip: "trigger not rendered" };
+      }
+      await trigger.click();
       await sleep(160);
       return {};
     });
@@ -336,13 +358,26 @@ async function captureTheme(page, theme, capture, interrupted) {
   await dismiss(page);
 
   await shot("Seeded chat: Fit All", "seeded-canvas", async () => {
+    // Reset after toolbar/settings captures so each theme loads a clean app.
+    await page.goto(BASE);
+    await page.locator('.app-shell[data-connection-status="open"]').waitFor({ timeout: 30_000 });
+    // Also dismiss onboarding if it reappears after the reload.
+    await dismissDialogs(page);
     await toolbarButton(page, "Library").click();
     const library = page.getByRole("dialog", { name: "Chat Library" });
     await library.waitFor({ state: "visible" });
-    await library.getByRole("button", { name: /^Open chat/ }).first().click();
-    await library.waitFor({ state: "hidden" });
-    await page.locator(".react-flow__node").first().waitFor();
-    await dismissToasts(page);
+    const openChat = library.getByRole("button", { name: /^Open chat "Events API p99 regression"/ }).first();
+    // The isolated backend may already have the seeded graph open after the
+    // earlier theme pass. Reloading it would trigger an unsaved-chat prompt.
+    const alreadyOpen = await page.locator(".react-flow__node").count() > 0;
+    if (alreadyOpen || await openChat.count() === 0 || !await openChat.isEnabled()) {
+      await page.keyboard.press("Escape");
+    } else {
+      await openChat.click();
+      if (await library.isVisible()) await page.keyboard.press("Escape");
+    }
+    await dismissDialogs(page);
+    await page.locator(".react-flow__node").first().waitFor({ state: "visible", timeout: 15_000 });
     await fitAll(page);
     return {};
   });
@@ -359,9 +394,10 @@ async function captureTheme(page, theme, capture, interrupted) {
       const node = page.locator(`.react-flow__node-${kind}`).first();
       await node.waitFor({ state: "visible" });
       await centerNode(page, node);
-      await zoomTo100(page);
+      const zoom = await zoomTo100(page);
       await centerNode(page, node);
-      return { clip: clipFor(await node.boundingBox()) };
+      if (!await node.isVisible()) throw new Error(`Node ${kind} is not visible`);
+      return { clip: clipFor(await node.boundingBox()), zoom };
     });
   }
   await shot("Chat node context menu", "node-chat-context-menu", async () => {
@@ -404,16 +440,32 @@ async function main() {
     return;
   }
   const manifest = [];
+  const saveFailureScreenshot = async (page, theme, name) => {
+    const failureFile = `failed-${theme}-${name}.png`;
+    try {
+      await page.screenshot({ path: join(out, failureFile), timeout: 10_000, animations: "disabled" });
+      return failureFile;
+    } catch (error) {
+      console.error(`${theme} / ${name} failure screenshot: ${errorLine(error)}`);
+      return null;
+    }
+  };
   const capture = async (page, theme, surface, name, prepare) => {
     const file = `${theme}-${name}.png`;
     try {
-      const options = await prepare();
+      const { skip, zoom, ...options } = await prepare();
+      if (skip) {
+        manifest.push({ file, surface, theme, status: "skipped", ok: null, reason: skip });
+        return;
+      }
       await page.screenshot({ path: join(out, file), timeout: 30_000, animations: "disabled", ...options });
-      manifest.push({ file, surface, theme, status: "ok", ok: true });
+      manifest.push({ file, surface, theme, status: "ok", ok: true, ...(zoom === undefined ? {} : { zoom }) });
     } catch (error) {
       const line = errorLine(error);
       console.error(`${theme} / ${surface}: ${line}`);
-      manifest.push({ file, surface, theme, status: "failed", ok: false, error: line });
+      const failureFile = await saveFailureScreenshot(page, theme, name);
+      manifest.push({ file, surface, theme, status: "failed", ok: false, error: line,
+        ...(failureFile ? { failureFile } : {}) });
     }
   };
 
@@ -463,7 +515,9 @@ async function main() {
         const file = `${theme}-boot.png`;
         const line = errorLine(error);
         console.error(`${theme} / app boot: ${line}`);
-        manifest.push({ file, surface: "App boot", theme, status: "failed", ok: false, error: line });
+        const failureFile = await saveFailureScreenshot(page, theme, "boot");
+        manifest.push({ file, surface: "App boot", theme, status: "failed", ok: false, error: line,
+          ...(failureFile ? { failureFile } : {}) });
       } finally {
         await page.close().catch(() => {});
       }
@@ -476,8 +530,10 @@ async function main() {
     await stop();
     rmSync(dataDir, { recursive: true, force: true });
     writeFileSync(join(out, "manifest.json"), JSON.stringify({ viewport: VIEWPORT, deviceScaleFactor: 1, captures: manifest }, null, 2) + "\n");
-    const ok = manifest.filter((item) => item.ok).length;
-    console.log(`${ok} ok, ${manifest.length - ok} failed`);
+    const ok = manifest.filter((item) => item.status === "ok").length;
+    const skipped = manifest.filter((item) => item.status === "skipped").length;
+    const failed = manifest.filter((item) => item.status === "failed").length;
+    console.log(`${ok} ok, ${skipped} skipped, ${failed} failed`);
     // A failed *capture* should never suppress the remaining surfaces or
     // block visual review. A backend that never started is a real run failure.
     if (!backendStarted) process.exitCode = 1;
