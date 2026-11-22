@@ -108,8 +108,8 @@ describe("icon registry", () => {
         .toBe(iconRegistry[definition.alias as keyof typeof iconRegistry]);
     }
     expect(iconRegistry.send).toBe(iconRegistry["arrow-up"]);
-  
- 
+  });
+
   it("keeps refresh and rerun on one clockwise arc with an open head and inset play", () => {
     expect(iconRegistry.refresh).toHaveLength(2);
     expect(iconRegistry.rerun).toHaveLength(3);
@@ -150,7 +150,6 @@ describe("icon registry", () => {
     // The triangle stays >= 2.5 units inside the circular arc at all points.
     expect(startX - 10 - Math.max(...triangleRadii)).toBeGreaterThanOrEqual(2.5);
   });
-});
 });
 
 describe("Icon component", () => {
