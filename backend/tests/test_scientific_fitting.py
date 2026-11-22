@@ -24,6 +24,15 @@ def _certified(actual, reference, digits):
     assert format(actual, f".{digits - 1}e") == format(reference, f".{digits - 1}e"), (actual, reference)
 
 
+def test_residual_plots_declare_unordered_observations_without_changing_result_data():
+    marks = {op.id: op.describe().get("plotMark") for op in operations("fitting")}
+    for name in ("weighted_linear_least_squares", "nonlinear_least_squares",
+                 "custom_nonlinear_least_squares", "multiple_linear_regression"):
+        assert marks[name] == "scatter"
+    ordered = next(op for op in operations("core") if op.id == "plot_xy")
+    assert "plotMark" not in ordered.describe()
+
+
 def test_manifest_and_all_examples_have_verifiable_receipts():
     import tomllib
 

@@ -12,9 +12,18 @@ from dataclasses import dataclass
 
 
 @dataclass
+class AppScienceOperationPayload:
+    id: str
+    title: str
+    description: str | None = None
+    inputKinds: list[str] | None = None
+
+
+@dataclass
 class AppPluginEntryPayload:
     name: str
     description: str
+    scienceOperations: list[AppScienceOperationPayload] | None = None
 
 
 @dataclass

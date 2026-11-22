@@ -235,11 +235,18 @@ def register_chart_intents(
             if not re.fullmatch(r"science_[a-z0-9_]+\.workbench", source.kind):
                 return None
 
+        expected_receipt = None
         if chart_options not in (None, {}):
-            raise ChartDataError("Scientific result charts use the saved data, not extraction options")
+            if not isinstance(chart_options, dict) or set(chart_options) != {"expectedScienceReceipt"}:
+                raise ChartDataError("Scientific result charts use the saved data, not extraction options")
+            expected_receipt = chart_options["expectedScienceReceipt"]
+            if not isinstance(expected_receipt, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_receipt):
+                raise ChartDataError("The displayed scientific result receipt is invalid")
         if normalized_chart_type not in ("scatter", "line", "boxplot", "heatmap"):
             raise ChartDataError("Choose scatter, fitted line, box plot or heatmap for a scientific result")
         result, receipt = scientific_chart_source(source)
+        if expected_receipt is not None and receipt["receiptHash"] != expected_receipt:
+            raise ChartDataError("The scientific result changed. Review the current result before charting.")
         if refreshing and expected.get("sourceKey") != receipt["sourceKey"]:
             raise ChartDataError("This chart belongs to a different scientific result")
         try:

@@ -22,6 +22,17 @@ const categories: AppPluginCategory[] = [
 ];
 
 describe("searchPlugins", () => {
+  it("finds required kinds in singular and plural and prioritizes the operation title over description matches", () => {
+    const group = [{ name: "Scientific Workbench", description: "", plugins: [{
+      name: "Mathematics", description: "", scienceOperations: [
+        { id: "distance", title: "Compare coordinates", description: "Matrix distance.", inputKinds: ["matrix", "matrix"] },
+        { id: "matrix_norm", title: "Matrix norm", description: "Measure size.", inputKinds: ["matrix"] },
+      ],
+    }] }];
+    expect(searchPlugins(group, "matrix").map(hit => hit.operation?.id)).toEqual(["matrix_norm", "distance"]);
+    expect(searchPlugins(group, "matrices mathematics").map(hit => hit.operation?.id)).toEqual(["distance"]);
+  });
+
   it("returns no hits for empty and whitespace queries", () => {
     expect(searchPlugins(categories, "")).toEqual([]);
     expect(searchPlugins(categories, "  \t ")).toEqual([]);

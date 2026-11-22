@@ -295,8 +295,21 @@ def plugins_payload(
     plugin_registry: "PluginRegistry | None" = None,
     settings_manager: "SettingsManager | None" = None,
 ) -> dict[str, Any]:
+    categories = get_plugin_categories(plugin_registry)
+    if plugin_registry is not None and settings_manager is not None:
+        grants = settings_manager.get_plugin_grants()
+        for category in categories:
+            for row in category["plugins"]:
+                entry = plugin_registry.picker_entries.get(row["name"])
+                if (entry and entry.science_operations and grants.get(entry.plugin_id, False)
+                        and entry.node_kind == f"{entry.plugin_id}.workbench"):
+                    # Metadata captured at approved activation. Listing never imports or runs a pack.
+                    row["scienceOperations"] = [
+                        {"id": op.id, "title": op.title, "description": op.description, "inputKinds": list(op.input_kinds)}
+                        for op in entry.science_operations
+                    ]
     return {
-        "categories": get_plugin_categories(plugin_registry),
+        "categories": categories,
         # ADR-014 stage 14.4: the Settings > Plugins grants list - see
         # _plugin_grants_payload's own docstring.
         "grants": _plugin_grants_payload(plugin_registry, settings_manager),

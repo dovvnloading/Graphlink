@@ -37,6 +37,7 @@ export interface ScienceOperation {
   headline?: string;
   pairedFields?: string[][];
   outputUnits?: Record<string, string>;
+  plotMark?: "scatter";
 }
 
 export interface SourceReference {
@@ -171,14 +172,20 @@ export function formatScienceSummary(summary: string): string {
   });
 }
 
+/** Shortest round-trip text for the binary64 value received from the scientific wire. */
+export function exactScienceNumber(value: number | undefined): string {
+  if (value === undefined) return "—";
+  return Object.is(value, -0) ? "-0" : editableNumber(value);
+}
+
 /** On-screen text for any result value: numbers at display precision, nested
  * arrays and objects as compact JSON-like text, strings unchanged. */
-export function formatScienceValue(value: unknown): string {
+export function formatScienceValue(value: unknown, exact = false): string {
   if (typeof value === "string") return value;
   // Never parse formatted "1,000" or "2 × 10⁻⁶" back into a Number:
   // that would turn nested scientific values into null in JSON previews.
   const nested = (item: unknown): string => {
-    if (typeof item === "number") return formatScienceNumber(item);
+    if (typeof item === "number") return exact ? exactScienceNumber(item) : formatScienceNumber(item);
     if (Array.isArray(item)) return "[" + item.map(nested).join(", ") + "]";
     if (item !== null && typeof item === "object")
       return "{" + Object.entries(item).map(([key, entry]) =>
@@ -313,6 +320,7 @@ export interface ScienceState {
   attempt?: ScienceAttempt;
   scienceVersion: 1;
   packId: string;
+  packTitle?: string;
   nodeKey?: string;
   runToken?: string;
   limits?: ScienceLimits;
@@ -388,6 +396,7 @@ function isOperation(value: unknown): value is ScienceOperation {
     && (value.outputUnits === undefined || record(value.outputUnits) && Object.values(value.outputUnits).every((unit) => typeof unit === "string"))
     && (value.methods === undefined || typeof value.methods === "string")
     && (value.headline === undefined || typeof value.headline === "string")
+    && (value.plotMark === undefined || value.plotMark === "scatter")
     && (value.citations === undefined || Array.isArray(value.citations)
       && value.citations.every((citation: unknown) => record(citation)
         && typeof citation.label === "string" && citation.label.trim().length > 0
@@ -431,7 +440,7 @@ function isMeasurement(value: unknown): value is ScientificMeasurement {
     && (value.monteCarloTrials === undefined || Number.isSafeInteger(value.monteCarloTrials));
 }
 
-function isResult(value: unknown): value is ScienceResult {
+export function isResult(value: unknown): value is ScienceResult {
   if (!record(value) || typeof value.operationId !== "string" || typeof value.summary !== "string" ||
       !record(value.inputs) || !record(value.values) || !record(value.provenance) ||
       typeof value.provenance.resultHash !== "string" ||
@@ -463,7 +472,7 @@ function isResult(value: unknown): value is ScienceResult {
     && plot.x.length === plot.y.length);
 }
 
-function isImportedTable(value: unknown): value is ScientificImportedTable {
+export function isImportedTable(value: unknown): value is ScientificImportedTable {
   if (!record(value) || value.version !== 1 || typeof value.asset_ref !== "string"
       || !Number.isSafeInteger(value.rowCount) || (value.rowCount as number) < 1
       || !Array.isArray(value.columns) || !Number.isSafeInteger(value.columnCount)
@@ -487,6 +496,7 @@ export function readScienceState(raw: string): ScienceState | null {
   try {
     const value: unknown = JSON.parse(raw);
     if (record(value) && value.scienceVersion === 1 && typeof value.packId === "string" &&
+        (value.packTitle === undefined || typeof value.packTitle === "string") &&
         Array.isArray(value.operations) && (value.operations.length || (typeof value.error === "string" && value.error)) &&
         (value.nodeKey == null || typeof value.nodeKey === "string") &&
         (value.error === undefined || typeof value.error === "string") &&
@@ -792,6 +802,21 @@ export function matchesSource(option: SourceOption, source: SourceReference): bo
     reference.selector.length === source.selector.length && reference.selector.every((part, i) => part === source.selector[i]);
 }
 
+
+/** A reviewed binding may use any bounded row window, while the quick picker
+ * offers the first window. Match the verified source/column, retaining the
+ * saved mask, policy and interval rather than replacing them with defaults. */
+export function currentSource(options: SourceOption[], source: SourceReference): SourceOption | undefined {
+  if (!source.binding) return options.find((option) => matchesSource(option, source));
+  const base = options.find((option) => option.tableColumn &&
+    option.reference.selector[0] === source.selector[0] && option.reference.selector[1] === source.selector[1] &&
+    (source.sourceKey ? option.reference.sourceKey === source.sourceKey : option.reference.nodeId === source.nodeId) &&
+    option.reference.resultHash === source.resultHash && option.reference.receiptHash === source.receiptHash);
+  if (!base) return undefined;
+  const { columnLabel, retained, omitted, sourceUnit, targetUnit } = source.binding;
+  const [, , , start, end] = source.selector;
+  return { ...base, label: `${columnLabel} · rows ${Number(start) + 1}–${end} · ${retained} retained, ${omitted} omitted · ${sourceUnit || "unlabeled"} → ${targetUnit}` };
+}
 
 /** These are the four existing ChartSpec types, not new renderers. The menu
  * only offers shapes that fit the chart canonicalizer's exact limits. */

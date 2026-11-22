@@ -75,6 +75,8 @@ def main() -> None:
             isolation.enter_context(patch.object(chat_library, "DEFAULT_DB_PATH", root / "chats.db"))
             for module_name, attribute, dirname in (
                 ("graphlink_scratch_dirs", "HARNESS_WORKSPACE_ROOT", "harness"),
+                ("graphlink_scratch_dirs", "HARNESS_PYTHON_ENV_ROOT", "python-environments"),
+                ("backend.harness.python_env", "HARNESS_PYTHON_ENV_ROOT", "python-environments"),
                 ("graphlink_scratch_dirs", "PYTHON_REPL_ROOT", "python-repls"),
                 ("graphlink_scratch_dirs", "EXECUTION_SANDBOX_ROOT", "execution"),
                 ("backend.harness.workspace", "HARNESS_WORKSPACE_ROOT", "harness"),

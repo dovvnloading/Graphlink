@@ -1097,7 +1097,7 @@ OPERATIONS = (
               (Field("predictors", "Predictor rows (without intercept)", "matrix"),
                Field("response", "Response measurements", "vector")),
               {"predictors": [[i, i*i] for i in range(1, 12)],
-               "response": [i + .2*i*i + (-1)**i for i in range(1, 12)]}, _ols_model, headline="adjusted_r_squared"),
+               "response": [i + .2*i*i + (-1)**i for i in range(1, 12)]}, _ols_model, headline="adjusted_r_squared", plot_mark="scatter"),
     Operation("binary_logistic_regression", "Binary logistic regression (IRLS)",
               "Binomial maximum likelihood by damped IRLS with Wald odds ratios/95% CI and separation detection.",
               (Field("predictors", "Predictor rows (without intercept)", "matrix"),

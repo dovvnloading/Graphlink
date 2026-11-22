@@ -1,8 +1,12 @@
 import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 import { WsTimeoutError, type WsTransport } from "../../lib/ws/transport";
-import { SceneStore } from "./sceneStore";
+import { SceneStore, initialSceneState } from "./sceneStore";
+import { ScienceTableSource } from "./ScienceTableSource";
+import { validateSceneState } from "../../lib/bridge-core/generated/scene-state";
+import { ScientificDataTable } from "./ScientificDataTable";
 import { ScientificNodeView, type ScientificFlowNode } from "./ScientificNodeView";
 import { readScienceState, type ScienceChartLink, type ScienceState, type ScienceResult } from "./scientificWorkbench";
 import * as download from "./downloadTextFile";
@@ -49,6 +53,73 @@ function expandResult(label: string | RegExp) {
 }
 
 describe("scientific workbench card", () => {
+  it("moves one live editor between surfaces and restores keyboard focus and unsaved import text", async () => {
+    const user = userEvent.setup();
+    const { request } = mount();
+    const value = screen.getByRole("textbox", { name: "Samples (m)" });
+    fireEvent.change(value, { target: { value: "[2,6]" } });
+    openImporter();
+    const pasted = screen.getByRole("textbox", { name: "Pasted table text" });
+    fireEvent.change(pasted, { target: { value: "Time,Reading\n1,3" } });
+    const opener = screen.getByRole("button", { name: "Open focused workbench for Mathematics" });
+    await user.click(opener);
+    const dialog = screen.getByRole("dialog", { name: "Mathematics workbench" });
+    expect(within(dialog).getByRole("textbox", { name: "Samples (m)" })).toBe(value);
+    expect(within(dialog).getByRole("textbox", { name: "Pasted table text" })).toBe(pasted);
+    expect(screen.getAllByRole("button", { name: "Run calculation" })).toHaveLength(1);
+    expect(within(dialog).getByRole("button", { name: "Close Mathematics workbench" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(opener).toHaveFocus();
+    expect(pasted).toBeVisible();
+    expect(pasted).toHaveValue("Time,Reading\n1,3");
+    expect(value).toHaveValue("[2,6]");
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("puts recorded warnings next to the saved result and distinguishes changed inputs and operation", () => {
+    const latest = { ...result, values: { distance: 0.1234567890123456, warning: "Inspect the fitted residuals." } };
+    mount(JSON.stringify({ ...state, latest }));
+    const region = screen.getByRole("region", { name: "Latest result" });
+    expect(within(region).getByRole("region", { name: "Result warnings" })).toHaveTextContent("Inspect the fitted residuals.");
+    expandResult("All values · 2");
+    fireEvent.click(within(region).getByRole("checkbox", { name: "Show stored precision" }));
+    expect(within(region).getByText("0.1234567890123456")).toBeVisible();
+    fireEvent.change(screen.getByRole("textbox", { name: "Samples (m)" }), { target: { value: "[1,4]" } });
+    expect(within(region).getByRole("note")).toHaveTextContent("Inputs have been edited");
+    fireEvent.change(screen.getByRole("combobox", { name: "Operation" }), { target: { value: "scale" } });
+    expect(within(region).getByRole("note")).toHaveTextContent("different operation");
+    expect(within(region).getByText("0.1234567890123456")).toBeVisible();
+  });
+
+  it("renders declared residuals as independent observations and preserves their exact submitted order", () => {
+    const plot = { x: [2, 1, 3], y: [.1234567890123456, -.5, .75], title: "Residuals", xLabel: "X", yLabel: "Residual" };
+    mount(JSON.stringify({ ...state, operations: [{ ...operation, plotMark: "scatter" }],
+      latest: { ...result, plot } }));
+    expandResult("Plots & views");
+    const svg = screen.getByRole("img", { name: /Residuals/ });
+    expect(svg.querySelector("polyline")).toBeNull();
+    expect(svg.querySelectorAll("circle")).toHaveLength(3);
+    fireEvent.click(screen.getByText("Exact plot coordinates"));
+    const rows = within(screen.getByRole("table", { name: "Exact plot coordinates" })).getAllByRole("row");
+    expect(rows[1]).toHaveTextContent("120.1234567890123456");
+    expect(rows[2]).toHaveTextContent("21-0.5");
+  });
+
+  it("paginates exact data and keeps rows readable when a new result is shorter", () => {
+    const rows = Array.from({ length: 41 }, (_, i) => [String(i + 1)]);
+    const table = (count: number) => <ScientificDataTable title="Sample values" columns={["Sample"]} rows={() => rows.slice(0, count)} />;
+    const view = render(table(41));
+    fireEvent.click(screen.getByText("Sample values"));
+    expect(within(screen.getByRole("table")).getAllByRole("row")).toHaveLength(41);
+    fireEvent.click(screen.getByRole("button", { name: "Next rows" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Rows 41–41 of 41");
+    expect(screen.getByRole("rowheader", { name: "41" })).toBeVisible();
+    view.rerender(table(3));
+    expect(screen.getByRole("rowheader", { name: "1" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Next rows" })).toBeNull();
+  });
+
   it("shows one meaningful headline and keeps full data and actions on demand", () => {
     const latestResult: ScienceResult = {
       ...result, summary: "Described 3 observations.", values: { count: 3, mean: 12, spread: [8, 10, 18] },
@@ -129,7 +200,12 @@ describe("scientific workbench card", () => {
     expect(svg.querySelector(".science-volcano-fdr-threshold")).toHaveAttribute("stroke-dasharray", "4 4");
     expect(svg.querySelector("polyline")).toBeNull();
     const down = svg.querySelector(".science-volcano-down")!;
-    expect(Number.isFinite(Number(down.getAttribute("cy")))).toBe(true);
+    expect(down.tagName.toLowerCase()).toBe("path");
+    expect(down.getAttribute("d")).not.toMatch(/NaN|Infinity/);
+    expect(svg.querySelector(".science-volcano-other")?.tagName.toLowerCase()).toBe("circle");
+    fireEvent.click(screen.getByText("Volcano feature data"));
+    const data = screen.getByRole("table", { name: "Volcano feature data" });
+    expect(within(data).getByRole("row", { name: /GeneDown/ })).toHaveTextContent("GeneDown-2.20Down in B");
     expect(screen.getByText(/Up in B: 1/)).toBeVisible();
     expect(screen.getByText(/Down in B: 1/)).toBeVisible();
     expect(screen.getByText(/Other tested: 1/)).toBeVisible();
@@ -190,14 +266,14 @@ describe("scientific workbench card", () => {
     expect(screen.getByRole("button", { name: "Chart this" })).toBeEnabled();
     expect(screen.getByRole("combobox", { name: "Chart type" })).toHaveValue("scatter");
     fireEvent.click(screen.getByRole("button", { name: "Chart this" }));
-    expect(generateChart).toHaveBeenCalledWith("target", "scatter");
+    expect(generateChart).toHaveBeenCalledWith("target", "scatter", "abc");
     fireEvent.change(screen.getByRole("combobox", { name: "Chart type" }), { target: { value: "heatmap" } });
     fireEvent.click(screen.getByRole("button", { name: "Chart this" }));
-    expect(generateChart).toHaveBeenCalledWith("target", "heatmap");
+    expect(generateChart).toHaveBeenCalledWith("target", "heatmap", "abc");
     expect(screen.getByText("Source changed · refresh to update")).toBeVisible();
     expect(screen.getByText(/Receipt bbbbbbbbbbbb/)).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Refresh chart" }));
-    expect(generateChart).toHaveBeenCalledWith("child-chart", "scatter");
+    expect(generateChart).toHaveBeenCalledWith("child-chart", "scatter", "abc");
   });
 
   it("only runs on submit, validates numeric arrays, and preserves the draft on a backend error", async () => {
@@ -243,6 +319,22 @@ describe("scientific workbench card", () => {
     await waitFor(() => expect(screen.getByText("Run calculation")).toBeEnabled());
   });
 
+  it("restores edited source bindings after loading an example, including across remount", async () => {
+    const { request, remount } = mount();
+    const source = screen.getByRole("combobox", { name: "Import Samples from a connected result" }) as HTMLSelectElement;
+    const option = Array.from(source.options).find((item) => item.text === "Samples · y")!;
+    fireEvent.change(source, { target: { value: option.value } });
+    fireEvent.click(screen.getByRole("button", { name: "Load example" }));
+    expect(screen.getByLabelText("Samples (m)")).toHaveValue("[1,2,3]");
+    remount(JSON.stringify(state));
+    fireEvent.click(screen.getByRole("button", { name: "Undo load example" }));
+    expect(screen.getByLabelText("Samples (m)")).toHaveValue("[1,8,3]");
+    fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
+    await waitFor(() => expect(request.mock.lastCall?.[2]?.[2]).toMatchObject({
+      sources: { samples: { selector: ["column", 1], resultHash: "abc" } },
+    }));
+  });
+
   it("renders persisted runs, plots irregular x coordinates, and exports the committed artifacts", async () => {
     const save = vi.spyOn(download, "downloadBlob").mockImplementation(() => {});
     try {
@@ -260,7 +352,9 @@ describe("scientific workbench card", () => {
       expandResult("Actions & exports");
       fireEvent.click(screen.getByText("Export JSON"));
       await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+      request.mockResolvedValueOnce({ ok: true, json: canonical });
       fireEvent.click(screen.getByText("Export CSV"));
+      await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
       expect(save.mock.calls.map(([, name]) => name)).toEqual(["mathematics-integral.json", "mathematics-integral.csv"]);
       expect(await save.mock.calls[0][0].text()).toBe(canonical);
       expect(await save.mock.calls[1][0].text()).toBe("x,y\r\n0,1\r\n2,8\r\n10,3");
@@ -460,15 +554,30 @@ describe("scientific workbench card", () => {
     expect(screen.getByText("Time (s) · -1.79769 × 10³⁰⁸ to 1.79769 × 10³⁰⁸")).toBeVisible();
   });
 
+  it("refuses inline CSV when the server has advanced past the visible receipt", async () => {
+    const save = vi.spyOn(download, "downloadBlob").mockImplementation(() => {});
+    try {
+      const { request } = mount(JSON.stringify({ ...state, latest: result }));
+      request.mockResolvedValueOnce({ ok: true, json: JSON.stringify({ ...result, provenance: { ...result.provenance, receiptHash: "new" } }) });
+      expandResult("Actions & exports");
+      fireEvent.click(screen.getByText("Export CSV"));
+      expect(await screen.findByRole("alert")).toHaveTextContent("result changed");
+      expect(save).not.toHaveBeenCalled();
+    } finally { save.mockRestore(); }
+  });
+
   it("exports every result row, escapes CSV cells and retains small signed values beyond the preview", async () => {
     const save = vi.spyOn(download, "downloadBlob").mockImplementation(() => {});
     try {
       const rows = Array.from({ length: 42 }, (_, i) => [i === 41 ? -Number.MIN_VALUE : i, i === 41 ? 'a,"b"' : "=formula"]);
-      mount(JSON.stringify({ ...state, latest: { ...result, table: { columns: ["Measurement", "Label"], rows } } }));
+      const saved = { ...result, table: { columns: ["Measurement", "Label"], rows } };
+      const { request } = mount(JSON.stringify({ ...state, latest: saved }));
+      request.mockResolvedValueOnce({ ok: true, json: JSON.stringify(saved) });
       expandResult("Tables · 42 rows");
       expect(screen.getAllByRole("row")).toHaveLength(31);
       expandResult("Actions & exports");
       fireEvent.click(screen.getByText("Export CSV"));
+      await waitFor(() => expect(save).toHaveBeenCalledOnce());
       const csv = await save.mock.calls[0][0].text();
       expect(csv.split("\r\n")).toHaveLength(43);
       expect(csv).toContain("0,'=formula");
@@ -580,7 +689,17 @@ describe("scientific workbench card", () => {
     expandResult("Plots & views");
     const large = screen.getByRole("table", { name: "384-well plate map" });
     expect(within(large).getAllByRole("row")).toHaveLength(17);
-    expect(within(large).getByRole("cell", { name: "P24: 5 RFU" })).toBeInTheDocument();
+    const first = within(large).getByRole("button", { name: "A1: empty" });
+    const last = within(large).getByRole("button", { name: "P24: 5 RFU" });
+    expect(large.querySelectorAll('button[tabindex="0"]')).toHaveLength(1);
+    fireEvent.keyDown(first, { key: "End", ctrlKey: true });
+    expect(last).toHaveFocus();
+    expect(last).toHaveAttribute("tabindex", "0");
+    expect(screen.getByText("P24", { selector: ".science-well-readout strong" }).parentElement).toHaveTextContent("P24 · 5 RFU");
+    fireEvent.keyDown(last, { key: "ArrowLeft" });
+    expect(within(large).getByRole("button", { name: "P23: empty" })).toHaveFocus();
+    fireEvent.click(first);
+    expect(first).toHaveAttribute("tabindex", "0");
   });
 
   it("renders all survival groups as step curves with censor ticks and a legend", () => {
@@ -599,6 +718,11 @@ describe("scientific workbench card", () => {
       /H.*V/.test(path.getAttribute("d") ?? ""))).toBe(true);
     expect(svg.querySelectorAll("line[stroke-width='2']")).toHaveLength(2);
     expect(screen.getByText("C · 0 censor times")).toBeVisible();
+    const keys = [...document.querySelectorAll(".science-survival-key line")];
+    expect(keys.map(key => key.getAttribute("stroke-dasharray")))
+      .toEqual([...svg.querySelectorAll("g path")].map(curve => curve.getAttribute("stroke-dasharray")));
+    fireEvent.click(screen.getByText("Survival curve data"));
+    expect(within(screen.getByRole("table", { name: "Survival curve data" })).getByRole("row", { name: "A 4 0.5 Yes" })).toBeVisible();
     // The legacy single-series plot is retained for connections, not displayed twice.
     expect(screen.queryByRole("img", { name: /Distance/ })).toBeNull();
     expect(screen.getByRole("table", { name: "Result table" })).toBeInTheDocument();
@@ -688,6 +812,30 @@ describe("typed table import and numeric selections", () => {
       receiptHash: "c".repeat(64), parseOptions: { format: "tsv", missingValues: ["", "NA"] } },
   };
 
+  it("connects an existing dataset upstream and retains the selection after a rejected connection", async () => {
+    const request = vi.fn<WsTransport["request"]>().mockResolvedValueOnce(null).mockResolvedValueOnce("edge");
+    const store = new SceneStore({ request } as unknown as WsTransport);
+    const source = { title: "Measurement source", kind: "science_mathematics.workbench", x: 0, y: 0,
+      pluginState: { science: JSON.stringify({ ...state, table: meta }) } };
+    const snapshot = validateSceneState({ ...initialSceneState, nodes: [
+      { ...source, id: "source" }, { ...source, id: "target" },
+      { ...source, id: "disabled", kind: "placeholder" },
+    ] });
+    if (!snapshot.ok) throw new Error(snapshot.errors.join(", "));
+    vi.spyOn(store, "getScene").mockReturnValue(snapshot.value);
+    render(<ScienceTableSource store={store} packTitle="Mathematics" targetId="target" renderImporter={() => null} />);
+    expect(screen.getByLabelText("Source workbench")).toHaveValue("source");
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Connect selected source" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("connection was not confirmed");
+    expect(screen.getByLabelText("Source workbench")).toHaveValue("source");
+    fireEvent.click(screen.getByRole("button", { name: "Connect selected source" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenNthCalledWith(1, "scene", "connectNodes", ["source", "target"]);
+    expect(request).toHaveBeenNthCalledWith(2, "scene", "connectNodes", ["source", "target"]);
+  });
+
   it("shows a recovery error rather than crashing on a damaged saved table preview", () => {
     mount(JSON.stringify({ ...state, table: { ...meta, preview: [null] } }));
     expect(screen.getByRole("alert")).toHaveTextContent("could not be loaded");
@@ -699,7 +847,7 @@ describe("typed table import and numeric selections", () => {
     } }));
     openImporter();
     fireEvent.change(screen.getByLabelText("Pasted table text"), { target: { value: "x\n😀" } });
-    fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("exceeds the import size limit");
     expect(request).not.toHaveBeenCalled();
   });
@@ -710,14 +858,36 @@ describe("typed table import and numeric selections", () => {
     fireEvent.change(screen.getByLabelText("Table format"), { target: { value: "tsv" } });
     fireEvent.change(screen.getByLabelText("Pasted table text"), { target: { value: "X\tFlag\n1\ttrue" } });
     fireEvent.change(screen.getByLabelText("Missing-value markers"), { target: { value: "NA,missing" } });
+    fireEvent.click(screen.getByText("Advanced column overrides"));
     fireEvent.change(screen.getByLabelText("Column type overrides"), { target: { value: '{"Flag":"boolean"}' } });
-    fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
+    request.mockResolvedValueOnce({ ok: true, table: meta, runToken: "reviewed-token" });
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
     await waitFor(() => expect(request).toHaveBeenCalledWith("app-plugins", "invokePluginIntent", [
-      "science_mathematics", "import_table", {
+      "science_mathematics", "preview_table", {
         node_id: "target", format: "tsv", text: "X\tFlag\n1\ttrue",
         missing_values: ["", "NA", "missing"], column_types: { Flag: "boolean" },
       },
-    ]));
+    ], 120_000));
+    expect(await screen.findByRole("table", { name: "Pending import preview" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Apply reviewed table" }));
+    await waitFor(() => expect(request).toHaveBeenLastCalledWith("app-plugins", "invokePluginIntent", [
+      "science_mathematics", "import_table", expect.objectContaining({
+        expected_run: "reviewed-token", expected_preview: meta.provenance.receiptHash,
+        format: "tsv", text: "X\tFlag\n1\ttrue", column_types: { Flag: "boolean" },
+      }),
+    ], 120_000));
+  });
+
+  it("requires another preview after editing a reviewed column type", async () => {
+    const { request } = mount();
+    openImporter();
+    request.mockResolvedValueOnce({ ok: true, table: meta, runToken: "reviewed-token" });
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
+    await screen.findByRole("button", { name: "Apply reviewed table" });
+    fireEvent.change(screen.getByRole("combobox", { name: "Type for Station" }), { target: { value: "categorical" } });
+    expect(screen.queryByRole("button", { name: "Apply reviewed table" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Preview table" })).toBeEnabled();
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("imports file bytes rather than decoding and repasting CSV into the field", async () => {
@@ -727,10 +897,10 @@ describe("typed table import and numeric selections", () => {
     const file = new File(["Time (s)\tValue\n0\t1"], "samples.tsv", { type: "text/tab-separated-values" });
     Object.defineProperty(file, "arrayBuffer", { value: async () => new TextEncoder().encode("Time (s)\tValue\n0\t1").buffer });
     fireEvent.change(screen.getByLabelText("CSV or TSV file"), { target: { files: [file] } });
-    fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
     await waitFor(() => expect(request).toHaveBeenCalled());
     const args = request.mock.lastCall?.[2]?.[2] as Record<string, unknown>;
-    expect(request.mock.lastCall?.[2]?.[1]).toBe("import_table");
+    expect(request.mock.lastCall?.[2]?.[1]).toBe("preview_table");
     expect(args.format).toBe("tsv");
     expect(args.filename).toBe("samples.tsv");
     expect(atob(args.encoded_file as string)).toBe("Time (s)\tValue\n0\t1");
@@ -752,14 +922,14 @@ describe("typed table import and numeric selections", () => {
     const newInput = screen.getByLabelText("CSV or TSV file") as HTMLInputElement;
     expect(newInput).not.toBe(oldInput);
     expect(newInput.files).toHaveLength(0);
-    fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Choose a CSV or TSV file.");
     expect(request).not.toHaveBeenCalled();
 
     const freshFile = new File(["X\n2"], "fresh.csv", { type: "text/csv" });
     Object.defineProperty(freshFile, "arrayBuffer", { value: async () => new TextEncoder().encode("X\n2").buffer });
     fireEvent.change(newInput, { target: { files: [freshFile] } });
-    fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
     await waitFor(() => expect(request).toHaveBeenCalledOnce());
     const args = request.mock.lastCall?.[2]?.[2] as Record<string, unknown>;
     expect(args.filename).toBe("fresh.csv");
@@ -776,7 +946,7 @@ describe("typed table import and numeric selections", () => {
     fireEvent.change(screen.getByLabelText("Table data source"), { target: { value: "paste" } });
     fireEvent.change(screen.getByLabelText("Table data source"), { target: { value: "file" } });
     expect((screen.getByLabelText("CSV or TSV file") as HTMLInputElement).files).toHaveLength(0);
-    fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Choose a CSV or TSV file.");
     expect(request).not.toHaveBeenCalled();
   });
@@ -817,6 +987,47 @@ describe("typed table import and numeric selections", () => {
     expect(request.mock.lastCall?.[2]?.[2]).toMatchObject({
       inputs: { samples: [10, 20] }, sources: { samples: reference },
     });
+  });
+
+  it("reviews paired columns in an editable window before atomically applying verified inputs", async () => {
+    const paired = {
+      ...operation, fields: [operation.fields[0], { ...operation.fields[0], key: "other", label: "Other" }],
+      example: { samples: [1, 2, 3], other: [4, 5, 6] }, pairedFields: [["samples", "other"]],
+    };
+    const table = { ...meta, columns: [
+      { ...meta.columns[0], label: "A (mm)", unit: "mm" }, { ...meta.columns[0], label: "B", unit: "" },
+    ] };
+    const upstream = { nodeId: "parent", title: "Observations", raw: JSON.stringify({
+      ...state, nodeKey: "d".repeat(32), table, latest: null,
+    }) };
+    const raw = JSON.stringify({ ...state, operations: [paired] });
+    const { request, remount } = mount(raw, [upstream]);
+    fireEvent.click(screen.getByText("Bind table columns"));
+    fireEvent.change(await screen.findByLabelText("Column for Samples"), { target: { value: "0" } });
+    fireEvent.change(screen.getByLabelText("Column for Other"), { target: { value: "1" } });
+    fireEvent.change(screen.getByLabelText("Source unit assumption for Other"), { target: { value: "mm" } });
+    fireEvent.change(screen.getByLabelText("First data row"), { target: { value: "2" } });
+    fireEvent.change(screen.getByLabelText("Missing observations"), { target: { value: "complete" } });
+    const choices = [0, 1].map((idx) => ({
+      nodeId: "parent", sourceKey: "d".repeat(32), resultHash: table.asset_ref,
+      receiptHash: table.provenance.receiptHash, selector: ["table_column", idx, "drop", 1, 3],
+      binding: { sourceUnit: "mm", targetUnit: "m", retained: 1, omitted: 1, rowDigest: "b".repeat(64),
+        columnLabel: table.columns[idx].label, completeColumns: [0, 1], ...(idx === 1 && { assumedUnit: "mm" }) },
+    }));
+    for (const reference of choices) request.mockResolvedValueOnce({ ok: true, values: [12.5],
+      inputs: ["12.5 mm"], normalizedPreview: [.0125], reference });
+    fireEvent.click(screen.getByRole("button", { name: "Preview bindings" }));
+    const apply = await screen.findByRole("button", { name: "Apply reviewed bindings" });
+    expect(screen.getByLabelText("Samples (m)")).toHaveValue("[1,2,3]");
+    expect(screen.getByRole("region", { name: "Verified binding preview" })).toHaveTextContent("0.0125");
+    expect(request.mock.calls[1][2]?.[2]).toMatchObject({ start: 1, end: 3, policy: "drop", complete_columns: [0, 1], assumed_unit: "mm" });
+    fireEvent.click(apply);
+    remount(raw);
+    expect(screen.getByLabelText("Samples (m)")).toHaveValue('["12.5 mm"]');
+    fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
+    await waitFor(() => expect(request.mock.lastCall?.[2]?.[2]).toMatchObject({
+      inputs: { samples: ["12.5 mm"], other: ["12.5 mm"] }, sources: { samples: choices[0], other: choices[1] },
+    }));
   });
 
   it("binds a complete typed table and selects text and numeric group fields in the form", async () => {
