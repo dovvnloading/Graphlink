@@ -324,7 +324,8 @@ function tableIntent(store: SceneStore, pluginId: string, name: string, args: Re
   return endpoint.scientificIntent(pluginId, name, args);
 }
 
-type FetchTableColumn = (option: SourceOption) => Promise<{ values: number[]; reference: SourceReference }>;
+type FetchTableColumn = (option: SourceOption, op: ScienceOperation, field: ScienceField, unitInputs: Record<string, string>) =>
+  Promise<{ values: Array<number | string>; reference: SourceReference }>;
 
 function binaryBase64(bytes: Uint8Array): string {
   const chunks: string[] = [];
@@ -469,7 +470,8 @@ function restoreDraft(op: ScienceOperation, result: ScienceResult | null, revisi
       values[field.key] = connectedInputText(field, option);
     }
   }
-  return { values, sources, revision, dirty: false };
+  const method = runner ? runner.uncertaintyMethod ?? "auto" : result?.provenance.requestedUncertaintyMethod ?? "auto";
+  return { values, sources, method, revision, dirty: false };
 }
 
 function AttemptProgress({ attempt, title }: { attempt: ScienceAttempt; title: string }) {
@@ -497,7 +499,13 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
   const [running, setRunning] = useState(false);
   const [configuring, setConfiguring] = useState(false);
   const [cancelling, setCancelling] = useState(false);
-  const [uncertaintyMethod, setUncertaintyMethod] = useState<"auto" | "gum" | "monte_carlo">("auto");
+  const uncertaintyMethod = draft.method ?? "auto";
+  const savedInputs = useMemo(() => configured?.operationId === op.id
+    ? restoreDraft(op, null, revision, options, configured) : null, [op, configured, revision, options]);
+  const savedMatches = !!savedInputs && uncertaintyMethod === savedInputs.method &&
+    op.fields.every(({ key }) => draft.values[key] === savedInputs.values[key] &&
+      JSON.stringify(draft.sources[key]) === JSON.stringify(savedInputs.sources[key]));
+  const formRef = useRef<HTMLFormElement>(null);
   const errorId = useId();
   const activeAttempt = attempt?.status === "running" || attempt?.status === "cancelling" ? attempt : undefined;
   const submission = useSyncExternalStore(session.onSubmission, session.submission);
@@ -546,21 +554,22 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
     let inputs: Record<string, unknown>;
     try { inputs = parseInputs(op, draft.values, limits); }
     catch (e) {
-      setError({ message: e instanceof Error ? e.message : "Check the inputs.",
-        field: e instanceof FieldError ? e.key : undefined });
+      const field = e instanceof FieldError ? e.key : undefined;
+      setError({ message: e instanceof Error ? e.message : "Check the inputs.", field });
+      if (field) (formRef.current?.elements.namedItem(field) as HTMLElement | null)?.focus();
       return;
     }
     pending.current = true;
     setConfiguring(true);
     setBusy(true);
     try {
-      await configure(op.id, inputs, draft.sources, runToken);
+      await configure(op.id, inputs, draft.sources, runToken, uncertaintyMethod);
       setDraft((old) => ({ ...old, dirty: false }));
     } catch (e) { setError({ message: e instanceof Error ? e.message : "Could not save the runner configuration." }); }
     finally { pending.current = false; setConfiguring(false); setBusy(false); }
   }
 
-  return <form className="science-operation-editor" onSubmit={submit}>
+  return <form ref={formRef} className="science-operation-editor" onSubmit={submit}>
     <div className="science-operation-context">
       {op.description && <p className="science-operation-preview" title={op.description}>{op.description}</p>}
       {(op.description || op.methods || op.citations?.length) && <details className="science-methods">
@@ -606,7 +615,9 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
                   pending.current = true;
                   setBusy(true);
                   setError(null);
-                  void fetchTableColumn(option).then(({ values, reference }) => {
+                  const unitInputs = Object.fromEntries(op.fields.filter((item) => item.kind === "text" && (
+                    item.key.endsWith("_unit") || item.key === "from_scale")).map((item) => [item.key, draft.values[item.key]]));
+                  void fetchTableColumn(option, op, field, unitInputs).then(({ values, reference }) => {
                     setDraft((old) => ({ ...old, dirty: true, values: { ...old.values, [field.key]: fieldText(field, values) },
                       sources: { ...old.sources, [field.key]: reference } }));
                   }).catch((e) => {
@@ -632,7 +643,10 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
       {bound.some(([, ref]) => options.some((option) => matchesSource(option, ref) && option.uncertainty)) &&
         <label>Uncertainty propagation method
           <select aria-label="Uncertainty propagation method" value={uncertaintyMethod}
-            onChange={(event) => setUncertaintyMethod(event.target.value as "auto" | "gum" | "monte_carlo")}>
+            onChange={(event) => {
+              const method = event.target.value as "auto" | "gum" | "monte_carlo";
+              setDraft((old) => ({ ...old, method, dirty: true }));
+            }}>
             <option value="auto">Automatic · first-order GUM or Monte Carlo for strong nonlinearity</option>
             <option value="gum">First-order GUM</option>
             <option value="monte_carlo">Monte Carlo · JCGM 101 (Gaussian input model)</option>
@@ -656,7 +670,8 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
           setDraft({ ...restoreDraft(op, null, revision), dirty: true }); setError(null);
         }}>Load example</button>
       </div>
-      {configured?.operationId === op.id && <small role="status">Saved as an explicit Graph Runner step.</small>}
+      {configured && <small role="status">{savedMatches ? "Saved as an explicit Graph Runner step."
+        : "Changes not saved to Graph Runner."}</small>}
     </fieldset>
     {submission?.phase === "checking" ? <p role="status">Checking run status…</p>
       : activeAttempt ? <AttemptProgress attempt={activeAttempt} title={attemptTitle ?? activeAttempt.operationId} />
@@ -723,18 +738,23 @@ export const ScientificNodeView = memo(function ScientificNodeView({ data, id, s
         exportMethods={() => data.store.exportScientificMethods(data.pluginId, id, state.runToken)}
         exportCsv={() => data.store.exportScientificTableCsv(data.pluginId, id, "result", state.runToken)}
         tableEditor={<TableEditor state={state} nodeId={id} pluginId={data.pluginId} store={data.store} />}
-        fetchTableColumn={async (option) => {
+        fetchTableColumn={async (option, operation, field, unitInputs) => {
           if (!option.tableColumn) throw new Error("Choose a typed table column.");
           const { nodeId, column, policy, start, end } = option.tableColumn;
           const answer = await tableIntent(data.store, data.pluginId, "table_column", {
             node_id: id, source_node_id: nodeId, column, policy, start, end,
             table_source: option.tableColumn.source ?? "import",
+            operation_id: operation.id, field_key: field.key, unit_inputs: unitInputs,
             expected_hash: option.reference.resultHash, expected_receipt: option.reference.receiptHash,
           });
           if (!Array.isArray(answer.values) || !answer.values.every((n) => typeof n === "number" && Number.isFinite(n))
               || typeof answer.reference !== "object" || answer.reference === null)
             throw new Error("The table column response was not valid.");
-          return { values: answer.values as number[], reference: answer.reference as SourceReference };
+          const literals = answer.inputs ?? answer.values;
+          if (!Array.isArray(literals) || literals.length !== answer.values.length || !literals.every(
+            (item) => typeof item === "string" || typeof item === "number" && Number.isFinite(item),
+          )) throw new Error("The table column input units could not be verified.");
+          return { values: literals as Array<number | string>, reference: answer.reference as SourceReference };
         }}
         charts={data.charts ?? []}
         onChart={(chartType) => data.store.generateChart(id, chartType)}
@@ -743,7 +763,7 @@ export const ScientificNodeView = memo(function ScientificNodeView({ data, id, s
           id, result.provenance.resultHash, result.provenance.receiptHash ?? result.provenance.resultHash,
         )}
         run={(operationId, inputs, sources, token, method, attemptId) => data.store.runScientificOperation(data.pluginId, id, operationId, inputs, sources, token, method, attemptId)}
-        configure={(operationId, inputs, sources, token) => data.store.configureScientificRunner(data.pluginId, id, operationId, inputs, sources, token)}
+        configure={(operationId, inputs, sources, token, method) => data.store.configureScientificRunner(data.pluginId, id, operationId, inputs, sources, token, method)}
         cancel={(operationId, attemptId) => data.store.cancelScientificOperation(data.pluginId, id, operationId, attemptId)} />
       : <p role="alert">This workbench version could not be loaded. Check the plugin in Settings.</p>}
   </NodeShell>;

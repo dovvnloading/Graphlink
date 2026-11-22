@@ -92,6 +92,8 @@ def render_result_methods(pack: str, data: dict, *, node_id: str, title: str) ->
         lines.extend(_value_lines(name, value))
     if len(values) > MAX_OUTPUT_VALUES:
         lines.append(f"{len(values) - MAX_OUTPUT_VALUES} further named outputs are in Export JSON.")
+    if "requestedUncertaintyMethod" in receipt:
+        lines.extend(_value_lines("Requested uncertainty method", receipt["requestedUncertaintyMethod"]))
     if "uncertainty" in result:
         lines.extend(_value_lines("Propagated uncertainty method", result["uncertainty"]["method"]))
         lines.append("Complete uncertainty estimates and budgets are in Export JSON.")

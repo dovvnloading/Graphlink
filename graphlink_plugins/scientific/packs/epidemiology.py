@@ -469,6 +469,7 @@ OPERATIONS: tuple[Operation, ...] = (
         citations=(Citation("Hanley & McNeil (1982), Meaning and use of the area under an ROC curve",
                             "https://pubmed.ncbi.nlm.nih.gov/7063747/"),),
         headline="auc",
+        paired_fields=(("scores", "disease_status"),),
     ),
     Operation(
         "incidence_rate", "Incidence rate with exact Poisson CI",
@@ -509,6 +510,7 @@ OPERATIONS: tuple[Operation, ...] = (
                    Citation("SAS/STAT, Direct standardization gamma confidence interval",
                             "https://support.sas.com/documentation/cdl/en/statug/67523/HTML/default/statug_stdrate_details14.htm")),
         headline="standardized_rate",
+        paired_fields=(("events_by_age", "person_time_by_age", "standard_population"),),
     ),
 )
 

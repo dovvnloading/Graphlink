@@ -117,6 +117,7 @@ OPERATIONS: tuple[Operation, ...] = (
         },
         tensile_response,
         headline="peak_measured_stress_mpa",
+        paired_fields=(("force_n", "extension_mm"),),
     ),
     Operation(
         "apparent_porosity",

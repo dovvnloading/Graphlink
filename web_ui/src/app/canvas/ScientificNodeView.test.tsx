@@ -932,3 +932,20 @@ describe("explicit Scientific Graph Runner configuration", () => {
     expect(screen.queryByText("Saved as an explicit Graph Runner step.")).toBeNull();
   });
 });
+
+it("restores a saved scalar unit literal and indicates when the recipe diverges", async () => {
+  const { request } = mount(JSON.stringify({ ...state, runner: {
+    version: 2, operationId: "scale", inputs: { length: "25 mm" }, sources: {},
+    uncertaintyMethod: "monte_carlo",
+  } }), []);
+  const field = screen.getByRole("textbox", { name: "Length (m)" });
+  expect(field).toHaveValue("25 mm");
+  expect(screen.getByText("Saved as an explicit Graph Runner step.")).toBeVisible();
+  fireEvent.change(field, { target: { value: "30 mm" } });
+  expect(screen.getByText("Changes not saved to Graph Runner.")).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Save for Graph Runner" }));
+  await waitFor(() => expect(request).toHaveBeenCalledWith("app-plugins", "invokePluginIntent", [
+    "science_mathematics", "configure_runner", { node_id: "target", operation_id: "scale",
+      inputs: { length: "30 mm" }, sources: {}, uncertainty_method: "monte_carlo" },
+  ]));
+});

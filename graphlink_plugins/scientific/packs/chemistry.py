@@ -100,6 +100,7 @@ OPERATIONS: tuple[Operation, ...] = (
         {"wavelength_nm": [400, 450, 500, 550], "transmission_percent": [80, 50, 10, 70]},
         transmission_spectrum,
         headline="peak_absorbance",
+        paired_fields=(("wavelength_nm", "transmission_percent"),),
     ),
     Operation(
         "isotope_average",
@@ -113,6 +114,7 @@ OPERATIONS: tuple[Operation, ...] = (
         {"isotope_mass_u": [34.96885, 36.96590], "abundance_percent": [75.76, 24.24]},
         isotope_average,
         headline="mean_atomic_mass_u",
+        paired_fields=(("isotope_mass_u", "abundance_percent"),),
     ),
 )
 
@@ -787,6 +789,7 @@ OPERATIONS += (
          "rate_constant": [0.00095, 0.00164, 0.00274, 0.00447], "rate_constant_unit": "s^-1"},
         arrhenius_fit,
         headline="activation_energy_kj_mol",
+        paired_fields=(("temperature_k", "rate_constant"),),
     ),
     Operation(
         "rate_law_fit", "First/second-order integrated rate-law fit",
@@ -799,6 +802,7 @@ OPERATIONS += (
          "concentration_mol_l": [0.2, 0.14816, 0.10976, 0.08131]},
         rate_law_fit,
         headline="rate_constant_per_s",
+        paired_fields=(("time_s", "concentration_mol_l"),),
     ),
     Operation(
         "gas_pressure", "Ideal and van der Waals gas pressure",
@@ -863,5 +867,6 @@ OPERATIONS += (
          "product_molar_mass_g_mol": 18.015, "actual_product_mass_g": 30},
         reaction_yield,
         headline="percent_yield",
+        paired_fields=(("reactant_coefficients", "reactant_mass_g", "reactant_molar_mass_g_mol"),),
     ),
 )

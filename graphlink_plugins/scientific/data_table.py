@@ -514,8 +514,9 @@ def _csv_cell(value: object) -> str:
     return str(value)
 
 
-def numeric_column(meta: dict, column: int, missing_policy: str = "reject",
-                   start: int = 0, end: int | None = None) -> list[float]:
+def numeric_selection(meta: dict, column: int, missing_policy: str, start: int, end: int | None,
+                      complete_columns: list[int] | None = None, *, table: dict | None = None) -> tuple[list, list[int]]:
+    """Return values with zero-based row identities from the verified source asset."""
     if not table_metadata_valid(meta):
         raise ValueError("The scientific table's import receipt is damaged.")
     if type(column) is not int or not 0 <= column < meta["columnCount"]:
@@ -524,19 +525,30 @@ def numeric_column(meta: dict, column: int, missing_policy: str = "reject",
         raise ValueError("Only numeric table columns can supply numerical operation inputs.")
     if missing_policy not in ("reject", "drop"):
         raise ValueError("Choose either reject or explicitly drop missing measurements.")
-    table = read_table(meta)
-    stop = len(table["rows"]) if end is None else end
-    if type(start) is not int or type(stop) is not int or not 0 <= start < stop <= len(table["rows"]):
+    required = [column] if complete_columns is None else complete_columns
+    if (not isinstance(required, list) or not 1 <= len(required) <= meta["columnCount"]
+            or any(type(i) is not int or not 0 <= i < meta["columnCount"] for i in required)
+            or column not in required or len(set(required)) != len(required)):
+        raise ValueError("Complete-case selection must include this column and distinct existing column indices.")
+    if any(meta["columns"][i]["type"] != "numeric" for i in required):
+        raise ValueError("Choose numeric columns for paired measurements.")
+    stop = meta["rowCount"] if end is None else end
+    if type(start) is not int or type(stop) is not int or not 0 <= start < stop <= meta["rowCount"]:
         raise ValueError("Select a valid nonempty row range.")
     if stop - start > MAX_POINTS:
         raise ValueError(f"Existing operations accept at most {MAX_POINTS} measurements; choose a smaller row range.")
-    values = [row[column] for row in table["rows"][start:stop]]
-    if any(value is None for value in values):
-        if missing_policy == "reject":
-            raise ValueError("This column contains missing values. Choose 'Drop missing' explicitly.")
-        values = [v for v in values if v is not None]
-    if not values:
+    rows = (read_table(meta) if table is None else table)["rows"]
+    indices = [i for i in range(start, stop) if all(rows[i][j] is not None for j in required)]
+    if missing_policy == "reject" and len(indices) != stop - start:
+        raise ValueError("This column selection contains missing values. Choose 'Drop missing' explicitly.")
+    if not indices:
         raise ValueError("No measurements remain after dropping missing values.")
+    return [rows[i][column] for i in indices], indices
+
+
+def numeric_column(meta: dict, column: int, missing_policy: str = "reject",
+                   start: int = 0, end: int | None = None) -> list[float]:
+    values, _ = numeric_selection(meta, column, missing_policy, start, end)
     return values
 
 

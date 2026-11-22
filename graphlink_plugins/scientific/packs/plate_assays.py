@@ -334,6 +334,7 @@ OPERATIONS = (
         citations=(Citation("Bio-Rad five-parameter logistic calibration",
                             "https://www.bio-rad.com/webroot/web/pdf/lsr/literature/10022815.pdf"),),
         headline="r_squared",
+        paired_fields=(("standard_concentrations", "standard_signals"), ("unknown_signals", "dilution_factors")),
     ),
     Operation(
         "assay_quality", "Assay quality: Z′, signal window and %CV",
@@ -369,6 +370,7 @@ OPERATIONS = (
         citations=(Citation("Pfaffl (2001), Nucleic Acids Research",
                             "https://doi.org/10.1093/nar/29.9.e45"),),
         headline="amplification_efficiency_percent",
+        paired_fields=(("standard_quantities", "standard_cts"),),
     ),
     Operation(
         "qpcr_relative_expression", "qPCR ΔΔCt and efficiency-corrected Pfaffl ratio",
@@ -394,6 +396,7 @@ OPERATIONS = (
                    Citation("Vandesompele et al. (2002), Genome Biology",
                             "https://doi.org/10.1186/gb-2002-3-7-research0034")),
         headline="ddct_fold_change",
+        paired_fields=(("reference_cts_sample", "reference_cts_calibrator", "reference_efficiencies"),),
     ),
     Operation(
         "digital_pcr", "Digital PCR Poisson copy concentration",

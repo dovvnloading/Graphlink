@@ -602,6 +602,7 @@ OPERATIONS = (
                 "Concentrations must be mass/volume, dose mass, time a time dimension.",
         citations=_NCA_CITES,
         headline="auc_inf",
+        paired_fields=(("time", "concentration"),),
     ),
     Operation(
         "one_compartment_fit", "Fit one-compartment IV bolus PK",
@@ -613,6 +614,7 @@ OPERATIONS = (
                 "Use only single-dose, linear time-invariant IV bolus profiles.",
         citations=_COMP_CITES,
         headline="clearance",
+        paired_fields=(("time", "concentration"),),
     ),
     Operation(
         "two_compartment_fit", "Fit two-compartment IV bolus PK",
@@ -625,6 +627,7 @@ OPERATIONS = (
                 "Local standard errors are Jacobian-linearized, and weak phase separation is flagged.",
         citations=_COMP_CITES,
         headline="clearance",
+        paired_fields=(("time", "concentration"),),
     ),
 
     Operation(
