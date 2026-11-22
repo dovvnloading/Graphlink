@@ -10,7 +10,7 @@ describe("TextField", () => {
   });
   it("links error and description and supports the mono, size and prefix variants", () => {
     render(<TextField label="API key" description="Keep safe" error="Required"
-      mono size="sm" prefixIcon="key" suffix={{ type: "unit", text: "ms" }} />);
+      mono size="sm" prefixIcon="lock" suffix={{ type: "unit", text: "ms" }} />);
     const input = screen.getByRole("textbox", { name: "API key" });
     expect(input).toHaveAttribute("aria-invalid", "true");
     expect(input).toHaveAccessibleDescription("Keep safe Required");

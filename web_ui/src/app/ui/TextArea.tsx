@@ -1,6 +1,6 @@
 import { useCallback, useLayoutEffect, useRef, useState, type TextareaHTMLAttributes } from "react";
 import { Field } from "./Field";
-import "./textArea.css";
+import "./text-area.css";
 
 export type TextAreaProps = Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "rows" | "value" | "defaultValue"> & {
   label: string;

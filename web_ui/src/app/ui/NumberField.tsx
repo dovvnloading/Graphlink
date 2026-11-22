@@ -1,7 +1,7 @@
 import { useState, type InputHTMLAttributes, type KeyboardEvent } from "react";
 import { Field } from "./Field";
 import { Icon } from "./icons/Icon";
-import "./numberField.css";
+import "./number-field.css";
 
 export type NumberFieldProps = Omit<InputHTMLAttributes<HTMLInputElement>, "type" | "size" | "min" | "max" | "step" | "value" | "defaultValue"> & {
   label: string;

@@ -2,7 +2,7 @@ import { useRef, useState, type InputHTMLAttributes } from "react";
 import { Field } from "./Field";
 import { Icon } from "./icons/Icon";
 import type { IconName } from "./icons/registry";
-import "./textField.css";
+import "./text-field.css";
 
 export type TextFieldSuffix =
   | { type: "unit"; text: string }

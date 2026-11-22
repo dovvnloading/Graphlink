@@ -1,6 +1,6 @@
 import { useId, useRef, useState, type KeyboardEvent } from "react";
 import { Icon } from "./icons/Icon";
-import "./radioGroup.css";
+import "./radio-group.css";
 
 export type RadioOption = {
   value: string;
@@ -80,7 +80,6 @@ export function RadioGroup({
                 onKeyDown={(event) => onArrow(event, index)}
                 disabled={disabled || option.disabled}
                 required={required}
-                aria-invalid={error ? true : undefined}
                 aria-labelledby={generated + "-option-" + index + "-label"}
                 aria-describedby={[option.description ? generated + "-option-" + index + "-description" : undefined, errorId].filter(Boolean).join(" ") || undefined}
               />

@@ -41,6 +41,8 @@ describe("RadioGroup", () => {
   it("honours disabled and exposes group errors", () => {
     render(<RadioGroup label="Locked selection" options={options} disabled error="Not available" />);
     expect(screen.getByRole("radiogroup", { name: "Locked selection" })).toHaveAccessibleDescription("Not available");
+    expect(screen.getByRole("radiogroup", { name: "Locked selection" })).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("radio", { name: /First/ })).not.toHaveAttribute("aria-invalid");
     expect(screen.getByRole("radio", { name: /First/ })).toBeDisabled();
   });
   it("starts unselected when no default value is supplied", async () => {

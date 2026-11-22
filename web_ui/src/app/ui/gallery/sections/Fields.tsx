@@ -1,6 +1,6 @@
 import { Field, FormRow, FieldGroup } from "../../Field";
 import type { GallerySection } from "../Gallery";
-import "../../textField.css";
+import "../../text-field.css";
 
 function Fields() {
   return (
