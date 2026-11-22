@@ -18,6 +18,7 @@ export function Switch({
   const controlId = id ?? generated;
   const [uncontrolled, setUncontrolled] = useState(defaultChecked);
   const selected = checked ?? uncontrolled;
+  const labelId = controlId + "-label";
   const descriptionId = description ? controlId + "-description" : undefined;
   const errorId = error ? controlId + "-error" : undefined;
 
@@ -32,6 +33,7 @@ export function Switch({
           className="gl-switch-input"
           checked={selected}
           disabled={disabled}
+          aria-labelledby={labelId}
           aria-checked={selected}
           aria-invalid={error ? true : inputProps["aria-invalid"]}
           aria-describedby={[extraDescription, descriptionId, errorId].filter(Boolean).join(" ") || undefined}
@@ -44,7 +46,7 @@ export function Switch({
         <span className="gl-switch-track" aria-hidden="true"><span className="gl-switch-knob" /></span>
       </span>
       <span className="gl-switch-copy">
-        <span className="gl-switch-label">{label}</span>
+        <span className="gl-switch-label" id={labelId}>{label}</span>
         {description && <span className="gl-switch-description" id={descriptionId}>{description}</span>}
         {error && <span className="gl-switch-error" id={errorId}>{error}</span>}
       </span>

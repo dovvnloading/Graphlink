@@ -17,6 +17,7 @@ export function Checkbox({
   const controlId = id ?? generatedId;
   const inputRef = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => { if (inputRef.current) inputRef.current.indeterminate = indeterminate; }, [indeterminate]);
+  const labelId = controlId + "-label";
   const descriptionId = description ? controlId + "-description" : undefined;
   const errorId = error ? controlId + "-error" : undefined;
   const describedBy = [extraDescription, descriptionId, errorId].filter(Boolean).join(" ") || undefined;
@@ -31,6 +32,7 @@ export function Checkbox({
           type="checkbox"
           className="gl-checkbox-input"
           disabled={disabled}
+          aria-labelledby={labelId}
           aria-checked={indeterminate ? "mixed" : undefined}
           aria-describedby={describedBy}
           aria-invalid={error ? true : inputProps["aria-invalid"]}
@@ -40,7 +42,7 @@ export function Checkbox({
         </span>
       </span>
       <span className="gl-checkbox-copy">
-        <span className="gl-checkbox-label">{label}</span>
+        <span className="gl-checkbox-label" id={labelId}>{label}</span>
         {description && <span className="gl-checkbox-description" id={descriptionId}>{description}</span>}
         {error && <span className="gl-checkbox-error" id={errorId}><Icon name="status-error" size="sm" />{error}</span>}
       </span>

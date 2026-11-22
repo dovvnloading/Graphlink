@@ -57,7 +57,7 @@ export function RadioGroup({
 
   return (
     <fieldset className={["gl-radio-group", variant === "card" && "gl-radio-group-card", className].filter(Boolean).join(" ")}
-      role="radiogroup" aria-describedby={errorId} aria-invalid={error || undefined ? true : undefined}
+      role="radiogroup" aria-describedby={errorId} aria-invalid={error ? true : undefined}
       disabled={disabled}>
       <legend className="gl-radio-legend">{label}</legend>
       <div className="gl-radio-options">
@@ -80,13 +80,14 @@ export function RadioGroup({
                 disabled={disabled || option.disabled}
                 required={required}
                 aria-invalid={error ? true : undefined}
-                aria-describedby={errorId}
+                aria-labelledby={generated + "-option-" + index + "-label"}
+                aria-describedby={[option.description ? generated + "-option-" + index + "-description" : undefined, errorId].filter(Boolean).join(" ") || undefined}
               />
               <span className="gl-radio-dot" aria-hidden="true" />
             </span>
             <span className="gl-radio-copy">
-              <span className="gl-radio-label">{option.label}</span>
-              {option.description && <span className="gl-radio-description">{option.description}</span>}
+              <span className="gl-radio-label" id={generated + "-option-" + index + "-label"}>{option.label}</span>
+              {option.description && <span className="gl-radio-description" id={generated + "-option-" + index + "-description"}>{option.description}</span>}
             </span>
             {variant === "card" && selected === option.value && <Icon name="check" size="md" className="gl-radio-check" />}
           </label>

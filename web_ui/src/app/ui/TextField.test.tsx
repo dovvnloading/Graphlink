@@ -6,7 +6,7 @@ import { TextField } from "./TextField";
 describe("TextField", () => {
   it.each(["text", "search", "url", "password", "email"] as const)("labels a %s input", (type) => {
     render(<TextField label="Address" type={type} placeholder="Enter value" />);
-    expect(screen.getByRole(type === "search" ? "searchbox" : "textbox", { name: "Address" })).toHaveAttribute("type", type);
+    expect((type === "password" ? screen.getByLabelText("Address") : screen.getByRole(type === "search" ? "searchbox" : "textbox", { name: "Address" }))).toHaveAttribute("type", type);
   });
   it("links error and description and supports the mono, size and prefix variants", () => {
     render(<TextField label="API key" description="Keep safe" error="Required"

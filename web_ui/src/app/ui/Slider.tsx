@@ -1,4 +1,4 @@
-import { useState, type InputHTMLAttributes } from "react";
+import { useState, type InputHTMLAttributes, type KeyboardEvent } from "react";
 import { Field } from "./Field";
 import "./slider.css";
 
@@ -20,12 +20,28 @@ export type SliderProps = Omit<InputHTMLAttributes<HTMLInputElement>, "type" | "
 
 export function Slider({
   label, description, error, min = 0, max = 100, step = 1, value, defaultValue,
-  onValueChange, onChange, ticks, showValue = false, formatValue = String,
+  onValueChange, onChange, onKeyDown, ticks, showValue = false, formatValue = String,
   id, className, disabled, ...inputProps
 }: SliderProps) {
   const [internal, setInternal] = useState(defaultValue ?? min);
   const current = value ?? internal;
   const percent = (number: number) => max === min ? 0 : Math.max(0, Math.min(100, 100 * (number - min) / (max - min)));
+  function update(next: number) {
+    const clamped = Number(Math.max(min, Math.min(max, next)).toFixed(10));
+    if (value === undefined) setInternal(clamped);
+    onValueChange?.(clamped);
+  }
+  function handleKeys(event: KeyboardEvent<HTMLInputElement>) {
+    const amount = step > 0 ? step : 1;
+    const delta = event.key === "ArrowRight" || event.key === "ArrowUp" ? 1 :
+      event.key === "ArrowLeft" || event.key === "ArrowDown" ? -1 :
+      event.key === "PageUp" ? 10 : event.key === "PageDown" ? -10 : 0;
+    if (!disabled && (delta !== 0 || event.key === "Home" || event.key === "End")) {
+      event.preventDefault();
+      update(event.key === "Home" ? min : event.key === "End" ? max : current + delta * amount);
+    }
+    onKeyDown?.(event);
+  }
   return (
     <Field label={label} description={description} error={error} id={id}>
       {(control) => (
@@ -46,11 +62,10 @@ export function Slider({
                 value={current}
                 disabled={disabled}
                 onChange={(event) => {
-                  const next = Number(event.currentTarget.value);
-                  if (value === undefined) setInternal(next);
-                  onValueChange?.(next);
+                  update(Number(event.currentTarget.value));
                   onChange?.(event);
                 }}
+                onKeyDown={handleKeys}
               />
             </div>
             {showValue && <output className="gl-slider-value" htmlFor={control.id}>{formatValue(current)}</output>}

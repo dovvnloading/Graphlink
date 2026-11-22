@@ -29,7 +29,9 @@ export function NumberField({
   const number = current === "" ? NaN : current;
 
   function clamp(next: number) {
-    return Number(Math.min(upper, Math.max(lower, next)).toFixed(10));
+    const base = min ?? 0;
+    const stepped = base + Math.round((next - base) / increment) * increment;
+    return Number(Math.min(upper, Math.max(lower, stepped)).toFixed(10));
   }
   function emit(next: number | "") {
     setDraft(null);
@@ -37,7 +39,8 @@ export function NumberField({
     onValueChange?.(next);
   }
   function adjust(direction: number) {
-    const start = Number.isFinite(number) ? number : min ?? 0;
+    const editing = draft === null || draft.trim() === "" ? number : Number(draft);
+    const start = Number.isFinite(editing) ? editing : min ?? 0;
     emit(clamp(start + direction * increment));
   }
   function handleKeys(event: KeyboardEvent<HTMLInputElement>) {
