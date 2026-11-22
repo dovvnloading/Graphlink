@@ -13,7 +13,7 @@ from uuid import uuid4
 from weakref import WeakKeyDictionary
 
 from backend.domain.node_states import ChartState, PersistedPluginState, PluginStateSnapshot
-from backend.plugin_sdk import HostContext, PluginNodeSeed, PluginSceneUpdate
+from backend.plugin_sdk import HostContext, PluginNodeSeed, PluginSceneUpdate, SciencePickerOperation
 
 from .attempts import AttemptLedger
 from .bindings import column_binding, paired_rows
@@ -832,6 +832,10 @@ def register_pack(host: HostContext, pack_id: str) -> None:
     host.register_picker_entry(
         node_kind="workbench", name=title, description=description,
         category="Biology Workbench" if PACK_FAMILIES.get(pack_id) == "biology" else "Scientific Workbench",
+        science_operations=tuple(
+            SciencePickerOperation(op.id, op.title, op.description, tuple(field.kind for field in op.fields))
+            for op in catalog.values()
+        ),
     )
     host.register_intent("configure_runner", configure_runner, args_schema=ConfigureRunnerArgs, expose_to_builder=False)
     host.register_intent("run", run, args_schema=RunArgs, expose_to_builder=False)
