@@ -372,7 +372,7 @@ async function captureTheme(page, theme, capture, interrupted) {
       .then(() => true, () => false);
     // The isolated backend may already have the seeded graph open after the
     // earlier theme pass. Keep it only if the library cannot reopen the seed.
-    const alreadyOpen = await page.locator(".react-flow__node").count() > 0;
+    const alreadyOpen = await page.locator(".react-flow__node").first().isVisible();
     if (alreadyOpen && (!openChatVisible || !await openChat.isEnabled())) {
       await page.keyboard.press("Escape");
     } else {
