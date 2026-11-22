@@ -1397,7 +1397,7 @@ describe("Settings > Knowledge embedding source", () => {
       ],
     });
     await user.click(screen.getByRole("button", { name: "Embedding source" }));
-    await user.click(await screen.findByRole("button", { name: /^Ollama \(local\)/ }));
+    await user.click(await screen.findByRole("option", { name: /^Ollama \(local\)/ }));
     expect(intents).toContainEqual(["app-settings", "scanOllamaSystem", []]);
     const models = screen.getByRole("combobox", { name: "Installed Ollama embedding model" });
     const options = within(models).getAllByRole("option");
@@ -1430,7 +1430,7 @@ describe("Settings > Knowledge embedding source", () => {
     };
     const { user, push, transport, intents, requests } = await openKnowledge(models);
     await user.click(screen.getByRole("button", { name: "Embedding source" }));
-    await user.click(await screen.findByRole("button", { name: /^Ollama \(local\)/ }));
+    await user.click(await screen.findByRole("option", { name: /^Ollama \(local\)/ }));
 
     // Let the transport deadline expire while the backend's worker still runs.
     // Its later done publish, not the timed-out reply, is the test result.
@@ -1473,7 +1473,7 @@ describe("Settings > Knowledge embedding source", () => {
   it("requires explicit consent before a cloud Test or Save", async () => {
     const { user, intents } = await openKnowledge();
     await user.click(screen.getByRole("button", { name: "Embedding source" }));
-    await user.click(await screen.findByRole("button", { name: /^Cloud \(OpenAI-compatible\)/ }));
+    await user.click(await screen.findByRole("option", { name: /^Cloud \(OpenAI-compatible\)/ }));
     expect(screen.getByText(/full text chunks from indexed files and saved graphs/)).toBeInTheDocument();
     expect(screen.getByText(/including chat messages, code, prompts, and notes/)).toBeInTheDocument();
     expect(screen.getByText(/remote endpoints require HTTPS/i)).toBeInTheDocument();
