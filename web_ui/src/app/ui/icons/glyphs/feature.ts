@@ -86,24 +86,22 @@ export const featureGlyphs = {
     path("M 3 10 C 3 13.5 17 13.5 17 10"),
   ],
 
-  "chart-line": [chartAxes, polyline("5.5 13 9 10 12 11.5 16 5.5")],
+  "chart-line": { alias: "node-chart" },
   "chart-bar": [
-    chartAxes,
-    rect(5, 11.5, 2.5, 4), rect(10, 8.5, 2.5, 7), rect(15, 5, 2.5, 10.5),
+    line(3, 16.5, 17, 16.5),
+    rect(4.5, 11.5, 2, 5), rect(9.5, 7.5, 2, 9), rect(14.5, 4.5, 2, 12),
   ],
   "chart-pie": [circle(10, 10, 7.5), path("M 10 2.5 V 10 H 17.5")],
   "chart-scatter": [chartAxes, dot(6, 13), dot(9, 9), dot(12, 12), dot(15, 5)],
   "chart-box": [
-    rect(6, 6, 8, 8), line(10, 6, 10, 14),
-    line(3, 10, 6, 10), line(14, 10, 17, 10),
-    line(3, 7.5, 3, 12.5), line(17, 7.5, 17, 12.5),
+    rect(7, 6.5, 6, 7), line(7, 10, 13, 10),
+    line(10, 3.5, 10, 6.5), line(10, 13.5, 10, 16.5),
+    line(8, 3.5, 12, 3.5), line(8, 16.5, 12, 16.5),
   ],
   "chart-heatmap": [
-    // Nine square cells, with a second outline around the central cell.
-    path("M 2 2 H 4 V 4 H 2 Z M 9 2 H 11 V 4 H 9 Z M 16 2 H 18 V 4 H 16 Z " +
-      "M 2 9 H 4 V 11 H 2 Z M 9 9 H 11 V 11 H 9 Z M 16 9 H 18 V 11 H 16 Z " +
-      "M 2 16 H 4 V 18 H 2 Z M 9 16 H 11 V 18 H 9 Z M 16 16 H 18 V 18 H 16 Z"),
-    path("M 6.5 6.5 H 13.5 V 13.5 H 6.5 Z"),
+    rect(3, 3, 14, 14),
+    line(10, 3, 10, 17), line(3, 10, 17, 10),
+    dot(6.5, 6.5), dot(13.5, 13.5),
   ],
   "chart-sankey": [
     path("M 3 3.5 C 8 3.5 12 5.5 17 5.5"),
@@ -121,7 +119,7 @@ export const featureGlyphs = {
     line(2.5, 10, 5, 10), line(15, 10, 17.5, 10),
     dot(10, 10),
   ],
-  video: [rect(2.5, 4, 15, 12), polyline("8 7 13 10 8 13 8 7")],
+  video: { alias: "node-media" },
   audio: [
     line(4, 9, 4, 11), line(7, 6.5, 7, 13.5), line(10, 3.5, 10, 16.5),
     line(13, 6.5, 13, 13.5), line(16, 9, 16, 11),
@@ -170,7 +168,9 @@ export const featureGlyphs = {
   "file-image": [
     fileFrame, dot(8, 9.5), polyline("6.5 14.5 9.5 11.5 11 13 12.5 11 14 12.5"),
   ],
-  // UI-06 supplies node-web, node-science, node-image and node-model. The registry
-  // resolves aliases eagerly and throws for missing targets, so defer all five
-  // cross-batch aliases until those glyphs are available on main.
+  globe: { alias: "node-web" },
+  terminal: { alias: "agent" },
+  flask: { alias: "node-science" },
+  image: { alias: "node-image" },
+  cube: { alias: "node-model" },
 } as const satisfies Record<string, GlyphDefinition>;
