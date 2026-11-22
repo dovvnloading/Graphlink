@@ -1,10 +1,12 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { Icon, type IconSize } from "./Icon";
 import { iconDefinitions, iconNames, iconRegistry, type GlyphPrimitive } from "./registry";
 import { chromeGlyphs } from "./glyphs/chrome";
 import iconsSection from "../gallery/sections/Icons";
-import css from "./icon.css?raw";
+const css = readFileSync(join(process.cwd(), "src/app/ui/icons/icon.css"), "utf-8");
 
 const allowedPrimitives = new Set(["path", "circle", "rect", "line", "polyline"]);
 const coordinateNumbers = (s: string): number[] =>
@@ -89,10 +91,32 @@ describe("icon registry", () => {
   });
 
   it("stores geometry without raw colours, CSS properties or glyph-specific stroke weights", () => {
-    const data = JSON.stringify(iconDefinitions);
-    expect(data).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(|currentColor|stroke|(?:black|white|red|blue)/i);
-    for (const glyph of Object.values(iconRegistry)) {
+    const allowedShapes: Record<GlyphPrimitive["type"], string[][]> = {
+      path: [["type", "d"]],
+      circle: [["type", "cx", "cy", "r"], ["type", "cx", "cy", "r", "fill"]],
+      rect: [["type", "x", "y", "width", "height", "rx"], ["type", "x", "y", "width", "height", "rx", "fill"]],
+      line: [["type", "x1", "y1", "x2", "y2"]],
+      polyline: [["type", "points"]],
+    };
+    for (const [name, glyph] of Object.entries(iconRegistry)) {
       for (const primitive of glyph) {
+        expect(allowedPrimitives.has(primitive.type), name).toBe(true);
+        const keys = Object.keys(primitive).sort();
+        const permittedKeySets = allowedShapes[primitive.type].map((shape) => [...shape].sort());
+        expect(permittedKeySets, name).toContainEqual(keys);
+        for (const [key, value] of Object.entries(primitive)) {
+          if (key === "type") {
+            expect(allowedPrimitives.has(value as string), name).toBe(true);
+          } else if (key === "fill") {
+            expect(typeof value, name).toBe("boolean");
+          } else if (key === "d" || key === "points") {
+            expect(typeof value, name).toBe("string");
+            expect(value, name).toMatch(/^[0-9 ,.MmLlHhVvCcSsQqTtAaZz-]+$/);
+          } else {
+            expect(typeof value, name).toBe("number");
+            expect(Number.isFinite(value), name).toBe(true);
+          }
+        }
         expect("stroke" in primitive || "color" in primitive || "strokeWidth" in primitive).toBe(false);
       }
     }
