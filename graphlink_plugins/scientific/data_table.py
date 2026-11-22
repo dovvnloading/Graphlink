@@ -161,7 +161,8 @@ def _options(fmt: str, missing: list[str] | None, hints: dict[str, str] | None) 
 
 
 def parse_table(source: bytes, *, fmt: str = "csv", missing: list[str] | None = None,
-                hints: dict[str, str] | None = None, filename: str = "") -> dict:
+                hints: dict[str, str] | None = None, filename: str = "",
+                preview_only: bool = False, expected_preview: str | None = None) -> dict:
     """Parse untrusted raw file bytes (or the UTF-8 bytes of pasted text).
 
     Never coerce a missing value to zero or a malformed typed value to null.
@@ -237,10 +238,14 @@ def parse_table(source: bytes, *, fmt: str = "csv", missing: list[str] | None = 
     encoded = canonical_bytes(payload)
     if len(encoded) > TABLE_MAX_ASSET_BYTES:
         raise ValueError("The normalized table asset exceeds 128 MiB.")
-    ref = _STAGING.put(encoded)
+    ref = hashlib.sha256(encoded).hexdigest()
     source_hash = hashlib.sha256(source).hexdigest()
     receipt = {"fileHash": source_hash, "parseOptions": options, "tableHash": ref}
     receipt["receiptHash"] = fingerprint(receipt)
+    if expected_preview is not None and receipt["receiptHash"] != expected_preview:
+        raise ValueError("Source or parsing options changed. Preview the table again.")
+    if not preview_only:
+        _STAGING.put(encoded)
     return {
         "version": 1, "asset_ref": ref, "mime_type": "application/json",
         "rowCount": len(rows), "columnCount": len(columns), "columns": columns,
