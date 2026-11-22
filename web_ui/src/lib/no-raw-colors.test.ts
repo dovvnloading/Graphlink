@@ -9,10 +9,10 @@
  * future component automatically, with nobody needing to remember this file.
  *
  * EXCLUDED, and why:
- * - src/lib/tokens/*.css (gl-theme.css, gl-vars-dev.css) are the hand-
- *   authored token source of truth (ADR-012 stage 12.1 - the Python
- *   generator these files' old headers cited is long gone) and contain
- *   real color values by design - that is their entire purpose.
+ * - src/lib/tokens/gl-vars-dev.css is the hand-authored token source of truth
+ *   (ADR-012 stage 12.1 - the Python generator its old header cited is
+ *   long gone) and contains real color values by design - that is its
+ *   entire purpose.
  *   gl-vars-dev.css has its own dedicated guard,
  *   token-theme-contrast.test.ts (name parity between light/dark, the two
  *   duplicated light blocks staying identical, WCAG contrast); this file
