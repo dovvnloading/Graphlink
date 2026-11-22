@@ -92,56 +92,11 @@ function findColorLiteralsInInlineStyles(source: string): string[] {
   return found;
 }
 
-// R7.6a: the SPA came under this guard for the first time when the glob moved
-// off the deleted islands tree, and it immediately surfaced 8 literals that
-// had never been checked. They are PINNED here rather than silently excluded,
-// deliberately mirroring qt_burndown.json's own idiom: the count may only go
-// down, and any NEW literal fails the build.
-//
-// They are not swapped for tokens in THIS increment because none is a
-// like-for-like substitution - doing it correctly changes rendered output and
-// belongs in a design pass, not an island deletion:
-//   - `0 8px 28px rgba(0,0,0,0.45)` and `0 12px 40px rgba(0,0,0,0.55)` match no
-//     existing token: --gl-shadow-3 is `0 8px 28px rgba(0,0,0,0.55)`, so it
-//     shares geometry with one and alpha with the other but equals neither.
-//   - `rgba(0,0,0,0.43)` is a scrim with no token of any kind.
-//
-// R8a (UI/UX audit POLISH finding #3): `#6ea8fe` - the load-bearing
-// fallback var(--gl-accent, #6ea8fe) described above used to rely on - is
-// gone from this list. .about-links a now uses --gl-palette-selection
-// (the same greyscale link token .chat-node-content a already uses)
-// instead of an undefined token whose hex fallback was the only
-// saturated color in the app's otherwise entirely greyscale palette.
-// Keyed with FORWARD slashes and looked up through a normalized path:
-// globSync returns backslash-separated paths on Windows and slash-separated
-// on Linux, and CI's frontend job runs on ubuntu (2026-08-07 Actions-minutes
-// economy) while dev boxes are Windows - a separator-literal key silently
-// empties the allowlist on whichever OS it wasn't written on.
+// UI-04: all eleven inherited styles.css rgba pins now resolve through
+// --gl-shadow-popover, --gl-shadow-dialog or --gl-scrim in both palettes.
+// Keep the empty explicit pin so any newly introduced raw color fails.
 const PINNED_APP_CSS_LITERALS: Record<string, string[]> = {
-  "app/styles.css": [
-    "rgba(0, 0, 0, 0.45)",
-    "rgba(0, 0, 0, 0.45)",
-    "rgba(0, 0, 0, 0.43)",
-    "rgba(0, 0, 0, 0.55)",
-    // .composer-stream-preview uses the shared popover shadow.
-    "rgba(0, 0, 0, 0.45)",
-    // R8a follow-up: .token-counter-popout's box-shadow - the Token usage
-    // hover fold-out (TokenCounter.tsx), same reasoning as the composer
-    // entries just above: reuses the SAME shared popover shadow rather
-    // than being tokenized alone.
-    "rgba(0, 0, 0, 0.45)",
-    "rgba(0, 0, 0, 0.55)",
-    "rgba(0, 0, 0, 0.45)",
-    // Document View full redesign, stage 2: .document-view-toc-dropdown's
-    // box-shadow (DocumentViewToc.tsx's outline popover) - same shared
-    // popover shadow reuse as every entry above.
-    "rgba(0, 0, 0, 0.45)",
-    "rgba(0, 0, 0, 0.45)",
-    // R6.1 follow-up: .group-node-ghost-preview's box-shadow (the
-    // collapsed-container hover preview, GroupNodeView.tsx) - same shared
-    // popover shadow reuse as every entry above.
-    "rgba(0, 0, 0, 0.45)",
-  ],
+  "app/styles.css": [],
 };
 
 describe("no raw color literals in app CSS", () => {

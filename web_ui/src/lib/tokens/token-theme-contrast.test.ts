@@ -187,6 +187,9 @@ const BODY_SURFACES = [
   "--gl-surface-node-body",
   "--gl-surface-inset",
   "--gl-surface-inset-deep",
+  "--gl-surface-canvas",
+  "--gl-surface-raised",
+  "--gl-surface-overlay",
 ];
 
 describe.each([
@@ -233,6 +236,44 @@ describe.each([
     expect(surface).toBeDefined();
     expect(textHex).toBeDefined();
     expect(contrastRatio(surface!, textHex!)).toBeGreaterThanOrEqual(WCAG_AAA_TEXT);
+  });
+});
+
+// UI-04: check newly introduced color tokens as well as the legacy text roles.
+// The accent is a selection indicator (not body text), so contrast is checked
+// against the canvas where that indicator appears, never against a text role.
+describe.each([
+  ["dark", darkTokens],
+  ["light", explicitLightTokens],
+] as const)("%s theme: v2 color and overlay contracts", (themeName, tokens) => {
+  it("selection tint aliases stay in sync and show against the canvas", () => {
+    expect(tokens.get("--gl-graph-selection")).toBe("var(--gl-accent)");
+    expect(tokens.get("--gl-connection-active")).toBe("var(--gl-accent)");
+    const accent = tokens.get("--gl-accent");
+    const canvas = tokens.get("--gl-surface-canvas");
+    expect(accent).toBeDefined();
+    expect(canvas).toBeDefined();
+    expect(contrastRatio(accent!, canvas!)).toBeGreaterThanOrEqual(WCAG_AA_TEXT);
+  });
+
+  it("overlay elevation and scrim match the palette", () => {
+    const overlay = tokens.get("--gl-surface-overlay");
+    const raised = tokens.get("--gl-surface-raised");
+    expect(overlay).toBeDefined();
+    expect(raised).toBeDefined();
+    if (themeName === "light") {
+      expect(tokens.get("--gl-surface-canvas")).toBe("#F2F2F2");
+      expect(raised).toBe("#FFFFFF");
+      expect(overlay).toBe("#FFFFFF");
+      expect(tokens.get("--gl-scrim")).toBe("rgba(15, 15, 15, 0.16)");
+      expect(tokens.get("--gl-shadow-popover")).toContain("rgba(0, 0, 0, 0.18)");
+      expect(tokens.get("--gl-shadow-dialog")).toContain("rgba(0, 0, 0, 0.22)");
+    } else {
+      expect(relativeLuminance(overlay!)).toBeGreaterThan(relativeLuminance(raised!));
+      expect(tokens.get("--gl-scrim")).toBe("rgba(0, 0, 0, 0.43)");
+      expect(tokens.get("--gl-shadow-popover")).toContain("rgba(0, 0, 0, 0.45)");
+      expect(tokens.get("--gl-shadow-dialog")).toContain("rgba(0, 0, 0, 0.55)");
+    }
   });
 });
 

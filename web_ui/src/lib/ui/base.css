@@ -69,7 +69,7 @@
   position: absolute;
   top: -9999px;
   left: 0;
-  z-index: 10000;
+  z-index: var(--gl-z-skip-link);
   padding: 8px 16px;
   background: var(--gl-composer-shell-background, #1f1f1f);
   color: var(--gl-composer-input-text, #eeeeee);
