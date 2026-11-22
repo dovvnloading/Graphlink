@@ -286,7 +286,31 @@ export interface ScienceRunnerConfiguration {
   sources: Sources;
 }
 
+export interface ScienceAttempt {
+  attemptId: string;
+  operationId: string;
+  status: "running" | "cancelling" | "succeeded" | "cancelled" | "failed";
+  startedAtMs: number;
+  elapsedMs?: number;
+  errorType?: string;
+  error?: string;
+  receiptHash?: string;
+}
+
+export function isScienceAttempt(value: unknown): value is ScienceAttempt {
+  return record(value) && typeof value.attemptId === "string" && /^[a-f0-9]{32}$/.test(value.attemptId)
+    && typeof value.operationId === "string" && typeof value.status === "string"
+    && ["running", "cancelling", "succeeded", "cancelled", "failed"].includes(value.status)
+    && Number.isSafeInteger(value.startedAtMs)
+    && (value.elapsedMs === undefined || Number.isSafeInteger(value.elapsedMs))
+    && (value.errorType === undefined || typeof value.errorType === "string")
+    && (value.error === undefined || typeof value.error === "string")
+    && (value.receiptHash === undefined || typeof value.receiptHash === "string");
+}
+
 export interface ScienceState {
+  attemptProtocol?: 1;
+  attempt?: ScienceAttempt;
   scienceVersion: 1;
   packId: string;
   nodeKey?: string;
@@ -469,7 +493,7 @@ export function readScienceState(raw: string): ScienceState | null {
         (value.runToken === undefined || typeof value.runToken === "string") &&
         (value.limits === undefined || (record(value.limits) && Object.keys(V1_LIMITS).every((k) =>
           Number.isSafeInteger((value.limits as Record<string, unknown>)[k]) && Number((value.limits as Record<string, unknown>)[k]) > 0))) &&
-        value.operations.every(isOperation) &&
+        (value.attempt === undefined || isScienceAttempt(value.attempt)) && value.operations.every(isOperation) &&
         (value.runner == null || (record(value.runner) &&
           ((value.runner.version === 1 && value.runner.uncertaintyMethod === undefined) ||
            (value.runner.version === 2 && validMethod(value.runner.uncertaintyMethod))) &&
