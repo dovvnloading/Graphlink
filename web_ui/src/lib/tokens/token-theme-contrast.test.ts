@@ -141,12 +141,11 @@ function contrastRatio(hexA: string, hexB: string): number {
 
 const WCAG_AAA_TEXT = 7.0;
 const WCAG_AA_TEXT = 4.5;
+const WCAG_NON_TEXT = 3.0;
 
-// Every token that carries text is held to a published WCAG 2.2 tier, and
-// held to it against the WORST-CASE surface it can be painted on rather
-// than only against the window: --gl-surface-field is the lightest dark
-// surface and the darkest light one, so a token that clears the bar there
-// clears it on every other surface in the same theme.
+// Every token carrying text is held to a published WCAG 2.2 tier on ALL
+// text-bearing surfaces. The new dark overlay is lighter than the field,
+// so the field alone is no longer the worst-case dark surface.
 //
 //   AAA normal text (7:1)  - the body/heading roles.
 //   AA normal text (4.5:1) - the deliberately de-emphasized roles. 4.5:1 is
@@ -177,8 +176,8 @@ const TEXT_TOKENS: Array<[textVar: string, minRatio: number]> = [
   ["--gl-semantic-search-highlight", WCAG_AA_TEXT],
 ];
 
-// The lowest-contrast surface each theme ever paints text on.
-const WORST_CASE_SURFACE = "--gl-surface-field";
+// Keep the field in the checked set; it is the lowest-contrast light surface.
+const FIELD_SURFACE = "--gl-surface-field";
 
 // The remaining surfaces that carry real body copy, checked for the primary
 // body token so a surface can never drift light/dark on its own.
@@ -191,29 +190,27 @@ const BODY_SURFACES = [
   "--gl-surface-raised",
   "--gl-surface-overlay",
 ];
+const TEXT_SURFACES = [FIELD_SURFACE, ...BODY_SURFACES];
 
 describe.each([
   ["dark", darkTokens],
   ["light", explicitLightTokens],
 ] as const)("%s theme: text contrast meets its WCAG bar", (themeName, tokens) => {
-  const surfaceHex = () => {
-    const hex = tokens.get(WORST_CASE_SURFACE);
-    expect(hex, `${WORST_CASE_SURFACE} missing in ${themeName}`).toBeDefined();
-    return hex!;
-  };
-
   it.each(TEXT_TOKENS)(
-    `%s on ${WORST_CASE_SURFACE} (>= %s:1)`,
+    `%s on every text surface (>= %s:1)`,
     (textVar, minRatio) => {
       const textHex = tokens.get(textVar);
       expect(textHex, `${textVar} missing in ${themeName}`).toBeDefined();
 
-      const surface = surfaceHex();
-      const ratio = contrastRatio(surface, textHex!);
-      expect(
-        ratio,
-        `${themeName} ${WORST_CASE_SURFACE}(${surface}) / ${textVar}(${textHex}) = ${ratio.toFixed(2)}:1, needs >= ${minRatio}:1`,
-      ).toBeGreaterThanOrEqual(minRatio);
+      for (const surfaceVar of TEXT_SURFACES) {
+        const surface = tokens.get(surfaceVar);
+        expect(surface, `${surfaceVar} missing in ${themeName}`).toBeDefined();
+        const ratio = contrastRatio(surface!, textHex!);
+        expect(
+          ratio,
+          `${themeName} ${surfaceVar}(${surface}) / ${textVar}(${textHex}) = ${ratio.toFixed(2)}:1, needs >= ${minRatio}:1`,
+        ).toBeGreaterThanOrEqual(minRatio);
+      }
     },
   );
 
@@ -254,6 +251,13 @@ describe.each([
     expect(accent).toBeDefined();
     expect(canvas).toBeDefined();
     expect(contrastRatio(accent!, canvas!)).toBeGreaterThanOrEqual(WCAG_AA_TEXT);
+    // The 4.5:1 canvas check remains. A selection outline / accent bar on
+    // field, raised or overlay surfaces needs at least 3:1 (non-text).
+    for (const surfaceName of ["--gl-surface-field", "--gl-surface-raised", "--gl-surface-overlay"]) {
+      const surface = tokens.get(surfaceName);
+      expect(surface, `${surfaceName} missing in ${themeName}`).toBeDefined();
+      expect(contrastRatio(accent!, surface!)).toBeGreaterThanOrEqual(WCAG_NON_TEXT);
+    }
   });
 
   it("overlay elevation and scrim match the palette", () => {
