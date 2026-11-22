@@ -13,6 +13,7 @@ async function openGraphRunner(page: Page) {
 
 test("runs a grouped table and both downstream outputs, then reopens their saved run", async ({ page }, testInfo) => {
   const source = await openTable(page);
+  // Reselect by stable source id: a live .first() can become the grouped output.
   const sourceId = await source.getAttribute("data-id");
   expect(sourceId).toBeTruthy();
   const table = page.locator(`.react-flow__node-note[data-id="${sourceId}"]`);
