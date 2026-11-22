@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -237,12 +237,18 @@ describe("overlay system (the OverlayManager contract)", () => {
     expect(screen.getByRole("dialog", { name: "Settings" })).toBeInTheDocument();
   });
 
-  it("closing restores focus to the opener", async () => {
+  it("closing restores focus to the opener after the exit phase", async () => {
     const user = setup();
     const opener = screen.getByRole("button", { name: /^Settings/ });
     await user.click(opener);
+    // The first field claims Escape for itself; target the ordinary field
+    // so this tests overlay dismissal rather than the field\'s own handler.
+    await user.click(screen.getByRole("textbox", { name: "first field" }));
     await user.keyboard("{Escape}");
     expect(document.activeElement).toBe(opener);
+    expect(document.querySelector(".overlay-dialog[data-state=\'closing\']")).not.toBeNull();
+    await waitFor(() => expect(document.querySelector(".overlay-dialog[data-state=\'closing\']")).toBeNull());
+    expect(opener).toHaveFocus();
   });
 
   it("opening a second surface without closing the first does not clobber the original opener", async () => {
