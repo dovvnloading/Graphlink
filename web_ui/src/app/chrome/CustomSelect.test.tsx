@@ -146,7 +146,7 @@ describe("CustomSelect", () => {
     expect(trigger).toHaveAttribute("aria-expanded", "true");
   });
 
-  it("opens with ArrowDown, focuses the selected option, and supports Home/End/Enter", async () => {
+  it("opens with ArrowDown, focuses the listbox at the next option, and supports Home/End/Enter", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     render(<CustomSelect ariaLabel="Pick one" value="b" options={OPTIONS} onChange={onChange} />);
