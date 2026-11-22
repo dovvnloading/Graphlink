@@ -147,6 +147,7 @@ OPERATIONS = (
         {"x": [0, 0.5, 1, 2], "y": [1, 2, 3, 5]},
         _integrate,
         headline="integral",
+        paired_fields=(("x", "y"),),
     ),
     Operation(
         "linear_system",

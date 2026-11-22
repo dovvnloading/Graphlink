@@ -398,6 +398,7 @@ OPERATIONS: tuple[Operation, ...] = (
         citations=(Citation("NIST chi-square goodness-of-fit test",
                             "https://www.itl.nist.gov/div898/handbook/eda/section3/eda35f.htm"),),
         headline="p_value",
+        paired_fields=(("observed_counts", "expected_ratio"),),
     ),
     Operation(
         "segregation_exact_binomial", "Exact two-class segregation test",
@@ -410,6 +411,7 @@ OPERATIONS: tuple[Operation, ...] = (
         citations=(Citation("NIST binomial distribution",
                             "https://www.itl.nist.gov/div898/handbook/eda/section3/eda366i.htm"),),
         headline="two_sided_p_value",
+        paired_fields=(("observed_counts", "expected_ratio"),),
     ),
     Operation(
         "hardy_weinberg_exact", "Hardy–Weinberg exact test",
