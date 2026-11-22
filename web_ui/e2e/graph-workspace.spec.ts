@@ -81,6 +81,7 @@ test("starts a graph and navigates it using the canvas controls", async ({ page 
         const picker = page.getByRole("dialog", { name: label });
         await expect(picker).toBeInViewport({ ratio: 1 });
         if (name === "model") {
+          // No installed chat models: the setup button opens Settings, not a model.
           await expect(picker.getByText("Loading local and cloud models…")).toHaveCount(0);
           const choices = picker.locator(".model-picker-option:enabled");
           if (await choices.count()) {
@@ -94,6 +95,7 @@ test("starts a graph and navigates it using the canvas controls", async ({ page 
           await picker.getByRole("button").first().click();
         }
         await expect(picker).toBeHidden();
+        await expect(page.getByRole("dialog", { name: "Settings" })).toBeHidden();
         await expect(input).toHaveValue(draft);
       }
     });

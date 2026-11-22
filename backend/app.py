@@ -62,6 +62,7 @@ from backend.api.intents_diagnostics import register_diagnostics_intents
 from backend.api.intents_fal_media import register_fal_media_intents
 from backend.crash_recovery import maybe_show_crash_notice
 from backend.diagnostics import DiagnosticsState
+from backend.domain.model import UserFacingError
 from backend.events import (
     DEFAULT_COALESCE_WINDOW_SECONDS,
     DEFAULT_SESSION_ID,
@@ -1002,6 +1003,20 @@ async def _handle_message(session: SessionBus, websocket: WebSocket, message: di
                     "kind": "error",
                     "id": msg_id,
                     "error": f"Invalid arguments: {'; '.join(exc.errors)}.",
+                }
+            )
+            return
+        except UserFacingError as exc:
+            # Only explicitly user-facing domain messages may reach the caller.
+            logger.info("intent %s/%s rejected with a user-facing error", topic, intent)
+            user_message = " ".join(str(exc).split())
+            if len(user_message) > 300:
+                user_message = user_message[:299] + "…"
+            await websocket.send_json(
+                {
+                    "kind": "error",
+                    "id": msg_id,
+                    "error": user_message or "Something went wrong while handling this request.",
                 }
             )
             return
