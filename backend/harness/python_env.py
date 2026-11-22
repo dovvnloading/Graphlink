@@ -20,6 +20,7 @@ from pathlib import Path
 
 from api_provider import RequestCancelledError
 from graphlink_execution_guard import (
+    DEFAULT_ACTIVE_PROCESS_LIMIT,
     assign_guarded_subprocess, create_execution_guard, spawn_guarded_subprocess,
 )
 from graphlink_process_env import safe_subprocess_env
@@ -87,7 +88,15 @@ def _bootstrap_managed_venv(
     noisy bootstrap cannot block on a full stdout pipe.
     """
     _check_cancelled(cancel_event)
-    guard = create_execution_guard()
+    # This is a fixed, app-owned venv bootstrap, not model-authored code.
+    # POSIX RLIMIT_NPROC counts all processes/threads owned by the same UID,
+    # including unrelated CI/browser workers. A limit of 64 can prevent
+    # venv's ensurepip child from starting (EAGAIN) under normal runner load.
+    # Keep the process-group teardown, memory/CPU/file caps, and Windows
+    # Job Object process cap. User-authored Python retains its full guard.
+    guard = create_execution_guard(
+        active_process_limit=DEFAULT_ACTIVE_PROCESS_LIMIT if sys.platform == "win32" else 0,
+    )
     process = None
     reader = None
     output: list[str] = []
