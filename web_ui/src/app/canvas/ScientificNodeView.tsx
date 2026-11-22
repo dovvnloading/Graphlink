@@ -1,4 +1,4 @@
-import { memo, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode } from "react";
 import type { Node, NodeProps } from "@xyflow/react";
 import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
@@ -10,7 +10,7 @@ import { createLinearScale } from "./charts/chartScales";
 import { ScientificResultViews } from "./ScientificResultViews";
 import {
   chartableScienceTypes, columnChoices, compatibleOptions, connectedInputText, draftInputs, FieldError, fieldText, formatMeasurement, formatScienceNumber, formatScienceRange, formatScienceSummary, formatScienceValue, matchesSource, parseInputs, readableScienceKey, readScienceState, resultMeasurement, sourceOptions,
-  type EditorDraft, type ScienceField, type ScienceLimits, type ScienceOperation, type ScienceParent, type SciencePlot, type ScienceResult,
+  type EditorDraft, type ScienceAttempt, type ScienceField, type ScienceLimits, type ScienceOperation, type ScienceParent, type SciencePlot, type ScienceResult,
   type ScienceChartLink, type ScienceChartType, type ScienceState, type ScienceRunnerConfiguration, type ScientificColumnType, type Sources, type SourceOption, type SourceReference,
 } from "./scientificWorkbench";
 import "./ScientificNodeView.css";
@@ -453,8 +453,8 @@ function TableEditor({ state, nodeId, pluginId, store }: {
 }
 
 type Run = (operationId: string, inputs: Record<string, unknown>, sources: Sources, expectedRun?: string,
-  method?: "auto" | "gum" | "monte_carlo") => Promise<void>;
-type Cancel = (operationId: string) => Promise<void>;
+  method?: "auto" | "gum" | "monte_carlo", attemptId?: string) => Promise<void>;
+type Cancel = (operationId: string, attemptId?: string) => Promise<void>;
 function restoreDraft(op: ScienceOperation, result: ScienceResult | null, revision: string,
   options: SourceOption[] = [], configured?: ScienceRunnerConfiguration | null): EditorDraft {
   const runner = configured?.operationId === op.id ? configured : null;
@@ -472,11 +472,21 @@ function restoreDraft(op: ScienceOperation, result: ScienceResult | null, revisi
   return { values, sources, revision, dirty: false };
 }
 
-function OperationEditor({ session, op, result, configured, revision, runToken, limits, options, run, configure, cancel, fetchTableColumn, busy, setBusy }: {
+function AttemptProgress({ attempt, title }: { attempt: ScienceAttempt; title: string }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return <p><span role="status">{attempt.status === "cancelling" ? "Stopping" : "Running"} {title}…</span>{" "}
+    <span aria-label="Elapsed time">{Math.max(0, Math.floor((now - attempt.startedAtMs) / 1000))} s</span></p>;
+}
+
+function OperationEditor({ session, op, result, configured, revision, runToken, limits, options, run, configure, cancel, fetchTableColumn, busy, setBusy, attemptProtocol, attempt, attemptTitle }: {
   session: ScienceEditorSession; op: ScienceOperation; result: ScienceResult | null;
   configured?: ScienceRunnerConfiguration | null; revision: string; runToken?: string; limits?: ScienceLimits;
   options: SourceOption[]; run: Run; configure: Run; cancel: Cancel; fetchTableColumn: FetchTableColumn;
-  busy: boolean; setBusy: (busy: boolean) => void;
+  busy: boolean; setBusy: (busy: boolean) => void; attemptProtocol?: 1; attempt?: ScienceAttempt; attemptTitle?: string;
 }) {
   const [draft, setDraft] = useState(() => session.drafts.get(op.id) ?? restoreDraft(op, result, revision, options, configured));
   useLayoutEffect(() => {
@@ -489,8 +499,13 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
   const [cancelling, setCancelling] = useState(false);
   const [uncertaintyMethod, setUncertaintyMethod] = useState<"auto" | "gum" | "monte_carlo">("auto");
   const errorId = useId();
+  const activeAttempt = attempt?.status === "running" || attempt?.status === "cancelling" ? attempt : undefined;
+  const submission = useSyncExternalStore(session.onSubmission, session.submission);
+  const completedOwnDraft = attempt?.status === "succeeded" && attempt.attemptId === submission?.id
+    && submission.draft === draft && result != null
+    && attempt.receiptHash === (result.provenance.receiptHash ?? result.provenance.resultHash);
   const changed = draft.revision !== revision;
-  if (changed && !draft.dirty) {
+  if (completedOwnDraft || (changed && !draft.dirty)) {
     setDraft(restoreDraft(op, result, revision, options, configured));
     setError(null);
   }
@@ -516,8 +531,11 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
     setRunning(true);
     setBusy(true);
     try {
-      await run(op.id, inputs, draft.sources, runToken, uncertaintyMethod);
-      setDraft((old) => ({ ...old, dirty: false }));
+      const attemptId = attemptProtocol ? crypto.randomUUID().replaceAll("-", "") : undefined;
+      if (attemptId) session.beginSubmission(attemptId, op.id, draft);
+      await run(op.id, inputs, draft.sources, runToken, uncertaintyMethod, attemptId);
+      if (session.drafts.get(op.id) === draft) session.drafts.delete(op.id);
+      setDraft((old) => old === draft ? { ...old, dirty: false } : old);
     } catch (e) { setError({ message: e instanceof Error ? e.message : "The calculation failed." }); }
     finally { pending.current = false; setRunning(false); setBusy(false); }
   }
@@ -640,17 +658,20 @@ function OperationEditor({ session, op, result, configured, revision, runToken, 
       </div>
       {configured?.operationId === op.id && <small role="status">Saved as an explicit Graph Runner step.</small>}
     </fieldset>
-    {busy && <p role="status">{running ? "Running calculation…" : configuring ? "Saving Graph Runner configuration…" : "Loading selected table column…"}</p>}
+    {submission?.phase === "checking" ? <p role="status">Checking run status…</p>
+      : activeAttempt ? <AttemptProgress attempt={activeAttempt} title={attemptTitle ?? activeAttempt.operationId} />
+      : busy && <p role="status">{running || submission?.phase === "submitting" ? "Running calculation…" : configuring ? "Saving Graph Runner configuration…" : "Loading selected table column…"}</p>}
     {/* Outside the disabled fieldset; only real calculations can be cancelled, not table-column imports. */}
-    {running && <div className="science-actions">
-      <button type="button" className="science-cancel" disabled={cancelling} onClick={async () => {
+    {attemptProtocol && (running || activeAttempt || (submission && submission.phase !== "finished")) && <div className="science-actions">
+      <button type="button" className="science-cancel" disabled={cancelling || activeAttempt?.status === "cancelling"} onClick={async () => {
         setCancelling(true);
-        try { await cancel(op.id); }
+        try { await cancel(activeAttempt?.operationId ?? op.id, activeAttempt?.attemptId ?? (attemptProtocol ? submission?.id : undefined)); }
         catch (e) { setError({ message: e instanceof Error ? e.message : "Unable to cancel the calculation." }); }
         finally { setCancelling(false); }
-      }}>{cancelling ? "Stopping…" : "Cancel calculation"}</button>
+      }}>{cancelling || activeAttempt?.status === "cancelling" ? "Stopping…" : "Cancel calculation"}</button>
     </div>}
-    {error && <p id={errorId} role="alert">{error.message}</p>}
+    {error ? <p id={errorId} role="alert">{error.message}</p>
+      : (attempt?.status === "cancelled" || attempt?.status === "failed") && <p role="status">{attempt.error}</p>}
   </form>;
 }
 
@@ -661,7 +682,10 @@ function Workbench({ session, state, options, run, configure, cancel, fetchTable
   onDiscuss: (result: ScienceResult) => void;
 }) {
   const [selected, setSelected] = useState(session.selected ?? state.runner?.operationId ?? state.latest?.operationId ?? state.operations[0].id);
-  const [busy, setBusy] = useState(false);
+  const [localBusy, setBusy] = useState(false);
+  const submission = useSyncExternalStore(session.onSubmission, session.submission);
+  const busy = localBusy || (submission !== undefined && submission.phase !== "finished")
+    || state.attempt?.status === "running" || state.attempt?.status === "cancelling";
   const operationId = useId();
   const op = state.operations.find((candidate) => candidate.id === selected) ?? state.operations[0];
   const result = state.latest?.operationId === op.id ? state.latest : null;
@@ -677,7 +701,8 @@ function Workbench({ session, state, options, run, configure, cancel, fetchTable
     <OperationEditor key={op.id} session={session} op={op} result={result} configured={state.runner}
       revision={revision} runToken={state.runToken} limits={state.limits}
       options={options} run={run} configure={configure} cancel={cancel} fetchTableColumn={fetchTableColumn}
-      busy={busy} setBusy={setBusy} />
+      busy={busy} setBusy={setBusy} attemptProtocol={state.attemptProtocol} attempt={state.attempt}
+      attemptTitle={state.operations.find((item) => item.id === state.attempt?.operationId)?.title} />
     {tableEditor}
     {state.latest && <Results key={revision} result={state.latest} exportJson={exportJson} exportCsv={exportCsv} exportMethods={exportMethods}
       charts={charts} onChart={onChart} onRefresh={onRefresh} onDiscuss={onDiscuss}
@@ -717,9 +742,9 @@ export const ScientificNodeView = memo(function ScientificNodeView({ data, id, s
         onDiscuss={(result) => data.store.discussScientificResult(
           id, result.provenance.resultHash, result.provenance.receiptHash ?? result.provenance.resultHash,
         )}
-        run={(operationId, inputs, sources, token, method) => data.store.runScientificOperation(data.pluginId, id, operationId, inputs, sources, token, method)}
+        run={(operationId, inputs, sources, token, method, attemptId) => data.store.runScientificOperation(data.pluginId, id, operationId, inputs, sources, token, method, attemptId)}
         configure={(operationId, inputs, sources, token) => data.store.configureScientificRunner(data.pluginId, id, operationId, inputs, sources, token)}
-        cancel={(operationId) => data.store.cancelScientificOperation(data.pluginId, id, operationId)} />
+        cancel={(operationId, attemptId) => data.store.cancelScientificOperation(data.pluginId, id, operationId, attemptId)} />
       : <p role="alert">This workbench version could not be loaded. Check the plugin in Settings.</p>}
   </NodeShell>;
 });

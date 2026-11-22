@@ -30,7 +30,8 @@ import type { DragSpeedState } from "../../lib/bridge-core/generated/drag-speed-
 import type { FontControlState } from "../../lib/bridge-core/generated/font-control-state";
 import type { ScenePatch, StateListener, StreamListener, WsTransport } from "../../lib/ws/transport";
 import type { BridgeRejection } from "../../lib/bridge-core/islandState";
-import type { EditorDraft, Sources, ScienceResult } from "./scientificWorkbench";
+import { WsTimeoutError, WsUnavailableError } from "../../lib/ws/transport";
+import { isScienceAttempt, type EditorDraft, type Sources, type ScienceResult } from "./scientificWorkbench";
 import type { HarnessHook } from "./HarnessNodeView";
 import { announce } from "../announcer";
 import { describeNodeRunTransition } from "./nodeRunAnnouncements";
@@ -305,8 +306,27 @@ export interface OrganizationOptions {
   preserveFrameSizes: boolean;
 }
 
+type SubmissionPhase = "submitting" | "running" | "checking" | "finished";
+type ScienceSubmission = { id: string; operationId: string; draft: EditorDraft; phase: SubmissionPhase };
+
 export class ScienceEditorSession {
   selected?: string;
+  private submitted?: ScienceSubmission;
+  private readonly submissionListeners = new Set<() => void>();
+  submission = () => this.submitted;
+  onSubmission = (listener: () => void) => {
+    this.submissionListeners.add(listener);
+    return () => { this.submissionListeners.delete(listener); };
+  };
+  beginSubmission(id: string, operationId: string, draft: EditorDraft) {
+    this.submitted = { id, operationId, draft, phase: "submitting" };
+    for (const listener of this.submissionListeners) listener();
+  }
+  setSubmissionPhase(id: string, phase: SubmissionPhase) {
+    if (!this.submitted || this.submitted.id !== id || this.submitted.phase === phase) return;
+    this.submitted = { ...this.submitted, phase };
+    for (const listener of this.submissionListeners) listener();
+  }
   readonly drafts = new Map<string, EditorDraft>();
   constructor(readonly nodeKey?: string) {}
   selectOperation(id: string) { this.selected = id; }
@@ -2092,15 +2112,66 @@ export class SceneStore {
 
   async runScientificOperation(pluginId: string, nodeId: string, operationId: string,
     inputs: Record<string, unknown>, sources: Sources, expectedRun?: string,
-    uncertaintyMethod: "auto" | "gum" | "monte_carlo" = "auto"): Promise<void> {
-    await this.scientificIntent(pluginId, "run", {
+    uncertaintyMethod: "auto" | "gum" | "monte_carlo" = "auto", attemptId?: string): Promise<void> {
+    const args = {
       node_id: nodeId, operation_id: operationId, inputs, sources, ...(expectedRun && { expected_run: expectedRun }),
       ...(uncertaintyMethod !== "auto" && { uncertainty_method: uncertaintyMethod }),
-    });
+    };
+    if (!attemptId) {
+      await this.scientificIntent(pluginId, "run", args);
+      return;
+    }
+    const session = this.scientificEditors.get(nodeId);
+    const setPhase = (phase: SubmissionPhase) => session?.setSubmissionPhase(attemptId, phase);
+    try {
+      await this.followScientificAttempt(pluginId, operationId, args, attemptId, setPhase,
+        () => !session || this.scientificEditors.get(nodeId) === session);
+    } finally {
+      setPhase("finished");
+    }
   }
 
-  async cancelScientificOperation(pluginId: string, nodeId: string, operationId: string): Promise<void> {
-    await this.scientificIntent(pluginId, "cancel", { node_id: nodeId, operation_id: operationId });
+  private async followScientificAttempt(pluginId: string, operationId: string,
+    args: { node_id: string }, attemptId: string, setPhase: (phase: SubmissionPhase) => void,
+    isCurrentSession: () => boolean): Promise<void> {
+    const identity = { node_id: args.node_id, attempt_id: attemptId };
+    const uncertain = (error: unknown) => error instanceof WsTimeoutError || error instanceof WsUnavailableError;
+    // Only the first call can launch work. After an ambiguous acknowledgement,
+    // query the exact attempt; never replay a calculation on reconnect.
+    let reply: unknown;
+    try { reply = await this.scientificIntent(pluginId, "start_attempt", { ...args, ...identity }); }
+    catch (error) { if (!uncertain(error)) throw error; setPhase("checking"); }
+    const deadline = Date.now() + 615_000;
+    for (;;) {
+      if (reply !== undefined) {
+        const attempt = (reply as { attempt?: unknown }).attempt;
+        if (attempt === null) throw new Error("This attempt is no longer available. Review the last successful result before running again.");
+        if (!isScienceAttempt(attempt) || attempt.attemptId !== attemptId || attempt.operationId !== operationId)
+          throw new Error("The calculation status did not match the submitted attempt.");
+        if (attempt.status === "succeeded") return;
+        if (attempt.status === "cancelled" || attempt.status === "failed")
+          throw new Error(attempt.error ?? "The calculation did not finish.");
+        setPhase("running");
+      }
+      if (Date.now() >= deadline)
+        throw new Error("The attempt could not be confirmed. Reconnect and review its status before running again.");
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      if (!isCurrentSession()) throw new Error("This workbench was closed or its plugin was disabled.");
+      try { reply = await this.scientificIntent(pluginId, "status_attempt", identity); }
+      catch (error) {
+        if (!uncertain(error)) throw error;
+        setPhase("checking");
+        reply = undefined;
+      }
+    }
+  }
+
+  async cancelScientificOperation(pluginId: string, nodeId: string, operationId: string, attemptId?: string): Promise<void> {
+    if (attemptId) {
+      await this.scientificIntent(pluginId, "cancel_attempt", { node_id: nodeId, attempt_id: attemptId });
+    } else {
+      await this.scientificIntent(pluginId, "cancel", { node_id: nodeId, operation_id: operationId });
+    }
   }
 
   async exportScientificResult(pluginId: string, nodeId: string, expectedRun?: string): Promise<string> {

@@ -412,6 +412,7 @@ class SessionBus:
         self.chat_mutation_guard: Any = None
         self.chat_save_state: Any = None
         self.autosave_task: Any = None
+        self.plugin_background_tasks: set[asyncio.Task] = set()
         self.autosave_guarded_tick: Any = None
         # ADR-016 stage 16.3: optional - fires with (topic, serialized byte
         # size) from _broadcast, once per outbound message. None by default
