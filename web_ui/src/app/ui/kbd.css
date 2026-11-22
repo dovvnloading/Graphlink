@@ -1,0 +1,22 @@
+.gl-kbd {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gl-space-0-5);
+  vertical-align: middle;
+}
+.gl-kbd-key {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--gl-space-5);
+  padding: 0 var(--gl-space-1);
+  border: 1px solid var(--gl-surface-border-strong);
+  border-radius: var(--gl-radius-xs);
+  background-color: var(--gl-surface-raised);
+  color: var(--gl-surface-text-secondary);
+  font-family: var(--gl-font-mono);
+  font-size: var(--gl-text-2xs);
+  line-height: var(--gl-leading-2xs);
+  white-space: nowrap;
+}

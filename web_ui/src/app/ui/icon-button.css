@@ -1,0 +1,30 @@
+.gl-icon-button {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--gl-control-h-md);
+  height: var(--gl-control-h-md);
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--gl-radius-sm);
+  color: var(--gl-surface-text-primary);
+  background-color: transparent;
+  cursor: pointer;
+  transition: background-color var(--gl-motion-fast) var(--gl-ease);
+}
+.gl-icon-button--sm { width: var(--gl-control-h-sm); height: var(--gl-control-h-sm); }
+.gl-icon-button--md { width: var(--gl-control-h-md); height: var(--gl-control-h-md); }
+.gl-icon-button--lg { width: var(--gl-control-h-lg); height: var(--gl-control-h-lg); }
+.gl-icon-button--secondary { background-color: var(--gl-surface-raised); border-color: var(--gl-surface-border); }
+.gl-icon-button--primary {
+  background-color: var(--gl-surface-text-primary);
+  border-color: var(--gl-surface-text-primary);
+  color: var(--gl-surface-window);
+}
+.gl-icon-button--ghost { background-color: transparent; }
+.gl-icon-button:hover:not(:disabled) { background-image: linear-gradient(var(--gl-state-hover), var(--gl-state-hover)); }
+.gl-icon-button:active:not(:disabled) { background-image: linear-gradient(var(--gl-state-pressed), var(--gl-state-pressed)); }
+.gl-icon-button:focus-visible { outline: 2px solid var(--gl-focus-ring); outline-offset: 2px; }
+.gl-icon-button:disabled { opacity: .45; cursor: not-allowed; }
