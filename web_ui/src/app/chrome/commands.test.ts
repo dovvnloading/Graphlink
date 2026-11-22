@@ -57,9 +57,14 @@ function makeOverlays(): OverlayContextValue {
   return {
     openSurface: null,
     open: vi.fn(),
+    openNested: vi.fn(),
     close: vi.fn(),
+    closeLayer: vi.fn(),
     toggle: vi.fn(),
     isOpen: () => false,
+    isClosing: () => false,
+    isNested: () => false,
+    isTopmost: () => false,
     registerSurfaceElement: vi.fn(),
   };
 }
