@@ -8,16 +8,23 @@ describe("Disclosure", () => {
     const user = userEvent.setup();
     render(<Disclosure title="Advanced options"><p>Detail content</p></Disclosure>);
     const trigger = screen.getByRole("button", { name: "Advanced options" });
-    const region = screen.getByRole("region", { name: "Advanced options", hidden: true });
+    const region = document.getElementById(trigger.getAttribute("aria-controls") ?? "");
     expect(trigger).toHaveAttribute("aria-expanded", "false");
-    expect(trigger).toHaveAttribute("aria-controls", region.id);
+    expect(trigger).toHaveAttribute("aria-controls", region?.id);
+    expect(region).toHaveAttribute("role", "region");
+    expect(region).toHaveAttribute("aria-labelledby", trigger.id);
     expect(region).not.toBeVisible();
     trigger.focus();
     await user.keyboard("{Enter}");
     expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("region", { name: "Advanced options" })).toBe(region);
     expect(region).toBeVisible();
     await user.keyboard(" ");
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
     expect(region).not.toBeVisible();
+    await user.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("region", { name: "Advanced options" })).toBeVisible();
   });
   it("supports a controlled section variant and open callback", async () => {
     const user = userEvent.setup(), onOpenChange = vi.fn();
@@ -29,6 +36,7 @@ describe("Disclosure", () => {
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     view.rerender(<Disclosure title="Details" variant="section" open onOpenChange={onOpenChange}>Panel</Disclosure>);
     expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("region", { name: "Details" })).toBeVisible();
   });
   it("defaults open and respects disabled", async () => {
     const user = userEvent.setup();
