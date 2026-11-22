@@ -1,0 +1,101 @@
+/* The only icon sizes: the token branch can land before or after this one. */
+.gl-icon {
+  display: inline-block;
+  flex: none;
+  vertical-align: middle;
+  width: var(--gl-icon-md, 16px);
+  height: var(--gl-icon-md, 16px);
+}
+
+.gl-icon--xs { width: var(--gl-icon-xs, 12px); height: var(--gl-icon-xs, 12px); }
+.gl-icon--sm { width: var(--gl-icon-sm, 14px); height: var(--gl-icon-sm, 14px); }
+.gl-icon--md { width: var(--gl-icon-md, 16px); height: var(--gl-icon-md, 16px); }
+.gl-icon--lg { width: var(--gl-icon-lg, 20px); height: var(--gl-icon-lg, 20px); }
+.gl-icon--xl { width: var(--gl-icon-xl, 24px); height: var(--gl-icon-xl, 24px); }
+.gl-icon--2xl { width: var(--gl-icon-2xl, 32px); height: var(--gl-icon-2xl, 32px); }
+.gl-icon--3xl { width: var(--gl-icon-3xl, 40px); height: var(--gl-icon-3xl, 40px); }
+
+/* Gallery-only presentation, kept here so UI-05 adds no extra CSS file. */
+.gl-icon-gallery { display: grid; gap: var(--gl-space-5); }
+.gl-icon-gallery-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--gl-space-3); }
+.gl-icon-gallery-note { margin: 0; color: var(--gl-surface-text-muted); font-size: var(--gl-text-xs); }
+.gl-icon-gallery-toggle {
+  padding: var(--gl-space-2) var(--gl-space-3);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  background: var(--gl-surface-window);
+  color: var(--gl-surface-text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+.gl-icon-gallery-toggle:focus-visible { outline: 2px solid var(--gl-focus-ring); outline-offset: 2px; }
+.gl-icon-gallery-toggle-active { border-color: var(--gl-surface-border-strong); background: var(--gl-surface-inset); }
+.gl-icon-gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--gl-space-3); }
+.gl-icon-gallery-card {
+  display: grid;
+  justify-items: center;
+  gap: var(--gl-space-3);
+  min-width: 0;
+  padding: var(--gl-space-4);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-md);
+  background: var(--gl-surface-window);
+}
+.gl-icon-gallery-name {
+  margin: 0;
+  font-family: var(--gl-font-mono);
+  font-size: var(--gl-text-xs);
+  color: var(--gl-surface-text-primary);
+  overflow-wrap: anywhere;
+}
+.gl-icon-gallery-large-frame {
+  display: grid;
+  place-items: center;
+  position: relative;
+  width: calc(var(--gl-icon-2xl, 32px) * 2);
+  height: calc(var(--gl-icon-2xl, 32px) * 2);
+}
+.gl-icon-gallery-large {
+  position: relative;
+  z-index: 1;
+  width: calc(var(--gl-icon-2xl, 32px) * 2);
+  height: calc(var(--gl-icon-2xl, 32px) * 2);
+}
+.gl-icon-gallery-sizes { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--gl-space-2); width: 100%; }
+.gl-icon-gallery-size { display: grid; justify-items: center; align-content: center; gap: var(--gl-space-2); min-height: var(--gl-space-10); }
+.gl-icon-gallery-size-label { color: var(--gl-surface-text-muted); font-size: var(--gl-text-2xs); }
+.gl-icon-guide-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, var(--gl-surface-divider) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--gl-surface-divider) 1px, transparent 1px);
+  background-size: 5% 5%;
+}
+.gl-icon-guide-circle,
+.gl-icon-guide-square,
+.gl-icon-guide-portrait,
+.gl-icon-guide-landscape {
+  box-sizing: border-box;
+  position: absolute;
+  border: 1px solid var(--gl-surface-border-strong);
+}
+.gl-icon-guide-circle { left: 10%; top: 10%; width: 80%; height: 80%; border-radius: 50%; }
+.gl-icon-guide-square { left: 15%; top: 15%; width: 70%; height: 70%; }
+.gl-icon-guide-portrait { left: 20%; top: 10%; width: 60%; height: 80%; }
+.gl-icon-guide-landscape { left: 10%; top: 20%; width: 80%; height: 60%; }
+.gl-icon-gallery-subheading { margin: 0; color: var(--gl-surface-text-primary); font-size: var(--gl-text-base); }
+.gl-icon-gallery-pairs { display: grid; gap: var(--gl-space-3); }
+.gl-icon-gallery-pair {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--gl-space-4);
+  padding: var(--gl-space-3);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-md);
+  background: var(--gl-surface-window);
+}
+.gl-icon-gallery-pair-item { display: grid; justify-items: center; gap: var(--gl-space-2); min-width: var(--gl-space-12); }
+.gl-icon-gallery-pair-label { font-family: var(--gl-font-mono); font-size: var(--gl-text-xs); color: var(--gl-surface-text-muted); }
