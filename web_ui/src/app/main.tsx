@@ -1,4 +1,4 @@
-import { StrictMode } from "react";
+import { lazy, StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "../lib/ui/base.css";
@@ -15,8 +15,32 @@ import "../lib/tokens/gl-vars-dev.css";
 import "./styles.css";
 import "./canvas/workspace.css";
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+// The opt-in gallery stays in a separate chunk; ordinary launches keep the
+// original <StrictMode><App /></StrictMode> tree and do not fetch it.
+const Gallery = lazy(() => import("./ui/gallery/Gallery"));
+const startsInGallery = window.location.hash === "#gallery";
+const root = createRoot(document.getElementById("root")!);
+
+if (startsInGallery) {
+  root.render(
+    <StrictMode>
+      <Suspense fallback={<p role="status">Loading gallery…</p>}>
+        <Gallery />
+      </Suspense>
+    </StrictMode>,
+  );
+} else {
+  root.render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
+}
+
+// Switch routes with a reload, not an in-place remount. Unrelated hashes,
+// including desktop #token=... and the composer skip link, must not reload.
+window.addEventListener("hashchange", () => {
+  if ((window.location.hash === "#gallery") !== startsInGallery) {
+    window.location.reload();
+  }
+});
