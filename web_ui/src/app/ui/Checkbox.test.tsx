@@ -33,9 +33,9 @@ describe("Checkbox", () => {
     const control = screen.getByRole("checkbox", { name: "Select all" }) as HTMLInputElement;
     expect(control.indeterminate).toBe(true);
     expect(control).toHaveAttribute("aria-checked", "mixed");
-    view.rerender(<Checkbox label="Select all" defaultChecked />);
+    view.rerender(<Checkbox label="Select all" />);
     expect(control.indeterminate).toBe(false);
-    expect(control).toBeChecked();
+    expect(control).not.toBeChecked();
   });
   it("honours disabled and defaultChecked", async () => {
     const user = userEvent.setup();

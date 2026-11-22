@@ -33,6 +33,7 @@ export function RadioGroup({
   const selected = value === undefined ? internal : value;
   const inputs = useRef<(HTMLInputElement | null)[]>([]);
   const errorId = error ? generated + "-error" : undefined;
+  const legendId = generated + "-legend";
 
   function select(next: string) {
     if (value === undefined) setInternal(next);
@@ -57,9 +58,9 @@ export function RadioGroup({
 
   return (
     <fieldset className={["gl-radio-group", variant === "card" && "gl-radio-group-card", className].filter(Boolean).join(" ")}
-      role="radiogroup" aria-describedby={errorId} aria-invalid={error ? true : undefined}
+      role="radiogroup" aria-labelledby={legendId} aria-describedby={errorId} aria-invalid={error ? true : undefined}
       disabled={disabled}>
-      <legend className="gl-radio-legend">{label}</legend>
+      <legend className="gl-radio-legend" id={legendId}>{label}</legend>
       <div className="gl-radio-options">
         {options.map((option, index) => (
           <label className={[
