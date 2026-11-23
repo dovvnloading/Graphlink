@@ -65,33 +65,33 @@ describe("SearchOverlay", () => {
     await user.click(screen.getByText("open search"));
     const input = screen.getByLabelText("Search the canvas");
     await user.type(input, "alpha");
-    expect(screen.getByText("0 / 2")).toBeInTheDocument();
+    expect(screen.getByText("1 of 2")).toBeInTheDocument();
     await user.keyboard("{Enter}");
-    expect(screen.getByText("1 / 2")).toBeInTheDocument();
+    expect(screen.getByText("2 of 2")).toBeInTheDocument();
     await user.keyboard("{Enter}");
-    expect(screen.getByText("2 / 2")).toBeInTheDocument();
+    expect(screen.getByText("1 of 2")).toBeInTheDocument();
     await user.keyboard("{Shift>}{Enter}{/Shift}");
-    expect(screen.getByText("1 / 2")).toBeInTheDocument();
+    expect(screen.getByText("2 of 2")).toBeInTheDocument();
   });
 
   it("matches against a node's full content, not just its title", async () => {
     const user = setup();
     await user.click(screen.getByText("open search"));
     await user.type(screen.getByLabelText("Search the canvas"), "zebra");
-    expect(screen.getByText("0 / 1")).toBeInTheDocument();
+    expect(screen.getByText("1 of 1")).toBeInTheDocument();
   });
 
   it("shows 0/0 for a query with no matches", async () => {
     const user = setup();
     await user.click(screen.getByText("open search"));
     await user.type(screen.getByLabelText("Search the canvas"), "zzz");
-    expect(screen.getByText("0 / 0")).toBeInTheDocument();
+    expect(screen.getByText("0 of 0")).toBeInTheDocument();
   });
 
   it("close button closes the overlay", async () => {
     const user = setup();
     await user.click(screen.getByText("open search"));
-    await user.click(screen.getByLabelText("Close (Esc)"));
+    await user.click(screen.getByRole("button", { name: "Close search" }));
     expect(screen.queryByLabelText("Search the canvas")).toBeNull();
   });
 
