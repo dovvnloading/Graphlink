@@ -1,5 +1,5 @@
 import type { Node, NodeProps } from "@xyflow/react";
-import { memo, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { memo, useEffect, useRef, useState, type RefObject } from "react";
 import type { StreamListener } from "../../lib/ws/transport";
 import { CHAT_SCROLL_REPORT_DEBOUNCE_MS } from "./canvasConstants";
 import { CollapseToggleButton } from "./CollapseToggleButton";
@@ -13,6 +13,14 @@ import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 import { useStreamBuffer } from "./useStreamBuffer";
+import { MenuItem, MenuGroup, SubMenu } from "../ui/Menu";
+import { Icon } from "../ui/icons/Icon";
+import { IconButton } from "../ui/IconButton";
+import { Button } from "../ui/Button";
+import { Badge } from "../ui/Badge";
+import { Tooltip } from "../ui/Tooltip";
+import { Disclosure } from "../ui/Disclosure";
+import { formatTokens } from "../ui/format";
 
 /**
  * The chat node (Qt-removal plan R3.1/R3.2) - ChatNode's React successor:
@@ -307,322 +315,81 @@ function ChatNodeMenu({
   onClearModelOverride: () => void;
   onClose: () => void;
 }) {
-  const [chartMenuOpen, setChartMenuOpen] = useState(false);
-  const [statusMenuOpen, setStatusMenuOpen] = useState(false);
-
-
+  const copyText = () => {
+    navigator.clipboard.writeText(content).catch((error: unknown) => {
+      console.error("[chat-node] Copy text failed:", error);
+    });
+  };
   return (
     <NodeMenu position={position} onClose={onClose} className="chat-node-menu" ariaLabel="Chat message actions">
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          // Best-effort clipboard write - a failure (missing Clipboard API,
-          // a denied permissions prompt, an insecure context) is swallowed
-          // rather than left as an unhandled rejection, matching
-          // ImageNodeView.tsx's own handleCopyImage: a menu action like this
-          // should never crash the node, it should just silently not have
-          // copied anything.
-          navigator.clipboard.writeText(content).catch((error) => {
-            console.error("[chat-node] Copy Text failed:", error);
-          });
-          onClose();
-        }}
-      >
-        Copy Text
-      </button>
-      {isUser && (
-        <>
-          <button type="button" role="menuitem" disabled={editDisabled}
-            onClick={() => { onEdit(); onClose(); }}>
-            Edit
-          </button>
-          <button type="button" role="menuitem" disabled={editDisabled}
-            onClick={() => { onEditAsNewBranch(); onClose(); }}>
-            Edit as new branch
-          </button>
-        </>
-      )}
-      {/* ADR-002 Workstream 1: stages this node as the composer's next reply
-          target (sceneStore's replyTargetNodeId) - available regardless of
-          isUser, since either a user message or an assistant reply is a
-          valid point to fork a new branch from. The composer shows a
-          "Replying to" indicator once set; the actual second-child branch
-          is created server-side the moment the user sends. */}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onBranchFromHere();
-          onClose();
-        }}
-      >
-        Branch from Here
-      </button>
-      {canRerun && onRerunFromHere && (
-        <button type="button" role="menuitem" disabled={editDisabled}
-          onClick={() => {
-            // Preserve a connected focus target when the context menu unmounts.
-            const trigger = document.getElementById("chat-rerun-trigger-" + nodeId)
-              ?? menuTriggerRef.current;
-            trigger?.focus();
-            onRerunFromHere();
-            onClose();
-          }}>
-          Re-run from here
-        </button>
-      )}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onToggleCollapse();
-          onClose();
-        }}
-      >
-        {isCollapsed ? "Expand" : "Collapse"}
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          downloadTextFile(content, `chat-${nodeId}.md`);
-          onClose();
-        }}
-      >
-        Export
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onToggleBranchFocus();
-          onClose();
-        }}
-      >
-        {isBranchFocusActive ? "Show All Branches" : "Hide Other Branches"}
-      </button>
-      <button type="button" role="menuitemcheckbox" aria-checked={indexIntoKnowledge}
-        onClick={() => {
-          onSetIndexIntoKnowledge(!indexIntoKnowledge);
-          onClose();
-        }}>
-        {indexIntoKnowledge ? "Remove from Knowledge Library" : "Add branch to Knowledge Library"}
-      </button>
-      {/* ADR-002 Workstream 1 ("Branch status and lifecycle"): the final
-          sequenced item after fork/compare/synthesize. Mark Status reuses
-          the exact click-to-expand submenu
-          idiom Generate Chart below already established (chartMenuOpen),
-          not a new interaction pattern - role="menuitemradio"/aria-checked
-          marks the currently active status. */}
-      <button
-        type="button"
-        role="menuitem"
-        aria-haspopup="true"
-        aria-expanded={statusMenuOpen}
-        onClick={() => setStatusMenuOpen((open) => !open)}
-      >
-        Mark Status
-      </button>
-      {statusMenuOpen && (
-        <div className="chat-node-submenu" role="menu" aria-label="Branch status">
+      <MenuGroup label="Edit">
+        <MenuItem icon="copy" label="Copy text" onSelect={copyText} />
+        {isUser && <>
+          <MenuItem icon="edit" label="Edit" disabled={editDisabled} onSelect={onEdit} />
+          <MenuItem icon="branch" label="Edit as new branch" disabled={editDisabled} onSelect={onEditAsNewBranch} />
+        </>}
+      </MenuGroup>
+      <MenuGroup label="Branch">
+        <MenuItem icon="branch" label="Branch from here" onSelect={onBranchFromHere} />
+        {canRerun && onRerunFromHere && (
+          <MenuItem icon="rerun" label="Re-run from here" disabled={editDisabled}
+            onSelect={() => {
+              const trigger = document.getElementById("chat-rerun-trigger-" + nodeId)
+                ?? menuTriggerRef.current;
+              trigger?.focus();
+              onRerunFromHere();
+            }} />
+        )}
+        {!isUser && <MenuItem icon="rerun" label="Regenerate response" onSelect={onRegenerate} />}
+        <MenuItem icon={isBranchFocusActive ? "eye" : "eye-off"}
+          label={isBranchFocusActive ? "Show all branches" : "Hide other branches"}
+          onSelect={onToggleBranchFocus} />
+        <MenuItem icon={isCollapsed ? "maximize" : "minimize"}
+          label={isCollapsed ? "Expand branch" : "Collapse branch"}
+          onSelect={() => onCollapseBranch(!isCollapsed)} />
+      </MenuGroup>
+      <MenuGroup label="Node">
+        <MenuItem icon={isCollapsed ? "maximize" : "minimize"}
+          label={isCollapsed ? "Expand" : "Collapse"} onSelect={onToggleCollapse} />
+        <SubMenu label="Mark status" icon="tag">
           {BRANCH_STATUS_OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              role="menuitemradio"
-              aria-checked={option.value === branchStatus}
-              onClick={() => {
-                onSetBranchStatus(option.value);
-                onClose();
-              }}
-            >
-              {option.value === branchStatus ? "✓ " : ""}
-              {option.label}
-            </button>
+            <MenuItem key={option.value} label={option.label} kind="radio"
+              checked={option.value === branchStatus}
+              onSelect={() => onSetBranchStatus(option.value)} />
           ))}
-        </div>
-      )}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onSetFinalDeliverable(!isFinalDeliverable);
-          onClose();
-        }}
-      >
-        {isFinalDeliverable ? "Unmark Final Deliverable" : "Mark as Final Deliverable"}
-      </button>
-      {/* ADR-018 stage 18.3: pins this node (and, when it is a branch root,
-          every descendant that doesn't pin its own - see backend/domain/
-          branches.py's resolve_model_for_node) to whatever model is
-          CURRENTLY active in the Composer. A full "browse every installed
-          model" picker needs a live catalog fetch this stage doesn't wire
-          to the frontend yet - see doc/adr/ADR-018-model-routing.md's own
-          status note; "pin to current" is the buildable, honestly-scoped
-          slice of the feature today. */}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onPinToCurrentModel();
-          onClose();
-        }}
-      >
-        Pin to Current Model
-      </button>
-      {overrideModelId && (
-        <button
-          type="button"
-          role="menuitem"
-          onClick={() => {
-            onClearModelOverride();
-            onClose();
-          }}
-        >
-          Clear Model Pin ({overrideModelId})
-        </button>
-      )}
-      {/* "Collapse Branch"/"Expand Branch" flips off THIS node's own
-          isCollapsed (same value/direction the plain single-node
-          "Expand"/"Collapse" item above already reads) but applies
-          server-side across the whole chat-kind subtree rooted here, not
-          just this one node - see onCollapseBranch's own comment on
-          ChatNodeData. Deliberately NOT automatic when status is set to
-          "rejected" above - status and collapse stay decoupled. */}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onCollapseBranch(!isCollapsed);
-          onClose();
-        }}
-      >
-        {isCollapsed ? "Expand Branch" : "Collapse Branch"}
-      </button>
-      {/* Real (not disabled) - matches the legacy's own `if docked_children:`
-          guard exactly. One button per docked child, each undocking that
-          specific child back onto the canvas via the shared setNodeDocked
-          intent (docked=false). */}
-      {dockedChildren.length > 0 && (
-        <>
-          <div className="chat-node-menu-section-label">Reveal Docked Items</div>
-          {dockedChildren.map((child) => (
-            <button
-              key={child.id}
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                onUndockChild(child.id);
-                onClose();
-              }}
-            >
-              {child.label}
-            </button>
-          ))}
-        </>
-      )}
-      {/* R8a: real. Opens the shared DocumentViewPanel (frontend-only, no
-          backend intent) with this node's own content - already client-side. */}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onOpenDocumentView();
-          onClose();
-        }}
-      >
-        Open Document View
-      </button>
-      {/* R8a: real. Each runs its agent over THIS node's text and drops the
-          result into a new note beside it - see backend/canvas.py's
-          _generate_note_from_node. Fire-and-forget like Generate Image
-          above: the note arrives on the next scene snapshot. */}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onGenerateKeyTakeaway();
-          onClose();
-        }}
-      >
-        Generate Key Takeaway
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onGenerateExplainerNote();
-          onClose();
-        }}
-      >
-        Generate Explainer Note
-      </button>
-      {/* R6.2: a real click-to-expand submenu (not disabled) - same
-          click-to-toggle popover interaction GroupColorPicker.tsx already
-          established for a nested picker inside a single flat menu list,
-          rather than inventing a hover-triggered flyout with no other
-          precedent anywhere in this codebase. */}
-      <button
-        type="button"
-        role="menuitem"
-        aria-haspopup="true"
-        aria-expanded={chartMenuOpen}
-        onClick={() => setChartMenuOpen((open) => !open)}
-      >
-        Generate Chart
-      </button>
-      {chartMenuOpen && (
-        <div className="chat-node-submenu" role="menu" aria-label="Chart type">
+        </SubMenu>
+        <MenuItem icon="flag"
+          label={isFinalDeliverable ? "Unmark final deliverable" : "Mark as final deliverable"}
+          onSelect={() => onSetFinalDeliverable(!isFinalDeliverable)} />
+        <MenuItem icon="pin" label="Pin to current model" onSelect={onPinToCurrentModel} />
+        {overrideModelId && <MenuItem icon="pin" label={`Clear model pin (${overrideModelId})`}
+          onSelect={onClearModelOverride} />}
+        {dockedChildren.length > 0 && (
+          <SubMenu label="Reveal docked items" icon="eye">
+            {dockedChildren.map((child) => (
+              <MenuItem key={child.id} label={child.label} onSelect={() => onUndockChild(child.id)} />
+            ))}
+          </SubMenu>
+        )}
+      </MenuGroup>
+      <MenuGroup label="Share">
+        <MenuItem icon="knowledge" label={indexIntoKnowledge ? "Remove from Knowledge Library" : "Add branch to Knowledge Library"}
+          kind="checkbox" checked={indexIntoKnowledge}
+          onSelect={() => onSetIndexIntoKnowledge(!indexIntoKnowledge)} />
+        <MenuItem icon="document-text" label="Open in Document View" onSelect={onOpenDocumentView} />
+        <MenuItem icon="download" label="Export…" onSelect={() => downloadTextFile(content, `chat-${nodeId}.md`)} />
+      </MenuGroup>
+      <SubMenu label="Generate" icon="sparkle">
+        <MenuItem icon="document-text" label="Key takeaway" onSelect={onGenerateKeyTakeaway} />
+        <MenuItem icon="document-text" label="Explainer note" onSelect={onGenerateExplainerNote} />
+        <SubMenu label="Chart" icon="chart-bar">
           {CHART_TYPE_OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                onGenerateChart(option.value);
-                onClose();
-              }}
-            >
-              {option.label}
-            </button>
+            <MenuItem key={option.value} label={option.label} onSelect={() => onGenerateChart(option.value)} />
           ))}
-        </div>
-      )}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onGenerateImage();
-          onClose();
-        }}
-      >
-        Generate Image
-      </button>
-      {!isUser && (
-        <button
-          type="button"
-          role="menuitem"
-          onClick={() => {
-            onRegenerate();
-            onClose();
-          }}
-        >
-          Regenerate Response
-        </button>
-      )}
-      <div className="chat-node-menu-separator" role="separator" />
-      <button
-        type="button"
-        role="menuitem"
-        className="chat-node-menu-danger"
-        onClick={() => {
-          onDelete();
-          onClose();
-        }}
-      >
-        Delete Node
-      </button>
+        </SubMenu>
+        <MenuItem icon="image" label="Image" onSelect={onGenerateImage} />
+      </SubMenu>
+      <MenuItem label="Delete node" destructive onSelect={onDelete} />
     </NodeMenu>
   );
 }
@@ -644,47 +411,6 @@ export function makeDebouncedScrollReport(
       onScrollChange(value);
     }, debounceMs);
   };
-}
-
-// Node redesign, stage 3 ("card chrome"): hand-authored stroke icons for
-// the header's hover-revealed quick-action row, matching the SAME
-// convention this codebase already established twice (GroupNodeView.tsx's
-// own GroupIcon, Composer.tsx's own Icon) rather than a fourth, different
-// icon approach - fill:none/stroke:currentColor, one small file-local
-// component per file that needs icons, not a shared icon library.
-type ChatNodeIconName = "copy" | "check" | "branch" | "document";
-
-const CHAT_NODE_ICON_PATHS: Record<ChatNodeIconName, ReactNode> = {
-  copy: (
-    <>
-      <rect x="2.5" y="2.5" width="8" height="8" rx="1.2" />
-      <rect x="5.5" y="5.5" width="8" height="8" rx="1.2" />
-    </>
-  ),
-  check: <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />,
-  branch: (
-    <>
-      <circle cx="4.5" cy="3.5" r="1.4" />
-      <circle cx="4.5" cy="12.5" r="1.4" />
-      <circle cx="11.5" cy="8" r="1.4" />
-      <path d="M4.5 4.9V11.1" />
-      <path d="M4.5 8H7a3 3 0 0 0 3-3" />
-    </>
-  ),
-  document: (
-    <>
-      <path d="M4 2h5l3 3v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1Z" />
-      <path d="M9 2v3h3" />
-    </>
-  ),
-};
-
-function ChatNodeIcon({ name }: { name: ChatNodeIconName }) {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16" className="chat-node-icon">
-      {CHAT_NODE_ICON_PATHS[name]}
-    </svg>
-  );
 }
 
 // Node redesign, stage 3's own deferred sub-item ("content fade + Show more,
@@ -857,7 +583,7 @@ function ModelReasonDisclosure({
         aria-label={`Why this model: ${model}`}
         aria-haspopup="menu" aria-expanded={anchor !== null}
         onClick={toggle}
-      >Why this model</button>
+      ><Icon name="info" size="sm" /> Why this model</button>
       {anchor && (
         <NodeMenu
           position={anchor} onClose={() => setAnchor(null)}
@@ -866,12 +592,10 @@ function ModelReasonDisclosure({
         >
           <p className="chat-node-model-reason-description">{describeModelReason(reason)}</p>
           <p className="chat-node-model-reason-hint">Changes affect future replies, not this recorded answer.</p>
-          <button type="button" role="menuitem" className="chat-node-model-reason-action"
-            onClick={() => { onOpenNodePinMenu(anchor); setAnchor(null); }}>Change node pin</button>
-          <button type="button" role="menuitem" className="chat-node-model-reason-action"
-            onClick={() => { setAnchor(null); onOpenModelSettings(); }}>
-            {reason.startsWith("auto: ") ? "Change automatic selection policy" : "Change task model setting"}
-          </button>
+          <MenuItem icon="pin" label="Change node pin" onSelect={() => onOpenNodePinMenu(anchor)} />
+          <MenuItem icon="settings"
+            label={reason.startsWith("auto: ") ? "Change automatic selection policy" : "Change task model setting"}
+            onSelect={onOpenModelSettings} />
         </NodeMenu>
       )}
     </span>
@@ -1059,32 +783,7 @@ export const ChatNodeView = memo(function ChatNodeView({
       ? `${scienceReference.operationTitle}: ${scienceReference.summary}`
       : data.pendingRequestId ? streamedContent : data.content).slice(0, 160).trim()
     : "";
-  const headerDetail = overview ? (
-    <span className="node-overview-excerpt">{overview}</span>
-  ) : hasMetadata && (
-    <div className="chat-node-metadata">
-      {data.model && (
-        <>
-          <span className="chat-node-model-badge" title={data.provider ?? undefined}>{data.model}</span>
-          {data.modelReason && (
-            <ModelReasonDisclosure model={data.model} reason={data.modelReason}
-              onOpenNodePinMenu={setMenuPosition} onOpenModelSettings={data.onOpenModelSettings} />
-          )}
-        </>
-      )}
-      {data.overrideModelId && (
-        <span className="chat-node-model-override-badge"
-          title={`Pinned to ${data.overrideProvider} - ${data.overrideModelId}`}>📌 {data.overrideModelId}</span>
-      )}
-      {hasUsage && (
-        <span className="chat-node-usage-badge"
-          title={`Prompt: ${data.promptTokens ?? "?"} · Completion: ${data.completionTokens ?? "?"}`}>
-          {`${data.promptTokens ?? "?"}→${data.completionTokens ?? "?"}`}
-          {data.estimatedCostUsd != null && ` · $${data.estimatedCostUsd.toFixed(4)}`}
-        </span>
-      )}
-    </div>
-  );
+  const headerDetail = overview ? <span className="node-overview-excerpt">{overview}</span> : undefined;
 
   return (
     <NodeShell
@@ -1106,77 +805,71 @@ export const ChatNodeView = memo(function ChatNodeView({
             <span>{data.isUser ? "You" : "Assistant"}</span>
             {data.versionCount > 1 && (
               <span className="chat-node-version-switcher nodrag" role="group" aria-label="Message versions">
-                <button type="button" className="chat-node-version-button nodrag"
-                  aria-label="Previous version" title="Previous version"
-                  disabled={data.versionIndex <= 0 || !!data.pendingRequestId}
-                  onClick={() => data.onSelectVersion(data.versionIndex - 1)}>‹</button>
+                <IconButton size="sm" className="chat-node-version-button nodrag" icon="chevron-left"
+                  label="Previous version" disabled={data.versionIndex <= 0 || !!data.pendingRequestId}
+                  onClick={() => data.onSelectVersion(data.versionIndex - 1)} />
                 <span>
-                  <span aria-hidden="true">{data.versionIndex + 1}/{data.versionCount}</span>
+                  <span aria-hidden="true">{data.versionIndex + 1} of {data.versionCount}</span>
                   <span className="visually-hidden" role="status" aria-live="polite">
                     Version {data.versionIndex + 1} of {data.versionCount} selected
                   </span>
                 </span>
-                <button type="button" className="chat-node-version-button nodrag"
-                  aria-label="Next version" title="Next version"
-                  disabled={data.versionIndex >= data.versionCount - 1 || !!data.pendingRequestId}
-                  onClick={() => data.onSelectVersion(data.versionIndex + 1)}>›</button>
-                <button type="button" className="chat-node-version-compare-button nodrag"
-                  aria-label="Compare message versions" title="Compare message versions"
-                  disabled={!!data.pendingRequestId} onClick={data.onCompareVersions}>Compare</button>
+                <IconButton size="sm" className="chat-node-version-button nodrag" icon="chevron-right"
+                  label="Next version" disabled={data.versionIndex >= data.versionCount - 1 || !!data.pendingRequestId}
+                  onClick={() => data.onSelectVersion(data.versionIndex + 1)} />
+                <Button size="sm" variant="ghost" iconStart="compare"
+                  className="chat-node-version-compare-button nodrag"
+                  aria-label="Compare message versions" disabled={!!data.pendingRequestId}
+                  onClick={data.onCompareVersions}>Compare</Button>
               </span>
             )}
             {data.branchStatus && data.branchStatus !== "active" && (
-              <span className="chat-node-status-badge" role="status" data-status={data.branchStatus}
-                title={`Branch status: ${data.branchStatus}`}
-                aria-label={`Branch status: ${data.branchStatus}`}>
-                {data.branchStatus.charAt(0).toUpperCase() + data.branchStatus.slice(1)}
-              </span>
+              <Tooltip label={`Branch status: ${data.branchStatus}`}>
+                <span className="chat-node-status-badge" role="status" data-status={data.branchStatus}
+                  aria-label={`Branch status: ${data.branchStatus}`}>
+                  <Icon size="sm" name={data.branchStatus === "rejected" ? "status-rejected"
+                    : data.branchStatus === "superseded" ? "history" : "status-success"} />
+                  {data.branchStatus.charAt(0).toUpperCase() + data.branchStatus.slice(1)}
+                </span>
+              </Tooltip>
             )}
             {data.dockedChildren.length > 0 && (
-              <span className="chat-node-docked-badge" title="Docked items">{data.dockedChildren.length}</span>
+              <Tooltip label="Docked items">
+                <span className="chat-node-docked-badge" aria-label="Docked items"><Icon name="folder" size="sm" />{data.dockedChildren.length}</span>
+              </Tooltip>
             )}
             {data.isBranchSynthesis && (
-              <span className="chat-node-synthesis-badge"
-                title={`Branch Synthesis (${data.synthesisSourceNodeIds.length} sources): ${data.synthesisInstructions}`}
-                aria-label="Branch Synthesis">⇄</span>
+              <Tooltip label={`Branch synthesis (${data.synthesisSourceNodeIds.length} sources): ${data.synthesisInstructions}`}>
+                <span className="chat-node-synthesis-badge" aria-label="Branch Synthesis">
+                  <Icon name="merge" size="sm" /><span>Synthesis</span>
+                </span>
+              </Tooltip>
             )}
             {data.isFinalDeliverable && (
-              <span className="chat-node-final-badge" title="Final Deliverable" aria-label="Final Deliverable">★</span>
+              <span className="chat-node-final-badge" aria-label="Final Deliverable">
+                <Icon name="flag" size="sm" /><span>Final deliverable</span>
+              </span>
             )}
             {data.indexIntoKnowledge && (
-              <span className="chat-node-knowledge-badge" role="status"
-                aria-label="Indexed in Knowledge Library" title="Indexed in Knowledge Library">
-                <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M3 2.5h7l3 3v8H3z" strokeLinejoin="round" />
-                  <path d="M10 2.5v3h3M5.5 8h5M5.5 10.5h5" strokeLinecap="round" />
-                </svg>
-                In Knowledge Library
+              <span className="chat-node-knowledge-badge" role="status" aria-label="Indexed in Knowledge Library">
+                <Icon name="knowledge" size="sm" />In Knowledge Library
               </span>
             )}
           </span>
           <span className="chat-node-title-actions">
             {!collapsed && (
               <span className="chat-node-quick-actions">
-                <button type="button" className="chat-node-quick-action nodrag" onClick={onQuickCopy}
-                  title="Copy text" aria-label="Copy text">
-                  <ChatNodeIcon name={copied ? "check" : "copy"} />
-                </button>
-                <button type="button" className="chat-node-quick-action nodrag" onClick={data.onBranchFromHere}
-                  title="Branch from here" aria-label="Branch from here">
-                  <ChatNodeIcon name="branch" />
-                </button>
+                <IconButton size="sm" className="chat-node-quick-action nodrag"
+                  icon={copied ? "check" : "copy"} label={copied ? "Copied" : "Copy text"} onClick={onQuickCopy} />
+                <IconButton size="sm" className="chat-node-quick-action nodrag"
+                  icon="branch" label="Branch from here" onClick={data.onBranchFromHere} />
                 {canRerunFromHere && data.onRerunFromHere && (
-                  <button type="button" className="chat-node-quick-action nodrag"
-                    id={"chat-rerun-trigger-" + id}
-                    disabled={!!data.pendingRequestId} onClick={data.onRerunFromHere}
-                    title="Re-run from here" aria-label="Re-run from here">
-                    ↻
-                  </button>
+                  <IconButton size="sm" className="chat-node-quick-action nodrag"
+                    id={"chat-rerun-trigger-" + id} icon="rerun" label="Re-run from here"
+                    disabled={!!data.pendingRequestId} onClick={data.onRerunFromHere} />
                 )}
-                <button type="button" className="chat-node-quick-action nodrag" onClick={data.onOpenDocumentView}
-                  title="Open Document View" aria-label="Open Document View">
-                  <ChatNodeIcon name="document" />
-                </button>
+                <IconButton size="sm" className="chat-node-quick-action nodrag"
+                  icon="document-text" label="Open in Document View" onClick={data.onOpenDocumentView} />
               </span>
             )}
             <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
@@ -1252,10 +945,10 @@ export const ChatNodeView = memo(function ChatNodeView({
           {staleEdit && <p role="alert">The message changed while editing. Reopen its latest version.</p>}
           {editError && <p role="alert">{editError}</p>}
           <div className="chat-node-edit-actions">
-            <button type="button" disabled={editSaving || staleEdit || !editDraft.trim()} onClick={saveEdit}>
+            <Button size="sm" variant="primary" disabled={editSaving || staleEdit || !editDraft.trim()} onClick={saveEdit}>
               {editSaving ? "Saving…" : editMode === "in-place" ? "Save changes" : "Save as new branch"}
-            </button>
-            <button type="button" disabled={editSaving} onClick={cancelEdit}>Cancel</button>
+            </Button>
+            <Button size="sm" disabled={editSaving} onClick={cancelEdit}>Cancel</Button>
           </div>
           <small className="chat-node-edit-hint">Ctrl+Enter to save · Escape to cancel</small>
         </div>
@@ -1292,44 +985,26 @@ export const ChatNodeView = memo(function ChatNodeView({
             <ChatCitationChips citations={replyCitations ?? []} onOpenCitation={data.onOpenCitation} />
           )}
           {contentOverflows && (
-            <button
-              type="button"
-              className="chat-node-show-more nodrag"
+            <Button size="sm" variant="ghost" className="chat-node-show-more nodrag"
               aria-expanded={contentExpanded}
-              onClick={() => setContentExpanded((expanded) => !expanded)}
-            >
+              onClick={() => setContentExpanded((expanded) => !expanded)}>
               {contentExpanded ? "Show less" : "Show more"}
-            </button>
+            </Button>
           )}
         </>
       )}
-      {/* ADR-007 stage 7.4: an assistant turn's tool calls + results - the
-          ADR's own "renders the calls and their results (collapsible)".
-          Native <details>/<summary> rather than the useState-driven
-          expand/collapse pattern above (contentExpanded) - this section's
-          state doesn't need to survive a re-render triggered by anything
-          else on the node, and a native disclosure widget is free
-          keyboard/AT support for a debug-style panel like this one. Hidden
-          entirely (not just collapsed) when the turn made no tool calls -
-          the overwhelming majority of chat nodes. */}
       {visibleToolInvocations.length > 0 && (
-        <details className="chat-node-tool-invocations">
-          <summary>
-            {visibleToolInvocations.length === 1
-              ? "1 tool call"
-              : `${visibleToolInvocations.length} tool calls`}
-          </summary>
+        <Disclosure className="chat-node-tool-invocations"
+          {...{ title: visibleToolInvocations.length === 1 ? "1 tool call" : `${visibleToolInvocations.length} tool calls` }}>
           {visibleToolInvocations.map((invocation, index) => (
-            <div
-              key={invocation.id || index}
-              className={`chat-node-tool-invocation${invocation.isError ? " error" : ""}`}
-            >
+            <div key={invocation.id || index}
+              className={`chat-node-tool-invocation${invocation.isError ? " error" : ""}`}>
               <div className="chat-node-tool-invocation-name">{invocation.name}</div>
               <pre className="chat-node-tool-invocation-arguments">{invocation.argumentsJson}</pre>
               <pre className="chat-node-tool-invocation-result">{invocation.result}</pre>
             </div>
           ))}
-        </details>
+        </Disclosure>
       )}
       {/* ADR-006 stage 6.4 review fix: per-node Stop for an in-flight
           streamed regenerate - see onCancelRegenerate's own comment on
@@ -1338,14 +1013,8 @@ export const ChatNodeView = memo(function ChatNodeView({
           ConversationNodeView's Cancel button already uses. */}
       {data.pendingRequestId && (
         <div className="chat-node-streaming-actions">
-          <button
-            type="button"
-            className="chat-node-stop-btn nodrag"
-            onClick={data.onCancelRegenerate}
-            title="Cancel regenerate"
-          >
-            Stop
-          </button>
+          <Button size="sm" variant="secondary" className="chat-node-stop-btn nodrag"
+            onClick={data.onCancelRegenerate}>Stop</Button>
         </div>
       )}
       {/* ADR-006 stage 6.4 (partial-output preservation): shown when the
@@ -1359,13 +1028,32 @@ export const ChatNodeView = memo(function ChatNodeView({
         <div className="chat-node-incomplete-banner" role="status">
           <span>Response interrupted — use Regenerate to retry.</span>
           {!data.isUser && (
-            <button
-              type="button"
-              className="chat-node-incomplete-retry nodrag"
-              onClick={data.onRegenerate}
-            >
-              Regenerate
-            </button>
+            <IconButton size="sm" className="chat-node-incomplete-retry nodrag"
+              icon="rerun" label="Regenerate" onClick={data.onRegenerate} />
+          )}
+        </div>
+      )}
+      {hasMetadata && !collapsed && (
+        <div className="chat-node-footer-meta">
+          {data.model && <span className="chat-node-model-badge">{data.model}</span>}
+          {data.model && hasUsage && <span aria-hidden="true">·</span>}
+          {hasUsage && (
+            <Tooltip label={`Prompt: ${data.promptTokens ?? "?"} · Completion: ${data.completionTokens ?? "?"}`}>
+              <span className="chat-node-usage-badge">
+                {`${data.promptTokens == null ? "?" : formatTokens(data.promptTokens)}→${data.completionTokens == null ? "?" : formatTokens(data.completionTokens)}${data.estimatedCostUsd != null ? ` · $${data.estimatedCostUsd.toFixed(4)}` : ""}`}
+              </span>
+            </Tooltip>
+          )}
+          {data.modelReason && (
+            <ModelReasonDisclosure model={data.model ?? ""} reason={data.modelReason}
+              onOpenNodePinMenu={setMenuPosition} onOpenModelSettings={data.onOpenModelSettings} />
+          )}
+          {data.overrideModelId && (
+            <Tooltip label={`Pinned to ${data.overrideProvider} — ${data.overrideModelId}`}>
+              <Badge className="chat-node-model-override-badge">
+                <Icon name="pin" size="sm" /> {data.overrideModelId}
+              </Badge>
+            </Tooltip>
           )}
         </div>
       )}

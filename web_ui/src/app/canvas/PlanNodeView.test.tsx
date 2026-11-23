@@ -87,9 +87,9 @@ describe("PlanNodeView", () => {
     expect(screen.getByText("found 3 sources")).toBeInTheDocument();
     expect(screen.getByText("Write summary")).toBeInTheDocument();
     expect(screen.getByText("Chart it")).toBeInTheDocument();
-    expect(screen.getByText("Steps 2/12")).toBeInTheDocument();
-    expect(screen.getByText("Tokens 12,345/150,000")).toBeInTheDocument();
-    expect(screen.getByText("Building…")).toBeInTheDocument();
+    expect(screen.getByText(/2 of 12 steps/)).toBeInTheDocument();
+    expect(screen.getByText(/12.3k \/ 150k tokens/)).toBeInTheDocument();
+    expect(screen.getByText("Running")).toBeInTheDocument();
   });
 
   // -- collapse/delete wiring (previously declared on PlanNodeData with no
@@ -105,7 +105,7 @@ describe("PlanNodeView", () => {
     expect(data.onToggleCollapse).toHaveBeenCalledOnce();
   });
 
-  it("the node-level right-click menu shows exactly Collapse/Expand + Delete Node", async () => {
+  it("the node-level right-click menu shows exactly Collapse/Expand + Delete node", async () => {
     const user = userEvent.setup();
     const data = makeData();
     renderPlan(data);
@@ -117,13 +117,13 @@ describe("PlanNodeView", () => {
     const items = screen.getAllByRole("menuitem");
     expect(items).toHaveLength(2);
     expect(items[0]).toHaveTextContent("Collapse");
-    expect(items[1]).toHaveTextContent("Delete Node");
+    expect(items[1]).toHaveTextContent("Delete node");
 
     await user.click(items[0]);
     expect(data.onToggleCollapse).toHaveBeenCalledOnce();
 
     fireEvent.contextMenu(screen.getByText("Research solar output and chart it"));
-    await user.click(screen.getByRole("menuitem", { name: "Delete Node" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete node" }));
     expect(data.onDelete).toHaveBeenCalledOnce();
   });
 
@@ -170,7 +170,9 @@ describe("PlanNodeView", () => {
     renderPlan(data);
 
     expect(screen.getByRole("group", { name: "Builder tool approval" })).toBeInTheDocument();
-    expect(screen.getByText("graph.create_node")).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Builder tool approval" }))
+      .toHaveTextContent("The Builder wants to run: graph.create_node");
+    expect(screen.getByText('graph.create_node {"kind":"note"}')).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Approve" }));
     expect(data.onApproveTool).toHaveBeenCalledTimes(1);
@@ -231,12 +233,12 @@ describe("PlanNodeView", () => {
 
   it("marks a failed build's detail as an alert and shows the autopilot chip", () => {
     renderPlan(makeData({
-      builderStatus: "failed", builderMode: "autopilot",
+      builderStatus: "failed", builderMode: "Autopilot",
       builderStatusDetail: "Build failed: the model aborted.", pendingRequestId: null,
     }));
 
     expect(screen.getByRole("alert")).toHaveTextContent("the model aborted");
-    expect(screen.getByText("autopilot")).toBeInTheDocument();
+    expect(screen.getByText("Autopilot")).toBeInTheDocument();
   });
 
   describe("activity log", () => {
@@ -263,14 +265,14 @@ describe("PlanNodeView", () => {
       // summary's text is assembled from more than one node - matched on
       // the element's own textContent rather than with a single-node text
       // query, which no longer sees the whole string.
-      const summary = container.querySelector(".plan-node-activity summary")!;
+      const summary = container.querySelector(".plan-node-activity .gl-disclosure-trigger")!;
       expect(summary.textContent).toBe("2 activity entries · 1 error");
-      const details = summary.closest("details");
-      expect(details).not.toHaveAttribute("open");
+      expect(summary).toHaveAttribute("aria-expanded", "false");
       expect(screen.getAllByText("graph.create_node")).toHaveLength(2);
       expect(screen.getByText('{"kind":"note"}')).toBeInTheDocument();
       expect(screen.getByText(/was denied approval/)).toBeInTheDocument();
-      expect(screen.getByText("12ms")).toBeInTheDocument();
+      expect(screen.getByText("<1 s")).toBeInTheDocument();
+      expect(screen.getByText("0 s")).toBeInTheDocument();
     });
 
     it("tints an error row distinctly from an ok row", () => {
@@ -303,13 +305,15 @@ describe("PlanNodeView", () => {
 
       try {
         const { rerender } = renderPlan(makeData({ builderStatus: "running", builderActivity: [row(1)] }));
-        const details = document.querySelector(".plan-node-activity") as HTMLDetailsElement;
-        expect(details.open).toBe(false); // collapsed by default
+        const toggle = screen.getByRole("button", { name: "1 activity entry" });
+        expect(toggle).toHaveAttribute("aria-expanded", "false");
 
         rerenderPlan(rerender, makeData({ builderStatus: "running", builderActivity: [row(1), row(2)] }));
         expect(scrollToSpy).not.toHaveBeenCalled(); // still collapsed - must not scroll a hidden panel
 
-        details.open = true; // the same native toggle a real click on <summary> performs
+        fireEvent.click(screen.getByRole("button", { name: "2 activity entries" }));
+        expect(screen.getByRole("button", { name: "2 activity entries" })).toHaveAttribute("aria-expanded", "true");
+        scrollToSpy.mockClear();
         rerenderPlan(rerender, makeData({ builderStatus: "running", builderActivity: [row(1), row(2), row(3)] }));
         expect(scrollToSpy).toHaveBeenCalledTimes(1); // running + open - follows the newest row
 
@@ -520,8 +524,9 @@ describe("PlanNodeView plan editing (ADR-021 stage 21.3)", () => {
 
     it("Stop warns that it is one-way before it is pressed, not after", () => {
       renderPlan(makeData({ builderStatus: "running" }));
-      expect(screen.getByRole("button", { name: "Stop" })).toHaveAttribute(
-        "title",
+      const stop = screen.getByRole("button", { name: "Stop" });
+      fireEvent.focus(stop);
+      expect(screen.getByRole("tooltip")).toHaveTextContent(
         "Stop this build. A stopped build cannot be resumed.",
       );
     });
@@ -545,7 +550,9 @@ describe("PlanNodeView plan editing (ADR-021 stage 21.3)", () => {
           ],
         }),
       );
-      expect(container.querySelectorAll(".plan-node-step-icon")).toHaveLength(4);
+      const markers = container.querySelectorAll(".plan-node-step-marker");
+      expect(markers).toHaveLength(4);
+      for (const marker of markers) expect(marker.querySelector("svg")).not.toBeNull();
       // None of the old glyphs survive anywhere in the rendered card.
       for (const glyph of ["○", "◐", "●", "✕", "–"]) {
         expect(container.textContent).not.toContain(glyph);
@@ -555,7 +562,7 @@ describe("PlanNodeView plan editing (ADR-021 stage 21.3)", () => {
     it("gives each status its own distinct geometry", () => {
       const markup = (status: string) =>
         renderPlan(makeData({ planSteps: [{ id: "s1", title: "t", status, detail: "" }] }))
-          .container.querySelector(".plan-node-step-icon")!.innerHTML;
+          .container.querySelector(".plan-node-step-marker")!.innerHTML;
       const shapes = ["done", "running", "failed", "skipped", "pending"].map(markup);
       // Five statuses, five different drawings - if any two ever collapse
       // to the same paths, the distinction is back to being colour-only.

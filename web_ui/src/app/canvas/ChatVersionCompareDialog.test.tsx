@@ -78,10 +78,10 @@ describe("read-only Document View comparison dialog", () => {
     expect(dialog).toHaveAttribute("aria-modal", "true");
     expect(within(dialog).getByText(/Choose two saved replies\./)).toBeVisible();
     expect(within(dialog).getByText("Raw reply text, including Markdown syntax")).toBeVisible();
-    const left = within(dialog).getByRole("combobox", { name: "Left version" });
-    const right = within(dialog).getByRole("combobox", { name: "Right version" });
-    expect(left).toHaveValue("1");
-    expect(right).toHaveValue("2");
+    const left = within(dialog).getByRole("button", { name: "Left version" });
+    const right = within(dialog).getByRole("button", { name: "Right version" });
+    expect(left).toHaveTextContent("Version 2");
+    expect(right).toHaveTextContent("Version 3");
     expect(compareChatVersions).toHaveBeenCalledWith("reply-1", 1, 2);
     await within(dialog).findByText("Word comparison ready.");
     expect(FakeDiffWorker.created).toBe(1);
@@ -137,11 +137,15 @@ describe("read-only Document View comparison dialog", () => {
     render(<OverlayProvider><Launcher store={store} /></OverlayProvider>);
     const opener = screen.getByRole("button", { name: "Open comparison" });
     await user.click(opener);
-    const leftSelect = screen.getByRole("combobox", { name: "Left version" });
-    const rightSelect = screen.getByRole("combobox", { name: "Right version" });
-    expect(within(rightSelect).getByRole("option", { name: "Version 2" })).toBeDisabled();
-    await user.selectOptions(leftSelect, "0");
-    await user.selectOptions(rightSelect, "1");
+    const leftSelect = screen.getByRole("button", { name: "Left version" });
+    const rightSelect = screen.getByRole("button", { name: "Right version" });
+    await user.click(rightSelect);
+    expect(screen.getByRole("option", { name: "Version 2" })).toBeDisabled();
+    await user.keyboard("{Escape}");
+    await user.click(leftSelect);
+    await user.click(screen.getByRole("option", { name: "Version 1" }));
+    await user.click(rightSelect);
+    await user.click(screen.getByRole("option", { name: "Version 2" }));
     await waitFor(() => expect(compareChatVersions).toHaveBeenLastCalledWith("reply-1", 0, 1));
     await screen.findByRole("region", { name: "Right comparison pane, version 2" });
     await user.click(screen.getByRole("button", { name: "Focus left pane" }));
@@ -161,7 +165,7 @@ describe("read-only Document View comparison dialog", () => {
   it("styles the actual focusable reading panes with the shared visible focus token", () => {
     // jsdom cannot implement :focus-visible or a layout engine; lock the
     // CSS selector to the real tabindex=0 element, not its inert section.
-    const css = readFileSync(join(REPO_SRC, "app/styles.css"), "utf-8");
+    const css = readFileSync(join(REPO_SRC, "app/canvas/ChatVersionCompareDialog.css"), "utf-8");
     const start = css.indexOf(".chat-version-compare-text:focus-visible,");
     expect(start).toBeGreaterThanOrEqual(0);
     const rule = css.slice(start, css.indexOf("}", start));

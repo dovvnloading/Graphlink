@@ -1,5 +1,5 @@
 import type { Node, NodeProps } from "@xyflow/react";
-import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { StreamListener } from "../../lib/ws/transport";
 import { CollapseToggleButton } from "./CollapseToggleButton";
 import type { MenuPosition } from "./menuPosition";
@@ -9,6 +9,11 @@ import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 import { useStreamBuffer } from "./useStreamBuffer";
+import { MenuItem, MenuSeparator } from "../ui/Menu";
+import { IconButton } from "../ui/IconButton";
+import { TextArea } from "../ui/TextArea";
+import { Button } from "../ui/Button";
+import { Tooltip } from "../ui/Tooltip";
 
 /**
  * The conversation node (Qt-removal plan R3.25/R3.26) - ConversationNode's
@@ -98,46 +103,12 @@ function ConversationNodeMenu({
 
   return (
     <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
-      {/* Order verified against the legacy PluginNodeContextMenu's own
-          construction order for this node kind: Open Document View,
-          Collapse/Expand, Delete Node - nothing else. */}
-      {/* R8a: real. Opens the shared DocumentViewPanel (frontend-only, no
-          backend intent) with this node's entire history formatted as a
-          numbered markdown transcript. */}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onOpenDocumentView();
-          onClose();
-        }}
-      >
-        Open Document View
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onToggleCollapse();
-          onClose();
-        }}
-      >
-        {isCollapsed ? "Expand" : "Collapse"}
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="chat-node-menu-danger"
-        onClick={() => {
-          onDelete();
-          onClose();
-        }}
-      >
-        Delete Node
-      </button>
+      <MenuItem icon="document-text" label="Open in Document View" onSelect={onOpenDocumentView} />
+      <MenuItem icon="minimize" label={isCollapsed ? "Expand" : "Collapse"} onSelect={onToggleCollapse} />
+      <MenuSeparator />
+      <MenuItem label="Delete node" destructive onSelect={onDelete} />
     </NodeMenu>
-  );
-}
+  );}
 
 // -- per-bubble menu ---------------------------------------------------------
 
@@ -155,73 +126,14 @@ function ConversationBubbleMenu({
 
   return (
     <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          // ADR-011 stage 11.1 (D11): a bare fire-and-forget clipboard write
-          // left this promise's rejection unhandled - same fix ImageNodeView's
-          // own Copy Image action already applies for its clipboard write.
-          navigator.clipboard.writeText(content).catch((error: unknown) => {
-            console.error("[conversation-node] Copy Message failed:", error);
-          });
-          onClose();
-        }}
-      >
-        Copy Message
-      </button>
-      <div className="chat-node-menu-separator" role="separator" />
-      <button
-        type="button"
-        role="menuitem"
-        className="chat-node-menu-danger"
-        onClick={() => {
-          onDeleteMessage();
-          onClose();
-        }}
-      >
-        Delete from History
-      </button>
+      <MenuItem icon="copy" label="Copy message" onSelect={() => {
+        navigator.clipboard.writeText(content).catch((error: unknown) => {
+          console.error("[conversation-node] Copy message failed:", error);
+        });
+      }} />
+      <MenuItem label="Delete from history" destructive onSelect={onDeleteMessage} />
     </NodeMenu>
-  );
-}
-
-// Node redesign follow-up ("per-bubble chrome"): hand-authored stroke icons
-// for the bubble header's hover-revealed quick-action row, matching the SAME
-// file-local-icon-component convention this codebase already established
-// (GroupNodeView.tsx's own GroupIcon, ChatNodeView.tsx's own ChatNodeIcon) -
-// not a shared icon import, even where a glyph (copy/check) is conceptually
-// identical to ChatNodeIcon's own. "trash" is new here: Delete from History
-// has no analogue among ChatNodeView's own quick actions (Branch from
-// Here/Open Document View don't apply to a single message inside a growing
-// conversation node).
-type ConversationBubbleIconName = "copy" | "check" | "trash";
-
-const CONVERSATION_BUBBLE_ICON_PATHS: Record<ConversationBubbleIconName, ReactNode> = {
-  copy: (
-    <>
-      <rect x="2.5" y="2.5" width="8" height="8" rx="1.2" />
-      <rect x="5.5" y="5.5" width="8" height="8" rx="1.2" />
-    </>
-  ),
-  check: <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />,
-  trash: (
-    <>
-      <path d="M3 4.5h10" />
-      <path d="M6 4.5V3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5" />
-      <path d="M4.5 4.5l.6 8a1 1 0 0 0 1 .9h3.8a1 1 0 0 0 1-.9l.6-8" />
-      <path d="M6.5 7v4M9.5 7v4" />
-    </>
-  ),
-};
-
-function ConversationBubbleIcon({ name }: { name: ConversationBubbleIconName }) {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16" className="chat-node-icon">
-      {CONVERSATION_BUBBLE_ICON_PATHS[name]}
-    </svg>
-  );
-}
+  );}
 
 // -- bubble ------------------------------------------------------------------
 
@@ -314,33 +226,18 @@ function ConversationBubble({
               message whose text was committed from a killed stream - see
               ConversationMessage.incomplete's own comment above. */}
           {message.incomplete && (
-            <span
-              className="conversation-node-incomplete-badge"
-              title="Response interrupted before completion"
-            >
-              Interrupted
-            </span>
+            <Tooltip label="Response interrupted before completion">
+              <span className="conversation-node-incomplete-badge">Interrupted</span>
+            </Tooltip>
           )}
         </span>
         <span className="chat-node-quick-actions">
-          <button
-            type="button"
-            className="chat-node-quick-action nodrag"
-            onClick={onQuickCopy}
-            title={`Copy message ${index + 1}`}
-            aria-label={`Copy message ${index + 1}`}
-          >
-            <ConversationBubbleIcon name={copied ? "check" : "copy"} />
-          </button>
-          <button
-            type="button"
-            className="chat-node-quick-action nodrag"
-            onClick={() => onDeleteMessage(index)}
-            title={`Delete message ${index + 1} from history`}
-            aria-label={`Delete message ${index + 1} from history`}
-          >
-            <ConversationBubbleIcon name="trash" />
-          </button>
+          <IconButton size="sm" className="chat-node-quick-action nodrag"
+            icon={copied ? "check" : "copy"} label={`${copied ? "Copied" : "Copy"} message ${index + 1}`}
+            onClick={onQuickCopy} />
+          <IconButton size="sm" className="chat-node-quick-action nodrag"
+            icon="trash" label={`Delete message ${index + 1} from history`}
+            onClick={() => onDeleteMessage(index)} />
         </span>
       </div>
       {/* Reuses .chat-node-content's markdown-body rule set (headings,
@@ -479,46 +376,25 @@ function ConversationNodeViewImpl({ data, selected }: NodeProps<ConversationFlow
         )}
       </div>
       <div className="conversation-node-input-row">
-        <textarea
-          className="conversation-node-input"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+        <TextArea
+          className="conversation-node-input" label="Message" minRows={1} maxRows={4}
+          value={draft} onValueChange={setDraft}
           onKeyDown={(event) => {
-            // Enter-to-send / Shift+Enter-for-newline - same convention
-            // the existing Composer already uses (Composer.tsx's own
-            // onKeyDown handler), including the IME-composing guard: an
-            // IME's Enter-to-commit keystroke also reports
-            // key==="Enter", so without it, confirming a composed
-            // character sent the half-typed buffer.
             if (event.nativeEvent.isComposing) return;
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
               void send();
             }
           }}
-          placeholder="Send a message…"
-          aria-label="Message"
-          rows={1}
-          spellCheck
+          placeholder="Send a message…" spellCheck
         />
         <div className="conversation-node-input-actions">
-          <button
-            type="button"
-            className="conversation-node-send-btn"
-            disabled={!draft.trim() || sending || !!data.pendingRequestId || draft.trim().length > 16_000}
-            onClick={() => { void send(); }}
-          >
-            {sending ? "Sending…" : "Send"}
-          </button>
+          <IconButton size="sm" icon="send" label={sending ? "Sending…" : "Send"}
+            className="conversation-node-send-btn" disabled={!draft.trim() || sending || !!data.pendingRequestId || draft.trim().length > 16_000}
+            onClick={() => { void send(); }} />
           {data.pendingRequestId && (
-            <button
-              type="button"
-              className="conversation-node-cancel-btn"
-              onClick={() => data.onCancel()}
-              title="Cancel response"
-            >
-              Cancel
-            </button>
+            <Button size="sm" className="conversation-node-cancel-btn"
+              onClick={() => data.onCancel()}>Cancel</Button>
           )}
         </div>
       </div>

@@ -1,0 +1,91 @@
+/* Discuss in chat: a verified Scientific Workbench result as a compact card.
+   The headline box mirrors the Workbench node's own .science-result-highlight
+   so the source and the discussion read as the same result. */
+.chat-science-card {
+  display: grid;
+  gap: var(--gl-space-1-5);
+  min-width: 0;
+}
+
+.chat-science-card-source,
+.chat-science-card-receipt {
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.chat-science-card-title {
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.chat-science-card-highlight {
+  display: grid;
+  gap: var(--gl-space-0-5);
+  padding: var(--gl-space-1-5) var(--gl-space-2);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+}
+
+.chat-science-card-highlight span {
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-secondary);
+}
+
+.chat-science-card-highlight strong {
+  font-size: var(--gl-text-base);
+  line-height: 1.2;
+  color: var(--gl-surface-text-primary);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.chat-science-card-summary {
+  margin: 0;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.chat-science-card-receipt code {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+
+.chat-science-card-excerpt {
+  margin: 0;
+  padding: var(--gl-space-1-5) var(--gl-space-2);
+  border-left: 3px solid var(--gl-surface-border);
+  color: var(--gl-surface-text-secondary);
+  font-size: var(--gl-text-2xs);
+  line-height: 1.4;
+}
+
+.chat-science-card-sent {
+  padding-top: var(--gl-space-1-5);
+  border-top: 1px solid var(--gl-surface-border);
+  font-size: var(--gl-text-2xs);
+}
+
+.chat-science-card-sent summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--gl-surface-text-secondary);
+}
+
+.chat-science-card-sent pre {
+  max-height: 220px;
+  overflow: auto;
+  margin: var(--gl-space-1-5) 0 0;
+  padding: var(--gl-space-1-5) var(--gl-space-2);
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: var(--gl-text-2xs);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
+  border-radius: var(--gl-radius-sm);
+}
+

@@ -1,0 +1,35 @@
+/* -- R3.5/R3.6 code node --------------------------------------------------- */
+
+.chat-node,
+.code-node {
+  width: 420px;
+  /* No shell max-height: the shell is overflow-hidden, so a cap here
+     amputates the card bottom whenever header chrome plus the capped
+     content region outgrow it. Height is bounded by the content
+     region's own cap instead, so the bottom border always renders. */
+  min-height: 110px;
+}
+
+.code-node.collapsed {
+  width: 290px;
+  min-height: 58px;
+}
+
+.code-node-language {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  text-transform: lowercase;
+}
+
+.code-node-content {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.code-node-content > :first-child {
+  margin-top: 0;
+}
+
+.code-node-content > :last-child {
+  margin-bottom: 0;
+}
+

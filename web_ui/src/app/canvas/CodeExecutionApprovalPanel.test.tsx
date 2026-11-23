@@ -98,7 +98,7 @@ describe("CodeExecutionApprovalPanel", () => {
     renderPanel();
     const buttons = screen.getAllByRole("button");
     // The code block's copy control is an icon button; compare accessible names.
-    expect(buttons.map((b) => b.getAttribute("aria-label") || b.textContent)).toEqual(["Copy code", "Deny", "Approve"]);
+    expect(buttons.map((b) => b.getAttribute("aria-label") || b.textContent)).toEqual(["Copy code", "Deny", "Approve and run"]);
     expect(screen.queryByRole("button", { name: /close/i })).toBeNull();
     expect(screen.queryByLabelText(/close/i)).toBeNull();
   });
@@ -169,7 +169,7 @@ describe("CodeExecutionApprovalPanel", () => {
 
     expect(screen.getAllByRole("dialog")).toHaveLength(2);
 
-    const approveButtons = screen.getAllByRole("button", { name: "Approve" });
+    const approveButtons = screen.getAllByRole("button", { name: "Approve and run" });
     expect(approveButtons).toHaveLength(2);
     await user.click(approveButtons[0]);
     expect(nodeA.onApprove).toHaveBeenCalledOnce();
@@ -357,7 +357,7 @@ describe("CodeExecutionApprovalPanel", () => {
   it("Approve calls onApprove with NO arguments", async () => {
     const user = userEvent.setup();
     const { onApprove } = renderPanel();
-    await user.click(screen.getByRole("button", { name: "Approve" }));
+    await user.click(screen.getByRole("button", { name: "Approve and run" }));
     expect(onApprove).toHaveBeenCalledExactlyOnceWith();
   });
 
@@ -372,13 +372,13 @@ describe("CodeExecutionApprovalPanel", () => {
 
   it("both Approve and Deny are disabled while busy is true", () => {
     renderPanel({ busy: true });
-    expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Approve and run" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
   });
 
   it("both buttons are enabled when busy is false", () => {
     renderPanel({ busy: false });
-    expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Approve and run" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
   });
 

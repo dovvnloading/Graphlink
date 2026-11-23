@@ -15,6 +15,20 @@ import { useLodVisibility } from "./useLodVisibility";
 import { HarnessWorkspaceFiles } from "./AgentWorkspaceBrowser";
 import type { HarnessWorkspaceListing } from "./harnessWorkspaceFiles";
 import { MAX_HARNESS_TASK_LENGTH, exceedsHarnessTaskLimit } from "../../lib/harnessTaskLimit";
+import { Icon } from "../ui/icons/Icon";
+import { IconButton } from "../ui/IconButton";
+import { Button } from "../ui/Button";
+import { MenuItem } from "../ui/Menu";
+import { Select } from "../ui/Select";
+import { Checkbox } from "../ui/Checkbox";
+import { TextField } from "../ui/TextField";
+import { TextArea } from "../ui/TextArea";
+import { Tooltip } from "../ui/Tooltip";
+import { Badge, StatusPill } from "../ui/Badge";
+import { InlineAlert } from "../ui/InlineAlert";
+import { Disclosure } from "../ui/Disclosure";
+import { Spinner } from "../ui/Spinner";
+import { formatDuration, formatTokens } from "../ui/format";
 
 /**
  * PLAN-2026-08-24 H1: the workspace agent node. Everything rendered here
@@ -148,30 +162,10 @@ function HarnessNodeMenu({
 }) {
   return (
     <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onToggleCollapse();
-          onClose();
-        }}
-      >
-        {isCollapsed ? "Expand" : "Collapse"}
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="chat-node-menu-danger"
-        onClick={() => {
-          onDelete();
-          onClose();
-        }}
-      >
-        Delete Node
-      </button>
+      <MenuItem icon="minimize" label={isCollapsed ? "Expand" : "Collapse"} onSelect={onToggleCollapse} />
+      <MenuItem label="Delete node" destructive onSelect={onDelete} />
     </NodeMenu>
-  );
-}
+  );}
 
 /** Node settings are portaled to the document, not rendered inside the
  * transformed React Flow node. Otherwise fixed coordinates drift with zoom. */
@@ -257,10 +251,10 @@ function AgentSettingsPopover({
   }, [position.x, position.y, engine, hooks]);
 
   useEffect(() => {
-    panelRef.current?.querySelector<HTMLElement>("select:not([disabled])")?.focus();
+    panelRef.current?.querySelector<HTMLElement>(".gl-select-trigger:not([disabled])")?.focus();
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as HTMLElement;
-      if (panelRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
+      if (panelRef.current?.contains(target) || triggerRef.current?.contains(target) || target.closest(".gl-select-panel")) return;
       onClose();
     };
     const onKeyDown = (event: KeyboardEvent) => {
@@ -309,69 +303,38 @@ function AgentSettingsPopover({
     >
       <div className="harness-node-settings-heading">
         <strong>Agent settings</strong>
-        <button type="button" aria-label="Close agent settings" onClick={onClose}>×</button>
+        <IconButton size="sm" icon="close" label="Close agent settings" onClick={onClose} />
       </div>
-      <label className="harness-node-settings-field">
-        <span>Shell</span>
-        <select
-          className="nodrag nowheel"
-          aria-label="Shell"
-          value={selected}
-          disabled={!windows}
-          onChange={(event) => onSetShell(event.target.value)}
-        >
-          {windows ? (
-            <>
-              <option value="powershell">PowerShell (default)</option>
-              <option value="cmd">Command Prompt (cmd)</option>
-              <option value="git-bash">Git Bash</option>
-            </>
-          ) : (
-            <option value="bash">Bash (default)</option>
-          )}
-        </select>
-      </label>
-      <label className="harness-node-settings-field">
-        <span>Execution profile</span>
-        <select
-          className="nodrag nowheel"
-          aria-label="Execution profile"
+      <div className="harness-node-settings-field">
+        <Select label="Shell" className="nodrag nowheel" value={selected} disabled={!windows}
+          onChange={onSetShell} options={windows ? [
+            { value: "powershell", label: "PowerShell (default)" },
+            { value: "cmd", label: "Command Prompt (cmd)" },
+            { value: "git-bash", label: "Git Bash" },
+          ] : [{ value: "bash", label: "Bash (default)" }]} />
+      </div>
+      <div className="harness-node-settings-field">
+        <Select label="Execution profile" className="nodrag nowheel"
           value={profile === "isolated" ? "isolated" : "host"}
-          onChange={(event) => onSetExecutionProfile(event.target.value)}
-        >
-          <option value="host">Host (default)</option>
-          <option value="isolated" disabled={engine === null}>Isolated (Docker / Podman)</option>
-        </select>
-      </label>
-      <label className="harness-node-settings-field">
-        <span>Permission mode</span>
-        <select
-          className="nodrag nowheel"
-          aria-label="Permission mode"
-          value={permissionMode}
-          onChange={(event) => onSetPermissionMode(event.target.value)}
-        >
-          <option value="ask">Ask — approve each action</option>
-          <option value="auto_edit">Auto-edit — workspace file writes</option>
-          <option value="autonomous" disabled={profile !== "isolated"}>
-            Autonomous — Isolated only
-          </option>
-        </select>
-      </label>
+          onChange={(value) => onSetExecutionProfile(value)} options={[
+            { value: "host", label: "Host (default)" },
+            { value: "isolated", label: "Isolated (Docker / Podman)", disabled: engine === null },
+          ]} />
+      </div>
+      <div className="harness-node-settings-field">
+        <Select label="Permission mode" className="nodrag nowheel" value={permissionMode}
+          onChange={(value) => onSetPermissionMode(value)} options={[
+            { value: "ask", label: "Ask — approve each action" },
+            { value: "auto_edit", label: "Auto-edit — workspace file writes" },
+            { value: "autonomous", label: "Autonomous — Isolated only", disabled: profile !== "isolated" },
+          ]} />
+      </div>
       <p>Scripts, Python execution, dangerous commands, outside-workspace paths and network requests still ask. A looser mode takes effect on the next task. Reopening a graph resets permissions to Ask.</p>
-      <label className="harness-node-settings-field">
-        <span>
-          <input
-            type="checkbox"
-            className="nodrag"
-            aria-label="Allow network for every task"
-            checked={allowNetwork && permissionMode !== "autonomous"}
-            disabled={profile !== "isolated" || permissionMode === "autonomous"}
-            onChange={(event) => onSetNetworkAlways(event.target.checked)}
-          />
-          {" "}Allow network for every task
-        </span>
-      </label>
+      <Checkbox className="harness-node-settings-field nodrag"
+        label="Allow network for every task"
+        checked={allowNetwork && permissionMode !== "autonomous"}
+        disabled={profile !== "isolated" || permissionMode === "autonomous"}
+        onChange={(event) => onSetNetworkAlways(event.target.checked)} />
       {engine === undefined ? (
         <p role="status">Checking Docker / Podman availability…</p>
       ) : engine === null ? (
@@ -395,7 +358,7 @@ function AgentSettingsPopover({
               return (
                 <li key={rule}>
                   <span className="harness-node-allow-rule-text">
-                    <code title={command}>{command}</code>
+                    <Tooltip label={command}><code>{command}</code></Tooltip>
                     <small>{ruleShell} · {context}</small>
                   </span>
                   <button
@@ -432,41 +395,21 @@ function AgentSettingsPopover({
             <ul aria-label="Agent hooks">
               {hooks.map((hook, index) => (
                 <li key={index} className="harness-node-hook-row">
-                  <label className="harness-node-hook-enabled">
-                    <input
-                      type="checkbox"
-                      className="nodrag"
-                      aria-label={"Enable hook " + (index + 1)}
-                      checked={hook.enabled}
-                      onChange={(event) => changeHook(index, { enabled: event.target.checked })}
-                    />
-                    Enabled
-                  </label>
-                  <label className="harness-node-settings-field">
-                    <span>When</span>
-                    <select
-                      className="nodrag nowheel"
-                      aria-label={"Hook phase " + (index + 1)}
-                      value={hook.phase}
-                      onChange={(event) => changeHook(index, { phase: event.target.value as HarnessHook["phase"] })}
-                    >
-                      <option value="before_tool">Before tool (can block)</option>
-                      <option value="after_tool">After tool (adds note)</option>
-                      <option value="end_run">End of run</option>
-                    </select>
-                  </label>
-                  <label className="harness-node-settings-field">
-                    <span>Command</span>
-                    <input
-                      className="nodrag nowheel"
-                      type="text"
-                      maxLength={4000}
-                      aria-label={"Hook command " + (index + 1)}
-                      value={hook.command}
-                      onChange={(event) => changeHook(index, { command: event.target.value })}
-                      placeholder="Command to run in workspace"
-                    />
-                  </label>
+                  <Checkbox className="harness-node-hook-enabled nodrag"
+                    label={`Enable hook ${index + 1}`} checked={hook.enabled}
+                    onChange={(event) => changeHook(index, { enabled: event.target.checked })} />
+                  <Select className="harness-node-settings-field nodrag nowheel"
+                    label={`Hook phase ${index + 1}`} value={hook.phase}
+                    onChange={(value) => changeHook(index, { phase: value as HarnessHook["phase"] })}
+                    options={[
+                      { value: "before_tool", label: "Before tool (can block)" },
+                      { value: "after_tool", label: "After tool (adds note)" },
+                      { value: "end_run", label: "End of run" },
+                    ]} />
+                  <TextField className="harness-node-settings-field nodrag nowheel"
+                    label={`Hook command ${index + 1}`} maxLength={4000}
+                    value={hook.command} onValueChange={(value) => changeHook(index, { command: value })}
+                    placeholder="Command to run in workspace" />
                   <button
                     type="button"
                     className="harness-node-hook-remove nodrag"
@@ -610,11 +553,10 @@ function AgentModelTrigger({ store, name }: { store: ComposerStore; name: string
       aria-haspopup="dialog"
       aria-expanded={overlays.isOpen(name)}
       disabled={!composer.request.canSend}
-      title="Choose the model for the next Agent task"
       onClick={() => overlays.toggle(name, "popover")}
     >
       <span>{composer.route.modelLabel || composer.route.modelId || "Choose model"}</span>
-      <span aria-hidden="true">⌄</span>
+      <Icon name="chevron-down" size="sm" />
     </button>
   );
 }
@@ -632,14 +574,20 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
   const [answerDraft, setAnswerDraft] = useState("");
   const [submittedApprovalId, setSubmittedApprovalId] = useState("");
   const submittedApprovalRef = useRef("");
-  const denyButtonRef = useRef<HTMLButtonElement>(null);
   const approvalActionsRef = useRef<HTMLDivElement>(null);
   const flow = useReactFlow();
-  const activityDetailsRef = useRef<HTMLDetailsElement>(null);
+  // Derive the default open state during render; streaming events must not cause an extra commit.
+  const [activityChoice, setActivityChoice] = useState<{ runId: string; open: boolean } | null>(null);
+  const activityOpen = activityChoice?.runId === data.harnessRunId
+    ? activityChoice.open : running && data.harnessActivity.length > 0;
+  const setActivityOpen = (open: boolean) => setActivityChoice({ runId: data.harnessRunId, open });
   const activityListRef = useRef<HTMLDivElement>(null);
   const activityErrorCount = data.harnessActivity.filter((row) => row.outcome === "error").length;
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
   const [settingsPosition, setSettingsPosition] = useState<MenuPosition | null>(null);
+  // A nested Select's exit updates overlays; keep the close callback stable
+  // so the settings effect does not restore focus to its opener mid-edit.
+  const closeSettings = useCallback(() => setSettingsPosition(null), []);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
   const shellApproval = data.harnessApprovalToolName === "shell.exec";
   // Every human consent prompt carries a unique ID, not just Python, Web
@@ -697,7 +645,7 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
   useLayoutEffect(() => {
     if (data.harnessAwaitingApproval && !collapsed) {
       revealApprovalActions();
-      denyButtonRef.current?.focus({ preventScroll: true });
+      document.getElementById("harness-node-deny-approval")?.focus({ preventScroll: true });
     }
   }, [data.harnessAwaitingApproval, data.harnessApprovalId, collapsed, revealApprovalActions]);
 
@@ -717,30 +665,16 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
     return () => observer.disconnect();
   }, [data.harnessAwaitingApproval, data.harnessApprovalId, collapsed, revealApprovalActions]);
 
-  // "What is it doing?" is the question a running agent raises, and the
-  // answer was one click away behind a closed <details>. Opened once, on
-  // the first activity of a run - once only, so a deliberate collapse
-  // stays collapsed for the rest of that run instead of springing back
-  // open on the next tool call.
-  const autoOpenedForRun = useRef<string | null>(null);
-  useEffect(() => {
-    const details = activityDetailsRef.current;
-    if (!details || !running || data.harnessActivity.length === 0) return;
-    if (autoOpenedForRun.current === data.harnessRunId) return;
-    autoOpenedForRun.current = data.harnessRunId;
-    details.open = true;
-    // Opening the log changes the approval panel's vertical position AFTER
-    // its first layout pass. Recheck once against the new measured rect.
-    revealApprovalActions();
-  }, [data.harnessActivity.length, data.harnessRunId, running, revealApprovalActions]);
+  // A new run opens its activity naturally through the derived open state.
+  // A manual collapse remains closed until the run ID changes.
 
   // Same follow-the-log behavior as PlanNodeView's activity list: pinned
   // to the newest row only while running and only while open.
   useEffect(() => {
-    if (running && activityDetailsRef.current?.open) {
+    if (running && activityOpen) {
       activityListRef.current?.scrollTo({ top: activityListRef.current.scrollHeight });
     }
-  }, [data.harnessActivity, running]);
+  }, [data.harnessActivity, running, activityOpen]);
 
   async function sendDraft(): Promise<void> {
     const text = draft.trim();
@@ -784,29 +718,18 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
       }}
       header={
         <NodeHeading className="plan-node-title">
-          <span className="plan-node-badge">Agent</span>
+          <Badge className="plan-node-badge">Agent</Badge>
           <span className="plan-node-goal">{data.harnessGoal || "Untitled task"}</span>
           {modelStore && <AgentModelTrigger store={modelStore} name={modelPickerName} />}
-          <button
-            ref={settingsTriggerRef}
-            type="button"
+          <button ref={settingsTriggerRef} type="button"
             className="harness-node-settings-trigger nodrag"
-            aria-label="Agent settings"
-            title="Agent settings"
-            aria-haspopup="dialog"
-            aria-expanded={Boolean(settingsPosition)}
+            aria-label="Agent settings" aria-haspopup="dialog" aria-expanded={Boolean(settingsPosition)}
             onClick={(event) => {
               const rect = event.currentTarget.getBoundingClientRect();
               setMenuPosition(null);
               setSettingsPosition((current) => current ? null : { x: rect.left, y: rect.bottom + 4 });
-            }}
-          >
-            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-              strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M10 2h4l.6 2.4 2.1.9 2.2-1.2 2.8 2.8-1.2 2.2.9 2.1L24 12l-2.6.8-.9 2.1 1.2 2.2-2.8 2.8-2.2-1.2-2.1.9L14 22h-4l-.6-2.4-2.1-.9-2.2 1.2-2.8-2.8 1.2-2.2-.9-2.1L0 12l2.6-.8.9-2.1-1.2-2.2 2.8-2.8 2.2 1.2 2.1-.9z"
-                transform="translate(2 2) scale(.83)" />
-            </svg>
+            }}>
+            <Icon name="settings" size="sm" />
           </button>
           <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
         </NodeHeading>
@@ -841,7 +764,7 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
             onGetIsolationEngine={data.onGetIsolationEngine}
             onGetHooks={data.onGetHooks}
             onSetHooks={data.onSetHooks}
-            onClose={() => setSettingsPosition(null)}
+            onClose={closeSettings}
             triggerRef={settingsTriggerRef}
           />
         )}
@@ -851,7 +774,18 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
         </>
       }
     >
-      <div className={`plan-node-status ${statusClass(data)}`}>{statusLabel(data)}</div>
+      <div className={`plan-node-status ${statusClass(data)}`}>
+        {data.harnessStatus === "running" ? (
+          <span className="gl-status-pill" role="status" aria-label={statusLabel(data)}>
+            {data.harnessAwaitingApproval || data.harnessAwaitingQuestion
+              ? <Icon name="status-approval" size="sm" /> : <Spinner size={12} decorative />}
+            <span>{statusLabel(data)}</span>
+          </span>
+        ) : data.harnessStatus === "done" ? <StatusPill status="Done" />
+          : data.harnessStatus === "failed" ? <StatusPill status="Failed" />
+          : data.harnessAwaitingApproval ? <StatusPill status="Waiting for approval" />
+          : <Badge>{statusLabel(data)}</Badge>}
+      </div>
       {!running && !data.pendingRequestId && modelCapabilities?.tools === false && (
         <p className="harness-node-model-warning" role="status">
           {modelCapabilities.modelId} does not support tool calling.{" "}
@@ -877,42 +811,33 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
           means no run has bound this node since the folder was picked -
           nothing has been refused yet, so nothing is warned about. */}
       <div className="harness-node-workspace">
+        <Icon name="folder" size="sm" />
         {data.harnessWorkspacePath ? (
           <>
-            <span
-              className="harness-node-workspace-dir"
-              title={data.harnessWorkspacePath}
-            >
-              📁 {data.harnessWorkspacePath}
-              {!running &&
-                data.harnessWorkspaceActive !== "" &&
-                data.harnessWorkspaceActive !== data.harnessWorkspacePath &&
-                " (not trusted on this machine — using scratch)"}
-            </span>
-            <button
-              type="button"
-              className="plan-node-button nodrag"
-              onClick={data.onUseScratch}
-              disabled={running}
-              title={running ? WORKSPACE_LOCKED_HINT : undefined}
-            >
-              Use scratch
-            </button>
+            <Tooltip label={data.harnessWorkspacePath}>
+              <code className="harness-node-workspace-dir">
+                {data.harnessWorkspacePath}
+                {!running && data.harnessWorkspaceActive !== "" &&
+                  data.harnessWorkspaceActive !== data.harnessWorkspacePath &&
+                  " (not trusted on this machine — using scratch)"}
+              </code>
+            </Tooltip>
+            <Tooltip label={running ? WORKSPACE_LOCKED_HINT : "Use scratch workspace"}>
+              <Button size="sm" variant="ghost" className="nodrag"
+                onClick={data.onUseScratch} disabled={running}>Use scratch</Button>
+            </Tooltip>
           </>
         ) : (
           <>
-            <span className="harness-node-workspace-dir">Scratch workspace</span>
-            <button
-              type="button"
-              className="plan-node-button nodrag"
-              onClick={data.onPickWorkspace}
-              disabled={running}
-              title={running ? WORKSPACE_LOCKED_HINT : undefined}
-            >
-              Choose folder…
-            </button>
+            <code className="harness-node-workspace-dir">Scratch workspace</code>
+            <Tooltip label={running ? WORKSPACE_LOCKED_HINT : "Choose a workspace folder"}>
+              <Button size="sm" className="nodrag" onClick={data.onPickWorkspace}
+                disabled={running}>Choose folder…</Button>
+            </Tooltip>
           </>
         )}
+        <IconButton size="sm" icon="folder-open" className="nodrag"
+          label="Open workspace" onClick={data.onRevealWorkspace} />
       </div>
       <HarnessWorkspaceFiles
         key={data.harnessWorkspacePath}
@@ -933,18 +858,16 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
           Turns {data.harnessSpentTurns}
           {data.harnessMaxTurns > 0 ? ` (max ${data.harnessMaxTurns}/task)` : ""}
         </span>
-        <span>Tokens {data.harnessSpentTokens.toLocaleString()}</span>
+        <span>Tokens {formatTokens(data.harnessSpentTokens)}</span>
         {data.harnessMaxContextTokens > 0 && (
-          <span
-            title={
-              data.harnessCompactions > 0
-                ? `History summarized ${data.harnessCompactions} time${data.harnessCompactions === 1 ? "" : "s"} to stay within the context budget`
-                : "System prompt, tool schemas and retained history within the model's served context window"
-            }
-          >
-            Context {Math.min(100, Math.round((data.harnessContextTokens / data.harnessMaxContextTokens) * 100))}%
-            {data.harnessCompactions > 0 && ` · compacted ${data.harnessCompactions}×`}
-          </span>
+          <Tooltip label={data.harnessCompactions > 0
+            ? `History summarized ${data.harnessCompactions} times to stay within the context budget`
+            : "System prompt, tool schemas and retained history within the model’s served context window"}>
+            <span>
+              Context {Math.min(100, Math.round((data.harnessContextTokens / data.harnessMaxContextTokens) * 100))}%
+              {data.harnessCompactions > 0 && ` · compacted ${data.harnessCompactions}×`}
+            </span>
+          </Tooltip>
         )}
       </div>
 
@@ -961,7 +884,7 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
               className={`harness-node-plan-step harness-node-plan-step-${step.status}`}
             >
               <span className="harness-node-plan-marker" aria-hidden="true">
-                {step.status === "done" ? "✓" : step.status === "active" ? "▸" : "○"}
+                {step.status === "active" ? <Spinner size={12} decorative /> : <Icon size="sm" name={step.status === "done" ? "status-success" : "status-pending"} />}
               </span>
               <span className="harness-node-plan-text">{step.text}</span>
             </div>
@@ -970,108 +893,74 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
       )}
 
       {data.harnessActivity.length > 0 && (
-        <details className="chat-node-tool-invocations plan-node-activity" ref={activityDetailsRef}>
-          <summary>
-            {data.harnessActivity.length === 1
-              ? "1 activity entry"
-              : `${data.harnessActivity.length} activity entries`}
-            {activityErrorCount > 0 &&
-              ` · ${activityErrorCount} error${activityErrorCount === 1 ? "" : "s"}`}
-          </summary>
+        <Disclosure className="chat-node-tool-invocations plan-node-activity"
+          open={activityOpen} onOpenChange={setActivityOpen}
+          {...{ title: `${data.harnessActivity.length} activity ${data.harnessActivity.length === 1 ? "entry" : "entries"}${activityErrorCount ? ` · ${activityErrorCount} ${activityErrorCount === 1 ? "error" : "errors"}` : ""}` }}>
           <div className="plan-node-activity-list nowheel nodrag" ref={activityListRef}>
             {data.harnessActivity.map((row, index) => (
-              <div
-                key={index}
-                className={`chat-node-tool-invocation${row.outcome === "error" ? " error" : ""}`}
-              >
+              <div key={index} className={`chat-node-tool-invocation${row.outcome === "error" ? " error" : ""}`}>
                 <div className="chat-node-tool-invocation-name">
                   {row.tool}
                   <span className="plan-node-activity-elapsed">
                     {row.outcome === "running" ? "Running · " : row.outcome === "stopped" ? "Stopped · " : ""}
-                    {row.elapsedMs}ms
+                    {formatDuration(row.elapsedMs / 1000)}
                   </span>
                 </div>
                 <pre className="chat-node-tool-invocation-arguments">{row.summary}</pre>
               </div>
             ))}
           </div>
-        </details>
+        </Disclosure>
       )}
 
       {data.harnessAwaitingApproval && (
         <div className="plan-node-approval" role="group" aria-label="Agent tool approval">
-          <div className="plan-node-approval-title">
-            The agent wants to run: <code>{data.harnessApprovalToolName}</code>
-          </div>
-          <pre
-            className="plan-node-approval-summary nowheel nodrag"
-            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- the scrollable disclosure must be keyboard reachable, matching CodeExecutionApprovalPanel's code region
-            tabIndex={0}
-            role="region"
-            aria-label="Proposed tool call"
-          >{renderApprovalSummary(data.harnessApprovalSummary, data.harnessApprovalToolName)}</pre>
-          {previewUnavailable && (
-            <p role="alert" className="harness-approval-preview-warning">
-              This file change could not be previewed. Deny the request and ask the agent to retry.
-            </p>
-          )}
-          {shellApproval && data.harnessApprovalSessionOffered && (
-            <p className="harness-approval-allow-explanation">
-              Always allow remembers this exact command (including any chain) only for this agent, workspace, shell, and execution profile.
-            </p>
-          )}
+          <InlineAlert variant="warning"
+            {...{ title: `The agent wants to run: ${data.harnessApprovalToolName}` }}
+            body={<>
+              {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable summary must be keyboard-reachable */}
+              <pre className="plan-node-approval-summary nowheel nodrag" tabIndex={0}
+                role="region" aria-label="Proposed tool call">
+                {renderApprovalSummary(data.harnessApprovalSummary, data.harnessApprovalToolName)}
+              </pre>
+              {previewUnavailable && (
+                <span role="alert" className="harness-approval-preview-warning">
+                  This file change could not be previewed. Deny the request and ask the agent to retry.
+                </span>
+              )}
+              {shellApproval && data.harnessApprovalSessionOffered && (
+                <span className="harness-approval-allow-explanation">
+                  Always allow remembers this exact command (including any chain) only for this agent,
+                  workspace, shell, and execution profile.
+                </span>
+              )}
+            </>} />
           <div className="plan-node-approval-actions" ref={approvalActionsRef}>
             {data.harnessApprovalNetworkOffered ? (
               <>
-                <button
-                  type="button"
-                  className="plan-node-button nodrag"
-                  onClick={() => approveNetwork("once")}
-                  disabled={decisionPending}
-                >
-                  Allow network once
-                </button>
-                {data.harnessTaskPermissionMode !== "autonomous" && <button
-                  type="button"
-                  className="plan-node-button nodrag"
-                  onClick={() => approveNetwork("task")}
-                  disabled={decisionPending}
-                >
-                  Allow network for this task
-                </button>}
+                <Button size="sm" disabled={decisionPending}
+                  onClick={() => approveNetwork("once")}>Allow network once</Button>
+                {data.harnessTaskPermissionMode !== "autonomous" && (
+                  <Button size="sm" disabled={decisionPending} onClick={() => approveNetwork("task")}>
+                    Allow network for this task
+                  </Button>
+                )}
               </>
             ) : (
-              <button
-                type="button"
-                className="plan-node-button nodrag"
-                onClick={() => decideTool(true)}
-                disabled={decisionPending || previewUnavailable}
-              >
-                Approve once
-              </button>
+              <Button size="sm" variant="primary" disabled={decisionPending || previewUnavailable}
+                onClick={() => decideTool(true)}>Approve once</Button>
             )}
             {data.harnessApprovalSessionOffered && (sessionGrantTool || shellApproval) && !previewUnavailable && (
-              <button
-                type="button"
-                className="plan-node-button nodrag"
-                disabled={decisionPending}
-                onClick={() => decideTool(true, true)}
-                title={shellApproval
-                  ? "Remember this exact command in this workspace, shell, and execution profile"
-                  : "Stop asking for this tool for the rest of this agent's session"}
-              >
-                {shellApproval ? "Always allow" : "Always allow this tool"}
-              </button>
+              <Tooltip label={shellApproval
+                ? "Remember this exact command in this workspace, shell, and execution profile"
+                : "Stop asking for this tool for the rest of this agent’s session"}>
+                <Button size="sm" disabled={decisionPending} onClick={() => decideTool(true, true)}>
+                  {shellApproval ? "Always allow" : "Always allow this tool"}
+                </Button>
+              </Tooltip>
             )}
-            <button
-              type="button"
-              className="plan-node-button plan-node-button-deny nodrag"
-              onClick={() => decideTool(false)}
-              disabled={decisionPending}
-              ref={denyButtonRef}
-            >
-              Deny
-            </button>
+            <Button size="sm" id="harness-node-deny-approval" variant="secondary"
+              onClick={() => decideTool(false)} disabled={decisionPending}>Deny</Button>
           </div>
         </div>
       )}
@@ -1084,20 +973,15 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
           <div className="plan-node-approval-title">The agent is asking:</div>
           <pre className="plan-node-approval-summary">{data.harnessQuestion}</pre>
           <div className="harness-node-composer">
-            <textarea
-              className="harness-node-input nodrag nowheel"
-              placeholder="Type your answer…"
-              value={answerDraft}
-              rows={2}
-              aria-label="Answer to the agent's question"
-              onChange={(event) => setAnswerDraft(event.target.value)}
+            <TextArea className="harness-node-input nodrag nowheel"
+              label="Answer to the agent's question" minRows={2} maxRows={4}
+              placeholder="Type your answer…" value={answerDraft} onValueChange={setAnswerDraft}
               onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing) return;
                 if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  sendAnswer();
+                  event.preventDefault(); sendAnswer();
                 }
-              }}
-            />
+              }} />
             <div className="plan-node-approval-actions">
               <button
                 type="button"
@@ -1124,56 +1008,35 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
 
       {acceptsInput(data.harnessStatus) && (
         <div className="harness-node-composer">
-          <textarea
-            className="harness-node-input nodrag nowheel"
-            placeholder="Send a follow-up…"
-            value={draft}
-            rows={2}
-            aria-label="Follow-up message"
-            onChange={(event) => {
-              setDraft(event.target.value);
-              setDraftError("");
-            }}
+          <TextArea className="harness-node-input nodrag nowheel"
+            label="Follow-up message" minRows={2} maxRows={4}
+            placeholder="Send a follow-up…" value={draft}
+            onValueChange={(value) => { setDraft(value); setDraftError(""); }}
             onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing) return;
               if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                sendDraft();
+                event.preventDefault(); sendDraft();
               }
-            }}
-          />
-          <button
-            type="button"
-            className="plan-node-button plan-node-button-start nodrag"
+            }} />
+          <Button size="sm" variant="primary" iconStart="send"
             disabled={!draft.trim() || sending || Boolean(data.pendingRequestId)}
-            onClick={sendDraft}
-          >
-            Send
-          </button>
+            onClick={sendDraft}>Send</Button>
           {draftError && <p className="composer-agent-error" role="alert">{draftError}</p>}
         </div>
       )}
 
       {running && (
         <div className="plan-node-actions">
-          <button
-            type="button"
-            className="plan-node-button plan-node-button-stop nodrag"
-            onClick={data.onCancel}
-          >
-            Stop
-          </button>
+          <Button size="sm" variant="secondary" className="nodrag"
+            iconStart="stop" onClick={data.onCancel}>Stop</Button>
         </div>
       )}
       {!running && data.harnessRunId && UNDOABLE_RUN_STATUSES.has(data.harnessStatus) && (
         <div className="plan-node-actions">
-          <button
-            type="button"
-            className="plan-node-button plan-node-button-danger nodrag"
-            onClick={data.onUndoRun}
-            title="Undo canvas changes made by this run. Workspace files are not reverted."
-          >
-            Undo run
-          </button>
+          <Tooltip label="Undo canvas changes made by this run. Workspace files are not reverted.">
+            <Button size="sm" variant="secondary" className="nodrag"
+              iconStart="undo" onClick={data.onUndoRun}>Undo run</Button>
+          </Tooltip>
         </div>
       )}
     </NodeShell>

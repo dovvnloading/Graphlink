@@ -6,6 +6,8 @@ import { NodeMenu } from "./NodeMenu";
 import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
+import { Icon } from "../ui/icons/Icon";
+import { MenuGroup, MenuItem } from "../ui/Menu";
 
 /**
  * The thinking node (Qt-removal plan R3.13/R3.14) - graphlink_node_thinking.py's
@@ -66,58 +68,23 @@ function ThinkingNodeMenu({
 
   return (
     <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
-      {/* Order verified against graphlink_node_thinking_menu.py's own
-          construction order: Copy Content, Dock to Parent Node, Hide Other
-          Branches, Delete Node. */}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          // ADR-011 stage 11.1 (D11): a bare fire-and-forget clipboard write
-          // left this promise's rejection unhandled - same fix ImageNodeView's
-          // own Copy Image action already applies for its clipboard write.
+      <MenuGroup label="Edit">
+        <MenuItem icon="copy" label="Copy content" onSelect={() => {
           navigator.clipboard.writeText(thinkingText).catch((error: unknown) => {
-            console.error("[thinking-node] Copy Content failed:", error);
+            console.error("[thinking-node] Copy content failed:", error);
           });
-          onClose();
-        }}
-      >
-        Copy Content
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onDock();
-          onClose();
-        }}
-      >
-        Dock to Parent Node
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onToggleBranchFocus();
-          onClose();
-        }}
-      >
-        {isBranchFocusActive ? "Show All Branches" : "Hide Other Branches"}
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="chat-node-menu-danger"
-        onClick={() => {
-          onDelete();
-          onClose();
-        }}
-      >
-        Delete Node
-      </button>
+        }} />
+      </MenuGroup>
+      <MenuGroup label="Branch">
+        <MenuItem icon="eye-off" label={isBranchFocusActive ? "Show all branches" : "Hide other branches"}
+          onSelect={onToggleBranchFocus} />
+      </MenuGroup>
+      <MenuGroup label="Node">
+        <MenuItem icon="pin" label="Dock to parent node" onSelect={onDock} />
+      </MenuGroup>
+      <MenuItem label="Delete node" destructive onSelect={onDelete} />
     </NodeMenu>
-  );
-}
+  );}
 
 function ThinkingNodeViewImpl({ data, selected }: NodeProps<ThinkingFlowNode>) {
   const collapsed = useLodVisibility();
@@ -131,6 +98,7 @@ function ThinkingNodeViewImpl({ data, selected }: NodeProps<ThinkingFlowNode>) {
       onMenuChange={setMenuPosition}
       header={
         <NodeHeading className="thinking-node-label">
+          <Icon name="node-thinking" size="sm" />
           <span>Thinking</span>
         </NodeHeading>
       }

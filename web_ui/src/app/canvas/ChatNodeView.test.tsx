@@ -280,7 +280,7 @@ describe("ChatNodeView", () => {
     const actions = screen.getByRole("button", { name: "Node actions" });
     await user.click(actions);
     expect(actions).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("menuitem", { name: "Copy Text" })).toHaveFocus();
+    expect(screen.getByRole("menuitem", { name: "Copy text" })).toHaveFocus();
     await user.click(actions);
     expect(screen.queryByRole("menu")).toBeNull();
     expect(actions).toHaveFocus();
@@ -308,10 +308,10 @@ describe("ChatNodeView", () => {
     fireEvent.contextMenu(role);
     expect(screen.getByRole("menu")).toBeInTheDocument();
 
-    expect(screen.getByRole("menuitem", { name: "Export" })).not.toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: "Export…" })).not.toBeDisabled();
     // R8a: no longer a disabled stub - see the dedicated Hide Other Branches
     // describe block below for its data-driven-label behavior.
-    const hideBranches = screen.getByRole("menuitem", { name: "Hide Other Branches" });
+    const hideBranches = screen.getByRole("menuitem", { name: "Hide other branches" });
     expect(hideBranches).not.toBeDisabled();
     expect(hideBranches).not.toHaveAttribute("title");
     // R8a: these three were disabled stubs until their agents/panel were
@@ -320,22 +320,23 @@ describe("ChatNodeView", () => {
     // assertion is deliberately inverted rather than removed - it was the
     // guard that encoded the stub as correct, so it has to now encode the
     // opposite.
-    const docView = screen.getByRole("menuitem", { name: "Open Document View" });
+    const docView = screen.getByRole("menuitem", { name: "Open in Document View" });
     expect(docView).not.toBeDisabled();
     expect(docView).not.toHaveAttribute("title");
-    for (const name of ["Generate Key Takeaway", "Generate Explainer Note"]) {
+    await user.click(screen.getByRole("menuitem", { name: "Generate" }));
+    for (const name of ["Key takeaway", "Explainer note"]) {
       const item = screen.getByRole("menuitem", { name });
       expect(item).not.toBeDisabled();
       expect(item).not.toHaveAttribute("title");
     }
-    expect(screen.getByRole("menuitem", { name: "Generate Image" })).not.toBeDisabled();
-    expect(screen.getByRole("menuitem", { name: "Generate Chart" })).not.toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: "Image" })).not.toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: "Chart" })).not.toBeDisabled();
 
-    await user.click(screen.getByRole("menuitem", { name: "Copy Text" }));
+    await user.click(screen.getByRole("menuitem", { name: "Copy text" }));
     expect(writeText).toHaveBeenCalledWith("Hello **world**");
 
     fireEvent.contextMenu(role);
-    await user.click(screen.getByRole("menuitem", { name: "Delete Node" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete node" }));
     expect(onDelete).toHaveBeenCalledOnce();
   });
 
@@ -351,7 +352,7 @@ describe("ChatNodeView", () => {
       });
 
     fireEvent.contextMenu(screen.getByText("You"));
-    await user.click(screen.getByRole("menuitem", { name: "Export" }));
+    await user.click(screen.getByRole("menuitem", { name: "Export…" }));
 
     await waitFor(() => expect(clickSpy).toHaveBeenCalled());
     expect(URL.createObjectURL).toHaveBeenCalled();
@@ -366,7 +367,7 @@ describe("ChatNodeView", () => {
   it("Regenerate Response only appears for assistant messages, matching the legacy is_user guard", () => {
     renderChatNode({ isUser: true });
     fireEvent.contextMenu(screen.getByText("You"));
-    expect(screen.queryByRole("menuitem", { name: "Regenerate Response" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Regenerate response" })).toBeNull();
   });
 
   it("Regenerate Response is a real, enabled item for an assistant message that calls onRegenerate then closes the menu", async () => {
@@ -374,7 +375,7 @@ describe("ChatNodeView", () => {
     const { onRegenerate } = renderChatNode({ isUser: false });
 
     fireEvent.contextMenu(screen.getByText("Assistant"));
-    const regenerate = screen.getByRole("menuitem", { name: "Regenerate Response" });
+    const regenerate = screen.getByRole("menuitem", { name: "Regenerate response" });
     expect(regenerate).not.toBeDisabled();
 
     await user.click(regenerate);
@@ -387,7 +388,7 @@ describe("ChatNodeView", () => {
     const { onSelectVersion, onCompareVersions, rerenderWithData } = renderChatNode({
       isUser: false, versionCount: 3, versionIndex: 1,
     });
-    expect(screen.getByLabelText("Message versions")).toHaveTextContent("2/3");
+    expect(screen.getByLabelText("Message versions")).toHaveTextContent("2 of 3");
     await user.click(screen.getByRole("button", { name: "Previous version" }));
     expect(onSelectVersion).toHaveBeenLastCalledWith(0);
     await user.click(screen.getByRole("button", { name: "Next version" }));
@@ -412,7 +413,8 @@ describe("ChatNodeView", () => {
     const { onGenerateImage } = renderChatNode({ isUser: true });
 
     fireEvent.contextMenu(screen.getByText("You"));
-    const generateImage = screen.getByRole("menuitem", { name: "Generate Image" });
+    await user.click(screen.getByRole("menuitem", { name: "Generate" }));
+    const generateImage = screen.getByRole("menuitem", { name: "Image" });
     expect(generateImage).not.toBeDisabled();
 
     await user.click(generateImage);
@@ -425,7 +427,7 @@ describe("ChatNodeView", () => {
     const { onOpenDocumentView } = renderChatNode({ isUser: false });
 
     fireEvent.contextMenu(screen.getByText("Assistant"));
-    await user.click(screen.getByRole("menuitem", { name: "Open Document View" }));
+    await user.click(screen.getByRole("menuitem", { name: "Open in Document View" }));
 
     expect(onOpenDocumentView).toHaveBeenCalledOnce();
     expect(screen.queryByRole("menu")).toBeNull();
@@ -436,7 +438,8 @@ describe("ChatNodeView", () => {
     const { onGenerateKeyTakeaway, onGenerateExplainerNote } = renderChatNode({ isUser: false });
 
     fireEvent.contextMenu(screen.getByText("Assistant"));
-    await user.click(screen.getByRole("menuitem", { name: "Generate Key Takeaway" }));
+    await user.click(screen.getByRole("menuitem", { name: "Generate" }));
+    await user.click(screen.getByRole("menuitem", { name: "Key takeaway" }));
 
     expect(onGenerateKeyTakeaway).toHaveBeenCalledOnce();
     // The two sit adjacent in the menu - assert the other one did NOT fire,
@@ -450,27 +453,31 @@ describe("ChatNodeView", () => {
     const { onGenerateExplainerNote, onGenerateKeyTakeaway } = renderChatNode({ isUser: false });
 
     fireEvent.contextMenu(screen.getByText("Assistant"));
-    await user.click(screen.getByRole("menuitem", { name: "Generate Explainer Note" }));
+    await user.click(screen.getByRole("menuitem", { name: "Generate" }));
+    await user.click(screen.getByRole("menuitem", { name: "Explainer note" }));
 
     expect(onGenerateExplainerNote).toHaveBeenCalledOnce();
     expect(onGenerateKeyTakeaway).not.toHaveBeenCalled();
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  it("both note agents are offered on a USER node too, matching legacy's unconditional enablement", () => {
+  it("both note agents are offered on a user node too", async () => {
+    const user = userEvent.setup();
     renderChatNode({ isUser: true });
     fireEvent.contextMenu(screen.getByText("You"));
-    expect(screen.getByRole("menuitem", { name: "Generate Key Takeaway" })).not.toBeDisabled();
-    expect(screen.getByRole("menuitem", { name: "Generate Explainer Note" })).not.toBeDisabled();
+    await user.click(screen.getByRole("menuitem", { name: "Generate" }));
+    expect(screen.getByRole("menuitem", { name: "Key takeaway" })).not.toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: "Explainer note" })).not.toBeDisabled();
   });
 
-  it("Generate Chart is a real, enabled item with aria-haspopup that starts collapsed (no submenu items in the DOM yet)", () => {
+  it("Chart is an accessible submenu that starts collapsed", async () => {
+    const user = userEvent.setup();
     renderChatNode({ isUser: true });
     fireEvent.contextMenu(screen.getByText("You"));
-
-    const generateChart = screen.getByRole("menuitem", { name: "Generate Chart" });
+    await user.click(screen.getByRole("menuitem", { name: "Generate" }));
+    const generateChart = screen.getByRole("menuitem", { name: "Chart" });
     expect(generateChart).not.toBeDisabled();
-    expect(generateChart).toHaveAttribute("aria-haspopup", "true");
+    expect(generateChart).toHaveAttribute("aria-haspopup", "menu");
     expect(generateChart).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("menuitem", { name: "Bar" })).toBeNull();
   });
@@ -480,10 +487,11 @@ describe("ChatNodeView", () => {
     renderChatNode({ isUser: true });
     fireEvent.contextMenu(screen.getByText("You"));
 
-    await user.click(screen.getByRole("menuitem", { name: "Generate Chart" }));
-    expect(screen.getByRole("menuitem", { name: "Generate Chart" })).toHaveAttribute("aria-expanded", "true");
+    await user.click(screen.getByRole("menuitem", { name: "Generate" }));
+    await user.click(screen.getByRole("menuitem", { name: "Chart" }));
+    expect(screen.getByRole("menuitem", { name: "Chart" })).toHaveAttribute("aria-expanded", "true");
 
-    const submenu = screen.getByRole("menu", { name: "Chart type" });
+    const submenu = screen.getByRole("menu", { name: "Chart" });
     const optionNames = Array.from(submenu.querySelectorAll('[role="menuitem"]')).map((el) => el.textContent);
     expect(optionNames).toEqual(["Bar", "Line", "Histogram", "Pie", "Sankey"]);
   });
@@ -493,15 +501,16 @@ describe("ChatNodeView", () => {
     const { onGenerateChart } = renderChatNode({ isUser: true });
     fireEvent.contextMenu(screen.getByText("You"));
 
-    await user.click(screen.getByRole("menuitem", { name: "Generate Chart" }));
+    await user.click(screen.getByRole("menuitem", { name: "Generate" }));
+    await user.click(screen.getByRole("menuitem", { name: "Chart" }));
     await user.click(screen.getByRole("menuitem", { name: "Sankey" }));
 
     expect(onGenerateChart).toHaveBeenCalledOnce();
     expect(onGenerateChart).toHaveBeenCalledWith("sankey");
-    expect(screen.queryByRole("menu", { name: "Chart type" })).toBeNull();
+    expect(screen.queryByRole("menu", { name: "Chart" })).toBeNull();
     // The outer context menu also closed (onClose fires after onGenerateChart,
     // same as every other real menu action in this file).
-    expect(screen.queryByRole("menuitem", { name: "Copy Text" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Copy text" })).toBeNull();
   });
 
   it("Escape and outside-click both close the menu", async () => {
@@ -522,7 +531,7 @@ describe("ChatNodeView", () => {
 
   it("hides the docked-count badge when dockedChildren is empty (the default)", () => {
     renderChatNode();
-    expect(screen.queryByTitle("Docked items")).toBeNull();
+    expect(screen.queryByLabelText("Docked items")).toBeNull();
   });
 
   it("shows the docked-count badge with the correct count when dockedChildren has entries", () => {
@@ -532,13 +541,13 @@ describe("ChatNodeView", () => {
         { id: "t2", label: "Thinking" },
       ],
     });
-    expect(screen.getByTitle("Docked items")).toHaveTextContent("2");
+    expect(screen.getByLabelText("Docked items")).toHaveTextContent("2");
   });
 
   it("omits the 'Reveal Docked Items' menu section entirely when dockedChildren is empty", () => {
     renderChatNode();
     fireEvent.contextMenu(screen.getByText("You"));
-    expect(screen.queryByText("Reveal Docked Items")).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Reveal docked items" })).toBeNull();
   });
 
   it("shows one labeled 'Reveal Docked Items' entry per docked child, and clicking one calls onUndockChild with its id", async () => {
@@ -551,7 +560,11 @@ describe("ChatNodeView", () => {
     });
 
     fireEvent.contextMenu(screen.getByText("You"));
-    expect(screen.getByText("Reveal Docked Items")).toBeInTheDocument();
+    const reveal = screen.getByRole("menuitem", { name: "Reveal docked items" });
+    expect(reveal).toHaveAttribute("aria-haspopup", "menu");
+    expect(reveal).toHaveAttribute("aria-expanded", "false");
+    await user.click(reveal);
+    expect(reveal).toHaveAttribute("aria-expanded", "true");
     const entries = screen.getAllByRole("menuitem", { name: "Thinking" });
     expect(entries).toHaveLength(2);
 
@@ -572,7 +585,7 @@ describe("ChatNodeView Hide Other Branches / Show All Branches (R8a)", () => {
     const { onToggleBranchFocus } = renderChatNode({ isBranchFocusActive: false });
 
     fireEvent.contextMenu(screen.getByText("You"));
-    const item = screen.getByRole("menuitem", { name: "Hide Other Branches" });
+    const item = screen.getByRole("menuitem", { name: "Hide other branches" });
     expect(item).not.toBeDisabled();
 
     await user.click(item);
@@ -585,8 +598,8 @@ describe("ChatNodeView Hide Other Branches / Show All Branches (R8a)", () => {
     const { onToggleBranchFocus } = renderChatNode({ isBranchFocusActive: true });
 
     fireEvent.contextMenu(screen.getByText("You"));
-    expect(screen.queryByRole("menuitem", { name: "Hide Other Branches" })).toBeNull();
-    const item = screen.getByRole("menuitem", { name: "Show All Branches" });
+    expect(screen.queryByRole("menuitem", { name: "Hide other branches" })).toBeNull();
+    const item = screen.getByRole("menuitem", { name: "Show all branches" });
     expect(item).not.toBeDisabled();
 
     await user.click(item);
@@ -595,7 +608,7 @@ describe("ChatNodeView Hide Other Branches / Show All Branches (R8a)", () => {
   });
 });
 
-// ADR-002 Workstream 1: "Branch from Here" - stages this node as the
+// ADR-002 Workstream 1: "Branch from here" - stages this node as the
 // composer's next reply target instead of creating anything itself; the
 // actual fork happens server-side once the user sends a message.
 describe("ChatNodeView Branch from Here (ADR-002 Workstream 1)", () => {
@@ -604,7 +617,7 @@ describe("ChatNodeView Branch from Here (ADR-002 Workstream 1)", () => {
     const { onBranchFromHere } = renderChatNode({ isUser: true });
 
     fireEvent.contextMenu(screen.getByText("You"));
-    const item = screen.getByRole("menuitem", { name: "Branch from Here" });
+    const item = screen.getByRole("menuitem", { name: "Branch from here" });
     expect(item).not.toBeDisabled();
 
     await user.click(item);
@@ -617,7 +630,7 @@ describe("ChatNodeView Branch from Here (ADR-002 Workstream 1)", () => {
     const { onBranchFromHere } = renderChatNode({ isUser: false });
 
     fireEvent.contextMenu(screen.getByText("Assistant"));
-    const item = screen.getByRole("menuitem", { name: "Branch from Here" });
+    const item = screen.getByRole("menuitem", { name: "Branch from here" });
 
     await user.click(item);
     expect(onBranchFromHere).toHaveBeenCalledOnce();
@@ -639,7 +652,7 @@ describe("ChatNodeView Discuss in chat result card", () => {
     renderChatNode({ isUser: true, content: snapshot, scienceReference: reference });
     const card = screen.getByRole("region", { name: "Scientific result: Standard curves and diluted unknowns" });
     expect(card).toHaveTextContent("Plate Assays · Scientific Workbench");
-    expect(screen.getByTitle("r_squared")).toHaveTextContent("R squared");
+    expect(screen.getByText("R squared")).toHaveTextContent("R squared");
     expect(card).toHaveTextContent("0.999984");
     expect(card).toHaveTextContent("2 of 2 unknowns quantified");
     expect(screen.getByText(/Verified snapshot/)).toHaveTextContent("Verified snapshot · receipt 2bc26741");
@@ -647,9 +660,9 @@ describe("ChatNodeView Discuss in chat result card", () => {
     // The raw snapshot is not the visible message body.
     expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
     const sent = screen.getByText("Data sent to the model");
-    expect(sent.closest("details")).not.toHaveAttribute("open");
+    expect(sent.closest("button")).toHaveAttribute("aria-expanded", "false");
     await user.click(sent);
-    expect(sent.closest("details")).toHaveAttribute("open");
+    expect(sent.closest("button")).toHaveAttribute("aria-expanded", "true");
     expect(card.querySelector("pre")).toHaveTextContent("Result JSON:");
   });
 
@@ -664,7 +677,7 @@ describe("ChatNodeView Discuss in chat result card", () => {
       ...reference, headlineKey: "distance_m", headlineValueJson: "120",
       headlineContextJson: JSON.stringify(context),
     } });
-    const highlight = screen.getByTitle("distance_m").parentElement;
+    const highlight = screen.getByText("Distance m").parentElement;
     expect(highlight).toHaveTextContent("120 ± 2.5 m");
     expect(screen.getByText(/Verified snapshot/)).toBeVisible();
   });
@@ -677,7 +690,7 @@ describe("ChatNodeView Discuss in chat result card", () => {
         uncertainty: { unsupportedOutputs: { distance_m: "nonlinear output" } },
       }),
     } });
-    expect(screen.getByTitle("distance_m").parentElement).toHaveTextContent("120 · uncertainty unavailable");
+    expect(screen.getByText("Distance m").parentElement).toHaveTextContent("120 · uncertainty unavailable");
   });
 
   it("also formats native standard errors and unit-suffixed outputs like the Workbench", () => {
@@ -687,7 +700,7 @@ describe("ChatNodeView Discuss in chat result card", () => {
         values: { distance_m: 7.5, distance_m_standard_error: 0.25 },
       }),
     } });
-    expect(screen.getByTitle("distance_m").parentElement).toHaveTextContent("7.5 ± 0.25 m");
+    expect(screen.getByText("Distance m").parentElement).toHaveTextContent("7.5 ± 0.25 m");
   });
 
   it("warns visibly when a large result sent only excerpts to the model", async () => {
@@ -705,15 +718,15 @@ describe("ChatNodeView Discuss in chat result card", () => {
     expect(warning).toHaveTextContent("source Workbench");
     const disclosure = screen.getByText("Data sent to the model");
     await user.click(disclosure);
-    expect(disclosure.closest("details")?.querySelector("pre")).toHaveTextContent("table (excerpt)");
-    expect(disclosure.closest("details")?.querySelector("pre")).toHaveTextContent("truncated from 45000");
+    expect(disclosure.closest(".gl-disclosure")?.querySelector("pre")).toHaveTextContent("table (excerpt)");
+    expect(disclosure.closest(".gl-disclosure")?.querySelector("pre")).toHaveTextContent("truncated from 45000");
   });
 
   it("omits the headline when the operation declares none and keeps ordinary messages unchanged", () => {
     const { rerenderWithData } = renderChatNode({
       isUser: true, content: snapshot, scienceReference: { ...reference, headlineKey: "", headlineValueJson: "" },
     });
-    expect(screen.queryByTitle("r_squared")).toBeNull();
+    expect(screen.queryByText("R squared")).toBeNull();
     expect(screen.getByRole("region", { name: /Scientific result/ })).toHaveTextContent("2 of 2 unknowns quantified");
     rerenderWithData({ isUser: true, content: "Hello **world**", scienceReference: null });
     expect(screen.queryByRole("region", { name: /Scientific result/ })).toBeNull();
@@ -745,8 +758,8 @@ describe("ChatNodeView Synthesize Branches provenance (ADR-002 Workstream 1)", (
       model: "claude-sonnet-5",
     });
     const badge = screen.getByLabelText("Branch Synthesis");
-    expect(badge).toHaveTextContent("⇄");
-    expect(badge).toHaveAttribute("title", "Branch Synthesis (2 sources): merge the best of both");
+    expect(badge).toHaveTextContent("Synthesis");
+    expect(badge.querySelector("svg")).not.toBeNull();
   });
 
   it("renders the model label with the provider as its tooltip, only when model is set", () => {
@@ -757,7 +770,7 @@ describe("ChatNodeView Synthesize Branches provenance (ADR-002 Workstream 1)", (
       provider: "Anthropic Claude",
       model: "claude-sonnet-5",
     });
-    expect(screen.getByText("claude-sonnet-5")).toHaveAttribute("title", "Anthropic Claude");
+    expect(screen.getByText("claude-sonnet-5")).toBeInTheDocument();
   });
 
   it("renders no model label when model is null, even if isBranchSynthesis is true", () => {
@@ -793,8 +806,8 @@ describe("ChatNodeView recorded model-routing disclosure", () => {
     const changePin = screen.getByRole("menuitem", { name: "Change node pin" });
     expect(changePin).toHaveFocus();
     await user.click(changePin);
-    expect(screen.getByRole("menuitem", { name: "Pin to Current Model" })).toBeInTheDocument();
-    await user.click(screen.getByRole("menuitem", { name: "Pin to Current Model" }));
+    expect(screen.getByRole("menuitem", { name: "Pin to current model" })).toBeInTheDocument();
+    await user.click(screen.getByRole("menuitem", { name: "Pin to current model" }));
     expect(onPinToCurrentModel).toHaveBeenCalledOnce();
   });
 
@@ -843,16 +856,16 @@ describe("ChatNodeView recorded model-routing disclosure", () => {
 describe("ChatNodeView model-override pin (ADR-018 stage 18.3)", () => {
   it("renders no pin badge or Clear Model Pin item for an ordinary node", () => {
     renderChatNode({ overrideProvider: "", overrideModelId: "" });
-    expect(screen.queryByText(/📌/)).toBeNull();
+    expect(document.querySelector(".chat-node-model-override-badge")).toBeNull();
     fireEvent.contextMenu(screen.getByText("You"));
-    expect(screen.queryByRole("menuitem", { name: /Clear Model Pin/ })).toBeNull();
-    expect(screen.getByRole("menuitem", { name: "Pin to Current Model" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /Clear model pin/ })).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Pin to current model" })).toBeInTheDocument();
   });
 
   it("renders the pin badge with the full provider/model as its tooltip", () => {
     renderChatNode({ overrideProvider: "Anthropic Claude", overrideModelId: "claude-opus-5" });
-    const badge = screen.getByText("📌 claude-opus-5");
-    expect(badge).toHaveAttribute("title", "Pinned to Anthropic Claude - claude-opus-5");
+    const badge = screen.getByText("claude-opus-5");
+    expect(badge.closest(".chat-node-model-override-badge")).not.toBeNull();
   });
 
   it("co-renders the pin badge alongside the provenance model badge - they are distinct signals", () => {
@@ -861,7 +874,7 @@ describe("ChatNodeView model-override pin (ADR-018 stage 18.3)", () => {
       overrideProvider: "Anthropic Claude", overrideModelId: "claude-opus-5",
     });
     expect(screen.getByText("gpt-4o")).toBeInTheDocument();
-    expect(screen.getByText("📌 claude-opus-5")).toBeInTheDocument();
+    expect(screen.getByText("claude-opus-5")).toBeInTheDocument();
   });
 
   it("Pin to Current Model calls onPinToCurrentModel and closes the menu", async () => {
@@ -869,7 +882,7 @@ describe("ChatNodeView model-override pin (ADR-018 stage 18.3)", () => {
     const { onPinToCurrentModel } = renderChatNode();
 
     fireEvent.contextMenu(screen.getByText("You"));
-    await user.click(screen.getByRole("menuitem", { name: "Pin to Current Model" }));
+    await user.click(screen.getByRole("menuitem", { name: "Pin to current model" }));
 
     expect(onPinToCurrentModel).toHaveBeenCalledOnce();
     expect(screen.queryByRole("menu")).toBeNull();
@@ -882,7 +895,7 @@ describe("ChatNodeView model-override pin (ADR-018 stage 18.3)", () => {
     });
 
     fireEvent.contextMenu(screen.getByText("You"));
-    const item = screen.getByRole("menuitem", { name: "Clear Model Pin (claude-opus-5)" });
+    const item = screen.getByRole("menuitem", { name: "Clear model pin (claude-opus-5)" });
     await user.click(item);
 
     expect(onClearModelOverride).toHaveBeenCalledOnce();
@@ -907,7 +920,7 @@ describe("ChatNodeView branch status badge (ADR-002 Workstream 1)", () => {
       rerenderWithData({ branchStatus: status });
       const badge = screen.getByRole("status", { name: `Branch status: ${status}` });
       expect(badge).toHaveTextContent(label);
-      expect(badge).toHaveAttribute("title", `Branch status: ${status}`);
+      expect(badge.querySelector("svg")).not.toBeNull();
     }
   });
 
@@ -919,7 +932,8 @@ describe("ChatNodeView branch status badge (ADR-002 Workstream 1)", () => {
   it("renders the Final Deliverable badge when isFinalDeliverable is true", () => {
     renderChatNode({ isFinalDeliverable: true });
     const badge = screen.getByLabelText("Final Deliverable");
-    expect(badge).toHaveTextContent("★");
+    expect(badge).toHaveTextContent("Final deliverable");
+    expect(badge.querySelector("svg")).not.toBeNull();
   });
 });
 
@@ -929,10 +943,10 @@ describe("ChatNodeView Mark Status menu (ADR-002 Workstream 1)", () => {
     renderChatNode({ branchStatus: "rejected" });
 
     fireEvent.contextMenu(screen.getByText("You"));
-    await user.click(screen.getByRole("menuitem", { name: "Mark Status" }));
+    await user.click(screen.getByRole("menuitem", { name: "Mark status" }));
 
     expect(screen.getByRole("menuitemradio", { name: "Active" })).toHaveAttribute("aria-checked", "false");
-    const rejectedOption = screen.getByRole("menuitemradio", { name: "✓ Rejected" });
+    const rejectedOption = screen.getByRole("menuitemradio", { name: "Rejected" });
     expect(rejectedOption).toHaveAttribute("aria-checked", "true");
   });
 
@@ -941,7 +955,7 @@ describe("ChatNodeView Mark Status menu (ADR-002 Workstream 1)", () => {
     const { onSetBranchStatus } = renderChatNode({ branchStatus: "active" });
 
     fireEvent.contextMenu(screen.getByText("You"));
-    await user.click(screen.getByRole("menuitem", { name: "Mark Status" }));
+    await user.click(screen.getByRole("menuitem", { name: "Mark status" }));
     await user.click(screen.getByRole("menuitemradio", { name: "Accepted" }));
 
     expect(onSetBranchStatus).toHaveBeenCalledWith("accepted");
@@ -955,7 +969,7 @@ describe("ChatNodeView Mark as Final Deliverable (ADR-002 Workstream 1)", () => 
     const { onSetFinalDeliverable } = renderChatNode({ isFinalDeliverable: false });
 
     fireEvent.contextMenu(screen.getByText("You"));
-    const item = screen.getByRole("menuitem", { name: "Mark as Final Deliverable" });
+    const item = screen.getByRole("menuitem", { name: "Mark as final deliverable" });
     await user.click(item);
 
     expect(onSetFinalDeliverable).toHaveBeenCalledWith(true);
@@ -966,7 +980,7 @@ describe("ChatNodeView Mark as Final Deliverable (ADR-002 Workstream 1)", () => 
     const { onSetFinalDeliverable } = renderChatNode({ isFinalDeliverable: true });
 
     fireEvent.contextMenu(screen.getByText("You"));
-    const item = screen.getByRole("menuitem", { name: "Unmark Final Deliverable" });
+    const item = screen.getByRole("menuitem", { name: "Unmark final deliverable" });
     await user.click(item);
 
     expect(onSetFinalDeliverable).toHaveBeenCalledWith(false);
@@ -979,7 +993,7 @@ describe("ChatNodeView Collapse Branch (ADR-002 Workstream 1)", () => {
     const { onCollapseBranch } = renderChatNode({ isCollapsed: false });
 
     fireEvent.contextMenu(screen.getByText("You"));
-    const item = screen.getByRole("menuitem", { name: "Collapse Branch" });
+    const item = screen.getByRole("menuitem", { name: "Collapse branch" });
     await user.click(item);
 
     expect(onCollapseBranch).toHaveBeenCalledWith(true);
@@ -990,7 +1004,7 @@ describe("ChatNodeView Collapse Branch (ADR-002 Workstream 1)", () => {
     const { onCollapseBranch } = renderChatNode({ isCollapsed: true });
 
     fireEvent.contextMenu(screen.getByText("You"));
-    const item = screen.getByRole("menuitem", { name: "Expand Branch" });
+    const item = screen.getByRole("menuitem", { name: "Expand branch" });
     await user.click(item);
 
     expect(onCollapseBranch).toHaveBeenCalledWith(false);
@@ -1016,12 +1030,12 @@ describe("ChatNodeView role labels and quick actions", () => {
     renderChatNode({ content: "Hello **world**" });
 
     const copyBtn = screen.getByRole("button", { name: "Copy text" });
-    expect(copyBtn.querySelector("path")).toBeNull(); // rest state: the copy glyph is two rects, no path
+    expect(screen.queryByRole("button", { name: "Copied" })).toBeNull();
 
     await user.click(copyBtn);
 
     expect(writeText).toHaveBeenCalledWith("Hello **world**");
-    await waitFor(() => expect(copyBtn.querySelector("path")).not.toBeNull()); // check glyph flashed
+    await waitFor(() => expect(screen.getByRole("button", { name: "Copied" })).toBe(copyBtn));
   });
 
   it("the quick-action Branch from Here button calls onBranchFromHere directly, without opening the card menu", async () => {
@@ -1037,14 +1051,14 @@ describe("ChatNodeView role labels and quick actions", () => {
     const user = userEvent.setup();
     const { onOpenDocumentView } = renderChatNode();
 
-    await user.click(screen.getByRole("button", { name: "Open Document View" }));
+    await user.click(screen.getByRole("button", { name: "Open in Document View" }));
     expect(onOpenDocumentView).toHaveBeenCalledOnce();
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it("all three quick-action buttons carry the nodrag class", () => {
     renderChatNode();
-    for (const name of ["Copy text", "Branch from here", "Open Document View"]) {
+    for (const name of ["Copy text", "Branch from here", "Open in Document View"]) {
       expect(screen.getByRole("button", { name })).toHaveClass("nodrag");
     }
   });
@@ -1057,9 +1071,9 @@ describe("ChatNodeView role labels and quick actions", () => {
 
     const copyBtn = screen.getByRole("button", { name: "Copy text" });
     await user.click(copyBtn);
-    await waitFor(() => expect(copyBtn.querySelector("path")).not.toBeNull());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Copied" })).toBe(copyBtn));
 
-    await waitFor(() => expect(copyBtn.querySelector("path")).toBeNull(), { timeout: 2000 });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Copy text" })).toBe(copyBtn), { timeout: 2000 });
   });
 
   it("adds the selected class to the card when the selected prop is true", () => {
@@ -1507,7 +1521,7 @@ describe("ChatNodeView tool invocations (ADR-007 stage 7.4)", () => {
 
   it("renders a collapsible summary, closed by default, with each call's name/arguments/result inside", async () => {
     const user = userEvent.setup();
-    const { container } = renderChatNode({
+    renderChatNode({
       isUser: false,
       toolInvocations: [
         {
@@ -1519,15 +1533,16 @@ describe("ChatNodeView tool invocations (ADR-007 stage 7.4)", () => {
         },
       ],
     });
-    const summary = screen.getByText("1 tool call");
-    const details = container.querySelector("details.chat-node-tool-invocations") as HTMLDetailsElement;
-    expect(details.open).toBe(false); // native <details> closed by default
+    const trigger = screen.getByRole("button", { name: "1 tool call" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("region", { name: "1 tool call" })).toBeNull();
 
-    await user.click(summary);
-    expect(details.open).toBe(true);
-    expect(screen.getByText("echo")).toBeInTheDocument();
-    expect(screen.getByText('{"message": "hi"}')).toBeInTheDocument();
-    expect(screen.getByText("hi")).toBeInTheDocument();
+    await user.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    const panel = screen.getByRole("region", { name: "1 tool call" });
+    expect(panel).toHaveTextContent("echo");
+    expect(panel).toHaveTextContent('{"message": "hi"}');
+    expect(panel).toHaveTextContent("hi");
   });
 
   it("pluralizes the summary count for more than one call", () => {
@@ -1938,7 +1953,7 @@ describe("ChatNodeView sent-message editing", () => {
     const user = userEvent.setup();
     const { onEditMessage } = renderChatNode({ content: "Original" });
     await user.click(screen.getByRole("button", { name: "Node actions" }));
-    expect(screen.getByRole("menuitem", { name: "Copy Text" })).toHaveFocus();
+    expect(screen.getByRole("menuitem", { name: "Copy text" })).toHaveFocus();
     await user.keyboard("{ArrowDown}{Enter}");
     const editor = screen.getByRole("textbox", { name: "Edit message text" });
     expect(editor).toHaveFocus();
@@ -2025,9 +2040,9 @@ describe("ChatNodeView sent-message editing", () => {
 
 describe("ChatNodeView re-run from here", () => {
   it.each([
-    { isUser: true, staleness: "current", label: "You", beforeDelete: "Generate Image" },
-    { isUser: false, staleness: "out_of_date", label: "Assistant", beforeDelete: "Regenerate Response" },
-  ] as const)("groups branch actions and keeps Delete Node last for $label", async ({ isUser, staleness, label, beforeDelete }) => {
+    { isUser: true, staleness: "current", label: "You" },
+    { isUser: false, staleness: "out_of_date", label: "Assistant" },
+  ] as const)("groups branch actions and keeps Delete Node last for $label", async ({ isUser, staleness, label }) => {
     const user = userEvent.setup();
     renderChatNode({ isUser, staleness, versionCount: 2 });
     fireEvent.contextMenu(screen.getByText(label));
@@ -2035,24 +2050,27 @@ describe("ChatNodeView re-run from here", () => {
     const menu = screen.getByRole("menu", { name: "Chat message actions" });
     const items = Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"], [role="menuitemcheckbox"]'));
     const labels = items.map((item) => item.textContent?.trim());
-    const branchIndex = labels.indexOf("Branch from Here");
+    const branchIndex = labels.indexOf("Branch from here");
     expect(branchIndex).toBeGreaterThan(0);
     expect(labels[branchIndex + 1]).toBe("Re-run from here");
     if (isUser) {
       expect(labels.slice(branchIndex - 2, branchIndex)).toEqual(["Edit", "Edit as new branch"]);
     }
 
-    const deleteItem = screen.getByRole("menuitem", { name: "Delete Node" });
-    expect(labels[labels.length - 1]).toBe("Delete Node");
-    expect(deleteItem).toHaveClass("chat-node-menu-danger");
+    const deleteItem = screen.getByRole("menuitem", { name: "Delete node" });
+    expect(labels[labels.length - 1]).toBe("Delete node");
+    expect(deleteItem).toHaveAttribute("data-destructive", "true");
     const separator = menu.querySelector('[role="separator"]');
-    expect(separator?.nextElementSibling).toBe(deleteItem);
-    expect(separator?.previousElementSibling).toHaveTextContent(beforeDelete);
+    expect(separator).not.toBeNull();
+    expect(deleteItem.closest('[aria-label="Destructive actions"]')).not.toBeNull();
+    const rerunIndex = labels.indexOf("Re-run from here");
+    expect(rerunIndex).toBeGreaterThanOrEqual(0);
+    expect(labels.indexOf("Delete node") - rerunIndex).toBeGreaterThan(1);
 
     await user.keyboard("{End}");
     expect(deleteItem).toHaveFocus();
     await user.keyboard("{ArrowUp}");
-    expect(screen.getByRole("menuitem", { name: beforeDelete })).toHaveFocus();
+    expect(deleteItem).not.toHaveFocus();
     if (isUser) {
       await user.keyboard("{Home}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}");
       expect(screen.getByRole("menuitem", { name: "Re-run from here" })).toHaveFocus();
@@ -2127,7 +2145,7 @@ describe("ChatNodeView branch-editing accessibility regressions", () => {
   it("announces the full selected version number without changing the compact label", () => {
     const { rerenderWithData } = renderChatNode({ versionCount: 3, versionIndex: 1 });
     const versions = screen.getByRole("group", { name: "Message versions" });
-    expect(versions).toHaveTextContent("2/3");
+    expect(versions).toHaveTextContent("2 of 3");
     expect(screen.getByRole("status")).toHaveTextContent("Version 2 of 3 selected");
     rerenderWithData({ versionCount: 3, versionIndex: 2 });
     expect(screen.getByRole("status")).toHaveTextContent("Version 3 of 3 selected");
