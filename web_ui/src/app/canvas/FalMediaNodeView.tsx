@@ -426,6 +426,7 @@ function OutputGallery({ media, id }: { media: MediaState; id: string }) {
 
 function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode>) {
   const lodCollapsed = useLodVisibility();
+  const confirm = useConfirm();
   const media = useMemo(() => parseMediaState(data.mediaJson), [data.mediaJson]);
   const catalog = useMemo(() => parseMediaCatalog(data.catalogJson), [data.catalogJson]);
   const schema = useMemo(() => parseMediaSchema(data.schemaJson), [data.schemaJson]);
@@ -521,11 +522,44 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
     data.onPrepare(draft);
     setLocalError("");
   };
-  const confirmGenerate = () => {
+  const confirmGenerate = async () => {
     if (!currentQuote?.id || busy || uploadBusy) return;
-    data.onGenerate(currentQuote.id);
+    const approvedQuote = currentQuote;
+    const accepted = await confirm({
+      title: "Generate media?",
+      body: "This request is billable on Fal.ai. Estimates are historical averages, not spending limits. Actual cost depends on the output. This approves one request.",
+      confirmLabel: "Generate media",
+      billing: { estimate: formatMediaPrice(approvedQuote.estimate, approvedQuote.currency) },
+    });
+    if (!accepted) return;
+    if ((approvedQuote.expiresAt ?? 0) <= Math.floor(Date.now() / 1000)) {
+      setLocalError("Cost review expired. Refresh the estimate before generating.");
+      return;
+    }
+    data.onGenerate(approvedQuote.id);
   };
   const showQueue = ["submitting", "queued", "running", "cancelling", "stalled"].includes(media.status);
+  const deleteNode = async () => {
+    if (!showQueue || await confirm({
+      title: "Delete Fal Media Studio node?",
+      body: "This job may continue on Fal after the node is removed.",
+      confirmLabel: "Delete node", destructive: true,
+    })) data.onDelete();
+  };
+  const acknowledge = async () => {
+    if (await confirm({
+      title: "Unlock studio?",
+      body: "Have you checked the Fal dashboard and verified the previous submission's outcome? This will not cancel a remote job or refund charges.",
+      confirmLabel: "Unlock studio",
+    })) data.onAcknowledge();
+  };
+  const cancelRequest = async () => {
+    if (await confirm({
+      title: "Cancel Fal request?",
+      body: "Ask Fal to cancel this request? Jobs already running may still incur charges.",
+      confirmLabel: "Cancel request", destructive: true,
+    })) data.onCancel();
+  };
   const statusText = media.status === "submitting" ? "Submitting to Fal…" :
     media.status === "queued" ? "In the Fal queue" :
     media.status === "running" ? "Generating" :
@@ -540,35 +574,30 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
     <NodeShell kindClassName="fal-studio-node" selected={!!selected}
       collapsed={lodCollapsed} bodyClassName="fal-studio-body"
       header={<div className="fal-studio-header">
-        <div className="fal-studio-header-icon" aria-hidden="true"><NodeGlyph name="media" /></div>
-        <div className="fal-studio-header-copy">
-          <h3>Fal Media Studio</h3>
-        </div>
-        <div className="fal-studio-status" data-status={media.status}>
-          <i aria-hidden="true" />{statusText}
-        </div>
-        <button type="button" className="fal-studio-icon-button fal-studio-delete"
-          title="Remove studio node" aria-label="Delete Fal Media Studio node"
-          onClick={() => {
-            if (!showQueue || window.confirm("This job may continue on Fal. Remove the Studio node anyway?")) {
-              data.onDelete();
-            }
-          }}>×</button>
+        <h3>Fal Media Studio</h3>
+        <Badge className="fal-studio-status">
+          {showQueue ? <Spinner size={12} decorative /> :
+            <Icon name={media.status === "completed" ? "status-success" :
+              media.status === "failed" ? "status-error" :
+                media.status === "cancelled" ? "status-cancelled" : "status-info"} size="sm" />}
+          {statusText}
+        </Badge>
+        <IconButton size="sm" className="fal-studio-delete nodrag" icon="trash"
+          label="Delete Fal Media Studio node" onClick={deleteNode} />
       </div>}>
       <div className="fal-studio-app nodrag nopan">
         <div className="fal-studio-mode-tabs" role="group" aria-label="Media generation type">
-          {(["image", "video", "audio", "all"] as const).map((mode) => (
-            <button key={mode} type="button" aria-pressed={draft.mode === mode}
-              disabled={busy || uploadBusy} onClick={() => chooseMode(mode)}>
-              <span aria-hidden="true">{iconFor(mode)}</span> {mode === "all" ? "All models" : mode[0].toUpperCase()+mode.slice(1)}
-            </button>
-          ))}
+          {(["image", "video", "audio", "all"] as const).map((mode) =>
+            <ToggleButton key={mode} size="sm" className="fal-studio-mode-button"
+              pressed={draft.mode === mode} disabled={busy || uploadBusy}
+              onPressedChange={() => chooseMode(mode)} icon={iconFor(mode)}
+              label={mode === "all" ? "All models" : mode[0].toUpperCase() + mode.slice(1)} />)}
         </div>
         {draft.mode !== "all" && <div className="fal-studio-operation-tabs" role="group" aria-label="Generation workflow">
-          {MEDIA_OPERATIONS[draft.mode].map((op) => (
-            <button key={op.id} type="button" aria-pressed={draft.operation === op.id}
-              disabled={busy || uploadBusy} onClick={() => chooseOperation(op.id)}>{op.label}</button>
-          ))}
+          {MEDIA_OPERATIONS[draft.mode].map((op) =>
+            <ToggleButton key={op.id} size="sm" label={op.label}
+              pressed={draft.operation === op.id} disabled={busy || uploadBusy}
+              onPressedChange={() => chooseOperation(op.id)} />)}
         </div>}
         <ModelLibrary draft={draft} catalog={catalog} isBusy={busy || uploadBusy}
           onSearch={data.onSearch} onSelect={chooseModel} onFavorite={data.onFavorite} />
@@ -580,88 +609,73 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
           onInspect={() => draft.modelId && data.onInspect(draft.modelId)} />
         <div className="fal-studio-rule" />
         <section className="fal-studio-generate" aria-label="Cost review and generation">
-          <div className="fal-studio-section-heading">
-            <h4>Review and generate</h4>
-          </div>
-          {draft.modelId ? (
-            <div className="fal-studio-selected-summary">
-              <span>Selected model</span>
-              <strong>{draft.modelName || draft.modelId}</strong>
-              <small>{draft.modelId}</small>
-            </div>
-          ) : <p className="fal-studio-quiet">Choose a model to review its cost and generate.</p>}
-          {!!(localError || (media.status === "unconfirmed" ? "" : media.error)) && (
-            <div role="alert" className="fal-studio-inline-alert">
-              <strong>{media.status === "failed" ? "The generation did not complete" : "Action needed"}</strong>
-              <p>{localError || media.error}</p>
-            </div>
-          )}
-          {media.status === "unconfirmed" ? (
-            <div className="fal-studio-job-progress" role="alert">
-              <strong>Submission outcome unknown</strong>
-              <p>Fal may have accepted and charged your last request, but Graphlink did not receive a job ID.
-                Do not submit it again until you have checked your Fal account.</p>
-              <a href="https://fal.ai/dashboard" target="_blank" rel="noreferrer"
-                className="fal-studio-dashboard-link">Open Fal dashboard ↗</a>
-              <div className="fal-studio-action-row">
-                <button type="button" className="fal-studio-button-outline"
-                  onClick={() => {
-                    if (window.confirm(
-                      "Have you checked the Fal dashboard for this generation? Only unlock if you have verified the previous submission's outcome. This will not cancel a remote job."
-                    )) data.onAcknowledge();
-                  }}>I've checked — unlock the Studio</button>
-              </div>
-              <small>Recovery requires your confirmation. Graphlink will never automatically retry an uncertain paid request.</small>
-            </div>
-          ) : showQueue ? (
-            <div className="fal-studio-job-progress" role="status" aria-live="polite">
-              <div className="fal-studio-progress-dots"><i/><i/><i/></div>
-              <strong>{statusText}</strong>
-              <p>{media.queuePosition > 0 ? `Queue position ${media.queuePosition}` :
-                media.status === "stalled" ? "You can retry checking the status without resubmitting." :
-                "Your request is safe in the remote queue. You can keep working."}</p>
-              <div className="fal-studio-action-row">
-                <button className="fal-studio-button-secondary" type="button" onClick={data.onRefresh}>↻ Check status</button>
-                {media.requestId && media.status !== "cancelling" && (
-                  <button className="fal-studio-button-outline" type="button"
-                    onClick={() => {
-                      if (window.confirm("Ask Fal to cancel this request? Jobs already running may still incur charges.")) data.onCancel();
-                    }}>Cancel request</button>
-                )}
-              </div>
-              {media.requestId && <small>Job ID · {media.requestId}</small>}
-            </div>
-          ) : <>
-            {quote && !currentQuote && <p className="fal-studio-inline-warning">Pricing review expired or inputs changed. Refresh your estimate to generate.</p>}
-            {!!currentQuote && (
-              <div className="fal-studio-quote">
-                <div className="fal-studio-quote-head"><span>Cost review</span><strong>Before you generate</strong></div>
-                <div className="fal-studio-quote-row"><span>Live model rate</span>
-                  <strong>{formatMediaPrice(currentQuote.price, currentQuote.currency)}{currentQuote.price != null ? ` / ${unitName(currentQuote.unit || "")}` : ""}</strong>
-                </div>
-                <div className="fal-studio-quote-row"><span>Historical one-call estimate</span>
-                  <strong>{formatMediaPrice(currentQuote.estimate, currentQuote.currency)}</strong>
-                </div>
-                <p>Estimates are historical averages, not parameter-specific quotations or spending limits. Actual billing depends on duration, size and output. Your approval authorizes one request.</p>
-                {!!currentQuote.warning && <small className="fal-studio-inline-warning">{currentQuote.warning}</small>}
-              </div>
-            )}
+          <div className="fal-studio-section-heading"><h4>Review and generate</h4></div>
+          {draft.modelId ? <div className="fal-studio-selected-summary">
+            <span>Selected model</span>
+            <strong>{draft.modelName || draft.modelId}</strong>
+            <small>{draft.modelId}</small>
+          </div> : <p className="fal-studio-quiet">Choose a model to review its cost and generate.</p>}
+          {!!(localError || (media.status === "unconfirmed" ? "" : media.error)) &&
+            <StudioAlert variant="error" label={media.status === "failed" ? "The generation did not complete" : "Action needed"}
+              body={localError || media.error} />}
+          {media.status === "unconfirmed" ? <div className="fal-studio-job-progress" role="alert">
+            <strong>Submission outcome unknown</strong>
+            <p>Fal may have accepted and charged your last request, but Graphlink did not receive a job ID.
+              Do not submit it again until you have checked your Fal account.</p>
+            <a href="https://fal.ai/dashboard" target="_blank" rel="noreferrer" className="fal-studio-dashboard-link">
+              <Icon name="external-link" size="sm" /> Open Fal dashboard
+            </a>
             <div className="fal-studio-action-row">
-              <button type="button" className="fal-studio-button-primary"
+              <Button size="sm" variant="secondary" onClick={acknowledge}>I've checked — unlock the Studio</Button>
+            </div>
+            <small>Recovery requires your confirmation. Graphlink will never automatically retry an uncertain paid request.</small>
+          </div> : showQueue ? <div className="fal-studio-job-progress" role="status" aria-live="polite">
+            <Spinner size={16} decorative />
+            <strong>{statusText}</strong>
+            <p>{media.queuePosition > 0 ? "Queue position " + formatCount(media.queuePosition) :
+              media.status === "stalled" ? "You can retry checking the status without resubmitting." :
+                "Your request is safe in the remote queue. You can keep working."}</p>
+            <div className="fal-studio-action-row">
+              <Button size="sm" variant="secondary" iconStart="refresh" onClick={data.onRefresh}>Check status</Button>
+              {media.requestId && media.status !== "cancelling" &&
+                <Button size="sm" variant="ghost" onClick={cancelRequest}>Cancel request</Button>}
+            </div>
+            {media.requestId && <small>Job ID · {media.requestId}</small>}
+          </div> : <>
+            {quote && !currentQuote &&
+              <StudioAlert variant="warning" label="Pricing review expired"
+                body="Inputs changed or the review expired. Refresh the estimate to generate." />}
+            {!!currentQuote && <div className="fal-studio-quote">
+              <div className="fal-studio-quote-head"><span>Cost review</span><strong>Before you generate</strong></div>
+              <div className="fal-studio-quote-row"><span>Live model rate</span>
+                <strong>{formatMediaPrice(currentQuote.price, currentQuote.currency)}
+                  {currentQuote.price != null ? " / " + unitName(currentQuote.unit || "") : ""}</strong>
+              </div>
+              <div className="fal-studio-quote-row"><span>Historical one-call estimate</span>
+                <strong>{formatMediaPrice(currentQuote.estimate, currentQuote.currency)}</strong>
+              </div>
+              <p>Estimates are historical averages, not parameter-specific quotations or spending limits.
+                Actual billing depends on duration, size and output. Your approval authorizes one request.</p>
+              {currentQuote.warning && <StudioAlert variant="warning" label="Estimate warning" body={currentQuote.warning} />}
+            </div>}
+            <div className="fal-studio-action-row">
+              <Button size="sm" variant="primary"
                 disabled={!draft.modelId || uploadBusy || media.quote?.status === "loading"}
                 onClick={currentQuote ? confirmGenerate : prepare}>
                 {media.quote?.status === "loading" ? "Checking price…" :
-                  currentQuote ? "Confirm & generate ↗" : "Review cost & generate ↗"}
-              </button>
-              {!!currentQuote && <button type="button" className="fal-studio-button-secondary"
-                onClick={prepare}>Refresh quote</button>}
+                  currentQuote ? "Confirm & generate" : "Review cost & generate"}
+              </Button>
+              {!!currentQuote && <Button size="sm" variant="secondary" onClick={prepare}>Refresh quote</Button>}
             </div>
             {currentQuote && <small className="fal-studio-consent">One confirmation · No automatic repeat charges</small>}
           </>}
         </section>
         <div className="fal-studio-rule" />
         <OutputGallery media={media} id={id} />
-        <div className="fal-studio-footer"><span>Powered by fal.ai</span><span>Catalog prices refresh as models change · Media URLs may expire</span></div>
+        <div className="fal-studio-footer">
+          <span>Powered by Fal.ai</span>
+          <span>Catalog prices refresh as models change · Media URLs may expire</span>
+        </div>
       </div>
     </NodeShell>
   );
