@@ -373,7 +373,7 @@ describe("SettingsDialog", () => {
     await goToLlamaCpp(user, push);
 
     expect(screen.queryByText(/lands in R7\.4c/)).toBeNull();
-    expect(screen.getByText("Reasoning Level")).toBeInTheDocument();
+    expect(screen.getByText("Reasoning level")).toBeInTheDocument();
   });
 
   it("Ollama page renders for the real (not deferred-placeholder) section", async () => {
@@ -700,21 +700,21 @@ describe("SettingsDialog", () => {
     expect(datalist?.querySelectorAll("option")).toHaveLength(2);
   });
 
-  it("the Scanned Chat Model select only appears once models are scanned, and selecting one fires setLlamaCppChatModelPath", async () => {
+  it("the Scanned chat model select only appears once models are scanned, and selecting one fires setLlamaCppChatModelPath", async () => {
     const { user, push, intents } = setup();
     await goToLlamaCpp(user, push);
-    expect(screen.queryByLabelText("Scanned Chat Model")).toBeNull();
+    expect(screen.queryByLabelText("Scanned chat model")).toBeNull();
 
     await goToLlamaCpp(user, push, { llamaCppScannedModels: ["C:/models/a.gguf"] });
     // basename(path) is what the option is actually labeled - see
     // CustomSelect's options={state.llamaCppScannedModels.map(...)} call in
     // SettingsDialog.tsx, not the raw path.
-    await chooseCustomOption(user, "Scanned Chat Model", "a.gguf");
+    await chooseCustomOption(user, "Scanned chat model", "a.gguf");
 
     expect(intents).toContainEqual(["app-settings", "setLlamaCppChatModelPath", ["C:/models/a.gguf"]]);
   });
 
-  it("the Scanned Chat Model select shows the blank placeholder when the configured path isn't in the scanned list", async () => {
+  it("the Scanned chat model select shows the blank placeholder when the configured path isn't in the scanned list", async () => {
     const { user, push } = setup();
     await goToLlamaCpp(user, push, {
       llamaCppScannedModels: ["C:/models/a.gguf", "C:/models/b.gguf"],
@@ -723,10 +723,10 @@ describe("SettingsDialog", () => {
 
     // CustomSelect's trigger is a <button>, not a native <select> - its
     // "current value" is its own displayed text, not a .value DOM property.
-    expect(screen.getByRole("button", { name: "Scanned Chat Model" })).toHaveTextContent("Select a scanned model…");
+    expect(screen.getByRole("button", { name: "Scanned chat model" })).toHaveTextContent("Select a scanned model…");
   });
 
-  it("Chat Model File shows 'No file selected' by default and Browse fires pickLlamaCppChatModelFile", async () => {
+  it("Chat model file shows 'No file selected' by default and Browse fires pickLlamaCppChatModelFile", async () => {
     const { user, push, intents } = setup();
     await goToLlamaCpp(user, push);
 
@@ -737,14 +737,14 @@ describe("SettingsDialog", () => {
     expect(intents).toContainEqual(["app-settings", "pickLlamaCppChatModelFile", []]);
   });
 
-  it("Chat Model File shows the staged path once one is set", async () => {
+  it("Chat model file shows the staged path once one is set", async () => {
     const { user, push } = setup();
     await goToLlamaCpp(user, push, { llamaCppChatModelPath: "C:/models/chat.gguf" });
 
     expect(screen.getByText("C:/models/chat.gguf")).toBeInTheDocument();
   });
 
-  it("Chat Naming File shows a reuse fallback by default and its own Browse fires pickLlamaCppTitleModelFile", async () => {
+  it("Chat naming file shows a reuse fallback by default and its own Browse fires pickLlamaCppTitleModelFile", async () => {
     const { user, push, intents } = setup();
     await goToLlamaCpp(user, push);
 
@@ -755,20 +755,20 @@ describe("SettingsDialog", () => {
     expect(intents).toContainEqual(["app-settings", "pickLlamaCppTitleModelFile", []]);
   });
 
-  it("Chat Format Override fires setLlamaCppChatFormat", async () => {
+  it("Chat format override fires setLlamaCppChatFormat", async () => {
     const { user, push, intents } = setup();
     await goToLlamaCpp(user, push);
 
-    await user.type(screen.getByLabelText("Chat Format Override"), "x");
+    await user.type(screen.getByLabelText("Chat format override"), "x");
 
     expect(intents).toContainEqual(["app-settings", "setLlamaCppChatFormat", ["x"]]);
   });
 
-  it("Context Window fires setLlamaCppNCtx with the parsed number", async () => {
+  it("Context window fires setLlamaCppNCtx with the parsed number", async () => {
     const { user, push, intents } = setup();
     await goToLlamaCpp(user, push);
 
-    const field = screen.getByLabelText("Context Window");
+    const field = screen.getByLabelText("Context window");
     await user.clear(field);
     await user.type(field, "8192");
 
@@ -793,7 +793,7 @@ describe("SettingsDialog", () => {
     expect(within(card).getByText("Q4_K_M")).toBeInTheDocument();
     expect(within(card).getByText("Trained context: 32,768 tokens")).toBeInTheDocument();
     expect(within(card).getByText("chat")).toHaveClass("settings-ollama-capability");
-    expect(within(card).getByRole("spinbutton", { name: "Context Window" })).toHaveValue(8192);
+    expect(within(card).getByRole("spinbutton", { name: "Context window" })).toHaveValue(8192);
   });
 
   it("shows separate chat and naming cards without inventing missing GGUF details", async () => {
@@ -818,39 +818,39 @@ describe("SettingsDialog", () => {
     expect(within(namingCard).getByText("1.0 KiB on disk")).toBeInTheDocument();
     expect(within(namingCard).getByText("F16")).toBeInTheDocument();
     expect(within(namingCard).queryByRole("spinbutton")).toBeNull();
-    expect(screen.getAllByRole("spinbutton", { name: "Context Window" })).toHaveLength(1);
+    expect(screen.getAllByRole("spinbutton", { name: "Context window" })).toHaveLength(1);
   });
 
   it("keeps the shared llama.cpp context control keyboard-editable on the chat card", async () => {
     const { user, push, intents } = setup();
     await goToLlamaCpp(user, push, { llamaCppChatModelPath: "C:/models/chat.gguf" });
     const chatCard = screen.getByRole("group", { name: "chat.gguf" });
-    const field = within(chatCard).getByRole("spinbutton", { name: "Context Window" });
+    const field = within(chatCard).getByRole("spinbutton", { name: "Context window" });
 
     await user.click(field);
     await user.clear(field);
     await user.keyboard("8192");
     expect(intents).toContainEqual(["app-settings", "setLlamaCppNCtx", [8192]]);
     await user.tab();
-    expect(screen.getByLabelText("Chat Format Override")).toHaveFocus();
+    expect(screen.getByLabelText("Chat format override")).toHaveFocus();
   });
 
-  it("GPU Layers fires setLlamaCppNGpuLayers with the parsed number", async () => {
+  it("GPU layers fires setLlamaCppNGpuLayers with the parsed number", async () => {
     const { user, push, intents } = setup();
     await goToLlamaCpp(user, push);
 
-    const field = screen.getByLabelText("GPU Layers");
+    const field = screen.getByLabelText("GPU layers");
     await user.clear(field);
     await user.type(field, "20");
 
     expect(intents).toContainEqual(["app-settings", "setLlamaCppNGpuLayers", [20]]);
   });
 
-  it("CPU Threads fires setLlamaCppNThreads with the parsed number", async () => {
+  it("CPU threads fires setLlamaCppNThreads with the parsed number", async () => {
     const { user, push, intents } = setup();
     await goToLlamaCpp(user, push);
 
-    const field = screen.getByLabelText("CPU Threads");
+    const field = screen.getByLabelText("CPU threads");
     await user.clear(field);
     await user.type(field, "4");
 
@@ -859,16 +859,16 @@ describe("SettingsDialog", () => {
 
   it("an llamaCppNotice renders as an inline error", async () => {
     const { user, push } = setup();
-    await goToLlamaCpp(user, push, { llamaCppNotice: "Chat Model File cannot be empty." });
+    await goToLlamaCpp(user, push, { llamaCppNotice: "Chat model file cannot be empty." });
 
-    expect(screen.getByText("Chat Model File cannot be empty.")).toBeInTheDocument();
+    expect(screen.getByText("Chat model file cannot be empty.")).toBeInTheDocument();
   });
 
-  it("Save Settings fires saveLlamaCppSettings", async () => {
+  it("Save settings fires saveLlamaCppSettings", async () => {
     const { user, push, intents } = setup();
     await goToLlamaCpp(user, push);
 
-    await user.click(screen.getByText("Save Settings"));
+    await user.click(screen.getByText("Save settings"));
 
     expect(intents).toContainEqual(["app-settings", "saveLlamaCppSettings", []]);
   });
