@@ -24,22 +24,6 @@
   justify-content: space-between;
 }
 
-.chat-node-collapse-btn {
-  font-size: var(--gl-text-2xs);
-  line-height: 1;
-  padding: var(--gl-space-0-5) var(--gl-space-1-5);
-  color: var(--gl-surface-text-muted);
-  background: transparent;
-  border: none;
-  border-radius: var(--gl-radius-sm);
-  cursor: pointer;
-}
-
-.chat-node-collapse-btn:hover {
-  color: var(--gl-surface-text-primary);
-  background-color: var(--gl-neutral-button-hover);
-}
-
 /* Markdown body inside a chat bubble - the same rule set as the document
    viewer's own .document-viewer-markdown, duplicated here since that island
    builds to a separate bundle and isn't importable into the SPA.

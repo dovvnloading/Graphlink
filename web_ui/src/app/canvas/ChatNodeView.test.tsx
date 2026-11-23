@@ -2108,7 +2108,8 @@ describe("ChatNodeView re-run from here", () => {
         result: "already executed", isError: false,
       }],
     });
-    expect(screen.getByRole("status")).toHaveTextContent("Upstream changed - re-run manually");
+    expect(screen.getByRole("status")).toHaveTextContent("Out of date");
+    expect(screen.getByText(/re-run manually/)).toBeInTheDocument();
     expect(container.querySelector(".node-staleness-badge svg")).not.toBeNull();
     expect(screen.queryByRole("button", { name: "Re-run from here" })).toBeNull();
     fireEvent.contextMenu(screen.getByText("Assistant"));

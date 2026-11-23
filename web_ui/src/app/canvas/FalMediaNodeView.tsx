@@ -1,7 +1,6 @@
 import type { Node, NodeProps } from "@xyflow/react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { withAuthToken } from "../../lib/auth/token";
-import { NodeGlyph } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { FalMediaUploader } from "./FalMediaUploader";
 import { useLodVisibility } from "./useLodVisibility";
@@ -9,8 +8,25 @@ import {
   MEDIA_OPERATIONS, comparableGroup, editJsonValue, formatMediaPrice,
   isMediaBusy, parseMediaCatalog, parseMediaSchema, parseMediaState,
   sortMediaModels, type MediaCatalog, type MediaMode, type MediaModel,
-  type MediaSchema, type MediaState, type PriceSort,
+  type MediaSchema, type MediaState, type MediaJob, type PriceSort,
 } from "./falMediaStudioModel";
+import { Badge } from "../ui/Badge";
+import { Button } from "../ui/Button";
+import { Checkbox } from "../ui/Checkbox";
+import { Disclosure } from "../ui/Disclosure";
+import { EmptyState } from "../ui/EmptyState";
+import { IconButton } from "../ui/IconButton";
+import { InlineAlert } from "../ui/InlineAlert";
+import { NumberField } from "../ui/NumberField";
+import { Select } from "../ui/Select";
+import { Spinner } from "../ui/Spinner";
+import { TextArea } from "../ui/TextArea";
+import { TextField } from "../ui/TextField";
+import { ToggleButton } from "../ui/ToggleButton";
+import { useConfirm } from "../ui/ConfirmDialog";
+import { formatCount } from "../ui/format";
+import { Icon } from "../ui/icons/Icon";
+import type { IconName } from "../ui/icons/registry";
 import "./FalMediaNodeView.css";
 
 interface StudioDraft {
@@ -75,44 +91,59 @@ function safeInlineMediaUrl(url: string): boolean {
   const host = new URL(url).hostname.toLowerCase();
   return host === "fal.media" || host.endsWith(".fal.media");
 }
-function iconFor(mode: MediaMode): string {
-  return mode === "image" ? "▧" : mode === "video" ? "▣" : mode === "audio" ? "♫" : "⌕";
+function iconFor(mode: MediaMode): IconName {
+  return mode === "image" ? "image" : mode === "video" ? "video" : mode === "audio" ? "audio" : "cube";
+}
+function categoryIcon(category: string): IconName {
+  return category.includes("video") ? "video" :
+    category.includes("audio") || category.includes("speech") ? "audio" :
+      category.includes("3d") || category.includes("mesh") ? "cube" : "image";
+}
+/** Adapters use label for a kit component's heading, never a native tooltip attribute. */
+function StudioDisclosure({ label, ...rest }: Omit<ComponentProps<typeof Disclosure>, "title"> & { label: string }) {
+  return <Disclosure {...rest} {...{ title: label }} />;
+}
+function StudioAlert({ label, ...rest }: Omit<ComponentProps<typeof InlineAlert>, "title"> & { label: string }) {
+  return <InlineAlert {...rest} {...{ title: label }} />;
+}
+function StudioEmpty({ label, ...rest }: Omit<ComponentProps<typeof EmptyState>, "title"> & { label: string }) {
+  return <EmptyState {...rest} {...{ title: label }} />;
 }
 function dateString(raw: string): string {
   const date = new Date(raw);
   return Number.isNaN(date.valueOf()) ? "" : date.toLocaleString();
 }
+
 function ModelCard({
-  model, selected, favorite, onSelect, onFavorite, compact = false, disabled = false,
+  model, selected, favorite, onSelect, onFavorite, disabled = false,
 }: {
   model: MediaModel; selected: boolean; favorite: boolean;
-  onSelect: () => void; onFavorite: () => void; compact?: boolean; disabled?: boolean;
+  onSelect: () => void; onFavorite: () => void; disabled?: boolean;
 }) {
   return (
-    <div className={`fal-studio-model-card${selected ? " is-selected" : ""}${compact ? " is-compact" : ""}`}>
-      <button type="button" className="fal-studio-model-pick" onClick={onSelect} disabled={disabled}
-        aria-label={`Select ${model.name}`} aria-pressed={selected}>
+    <div className={"fal-studio-model-card" + (selected ? " is-selected" : "")}>
+      <Button variant="ghost" size="sm" className="fal-studio-model-pick nodrag"
+        aria-label={"Select " + model.name} aria-pressed={selected}
+        disabled={disabled} onClick={onSelect}>
         <span className="fal-studio-model-avatar" aria-hidden="true">
-          {model.category.includes("video") ? "▣" : model.category.includes("audio") || model.category.includes("speech") ? "♫" : "◈"}
+          <Icon name={categoryIcon(model.category)} size="lg" />
         </span>
         <span className="fal-studio-model-text">
-          <strong title={model.id}>{model.name}</strong>
-          <small title={model.id}>{model.id}</small>
-          {!compact && !!model.description && <span className="fal-studio-model-desc">{model.description}</span>}
+          <strong>{model.name}</strong>
+          <small>{model.id}</small>
+          {model.description && <span className="fal-studio-model-desc">{model.description}</span>}
         </span>
-        <span className="fal-studio-model-price" aria-label={
-          model.price === null ? "Price unavailable" :
-          `${formatMediaPrice(model.price, model.currency)} per ${unitName(model.unit)}`
-        }>
+        <span className="fal-studio-model-price"
+          aria-label={model.price === null ? "Price unavailable" :
+            formatMediaPrice(model.price, model.currency) + " per " + unitName(model.unit)}>
           <strong>{formatMediaPrice(model.price, model.currency)}</strong>
-          <small>{model.price === null ? "Unverified" : `/ ${unitName(model.unit)}`}</small>
+          <small>{model.price === null ? "Unverified" : "/ " + unitName(model.unit)}</small>
         </span>
-      </button>
-      <button type="button" className={`fal-studio-star${favorite ? " is-favorite" : ""}`}
-        onClick={onFavorite} aria-label={favorite ? `Remove ${model.name} from favorites` : `Favorite ${model.name}`}
-        aria-pressed={favorite} title={favorite ? "Remove from favorites" : "Add to favorites"}>
-        {favorite ? "★" : "☆"}
-      </button>
+      </Button>
+      <ToggleButton size="sm" className="fal-studio-star nodrag"
+        icon={favorite ? "star-filled" : "star"} pressed={favorite}
+        disabled={disabled} onPressedChange={onFavorite}
+        aria-label={favorite ? "Remove " + model.name + " from favorites" : "Favorite " + model.name} />
     </div>
   );
 }
@@ -129,109 +160,94 @@ function ModelLibrary({
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [sortOrder, setSortOrder] = useState<PriceSort>("economy");
   const [showLibrary, setShowLibrary] = useState(true);
-  const searchSignature = `${draft.mode}|${draft.operation}|${query}`;
+  const [showExtraModels, setShowExtraModels] = useState(false);
   useEffect(() => {
-    // Query is a deliberate network read; debounce each keystroke.
-    const timer = window.setTimeout(() => {
-      onSearch(draft.mode, draft.operation, query);
-    }, query.trim() ? 450 : 180);
+    const timer = window.setTimeout(() => onSearch(draft.mode, draft.operation, query), query.trim() ? 450 : 180);
     return () => window.clearTimeout(timer);
-  }, [draft.mode, draft.operation, query, searchSignature, onSearch]);
-  const loaded = catalog.mode === draft.mode && catalog.operation === draft.operation &&
-    catalog.query === query;
+  }, [draft.mode, draft.operation, query, onSearch]);
+  const loaded = catalog.mode === draft.mode && catalog.operation === draft.operation && catalog.query === query;
   const favorites = useMemo(() => new Set(catalog.favorites), [catalog.favorites]);
   const visible = useMemo(() => sortMediaModels(
     (loaded ? catalog.models : []).filter((model) => !favoritesOnly || favorites.has(model.id)),
     sortOrder,
   ), [catalog.models, loaded, favoritesOnly, favorites, sortOrder]);
+  const renderModels = (models: MediaModel[]) => models.map((model, index) => {
+    const group = comparableGroup(model);
+    const previous = index ? comparableGroup(models[index - 1]) : "";
+    return (
+      <div key={model.id}>
+        {sortOrder !== "name" && group !== previous &&
+          <div className="fal-studio-price-group">{group === "Unpriced" ? "Price unavailable" : "Billed in " + group}</div>}
+        <ModelCard model={model} selected={draft.modelId === model.id}
+          favorite={favorites.has(model.id)} disabled={isBusy}
+          onSelect={() => onSelect(model)}
+          onFavorite={() => onFavorite(model.id, !favorites.has(model.id))} />
+      </div>
+    );
+  });
   return (
     <section className="fal-studio-library" aria-label="Fal model catalog">
       <div className="fal-studio-section-heading">
-        <div>
-          <h4>Model catalog <span>{loaded ? catalog.models.length : "—"}</span></h4>
-        </div>
-        <button type="button" className="fal-studio-icon-button" aria-label={showLibrary ? "Collapse catalog" : "Expand catalog"}
-          onClick={() => setShowLibrary(!showLibrary)}>{showLibrary ? "⌃" : "⌄"}</button>
+        <h4>Model catalog <Badge>{loaded ? formatCount(catalog.models.length) : "—"}</Badge></h4>
+        <IconButton size="sm" icon={showLibrary ? "chevron-up" : "chevron-down"}
+          label={showLibrary ? "Collapse catalog" : "Expand catalog"}
+          onClick={() => setShowLibrary(!showLibrary)} />
       </div>
       {showLibrary && <>
-        <label className="fal-studio-search-field">
-          <span aria-hidden="true">⌕</span>
-          <input className="nodrag nopan" type="search" value={query}
-            placeholder="Search models, creators, capabilities…"
-            onChange={(event) => setQuery(event.target.value)}
-            aria-label="Search Fal media models" />
-          {(loaded && catalog.status === "loading") && <span className="fal-studio-loading-dot" role="status" aria-label="Searching"/>}
-        </label>
+        <div className="fal-studio-search nodrag nopan">
+          <TextField label="Search Fal media models" type="search" size="sm"
+            prefixIcon="search" value={query} onValueChange={setQuery}
+            placeholder="Search models, creators, capabilities…" />
+          {loaded && catalog.status === "loading" && <Spinner size={12} label="Searching" />}
+        </div>
         <div className="fal-studio-library-controls">
-          <div className="fal-studio-choice" aria-label="Model filter">
-            <button type="button" aria-pressed={!favoritesOnly} onClick={() => setFavoritesOnly(false)}>
-              All results
-            </button>
-            <button type="button" aria-pressed={favoritesOnly} onClick={() => setFavoritesOnly(true)}>
-              <span aria-hidden="true">★</span> Favorites
-            </button>
+          <div className="fal-studio-choice" role="group" aria-label="Model filter">
+            <ToggleButton size="sm" label="All results" pressed={!favoritesOnly}
+              onPressedChange={() => setFavoritesOnly(false)} />
+            <ToggleButton size="sm" label="Favorites" icon={favoritesOnly ? "star-filled" : "star"}
+              pressed={favoritesOnly} onPressedChange={() => setFavoritesOnly(true)} />
           </div>
-          <label className="fal-studio-sort">
-            <span className="sr-only">Sort model catalog</span>
-            <select value={sortOrder} onChange={(event) => setSortOrder(event.target.value as PriceSort)}>
-              <option value="economy">Economy first</option>
-              <option value="premium">Premium first</option>
-              <option value="name">Name A–Z</option>
-            </select>
-          </label>
+          <Select ariaLabel="Sort model catalog" value={sortOrder}
+            onChange={(next) => setSortOrder(next as PriceSort)}
+            options={[{value: "economy", label: "Economy first"},
+              {value: "premium", label: "Premium first"}, {value: "name", label: "Name A–Z"}]} />
         </div>
-        <div className="fal-studio-compare-disclosure">
-          Prices are live unit rates, grouped by billing unit. Final cost varies by output.
-        </div>
-        <div className="fal-studio-model-list nowheel nodrag" role="region" aria-label="Available Fal models">
+        <StudioDisclosure label="How pricing compares" className="fal-studio-pricing-info">
+          Prices are live unit rates grouped by billing unit. Final cost varies by output.
+        </StudioDisclosure>
+        <div className="fal-studio-model-list" role="region" aria-label="Available Fal models">
           {!loaded && <p className="fal-studio-quiet">Loading models for this category…</p>}
-          {loaded && catalog.status === "error" && (
-            <div className="fal-studio-inline-alert" role="alert">
-              <strong>Catalog unavailable</strong>
-              <p>{catalog.error || "We could not reach the Fal catalog. Check your Fal API key in Settings."}</p>
-              <button type="button" onClick={() => onSearch(draft.mode, draft.operation, query)}>Retry catalog</button>
-            </div>
-          )}
-          {loaded && catalog.pricingWarning && (
-            <p className="fal-studio-inline-warning">{catalog.pricingWarning}</p>
-          )}
-          {visible.map((model, index) => {
-            const group = comparableGroup(model);
-            const previousGroup = index > 0 ? comparableGroup(visible[index-1]) : "";
-            const newGroup = sortOrder !== "name" && group !== previousGroup;
-            return (
-              <div key={model.id}>
-                {newGroup && <div className="fal-studio-price-group">{group === "Unpriced" ? "Price unavailable" : `Billed in ${group}`}</div>}
-                <ModelCard model={model} selected={draft.modelId === model.id}
-                  favorite={favorites.has(model.id)} onSelect={() => onSelect(model)}
-                  onFavorite={() => onFavorite(model.id, !favorites.has(model.id))}
-                  compact={favoritesOnly} disabled={isBusy} />
-              </div>
-            );
-          })}
-          {loaded && catalog.status !== "loading" && visible.length === 0 && (
-            <div className="fal-studio-empty-catalog">
-              <span aria-hidden="true">{favoritesOnly ? "☆" : "⌕"}</span>
-              <strong>{favoritesOnly ? "No saved models in these results" : "No matching models"}</strong>
-              <p>{favoritesOnly ? "Use the star beside a model to save it. Favorites stay available across sessions." :
-                "Try another search or generation category."}</p>
-            </div>
-          )}
-          {loaded && draft.mode === "all" && !!catalog.currentCursor && !favoritesOnly && (
-            <button type="button" className="fal-studio-loadmore" disabled={catalog.status === "loading"}
-              onClick={() => onSearch(draft.mode, draft.operation, query)}>First page</button>
-          )}
-          {loaded && catalog.hasMore && !favoritesOnly && (
-            <button type="button" className="fal-studio-loadmore"
-              disabled={catalog.status === "loading" || isBusy || !catalog.nextCursor}
-              onClick={() => onSearch(draft.mode, draft.operation, query, catalog.nextCursor)}>
-              {catalog.status === "loading" ? "Loading…" : draft.mode === "all" ? "Next page" : "Show more models"}
-            </button>
-          )}
+          {loaded && catalog.status === "error" &&
+            <StudioAlert variant="error" label="Catalog unavailable"
+              body={catalog.error || "We could not reach the Fal catalog. Check your Fal API key in Settings."}
+              action={{label: "Retry catalog", onClick: () => onSearch(draft.mode, draft.operation, query)}} />}
+          {loaded && catalog.pricingWarning &&
+            <StudioAlert variant="warning" label="Pricing information" body={catalog.pricingWarning} />}
+          {renderModels(visible.slice(0, 4))}
+          {loaded && catalog.status !== "loading" && visible.length === 0 &&
+            <StudioEmpty icon={favoritesOnly ? "star" : "search"}
+              label={favoritesOnly ? "No saved models in these results" : "No matching models"}
+              body={favoritesOnly ? "Star a model to save it across sessions." :
+                "Try another search or generation category."} />}
+          {visible.length > 4 && <StudioDisclosure className="fal-studio-extra-models"
+            label={"More models (" + formatCount(visible.length - 4) + ")"}
+            open={showExtraModels} onOpenChange={setShowExtraModels}>
+            {showExtraModels && renderModels(visible.slice(4))}
+          </StudioDisclosure>}
+          <div className="fal-studio-pagination">
+            {loaded && draft.mode === "all" && !!catalog.currentCursor && !favoritesOnly &&
+              <Button size="sm" variant="ghost" disabled={catalog.status === "loading"}
+                onClick={() => onSearch(draft.mode, draft.operation, query)}>First page</Button>}
+            {loaded && catalog.hasMore && !favoritesOnly &&
+              <Button size="sm" variant="secondary"
+                disabled={catalog.status === "loading" || isBusy || !catalog.nextCursor}
+                onClick={() => onSearch(draft.mode, draft.operation, query, catalog.nextCursor)}>
+                {catalog.status === "loading" ? "Loading…" : draft.mode === "all" ? "Next page" : "Show more models"}
+              </Button>}
+          </div>
         </div>
-        {!!catalog.favorites.length && favoritesOnly && visible.length === 0 && (
-          <p className="fal-studio-quiet">You have {catalog.favorites.length} saved model{catalog.favorites.length === 1 ? "" : "s"} across your library. Switch categories to view other favorites.</p>
-        )}
+        {!!catalog.favorites.length && favoritesOnly && visible.length === 0 &&
+          <p className="fal-studio-quiet">You have {formatCount(catalog.favorites.length)} saved models across your library. Switch categories to view other favorites.</p>}
       </>}
     </section>
   );
@@ -246,6 +262,7 @@ function ModelInputs({
   onInspect: () => void;
 }) {
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showExtraFields, setShowExtraFields] = useState(false);
   let parsedInputs: Record<string, unknown> = {};
   let jsonError = "";
   try {
@@ -265,161 +282,159 @@ function ModelInputs({
     const next = editJsonValue(draft.argumentsJson, name, value);
     if (next !== null) setJson(next);
   };
+  const renderField = (field: MediaSchema["fields"][number]) => {
+    const val = parsedInputs[field.name] ?? field.default;
+    const value = val === null || val === undefined ? "" : String(val);
+    const label = field.name.replace(/_/g, " ");
+    const description = field.description || (field.required ? "Required" : undefined);
+    if (field.enum?.length) {
+      return <Select key={field.name} label={label} className="fal-studio-schema-control"
+        disabled={busy} value={value}
+        options={[{value: "", label: "Choose a value"},
+          ...field.enum.map((option) => ({value: String(option), label: String(option)}))]}
+        onChange={(next) => {
+          const selected = field.enum.find((option) => String(option) === next);
+          updateField(field.name, selected ?? next);
+        }} />;
+    }
+    if (field.type === "boolean") {
+      return <Checkbox key={field.name} label={label} description={description}
+        disabled={busy} checked={val === true}
+        onChange={(event) => updateField(field.name, event.currentTarget.checked)} />;
+    }
+    if (field.type === "number" || field.type === "integer") {
+      const numeric = val === null || val === undefined || val === "" ? "" : Number(val);
+      return <NumberField key={field.name} label={label} description={description}
+        disabled={busy} value={numeric !== "" && !Number.isFinite(numeric) ? "" : numeric}
+        step={field.type === "integer" ? 1 : 0.01}
+        onValueChange={(next) => updateField(field.name, next)} />;
+    }
+    return <TextField key={field.name} label={label} description={description}
+      className="nodrag nopan" disabled={busy}
+      type="text" value={field.type === "json" && val != null ? JSON.stringify(val) : value}
+      placeholder={field.format === "uri" || field.name.endsWith("_url") ? "https://…" :
+        field.required ? "Required" : "Optional"}
+      onValueChange={(next) => updateField(field.name,
+        field.type === "json" ? (() => { try { return JSON.parse(next); } catch { return next; } })() : next)} />;
+  };
   return (
     <section className="fal-studio-inputs" aria-label="Generation inputs">
       <div className="fal-studio-section-heading">
-        <div>
-          <h4>{draft.mode === "all" ? "Model inputs" : draft.operation === "text-to-speech" ? "Write what to say" : "Describe your creation"}</h4>
-        </div>
-        {draft.modelId && <button type="button" className="fal-studio-mini-link" onClick={onInspect}
-          disabled={schema.status === "loading"}>↻ Model schema</button>}
+        <h4>{draft.mode === "all" ? "Model inputs" :
+          draft.operation === "text-to-speech" ? "Write what to say" : "Describe your creation"}</h4>
+        {draft.modelId && <Button variant="ghost" size="sm" iconStart="refresh"
+          onClick={onInspect} disabled={schema.status === "loading"}>Model schema</Button>}
       </div>
-      {primaryField && <label className="fal-studio-field">
-        <span>{primaryField === "text" ? "Speech text" : "Prompt"} <small>{
-          primaryField === "text" ? "The exact words to speak" : "Describe the outcome you want"
-        }</small></span>
-        <textarea className="fal-studio-prompt nodrag nopan nowheel"
-          value={draft.prompt} disabled={busy} rows={3} maxLength={16000}
+      {primaryField && <>
+        <TextArea className="fal-studio-prompt nodrag nopan nowheel"
+          label={primaryField === "text" ? "Speech text" : "Prompt"}
+          description={primaryField === "text" ? "The exact words to speak" : "Describe the outcome you want"}
+          aria-label={primaryField === "text" ? "Text to speak" : "Media generation prompt"}
+          value={draft.prompt} onValueChange={setPrompt}
+          disabled={busy} minRows={3} maxRows={5} maxLength={16000}
           placeholder={draft.mode === "image" ? "A moody editorial photograph, soft daylight, sculptural architecture…" :
             draft.mode === "video" ? "A slow cinematic dolly shot through a glowing glass forest…" :
-            draft.operation === "text-to-speech" ? "Hello. Welcome to our studio. This is the text to narrate…" :
-            "Warm, expressive music, ambience or a sound effect…"}
-          onChange={(event) => setPrompt(event.target.value)}
-          aria-label={primaryField === "text" ? "Text to speak" : "Media generation prompt"} />
-        <small className="fal-studio-field-meta">{draft.prompt.length.toLocaleString()} / 16,000</small>
-      </label>}
-      {draft.modelId && schema.status === "loading" && (
-        <p className="fal-studio-quiet">Checking required inputs for this model…</p>
-      )}
-      {schema.warning && schema.modelId === draft.modelId && (
-        <p className="fal-studio-inline-warning">{schema.warning}</p>
-      )}
-      {fields.length > 0 && (
-        <div className="fal-studio-schema-grid">
-          {fields.map((field) => {
-            const val = parsedInputs[field.name] ?? field.default;
-            const value = val === null || val === undefined ? "" : String(val);
-            return (
-              <label key={field.name} className="fal-studio-field">
-                <span>{field.name.replace(/_/g, " ")} {field.required && <em>Required</em>}</span>
-                {!!field.description && <small title={field.description}>{field.description}</small>}
-                {(field.enum?.length ?? 0) > 0 ? (
-                  <select className="fal-studio-control nodrag nopan" disabled={busy}
-                    value={value}
-                    onChange={(event) => {
-                      const option = field.enum.find((item) => String(item) === event.target.value);
-                      updateField(field.name, option ?? event.target.value);
-                    }}>
-                    <option value="">Choose a value</option>
-                    {field.enum.map((option) => <option key={String(option)} value={String(option)}>{String(option)}</option>)}
-                  </select>
-                ) : field.type === "boolean" ? (
-                  <input type="checkbox" disabled={busy} checked={val === true}
-                    onChange={(event) => updateField(field.name, event.target.checked)} />
-                ) : (
-                  <input className="fal-studio-control nodrag nopan" disabled={busy}
-                    type={field.type === "number" || field.type === "integer" ? "number" : "text"}
-                    step={field.type === "integer" ? 1 : "any"}
-                    value={field.type === "json" && val != null ? JSON.stringify(val) : value}
-                    placeholder={field.format === "uri" || field.name.endsWith("_url") ? "https://…" : field.required ? "Required" : "Optional"}
-                    onChange={(event) => {
-                      const next = event.target.value;
-                      const number = Number(next);
-                      updateField(field.name,
-                        field.type === "number" || field.type === "integer" ? (next && Number.isFinite(number) ? number : next) :
-                          field.type === "json" ? (() => { try { return JSON.parse(next); } catch { return next; } })() : next);
-                    }} />
-                )}
-              </label>
-            );
-          })}
-        </div>
-      )}
-      <FalMediaUploader key={draft.modelId} mode={draft.mode} operation={draft.operation}
-        fields={fields.filter((field) => field.name.endsWith("_url") || field.format === "uri").map((field) => field.name)}
-        argumentsJson={draft.argumentsJson} disabled={uploadDisabled}
-        onJsonChange={setJson} onBusyChange={onUploadBusy} />
-      <details className="fal-studio-advanced" open={showAdvanced} onToggle={(event) => {
-        setShowAdvanced((event.currentTarget as HTMLDetailsElement).open);
-      }}>
-        <summary>Advanced model JSON <small>Full API control</small></summary>
-        <p>{draft.mode === "all" ? "Enter the input object from this model’s API schema." : "Set model-specific options such as image dimensions, duration, seed, or reference media URLs. JSON fields take precedence over the prompt box."}</p>
-        <textarea className="fal-studio-code nodrag nopan nowheel" aria-label="Advanced Fal model JSON"
-          spellCheck={false} rows={5} disabled={busy} value={draft.argumentsJson}
-          onChange={(event) => setJson(event.target.value)} />
-        {jsonError && <p className="fal-studio-field-error" role="alert">{jsonError}</p>}
-      </details>
+              draft.operation === "text-to-speech" ? "Hello. Welcome to our studio. This is the text to narrate…" :
+                "Warm, expressive music, ambience or a sound effect…"} />
+        <small className="fal-studio-field-meta">{formatCount(draft.prompt.length)} / {formatCount(16000)}</small>
+      </>}
+      {draft.modelId && schema.status === "loading" &&
+        <p className="fal-studio-quiet">Checking required inputs for this model…</p>}
+      {schema.warning && schema.modelId === draft.modelId &&
+        <StudioAlert variant="warning" label="Model inputs" body={schema.warning} />}
+      {!!fields.length && <div className="fal-studio-schema-grid">
+        {fields.slice(0, 4).map(renderField)}
+      </div>}
+      {fields.length > 4 &&
+        <StudioDisclosure label={"More model inputs (" + formatCount(fields.length - 4) + ")"}
+          open={showExtraFields} onOpenChange={setShowExtraFields}>
+          {showExtraFields && <div className="fal-studio-schema-grid">{fields.slice(4).map(renderField)}</div>}
+        </StudioDisclosure>}
+      <StudioDisclosure label="Reference media">
+        <FalMediaUploader key={draft.modelId} mode={draft.mode} operation={draft.operation}
+          fields={fields.filter((field) => field.name.endsWith("_url") || field.format === "uri").map((field) => field.name)}
+          argumentsJson={draft.argumentsJson} disabled={uploadDisabled}
+          onJsonChange={setJson} onBusyChange={onUploadBusy} />
+      </StudioDisclosure>
+      <StudioDisclosure className="fal-studio-advanced" label="Advanced model JSON"
+        open={showAdvanced} onOpenChange={setShowAdvanced}>
+        <p>{draft.mode === "all" ? "Enter the input object from this model’s API schema." :
+          "Set model-specific options such as dimensions, duration, seed, or reference URLs. JSON values take precedence over the prompt."}</p>
+        <TextArea className="fal-studio-code nodrag nopan nowheel" label="Advanced Fal model JSON"
+          aria-label="Advanced Fal model JSON" spellCheck={false} minRows={5} maxRows={9}
+          disabled={busy} value={draft.argumentsJson} onValueChange={setJson} />
+        {jsonError && <StudioAlert variant="error" label="Invalid model JSON" body={jsonError} />}
+      </StudioDisclosure>
     </section>
   );
 }
 
 function OutputGallery({ media, id }: { media: MediaState; id: string }) {
   const jobs = media.history || [];
+  const [showOlderJobs, setShowOlderJobs] = useState(false);
+  const renderJob = (job: MediaJob, index: number) => (
+    <div className="fal-studio-job" key={job.requestId || String(index)}>
+      <div className="fal-studio-job-heading">
+        <span><Icon name={iconFor(job.mode)} size="sm" /> <strong>{job.modelName || job.modelId}</strong></span>
+        <time>{dateString(job.createdAt)}</time>
+      </div>
+      {job.prompt && <p className="fal-studio-job-prompt">{job.prompt}</p>}
+      <div className="fal-studio-asset-grid">
+        {job.outputs?.map((item, i) => {
+          if (!safeAssetUrl(item.url)) return null;
+          const proxyUrl = withAuthToken("/api/fal-media/preview/" + encodeURIComponent(id) + "/" + index + "/" + i);
+          return <div key={item.url} className="fal-studio-asset">
+            {item.kind === "image" && safeInlineMediaUrl(item.url) ? (
+              <img src={proxyUrl} alt={job.prompt || "Generated image"} loading="lazy"
+                referrerPolicy="no-referrer" onError={(event) => { event.currentTarget.hidden = true; }} />
+            ) : item.kind === "video" && safeInlineMediaUrl(item.url) ? (
+              // Fal does not guarantee a caption track for generated video.
+              // eslint-disable-next-line jsx-a11y/media-has-caption
+              <video src={item.url} controls playsInline preload="metadata" className="nowheel"
+                aria-label={job.prompt || "Generated video"} />
+            ) : item.kind === "audio" && safeInlineMediaUrl(item.url) ? (
+              // Audio generation has no guaranteed transcript.
+              // eslint-disable-next-line jsx-a11y/media-has-caption
+              <audio src={item.url} controls preload="none" className="nowheel"
+                aria-label={job.prompt || "Generated audio"} />
+            ) : <p className="fal-studio-quiet">Inline preview unavailable. Open the source link to view this asset.</p>}
+            <a href={item.url} target="_blank" rel="noreferrer"
+              aria-label={"Open generated " + item.kind + " " + (i + 1) + " in a new tab"}>
+              <Icon name="external-link" size="xs" /> Open {item.kind}
+            </a>
+          </div>;
+        })}
+        {!job.resultPreview && (!job.outputs || job.outputs.length === 0) &&
+          <p className="fal-studio-quiet">The model returned no downloadable media URLs.</p>}
+      </div>
+      {typeof job.resultPreview === "string" && job.resultPreview.length > 0 &&
+        <StudioDisclosure className="fal-studio-result" label="Model response" defaultOpen={!job.outputs?.length}>
+          <pre className="nowheel nodrag">{job.resultPreview}</pre>
+        </StudioDisclosure>}
+    </div>
+  );
   return (
     <section className="fal-studio-gallery" aria-label="Generated media library">
-      <div className="fal-studio-section-heading">
-        <div><h4>Outputs <span>{jobs.length}</span></h4></div>
-      </div>
+      <div className="fal-studio-section-heading"><h4>Outputs <Badge>{formatCount(jobs.length)}</Badge></h4></div>
       {jobs.length === 0 ? (
-        <div className="fal-studio-gallery-empty">
-          <span aria-hidden="true">◈</span>
-          <strong>Made here, saved here.</strong>
-          <p>Completed jobs appear here with their output files or model response.</p>
-        </div>
-      ) : (
-        <div className="fal-studio-gallery-list nowheel nodrag">
-          {jobs.map((job, j) => (
-            <div className="fal-studio-job" key={job.requestId || String(j)}>
-              <div className="fal-studio-job-heading">
-                <span>{iconFor(job.mode)} <strong>{job.modelName || job.modelId}</strong></span>
-                <time>{dateString(job.createdAt)}</time>
-              </div>
-              {job.prompt && <p className="fal-studio-job-prompt" title={job.prompt}>{job.prompt}</p>}
-              <div className="fal-studio-asset-grid">
-                {job.outputs?.map((item, i) => {
-                  if (!safeAssetUrl(item.url)) return null;
-                  const proxyUrl = withAuthToken(`/api/fal-media/preview/${encodeURIComponent(id)}/${j}/${i}`);
-                  return (
-                    <div key={item.url} className="fal-studio-asset">
-                      {item.kind === "image" && safeInlineMediaUrl(item.url) ? (
-                        <img src={proxyUrl} alt={job.prompt || "Generated image"} loading="lazy"
-                          referrerPolicy="no-referrer" onError={(event) => { event.currentTarget.hidden = true; }} />
-                      ) : item.kind === "video" && safeInlineMediaUrl(item.url) ? (
-                        // Fal doesn't guarantee a VTT/SRT caption track. Never
-                        // invent inaccurate captions for generated video.
-                        // eslint-disable-next-line jsx-a11y/media-has-caption
-                        <video src={item.url} controls playsInline preload="metadata" className="nowheel" aria-label={job.prompt || "Generated video"} />
-                      ) : item.kind === "audio" && safeInlineMediaUrl(item.url) ? (
-                        // Audio generation has no guaranteed transcript;
-                        // prompt and source link are displayed for context.
-                        // eslint-disable-next-line jsx-a11y/media-has-caption
-                        <audio src={item.url} controls preload="none" className="nowheel" aria-label={job.prompt || "Generated audio"} />
-                      ) : (
-                        <p className="fal-studio-quiet">Inline preview unavailable. Open the source link to view this asset.</p>
-                      )}
-                      <a href={item.url} target="_blank" rel="noreferrer"
-                        aria-label={`Open generated ${item.kind} ${i+1} in a new tab`}>↗ Open {item.kind}</a>
-                    </div>
-                  );
-                })}
-                {!job.resultPreview && (!job.outputs || job.outputs.length === 0) && <p className="fal-studio-quiet">The model returned no downloadable media URLs.</p>}
-              </div>
-              {typeof job.resultPreview === "string" && job.resultPreview.length > 0 && (
-                <details className="fal-studio-result" open={!job.outputs?.length}>
-                  <summary>Model response</summary>
-                  <pre className="nowheel nodrag">{job.resultPreview}</pre>
-                </details>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+        <StudioEmpty icon="image" label="Made here, saved here."
+          body="Completed jobs appear here with their output files or model response." />
+      ) : <>
+        <div className="fal-studio-gallery-list">{jobs.slice(0, 2).map(renderJob)}</div>
+        {jobs.length > 2 && <StudioDisclosure label={"Previous outputs (" + formatCount(jobs.length - 2) + ")"}
+          open={showOlderJobs} onOpenChange={setShowOlderJobs}>
+          {showOlderJobs && <div className="fal-studio-gallery-list">
+            {jobs.slice(2).map((job, index) => renderJob(job, index + 2))}
+          </div>}
+        </StudioDisclosure>}
+      </>}
     </section>
   );
 }
 
 function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode>) {
   const lodCollapsed = useLodVisibility();
+  const requestApproval = useConfirm();
   const media = useMemo(() => parseMediaState(data.mediaJson), [data.mediaJson]);
   const catalog = useMemo(() => parseMediaCatalog(data.catalogJson), [data.catalogJson]);
   const schema = useMemo(() => parseMediaSchema(data.schemaJson), [data.schemaJson]);
@@ -515,11 +530,45 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
     data.onPrepare(draft);
     setLocalError("");
   };
-  const confirmGenerate = () => {
+  const confirmGenerate = async () => {
     if (!currentQuote?.id || busy || uploadBusy) return;
-    data.onGenerate(currentQuote.id);
+    const approvedQuote = currentQuote;
+    const approvedQuoteId = currentQuote.id;
+    const accepted = await requestApproval({
+      title: "Generate media?",
+      body: "This request is billable on Fal.ai. Estimates are historical averages, not spending limits. Actual cost depends on the output. This approves one request.",
+      confirmLabel: "Generate media",
+      billing: { estimate: formatMediaPrice(approvedQuote.estimate, approvedQuote.currency) },
+    });
+    if (!accepted) return;
+    if ((approvedQuote.expiresAt ?? 0) <= Math.floor(Date.now() / 1000)) {
+      setLocalError("Cost review expired. Refresh the estimate before generating.");
+      return;
+    }
+    data.onGenerate(approvedQuoteId);
   };
   const showQueue = ["submitting", "queued", "running", "cancelling", "stalled"].includes(media.status);
+  const deleteNode = async () => {
+    if (!showQueue || await requestApproval({
+      title: "Delete Fal Media Studio node?",
+      body: "This job may continue on Fal after the node is removed.",
+      confirmLabel: "Delete node", destructive: true,
+    })) data.onDelete();
+  };
+  const acknowledge = async () => {
+    if (await requestApproval({
+      title: "Unlock studio?",
+      body: "Have you checked the Fal dashboard and verified the previous submission's outcome? This will not cancel a remote job or refund charges.",
+      confirmLabel: "Unlock studio",
+    })) data.onAcknowledge();
+  };
+  const cancelRequest = async () => {
+    if (await requestApproval({
+      title: "Cancel Fal request?",
+      body: "Ask Fal to cancel this request? Jobs already running may still incur charges.",
+      confirmLabel: "Cancel request", destructive: true,
+    })) data.onCancel();
+  };
   const statusText = media.status === "submitting" ? "Submitting to Fal…" :
     media.status === "queued" ? "In the Fal queue" :
     media.status === "running" ? "Generating" :
@@ -534,35 +583,30 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
     <NodeShell kindClassName="fal-studio-node" selected={!!selected}
       collapsed={lodCollapsed} bodyClassName="fal-studio-body"
       header={<div className="fal-studio-header">
-        <div className="fal-studio-header-icon" aria-hidden="true"><NodeGlyph name="media" /></div>
-        <div className="fal-studio-header-copy">
-          <h3>Fal Media Studio</h3>
-        </div>
-        <div className="fal-studio-status" data-status={media.status}>
-          <i aria-hidden="true" />{statusText}
-        </div>
-        <button type="button" className="fal-studio-icon-button fal-studio-delete"
-          title="Remove studio node" aria-label="Delete Fal Media Studio node"
-          onClick={() => {
-            if (!showQueue || window.confirm("This job may continue on Fal. Remove the Studio node anyway?")) {
-              data.onDelete();
-            }
-          }}>×</button>
+        <h3>Fal Media Studio</h3>
+        <Badge className="fal-studio-status">
+          {showQueue ? <Spinner size={12} decorative /> :
+            <Icon name={media.status === "completed" ? "status-success" :
+              media.status === "failed" ? "status-error" :
+                media.status === "cancelled" ? "status-cancelled" : "status-info"} size="sm" />}
+          {statusText}
+        </Badge>
+        <IconButton size="sm" className="fal-studio-delete nodrag" icon="trash"
+          label="Delete Fal Media Studio node" onClick={deleteNode} />
       </div>}>
       <div className="fal-studio-app nodrag nopan">
         <div className="fal-studio-mode-tabs" role="group" aria-label="Media generation type">
-          {(["image", "video", "audio", "all"] as const).map((mode) => (
-            <button key={mode} type="button" aria-pressed={draft.mode === mode}
-              disabled={busy || uploadBusy} onClick={() => chooseMode(mode)}>
-              <span aria-hidden="true">{iconFor(mode)}</span> {mode === "all" ? "All models" : mode[0].toUpperCase()+mode.slice(1)}
-            </button>
-          ))}
+          {(["image", "video", "audio", "all"] as const).map((mode) =>
+            <ToggleButton key={mode} size="sm" className="fal-studio-mode-button"
+              pressed={draft.mode === mode} disabled={busy || uploadBusy}
+              onPressedChange={() => chooseMode(mode)} icon={iconFor(mode)}
+              label={mode === "all" ? "All models" : mode[0].toUpperCase() + mode.slice(1)} />)}
         </div>
         {draft.mode !== "all" && <div className="fal-studio-operation-tabs" role="group" aria-label="Generation workflow">
-          {MEDIA_OPERATIONS[draft.mode].map((op) => (
-            <button key={op.id} type="button" aria-pressed={draft.operation === op.id}
-              disabled={busy || uploadBusy} onClick={() => chooseOperation(op.id)}>{op.label}</button>
-          ))}
+          {MEDIA_OPERATIONS[draft.mode].map((op) =>
+            <ToggleButton key={op.id} size="sm" label={op.label}
+              pressed={draft.operation === op.id} disabled={busy || uploadBusy}
+              onPressedChange={() => chooseOperation(op.id)} />)}
         </div>}
         <ModelLibrary draft={draft} catalog={catalog} isBusy={busy || uploadBusy}
           onSearch={data.onSearch} onSelect={chooseModel} onFavorite={data.onFavorite} />
@@ -574,88 +618,73 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
           onInspect={() => draft.modelId && data.onInspect(draft.modelId)} />
         <div className="fal-studio-rule" />
         <section className="fal-studio-generate" aria-label="Cost review and generation">
-          <div className="fal-studio-section-heading">
-            <h4>Review and generate</h4>
-          </div>
-          {draft.modelId ? (
-            <div className="fal-studio-selected-summary">
-              <span>Selected model</span>
-              <strong>{draft.modelName || draft.modelId}</strong>
-              <small>{draft.modelId}</small>
-            </div>
-          ) : <p className="fal-studio-quiet">Choose a model to review its cost and generate.</p>}
-          {!!(localError || (media.status === "unconfirmed" ? "" : media.error)) && (
-            <div role="alert" className="fal-studio-inline-alert">
-              <strong>{media.status === "failed" ? "The generation did not complete" : "Action needed"}</strong>
-              <p>{localError || media.error}</p>
-            </div>
-          )}
-          {media.status === "unconfirmed" ? (
-            <div className="fal-studio-job-progress" role="alert">
-              <strong>Submission outcome unknown</strong>
-              <p>Fal may have accepted and charged your last request, but Graphlink did not receive a job ID.
-                Do not submit it again until you have checked your Fal account.</p>
-              <a href="https://fal.ai/dashboard" target="_blank" rel="noreferrer"
-                className="fal-studio-dashboard-link">Open Fal dashboard ↗</a>
-              <div className="fal-studio-action-row">
-                <button type="button" className="fal-studio-button-outline"
-                  onClick={() => {
-                    if (window.confirm(
-                      "Have you checked the Fal dashboard for this generation? Only unlock if you have verified the previous submission's outcome. This will not cancel a remote job."
-                    )) data.onAcknowledge();
-                  }}>I've checked — unlock the Studio</button>
-              </div>
-              <small>Recovery requires your confirmation. Graphlink will never automatically retry an uncertain paid request.</small>
-            </div>
-          ) : showQueue ? (
-            <div className="fal-studio-job-progress" role="status" aria-live="polite">
-              <div className="fal-studio-progress-dots"><i/><i/><i/></div>
-              <strong>{statusText}</strong>
-              <p>{media.queuePosition > 0 ? `Queue position ${media.queuePosition}` :
-                media.status === "stalled" ? "You can retry checking the status without resubmitting." :
-                "Your request is safe in the remote queue. You can keep working."}</p>
-              <div className="fal-studio-action-row">
-                <button className="fal-studio-button-secondary" type="button" onClick={data.onRefresh}>↻ Check status</button>
-                {media.requestId && media.status !== "cancelling" && (
-                  <button className="fal-studio-button-outline" type="button"
-                    onClick={() => {
-                      if (window.confirm("Ask Fal to cancel this request? Jobs already running may still incur charges.")) data.onCancel();
-                    }}>Cancel request</button>
-                )}
-              </div>
-              {media.requestId && <small>Job ID · {media.requestId}</small>}
-            </div>
-          ) : <>
-            {quote && !currentQuote && <p className="fal-studio-inline-warning">Pricing review expired or inputs changed. Refresh your estimate to generate.</p>}
-            {!!currentQuote && (
-              <div className="fal-studio-quote">
-                <div className="fal-studio-quote-head"><span>Cost review</span><strong>Before you generate</strong></div>
-                <div className="fal-studio-quote-row"><span>Live model rate</span>
-                  <strong>{formatMediaPrice(currentQuote.price, currentQuote.currency)}{currentQuote.price != null ? ` / ${unitName(currentQuote.unit || "")}` : ""}</strong>
-                </div>
-                <div className="fal-studio-quote-row"><span>Historical one-call estimate</span>
-                  <strong>{formatMediaPrice(currentQuote.estimate, currentQuote.currency)}</strong>
-                </div>
-                <p>Estimates are historical averages, not parameter-specific quotations or spending limits. Actual billing depends on duration, size and output. Your approval authorizes one request.</p>
-                {!!currentQuote.warning && <small className="fal-studio-inline-warning">{currentQuote.warning}</small>}
-              </div>
-            )}
+          <div className="fal-studio-section-heading"><h4>Review and generate</h4></div>
+          {draft.modelId ? <div className="fal-studio-selected-summary">
+            <span>Selected model</span>
+            <strong>{draft.modelName || draft.modelId}</strong>
+            <small>{draft.modelId}</small>
+          </div> : <p className="fal-studio-quiet">Choose a model to review its cost and generate.</p>}
+          {!!(localError || (media.status === "unconfirmed" ? "" : media.error)) &&
+            <StudioAlert variant="error" label={media.status === "failed" ? "The generation did not complete" : "Action needed"}
+              body={localError || media.error} />}
+          {media.status === "unconfirmed" ? <div className="fal-studio-job-progress" role="alert">
+            <strong>Submission outcome unknown</strong>
+            <p>Fal may have accepted and charged your last request, but Graphlink did not receive a job ID.
+              Do not submit it again until you have checked your Fal account.</p>
+            <a href="https://fal.ai/dashboard" target="_blank" rel="noreferrer" className="fal-studio-dashboard-link">
+              <Icon name="external-link" size="sm" /> Open Fal dashboard
+            </a>
             <div className="fal-studio-action-row">
-              <button type="button" className="fal-studio-button-primary"
+              <Button size="sm" variant="secondary" onClick={acknowledge}>I've checked — unlock the Studio</Button>
+            </div>
+            <small>Recovery requires your confirmation. Graphlink will never automatically retry an uncertain paid request.</small>
+          </div> : showQueue ? <div className="fal-studio-job-progress" role="status" aria-live="polite">
+            <Spinner size={16} decorative />
+            <strong>{statusText}</strong>
+            <p>{media.queuePosition > 0 ? "Queue position " + formatCount(media.queuePosition) :
+              media.status === "stalled" ? "You can retry checking the status without resubmitting." :
+                "Your request is safe in the remote queue. You can keep working."}</p>
+            <div className="fal-studio-action-row">
+              <Button size="sm" variant="secondary" iconStart="refresh" onClick={data.onRefresh}>Check status</Button>
+              {media.requestId && media.status !== "cancelling" &&
+                <Button size="sm" variant="ghost" onClick={cancelRequest}>Cancel request</Button>}
+            </div>
+            {media.requestId && <small>Job ID · {media.requestId}</small>}
+          </div> : <>
+            {quote && !currentQuote &&
+              <StudioAlert variant="warning" label="Pricing review expired"
+                body="Inputs changed or the review expired. Refresh the estimate to generate." />}
+            {!!currentQuote && <div className="fal-studio-quote">
+              <div className="fal-studio-quote-head"><span>Cost review</span><strong>Before you generate</strong></div>
+              <div className="fal-studio-quote-row"><span>Live model rate</span>
+                <strong>{formatMediaPrice(currentQuote.price, currentQuote.currency)}
+                  {currentQuote.price != null ? " / " + unitName(currentQuote.unit || "") : ""}</strong>
+              </div>
+              <div className="fal-studio-quote-row"><span>Historical one-call estimate</span>
+                <strong>{formatMediaPrice(currentQuote.estimate, currentQuote.currency)}</strong>
+              </div>
+              <p>Estimates are historical averages, not parameter-specific quotations or spending limits.
+                Actual billing depends on duration, size and output. Your approval authorizes one request.</p>
+              {currentQuote.warning && <StudioAlert variant="warning" label="Estimate warning" body={currentQuote.warning} />}
+            </div>}
+            <div className="fal-studio-action-row">
+              <Button size="sm" variant="primary"
                 disabled={!draft.modelId || uploadBusy || media.quote?.status === "loading"}
                 onClick={currentQuote ? confirmGenerate : prepare}>
                 {media.quote?.status === "loading" ? "Checking price…" :
-                  currentQuote ? "Confirm & generate ↗" : "Review cost & generate ↗"}
-              </button>
-              {!!currentQuote && <button type="button" className="fal-studio-button-secondary"
-                onClick={prepare}>Refresh quote</button>}
+                  currentQuote ? "Confirm & generate" : "Review cost & generate"}
+              </Button>
+              {!!currentQuote && <Button size="sm" variant="secondary" onClick={prepare}>Refresh quote</Button>}
             </div>
             {currentQuote && <small className="fal-studio-consent">One confirmation · No automatic repeat charges</small>}
           </>}
         </section>
         <div className="fal-studio-rule" />
         <OutputGallery media={media} id={id} />
-        <div className="fal-studio-footer"><span>Powered by fal.ai</span><span>Catalog prices refresh as models change · Media URLs may expire</span></div>
+        <div className="fal-studio-footer">
+          <span>Powered by Fal.ai</span>
+          <span>Catalog prices refresh as models change · Media URLs may expire</span>
+        </div>
       </div>
     </NodeShell>
   );
