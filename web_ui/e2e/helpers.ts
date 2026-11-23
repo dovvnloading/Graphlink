@@ -63,12 +63,12 @@ export async function gotoApp(page: Page): Promise<void> {
   }
 
   await page.locator('[data-overlay-trigger="library"]').click();
-  const libraryDialog = page.getByRole("dialog", { name: "Chat Library" });
+  const libraryDialog = page.getByRole("dialog", { name: "Chat library" });
   await expect(libraryDialog).toBeVisible();
   const acceptReset = (dialog: Dialog) => { void dialog.accept(); };
   page.on("dialog", acceptReset);
   try {
-    await libraryDialog.getByRole("button", { name: "New Chat", exact: true }).first().click();
+    await libraryDialog.getByRole("button", { name: "New chat", exact: true }).first().click();
     await expect(libraryDialog).toBeHidden();
   } finally {
     page.off("dialog", acceptReset);
