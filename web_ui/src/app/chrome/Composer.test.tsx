@@ -753,6 +753,27 @@ describe("Composer", () => {
     expect(openOllamaSettings).toHaveBeenCalledOnce();
   });
 
+  it("keeps keyboard focus inside the model menu after the list reloads, so Escape closes it", async () => {
+    const user = userEvent.setup();
+    const { store, loadPickerModels } = makeStore({
+      composer: { request: { ...initialComposerState.request, canSend: true } },
+    });
+    loadPickerModels.mockResolvedValue([]);
+    const { container } = render(
+      <OverlayProvider>
+        {/* @ts-expect-error Test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    const trigger = container.querySelector('[data-overlay-trigger="model"]') as HTMLButtonElement;
+    await user.click(trigger);
+    const menu = await screen.findByRole("menu", { name: "Choose a model" });
+    await screen.findByText("No models available. Configure a model in Settings.");
+    expect(menu.contains(document.activeElement)).toBe(true);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "Choose a model" })).toBeNull();
+  });
+
   it("reloads the model list on every open so a newly configured provider appears", async () => {
     const user = userEvent.setup();
     const { store, loadPickerModels } = makeStore({

@@ -26,6 +26,18 @@ function ButtonHarness() {
 }
 
 describe("kit menu structure and focus", () => {
+  it("closes an open menu with Escape even when focus is back on its trigger", async () => {
+    const user = userEvent.setup();
+    render(<ButtonHarness />);
+    const trigger = screen.getByRole("button", { name: "Actions" });
+    await user.click(trigger);
+    expect(screen.getByRole("menu", { name: "Actions" })).toBeInTheDocument();
+    trigger.focus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "Actions" })).toBeNull();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("exposes trigger state, group, shortcut, disabled reason, checked roles and last-group destructive action", async () => {
     const user = userEvent.setup();
     render(<ButtonHarness />);

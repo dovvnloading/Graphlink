@@ -478,6 +478,12 @@ export function MenuButton({ label, children, menuLabel, className, disabled, on
           if (event.key === "ArrowDown" && !position) {
             event.preventDefault();
             showMenu();
+          } else if (event.key === "Escape" && position) {
+            // Focus can sit on the trigger while the menu is open (a pointer
+            // open, or a sibling layer's focus restore); Escape still closes.
+            event.preventDefault();
+            event.stopPropagation();
+            setPosition(null);
           }
         }}>
         {label}<Icon name="chevron-down" size="sm" />
