@@ -556,7 +556,7 @@ describe("ChatLibraryDialog on the kit", () => {
     const { user, push } = setup();
     await user.click(screen.getByText("open library"));
     act(() => push({ ...SNAPSHOT, revision: 2, notice: "Could not load saved chats: disk error" }));
-    expect(screen.getByRole("status")).toHaveTextContent(/Could not load saved chats: disk error/);
+    expect(screen.getByText("Could not load saved chats: disk error")).toHaveAttribute("role", "status");
   });
 
   it("workspace picker shows only selected graphs, and All restores the full list", async () => {
