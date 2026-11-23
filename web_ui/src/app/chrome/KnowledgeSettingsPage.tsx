@@ -220,7 +220,7 @@ export function KnowledgeSettingsPage({
             a new opt-in. Turning this off stops future requests, but cannot
             recall text already sent to the provider.
           </p>
-        </fieldset>
+        </FieldGroup>
       )}
 
       <p className="settings-field-hint">
