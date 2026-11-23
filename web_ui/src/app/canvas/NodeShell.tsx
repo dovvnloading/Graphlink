@@ -164,7 +164,7 @@ export function NodeShell({
         </div>
         <div className="node-lod-overview" aria-hidden="true">
           <Icon name={icon} size="sm" className="node-lod-icon" />
-          <span className="node-lod-title">{overviewTitle}</span>
+          <span className="node-lod-title" data-title={overviewTitle} />
         </div>
         {!collapsed && (
           <div className={"scene-node-body " + bodyClassName} onDoubleClick={onBodyDoubleClick}>
