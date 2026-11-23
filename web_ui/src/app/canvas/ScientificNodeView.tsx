@@ -139,7 +139,7 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
     <div className="science-result-head">
       <h4>Last successful run · {title}</h4>
       <div className="science-result-status">
-          <StatusPill status={freshness ? "Out of date" : "Done"} />
+          <span aria-hidden="true"><StatusPill status={freshness ? "Out of date" : "Done"} /></span>
           {freshness && <p role="note" className="science-result-notice">{freshness}</p>}
         </div>
       {headline ? <div className="science-result-highlight">

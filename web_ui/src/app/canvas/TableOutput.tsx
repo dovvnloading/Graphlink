@@ -101,8 +101,8 @@ export default function TableOutput({ node, store, editing = false }: TableOutpu
       <strong>{node.tableValueColumn} by {node.tableLabelColumn}</strong>
       <span>Version {node.tableOutputVersion}{node.tableInputSourceId && ` · Table ${node.tableInputSourceId}`}</span>
     </div>
-    <div className="table-output-status" data-state={node.tableInputStatus}>
-      <StatusPill status={node.tableInputStatus === "current" ? "Done" : node.tableInputStatus === "stale" ? "Out of date" : "Skipped"} />
+    <div className="table-output-status" role="status" data-state={node.tableInputStatus}>
+      <span aria-hidden="true"><StatusPill status={node.tableInputStatus === "current" ? "Done" : node.tableInputStatus === "stale" ? "Out of date" : "Skipped"} /></span>
       <span>{statusText}</span>
     </div>
     {(node.tableOutputEdited || editing || node.pendingRequestId || node.artifactProposalId) && <p>
