@@ -165,7 +165,7 @@ describe("read-only Document View comparison dialog", () => {
   it("styles the actual focusable reading panes with the shared visible focus token", () => {
     // jsdom cannot implement :focus-visible or a layout engine; lock the
     // CSS selector to the real tabindex=0 element, not its inert section.
-    const css = readFileSync(join(REPO_SRC, "app/styles.css"), "utf-8");
+    const css = readFileSync(join(REPO_SRC, "app/canvas/ChatVersionCompareDialog.css"), "utf-8");
     const start = css.indexOf(".chat-version-compare-text:focus-visible,");
     expect(start).toBeGreaterThanOrEqual(0);
     const rule = css.slice(start, css.indexOf("}", start));
