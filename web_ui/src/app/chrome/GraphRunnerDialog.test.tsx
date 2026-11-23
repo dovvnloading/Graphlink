@@ -55,12 +55,13 @@ describe("Graph Runner", () => {
       .mockResolvedValueOnce({ previewToken: "selection", steps: [step] })
       .mockResolvedValueOnce({ previewToken: "all", steps: [] });
     await user.click(screen.getByRole("button", { name: "Open runner" }));
-    const scope = screen.getByRole("combobox", { name: "Run scope" });
-    expect(scope).toHaveValue("selection");
+    const scope = screen.getByRole("button", { name: "Run scope" });
+    expect(scope).toHaveTextContent("Selected nodes");
     const preview = screen.getByRole("button", { name: "Preview run" });
     await user.click(preview);
     expect(request).toHaveBeenLastCalledWith("scene", "previewGraphRun", [["source", "other"]]);
-    await user.selectOptions(scope, "all");
+    await user.click(scope);
+    await user.click(screen.getByRole("option", { name: "Whole graph" }));
     expect(screen.queryByRole("button", { name: "Run graph" })).toBeNull();
     await user.click(preview);
     expect(request).toHaveBeenLastCalledWith("scene", "previewGraphRun", [[]]);
@@ -75,7 +76,7 @@ describe("Graph Runner", () => {
       .mockResolvedValueOnce({ previewToken: "review-only", steps: [step] });
     store.requestGraphRunnerNodes(["bound-model", "bound-model"]);
     await user.click(screen.getByRole("button", { name: "Open runner" }));
-    expect(await screen.findByRole("combobox", { name: "Run scope" })).toHaveValue("selection");
+    expect(await screen.findByRole("button", { name: "Run scope" })).toHaveTextContent("Selected nodes");
     await user.click(screen.getByRole("button", { name: "Preview run" }));
     expect(request).toHaveBeenCalledWith("scene", "previewGraphRun", [["bound-model"]]);
     expect(await screen.findByRole("region", { name: "Run preview" })).toBeInTheDocument();
@@ -94,14 +95,15 @@ describe("Graph Runner", () => {
       .mockResolvedValueOnce({ previewToken: "old", steps: [step] })
       .mockResolvedValueOnce({ previewToken: "bound", steps: [step] });
     await user.click(screen.getByRole("button", { name: "Open runner" }));
-    const scope = screen.getByRole("combobox", { name: "Run scope" });
-    await user.selectOptions(scope, "all");
+    const scope = screen.getByRole("button", { name: "Run scope" });
+    await user.click(scope);
+    await user.click(screen.getByRole("option", { name: "Whole graph" }));
     const preview = screen.getByRole("button", { name: "Preview run" });
     await user.click(preview);
     expect(await screen.findByRole("region", { name: "Run preview" })).toBeVisible();
 
     act(() => store.requestGraphRunnerNodes(["bound-b", "bound-a", "bound-b"]));
-    expect(scope).toHaveValue("selection");
+    expect(scope).toHaveTextContent("Selected nodes");
     expect(screen.queryByRole("region", { name: "Run preview" })).toBeNull();
     await user.click(preview);
     expect(request).toHaveBeenLastCalledWith("scene", "previewGraphRun", [["bound-b", "bound-a"]]);
@@ -283,7 +285,7 @@ describe("Graph Runner", () => {
     await user.click(toggle); // close
     await user.click(toggle); // saved connections are loaded fresh when reopened
     expect(request).toHaveBeenCalledWith("scene", "getGraphModelBindings", []);
-    expect(await screen.findByRole("combobox", { name: "Saved model connections" })).toHaveValue("destination");
+    expect(await screen.findByRole("button", { name: "Saved model connections" })).toHaveTextContent("qwen3:8b");
     expect(screen.getByRole("textbox", { name: "Installed Ollama model ID" })).toHaveValue("qwen3:8b");
   });
 

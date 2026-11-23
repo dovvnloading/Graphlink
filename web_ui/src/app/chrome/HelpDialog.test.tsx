@@ -156,9 +156,9 @@ describe("HelpDialog", () => {
     await renderOpen();
     // Start Here documents the palette; the chord is an element, so it can
     // be found as one rather than by parsing a heading string.
-    const kbds = document.querySelectorAll("kbd.help-kbd");
+    const kbds = document.querySelectorAll(".help-kbd[role=\"group\"]");
     expect(kbds.length).toBeGreaterThan(0);
-    expect([...kbds].map((k) => k.textContent)).toContain("Ctrl+K");
+    expect([...kbds].map((k) => k.getAttribute("aria-label"))).toContain("Ctrl+K");
   });
 
   describe("search", () => {

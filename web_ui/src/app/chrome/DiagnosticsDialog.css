@@ -1,0 +1,17 @@
+.diagnostics-dialog .overlay-dialog-body { display: flex; flex-direction: column; gap: var(--gl-space-4); }
+.diagnostics-health-grid, .diagnostics-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--gl-space-3); margin: 0; }
+.diagnostics-health-grid div, .diagnostics-stats div { display: flex; flex-direction: column; gap: var(--gl-space-1); min-width: 0; }
+.diagnostics-health-grid dt, .diagnostics-stats dt { font-size: var(--gl-text-xs); color: var(--gl-surface-text-muted); }
+.diagnostics-health-grid dd, .diagnostics-stats dd { margin: 0; font-size: var(--gl-text-sm); color: var(--gl-surface-text-primary); overflow-wrap: anywhere; }
+.diagnostics-actions { display: flex; flex-wrap: wrap; gap: var(--gl-space-2); margin-top: var(--gl-space-4); }
+.diagnostics-section-title { margin: var(--gl-space-4) 0 var(--gl-space-2); font-size: var(--gl-text-sm); }
+.diagnostics-empty { margin: 0; font-size: var(--gl-text-sm); color: var(--gl-surface-text-muted); }
+.diagnostics-table-wrap { overflow-x: auto; }
+.diagnostics-table { border-collapse: collapse; width: 100%; font-size: var(--gl-text-sm); }
+.diagnostics-table th, .diagnostics-table td { text-align: left; border-bottom: 1px solid var(--gl-surface-border); padding: var(--gl-space-2); }
+.diagnostics-error-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--gl-space-2); }
+.diagnostics-error-item { display: flex; flex-wrap: wrap; gap: var(--gl-space-2); padding: var(--gl-space-2); border-radius: var(--gl-radius-sm); background: var(--gl-surface-inset); font-size: var(--gl-text-xs); }
+.diagnostics-error-item p { width: 100%; margin: 0; }
+.diagnostics-bundle-preview-wrap { display: grid; gap: var(--gl-space-2); }
+.diagnostics-bundle-preview { padding: var(--gl-space-3); background: var(--gl-surface-inset); border-radius: var(--gl-radius-sm); max-height: 180px; overflow: auto; font-size: var(--gl-text-xs); }
+.diagnostics-bundle-path { margin: 0; overflow-wrap: anywhere; color: var(--gl-surface-text-muted); font-size: var(--gl-text-xs); }
