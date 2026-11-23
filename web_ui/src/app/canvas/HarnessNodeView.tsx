@@ -82,6 +82,7 @@ export interface HarnessPlanStepData {
 }
 
 export interface HarnessNodeData extends Record<string, unknown> {
+  title?: string;
   harnessGoal: string;
   harnessReply: string;
   harnessStatus: string;
@@ -718,7 +719,7 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
       }}
       header={
         <NodeHeading className="plan-node-title">
-          <Badge className="plan-node-badge">Agent</Badge>
+          <Badge className="plan-node-badge">{data.title === "Browser Agent" ? "Browser Agent" : "Agent"}</Badge>
           <span className="plan-node-goal">{data.harnessGoal || "Untitled task"}</span>
           {modelStore && <AgentModelTrigger store={modelStore} name={modelPickerName} />}
           <button ref={settingsTriggerRef} type="button"

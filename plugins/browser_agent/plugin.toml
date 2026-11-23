@@ -1,0 +1,10 @@
+[plugin]
+id = "browser_agent"
+name = "Browser Agent"
+version = "1.0.0"
+sdk_api_version = 1
+entry_point = "plugin:register"
+description = "Use a consent-gated Playwright browser to research live websites and publish evidence on the canvas."
+
+[frontend]
+view = "generic"

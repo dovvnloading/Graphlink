@@ -173,7 +173,7 @@ _CATEGORY_META = [
 # _builtin_picker_sort_key's own docstring for the stable-sort mechanics
 # that guarantee that.
 _BUILTIN_PICKER_ORDER = (
-    "System Prompt", "Conversation Node", "Web Research", "Gitlink",
+    "System Prompt", "Conversation Node", "Web Research", "Browser Agent", "Gitlink",
     "Virtual Environment Runner", "HTML Renderer", "Artifact / Drafter",
     "Review Lens",
 )

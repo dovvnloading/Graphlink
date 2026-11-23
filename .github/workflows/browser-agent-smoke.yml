@@ -1,0 +1,84 @@
+name: Browser Agent Chromium smoke
+
+# Python Playwright is intentionally optional in the base Graphlink install.
+# This targeted job exercises the actual Chromium engine, request route
+# interception, approved DOM interaction and screenshot publication surface.
+# The test fulfills its own fixture HTML; it never contacts an external site.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/browser-agent-smoke.yml"
+      - "graphlink_plugins/browser_agent/**"
+      - "plugins/browser_agent/**"
+      - "backend/harness/tools_browser.py"
+      - "backend/tests/test_browser_agent_*"
+      - "web_ui/e2e/browser-agent-plugin.spec.ts"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-agent-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  chromium-smoke:
+    name: Offline Python Playwright Chromium smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Graphlink runtime and Chromium test dependencies
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install pytest==9.1.1 pytest-xdist==3.8.0 hypothesis==6.165.10 playwright==1.57.0
+      - name: Install headless Chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Exercise the actual Playwright/Chromium path without network
+        run: python -m pytest -q -n0 backend/tests/test_browser_agent_chromium_smoke.py
+
+  plugin-picker:
+    name: Browser Agent production SPA picker and screenshot
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: web_ui/.nvmrc
+          cache: npm
+          cache-dependency-path: web_ui/package-lock.json
+      - name: Install locked backend dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: web_ui
+      - name: Build production SPA
+        run: npm run build
+        working-directory: web_ui
+      - name: Install frontend Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: web_ui
+      - name: Browser Agent plugin-picker E2E
+        run: npx playwright test browser-agent-plugin --retries=0 --trace=retain-on-failure
+        working-directory: web_ui
+      - name: Preserve plugin-picker UI evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: browser-agent-plugin-picker
+          path: |
+            web_ui/test-results/**/browser-agent-plugin.png
+            web_ui/test-results/**/*.zip
+          if-no-files-found: warn
+          retention-days: 14

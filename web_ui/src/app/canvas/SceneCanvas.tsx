@@ -1736,6 +1736,7 @@ export function toFlowNodes(
         position: { x: n.x, y: n.y },
         style: dimmedVal ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
+          title: n.title,
           harnessGoal: n.harnessGoal,
           harnessReply: n.harnessReply,
           harnessStatus: n.harnessStatus,
