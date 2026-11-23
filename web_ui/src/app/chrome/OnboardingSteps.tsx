@@ -24,12 +24,12 @@ export function OnboardingSteps({ step, setStep, providerMode, route, store, ope
 
   return (
     <Dialog name="onboarding" {...{ title: "Welcome to Graphlink" }} size="md" className="onboarding-dialog"
-      status={<Button size="sm" variant="ghost" onClick={overlays.close}>Skip setup</Button>}
+      status={<Button size="sm" variant="ghost" onClick={() => overlays.close()}>Skip setup</Button>}
       footer={<>
         {step > 0 && <Button variant="secondary" onClick={() => setStep((value) => value - 1)}>Back</Button>}
         {step < STEPS.length - 1
           ? <Button variant="primary" onClick={() => setStep((value) => value + 1)}>Next</Button>
-          : <Button variant="primary" onClick={overlays.close}>Finish</Button>}
+          : <Button variant="primary" onClick={() => overlays.close()}>Finish</Button>}
       </>}>
       <ol className="onboarding-stepper" aria-label="Setup progress">
         {STEPS.map((label, index) => (
