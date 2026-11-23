@@ -8,7 +8,7 @@ async function grantPacks(page: Page, names: string[]) {
   const settings = page.getByRole("dialog", { name: "Settings" });
   await settings.getByRole("button", { name: "Plugins", exact: true }).click();
   for (const name of names) {
-    const grant = settings.getByRole("checkbox", { name: `Granted: ${name}`, exact: true });
+    const grant = settings.getByRole("switch", { name: `Granted: ${name}`, exact: true });
     if (!(await grant.isChecked())) await grant.click();
     await expect(grant).toBeChecked();
   }

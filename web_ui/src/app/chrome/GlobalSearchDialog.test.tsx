@@ -196,31 +196,36 @@ describe("GlobalSearchDialog", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/search failed/i);
   });
 
-  // Mirrors KnowledgeSearchDialog's own identical, already-adversarially-
-  // reviewed test: runSearch()'s `searching` early-return is what actually
-  // makes the monotonic-requestId guard below it unreachable in normal use
-  // (both the Search button and Enter share the same gated function, so a
-  // second dispatch while the first is still in flight is impossible to
-  // trigger through the UI, not merely discarded after the fact) - proven
-  // here the same way Knowledge proves it: a second Enter press while the
-  // first request is still pending fires no second transport.request call
-  // at all.
-  it("a second Enter press while a search is already in flight does not fire a duplicate request", async () => {
+  it("a newer query can run while an older reply is in flight; stale results are ignored", async () => {
     const { user, request } = await setup();
     let resolveFirst: (value: unknown) => void = () => {};
-    request.mockImplementationOnce(
-      () => new Promise((resolve) => { resolveFirst = resolve; }),
-    );
-
+    let resolveSecond: (value: unknown) => void = () => {};
+    request.mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }));
+    request.mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve; }));
     const input = screen.getByPlaceholderText(/search every workspace/i);
     await user.type(input, "first query{Enter}");
     expect(request).toHaveBeenCalledTimes(1);
-
     await user.clear(input);
     await user.type(input, "second query{Enter}");
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
 
-    resolveFirst({ results: [GRAPH_HIT] });
+    resolveFirst({ results: [DOCUMENT_HIT] });
+    expect(screen.queryByText("Fox Story")).toBeNull();
+    resolveSecond({ results: [GRAPH_HIT] });
     expect(await screen.findByText("Workspace B / Onboarding Notes")).toBeInTheDocument();
+  });
+
+  it("filters grouped results to Graphs and Knowledge via the kit scope switch", async () => {
+    const { user, request } = await setup();
+    request.mockResolvedValueOnce({ results: [DOCUMENT_HIT, GRAPH_HIT] });
+    await user.type(screen.getByPlaceholderText(/search every workspace/i), "query{Enter}");
+    expect(await screen.findByText("2 results found")).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Knowledge" }));
+    expect(screen.getByText("1 result found")).toBeInTheDocument();
+    expect(screen.queryByText("Workspace B / Onboarding Notes")).toBeNull();
+    expect(screen.getByText("Fox Story")).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Graphs" }));
+    expect(screen.getByText("Workspace B / Onboarding Notes")).toBeInTheDocument();
+    expect(screen.queryByText("Fox Story")).toBeNull();
   });
 });

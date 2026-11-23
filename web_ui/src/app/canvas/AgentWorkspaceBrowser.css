@@ -1,0 +1,77 @@
+/* The agent's on-demand, read-only workspace browser. It sits below the
+   folder binding and scrolls internally instead of expanding the canvas card. */
+.harness-workspace-files-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gl-space-1-5);
+}
+.harness-files-browser {
+  min-width: 0;
+  padding: var(--gl-space-1-5);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  background: var(--gl-surface-inset, var(--gl-surface-window));
+}
+.harness-files-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-1-5);
+}
+.harness-files-current,
+.harness-files-root,
+.harness-files-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.harness-files-current {
+  flex: 1;
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-primary);
+}
+.harness-files-root,
+.harness-files-note {
+  margin: var(--gl-space-1) 0;
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-muted);
+}
+.harness-files-list {
+  list-style: none;
+  padding: 0;
+  margin: var(--gl-space-1-5) 0 0;
+  max-height: 200px;
+  overflow-y: auto;
+}
+/* Leave room for each file's knowledge action next to its open control. */
+.harness-files-entry { display: flex; align-items: center; gap: var(--gl-space-1); }
+.harness-files-add-knowledge { white-space: nowrap; }
+.harness-files-entry-button {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-1-5);
+  width: 100%;
+  min-width: 0;
+  padding: var(--gl-space-1) var(--gl-space-1-5);
+  border: 0;
+  border-radius: var(--gl-radius-xs);
+  background: transparent;
+  color: var(--gl-surface-text-primary);
+  font: inherit;
+  font-size: var(--gl-text-2xs);
+  text-align: left;
+  cursor: pointer;
+}
+.harness-files-entry-button:hover,
+.harness-files-entry-button:focus-visible {
+  background: var(--gl-surface-window);
+}
+.harness-files-entry-button:disabled { cursor: progress; }
+.harness-files-error {
+  margin: var(--gl-space-1-5) 0;
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-semantic-status-error);
+  overflow-wrap: anywhere;
+}
+.harness-files-row:hover, .harness-files-entry:hover { background:var(--gl-neutral-button-hover); }

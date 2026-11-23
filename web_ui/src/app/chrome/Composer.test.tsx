@@ -517,7 +517,8 @@ describe("Composer", () => {
 
     await user.click(screen.getByRole("button", { name: "Send to workspace agent" }));
     expect(await screen.findByText(/Podman detected on the backend/)).toBeInTheDocument();
-    await user.selectOptions(screen.getByRole("combobox", { name: "Execution profile for new agent" }), "isolated");
+    await user.click(screen.getByRole("button", { name: "Execution profile" }));
+    await user.click(screen.getByRole("option", { name: /Isolated \(Docker \/ Podman\)/ }));
     await user.click(screen.getByRole("button", { name: "Send message" }));
     expect(sendComposerAgentMessage).toHaveBeenCalledWith("Run tests in isolation", "isolated");
   });
@@ -535,8 +536,10 @@ describe("Composer", () => {
       </OverlayProvider>,
     );
     await user.click(screen.getByRole("button", { name: "Send to workspace agent" }));
-    expect(await screen.findByText(/Docker or Podman is unavailable/)).toBeInTheDocument();
+    expect(await screen.findByText(/Docker or Podman isn't available/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Execution profile" }));
     expect(screen.getByRole("option", { name: /Isolated/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Execution profile" })).toHaveTextContent("Host (default)");
   });
 
   it("rejects oversized Agent tasks visibly without sending or clearing the draft", async () => {

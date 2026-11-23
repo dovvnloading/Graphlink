@@ -6,9 +6,9 @@ test.use({ viewport: { width: 1440, height: 1200 }, contextOptions: { reducedMot
 async function grantCore(page: Page, enabled: boolean) {
   await page.locator('[data-overlay-trigger="settings"]').click();
   const settings = page.getByRole("dialog", { name: "Settings" });
-  const previous = await settings.getByRole("region").getAttribute("aria-label");
+  const previous = await settings.locator(".settings-page").getAttribute("aria-label");
   await settings.getByRole("button", { name: "Plugins", exact: true }).click();
-  const grant = settings.getByRole("checkbox", { name: "Granted: Scientific Core", exact: true });
+  const grant = settings.getByRole("switch", { name: "Granted: Scientific Core", exact: true });
   const before = await grant.isChecked();
   if (before !== enabled) await grant.click();
   await expect(grant).toBeChecked({ checked: enabled });

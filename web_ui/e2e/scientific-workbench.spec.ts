@@ -21,16 +21,16 @@ async function launchPack(page: Page, name: string) {
 async function setGrants(page: Page, names: string[], enabled: boolean) {
   await page.locator('[data-overlay-trigger="settings"]').click();
   const settings = page.getByRole("dialog", { name: "Settings" });
-  const previousSection = await settings.getByRole("region").getAttribute("aria-label");
+  const previousSection = await settings.locator(".settings-page").getAttribute("aria-label");
   await settings.getByRole("button", { name: "Plugins", exact: true }).click();
   for (const name of names) {
-    const grant = settings.getByRole("checkbox", { name: `Granted: ${name}`, exact: true });
+    const grant = settings.getByRole("switch", { name: `Granted: ${name}`, exact: true });
     if ((await grant.isChecked()) !== enabled) await grant.click();
     await expect(grant).toBeChecked({ checked: enabled });
   }
   if (previousSection && previousSection !== "Plugins") {
     await settings.getByRole("button", { name: previousSection, exact: true }).click();
-    await expect(settings.getByRole("region", { name: previousSection })).toBeVisible();
+    await expect(settings.locator(".settings-page")).toHaveAttribute("aria-label", previousSection);
   }
   await page.keyboard.press("Escape");
   await expect(settings).toBeHidden();

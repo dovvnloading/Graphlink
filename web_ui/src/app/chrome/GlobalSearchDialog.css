@@ -1,0 +1,18 @@
+.global-search-dialog .overlay-dialog-body { display: flex; flex-direction: column; gap: var(--gl-space-3); }
+.global-search-row { display: flex; align-items: center; gap: var(--gl-space-2); }
+.global-search-input { flex: 1; min-width: 0; padding: var(--gl-space-2) var(--gl-space-3); border: 1px solid var(--gl-surface-border); border-radius: var(--gl-radius-sm); color: var(--gl-surface-text-primary); background: var(--gl-surface-field); font-size: var(--gl-text-base); font-family: inherit; }
+.global-search-recent h3, .global-search-group-heading, .global-search-section-title { font-size: var(--gl-text-sm); margin: var(--gl-space-3) 0 var(--gl-space-2); color: var(--gl-surface-text-secondary); }
+.global-search-group-heading { display: flex; align-items: center; gap: var(--gl-space-2); }
+.global-search-recent-items { display: flex; flex-wrap: wrap; gap: var(--gl-space-1); }
+.global-search-result-list { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--gl-space-2); }
+.global-search-result-item { border: 1px solid var(--gl-surface-border); background: var(--gl-surface-inset); border-radius: var(--gl-radius-md); overflow: hidden; }
+.global-search-result-header { display: flex; flex-direction: column; align-items: flex-start; width: 100%; padding: var(--gl-space-3); gap: var(--gl-space-1); background: transparent; color: var(--gl-surface-text-primary); border: 0; cursor: pointer; text-align: left; font: inherit; }
+.global-search-result-header:hover, .global-search-result-header:focus-visible { background: var(--gl-state-hover); }
+.global-search-result-title { font-size: var(--gl-text-sm); font-weight: var(--gl-weight-semibold); }
+.global-search-result-kind, .global-search-result-source { font-size: var(--gl-text-2xs); color: var(--gl-surface-text-muted); }
+.global-search-result-source { word-break: break-all; }
+.global-search-result-body { padding: 0 var(--gl-space-3) var(--gl-space-3); }
+.global-search-result-excerpt { margin: 0 0 var(--gl-space-2); padding: var(--gl-space-2); background: var(--gl-surface-raised); white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--gl-text-xs); }
+.global-search-result-footer { display: flex; justify-content: space-between; align-items: center; gap: var(--gl-space-2); color: var(--gl-surface-text-muted); font-size: var(--gl-text-xs); }
+.global-search-result-open-link { color: var(--gl-surface-text-primary); background: transparent; border: 0; cursor: pointer; text-decoration: underline; font: inherit; }
+.global-search-jump-error { color: var(--gl-semantic-status-error); font-size: var(--gl-text-xs); }

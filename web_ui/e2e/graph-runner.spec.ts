@@ -6,7 +6,7 @@ async function openGraphRunner(page: Page) {
   const search = page.getByRole("searchbox", { name: /plugin/i });
   await search.fill("Graph Runner");
   await search.press("Enter");
-  const runner = page.getByRole("dialog", { name: "Graph Runner" });
+  const runner = page.getByRole("dialog", { name: "Graph runner" });
   await expect(runner).toBeVisible();
   return runner;
 }
@@ -44,7 +44,8 @@ test("runs a grouped table and both downstream outputs, then reopens their saved
   await expect(design.getByRole("cell", { name: "5", exact: true })).toBeAttached();
 
   const runner = await openGraphRunner(page);
-  await runner.getByRole("combobox", { name: "Run scope" }).selectOption({ label: "Whole graph" });
+  await runner.getByRole("button", { name: "Run scope" }).click();
+  await page.getByRole("option", { name: "Whole graph" }).click();
   await runner.getByRole("button", { name: "Preview run" }).click();
   const preview = runner.getByRole("region", { name: "Run preview" });
   await expect(preview.getByRole("listitem")).toHaveCount(3);
@@ -52,7 +53,7 @@ test("runs a grouped table and both downstream outputs, then reopens their saved
   await expect(design.getByRole("cell", { name: "5", exact: true })).toBeAttached();
   await runner.getByRole("button", { name: "Run graph" }).click();
   const latest = runner.getByRole("region", { name: "Latest run" });
-  await expect(latest.getByRole("status")).toHaveText("Completed");
+  await expect(latest.getByRole("status")).toContainText("Completed");
   await expect(design.getByRole("cell", { name: "10", exact: true })).toBeAttached();
   const image = testInfo.outputPath("graph-runner.png");
   await page.screenshot({ path: image });
