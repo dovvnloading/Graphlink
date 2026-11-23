@@ -1,7 +1,8 @@
 import { useStore } from "@xyflow/react";
 import { createContext, memo, useCallback, useContext, useLayoutEffect, useState, type ComponentType, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Dialog, useOverlays } from "../overlays/overlays";
+import { useOverlays } from "../overlays/overlays";
+import { CanvasDialog } from "./CanvasDialog";
 import type { ScientificFlowNode } from "./ScientificNodeView";
 import { readScientificFocus } from "./scientificFocus";
 
@@ -76,11 +77,11 @@ export function ScientificWorkspace({ Editor, children }: {
   return <Slots.Provider value={register}>
     {children}
     {focus && overlays.openSurface && createPortal(
-      <Dialog name={overlays.openSurface} title={focusedData ? focusedData.title + " workbench" : "Scientific workbench"}
+      <CanvasDialog name={overlays.openSurface} heading={focusedData ? focusedData.title + " workbench" : "Scientific workbench"}
         className="science-focused-dialog">
         <div className="science-body science-focus-body" ref={setDialogBody} />
         {!focusedData && <p role="status">The workbench is unavailable. Close this view to return to the graph.</p>}
-      </Dialog>, document.body)}
+      </CanvasDialog>, document.body)}
     {ids.map(id => {
       const slot = slots.get(id);
       const focused = id === focusId;
