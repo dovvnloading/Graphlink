@@ -1,15 +1,14 @@
 import { useId, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { ScientificDataTable } from "./ScientificDataTable";
+import { Disclosure } from "../ui/Disclosure";
+import { GROUP_NAMED_COLORS } from "./GroupColorPicker";
+import { formatCount } from "../ui/format";
 import { exactScienceNumber, formatScienceNumber } from "./scientificWorkbench";
 import type { ScienceForestPlotView, SciencePhylogeneticNode, SciencePhylogeneticTreeView, SciencePlateMapView, ScienceResultView, ScienceSurvivalCurveView, ScienceVolcanoPlotView, ScienceVolcanoPoint } from "./scientificViewTypes";
 import "./ScientificResultViews.css";
 
 const ROWS = "ABCDEFGHIJKLMNOP";
-const COLORS = [
-  "#227ba5", "#ce623a", "#5b8236", "#9e4c88",
-  "#9a7926", "#387f81", "#795ac2", "#ad5360",
-  "#576a98", "#8b6947", "#428568", "#9e637b",
-];
+const COLORS = GROUP_NAMED_COLORS.map((color) => color.hex);
 const DASHES = ["", "6 3", "2 3", "9 2 2 2"];
 
 function PlateMap({ view }: { view: SciencePlateMapView }) {
@@ -68,15 +67,16 @@ function PlateMap({ view }: { view: SciencePlateMapView }) {
                 Number.isFinite(range) ? (value - minimum) / range :
                   (value / 2 - minimum / 2) / (maximum / 2 - minimum / 2) : 0;
               const fill: CSSProperties | undefined = number
-                ? { backgroundColor: `hsl(209 78% ${87 - ratio * 47}%)`, color: ratio >= 0.57 ? "#fff" : "#14304e" }
+                ? { backgroundColor: `color-mix(in srgb, var(--gl-semantic-status-info) ${Math.round(20 + ratio * 70)}%, var(--gl-surface-window))`,
+                  color: "var(--gl-surface-text-primary)" }
                 : undefined;
-              return <td key={well} aria-label={description} title={description}
+              return <td key={well} aria-label={description}
                 className={empty ? "science-well-empty" : number ? "science-well-number" : "science-well-text"}>
                 <button type="button" className="science-well-button" data-well-index={cellIndex}
                   tabIndex={activeIndex === cellIndex ? 0 : -1} aria-label={description}
                   onKeyDown={event => move(event, cellIndex)} onFocus={() => setActiveIndex(cellIndex)}
                   onClick={() => setActiveIndex(cellIndex)}>
-                  <span style={fill}>{empty ? "·" : number ? "●" : String(value).slice(0, 2)}</span>
+                  <span style={fill} className={number ? "science-well-value-number" : ""}>{empty ? "—" : number ? "" : String(value).slice(0, 2)}</span>
                 </button>
               </td>;
             })}
@@ -111,7 +111,7 @@ function SurvivalCurve({ view }: { view: ScienceSurvivalCurveView }) {
         </g>)}
       <path d="M38 20V164H342" stroke="currentColor" strokeWidth="1" opacity=".5" fill="none" />
       {view.groups.map((group, index) => {
-        const color = COLORS[index];
+        const color = COLORS[index % COLORS.length];
         return <g key={group.label} stroke={color} fill="none">
           <path d={path(group.times, group.survival)} strokeWidth="2.2"
             strokeDasharray={DASHES[index % DASHES.length]} strokeLinejoin="round">
@@ -130,10 +130,9 @@ function SurvivalCurve({ view }: { view: ScienceSurvivalCurveView }) {
       <text x="190" y="194" textAnchor="middle" className="science-survival-axis">{view.xLabel}</text>
     </svg>
     <ul className="science-survival-legend">{view.groups.map((group, index) =>
-      <li key={group.label}><svg className="science-survival-key" viewBox="0 0 32 8" aria-hidden="true">
-        <line x1="0" y1="4" x2="32" y2="4" stroke={COLORS[index]} strokeWidth="2.2"
-          strokeDasharray={DASHES[index % DASHES.length]} /></svg>
-        {group.label} · {group.censored?.length ?? 0} censor times
+      <li key={group.label}><span className="science-survival-key" aria-hidden="true"
+          style={{ background: COLORS[index % COLORS.length] }} />
+        {group.label} · {formatCount(group.censored?.length ?? 0)} censor times
       </li>)}</ul>
     <ScientificDataTable title="Survival curve data" columns={["Group", view.xLabel, "Survival probability", "Censor time"]}
       rows={() => view.groups.flatMap(group => {
@@ -205,7 +204,7 @@ function VolcanoPlot({ view }: { view: ScienceVolcanoPlotView }) {
     </svg>
     <ul className="science-volcano-legend" aria-label="Volcano significance counts">
       {(["up", "down", "other"] as const).map(kind => <li key={kind}>
-        <svg aria-hidden="true" className="science-volcano-key" viewBox="0 0 12 12"><VolcanoMark kind={kind} x={6} y={6} /></svg>
+        <span aria-hidden="true" className={`science-volcano-key science-volcano-${kind}`} />
         {{ up: "Up in B", down: "Down in B", other: "Other tested" }[kind]}: {counts[kind]}
       </li>)}
     </ul>
@@ -298,8 +297,7 @@ function ForestPlot({ view }: { view: ScienceForestPlotView }) {
         </text>
       </svg>
     </div>
-    <details className="science-view-data">
-      <summary>Exact estimates and confidence intervals</summary>
+    <Disclosure className="science-view-data" title="Exact estimates and confidence intervals">
       <div className="science-view-data-scroll">
         <table aria-label={view.title + " estimate data"}>
           <thead><tr><th scope="col">Study</th><th scope="col">Estimate</th><th scope="col">Lower</th><th scope="col">Upper</th><th scope="col">Weight</th></tr></thead>
@@ -313,7 +311,7 @@ function ForestPlot({ view }: { view: ScienceForestPlotView }) {
           </tbody>
         </table>
       </div>
-    </details>
+    </Disclosure>
   </figure>;
 }
 
@@ -436,8 +434,7 @@ function PhylogeneticTree({ view }: { view: SciencePhylogeneticTreeView }) {
     <div className="science-phylogeny-scroll">
       {view.layout === "rectangular" ? rectangular() : circular()}
     </div>
-    <details className="science-view-data">
-      <summary>Branch lengths and support labels ({all.length - 1} branches)</summary>
+    <Disclosure className="science-view-data" title={`Branch lengths and support labels (${all.length - 1} branches)`}>
       <div className="science-view-data-scroll">
         <table aria-label={view.title + " branch data"}>
           <thead><tr><th scope="col">Node/taxon</th><th scope="col">Length</th><th scope="col">Support</th></tr></thead>
@@ -448,7 +445,7 @@ function PhylogeneticTree({ view }: { view: SciencePhylogeneticTreeView }) {
             </tr>)}</tbody>
         </table>
       </div>
-    </details>
+    </Disclosure>
   </figure>;
 }
 
