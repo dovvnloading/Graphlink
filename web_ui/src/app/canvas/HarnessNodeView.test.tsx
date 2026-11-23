@@ -79,7 +79,7 @@ function renderHarness(
   data: HarnessNodeData, capabilities: ModelCapabilityPreview | null = null,
   modelStore: ComposerStore | null = null,
 ) {
-  return render(
+  const element = (snapshot: HarnessNodeData) => (
     <OverlayProvider>
     <ComposerModelStoreContext.Provider value={modelStore}>
     <ModelCapabilityContext.Provider value={capabilities}>
@@ -87,7 +87,7 @@ function renderHarness(
       <HarnessNodeView
         id="n1"
         type="harness"
-        data={data}
+        data={snapshot}
         selected={false}
         isConnectable={false}
         positionAbsoluteX={0}
@@ -102,8 +102,10 @@ function renderHarness(
       </ReactFlowProvider>
     </ModelCapabilityContext.Provider>
     </ComposerModelStoreContext.Provider>
-    </OverlayProvider>,
+    </OverlayProvider>
   );
+  const rendered = render(element(data));
+  return { ...rendered, rerenderWithData: (next: HarnessNodeData) => rendered.rerender(element(next)) };
 }
 
 describe("Agent approval viewport navigation", () => {
@@ -284,8 +286,12 @@ describe("HarnessNodeView", () => {
     expect(within(dialog).getByRole("textbox", { name: "Hook command 1" })).toHaveValue("echo check");
     await user.click(within(dialog).getByRole("button", { name: "Hook phase 1" }));
     await user.click(screen.getByRole("option", { name: "After tool (adds note)" }));
-    await user.clear(within(dialog).getByRole("textbox", { name: "Hook command 1" }));
-    await user.type(within(dialog).getByRole("textbox", { name: "Hook command 1" }), "echo result");
+    // Let the kit Select's closing portal finish before typing into the next field.
+    await waitFor(() => expect(document.querySelector(".gl-select-panel")).toBeNull());
+    const command = within(dialog).getByRole("textbox", { name: "Hook command 1" });
+    await user.clear(command);
+    await user.type(command, "echo result");
+    expect(command).toHaveValue("echo result");
     await user.click(within(dialog).getByRole("checkbox", { name: "Enable hook 1" }));
     expect(data.onSetHooks).not.toHaveBeenCalled();
     await user.click(within(dialog).getByRole("button", { name: "Save hooks" }));
@@ -616,8 +622,10 @@ describe("HarnessNodeView", () => {
       harnessApprovalId: "shell-disclosure-1",
     });
     renderHarness(data);
-    expect(screen.getByText("shell.exec")).toBeInTheDocument();
-    expect(screen.getByText(/python build\.py --all/)).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Agent tool approval" }))
+      .toHaveTextContent("The agent wants to run: shell.exec");
+    expect(screen.getByRole("region", { name: "Proposed tool call" }).textContent)
+      .toBe("shell.exec\npython build.py --all");
     await user.click(screen.getByRole("button", { name: "Approve once" }));
     expect(data.onApproveTool).toHaveBeenCalledExactlyOnceWith("shell-disclosure-1");
     expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
@@ -1003,30 +1011,26 @@ describe("HarnessNodeView — activity visibility", () => {
     const { container } = renderHarness(
       makeData({ harnessStatus: "running", harnessActivity: activity }),
     );
-    expect(container.querySelector("details.plan-node-activity")).toHaveProperty("open", true);
+    expect(screen.getByRole("button", { name: "1 activity entry" }))
+      .toHaveAttribute("aria-expanded", "true");
   });
 
   it("does not spring back open after the user collapses it mid-run", () => {
-    const { container, rerender } = renderHarness(
+    const { rerenderWithData } = renderHarness(
       makeData({ harnessStatus: "running", harnessActivity: activity }),
     );
-    const details = container.querySelector("details.plan-node-activity") as HTMLDetailsElement;
-    details.open = false;
+    const toggle = screen.getByRole("button", { name: "1 activity entry" });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
 
-    rerender(
-      <ReactFlowProvider>
-        <HarnessNodeView
-          id="n1" type="harness"
-          data={makeData({
-            harnessStatus: "running",
-            harnessActivity: [...activity, { tool: "fs.read", summary: "{}", outcome: "ok", elapsedMs: 9 }],
-          })}
-          selected={false} isConnectable={false} positionAbsoluteX={0} positionAbsoluteY={0}
-          zIndex={0} dragging={false} deletable selectable draggable parentId={undefined}
-        />
-      </ReactFlowProvider>,
-    );
-    expect(details.open).toBe(false);
+    rerenderWithData(makeData({
+      harnessStatus: "running",
+      harnessActivity: [...activity, { tool: "fs.read", summary: "{}", outcome: "ok", elapsedMs: 9 }],
+    }));
+    expect(screen.getByRole("button", { name: "2 activity entries" }))
+      .toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("region", { name: "2 activity entries" })).toBeNull();
   });
 });
 
