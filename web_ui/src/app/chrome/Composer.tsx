@@ -466,19 +466,19 @@ export function Composer({
           {typeof contextInspector === "function"
             ? contextInspector(knowledgePreference?.enabled ?? null, knowledgePreference?.nodeId)
             : contextInspector}
-          {!knowledgePreference?.hasDocuments ? (
-            <Tooltip label={knowledgeCheckFailed ? "Could not check workspace knowledge"
-              : knowledgeResolved ? "Nothing is indexed yet" : "Checking indexed knowledge…"} placement="top">
-              <span className="composer-disabled-control" tabIndex={0}>
-                <ToggleButton icon="knowledge" label="Use knowledge" size="sm" pressed={false} disabled />
-              </span>
-            </Tooltip>
-          ) : (
-            <ToggleButton icon="knowledge" label="Use knowledge" size="sm"
-              pressed={knowledgePreference.enabled}
-              disabled={!composer.request.canSend || knowledgeUpdating || agentMode}
-              onPressedChange={toggleUseKnowledge} />
-          )}
+          <Tooltip label={knowledgeCheckFailed ? "Could not check workspace knowledge"
+            : !knowledgeResolved ? "Checking indexed knowledge…"
+              : !knowledgePreference?.hasDocuments ? "Nothing is indexed yet" : "Use knowledge"}
+            placement="top">
+            <span className="composer-knowledge-control"
+              tabIndex={!knowledgePreference?.hasDocuments ? 0 : undefined}>
+              <ToggleButton icon="knowledge" label="Use knowledge" size="sm"
+                pressed={knowledgePreference?.enabled ?? false}
+                disabled={!knowledgePreference?.hasDocuments || !composer.request.canSend ||
+                  knowledgeUpdating || agentMode}
+                onPressedChange={toggleUseKnowledge} />
+            </span>
+          </Tooltip>
           <ToggleButton icon="agent" label="Agent" aria-label="Send to workspace agent" size="sm"
             pressed={agentMode} disabled={!composer.request.canSend || agentSending}
             onPressedChange={(enabled) => {
