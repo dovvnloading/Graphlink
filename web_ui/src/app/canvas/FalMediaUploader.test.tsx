@@ -1,8 +1,10 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FalMediaUploader } from "./FalMediaUploader";
+import { OverlayProvider } from "../overlays/overlays";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 
 class MockXHR {
   static requests: MockXHR[] = [];
@@ -31,13 +33,16 @@ function setup(extra: Partial<React.ComponentProps<typeof FalMediaUploader>> = {
   const onJsonChange = vi.fn();
   const onBusyChange = vi.fn();
   const user = userEvent.setup();
-  render(<FalMediaUploader
-    mode="image" operation="image-to-image" fields={["image_url"]}
-    argumentsJson='{"seed":18}'
-    disabled={false}
-    onJsonChange={onJsonChange} onBusyChange={onBusyChange}
-    {...extra}
-  />);
+  render(<OverlayProvider>
+    <ConfirmDialog />
+    <FalMediaUploader
+      mode="image" operation="image-to-image" fields={["image_url"]}
+      argumentsJson='{"seed":18}'
+      disabled={false}
+      onJsonChange={onJsonChange} onBusyChange={onBusyChange}
+      {...extra}
+    />
+  </OverlayProvider>);
   return { user, onJsonChange, onBusyChange };
 }
 
@@ -46,25 +51,28 @@ afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); MockXHR.requests 
 describe("Fal Media Studio direct reference upload", () => {
   it("requires an explicit confirmation before sending bytes to Fal", async () => {
     vi.stubGlobal("XMLHttpRequest", MockXHR);
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     const { user, onJsonChange } = setup();
     fireEvent.change(screen.getByLabelText("Source file"), {
       target: { files: [new File(["image content"], "scene.png", { type: "image/png" })] },
     });
     await user.click(screen.getByRole("button", { name: /Upload reference/ }));
-    expect(confirm).toHaveBeenCalledOnce();
+    const dialog = await screen.findByRole("dialog", { name: "Upload reference to Fal.ai?" });
+    expect(within(dialog).getByText(/transfers the file outside Graphlink/)).toBeVisible();
+    expect(MockXHR.requests).toHaveLength(0);
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(MockXHR.requests).toHaveLength(0);
     expect(onJsonChange).not.toHaveBeenCalled();
   });
 
   it("uploads media only through an authenticated first-party API and saves only the returned CDN URL", async () => {
     vi.stubGlobal("XMLHttpRequest", MockXHR);
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     const { user, onJsonChange, onBusyChange } = setup();
     const file = new File(["image content"], "holiday.png", { type: "image/png" });
     fireEvent.change(screen.getByLabelText("Source file"), { target: { files: [file] } });
     await user.click(screen.getByRole("button", { name: /Upload reference/ }));
-    expect(confirm).toHaveBeenCalled();
+    const dialog = await screen.findByRole("dialog", { name: "Upload reference to Fal.ai?" });
+    expect(MockXHR.requests).toHaveLength(0);
+    await user.click(within(dialog).getByRole("button", { name: "Upload reference" }));
     const xhr = MockXHR.requests[0];
     expect(xhr.method).toBe("POST");
     expect(xhr.url).toBe("/api/fal-media/upload");
@@ -98,17 +106,17 @@ describe("Fal Media Studio direct reference upload", () => {
 
   it("uses image, video and audio parameter names appropriate for each workflow", () => {
     vi.stubGlobal("XMLHttpRequest", MockXHR);
-    const { rerender } = render(<FalMediaUploader
+    const { rerender } = render(<OverlayProvider><ConfirmDialog /><FalMediaUploader
       mode="video" operation="video-to-video" fields={[]}
       argumentsJson="{}" disabled={false}
       onJsonChange={vi.fn()} onBusyChange={vi.fn()}
-    />);
+    /></OverlayProvider>);
     expect(screen.getByRole("combobox", {name:"Media URL parameter"})).toHaveValue("video_url");
-    rerender(<FalMediaUploader
+    rerender(<OverlayProvider><ConfirmDialog /><FalMediaUploader
       mode="audio" operation="audio-to-audio" fields={[]}
       argumentsJson="{}" disabled={false}
       onJsonChange={vi.fn()} onBusyChange={vi.fn()}
-    />);
+    /></OverlayProvider>);
     expect(screen.getByRole("combobox", {name:"Media URL parameter"})).toHaveValue("audio_url");
   });
 });
