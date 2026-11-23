@@ -4,11 +4,12 @@ import { memo, useEffect, useRef, useState } from "react";
 import { Select, type SelectOption } from "../ui/Select";
 import { Button } from "../ui/Button";
 import { Checkbox } from "../ui/Checkbox";
-import { Disclosure } from "../ui/Disclosure";
+import { CanvasDisclosure } from "./CanvasDisclosure";
 import { MenuItem } from "../ui/Menu";
 import { TextField } from "../ui/TextField";
 import { TextArea } from "../ui/TextArea";
-import { Dialog, useOverlays } from "../overlays/overlays";
+import { useOverlays } from "../overlays/overlays";
+import { CanvasDialog } from "./CanvasDialog";
 import { CollapseToggleButton } from "./CollapseToggleButton";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
@@ -520,7 +521,7 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                   ))}
                 </ul>
                 {filteredPaths.length > 4 && (
-                  <Disclosure {...{ title: `Show ${filteredPaths.length - 4} more files` }}
+                  <CanvasDisclosure label={`Show ${filteredPaths.length - 4} more files`}
                     className="gitlink-node-extra-files">
                     <ul className="gitlink-node-file-list">
                       {filteredPaths.slice(4).map((path) => (
@@ -530,7 +531,7 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                         </div></li>
                       ))}
                     </ul>
-                  </Disclosure>
+                  </CanvasDisclosure>
                 )}
                 <p className="gitlink-node-file-count">{selectedPaths.length} selected</p>
               </div>
@@ -680,7 +681,7 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                   }}>Apply selected ({approvedChanges.length})</Button>
               </div>
 
-              <Dialog name={applyOverlayName} title="Apply Selected Changes?" className="gitlink-node-apply-dialog">
+              <CanvasDialog name={applyOverlayName} heading="Apply Selected Changes?" className="gitlink-node-apply-dialog">
                 {confirmationFingerprint !== data.gitlinkChangeFingerprint && (
                   <p role="alert" className="gitlink-node-banner-error">
                     The proposal changed while this confirmation was open.
@@ -722,7 +723,7 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                       overlays.close();
                     }}>Yes</Button>
                 </div>
-              </Dialog>
+              </CanvasDialog>
             </div>
           )}
     </NodeShell>
