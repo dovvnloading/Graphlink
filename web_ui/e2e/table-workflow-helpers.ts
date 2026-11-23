@@ -22,10 +22,10 @@ export async function editHours(source: Locator, hours: string) {
 export async function reopenSavedGraph(page: Page) {
   await page.getByRole("button", { name: "Save", exact: true }).click();
   const libraryButton = page.locator('[data-overlay-trigger="library"]');
-  const library = page.getByRole("dialog", { name: "Chat Library" });
+  const library = page.getByRole("dialog", { name: "Chat library" });
   await libraryButton.click();
   page.once("dialog", (dialog) => { void dialog.accept(); });
-  await library.getByRole("button", { name: "New Chat", exact: true }).first().click();
+  await library.getByRole("button", { name: "New chat", exact: true }).first().click();
   await expect(page.locator(".react-flow__node")).toHaveCount(0);
   await libraryButton.click();
   await library.locator(".library-row").first().getByRole("button", { name: /^Open chat/ }).click();
