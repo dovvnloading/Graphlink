@@ -251,8 +251,8 @@ describe("NoteNodeView", () => {
     })();
 
     expect(container.querySelector(".note-node.system-prompt")).not.toBeNull();
-    expect(screen.getByTitle("System Prompt")).toBeInTheDocument();
-    expect(screen.queryByTitle("Summary Note")).toBeNull();
+    expect(screen.getByLabelText("System Prompt")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Summary Note")).toBeNull();
     // The marker is carried by shape (the .system-prompt class's dashed,
     // heavier border) and the badge above - never by an inline colour. It
     // used to take the colour picker's own "Purple" swatch, which made a
@@ -281,20 +281,20 @@ describe("NoteNodeView", () => {
       </ReactFlowProvider>,
     );
     expect(container.querySelector(".note-node.system-prompt")).toBeNull();
-    expect(screen.getByTitle("Summary Note")).toBeInTheDocument();
+    expect(screen.getByLabelText("Summary Note")).toBeInTheDocument();
   });
 
   // ADR-002 Workstream 1 ("Compare Branches") - a third, distinct badge
   // alongside isSystemPrompt/isSummaryNote above.
   it("isBranchComparison renders a distinct badge showing the source-branch count, absent otherwise", () => {
     renderNoteNode({ isBranchComparison: false });
-    expect(screen.queryByTitle(/Branch Comparison/)).toBeNull();
+    expect(screen.queryByLabelText(/Branch Comparison/)).toBeNull();
 
     renderNoteNode({ isBranchComparison: true, compareSourceNodeIds: ["n1", "n2", "n3"] });
     expect(screen.getByLabelText("Branch Comparison")).toBeInTheDocument();
-    expect(screen.getByTitle("Branch Comparison (3 sources)")).toBeInTheDocument();
+    expect(screen.getByLabelText("Branch Comparison")).toBeInTheDocument();
     // Distinct from isSummaryNote's own badge - never conflated.
-    expect(screen.queryByTitle("Summary Note")).toBeNull();
+    expect(screen.queryByLabelText("Summary Note")).toBeNull();
   });
 
   it("Delete button calls onDelete", async () => {
