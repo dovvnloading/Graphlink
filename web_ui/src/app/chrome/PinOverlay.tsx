@@ -77,7 +77,7 @@ export function PinOverlay({ store }: { store: SceneStore }) {
           value={query} onValueChange={setQuery} />
       )}
       {scene.pins.length === 0 ? (
-        <EmptyState icon="pin" size="sm" title="No pins yet."
+        <EmptyState icon="pin" size="sm" {...{ title: "No pins yet." }}
           body="Pins save a place on the canvas. Pin the current view to jump back to it later." />
       ) : filtered.length === 0 ? (
         <p className="pins-empty">No pins match “{query}”.</p>
