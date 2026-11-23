@@ -11,14 +11,14 @@ export function ResourceLimitsPage() {
         System-computed limits applied to AI-driven code execution. These are also displayed before approving a run.
       </p>
       {codeSandboxResourceLimitsText ? (
-        <Card title="Execution sandbox">
+        <Card {...{ title: "Execution sandbox" }}>
           <dl className="settings-key-value">
             <dt>Virtual environment runner</dt>
             <dd className="settings-preserve-lines">{codeSandboxResourceLimitsText}</dd>
           </dl>
         </Card>
       ) : (
-        <EmptyState icon="shield" title="Limits unavailable"
+        <EmptyState icon="shield" {...{ title: "Limits unavailable" }}
           body="No resource limits have been reported for this system yet." />
       )}
     </div>
