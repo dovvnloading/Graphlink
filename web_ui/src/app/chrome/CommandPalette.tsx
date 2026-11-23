@@ -153,7 +153,7 @@ export function CommandPalette({ store }: { store: SceneStore }) {
           selected={index === activeIndex} onHover={() => setSelectedIndex(index)}
           onExecute={() => execute(result.command.id)} query={query} />)}
       </ul>
-      <p className="palette-hint"><Kbd shortcut="↑" /> <Kbd shortcut="↓" /> to navigate · <Kbd shortcut="Enter" /> to run</p>
+      <p className="palette-hint"><Icon name="arrow-up" size="sm" /> <Icon name="arrow-down" size="sm" /> to navigate · <Kbd shortcut="Enter" /> to run</p>
     </Dialog>
   );
 }
