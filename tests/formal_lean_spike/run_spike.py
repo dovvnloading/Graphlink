@@ -40,10 +40,8 @@ def validate_toolchain(probe, lock_bytes):
     }
     if any(evidence.get(key) != value for key, value in expected.items()):
         raise ValueError("The image toolchain differs from the source lock")
-    executables = evidence["executables"]
-    for name in ("lean", "lake", "leanexport", "nanoda_bin", "leanchecker", "leanchecker-paranoid"):
-        if not sha256_hex(executables.get(name)):
-            raise ValueError(f"Missing binary identity for {name}")
+    if evidence.get("executables") != lock["lean"]["executables"]:
+        raise ValueError("Image checker binary identities differ from the source lock")
     if not sha256_hex(evidence.get("modules_sha256")):
         raise ValueError("Missing compiled module inventory digest")
 

@@ -8,5 +8,5 @@
 !checker/fixtures
 !checker/*.lean
 !checker/*.json
-!checker/*.py
+!checker/stage.py
 !checker/fixtures/*.lean

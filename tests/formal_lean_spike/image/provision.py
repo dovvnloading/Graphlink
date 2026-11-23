@@ -108,16 +108,16 @@ def build(lock):
     inventory = seal_modules()
     if not (MODULES / (module.replace(".", "/") + ".olean")).is_file():
         raise RuntimeError("Requested mathlib module missing from sealed cache")
+    executables = {name: digest(LEAN / "bin" / name) for name in lock["lean"]["executables"]}
+    if executables != lock["lean"]["executables"]:
+        raise ValueError("Checker executable differs from its locked release hash")
     evidence = {
         "schema": 1,
         "lock_sha256": digest(LOCK_PATH),
         "lean_revision": revision,
         "mathlib_revision": lock["mathlib"]["revision"],
         "modules_sha256": digest(inventory),
-        "executables": {
-            name: digest(LEAN / "bin" / name)
-            for name in ("lean", "lake", "leanexport", "leanchecker", "nanoda_bin", "leanchecker-paranoid")
-        },
+        "executables": executables,
     }
     (ROOT / "toolchain-evidence.json").write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
 
