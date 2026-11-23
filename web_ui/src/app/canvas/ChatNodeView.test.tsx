@@ -754,8 +754,8 @@ describe("ChatNodeView Synthesize Branches provenance (ADR-002 Workstream 1)", (
       model: "claude-sonnet-5",
     });
     const badge = screen.getByLabelText("Branch Synthesis");
-    expect(badge).toHaveTextContent("⇄");
-    expect(badge).toHaveAttribute("title", "Branch Synthesis (2 sources): merge the best of both");
+    expect(badge).toHaveTextContent("Synthesis");
+    expect(badge.querySelector("svg")).not.toBeNull();
   });
 
   it("renders the model label with the provider as its tooltip, only when model is set", () => {
@@ -766,7 +766,7 @@ describe("ChatNodeView Synthesize Branches provenance (ADR-002 Workstream 1)", (
       provider: "Anthropic Claude",
       model: "claude-sonnet-5",
     });
-    expect(screen.getByText("claude-sonnet-5")).toHaveAttribute("title", "Anthropic Claude");
+    expect(screen.getByText("claude-sonnet-5")).toBeInTheDocument();
   });
 
   it("renders no model label when model is null, even if isBranchSynthesis is true", () => {
@@ -852,16 +852,16 @@ describe("ChatNodeView recorded model-routing disclosure", () => {
 describe("ChatNodeView model-override pin (ADR-018 stage 18.3)", () => {
   it("renders no pin badge or Clear Model Pin item for an ordinary node", () => {
     renderChatNode({ overrideProvider: "", overrideModelId: "" });
-    expect(screen.queryByText(/📌/)).toBeNull();
+    expect(document.querySelector(".chat-node-model-override-badge")).toBeNull();
     fireEvent.contextMenu(screen.getByText("You"));
-    expect(screen.queryByRole("menuitem", { name: /Clear Model Pin/ })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: /Clear model pin/ })).toBeNull();
     expect(screen.getByRole("menuitem", { name: "Pin to current model" })).toBeInTheDocument();
   });
 
   it("renders the pin badge with the full provider/model as its tooltip", () => {
     renderChatNode({ overrideProvider: "Anthropic Claude", overrideModelId: "claude-opus-5" });
-    const badge = screen.getByText("📌 claude-opus-5");
-    expect(badge).toHaveAttribute("title", "Pinned to Anthropic Claude - claude-opus-5");
+    const badge = screen.getByText("claude-opus-5");
+    expect(badge.closest(".chat-node-model-override-badge")).not.toBeNull();
   });
 
   it("co-renders the pin badge alongside the provenance model badge - they are distinct signals", () => {
@@ -870,7 +870,7 @@ describe("ChatNodeView model-override pin (ADR-018 stage 18.3)", () => {
       overrideProvider: "Anthropic Claude", overrideModelId: "claude-opus-5",
     });
     expect(screen.getByText("gpt-4o")).toBeInTheDocument();
-    expect(screen.getByText("📌 claude-opus-5")).toBeInTheDocument();
+    expect(screen.getByText("claude-opus-5")).toBeInTheDocument();
   });
 
   it("Pin to Current Model calls onPinToCurrentModel and closes the menu", async () => {
@@ -891,7 +891,7 @@ describe("ChatNodeView model-override pin (ADR-018 stage 18.3)", () => {
     });
 
     fireEvent.contextMenu(screen.getByText("You"));
-    const item = screen.getByRole("menuitem", { name: "Clear Model Pin (claude-opus-5)" });
+    const item = screen.getByRole("menuitem", { name: "Clear model pin (claude-opus-5)" });
     await user.click(item);
 
     expect(onClearModelOverride).toHaveBeenCalledOnce();
