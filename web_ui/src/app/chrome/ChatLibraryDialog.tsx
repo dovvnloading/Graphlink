@@ -268,11 +268,12 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
     }
   }
 
-  function rowKeys(event: KeyboardEvent<HTMLDivElement>) {
-    const target = event.target;
-    if (!(target instanceof HTMLElement) || !target.matches(".chat-library-row-primary")) return;
-    const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>(".chat-library-row-primary"));
-    const index = buttons.indexOf(target as HTMLButtonElement);
+  function rowKeys(event: KeyboardEvent<HTMLButtonElement>) {
+    const target = event.currentTarget;
+    const buttons = Array.from(
+      target.closest(".chat-library-groups")?.querySelectorAll<HTMLButtonElement>(".chat-library-row-primary") ?? [],
+    );
+    const index = buttons.indexOf(target);
     if (index < 0) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
@@ -368,7 +369,7 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
           <EmptyState icon="search" {...{ title: "No matching chats" }} body="Try another search or change the filters."
             actions={<Button onClick={() => { setQuery(""); setFilter("all"); setSelectedTags(new Set()); setSelectedWorkspaceId(null); }}>Clear filters</Button>} />
         ) : (
-          <div className="chat-library-groups" onKeyDown={rowKeys}>
+          <div className="chat-library-groups">
             {groups.map((group) => (
               <section className="chat-library-group" key={group.key} aria-label={group.key}>
                 <h3 className="chat-library-overline">{group.key}</h3>
@@ -404,7 +405,7 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
                         ) : (
                           <button type="button" className="chat-library-row-primary" data-chat-id={row.id}
                             aria-label={'Open chat "' + row.title + '", ' + row.messageCount + ' ' + word + ', updated ' + row.updatedLabel}
-                            onClick={() => { void loadChat(row.id); }}>
+                            onKeyDown={rowKeys} onClick={() => { void loadChat(row.id); }}>
                             <span className="chat-library-row-title">{row.title}</span>
                             <span className="chat-library-row-preview">{row.preview || "No messages yet"}</span>
                             <span className="chat-library-row-meta">{chatMeta(row)}</span>
