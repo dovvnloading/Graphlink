@@ -17,9 +17,6 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
   readonly rule: RatchetRule;
   readonly count: number;
 }> = [
-  { file: "app/canvas/AgentWorkspaceBrowser.tsx", rule: "R1", count: 2 },
-
-  { file: "app/canvas/AgentWorkspaceBrowser.tsx", rule: "R8", count: 3 },
 
   { file: "app/canvas/ArtifactNodeView.tsx", rule: "R7", count: 2 },
 
@@ -39,60 +36,21 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/canvas/ChatCitationChips.css", rule: "R14", count: 13 },
 
-  { file: "app/canvas/ChatNodeView.tsx", rule: "R1", count: 7 },
-
-  { file: "app/canvas/ChatNodeView.tsx", rule: "R2", count: 2 },
-
-  { file: "app/canvas/ChatNodeView.tsx", rule: "R5", count: 1 },
-
-  { file: "app/canvas/ChatNodeView.tsx", rule: "R7", count: 26 },
-
-  { file: "app/canvas/ChatNodeView.tsx", rule: "R8", count: 16 },
-
   { file: "app/canvas/ChatRerunDialog.css", rule: "R9", count: 2 },
 
   { file: "app/canvas/ChatRerunDialog.css", rule: "R10", count: 4 },
-
-  { file: "app/canvas/ChatRerunDialog.tsx", rule: "R6", count: 3 },
-
-  { file: "app/canvas/ChatRerunDialog.tsx", rule: "R8", count: 1 },
-
-  { file: "app/canvas/ChatScienceCard.tsx", rule: "R5", count: 1 },
-
-  { file: "app/canvas/ChatScienceCard.tsx", rule: "R8", count: 2 },
-
-  { file: "app/canvas/ChatVersionCompareDialog.tsx", rule: "R4", count: 2 },
-
-  { file: "app/canvas/ChatVersionCompareDialog.tsx", rule: "R8", count: 1 },
-
-  { file: "app/canvas/CodeExecutionApprovalPanel.tsx", rule: "R6", count: 1 },
-
-  { file: "app/canvas/CodeNodeView.tsx", rule: "R7", count: 5 },
 
   { file: "app/canvas/CodeReviewNodeView.tsx", rule: "R7", count: 2 },
 
   { file: "app/canvas/CodeReviewNodeView.tsx", rule: "R8", count: 6 },
 
-  { file: "app/canvas/CodeSandboxNodeView.tsx", rule: "R5", count: 1 },
-
-  { file: "app/canvas/CodeSandboxNodeView.tsx", rule: "R7", count: 2 },
-
-  { file: "app/canvas/CodeSandboxNodeView.tsx", rule: "R8", count: 2 },
-
   { file: "app/canvas/CollapseToggleButton.tsx", rule: "R2", count: 1 },
 
   { file: "app/canvas/CollapseToggleButton.tsx", rule: "R8", count: 1 },
 
-  { file: "app/canvas/ConversationNodeView.tsx", rule: "R2", count: 1 },
-
-  { file: "app/canvas/ConversationNodeView.tsx", rule: "R7", count: 5 },
-
-  { file: "app/canvas/ConversationNodeView.tsx", rule: "R8", count: 4 },
-
   { file: "app/canvas/DocumentNodeView.tsx", rule: "R7", count: 7 },
 
   { file: "app/canvas/DocumentNodeView.tsx", rule: "R8", count: 2 },
-
 
   { file: "app/canvas/DocumentViewPanel.tsx", rule: "R8", count: 6 },
 
@@ -140,20 +98,6 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/canvas/GroupNodeView.tsx", rule: "R8", count: 5 },
 
-  { file: "app/canvas/HarnessNodeView.tsx", rule: "R1", count: 6 },
-
-  { file: "app/canvas/HarnessNodeView.tsx", rule: "R2", count: 1 },
-
-  { file: "app/canvas/HarnessNodeView.tsx", rule: "R4", count: 4 },
-
-  { file: "app/canvas/HarnessNodeView.tsx", rule: "R5", count: 1 },
-
-  { file: "app/canvas/HarnessNodeView.tsx", rule: "R6", count: 2 },
-
-  { file: "app/canvas/HarnessNodeView.tsx", rule: "R7", count: 2 },
-
-  { file: "app/canvas/HarnessNodeView.tsx", rule: "R8", count: 9 },
-
   { file: "app/canvas/HtmlNodeView.tsx", rule: "R8", count: 1 },
 
   { file: "app/canvas/ImageNodeView.tsx", rule: "R7", count: 5 },
@@ -165,7 +109,6 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
   { file: "app/canvas/NodeCards.css", rule: "R14", count: 87 },
 
   { file: "app/canvas/NodeHeading.tsx", rule: "R2", count: 1 },
-
 
   { file: "app/canvas/NodeShell.tsx", rule: "R2", count: 1 },
 
@@ -179,23 +122,11 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/canvas/NoteTextInput.tsx", rule: "R8", count: 1 },
 
-  { file: "app/canvas/PlanNodeView.tsx", rule: "R2", count: 6 },
-
-  { file: "app/canvas/PlanNodeView.tsx", rule: "R5", count: 1 },
-
-  { file: "app/canvas/PlanNodeView.tsx", rule: "R7", count: 2 },
-
-  { file: "app/canvas/PlanNodeView.tsx", rule: "R8", count: 1 },
-
   { file: "app/canvas/SceneCanvas.tsx", rule: "R2", count: 1 },
 
   { file: "app/canvas/SceneCanvas.tsx", rule: "R8", count: 2 },
 
   { file: "app/canvas/SceneCanvas.tsx", rule: "R13", count: 1 },
-
-
-
-
 
   { file: "app/canvas/ScienceArrayInput.tsx", rule: "R1", count: 1 },
 
@@ -253,23 +184,13 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/canvas/TableWorkflow.css", rule: "R14", count: 17 },
 
-  { file: "app/canvas/ThinkingNodeView.tsx", rule: "R7", count: 4 },
-
-
-
   { file: "app/canvas/WebResearchNodeView.tsx", rule: "R6", count: 1 },
 
   { file: "app/canvas/WebResearchNodeView.tsx", rule: "R7", count: 2 },
 
   { file: "app/canvas/WebResearchNodeView.tsx", rule: "R8", count: 1 },
 
-  { file: "app/canvas/workspace.css", rule: "R9", count: 6 },
-
-  { file: "app/canvas/workspace.css", rule: "R10", count: 8 },
-
   { file: "app/canvas/workspace.css", rule: "R11", count: 2 },
-
-  { file: "app/canvas/workspace.css", rule: "R14", count: 31 },
 
   { file: "app/chrome/AboutDialog.tsx", rule: "R8", count: 1 },
 
@@ -363,8 +284,6 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/chrome/OrganizationDialog.tsx", rule: "R8", count: 2 },
 
-
-
   { file: "app/chrome/PluginPicker.tsx", rule: "R1", count: 1 },
 
   { file: "app/chrome/QuickSwitcherDialog.tsx", rule: "R3", count: 1 },
@@ -373,10 +292,7 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/chrome/SearchIcon.tsx", rule: "R2", count: 1 },
 
-
   { file: "app/chrome/SettingsDialog.tsx", rule: "R8", count: 1 },
-
-
 
   { file: "app/chrome/settings/FalAiPage.tsx", rule: "R3", count: 4 },
 
@@ -412,15 +328,15 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/context/ContextInspectorLauncher.tsx", rule: "R8", count: 1 },
 
-  { file: "app/styles.css", rule: "R9", count: 355 },
+  { file: "app/styles.css", rule: "R9", count: 268 },
 
-  { file: "app/styles.css", rule: "R10", count: 183 },
+  { file: "app/styles.css", rule: "R10", count: 133 },
 
   { file: "app/styles.css", rule: "R11", count: 3 },
 
-  { file: "app/styles.css", rule: "R12", count: 9534 },
+  { file: "app/styles.css", rule: "R12", count: 6767 },
 
-  { file: "app/styles.css", rule: "R14", count: 771 },
+  { file: "app/styles.css", rule: "R14", count: 581 },
 
 ];
 
