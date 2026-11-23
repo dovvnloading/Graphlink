@@ -1,35 +1,22 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 import type { ComposerStore } from "./composerStore";
+import { Toaster } from "../ui/Toast";
 
-/** Info and success banners are confirmations; they clear themselves after
- * this long. Warnings and errors need attention and stay until dismissed.
- * Dismissing goes through the backend intent, so a reload does not bring a
- * stale confirmation back. */
-export const TRANSIENT_NOTIFICATION_MS = 5000;
+export { TRANSIENT_NOTIFICATION_MS } from "../ui/Toast";
 
-export function NotificationBanner({ store }: { store: ComposerStore }) {
+/** Bridges the live backend notification topic into the kit toaster.
+ * Dismissal remains store.dismissNotification(), which sends the original
+ * fireIntent("notification", "dismiss", []) backend intent. */
+export function NotificationToaster({ store }: { store: ComposerStore }) {
   const notification = useSyncExternalStore(store.subscribe, store.getNotification);
-  const transient = notification.visible
-    && (notification.msgType === "info" || notification.msgType === "success");
-
-  useEffect(() => {
-    if (!transient) return;
-    const timer = window.setTimeout(() => store.dismissNotification(), TRANSIENT_NOTIFICATION_MS);
-    return () => window.clearTimeout(timer);
-  }, [transient, notification.message, notification.msgType, store]);
-
-  if (!notification.visible) return null;
-  return (
-    <div className={`notification-banner notification-${notification.msgType}`} role="status">
-      <span className="notification-message">{notification.message}</span>
-      <button
-        type="button"
-        className="notification-dismiss"
-        aria-label="Dismiss notification"
-        onClick={() => store.dismissNotification()}
-      >
-        ×
-      </button>
-    </div>
-  );
+  const dismiss = useCallback(() => store.dismissNotification(), [store]);
+  return <Toaster backendNotification={notification.visible ? {
+    id: "backend-notification-" + notification.revision,
+    message: notification.message,
+    msgType: notification.msgType,
+    onDismiss: dismiss,
+  } : null} />;
 }
+
+/** Compatibility export for older notification call sites. */
+export const NotificationBanner = NotificationToaster;

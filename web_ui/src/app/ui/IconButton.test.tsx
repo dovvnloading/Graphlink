@@ -17,7 +17,7 @@ describe("IconButton", () => {
     expect(container.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
   });
 
-  it("defaults to ghost and button type; stores shortcut for the future Tooltip", () => {
+  it("defaults to ghost and button type; stores shortcut for the Tooltip", () => {
     render(<IconButton icon="search" label="Search" shortcut="Ctrl+K" />);
     expect(screen.getByRole("button", { name: "Search" }))
       .toHaveClass("gl-icon-button--ghost");
@@ -47,5 +47,13 @@ describe("IconButton", () => {
     expect(button).toBeDisabled();
     fireEvent.click(button);
     expect(onClick).toHaveBeenCalledTimes(1);
+  });
+  it("shows label and Kbd shortcut in the tooltip on keyboard focus", () => {
+    render(<IconButton icon="search" label="Search" shortcut="Ctrl+K" />);
+    screen.getByRole("button", { name: "Search" }).focus();
+    const tooltip = screen.getByRole("tooltip");
+    expect(tooltip).toHaveTextContent("Search");
+    expect(tooltip.querySelector('[role="group"]')).toHaveAttribute("aria-label", "Ctrl+K");
+    expect(screen.getByRole("button", { name: "Search" })).toHaveAttribute("aria-describedby", tooltip.id);
   });
 });
