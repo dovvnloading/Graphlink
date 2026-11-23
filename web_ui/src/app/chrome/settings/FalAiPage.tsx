@@ -32,7 +32,7 @@ export function FalAiPage({
   state: AppSettingsState;
   transport: WsTransport;
 }) {
-  const confirm = useConfirm();
+  const askConfirm = useConfirm();
   const [keyDraft, setKeyDraft] = useState("");
   const [modelId, setModelId] = useState("fal-ai/flux/schnell");
   const [argumentsJson, setArgumentsJson] = useState('{"prompt": "A cinematic mountain landscape at sunrise"}');
@@ -252,7 +252,7 @@ export function FalAiPage({
         <div className="settings-button-row">
           <Button variant="primary" disabled={state.falBusy}
             onClick={async () => {
-              if (prepareRequest() && await confirm({
+              if (prepareRequest() && await askConfirm({
                 title: "Submit billable queue request?", body: `Submit a Fal.ai queue request to ${modelId}?`,
                 billing: { estimate: costEstimate }, confirmLabel: "Submit request",
               })) {
@@ -261,7 +261,7 @@ export function FalAiPage({
             }}>Submit to Queue</Button>
           <Button variant="secondary" disabled={state.falBusy}
             onClick={async () => {
-              if (prepareRequest() && await confirm({
+              if (prepareRequest() && await askConfirm({
                 title: "Run billable inference?", body: `Run Fal.ai inference on ${modelId} now?`,
                 billing: { estimate: costEstimate }, confirmLabel: "Run inference",
               })) {
@@ -288,7 +288,7 @@ export function FalAiPage({
         <div className="settings-button-row">
           <Button variant="secondary" disabled={state.falBusy || !localPath.trim()}
             onClick={async () => {
-              if (await confirm({
+              if (await askConfirm({
                 title: "Upload to Fal.ai CDN?",
                 body: `Upload ${localPath.split(/[\\/]/).pop() || localPath} to Fal.ai CDN? Its contents will leave your device.`,
                 confirmLabel: "Upload file",
@@ -336,7 +336,7 @@ export function FalAiPage({
                   [job.modelId, job.requestId, true])}>Refresh / Fetch Result</Button>
               <Button variant="secondary" disabled={state.falBusy}
                 onClick={async () => {
-                  if (await confirm({
+                  if (await askConfirm({
                     title: "Cancel queued request?", body: `Request cancellation of ${job.requestId}?`,
                     confirmLabel: "Cancel job", destructive: true,
                   })) {
