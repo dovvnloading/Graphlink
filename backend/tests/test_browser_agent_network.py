@@ -192,7 +192,6 @@ def test_total_response_bytes_are_bounded_even_with_small_individual_resources(m
 
 def test_concurrent_resources_reserve_their_bytes_before_network_fetch(monkeypatch):
     """Nine parallel 2-MiB responses cannot exceed the 16-MiB session cap."""
-    started = threading.Event()
     release = threading.Event()
     lock = threading.Lock()
     count = 0
@@ -201,8 +200,6 @@ def test_concurrent_resources_reserve_their_bytes_before_network_fetch(monkeypat
         nonlocal count
         with lock:
             count += 1
-            if count == 8:
-                started.set()
         if not release.wait(timeout=8):
             raise RuntimeError("Browser fixture was not released.")
         return network.BrowserResponse(200, {}, b"x" * network.MAX_RESOURCE_BYTES)
@@ -221,7 +218,12 @@ def test_concurrent_resources_reserve_their_bytes_before_network_fetch(monkeypat
             )) for index in range(8)
         ]
         try:
-            assert await asyncio.wait_for(asyncio.to_thread(started.wait, 6), timeout=7)
+            async def all_reserved():
+                # Do not require eight executor threads. On small CI runners
+                # a few fetches may be queued but all have reserved bytes.
+                while gate._reserved_bytes < network.MAX_SESSION_BYTES:
+                    await asyncio.sleep(0.005)
+            await asyncio.wait_for(all_reserved(), timeout=4)
             with pytest.raises(network.BrowserPolicyError, match="transfer budget"):
                 await gate.fetch("https://example.com/ninth", method="GET", navigation=True, headers={})
         finally:
