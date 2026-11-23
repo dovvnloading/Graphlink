@@ -2632,14 +2632,16 @@ export function toFlowEdges(scene: SceneState, hoveredEdgeId: string | null): Ed
       || collapsedHiddenIds.has(source) || collapsedHiddenIds.has(target.id)) continue;
     const role = table ? "table-input" : "text-input";
     const id = `${model ? "model-input" : role}:${target.id}`;
-    flowEdges.push({
+    const edge: Edge<{ role: ConnectionRole }> = {
       id, source, target: target.id,
       sourceHandle: table ? "table-source" : TEXT_OUTPUT_HANDLE,
       targetHandle: model ? "model-input" : (table ? "table-target" : TEXT_INPUT_HANDLE),
       data: { role },
       ariaLabel: `${model ? "Model text" : table ? "Table" : "Text"} input from ${source} to ${target.id}`,
-      ...(scene.fadeConnectionsEnabled && id !== hoveredEdgeId ? { style: { opacity: FADED_CONNECTION_OPACITY } } : {}),
-    });
+    };
+    if (scene.fadeConnectionsEnabled && id !== hoveredEdgeId)
+      edge.style = { opacity: FADED_CONNECTION_OPACITY };
+    flowEdges.push(edge);
   }
   return flowEdges;
 }
