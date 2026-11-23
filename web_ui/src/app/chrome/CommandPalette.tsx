@@ -141,7 +141,7 @@ export function CommandPalette({ store }: { store: SceneStore }) {
   if (!isOpen) return null;
   return (
     <Dialog name="palette" {...{ title: "Command palette" }} size="md" className="palette-dialog">
-      <input type="search" className="palette-search-input" autoComplete="off" spellCheck={false}
+      <input type="text" className="palette-search-input" autoComplete="off" spellCheck={false}
         placeholder="Type a command…" aria-label="Search commands"
         aria-controls="palette-results" aria-activedescendant={results[activeIndex] ? `palette-option-${results[activeIndex].command.id}` : undefined}
         value={query} onChange={(event) => { setQuery(event.target.value); setSelectedIndex(0); }}
