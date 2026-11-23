@@ -13,3 +13,8 @@
   justify-content: center;
   margin-top: var(--gl-space-3);
 }
+
+.empty-graph-model-alert {
+  margin-top: var(--gl-space-4);
+  text-align: left;
+}
