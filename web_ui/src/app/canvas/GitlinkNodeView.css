@@ -1,3 +1,4 @@
+@layer nodes {
 /* -- R5.3 gitlink node ---------------------------------------------------- */
 
 .gitlink-node {
@@ -402,3 +403,4 @@
 .gitlink-node-apply-dialog-actions .gl-button { min-width: var(--gl-control-h-sm); }
 
 .gitlink-node-extra-files .gl-disclosure-content { max-height: none; }
+}

@@ -1,3 +1,4 @@
+@layer nodes {
 /* PLAN-2026-08-24 H1: the workspace agent node. Deliberately rides the
    plan-node class vocabulary for everything shared (status band, detail,
    budgets, activity, buttons) - only the reply body and the follow-up
@@ -94,3 +95,4 @@
 .harness-node-workspace > .gl-icon { flex:none; }
 .harness-node-settings-field .gl-select { width:100%; }
 .harness-node-hook-row .gl-select, .harness-node-hook-row .gl-text-field { min-width:0; }
+}

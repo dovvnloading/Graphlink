@@ -1,3 +1,4 @@
+@layer nodes {
 /* UI-17: common node defaults moved from the global stylesheet. */
 .scene-node {
   min-width: 160px;
@@ -1033,3 +1034,4 @@
 }
 
 /* -- The launchers (Builder + workspace agent) ---------------------------
+}

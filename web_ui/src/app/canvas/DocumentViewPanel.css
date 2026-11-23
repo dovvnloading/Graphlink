@@ -1,3 +1,4 @@
+@layer nodes {
 /* -- Document view panel (R8a follow-up) ------------------------------------
    Docked flush-left, border-right only - restores legacy's
    DocumentViewerPanel chrome (a permanent embedded QWidget, corner_radius=0,
@@ -663,4 +664,4 @@ mark.document-view-search-match-current {
   background-color: var(--gl-neutral-button-hover);
   border-color: var(--gl-palette-selection);
 }
-
+}

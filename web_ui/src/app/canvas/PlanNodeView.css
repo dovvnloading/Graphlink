@@ -1,3 +1,4 @@
+@layer nodes {
 /* -- ADR-008 stage 8.3: the Builder (plan node + launcher) ----------------
 
    MONOCHROME, ON PURPOSE - AND WHAT THAT COSTS. This app's palette is a
@@ -547,4 +548,4 @@
 .plan-node-button-deny:hover:not(:disabled) {
   background-color: var(--gl-neutral-button-hover);
 }
-
+}

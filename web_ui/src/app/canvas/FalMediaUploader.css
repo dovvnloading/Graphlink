@@ -1,3 +1,4 @@
+@layer nodes {
 /* Reference uploader: a compact kit-backed field group. */
 .fal-studio-uploader {
   margin: var(--gl-space-2) 0; padding: var(--gl-space-3);
@@ -43,4 +44,5 @@
 .fal-studio-inline-warning {
   font-size: var(--gl-text-xs); color: var(--gl-surface-text-secondary);
   margin: var(--gl-space-2) 0;
+}
 }

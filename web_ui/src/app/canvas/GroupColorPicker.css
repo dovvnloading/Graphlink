@@ -1,3 +1,4 @@
+@layer nodes {
 .group-color-picker { position: relative; display: inline-flex; }
 .group-color-swatch-trigger.gl-icon-button {
   border: 1px solid var(--gl-surface-border);
@@ -20,3 +21,4 @@
   pointer-events: none;
 }
 .group-color-option .gl-menu-item { padding-left: var(--gl-space-10); }
+}
