@@ -1,6 +1,8 @@
 /* eslint-disable jsx-a11y/no-noninteractive-tabindex, jsx-a11y/no-noninteractive-element-interactions -- two labelled read-only Document View regions must accept keyboard focus and Alt+Arrow pane switching. */
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { Dialog, useOverlays } from "../overlays/overlays";
+import { Select } from "../ui/Select";
+import { Button } from "../ui/Button";
 import type { ChatVersionComparison, ChatVersionSnapshot, SceneStore } from "./sceneStore";
 import type { ChatDiffChunk, ChatWordDiff } from "./chatVersionWordDiff";
 
@@ -106,8 +108,6 @@ export function ChatVersionCompareDialog({
   const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
   const leftRef = useRef<HTMLDivElement>(null);
   const rightRef = useRef<HTMLDivElement>(null);
-  const leftId = useId();
-  const rightId = useId();
   const requestKey = target.nodeId + ":" + leftIndex + ":" + rightIndex;
 
   useEffect(() => {
@@ -153,28 +153,22 @@ export function ChatVersionCompareDialog({
   };
 
   return (
-    <Dialog name="chat-version-compare" title={`Document View · Compare ${target.isUser ? "message" : "reply"} versions`} className="chat-version-compare-dialog">
+    <Dialog name="chat-version-compare" title={`Document View · Compare ${target.isUser ? "message" : "reply"} versions`} size="lg" className="chat-version-compare-dialog">
       <p className="chat-version-compare-help">
         Choose two saved {target.isUser ? "versions" : "replies"}. This comparison is read-only and never changes the active version.
         Use Alt+Left/Right Arrow to switch reading panes, or Tab to the pane focus buttons. Escape closes.
       </p>
       <div className="chat-version-compare-selectors">
-        <label htmlFor={leftId}>
-          Left version
-          <select id={leftId} value={leftIndex} onChange={(e) => setLeftIndex(Number(e.target.value))}>
-            {Array.from({ length: count }, (_, index) => (
-              <option key={index} value={index} disabled={index === rightIndex}>Version {index + 1}</option>
-            ))}
-          </select>
-        </label>
-        <label htmlFor={rightId}>
-          Right version
-          <select id={rightId} value={rightIndex} onChange={(e) => setRightIndex(Number(e.target.value))}>
-            {Array.from({ length: count }, (_, index) => (
-              <option key={index} value={index} disabled={index === leftIndex}>Version {index + 1}</option>
-            ))}
-          </select>
-        </label>
+        <Select label="Left version" value={String(leftIndex)}
+          onChange={(value) => setLeftIndex(Number(value))}
+          options={Array.from({ length: count }, (_, index) => ({
+            value: String(index), label: `Version ${index + 1}`, disabled: index === rightIndex,
+          }))} />
+        <Select label="Right version" value={String(rightIndex)}
+          onChange={(value) => setRightIndex(Number(value))}
+          options={Array.from({ length: count }, (_, index) => ({
+            value: String(index), label: `Version ${index + 1}`, disabled: index === leftIndex,
+          }))} />
       </div>
       <div className="chat-version-compare-legend" role="group" aria-label="Text difference legend">
         <span><span aria-hidden="true">− </span>Deleted: <del>struck through</del></span>
@@ -182,8 +176,8 @@ export function ChatVersionCompareDialog({
         <span>Raw {target.isUser ? "message" : "reply"} text, including Markdown syntax</span>
       </div>
       <div className="chat-version-compare-focus-actions">
-        <button type="button" onClick={() => leftRef.current?.focus()}>Focus left pane</button>
-        <button type="button" onClick={() => rightRef.current?.focus()}>Focus right pane</button>
+        <Button size="sm" onClick={() => leftRef.current?.focus()}>Focus left pane</Button>
+        <Button size="sm" onClick={() => rightRef.current?.focus()}>Focus right pane</Button>
       </div>
       <p role="status" className="chat-version-compare-status">
         {error || (!pair ? "Loading versions…" : !diff ? "Calculating word changes…" : "Word comparison ready.")}
