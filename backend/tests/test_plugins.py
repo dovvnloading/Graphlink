@@ -88,7 +88,7 @@ def test_get_plugin_categories_pins_the_original_curated_within_category_order_f
     by_category = {category["name"]: [p["name"] for p in category["plugins"]] for category in grouped}
 
     assert by_category["Branch Foundations"] == ["System Prompt", "Conversation Node"]
-    assert by_category["Reasoning & Research"] == ["Web Research"]
+    assert by_category["Reasoning & Research"] == ["Web Research", "Browser Agent"]
     assert by_category["Build & Execution"] == [
         "Gitlink", "Virtual Environment Runner", "HTML Renderer", "Fal Media Studio",
     ]
