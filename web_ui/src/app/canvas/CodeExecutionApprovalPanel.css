@@ -1,0 +1,131 @@
+/* -- R5.4 shared code-execution approval panel ---------------------------- */
+/* Post-review fix pass: CodeExecutionApprovalPanel is now a small,
+   self-contained modal (its own .overlay-scrim + .overlay-dialog markup,
+   rendered directly by CodeSandboxNodeView) rather than a
+   <Dialog> registered with the shared useOverlays() singleton - see that
+   component's own module doc for why. It reuses .overlay-scrim/
+   .overlay-dialog purely for visual consistency (colors/shadows/centering),
+   not because it participates in that registry. */
+
+.code-exec-approval-dialog {
+  max-width: min(520px, calc(100vw - 64px));
+}
+
+.code-exec-approval-warning {
+  margin: 0 0 var(--gl-space-2-5);
+  font-size: var(--gl-text-xs);
+  line-height: 1.5;
+  color: var(--gl-semantic-status-error, currentColor);
+}
+
+/* ADR-005 stage 5.4: the backend-computed resource-cap addendum - muted
+   rather than the warning's own error color, since this is reassuring
+   ("here is what limits the blast radius"), not alarming, information. */
+.code-exec-approval-resource-limits {
+  margin: 0 0 var(--gl-space-2-5);
+  font-size: var(--gl-text-2xs);
+  line-height: 1.5;
+  color: var(--gl-surface-text-muted);
+}
+
+/* R5.4 post-review FIX C: the pending pip-install manifest, shown for
+   code_sandbox only, positioned BEFORE the code display so it is seen prior
+   to clicking Approve (never buried below the fold). Reuses the same
+   monospace/inset-surface treatment as .code-sandbox-node-terminal, since
+   both are raw machine-formatted text, not prose. */
+.code-exec-approval-requirements {
+  margin: 0 0 var(--gl-space-3);
+}
+
+.code-exec-approval-requirements-label {
+  display: block;
+  margin-bottom: var(--gl-space-1);
+  font-size: var(--gl-text-2xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--gl-surface-text-muted);
+}
+
+.code-exec-approval-requirements-list {
+  margin: 0;
+  padding: var(--gl-space-2) var(--gl-space-2-5);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: var(--gl-text-2xs);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
+  overflow: auto;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+}
+
+/* ADR-005 stage 5.5: the source-build escalation checkbox - reuses
+   .settings-checkbox-row's own layout/hover treatment (SettingsDialog.tsx)
+   for visual consistency with every other checkbox in the app, scaled down
+   to this dialog's own smaller 11px type and given margin-bottom to match
+   .code-exec-approval-requirements's own spacing rhythm above it. */
+.code-exec-approval-source-builds-row {
+  margin: 0 0 var(--gl-space-3);
+  font-size: var(--gl-text-2xs);
+  line-height: 1.4;
+  color: var(--gl-surface-text-primary);
+}
+
+.code-exec-approval-source-builds-row:has(input:disabled) {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.code-exec-approval-code {
+  max-height: 320px;
+  overflow: auto;
+}
+
+.code-exec-approval-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--gl-space-2);
+  margin-top: var(--gl-space-3);
+}
+
+.code-exec-approval-actions button {
+  font-size: var(--gl-text-2xs);
+  font-weight: 600;
+  font-family: inherit;
+  padding: var(--gl-space-1) var(--gl-space-3);
+  border-radius: var(--gl-radius-sm);
+  cursor: pointer;
+}
+
+.code-exec-approval-approve-btn {
+  color: var(--gl-surface-window);
+  background-color: var(--gl-surface-text-muted);
+  border: none;
+}
+
+/* R8a (UI/UX issue list finding #23): Approve/Deny are the most
+   consequential controls in a mandatory security prompt and had zero
+   hover feedback - felt dead under the mouse next to responsive toolbar
+   chips. */
+.code-exec-approval-approve-btn:hover:enabled {
+  filter: brightness(1.1);
+}
+
+.code-exec-approval-deny-btn {
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+}
+
+.code-exec-approval-deny-btn:hover:enabled {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.code-exec-approval-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+

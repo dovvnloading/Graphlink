@@ -1,3 +1,15 @@
+@import "./ChatNodeView.css";
+@import "./ChatScienceCard.css";
+@import "./CodeNodeView.css";
+@import "./ThinkingNodeView.css";
+@import "./ConversationNodeView.css";
+@import "./CodeSandboxNodeView.css";
+@import "./CodeExecutionApprovalPanel.css";
+@import "./PlanNodeView.css";
+@import "./AgentWorkspaceBrowser.css";
+@import "./HarnessNodeView.css";
+@import "./ChatVersionCompareDialog.css";
+
 .app-topbar {
   height: 44px;
   flex: none;

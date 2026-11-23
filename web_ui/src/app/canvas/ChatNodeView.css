@@ -1,0 +1,588 @@
+/* -- R3.1/R3.2 chat node --------------------------------------------------- */
+
+.chat-node {
+  width: 420px;
+  /* No shell max-height: the shell is overflow-hidden, so a cap here
+     amputates the card bottom whenever header chrome plus the capped
+     content region outgrow it. Height is bounded by the content
+     region's own cap instead, so the bottom border always renders. */
+  min-height: 110px;
+}
+
+.chat-node.collapsed {
+  width: 290px;
+  min-height: 58px;
+}
+
+.chat-node.user .scene-node-title {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.chat-node-role {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.chat-node-collapse-btn {
+  font-size: var(--gl-text-2xs);
+  line-height: 1;
+  padding: var(--gl-space-0-5) var(--gl-space-1-5);
+  color: var(--gl-surface-text-muted);
+  background: transparent;
+  border: none;
+  border-radius: var(--gl-radius-sm);
+  cursor: pointer;
+}
+
+.chat-node-collapse-btn:hover {
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-hover);
+}
+
+/* Markdown body inside a chat bubble - the same rule set as the document
+   viewer's own .document-viewer-markdown, duplicated here since that island
+   builds to a separate bundle and isn't importable into the SPA.
+   Document View's own scroll container also carries this class
+   (DocumentViewPanel.tsx: "document-view-panel-scroll chat-node-content"),
+   so every change here is shared by both surfaces - deliberately, not
+   incidentally (node redesign stage 2's own comment below explains why).
+   Kept as ONE rule block (adversarial review flagged an earlier draft that
+   split this into two non-adjacent .chat-node-content{} blocks with no
+   selector-duplication lint to catch a future silent conflict between
+   them) - if a future change needs to add more properties here, add them
+   to THIS block, not a new one further down the file. */
+.chat-node-content {
+  max-height: 300px;
+  overflow-y: auto;
+  line-height: 1.55;
+}
+
+.chat-node-content > :first-child {
+  margin-top: 0;
+}
+
+.chat-node-content > :last-child {
+  margin-bottom: 0;
+}
+
+/* Node redesign, stage 3's own deferred sub-item ("content fade + Show
+   more"), implemented now: replaces the hard 560px scroll-only cutoff with
+   a fade + toggle, matching how most chat UIs handle a long message.
+   Scoped to ChatNodeView only - .thinking-node-content/.code-node-content
+   share the base .chat-node-content rule above but never render this
+   wrapper/fade/button, so they keep their existing scroll-only behavior
+   unchanged. */
+.chat-node-content-shell {
+  position: relative;
+}
+
+.chat-node-content.expanded {
+  max-height: none;
+}
+
+.chat-node-content-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 48px;
+  background: linear-gradient(to bottom, transparent, var(--gl-surface-node-body));
+  pointer-events: none;
+}
+
+.chat-node-show-more {
+  display: block;
+  width: 100%;
+  padding: var(--gl-space-1) 0;
+  font-size: var(--gl-text-2xs);
+  font-family: inherit;
+  color: var(--gl-surface-text-muted);
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--gl-surface-border);
+  cursor: pointer;
+}
+
+.chat-node-show-more:hover {
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-hover);
+}
+
+/* ADR-006 stage 6.4 (partial-output preservation): the "interrupted"
+   banner shown when the node's persisted content is a partial response the
+   backend committed after a killed stream (responseIncomplete on the wire
+   row). Warning posture (not error) - the partial text itself is intact
+   and readable above; same bordered-pill shape as
+   .code-sandbox-node-banner-error. Margins match .scene-node-body's own
+   8px/10px padding so the banner aligns with the content above it. */
+.chat-node-incomplete-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gl-space-2);
+  margin: 0 var(--gl-space-2-5) var(--gl-space-2);
+  padding: var(--gl-space-1-5) var(--gl-space-2-5);
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-semantic-status-warning, currentColor);
+  border: 1px solid var(--gl-semantic-status-warning, currentColor);
+  border-radius: var(--gl-radius-md);
+}
+
+/* .chat-node-stop-btn (ADR-006 stage 6.4 review fix): the per-node Stop
+   for an in-flight streamed regenerate shares the retry button's own small
+   bordered shape - two affordances for the same request lifecycle, one
+   visual vocabulary. */
+.chat-node-incomplete-retry,
+.chat-node-stop-btn {
+  padding: var(--gl-space-0-5) var(--gl-space-2);
+  font-size: var(--gl-text-2xs);
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: transparent;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chat-node-incomplete-retry:hover,
+.chat-node-stop-btn:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+/* Right-aligned under the streaming content, matching the banner's own
+   0/10px horizontal alignment with .scene-node-body's padding. */
+.chat-node-streaming-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 var(--gl-space-2-5) var(--gl-space-2);
+}
+
+/* ADR-007 stage 7.4: an assistant turn's tool calls + results - native
+   <details>/<summary>, styled to match the incomplete-banner's own bordered-
+   pill posture just above rather than a heavier custom disclosure widget. */
+.chat-node-tool-invocations {
+  margin: 0 var(--gl-space-2-5) var(--gl-space-2);
+  padding: var(--gl-space-1-5) var(--gl-space-2-5);
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-primary);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-md);
+}
+
+.chat-node-tool-invocations summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.chat-node-tool-invocations[open] summary {
+  margin-bottom: var(--gl-space-1-5);
+}
+
+.chat-node-tool-invocation {
+  padding: var(--gl-space-1-5) 0;
+  border-top: 1px solid var(--gl-surface-border);
+}
+
+.chat-node-tool-invocation:first-of-type {
+  border-top: none;
+}
+
+.chat-node-tool-invocation-name {
+  font-weight: 600;
+  margin-bottom: var(--gl-space-1);
+}
+
+.chat-node-tool-invocation.error .chat-node-tool-invocation-name {
+  color: var(--gl-semantic-status-error, currentColor);
+}
+
+.chat-node-tool-invocation-arguments,
+.chat-node-tool-invocation-result {
+  margin: var(--gl-space-1) 0 0;
+  padding: var(--gl-space-1-5) var(--gl-space-2);
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: var(--gl-text-2xs);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
+  border-radius: var(--gl-radius-sm);
+}
+
+/* Node redesign, stage 2 ("typography and heading hierarchy"): headings
+   were fixed px values (15/14/13/12) set independently of this element's
+   own font-size, which itself is driven by the user-configurable
+   --gl-node-font-size custom property (SceneCanvas.tsx, View popover) -
+   defaulting to 9pt (~12px) but adjustable up to 16pt (~21px). At many
+   real settings, and always at the low end of that range, those fixed
+   heading sizes rendered SMALLER than or barely larger than the body text
+   they were supposed to head - an inverted hierarchy, not a style choice.
+   `em` here scales relative to whatever this element's own computed
+   font-size actually is (inherited from --gl-node-font-size, or the
+   fallback below in a context with no such variable, e.g. an isolated
+   component test), so headings are now ALWAYS meaningfully larger than
+   body text, at any font-size setting. */
+.chat-node-content h1,
+.chat-node-content h2,
+.chat-node-content h3,
+.chat-node-content h4,
+.chat-node-content h5,
+.chat-node-content h6 {
+  margin: var(--gl-space-3) 0 var(--gl-space-1-5) 0;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.chat-node-content h1 { font-size: var(--gl-text-xl); }
+.chat-node-content h2 { font-size: var(--gl-text-lg); }
+.chat-node-content h3 { font-size: var(--gl-text-base); }
+.chat-node-content h4,
+.chat-node-content h5,
+.chat-node-content h6 { font-size: var(--gl-text-sm); }
+
+.chat-node-content p {
+  margin: 0 0 var(--gl-space-2-5) 0;
+}
+
+.chat-node-content ul,
+.chat-node-content ol {
+  margin: 0 0 var(--gl-space-2-5) 0;
+  padding-left: var(--gl-space-5);
+}
+
+.chat-node-content li {
+  margin: 0 0 var(--gl-space-1) 0;
+}
+
+.chat-node-content a {
+  color: var(--gl-palette-selection, var(--gl-surface-text-primary));
+}
+
+.chat-node-content blockquote {
+  margin: 0 0 var(--gl-space-2-5) 0;
+  padding: var(--gl-space-0-5) 0 var(--gl-space-0-5) var(--gl-space-2-5);
+  border-left: 3px solid var(--gl-surface-border);
+  color: var(--gl-surface-text-muted);
+}
+
+.chat-node-content hr {
+  margin: var(--gl-space-4) 0;
+  border: 0;
+  border-top: 1px solid var(--gl-surface-border);
+}
+
+.chat-node-content code {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-hover);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-xs);
+  padding: var(--gl-space-0-5) var(--gl-space-1);
+}
+
+.chat-node-content pre {
+  margin: 0 0 var(--gl-space-2-5) 0;
+  padding: var(--gl-space-2-5);
+  overflow-x: auto;
+  background-color: var(--gl-neutral-button-hover);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+}
+
+.chat-node-content pre code {
+  background-color: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  font-size: var(--gl-text-2xs);
+}
+
+.chat-node-content table {
+  width: 100%;
+  margin: 0 0 var(--gl-space-2-5) 0;
+  border-collapse: collapse;
+}
+
+.chat-node-content th,
+.chat-node-content td {
+  padding: var(--gl-space-1-5) var(--gl-space-2);
+  text-align: left;
+  border: 1px solid var(--gl-surface-border);
+}
+
+.chat-node-content th {
+  font-weight: 700;
+  background-color: var(--gl-neutral-button-hover);
+}
+
+/* Groups the role label with its docked-count badge so the pair sits
+   together on the left of .chat-node-role's space-between layout, instead
+   of the badge landing in the middle (a 3rd flex child would otherwise get
+   pushed to the center by space-between). */
+.chat-node-role-group {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-1-5);
+}
+
+/* Node redesign, stage 3 ("card chrome"): a small avatar chip so scanning a
+   dense graph of many chat nodes doesn't depend on reading "You"/"Assistant"
+   text at small zoom levels. Purely visual (aria-hidden in the JSX - the
+   role text right after it already carries the semantics), differentiated
+   by the same background-shade tokens .chat-node-docked-badge already pairs
+   below - this app's palette stays deliberately greyscale, not a new color
+   per role. */
+.chat-node-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  font-size: var(--gl-text-2xs);
+  font-weight: 700;
+  line-height: 1;
+  color: var(--gl-surface-text-secondary);
+  background-color: var(--gl-neutral-button-hover);
+  border-radius: var(--gl-radius-full);
+}
+
+.chat-node.user .chat-node-avatar,
+.conversation-node-bubble.user .chat-node-avatar {
+  color: var(--gl-surface-window);
+  background-color: var(--gl-surface-text-muted);
+}
+
+/* Wraps the hover-revealed quick actions together with the pre-existing
+   collapse button so the pair acts as ONE combined flex child on the right
+   of .chat-node-role's space-between layout - same reasoning as
+   .chat-node-role-group's own comment above, mirrored for the right side. */
+.chat-node-title-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-0-5);
+}
+
+/* The 3 most-reached-for items from the card menu (Copy Text, Branch from
+   here, Open Document View), surfaced without a right-click. Hidden by
+   default and revealed on hover or while selected - mirrors
+   .group-node-controls-chip's own established hover-reveal convention
+   exactly rather than inventing a second one. */
+.chat-node-quick-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-0-5);
+  opacity: 0;
+  transform: translateX(4px);
+  pointer-events: none;
+  transition:
+    opacity var(--gl-motion-fast) var(--gl-motion-ease),
+    transform var(--gl-motion-fast) var(--gl-motion-ease);
+}
+
+.chat-node:hover .chat-node-quick-actions,
+.chat-node.selected .chat-node-quick-actions,
+.conversation-node-bubble:hover .chat-node-quick-actions,
+.chat-node-quick-actions:focus-within {
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.chat-node-quick-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--gl-surface-text-muted);
+  background: transparent;
+  border: none;
+  border-radius: var(--gl-radius-sm);
+  cursor: pointer;
+  transition:
+    background-color var(--gl-motion-fast) var(--gl-motion-ease),
+    color var(--gl-motion-fast) var(--gl-motion-ease);
+}
+
+.chat-node-quick-action:hover {
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.chat-node-icon {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Small pill on ChatNodeView showing how many thinking-node children are
+   currently docked to this chat node - only rendered when count > 0. */
+.chat-node-docked-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 var(--gl-space-1);
+  font-size: var(--gl-text-2xs);
+  font-weight: 700;
+  line-height: 1;
+  color: var(--gl-surface-window);
+  background-color: var(--gl-surface-text-muted);
+  border-radius: var(--gl-radius-full);
+}
+
+/* ADR-002 Workstream 1 ("Synthesize Branches"): the "derived from multiple
+   branches" glyph, only rendered on a synthesis-result chat node - same
+   font-size/color vocabulary as .note-node-badge (Compare Branches'
+   sibling), not a pill like .chat-node-docked-badge above, since this is a
+   single glyph rather than a count. */
+.chat-node-synthesis-badge {
+  font-size: var(--gl-text-xs);
+  line-height: 1;
+  color: var(--gl-surface-text-muted);
+}
+
+/* ADR-002 Workstream 1 ("Synthesize Branches"): the provider/model
+   provenance label, only rendered when the node actually carries one
+   (today: synthesis results only). Deliberately plain text, not a pill -
+   this can be a full model name/id and a pill would either truncate it or
+   force a fixed width that doesn't fit most names. */
+.chat-node-model-badge {
+  font-size: var(--gl-text-2xs);
+  line-height: 1;
+  color: var(--gl-surface-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 140px;
+}
+
+/* Recorded model-routing disclosure: plain --gl-* surface tokens only,
+   positioned outside React Flow's clipped/transformed node by NodeMenu. */
+.chat-node-model-reason {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.chat-node-model-reason-trigger {
+  padding: var(--gl-space-0-5) var(--gl-space-1);
+  color: var(--gl-surface-text-muted);
+  background: transparent;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  font: inherit;
+  font-size: var(--gl-text-2xs);
+  cursor: pointer;
+}
+.chat-node-model-reason-trigger:hover,
+.chat-node-model-reason-trigger:focus-visible {
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-hover);
+}
+.chat-node-model-reason-popover {
+  z-index: var(--gl-z-node-menu);
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-1-5);
+  width: 240px;
+  max-width: 85vw;
+  padding: var(--gl-space-2-5);
+  background-color: var(--gl-surface-node-body);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  box-shadow: var(--gl-shadow-1);
+  color: var(--gl-surface-text-primary);
+}
+.chat-node-model-reason-description,
+.chat-node-model-reason-hint {
+  margin: 0;
+  font-size: var(--gl-text-2xs);
+  line-height: 1.5;
+}
+.chat-node-model-reason-hint {
+  color: var(--gl-surface-text-muted);
+}
+.chat-node-model-reason-action {
+  padding: var(--gl-space-1-5) var(--gl-space-2);
+  text-align: left;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: var(--gl-radius-sm);
+  font: inherit;
+  font-size: var(--gl-text-2xs);
+  cursor: pointer;
+}
+.chat-node-model-reason-action:hover,
+.chat-node-model-reason-action:focus-visible {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+/* ADR-018 stage 18.3: the model-override PIN - same plain-text scale as
+   .chat-node-model-badge above, but tinted (not muted) since it reflects a
+   deliberate user choice governing the NEXT reply, not passive provenance
+   of a past one - the two can legitimately co-occur (see ChatNodeView.tsx's
+   own comment), so they need to read as visually distinct at a glance. */
+.chat-node-model-override-badge {
+  font-size: var(--gl-text-2xs);
+  line-height: 1;
+  /* --gl-palette-selection, same real (non-hardcoded-fallback) token
+     .about-links a already uses for "the one non-grey accent" - see that
+     rule's own comment on why --gl-accent itself is never real here. */
+  color: var(--gl-palette-selection, var(--gl-surface-text-primary));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 140px;
+}
+
+/* ADR-016 stage 16.2: real per-node token/cost usage, same plain-text
+   scale as .chat-node-model-badge next to it - a compact "prompt→completion
+   · $cost" label, not a pill (numbers vary too widely in width). */
+.chat-node-usage-badge {
+  font-size: var(--gl-text-2xs);
+  line-height: 1;
+  color: var(--gl-surface-text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* An explicit label for non-default branch states, readable without
+   color perception and using only the same high-contrast theme tokens. */
+.chat-node-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px var(--gl-space-1);
+  border: 1px dashed var(--gl-surface-border);
+  border-radius: var(--gl-radius-xs);
+  background: var(--gl-neutral-button-background);
+  color: var(--gl-surface-text-primary);
+  font-size: var(--gl-text-2xs);
+  font-weight: 600;
+  line-height: 1.3;
+  flex-shrink: 0;
+}
+
+/* ADR-002 Workstream 1 ("Branch status and lifecycle"): the Final
+   Deliverable glyph - same "single glyph, no pill" shape as
+   .chat-node-synthesis-badge above, at most one node in the whole scene
+   ever shows this. */
+.chat-node-final-badge {
+  font-size: var(--gl-text-xs);
+  line-height: 1;
+  color: var(--gl-surface-text-muted);
+}
+
+.chat-node-footer-meta { display:flex; align-items:center; flex-wrap:wrap; gap:var(--gl-space-1-5); padding:var(--gl-space-1); color:var(--gl-surface-text-muted); font-size:var(--gl-text-xs); }
+.chat-node-version-switcher { display:inline-flex; align-items:center; gap:var(--gl-space-0-5); font-variant-numeric:tabular-nums; }
+.chat-node-status-badge, .chat-node-synthesis-badge, .chat-node-final-badge, .chat-node-knowledge-badge { display:inline-flex; align-items:center; gap:var(--gl-space-0-5); }
+.chat-node-footer-meta .gl-badge { min-width:0; max-width:100%; }
