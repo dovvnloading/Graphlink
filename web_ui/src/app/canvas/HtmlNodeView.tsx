@@ -12,6 +12,10 @@ import {
 import { CollapseToggleButton } from "./CollapseToggleButton";
 import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
+import { Icon } from "../ui/icons/Icon";
+import { IconButton } from "../ui/IconButton";
+import { Button } from "../ui/Button";
+import { Tooltip } from "../ui/Tooltip";
 import { nextHtmlSplitterKeyboardValue } from "./htmlSplitterControls";
 import { useLodVisibility } from "./useLodVisibility";
 
@@ -379,13 +383,8 @@ function HtmlNodeViewImpl({ data, selected }: NodeProps<HtmlFlowNode>) {
                 is recorded in this module's own doc instead: opening
                 untrusted HTML in a separate window needs a security review
                 first, and until that happens there is nothing to render. */}
-            <button
-              type="button"
-              className="html-node-header-btn html-node-delete-btn nodrag"
-              onClick={data.onDelete}
-            >
-              Delete
-            </button>
+            <IconButton icon="trash" size="sm" className="html-node-delete-btn nodrag"
+              label="Delete" onClick={data.onDelete} />
           </div>
         </NodeHeading>
       }
@@ -425,16 +424,12 @@ function HtmlNodeViewImpl({ data, selected }: NodeProps<HtmlFlowNode>) {
           Math.round((1 - splitterValue) * 100) + "% preview"}
         onPointerDown={onSplitterPointerDown}
         onKeyDown={onSplitterKeyDown}
-      />
+      ><Icon name="grip" size="sm" /></div>
       <div className="html-node-render-controls">
-        <button
-          type="button"
-          className="html-node-render-btn"
-          onClick={renderPreview}
-          title="Render or restart the HTML preview (Ctrl+Enter in Source)"
-        >
-          Render
-        </button>
+        <Tooltip label="Render or restart the HTML preview (Ctrl+Enter in Source)">
+          <Button variant="primary" size="sm" iconStart="play"
+            onClick={renderPreview}>Render</Button>
+        </Tooltip>
         <span className={"html-node-preview-status" + (previewOutOfDate ? " stale" : "")} role="status">
           {previewOutOfDate ? "Preview out of date" : "Preview up to date"}
         </span>
