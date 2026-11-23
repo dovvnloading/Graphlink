@@ -71,7 +71,7 @@ describe("KnowledgeSearchDialog kit library", () => {
   it("opens the xl dialog with search first, and count-labelled tabs", async () => {
     const { user } = await setup({ documents: [DOC], folders: [FOLDER] });
     expect(screen.getByRole("dialog", { name: "Knowledge library" })).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "Search the knowledge base" })).toBeInTheDocument();
+    expect(screen.getByRole("searchbox", { name: "Search the knowledge base" })).toBeInTheDocument();
     expect(screen.getByRole("tablist", { name: "Knowledge library sections" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Documents (1)" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Watched folders (1)" })).toBeInTheDocument();
@@ -147,7 +147,7 @@ describe("KnowledgeSearchDialog kit library", () => {
     const { user, intents, request } = await setup();
     request.mockImplementation(async (_topic, intent) =>
       intent === "search" ? { results: [RESULT] } : {});
-    await user.type(screen.getByRole("textbox", { name: "Search the knowledge base" }), "fox");
+    await user.type(screen.getByRole("searchbox", { name: "Search the knowledge base" }), "fox");
     await waitFor(() => expect(intents).toContainEqual(["knowledge", "search", ["fox", 10]]));
     expect(await screen.findByText("1 search result")).toBeInTheDocument();
     const marker = document.querySelector("mark");
@@ -161,7 +161,7 @@ describe("KnowledgeSearchDialog kit library", () => {
     const { user, request } = await setup({ onOpenDocumentView });
     request.mockImplementation(async (_topic, intent) =>
       intent === "search" ? { results: [RESULT] } : {});
-    await user.type(screen.getByRole("textbox", { name: "Search the knowledge base" }), "fox");
+    await user.type(screen.getByRole("searchbox", { name: "Search the knowledge base" }), "fox");
     await screen.findByText("Fox story");
     expect(screen.getByRole("link", { name: "Open source" })).toHaveAttribute("href", "https://example.com/fox");
     await user.click(screen.getByRole("button", { name: "Open in Document View" }));
@@ -174,7 +174,7 @@ describe("KnowledgeSearchDialog kit library", () => {
     const { user, request } = await setup();
     request.mockImplementation(async (_topic, intent) =>
       intent === "search" ? { results: [{ ...RESULT, sourceUri: "C:\\Users\\secret\\notes.md", sourceFile: "C:\\Users\\secret\\notes.md" }] } : {});
-    await user.type(screen.getByRole("textbox", { name: "Search the knowledge base" }), "notes");
+    await user.type(screen.getByRole("searchbox", { name: "Search the knowledge base" }), "notes");
     await screen.findByText("Fox story");
     expect(screen.getByText("notes.md")).toBeInTheDocument();
     expect(screen.queryByText(/Users\\secret/)).toBeNull();
@@ -188,7 +188,7 @@ describe("KnowledgeSearchDialog kit library", () => {
       if (intent !== "search") return {};
       return args?.[0] === "alpha" ? old : { results: [{ ...RESULT, documentTitle: "New result" }] };
     });
-    const field = screen.getByRole("textbox", { name: "Search the knowledge base" });
+    const field = screen.getByRole("searchbox", { name: "Search the knowledge base" });
     await user.type(field, "alpha");
     await waitFor(() => expect(request).toHaveBeenCalledWith("knowledge", "search", ["alpha", 10]));
     await user.clear(field);
@@ -200,7 +200,7 @@ describe("KnowledgeSearchDialog kit library", () => {
 
   it("shows an explicit no-results status when a search returns no hits", async () => {
     const { user } = await setup();
-    await user.type(screen.getByRole("textbox", { name: "Search the knowledge base" }), "no match");
+    await user.type(screen.getByRole("searchbox", { name: "Search the knowledge base" }), "no match");
     expect(await screen.findByText("No search results")).toBeInTheDocument();
   });
 
