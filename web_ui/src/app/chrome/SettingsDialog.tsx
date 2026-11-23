@@ -263,7 +263,7 @@ export function SettingsDialog({ transport }: { transport: WsTransport }) {
   };
 
   return (
-    <Dialog name="settings" title="Settings" className="settings-dialog">
+    <Dialog name="settings" {...{ title: "Settings" }} className="settings-dialog">
       {!state.secretsEncryptedAtRest && (
         <div className="settings-secrets-warning" role="alert">
           <InlineAlert variant="warning" {...{ title: "Secrets are not encrypted" }}
