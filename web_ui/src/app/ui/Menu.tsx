@@ -2,7 +2,7 @@ import {
   Children, cloneElement, createContext, isValidElement, useCallback, useContext,
   useEffect, useId, useLayoutEffect, useMemo, useRef, useState,
   type ButtonHTMLAttributes, type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject,
+  type MouseEvent as ReactMouseEvent, type MutableRefObject, type ReactNode, type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
 import { OverlayProviderIfMissing, useOverlays } from "../overlays/overlays";
@@ -22,8 +22,8 @@ const ITEM_SELECTOR = [
 type MenuContextValue = {
   dismiss: () => void;
   nested: boolean;
-  submenuPanels: RefObject<Set<HTMLElement>>;
-  submenuClosers: RefObject<Array<() => void>>;
+  submenuPanels: MutableRefObject<Set<HTMLElement>>;
+  submenuClosers: MutableRefObject<Array<() => void>>;
 };
 const MenuContext = createContext<MenuContextValue | null>(null);
 
