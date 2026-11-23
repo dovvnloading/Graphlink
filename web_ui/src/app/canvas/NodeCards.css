@@ -898,6 +898,7 @@
   opacity: var(--gl-lod-overview, 0);
   color: var(--gl-surface-text-primary);
 }
+.scene-node-card .node-lod-title::before { content: attr(data-title); }
 .scene-node-card .node-lod-icon {
   flex: none;
   width: calc(var(--gl-icon-sm) / var(--gl-canvas-zoom, 1));
