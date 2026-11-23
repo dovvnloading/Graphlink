@@ -6,7 +6,8 @@
   overflow: hidden;
   isolation: isolate;
   border: 1px solid var(--gl-graph-border);
-  border-radius: 5px;
+  border-radius: var(--gl-radius-md);
+  box-shadow: var(--gl-shadow-2);
   background: var(--gl-graph-surface);
 }
 
@@ -15,52 +16,22 @@
 .scene-minimap-footer {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  padding: 0 3px;
+  gap: var(--gl-space-1);
+  padding: var(--gl-space-1) var(--gl-space-2);
+  min-height: var(--gl-space-8);
 }
-.scene-minimap-toggle,
-.scene-minimap-waiting {
-  display: inline-flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 5px;
-  min-height: 26px;
-  padding: 0 5px;
-  border: 0;
-  border-radius: 2px;
-  background: transparent;
-  color: var(--gl-surface-text-muted);
-  font: 500 11px/1 var(--gl-font-family);
+.scene-minimap-count {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-secondary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  cursor: pointer;
 }
-.scene-minimap-toggle { flex: 1; }
-.scene-minimap-waiting {
-  color: var(--gl-surface-text-primary);
+.scene-minimap-waiting.gl-button {
   text-decoration: underline;
-  text-decoration-color: var(--gl-graph-border);
-  text-underline-offset: 2px;
+  text-underline-offset: var(--gl-space-0-5);
 }
-.scene-minimap-footer button:hover {
-  background: var(--gl-surface-inset);
-  color: var(--gl-surface-text-primary);
-}
-.scene-minimap-footer button:focus-visible {
-  outline: 2px solid var(--gl-graph-selection);
-  outline-offset: -2px;
-}
-.scene-minimap-chevron {
-  width: 11px;
-  height: 11px;
-  flex: none;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.4;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 .scene-minimap.react-flow__minimap {
   position: static;
   margin: 0;
