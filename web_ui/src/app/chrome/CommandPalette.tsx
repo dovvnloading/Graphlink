@@ -140,7 +140,7 @@ export function CommandPalette({ store }: { store: SceneStore }) {
 
   if (!isOpen) return null;
   return (
-    <Dialog name="palette" title="Command palette" size="md" className="palette-dialog">
+    <Dialog name="palette" {...{ title: "Command palette" }} size="md" className="palette-dialog">
       <input type="search" className="palette-search-input" autoComplete="off" spellCheck={false}
         placeholder="Type a command…" aria-label="Search commands"
         aria-controls="palette-results" aria-activedescendant={results[activeIndex] ? `palette-option-${results[activeIndex].command.id}` : undefined}
