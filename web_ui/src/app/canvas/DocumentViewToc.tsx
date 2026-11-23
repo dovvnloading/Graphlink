@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import type { DocumentHeading } from "./documentViewHeadings";
+import { IconButton } from "../ui/IconButton";
 
 /**
  * Document View full redesign, stage 2 ("table of contents + reading
@@ -124,16 +125,7 @@ export function DocumentViewToc({
 
   return (
     <div className="document-view-toc" ref={rootRef}>
-      <button
-        type="button"
-        className="document-view-toc-toggle"
-        aria-haspopup="true"
-        aria-expanded={isOpen}
-        onClick={() => setIsOpen((open) => !open)}
-        title="Table of contents"
-      >
-        Outline
-      </button>
+      <IconButton icon="panel-left" label="Table of contents" size="sm" aria-haspopup="menu" aria-expanded={isOpen} onClick={() => setIsOpen((open) => !open)} />
       {isOpen && (
         <div className="document-view-toc-dropdown" role="menu" aria-label="Table of contents">
           {headings.map((heading) => (
