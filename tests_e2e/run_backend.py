@@ -10,20 +10,11 @@ window in a CI runner. See web_ui/playwright.config.ts's own comment for
 the other half of this design (its `webServer` block runs this exact
 script and polls /api/health before handing control to the tests).
 
-Isolation: every run gets a FRESH temporary directory (tempfile.mkdtemp(),
-not a fixed committed path) for settings_state_file/chat_db_path - never
-~/.graphlink/, which is a real user's actual data. A fresh mkdtemp() per
-run, rather than a fixed tests_e2e/.e2e_data/ dir this script clears at
-startup, was chosen so two overlapping local runs (a developer running
-`npx playwright test` while CI or another shell is mid-run) can never
-collide on the same session.dat/chats.db, and so there is nothing under
-version control to .gitignore or to accidentally commit. The directory is
-deliberately NOT cleaned up on exit - this process is killed (not asked to
-shut down) by Playwright's webServer teardown, so there is no reliable
-"after the last test" hook to clean up from; the OS temp directory's own
-normal housekeeping (or a developer's `%TEMP%` cleanup) is left to reclaim
-it, exactly as pytest's own tmp_path fixture leaves its directories behind
-for inspection after a run.
+Isolation: every run gets a FRESH TemporaryDirectory for
+settings_state_file/chat_db_path - never ~/.graphlink/, which is a real user's
+actual data. Independent runs remain isolated and cannot collide with one
+another. The directory is cleaned up on normal exit, including a graceful
+uvicorn shutdown; forced process termination may bypass Python's cleanup.
 
 The explicit allow_unauthenticated_for_tests=True flag disables /api
 and /ws authentication ONLY for this isolated loopback E2E harness: there is no graphlink_desktop.py
@@ -78,16 +69,16 @@ def main() -> None:
 
     from backend.app import create_app
 
-    e2e_data_dir = Path(tempfile.mkdtemp(prefix="graphlink-e2e-"))
-
-    app = create_app(
-        spa_dir=REPO_ROOT / "web_ui" / "dist" / "app",
-        settings_state_file=e2e_data_dir / "session.dat",
-        chat_db_path=e2e_data_dir / "chats.db",
-        auth_token=None,
-        allow_unauthenticated_for_tests=True,
-    )
-    uvicorn.run(app, host="127.0.0.1", port=E2E_PORT, log_level="warning")
+    with tempfile.TemporaryDirectory(prefix="graphlink-e2e-", ignore_cleanup_errors=True) as directory:
+        e2e_data_dir = Path(directory)
+        app = create_app(
+            spa_dir=REPO_ROOT / "web_ui" / "dist" / "app",
+            settings_state_file=e2e_data_dir / "session.dat",
+            chat_db_path=e2e_data_dir / "chats.db",
+            auth_token=None,
+            allow_unauthenticated_for_tests=True,
+        )
+        uvicorn.run(app, host="127.0.0.1", port=E2E_PORT, log_level="warning")
 
 
 if __name__ == "__main__":

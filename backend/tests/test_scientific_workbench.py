@@ -730,7 +730,7 @@ def test_chart_receipt_freshness_detects_equal_numbers_from_different_sources(se
 
 
 def test_import_preview_does_not_stage_and_apply_requires_reviewed_bytes_and_options(session, monkeypatch):
-    from graphlink_plugins.scientific.data_table import _STAGING
+    from graphlink_plugins.scientific.data_table import _staging_store
 
     document, bus, _, _ = session
     grant(bus, "core")
@@ -742,7 +742,7 @@ def test_import_preview_does_not_stage_and_apply_requires_reviewed_bytes_and_opt
         return dispatch(bus, "invokePluginIntent", "science_core", action, {**args, **extra})
 
     with monkeypatch.context() as scoped:
-        scoped.setattr(_STAGING, "put", lambda *args: pytest.fail("Preview or mismatched apply wrote an asset"))
+        scoped.setattr(_staging_store(), "put", lambda *args: pytest.fail("Preview or mismatched apply wrote an asset"))
         preview = call("preview_table")
         table = preview["table"]
         pinned = {"expected_run": preview["runToken"], "expected_preview": table["provenance"]["receiptHash"]}
@@ -955,7 +955,7 @@ def test_table_metadata_rejects_malformed_preview_and_columns():
 def test_table_column_returns_validation_error_for_corrupt_asset_rows():
     from graphlink_plugins.scientific.core import canonical_bytes, fingerprint
     from graphlink_plugins.scientific.data_table import (
-        _STAGING, numeric_column, parse_table, table_metadata_valid,
+        _staging_store, numeric_column, parse_table, table_metadata_valid,
     )
 
     table = parse_table(b"Value\n1\n")
@@ -964,7 +964,7 @@ def test_table_column_returns_validation_error_for_corrupt_asset_rows():
     forged = canonical_bytes({
         "version": 1, "columns": table["columns"], "rows": [{"0": 1}],
     })
-    ref = _STAGING.put(forged)
+    ref = _staging_store().put(forged)
     receipt = {k: v for k, v in table["provenance"].items() if k != "receiptHash"}
     receipt["tableHash"] = ref
     receipt["receiptHash"] = fingerprint(receipt)
