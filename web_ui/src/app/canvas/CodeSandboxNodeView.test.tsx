@@ -117,6 +117,7 @@ describe("CodeSandboxNodeView", () => {
   it("typing into Requirements calls no WS method - only blur commits it", async () => {
     const user = userEvent.setup();
     const data = renderCodeSandboxNode();
+    await user.click(screen.getByRole("button", { name: "Edit dependencies" }));
     const input = screen.getByRole("textbox", { name: "Requirements" });
 
     await user.type(input, "numpy");
@@ -129,6 +130,7 @@ describe("CodeSandboxNodeView", () => {
   it("pressing Enter (no shift) in Requirements commits exactly once via blur, not twice", async () => {
     const user = userEvent.setup();
     const data = renderCodeSandboxNode();
+    await user.click(screen.getByRole("button", { name: "Edit dependencies" }));
     const input = screen.getByRole("textbox", { name: "Requirements" });
 
     await user.type(input, "numpy{Enter}");
@@ -139,6 +141,7 @@ describe("CodeSandboxNodeView", () => {
   it("Shift+Enter inserts a newline in Requirements instead of committing", async () => {
     const user = userEvent.setup();
     const data = renderCodeSandboxNode();
+    await user.click(screen.getByRole("button", { name: "Edit dependencies" }));
     const input = screen.getByRole("textbox", { name: "Requirements" });
 
     await user.type(input, "numpy{Shift>}{Enter}{/Shift}pandas");
