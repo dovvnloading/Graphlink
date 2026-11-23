@@ -1,15 +1,17 @@
 .view-popover {
   width: 328px;
-  max-height: min(76vh, 760px);
+  height: min(76vh, 760px);
+  max-height: calc(100vh - 96px);
   display: flex;
   flex-direction: column;
   padding: 0;
   overflow: hidden;
 }
 .view-scroll {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: var(--gl-space-3);
 }
 .view-section + .view-section {

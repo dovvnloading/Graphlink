@@ -93,21 +93,21 @@ export function buildCommands(
   const commands = [
     {
       id: "fit-all",
-      name: "Fit All to View",
+      name: "Fit all to view",
       aliases: ["fit screen", "zoom fit"],
       run: () => rf.fitView({ duration: motionDuration(200), ...GRAPH_FIT_OPTIONS }),
       enabled: hasNodes,
     },
     {
       id: "reset-view",
-      name: "Reset View",
+      name: "Reset view",
       aliases: ["reset zoom", "default view"],
       run: () => rf.zoomTo(1, { duration: motionDuration(200) }),
       enabled: () => true,
     },
     {
       id: "export-canvas-png",
-      name: "Export Canvas as PNG",
+      name: "Export canvas as PNG",
       aliases: ["export png", "download image", "save canvas image"],
       // Imported on run, not at module scope - see AppBar.tsx's exportPng.
       run: () =>
@@ -118,42 +118,42 @@ export function buildCommands(
     },
     {
       id: "zoom-in",
-      name: "Zoom In",
+      name: "Zoom in",
       aliases: ["zoom in"],
       run: () => rf.zoomIn({ duration: motionDuration(150) }),
       enabled: () => true,
     },
     {
       id: "zoom-out",
-      name: "Zoom Out",
+      name: "Zoom out",
       aliases: ["zoom out"],
       run: () => rf.zoomOut({ duration: motionDuration(150) }),
       enabled: () => true,
     },
     {
       id: "organize-nodes",
-      name: "Organize Nodes",
+      name: "Organize nodes",
       aliases: ["organize", "auto layout", "rearrange"],
       run: () => overlays.open("organize", "dialog"),
       enabled: hasNodes,
     },
     {
       id: "graph-runner",
-      name: "Graph Runner",
+      name: "Graph runner",
       aliases: ["run graph", "run selection", "preview run", "resume run", "workflow"],
       run: () => overlays.open("graph-runner", "dialog"),
       enabled: () => true,
     },
     {
       id: "select-all",
-      name: "Select All Nodes",
+      name: "Select all nodes",
       aliases: ["select all"],
       run: () => rf.setNodes((nodes) => nodes.map((n) => ({ ...n, selected: true }))) as void,
       enabled: hasNodes,
     },
     {
       id: "delete-selected",
-      name: "Delete Selected Items",
+      name: "Delete selected items",
       aliases: ["delete", "remove selected"],
       run: () => {
         const nodeIds = rf.getNodes().filter((n) => n.selected).map((n) => n.id);
@@ -173,21 +173,21 @@ export function buildCommands(
     // surfaces would be worse than having no palette entry at all.
     {
       id: "compare-branches",
-      name: "Compare Branches",
+      name: "Compare branches",
       aliases: ["compare", "diff branches", "contrast branches"],
       run: () => applyCompareBranches(store, rf),
       enabled: hasMultiSelection,
     },
     {
       id: "synthesize-branches",
-      name: "Synthesize Branches",
+      name: "Synthesize branches",
       aliases: ["synthesize", "merge branches", "combine branches"],
       run: () => applySynthesizeBranches(store, rf),
       enabled: hasMultiSelection,
     },
     {
       id: "add-pin",
-      name: "Add Navigation Pin",
+      name: "Add navigation pin",
       aliases: ["create pin", "bookmark location", "pin current view"],
       run: () => {
         const { x, y } = store.getSpawnPoint();
@@ -197,42 +197,42 @@ export function buildCommands(
     },
     {
       id: "open-library",
-      name: "Open Library",
+      name: "Open library",
       aliases: ["chat library", "sessions"],
       run: () => overlays.open("library", "dialog"),
       enabled: () => true,
     },
     {
       id: "open-settings",
-      name: "Open Settings",
+      name: "Open settings",
       aliases: ["preferences", "config"],
       run: () => overlays.open("settings", "dialog"),
       enabled: () => true,
     },
     {
       id: "open-view",
-      name: "Open View Controls",
+      name: "Open view controls",
       aliases: ["drag speed", "grid", "font"],
       run: () => overlays.open("view", "popover"),
       enabled: () => true,
     },
     {
       id: "open-pins",
-      name: "Open Navigation Pins",
+      name: "Open navigation pins",
       aliases: ["pins list"],
       run: () => overlays.open("pins", "popover"),
       enabled: () => true,
     },
     {
       id: "open-help",
-      name: "Open Help",
+      name: "Open help",
       aliases: ["docs", "shortcuts"],
       run: () => overlays.open("help", "dialog"),
       enabled: () => true,
     },
     {
       id: "open-about",
-      name: "Open About",
+      name: "Open about",
       aliases: ["version", "credits"],
       run: () => overlays.open("about", "dialog"),
       enabled: () => true,
@@ -243,14 +243,14 @@ export function buildCommands(
       // while every sibling dialog here has had a palette twin since it
       // shipped.
       id: "open-agent",
-      name: "Open Agent",
+      name: "Open agent",
       aliases: ["workspace agent", "harness", "new agent"],
       run: () => overlays.open("harness-launch", "dialog"),
       enabled: () => true,
     },
     {
       id: "open-plugins",
-      name: "Open Plugins",
+      name: "Open plugins",
       aliases: ["plugin picker", "add node"],
       run: () => overlays.open("plugins", "popover"),
       enabled: () => true,
@@ -262,7 +262,7 @@ export function buildCommands(
       // trigger is Ctrl+P (chrome/shortcuts.ts), this is the discoverable
       // palette twin, same posture as "open-library"'s own Ctrl+L twin.
       id: "open-quick-switcher",
-      name: "Quick Switcher",
+      name: "Quick switcher",
       aliases: ["go to graph", "jump to graph", "recent graphs", "switch graph"],
       run: () => overlays.open("quick-switcher", "dialog"),
       enabled: () => true,
@@ -273,7 +273,7 @@ export function buildCommands(
       // shape as "open-library"/"open-plugins" above (ADR-012's own
       // "register every new surface in the palette" rule).
       id: "open-global-search",
-      name: "Open Global Search",
+      name: "Open global search",
       aliases: ["search everywhere", "search all workspaces", "find in graph"],
       run: () => overlays.open("global-search", "dialog"),
       enabled: () => true,
@@ -285,7 +285,7 @@ export function buildCommands(
       // path (the plugin picker's generic executePlugin("System Prompt", ...)
       // - see backend/plugins.py) and is deliberately not duplicated here.
       id: "add-note",
-      name: "Add Note",
+      name: "Add note",
       aliases: ["sticky note", "create note", "new note"],
       run: () => {
         const { x, y } = store.getSpawnPoint();
@@ -295,7 +295,7 @@ export function buildCommands(
     },
     {
       id: "add-table",
-      name: "Add Table",
+      name: "Add table",
       aliases: ["csv", "spreadsheet", "create table"],
       run: () => store.addTable(),
       enabled: () => true,
@@ -305,7 +305,7 @@ export function buildCommands(
       // the chat-library dialog); this just gives the palette its own entry
       // point to the same intent, same posture as "add-note" above.
       id: "new-chat",
-      name: "New Chat",
+      name: "New chat",
       aliases: ["new session", "clear canvas", "start over"],
       run: () => requestNewChat(store),
       enabled: () => true,
@@ -315,7 +315,7 @@ export function buildCommands(
       // R6.5 but no palette entry - a genuine gap this increment closes,
       // since Ctrl+S now needs a palette twin to stay discoverable.
       id: "save-chat",
-      name: "Save Chat",
+      name: "Save chat",
       aliases: ["save", "save session", "persist chat"],
       run: () => store.saveChat(),
       enabled: () => true,
@@ -325,21 +325,21 @@ export function buildCommands(
       // same primitive "fit-all" above already uses, just scoped to the
       // current selection instead of every node.
       id: "focus-selection",
-      name: "Focus on Selection",
+      name: "Focus on selection",
       aliases: ["zoom to selection", "frame selection view"],
       run: () => rf.fitView({ nodes: selectedNodeIds().map((id) => ({ id })), duration: motionDuration(200) }),
       enabled: hasSelection,
     },
     {
       id: "create-frame",
-      name: "Create Frame",
+      name: "Create frame",
       aliases: ["group into frame", "frame selection"],
       run: () => store.createFrame(selectedNodeIds()),
       enabled: hasMultiSelection,
     },
     {
       id: "create-container",
-      name: "Create Container",
+      name: "Create container",
       aliases: ["group into container", "container selection"],
       run: () => store.createContainer(selectedNodeIds()),
       enabled: hasMultiSelection,
@@ -350,7 +350,7 @@ export function buildCommands(
       // html node exists, same posture as create-frame/create-container's own
       // content-shaped gate above.
       id: "collapse-all-nodes",
-      name: "Collapse All Nodes",
+      name: "Collapse all nodes",
       aliases: ["fold all"],
       run: () => store.collapseAllNodes(),
       enabled: hasCollapsibleNodes,
@@ -359,7 +359,7 @@ export function buildCommands(
       // R7.5e: legacy's "Expand All Nodes" (graphlink_window_navigation.py:13),
       // alias "unfold all".
       id: "expand-all-nodes",
-      name: "Expand All Nodes",
+      name: "Expand all nodes",
       aliases: ["unfold all"],
       run: () => store.expandAllNodes(),
       enabled: hasCollapsibleNodes,

@@ -51,6 +51,12 @@ function renderThinkingNode(overrides: Partial<ThinkingFlowNode["data"]> = {}) {
 }
 
 describe("ThinkingNodeView", () => {
+  it("shows exactly one kind glyph in the thinking node header", () => {
+    renderThinkingNode();
+    expect(document.querySelectorAll(".thinking-node .node-card-header svg")).toHaveLength(1);
+    expect(document.querySelector(".thinking-node .node-card-kind-icon")).toBeInTheDocument();
+  });
+
   it("renders the markdown thinking text", () => {
     renderThinkingNode();
     expect(screen.getByText("several")).toBeInTheDocument(); // bold text still renders as text
