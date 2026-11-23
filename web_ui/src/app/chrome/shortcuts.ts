@@ -168,3 +168,22 @@ export function resolveShortcut(event: ShortcutKeyEvent): ShortcutId | null {
       return null;
   }
 }
+
+/** Every chord the resolver accepts, per action ("Ctrl+K", "Ctrl+Shift+G"),
+ * discovered from resolveShortcut itself so labels can never drift from the
+ * real key handling. Help and the empty canvas both read this. */
+export function discoverShortcutChords(): Map<ShortcutId, string[]> {
+  const chords = new Map<ShortcutId, string[]>();
+  const keys = "abcdefghijklmnopqrstuvwxyz".split("").concat(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
+  const arrowNames: Record<string, string> = { ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right" };
+  for (const shiftKey of [false, true]) {
+    for (const key of keys) {
+      const id = resolveShortcut({ key, ctrlKey: true, metaKey: false, shiftKey, altKey: false });
+      if (!id) continue;
+      const chord = "Ctrl+" + (shiftKey ? "Shift+" : "") + (arrowNames[key] ?? key.toUpperCase());
+      const existing = chords.get(id) ?? [];
+      if (!existing.includes(chord)) chords.set(id, [...existing, chord]);
+    }
+  }
+  return chords;
+}

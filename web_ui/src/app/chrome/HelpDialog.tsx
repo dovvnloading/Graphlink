@@ -5,7 +5,7 @@ import { Dialog } from "../overlays/overlays";
 import { Icon } from "../ui/icons/Icon";
 import type { IconName } from "../ui/icons/registry";
 import { Kbd } from "../ui/Kbd";
-import { resolveShortcut, type ShortcutId } from "./shortcuts";
+import { discoverShortcutChords, type ShortcutId } from "./shortcuts";
 import "./HelpDialog.css";
 
 /**
@@ -67,20 +67,7 @@ const SHORTCUT_INFO: Record<ShortcutId, { group: string; action: string; descrip
 
 /** Discover actual chords from the dispatch resolver rather than copying shortcuts by hand. */
 function generatedKeyboardSection(source: HelpSection): HelpSection {
-  const chords = new Map<ShortcutId, string[]>();
-  const keys = "abcdefghijklmnopqrstuvwxyz".split("").concat(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
-  for (const shiftKey of [false, true]) {
-    for (const key of keys) {
-      const id = resolveShortcut({ key, ctrlKey: true, metaKey: false, shiftKey, altKey: false });
-      if (!id) continue;
-      const displayKey = key.startsWith("Arrow")
-        ? { ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right" }[key as "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight"]
-        : key.toUpperCase();
-      const chord = "Ctrl+" + (shiftKey ? "Shift+" : "") + displayKey;
-      const existing = chords.get(id) ?? [];
-      if (!existing.includes(chord)) chords.set(id, [...existing, chord]);
-    }
-  }
+  const chords = discoverShortcutChords();
   const subsections = ["Project", "Finding", "Editing", "Branches"].map((title) => ({
     title,
     items: (Object.entries(SHORTCUT_INFO) as [ShortcutId, typeof SHORTCUT_INFO[ShortcutId]][])
