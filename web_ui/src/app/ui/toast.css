@@ -1,0 +1,66 @@
+.gl-toaster {
+  position: fixed;
+  top: calc(44px + var(--gl-space-3));
+  right: var(--gl-space-4);
+  z-index: var(--gl-z-toast);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--gl-space-2);
+  width: min(360px, calc(100vw - 32px));
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  pointer-events: none;
+}
+.gl-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--gl-space-2);
+  padding: var(--gl-space-3);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-lg);
+  background: var(--gl-surface-overlay);
+  color: var(--gl-surface-text-primary);
+  box-shadow: var(--gl-shadow-popover);
+  font-size: var(--gl-text-sm);
+  pointer-events: auto;
+  animation: gl-toast-enter var(--gl-motion-base) var(--gl-ease-enter) both;
+}
+.gl-toast[data-state="closing"] {
+  pointer-events: none;
+  animation: gl-toast-exit var(--gl-motion-fast) var(--gl-ease-exit) both;
+}
+.gl-toast-main { display: grid; gap: var(--gl-space-2); flex: 1; min-width: 0; }
+.gl-toast-title { overflow-wrap: anywhere; font-weight: var(--gl-weight-semibold); }
+.gl-toast-details { display: flex; gap: var(--gl-space-2); align-items: flex-start; }
+.gl-toast-details pre {
+  flex: 1;
+  min-width: 0;
+  max-height: 16em;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  margin: 0;
+  padding: var(--gl-space-2);
+  background: var(--gl-surface-inset);
+  border-radius: var(--gl-radius-xs);
+  font: inherit;
+  font-family: var(--gl-font-mono);
+  font-size: var(--gl-text-xs);
+}
+.gl-toaster-more {
+  align-self: flex-end;
+  padding: var(--gl-space-1) var(--gl-space-2);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  background: var(--gl-surface-overlay);
+  color: var(--gl-surface-text-primary);
+  font: inherit;
+  font-size: var(--gl-text-xs);
+  cursor: pointer;
+  pointer-events: auto;
+}
+.gl-toaster-more:focus-visible { outline: 2px solid var(--gl-focus-ring); outline-offset: 2px; }
+@keyframes gl-toast-enter { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes gl-toast-exit { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-4px); } }
+@media (prefers-reduced-motion: reduce) { .gl-toast { animation: none !important; } }

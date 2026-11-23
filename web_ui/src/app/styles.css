@@ -3339,67 +3339,6 @@ body {
   color: var(--gl-surface-text-primary);
 }
 
-/* R8a (UI/UX issue list findings #3/#25 - a literal duplicate entry, one
-   bug): this layer and .app-search-layer both centre on the same top-
-   centre band. Before this fix both used the same --gl-chrome-inset top,
-   so a banner showing while search was open fully covered it (measured
-   live: .search-overlay-shell renders at top:16/height:42 relative to
-   .app-canvas-region, and a real .notification-banner renders 40px tall -
-   two 40px+ elements at an identical top offset is total overlap, not a
-   near-miss). Search keeps the stable slot (it's the one the user is
-   actively looking at/typing into); the banner gets a second band below
-   it with real clearance - 68px clears search's own measured bottom
-   (16+42=58) by 10px, so the two can never touch regardless of which
-   shows first. The z-index gap (still --gl-z-notification over
-   --gl-z-search) stays as a second guarantee in case a longer banner
-   message ever wraps taller than assumed here. */
-.app-notification-layer {
-  position: absolute;
-  top: calc(var(--gl-chrome-inset) + 52px);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: var(--gl-z-notification);
-}
-
-.notification-banner {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--gl-surface-border);
-  background-color: var(--gl-surface-node-body);
-  font-size: 12px;
-  color: var(--gl-surface-text-primary);
-}
-
-.notification-error {
-  border-color: var(--gl-semantic-status-error, var(--gl-surface-border));
-}
-
-.notification-dismiss {
-  font-size: 14px;
-  font-family: inherit;
-  line-height: 1;
-  /* R8a (UI/UX issue list finding #26): this was the one close/dismiss
-     button in the app with no padding at all - its click target was the
-     bare glyph's own advance width (~9x14px). Matches .overlay-dialog-close
-     and .search-overlay-icon-btn's shape (padding + rounded corners + a
-     hover background, not just a color change) rather than inventing a
-     third convention for the same kind of control. */
-  padding: 4px 8px;
-  color: var(--gl-surface-text-muted);
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-.notification-dismiss:hover {
-  color: var(--gl-surface-text-primary);
-  background-color: var(--gl-neutral-button-hover);
-}
-
 /* -- R2.4 pin overlay ------------------------------------------------------ */
 
 .pins-popover {
