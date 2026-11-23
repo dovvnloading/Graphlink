@@ -46,7 +46,7 @@ BROWSER_RUN_SPEC = ToolSpec(
     description=(
         "Open a disposable headless Chromium session for a public HTTPS page. "
         "Render JavaScript, optionally navigate/click/fill/select/scroll, and extract "
-        "source URL, visible text, links, tables and optional screenshot. Only GET "
+        "source URL, visible text, links, tables, visible control selectors and optional screenshot. Only GET "
         "requests are permitted; no logins, downloads, arbitrary JS or form writes. "
         "Each new host and interactive action requires human approval. Third-party "
         "subresources are blocked unless their hosts are explicitly listed. "
@@ -186,12 +186,14 @@ async def _run(call: ToolCall, ctx: RunContext) -> ToolResult:
         return bool(decision) and not (ctx.cancel is not None and ctx.cancel.is_set())
 
     try:
-        capture = await run_browser(
+        capture = await asyncio.wait_for(run_browser(
             args["url"], steps, approve_host, approve_action,
             allowed_hosts=tuple(allowed_hosts), screenshot=screenshot, cancel=ctx.cancel,
-        )
+        ), timeout=100)
     except BrowserPolicyError as exc:
         return ToolResult("Browser Agent: " + str(exc), is_error=True)
+    except TimeoutError:
+        return ToolResult("Browser Agent exceeded its 100-second task limit.", is_error=True)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -212,6 +214,7 @@ async def _run(call: ToolCall, ctx: RunContext) -> ToolResult:
     # in this task's private capture store until explicitly published.
     report["text"] = report["text"][:8000]
     report["links"] = report["links"][:25]
+    report["controls"] = report["controls"][:25]
     report["tables"] = [
         [row[:8] for row in table[:10]] for table in report["tables"][:3]
     ]
