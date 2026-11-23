@@ -320,7 +320,7 @@ describe("CodeSandboxNodeView", () => {
   it("Approve calls onApprove with no arguments", async () => {
     const user = userEvent.setup();
     const data = renderCodeSandboxNode({ codeSandboxAwaitingApproval: true, codeSandboxCode: "print(1)" });
-    await user.click(screen.getByRole("button", { name: "Approve" }));
+    await user.click(screen.getByRole("button", { name: "Approve and run" }));
     expect(data.onApprove).toHaveBeenCalledExactlyOnceWith();
   });
 
@@ -448,7 +448,7 @@ describe("CodeSandboxNodeView", () => {
 
     expect(screen.getAllByRole("dialog")).toHaveLength(2);
 
-    const approveButtons = screen.getAllByRole("button", { name: "Approve" });
+    const approveButtons = screen.getAllByRole("button", { name: "Approve and run" });
     expect(approveButtons).toHaveLength(2);
     await user.click(approveButtons[0]);
     expect(dataA.onApprove).toHaveBeenCalledExactlyOnceWith();
@@ -489,7 +489,7 @@ describe("CodeSandboxNodeView", () => {
 
   // -- card-level menu ----------------------------------------------------
 
-  it("the node-level right-click menu shows exactly Collapse/Expand + Delete Node - no dock action", async () => {
+  it("the node-level right-click menu shows exactly Collapse/Expand + Delete node - no dock action", async () => {
     const user = userEvent.setup();
     const data = renderCodeSandboxNode();
 
@@ -500,14 +500,14 @@ describe("CodeSandboxNodeView", () => {
     const items = screen.getAllByRole("menuitem");
     expect(items).toHaveLength(2);
     expect(items[0]).toHaveTextContent("Collapse");
-    expect(items[1]).toHaveTextContent("Delete Node");
+    expect(items[1]).toHaveTextContent("Delete node");
     expect(screen.queryByRole("menuitem", { name: /Dock/ })).toBeNull();
 
     await user.click(items[0]);
     expect(data.onToggleCollapse).toHaveBeenCalledOnce();
 
     fireEvent.contextMenu(screen.getByText("Virtual Environment Runner"));
-    await user.click(screen.getByRole("menuitem", { name: "Delete Node" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete node" }));
     expect(data.onDelete).toHaveBeenCalledOnce();
   });
 

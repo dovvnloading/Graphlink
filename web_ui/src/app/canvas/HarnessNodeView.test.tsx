@@ -489,7 +489,7 @@ describe("HarnessNodeView", () => {
     expect(screen.getByRole("menu")).toBeInTheDocument();
   });
 
-  it("the node-level right-click menu shows exactly Collapse/Expand + Delete Node", async () => {
+  it("the node-level right-click menu shows exactly Collapse/Expand + Delete node", async () => {
     const user = userEvent.setup();
     const data = makeData();
     renderHarness(data);
@@ -501,13 +501,13 @@ describe("HarnessNodeView", () => {
     const items = screen.getAllByRole("menuitem");
     expect(items).toHaveLength(2);
     expect(items[0]).toHaveTextContent("Collapse");
-    expect(items[1]).toHaveTextContent("Delete Node");
+    expect(items[1]).toHaveTextContent("Delete node");
 
     await user.click(items[0]);
     expect(data.onToggleCollapse).toHaveBeenCalledOnce();
 
     fireEvent.contextMenu(screen.getByText("Summarize the workspace files"));
-    await user.click(screen.getByRole("menuitem", { name: "Delete Node" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete node" }));
     expect(data.onDelete).toHaveBeenCalledOnce();
   });
 
@@ -926,7 +926,7 @@ describe("HarnessNodeView", () => {
       ],
     }));
     expect(screen.getByText("2 activity entries")).toBeInTheDocument();
-    expect(screen.getByText("Running · 150ms")).toBeInTheDocument();
+    expect(screen.getByText("Running · <1 s")).toBeInTheDocument();
     expect(screen.getByText("Stopped · 220ms")).toBeInTheDocument();
     expect(screen.getByText(/first line/)).toBeInTheDocument();
     expect(screen.getByText(/previous output/)).toBeInTheDocument();

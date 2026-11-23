@@ -152,11 +152,11 @@ describe("ConversationNodeView", () => {
     expect(screen.getByText("Hello")).toBeInTheDocument();
   });
 
-  it("each bubble's right-click menu shows exactly Copy Message and Delete from History, both real", async () => {
+  it("each bubble's right-click menu shows exactly Copy message and Delete from history, both real", async () => {
     const user = userEvent.setup();
     const { onDeleteMessage } = renderConversationNode();
 
-    // ADR-011 stage 11.1: the menu's Copy Message now chains a .catch() onto
+    // ADR-011 stage 11.1: the menu's Copy message now chains a .catch() onto
     // the clipboard write (D11), so the mock must resolve like a real
     // Promise-returning clipboard API - a bare vi.fn() (no resolved value)
     // would make that .catch() call throw synchronously on `undefined`.
@@ -170,21 +170,21 @@ describe("ConversationNodeView", () => {
 
     const items = screen.getAllByRole("menuitem");
     expect(items).toHaveLength(2);
-    expect(items[0]).toHaveTextContent("Copy Message");
-    expect(items[1]).toHaveTextContent("Delete from History");
+    expect(items[0]).toHaveTextContent("Copy message");
+    expect(items[1]).toHaveTextContent("Delete from history");
     expect(items[0]).toBeEnabled();
     expect(items[1]).toBeEnabled();
 
-    await user.click(screen.getByRole("menuitem", { name: "Copy Message" }));
+    await user.click(screen.getByRole("menuitem", { name: "Copy message" }));
     expect(writeText).toHaveBeenCalledWith("Hello **world**");
 
     fireEvent.contextMenu(userBubble);
-    await user.click(screen.getByRole("menuitem", { name: "Delete from History" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete from history" }));
     expect(onDeleteMessage).toHaveBeenCalledOnce();
     expect(onDeleteMessage).toHaveBeenCalledWith(0);
   });
 
-  it("clicking Copy Message on the second bubble copies its own exact content", async () => {
+  it("clicking Copy message on the second bubble copies its own exact content", async () => {
     const user = userEvent.setup();
     renderConversationNode();
     // See the .mockResolvedValue comment above - the added .catch() needs a
@@ -194,17 +194,17 @@ describe("ConversationNodeView", () => {
 
     const assistantBubble = screen.getByText("Hi there").closest(".conversation-node-bubble") as HTMLElement;
     fireEvent.contextMenu(assistantBubble);
-    await user.click(screen.getByRole("menuitem", { name: "Copy Message" }));
+    await user.click(screen.getByRole("menuitem", { name: "Copy message" }));
     expect(writeText).toHaveBeenCalledWith("Hi there");
   });
 
-  it("clicking Delete from History on the second bubble calls onDeleteMessage with index 1", async () => {
+  it("clicking Delete from history on the second bubble calls onDeleteMessage with index 1", async () => {
     const user = userEvent.setup();
     const { onDeleteMessage } = renderConversationNode();
 
     const assistantBubble = screen.getByText("Hi there").closest(".conversation-node-bubble") as HTMLElement;
     fireEvent.contextMenu(assistantBubble);
-    await user.click(screen.getByRole("menuitem", { name: "Delete from History" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete from history" }));
     expect(onDeleteMessage).toHaveBeenCalledWith(1);
   });
 
@@ -390,10 +390,10 @@ describe("ConversationNodeView", () => {
     const userBubble = screen.getByText("world").closest(".conversation-node-bubble") as HTMLElement;
     fireEvent.contextMenu(userBubble);
     expect(screen.getAllByRole("menu")).toHaveLength(1);
-    expect(screen.queryByRole("menuitem", { name: "Delete Node" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Delete node" })).toBeNull();
   });
 
-  it("the node-level right-click menu shows exactly 3 items: Open Document View (real), Collapse/Expand (real), Delete Node (real)", async () => {
+  it("the node-level right-click menu shows exactly 3 items: Open in Document View (real), Collapse/Expand (real), Delete node (real)", async () => {
     const user = userEvent.setup();
     const { onDelete, onToggleCollapse } = renderConversationNode();
 
@@ -405,13 +405,13 @@ describe("ConversationNodeView", () => {
     const items = screen.getAllByRole("menuitem");
     expect(items).toHaveLength(3);
 
-    const docView = screen.getByRole("menuitem", { name: "Open Document View" });
+    const docView = screen.getByRole("menuitem", { name: "Open in Document View" });
     expect(docView).toBeEnabled();
 
     const collapseItem = screen.getByRole("menuitem", { name: "Collapse" });
     expect(collapseItem).toBeEnabled();
 
-    const deleteItem = screen.getByRole("menuitem", { name: "Delete Node" });
+    const deleteItem = screen.getByRole("menuitem", { name: "Delete node" });
     expect(deleteItem).toBeEnabled();
 
     // Explicitly absent: neither of these belongs to this node kind's menu.
@@ -424,17 +424,17 @@ describe("ConversationNodeView", () => {
     expect(onToggleCollapse).toHaveBeenCalledOnce();
 
     fireEvent.contextMenu(header);
-    await user.click(screen.getByRole("menuitem", { name: "Delete Node" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete node" }));
     expect(onDelete).toHaveBeenCalledOnce();
   });
 
-  it("Open Document View calls onOpenDocumentView then closes the menu", async () => {
+  it("Open in Document View calls onOpenDocumentView then closes the menu", async () => {
     const user = userEvent.setup();
     const { onOpenDocumentView } = renderConversationNode();
 
     const header = screen.getByText("Conversation");
     fireEvent.contextMenu(header);
-    await user.click(screen.getByRole("menuitem", { name: "Open Document View" }));
+    await user.click(screen.getByRole("menuitem", { name: "Open in Document View" }));
 
     expect(onOpenDocumentView).toHaveBeenCalledOnce();
     expect(screen.queryByRole("menu")).toBeNull();

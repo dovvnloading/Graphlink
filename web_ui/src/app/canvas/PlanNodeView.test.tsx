@@ -87,9 +87,9 @@ describe("PlanNodeView", () => {
     expect(screen.getByText("found 3 sources")).toBeInTheDocument();
     expect(screen.getByText("Write summary")).toBeInTheDocument();
     expect(screen.getByText("Chart it")).toBeInTheDocument();
-    expect(screen.getByText("Steps 2/12")).toBeInTheDocument();
-    expect(screen.getByText("Tokens 12,345/150,000")).toBeInTheDocument();
-    expect(screen.getByText("Building…")).toBeInTheDocument();
+    expect(screen.getByText(/2 of 12 steps/)).toBeInTheDocument();
+    expect(screen.getByText(/12.3k \/ 150k tokens/)).toBeInTheDocument();
+    expect(screen.getByText("Running")).toBeInTheDocument();
   });
 
   // -- collapse/delete wiring (previously declared on PlanNodeData with no
@@ -105,7 +105,7 @@ describe("PlanNodeView", () => {
     expect(data.onToggleCollapse).toHaveBeenCalledOnce();
   });
 
-  it("the node-level right-click menu shows exactly Collapse/Expand + Delete Node", async () => {
+  it("the node-level right-click menu shows exactly Collapse/Expand + Delete node", async () => {
     const user = userEvent.setup();
     const data = makeData();
     renderPlan(data);
@@ -117,13 +117,13 @@ describe("PlanNodeView", () => {
     const items = screen.getAllByRole("menuitem");
     expect(items).toHaveLength(2);
     expect(items[0]).toHaveTextContent("Collapse");
-    expect(items[1]).toHaveTextContent("Delete Node");
+    expect(items[1]).toHaveTextContent("Delete node");
 
     await user.click(items[0]);
     expect(data.onToggleCollapse).toHaveBeenCalledOnce();
 
     fireEvent.contextMenu(screen.getByText("Research solar output and chart it"));
-    await user.click(screen.getByRole("menuitem", { name: "Delete Node" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete node" }));
     expect(data.onDelete).toHaveBeenCalledOnce();
   });
 
@@ -231,12 +231,12 @@ describe("PlanNodeView", () => {
 
   it("marks a failed build's detail as an alert and shows the autopilot chip", () => {
     renderPlan(makeData({
-      builderStatus: "failed", builderMode: "autopilot",
+      builderStatus: "failed", builderMode: "Autopilot",
       builderStatusDetail: "Build failed: the model aborted.", pendingRequestId: null,
     }));
 
     expect(screen.getByRole("alert")).toHaveTextContent("the model aborted");
-    expect(screen.getByText("autopilot")).toBeInTheDocument();
+    expect(screen.getByText("Autopilot")).toBeInTheDocument();
   });
 
   describe("activity log", () => {
@@ -270,7 +270,7 @@ describe("PlanNodeView", () => {
       expect(screen.getAllByText("graph.create_node")).toHaveLength(2);
       expect(screen.getByText('{"kind":"note"}')).toBeInTheDocument();
       expect(screen.getByText(/was denied approval/)).toBeInTheDocument();
-      expect(screen.getByText("12ms")).toBeInTheDocument();
+      expect(screen.getByText("<1 s")).toBeInTheDocument();
     });
 
     it("tints an error row distinctly from an ok row", () => {
