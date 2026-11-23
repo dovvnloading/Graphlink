@@ -125,7 +125,7 @@ function GroupNodeViewImpl({ id, data, selected }: NodeProps<GroupFlowNode>) {
   // tint visible around them - the collapsed pill IS the whole visible
   // object, so it falls back to the body color too (same headerColor-first
   // fallback GroupColorPicker's own swatch trigger already uses).
-  const chipStyle = data.headerColor ? ({ "--group-header-color": data.headerColor } as CSSProperties) : undefined;
+  const chipStyle = data.headerColor ? ({ ...swatchStyle(data.headerColor), "--group-header-color": data.headerColor } as CSSProperties) : undefined;
   const pillStyle = swatchStyle(data.headerColor ?? data.color);
 
   function beginEdit() {
