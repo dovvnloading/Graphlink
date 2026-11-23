@@ -184,7 +184,7 @@ export function NodeShell({
             {children}
           </div>
         )}
-        {footer && <div className="node-card-footer">{footer}</div>}
+        {footer}
       </div>
       <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
       {textOutput && <Handle id={TEXT_OUTPUT_HANDLE} type="source" position={Position.Right}

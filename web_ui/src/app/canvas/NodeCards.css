@@ -909,7 +909,7 @@
 .scene-node-card .node-card-title-slot > .node-heading > .node-glyph { display: none; }
 .node-glyph { display: inline-flex; align-items: center; justify-content: center; }
 .scene-node-card .node-card-title-slot .node-heading-detail { grid-column: 1 / -1; }
-.scene-node-card .scene-node-surface > :is(.scene-node-body, .node-card-footer) {
+.scene-node-card .scene-node-surface > :not(.node-card-header):not(.node-lod-overview) {
   max-height: calc(var(--gl-lod-full, 1) * 10000px);
   opacity: var(--gl-lod-full, 1);
 }
