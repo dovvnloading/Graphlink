@@ -798,11 +798,11 @@ function CodeReviewNodeViewImpl({ id, data, selected }: NodeProps<CodeReviewFlow
                   onClick={() => inspectDiff(error.path, error.line)} />}
                 <IconButton size="sm" icon="copy" label={`Copy error: ${error.title}`}
                   onClick={() => copyText(`[${error.severity}] ${error.title} (${findingLocation(error.path, error.line)}): ${error.evidence} Fix: ${error.fix}`)} />
-                <IconButton size="sm" icon="message-circle"
+                <IconButton size="sm" icon="chat"
                   label={`Preview GitHub comment for error: ${error.title}`}
                   disabled={busy || previewingId !== null || posting || !error.path || error.line <= 0}
                   onClick={() => void previewComment(error.id)} />
-                <IconButton size="sm" icon="git-branch"
+                <IconButton size="sm" icon="branch"
                   label={`Propose Gitlink fix for error: ${error.title}`}
                   disabled={busy || proposingId !== null || !error.path || error.line <= 0}
                   onClick={() => void proposeFix(error.id)} />
@@ -836,11 +836,11 @@ function CodeReviewNodeViewImpl({ id, data, selected }: NodeProps<CodeReviewFlow
                   onClick={() => copyText(
                       `[${finding.severity}] ${finding.title} (${findingLocation(finding.path, finding.line)}): ${finding.evidence} Recommendation: ${finding.recommendation}`,
                     )} />
-                <IconButton size="sm" icon="message-circle"
+                <IconButton size="sm" icon="chat"
                   label={`Preview GitHub comment for finding: ${finding.title}`}
                   disabled={busy || previewingId !== null || posting || !finding.path || finding.line <= 0}
                   onClick={() => void previewComment(finding.id)} />
-                <IconButton size="sm" icon="git-branch"
+                <IconButton size="sm" icon="branch"
                   label={`Propose Gitlink fix for finding: ${finding.title}`}
                   disabled={busy || proposingId !== null || !finding.path || finding.line <= 0}
                   onClick={() => void proposeFix(finding.id)} />
