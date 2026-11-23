@@ -47,12 +47,12 @@ test("knowledge and Agent mode buttons keep their labels inside separate hit tar
   await expect(knowledge).not.toHaveAttribute("title", "Checking workspace knowledge…");
 
   const boxes = await page.evaluate(() => {
-    const knowledgeButton = document.querySelector<HTMLButtonElement>(".composer-knowledge-toggle");
-    const agentButton = document.querySelector<HTMLButtonElement>(
-      ".composer-agent-toggle:not(.composer-knowledge-toggle)",
-    );
-    const knowledgeLabel = knowledgeButton?.querySelector("span");
-    const agentLabel = agentButton?.querySelector("span");
+    // UI-15: both are kit ToggleButtons; their visible text is .gl-toggle-button-label.
+    const toggles = [...document.querySelectorAll<HTMLButtonElement>("button.gl-toggle-button")];
+    const knowledgeButton = toggles.find((button) => button.textContent?.trim() === "Use knowledge");
+    const agentButton = toggles.find((button) => button.getAttribute("aria-label") === "Send to workspace agent");
+    const knowledgeLabel = knowledgeButton?.querySelector(".gl-toggle-button-label");
+    const agentLabel = agentButton?.querySelector(".gl-toggle-button-label");
     if (!knowledgeButton || !agentButton || !knowledgeLabel || !agentLabel) return null;
     const kb = knowledgeButton.getBoundingClientRect();
     const ab = agentButton.getBoundingClientRect();

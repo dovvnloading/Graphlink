@@ -1,5 +1,8 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
+import { Fragment, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 import { Popover, useOverlays } from "../overlays/overlays";
+import { Icon } from "../ui/icons/Icon";
+import { Button } from "../ui/Button";
+import { MenuButton, MenuGroup, MenuItem, MenuSeparator } from "../ui/Menu";
 import type { ComposerStore, PickerModel } from "./composerStore";
 
 const CAPABILITY_BADGES = ["tools", "vision", "embeddings", "thinking"] as const;
@@ -114,24 +117,25 @@ export function ModelPicker({ store, name = "model" }: { store: ComposerStore; n
       {!!error && (
         <>
           <p className="model-picker-empty" role="alert">{error}</p>
-          <button type="button" className="model-picker-setup"
+          <Button variant="ghost" type="button" className="model-picker-setup"
             onClick={() => {
               searchRef.current?.focus();
               setRetryCount((count) => count + 1);
-            }}>Retry model list</button>
+            }}>Retry model list</Button>
         </>
       )}
       <div className="model-picker-results" aria-label="Model choices">
         {matches.map((model) => {
           const selected = activeProvider === model.provider && model.modelId === composer.route.modelId;
           return (
-            <button
+            <Button variant="ghost"
               key={JSON.stringify([model.provider, model.modelId])}
-              type="button"
-              className={`reasoning-option model-picker-option${selected ? " active" : ""}`}
+                            className={`reasoning-option model-picker-option${selected ? " active" : ""}`}
               aria-pressed={selected}
               disabled={!canChat(model)}
-              title={!canChat(model) ? "Embedding-only model; cannot be used for chat" : undefined}
+              aria-label={!canChat(model)
+                ? `${model.label} · Embedding-only · unavailable for chat or agent tasks`
+                : model.label}
               onClick={() => choose(model)}
               onKeyDown={onOptionKeyDown}
             >
@@ -152,8 +156,8 @@ export function ModelPicker({ store, name = "model" }: { store: ComposerStore; n
                   )}
                 </span>
               </span>
-              {selected && <span aria-hidden="true">✓</span>}
-            </button>
+              {selected && <Icon name="check" size="sm" />}
+            </Button>
           );
         })}
         {!loading && !error && matches.length === 0 && (
@@ -168,16 +172,150 @@ export function ModelPicker({ store, name = "model" }: { store: ComposerStore; n
           </p>
         )}
       </div>
-      <button
-        type="button"
-        className="model-picker-setup"
+      <Button variant="ghost"
+                className="model-picker-setup"
         onClick={() => {
           store.openOllamaSettings();
           overlays.open("settings", "dialog");
         }}
       >
         Set up a local model
-      </button>
+      </Button>
     </Popover>
+  );
+}
+
+// The composer uses the kit menu. The legacy anchored popover above remains for
+// agent nodes, which share the same provider-qualified model selection intent.
+export function ComposerModelMenu({ store, disabled = false }: { store: ComposerStore; disabled?: boolean }) {
+  const composer = useSyncExternalStore(store.subscribe, store.getComposer);
+  const overlays = useOverlays();
+  const [retry, setRetry] = useState(0);
+  const [result, setResult] = useState<{
+    store: ComposerStore; retry: number; models: PickerModel[]; error: string;
+  } | null>(null);
+  const [query, setQuery] = useState("");
+  const input = useRef<HTMLInputElement>(null);
+  const [openEpoch, setOpenEpoch] = useState(0);
+  useEffect(() => {
+    let current = true;
+    void store.loadPickerModels().then((models) => {
+      if (current) setResult({ store, retry, models, error: "" });
+    }, () => {
+      if (current) setResult({
+        store, retry, models: [],
+        error: "Could not load available models. Check the connection and retry.",
+      });
+    });
+    return () => { current = false; };
+    // Reload on every open (openEpoch): providers and installed models change
+    // while the composer stays mounted. The previous list stays visible
+    // until the fresh one arrives.
+  }, [store, retry, openEpoch]);
+
+  // Focus search after MenuSurface's layout effect initially focuses its first item.
+  useEffect(() => { if (openEpoch > 0) input.current?.focus(); }, [openEpoch, result]);
+
+  // Menu's capture-phase typeahead precedes input handlers. Search owns its
+  // printable edits while focused; paste and screen-reader input still use
+  // the ordinary onChange path below.
+  useEffect(() => {
+    const handleInput = (event: globalThis.KeyboardEvent) => {
+      if (document.activeElement !== input.current || event.ctrlKey || event.altKey || event.metaKey) return;
+      if (event.key.length === 1) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        setQuery((value) => value + event.key);
+      } else if (event.key === "Backspace") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        setQuery((value) => value.slice(0, -1));
+      }
+    };
+    document.addEventListener("keydown", handleInput, true);
+    return () => document.removeEventListener("keydown", handleInput, true);
+  }, []);
+
+  const current = result?.store === store && result.retry === retry ? result : null;
+  const models = current?.models ?? [];
+  const normalized = query.trim().toLocaleLowerCase();
+  const matches = models.filter((model) => [model.label, model.provider, model.modelId]
+    .some((part) => part.toLocaleLowerCase().includes(normalized)));
+  const providers = [...new Set(matches.map((model) => model.provider))];
+  const modelLabel = composer.route.modelLabel || composer.route.modelId || "Select a model";
+  const providerIcon = composer.route.mode === "ollama" ? "cpu" : "cloud";
+
+  return (
+    <span className="composer-model-menu">
+      <Icon name={providerIcon} size="sm" />
+      <MenuButton label={modelLabel} aria-label={`${composer.route.provider} model: ${modelLabel}`}
+        className="composer-menu-button" data-overlay-trigger="model"
+        disabled={disabled} menuLabel="Choose a model"
+        onClick={() => { setQuery(""); setOpenEpoch((n) => n + 1); }}>
+        {models.length > 8 && (
+          <input key="search" ref={input} type="search" className="model-picker-search"
+            placeholder="Search local and cloud models…" aria-label="Search models"
+            value={query} onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                e.currentTarget.closest('[role="menu"]')
+                  ?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled),[role="menuitemradio"]:not(:disabled)')
+                  ?.focus();
+              }
+              if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                const options = matches.filter(canChat);
+                if (options.length === 1) {
+                  e.preventDefault();
+                  // Activate the lone visible model item itself: the normal
+                  // MenuItem path selects it AND closes the menu (a synthetic
+                  // Escape never reached the menu's keyboard handler).
+                  e.currentTarget.closest('[role="menu"]')
+                    ?.querySelector<HTMLElement>('[role="menuitemradio"]:not(:disabled):not([aria-disabled="true"])')
+                    ?.click();
+                }
+              }
+            }} />
+        )}
+        {!current && <span key="loading" className="model-picker-empty" role="status">Loading local and cloud models…</span>}
+        {current?.error && (
+          <Fragment key="error">
+            <span className="model-picker-empty" role="alert">{current.error}</span>
+            <MenuItem label="Retry model list" icon="refresh" onSelect={() => setRetry((x) => x + 1)} />
+          </Fragment>
+        )}
+        {!current?.error && providers.map((provider) => (
+          <MenuGroup key={provider} label={provider}>
+            {matches.filter((model) => model.provider === provider).map((model) => {
+              const selected = (composer.route.mode === "ollama" ? "Ollama" : composer.route.provider)
+                === model.provider && model.modelId === composer.route.modelId;
+              const available = canChat(model);
+              return (
+                <MenuItem key={JSON.stringify([model.provider, model.modelId])}
+                  label={model.label} icon={model.source === "local" ? "cpu" : "cloud"}
+                  kind="radio" checked={selected} disabled={!available}
+                  disabledReason={available ? undefined : "Embedding-only model; unavailable for chat"}
+                  description={available
+                    ? [model.source === "local" ? "Ready · Local" : "Ready · API",
+                      ...CAPABILITY_BADGES.filter((cap) => model.capabilities.includes(cap)),
+                      model.sizeBytes === null ? "" : formatSize(model.sizeBytes)].filter(Boolean).join(" · ")
+                    : "Embedding-only · unavailable for chat or agent tasks"}
+                  onSelect={() => store.selectPickerModel(model.provider, model.modelId)} />
+              );
+            })}
+          </MenuGroup>
+        ))}
+        {current && !current.error && !matches.length && (
+          <span key="empty" className="model-picker-empty" role="status">
+            {normalized ? "No matching models. Try another search." : "No models available. Configure a model in Settings."}
+          </span>
+        )}
+        <MenuSeparator key="separator" />
+        <MenuItem key="manage" label="Manage models…" icon="settings" onSelect={() => {
+          store.openOllamaSettings();
+          overlays.open("settings", "dialog");
+        }} />
+      </MenuButton>
+    </span>
   );
 }

@@ -1,44 +1,34 @@
-import { useState } from "react";
 import { useSyncExternalStore } from "react";
+import { OverlayProviderIfMissing, Popover, useOverlays } from "../overlays/overlays";
+import { Button } from "../ui/Button";
 import type { ComposerStore } from "./composerStore";
 
-/**
- * Token usage (R8a follow-up) - a hover-triggered fold-out attached to the
- * composer's own control row, replacing what used to be a standalone
- * floating widget pinned to the canvas's bottom-left corner. That widget
- * had no relationship to anything else on screen - an island, per the
- * user's own description - and (before the App.tsx layout fix alongside
- * it) didn't even know to get out of the way when Document View's docked
- * panel opened. Folding it into the composer removes both problems at
- * once: it's now part of the SAME control row as Reasoning/Model, so it
- * reflows with everything else the composer already reflows with, and it
- * only ever shows a compact total until hovered.
- */
+/** A single, keyboard-accessible overlay shares the app popover layer. */
 export function TokenCounter({ store }: { store: ComposerStore }) {
-  const counter = useSyncExternalStore(store.subscribe, store.getTokenCounter);
-  const [hovered, setHovered] = useState(false);
-  // ADR-006 stage 6.8: when the provider reported real counts, the total is
-  // exact (prompt+completion); otherwise it is the estimator's sum. ADR-016
-  // requires the two to be labeled apart, never conflated.
-  const usageLabel = counter.usageIsReal ? "exact" : "estimated";
-
   return (
-    <div
-      className="token-counter-trigger"
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      <button
-        type="button"
-        className="composer-control token-counter-summary"
-        aria-haspopup="true"
-        aria-expanded={hovered}
+    <OverlayProviderIfMissing>
+      <TokenCounterSurface store={store} />
+    </OverlayProviderIfMissing>
+  );
+}
+function TokenCounterSurface({ store }: { store: ComposerStore }) {
+  const counter = useSyncExternalStore(store.subscribe, store.getTokenCounter);
+  const overlays = useOverlays();
+  const name = "composer-token-usage";
+  const expanded = overlays.isOpen(name);
+  const usageLabel = counter.usageIsReal ? "exact" : "estimated";
+  return (
+    <span className="token-counter-trigger">
+      <Button variant="ghost" size="sm" className="token-counter-summary"
+        data-overlay-trigger={name} aria-haspopup="dialog" aria-expanded={expanded}
         aria-label={`Token usage: ${counter.totalTokens} total`}
-      >
+        onMouseEnter={() => { if (!expanded) overlays.open(name, "popover"); }}
+        onMouseLeave={() => { if (expanded) overlays.closeLayer(name); }}
+        onClick={() => overlays.toggle(name, "popover")}>
         <span className="composer-control-value">{counter.totalTokens}</span>
         <span className="composer-control-label">tokens</span>
-      </button>
-      {hovered && (
+      </Button>
+      <Popover anchored name={name} label="Token usage breakdown">
         <div className="token-counter-popout" role="status" aria-label="Token usage breakdown">
           <span className="token-counter-row">
             <span className="token-counter-label">Input</span>
@@ -77,7 +67,7 @@ export function TokenCounter({ store }: { store: ComposerStore }) {
             </span>
           )}
         </div>
-      )}
-    </div>
+      </Popover>
+    </span>
   );
 }
