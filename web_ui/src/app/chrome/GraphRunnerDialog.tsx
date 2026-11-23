@@ -5,6 +5,11 @@ import { formatScienceSummary } from "../canvas/scientificWorkbench";
 import { Dialog, useOverlays } from "../overlays/overlays";
 import { getRunTrace } from "./graphRunTrace";
 import { Disclosure } from "./RunnerDisclosure";
+import { Button } from "../ui/Button";
+import { Select } from "../ui/Select";
+import { TextField } from "../ui/TextField";
+import { StatusPill } from "../ui/Badge";
+import { formatCount, formatRelativeTime } from "../ui/format";
 import "./GraphRunnerDialog.css";
 
 const LazyGraphRunnerInspectorContent = lazy(() =>
@@ -36,7 +41,7 @@ function RunSteps({ steps, names }: { steps: GraphRunStep[]; names: Map<string, 
             .map((id) => names.get(id) || id).join(", ")}</>}
       </div>
       {step.kind === "scientific" && <div>
-        {step.elapsedMs !== undefined && <>Elapsed: {step.elapsedMs.toLocaleString()} ms. </>}
+        {step.elapsedMs !== undefined && <>Elapsed: {formatCount(step.elapsedMs)} ms. </>}
         {step.errorType && <>Error type: <strong>{step.errorType}</strong></>}
         {step.scientificResult && <p>Result: {formatScienceSummary(step.scientificResult.summary)}</p>}
       </div>}
@@ -58,7 +63,7 @@ function RunSteps({ steps, names }: { steps: GraphRunStep[]; names: Map<string, 
 
 function runDate(run: GraphRun) {
   const date = new Date(run.startedAt);
-  return Number.isNaN(date.valueOf()) ? run.runId : date.toLocaleString();
+  return Number.isNaN(date.valueOf()) ? run.runId : formatRelativeTime(date);
 }
 
 function RunInspector({ run, names, onSelect }: {
@@ -215,21 +220,21 @@ function Runner({ store }: { store: SceneStore }) {
       <p>{uncertain
         ? "Continue only unaffected pending steps. The uncertain external request will not be repeated."
         : "Continue from the last saved step."}</p>
-      <button type="button" className="appbar-btn" disabled={!!busy || running} onClick={() =>
+      <Button variant="secondary" disabled={!!busy || running} onClick={() =>
         void perform("Resuming run…", () => updateRun(
           store.resumeGraphRun(run.runId, run.steps.some((step) => step.kind === "scientific")),
         ))
-      }>{uncertain ? "Continue safe steps" : "Resume run"}</button>
+      }>{uncertain ? "Continue safe steps" : "Resume run"}</Button>
     </div>;
   }
 
   function cancelButton(run: GraphRun) {
     if (run.status !== "running") return null;
     return <div className="runner-commit">
-      <button type="button" className="appbar-btn" disabled={cancellingRun}
+      <Button variant="secondary" disabled={cancellingRun}
         onClick={() => void cancelActiveRun(run.runId)}>
         {cancellingRun ? "Stopping run…" : "Cancel run"}
-      </button>
+      </Button>
     </div>;
   }
 
@@ -295,17 +300,13 @@ function Runner({ store }: { store: SceneStore }) {
   return <>
     <p className="runner-intro">Preview a dependency-ordered graph. Local Model nodes and explicitly configured Scientific Workbench operations run only after approval; every connected input must be ready. Scientific calculations use a bounded, cancellable local worker. Preview never executes either.</p>
     <div className="runner-controls">
-      <label>Run scope
-        <select value={scope} disabled={!!busy} onChange={(event) => {
-          setScope(event.target.value);
-          setPreview(null);
-          setError("");
-        }}>
-          <option value="all">Whole graph</option>
-          <option value="selection" disabled={!selectedIds.length}>Selected nodes ({selectedIds.length})</option>
-        </select>
-      </label>
-      <button type="button" className="appbar-btn" disabled={!!busy} onClick={previewRun}>Preview run</button>
+      <Select label="Run scope" value={scope} disabled={!!busy}
+        onChange={(value) => { setScope(value); setPreview(null); setError(""); }}
+        options={[
+          { value: "all", label: "Whole graph" },
+          { value: "selection", label: `Selected nodes (${selectedIds.length})`, disabled: !selectedIds.length },
+        ]} />
+      <Button variant="secondary" disabled={!!busy} onClick={previewRun}>Preview run</Button>
     </div>
     {scope === "selection" && <p className="runner-note">Includes downstream outputs and the inputs they depend on.</p>}
     {modelNoteHandoff && <p className="runner-note">The selected note has a saved local-model
@@ -313,58 +314,49 @@ function Runner({ store }: { store: SceneStore }) {
     <Disclosure label="Run a local model into a note" onOpen={loadModelBindings}
       initiallyOpen={modelNoteHandoff}>
       {noteModelBindings.length > 0 && <div className="runner-controls">
-        <label>Saved model connections
-          <select aria-label="Saved model connections" value={savedModelBinding?.targetId ?? ""} disabled={!!busy}
-            onChange={(event) => selectSavedModel(event.target.value)}>
-            <option value="">Choose a saved connection</option>
-            {noteModelBindings.map((binding) => <option key={binding.targetId} value={binding.targetId}>
-              {names.get(binding.targetId) || binding.targetId} · {binding.modelId} · {binding.status}
-            </option>)}
-          </select>
-        </label>
+        <Select label="Saved model connections" ariaLabel="Saved model connections"
+          value={savedModelBinding?.targetId ?? ""} disabled={!!busy} onChange={selectSavedModel}
+          options={[{ value: "", label: "Choose a saved connection" },
+            ...noteModelBindings.map((binding) => ({
+              value: binding.targetId,
+              label: `${names.get(binding.targetId) || binding.targetId} · ${binding.modelId} · ${binding.status}`,
+            }))]} />
       </div>}
       <div className="runner-controls">
-        <label>Model text source
-          <select aria-label="Model text source" value={modelSourceId} disabled={!!busy} onChange={(event) => {
-            setModelSourceSelection(event.target.value); setModelPreview(null);
-          }}>
-            {sources.map((node) => <option key={node.id} value={node.id}>{node.title || node.id}</option>)}
-          </select>
-        </label>
-        <label>Model output note
-          <select aria-label="Model output note" value={modelTargetId} disabled={!!busy} onChange={(event) => {
-            const binding = noteModelBindings.find((row) => row.targetId === event.target.value);
-            if (binding) selectSavedModel(event.target.value);
-            else { setModelTargetSelection(event.target.value); setModelPreview(null); }
-          }}>
-            {eligibleTargets.map((node) => <option key={node.id} value={node.id}>{node.title || node.id}</option>)}
-          </select>
-        </label>
-        <label>Installed Ollama model ID
-          <input aria-label="Installed Ollama model ID" value={modelId} disabled={!!busy}
-            placeholder="e.g. llama3.2:3b" onChange={(event) => {
-              setModelId(event.target.value); setModelPreview(null);
-            }} />
-        </label>
-        <button type="button" className="appbar-btn" disabled={!!busy || !modelSourceId || !modelId.trim()}
+        <Select label="Model text source" ariaLabel="Model text source"
+          value={modelSourceId} disabled={!!busy}
+          onChange={(value) => { setModelSourceSelection(value); setModelPreview(null); }}
+          options={sources.map((node) => ({ value: node.id, label: node.title || node.id }))} />
+        <Select label="Model output note" ariaLabel="Model output note"
+          value={modelTargetId} disabled={!!busy}
+          onChange={(value) => {
+            const binding = noteModelBindings.find((row) => row.targetId === value);
+            if (binding) selectSavedModel(value);
+            else { setModelTargetSelection(value); setModelPreview(null); }
+          }}
+          options={eligibleTargets.map((node) => ({ value: node.id, label: node.title || node.id }))} />
+        <TextField label="Installed Ollama model ID" aria-label="Installed Ollama model ID"
+          value={modelId} disabled={!!busy} placeholder="e.g. llama3.2:3b"
+          onValueChange={(value) => { setModelId(value); setModelPreview(null); }} />
+        <Button variant="secondary" disabled={!!busy || !modelSourceId || !modelId.trim()}
           onClick={() => void perform("Creating Model node…", async () => {
             await store.addModelNode(modelSourceId, "Ollama", modelId.trim());
             setModelBindings((await store.getGraphModelBindings()) ?? []);
             setModelPreview(null);
-          })}>Create Model node</button>
-        <button type="button" className="appbar-btn" disabled={!!busy || !modelSourceId || !modelTargetId || !modelId.trim()}
+          })}>Create Model node</Button>
+        <Button variant="secondary" disabled={!!busy || !modelSourceId || !modelTargetId || !modelId.trim()}
           onClick={() => void perform("Saving model connection…", async () => {
             setModelBindings((await store.bindGraphModel(modelSourceId, modelTargetId, "Ollama", modelId.trim())) ?? []);
             setModelPreview(null);
-          })}>Save model connection</button>
-        {savedModelBinding && <button type="button" className="appbar-btn" disabled={!!busy} onClick={() =>
+          })}>Save model connection</Button>
+        {savedModelBinding && <Button variant="secondary" disabled={!!busy} onClick={() =>
           void perform("Disconnecting model…", async () => {
             setModelBindings((await store.unbindGraphModel(modelTargetId)) ?? []);
             setModelPreview(null);
           })
-        }>Disconnect model connection</button>}
-        <button type="button" className="appbar-btn" disabled={!!busy || !modelSourceId || !modelTargetId || !modelId.trim()}
-          onClick={previewLocalModel}>Preview model step</button>
+        }>Disconnect model connection</Button>}
+        <Button variant="secondary" disabled={!!busy || !modelSourceId || !modelTargetId || !modelId.trim()}
+          onClick={previewLocalModel}>Preview model step</Button>
       </div>
       {savedModelBinding && <p className="runner-note" role="status">
         Saved text → text connection (version {savedModelBinding.version}). Status: {savedModelBinding.status}.
@@ -375,7 +367,7 @@ function Runner({ store }: { store: SceneStore }) {
         <RunSteps steps={modelPreview.steps} names={names} />
         <div className="runner-commit">
           <p>The model request is made only after you select Run local model. Its request ID and outcome are saved.</p>
-          <button type="button" className="appbar-btn" disabled={!!busy || running} onClick={() =>
+          <Button variant="secondary" disabled={!!busy || running} onClick={() =>
             void perform("Running local model…", async () => {
               await updateRun(store.executeGraphModel(
                 modelPreview.sourceId, modelPreview.targetId, modelPreview.provider, modelPreview.modelId,
@@ -384,7 +376,7 @@ function Runner({ store }: { store: SceneStore }) {
               setModelPreview(null);
               setModelBindings((await store.getGraphModelBindings()) ?? []);
             })
-          }>Run local model</button>
+          }>Run local model</Button>
         </div>
       </section>}
     </Disclosure>
@@ -401,11 +393,11 @@ function Runner({ store }: { store: SceneStore }) {
     {busy && <p role="status">{busy}</p>}
     {error && <div className="runner-error">
       <p role="alert">{error}</p>
-      <button type="button" className="appbar-btn" disabled={!!busy} onClick={() => void perform("Checking run status…", async () => {
+      <Button variant="secondary" disabled={!!busy} onClick={() => void perform("Checking run status…", async () => {
         const run = await store.getGraphRun();
         setLatest(run);
         if (run && preview?.operationId === run.runId) setPreview(null);
-      })}>Check run status</button>
+      })}>Check run status</Button>
     </div>}
     {preview && <section aria-label="Run preview">
       <header className="runner-section-header">
@@ -416,18 +408,24 @@ function Runner({ store }: { store: SceneStore }) {
         <p>No connected outputs in this scope. Bind a note's text input, create a table output, or save a Scientific Workbench operation for Graph Runner.</p>}
       {ready > 0 && <div className="runner-commit">
         <p>Running saves this graph and records each finished step.</p>
-        <button type="button" className="appbar-btn" disabled={!!busy || running} onClick={() =>
+        <Button variant="secondary" disabled={!!busy || running} onClick={() =>
           void perform("Running graph…", () => updateRun(store.executeGraphRun(
             preview.nodeIds, preview.previewToken, preview.operationId,
             preview.steps.some((step) => step.kind === "scientific"),
           )))
-        }>Run graph</button>
+        }>Run graph</Button>
       </div>}
     </section>}
     {latest && <section aria-label="Latest run">
       <header className="runner-section-header">
         <h2>Latest run</h2>
-        <span role="status" data-status={latest.status}>{statuses[latest.status] ?? latest.status}</span>
+        <span role="status" data-status={latest.status}>
+          <StatusPill status={latest.status === "completed" ? "Done"
+            : latest.status === "running" ? "Running" : latest.status === "cancelled" ? "Cancelled"
+            : latest.status === "failed" || latest.status === "reconciliation-required" ? "Failed"
+            : "Out of date"} />
+          {statuses[latest.status] ?? latest.status}
+        </span>
       </header>
       <div className="runner-note">{runDate(latest)}</div>
       {cancelButton(latest)}
@@ -458,7 +456,7 @@ export function GraphRunnerDialog({ store }: { store: SceneStore }) {
     if (wasOpen.current && !isOpen) store.clearGraphRunnerRequestedIds();
     wasOpen.current = isOpen;
   }, [overlays, store]);
-  return <Dialog name="graph-runner" title="Graph Runner" className="graph-runner-dialog">
+  return <Dialog name="graph-runner" title="Graph runner" size="lg" className="graph-runner-dialog">
     <Runner store={store} />
   </Dialog>;
 }
