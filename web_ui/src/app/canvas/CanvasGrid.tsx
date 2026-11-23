@@ -1,5 +1,7 @@
 import { Background, BackgroundVariant, useStore } from "@xyflow/react";
 import type { GridControlState } from "../../lib/bridge-core/generated/grid-control-state";
+import { initialGridState } from "./sceneStore";
+import "./CanvasGrid.css";
 
 const variants: Record<string, BackgroundVariant> = {
   Dots: BackgroundVariant.Dots,
@@ -17,12 +19,13 @@ export function CanvasGrid({ grid }: { grid: GridControlState }) {
   const gap = grid.gridSize * stride;
   const opacity = grid.gridOpacityPercent / 100;
   const variant = variants[grid.gridStyle] ?? BackgroundVariant.Dots;
+  const ink = grid.gridColor === initialGridState.gridColor ? "var(--gl-grid-default-ink)" : grid.gridColor;
   return (
     <Background
       id="grid"
       variant={variant}
       gap={gap}
-      color={grid.gridColor}
+      color={ink}
       size={variant === BackgroundVariant.Cross ? 5 : 1.2}
       style={{ opacity }}
     />

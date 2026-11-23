@@ -93,7 +93,6 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/canvas/DocumentNodeView.tsx", rule: "R8", count: 2 },
 
-  { file: "app/canvas/DocumentViewMarkdown.tsx", rule: "R8", count: 1 },
 
   { file: "app/canvas/DocumentViewPanel.tsx", rule: "R8", count: 6 },
 
@@ -167,7 +166,6 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/canvas/NodeHeading.tsx", rule: "R2", count: 1 },
 
-  { file: "app/canvas/NodeMarkdown.tsx", rule: "R8", count: 3 },
 
   { file: "app/canvas/NodeShell.tsx", rule: "R2", count: 1 },
 
@@ -195,13 +193,9 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/canvas/SceneCanvas.tsx", rule: "R13", count: 1 },
 
-  { file: "app/canvas/SceneMinimap.css", rule: "R10", count: 2 },
 
-  { file: "app/canvas/SceneMinimap.css", rule: "R14", count: 3 },
 
-  { file: "app/canvas/SceneMinimap.tsx", rule: "R2", count: 1 },
 
-  { file: "app/canvas/SceneMinimap.tsx", rule: "R8", count: 3 },
 
   { file: "app/canvas/ScienceArrayInput.tsx", rule: "R1", count: 1 },
 
@@ -261,9 +255,7 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/canvas/ThinkingNodeView.tsx", rule: "R7", count: 4 },
 
-  { file: "app/canvas/ViewportDock.tsx", rule: "R2", count: 2 },
 
-  { file: "app/canvas/ViewportDock.tsx", rule: "R8", count: 4 },
 
   { file: "app/canvas/WebResearchNodeView.tsx", rule: "R6", count: 1 },
 
@@ -371,9 +363,7 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/chrome/OrganizationDialog.tsx", rule: "R8", count: 2 },
 
-  { file: "app/chrome/PinOverlay.tsx", rule: "R1", count: 2 },
 
-  { file: "app/chrome/PinOverlay.tsx", rule: "R8", count: 1 },
 
   { file: "app/chrome/PluginPicker.tsx", rule: "R1", count: 1 },
 
@@ -383,13 +373,10 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/chrome/SearchIcon.tsx", rule: "R2", count: 1 },
 
-  { file: "app/chrome/SearchOverlay.tsx", rule: "R1", count: 3 },
 
   { file: "app/chrome/SettingsDialog.tsx", rule: "R8", count: 1 },
 
-  { file: "app/chrome/ViewPopover.tsx", rule: "R6", count: 2 },
 
-  { file: "app/chrome/ViewPopover.tsx", rule: "R8", count: 3 },
 
   { file: "app/chrome/settings/FalAiPage.tsx", rule: "R3", count: 4 },
 
@@ -425,15 +412,15 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/context/ContextInspectorLauncher.tsx", rule: "R8", count: 1 },
 
-  { file: "app/styles.css", rule: "R9", count: 386 },
+  { file: "app/styles.css", rule: "R9", count: 355 },
 
-  { file: "app/styles.css", rule: "R10", count: 211 },
+  { file: "app/styles.css", rule: "R10", count: 183 },
 
   { file: "app/styles.css", rule: "R11", count: 3 },
 
-  { file: "app/styles.css", rule: "R12", count: 10663 },
+  { file: "app/styles.css", rule: "R12", count: 9534 },
 
-  { file: "app/styles.css", rule: "R14", count: 850 },
+  { file: "app/styles.css", rule: "R14", count: 771 },
 
 ];
 
