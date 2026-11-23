@@ -36,7 +36,7 @@ function ProviderPicker({ state, viewed, onSelect }: {
   onSelect: (id: string) => void;
 }) {
   return (
-    <FieldGroup title="API provider" description="Choose a provider or a custom endpoint.">
+    <FieldGroup {...{ title: "API provider" }} description="Choose a provider or a custom endpoint.">
       <FormRow label="API provider" layout="inline">
         <Select ariaLabel="API provider" value={viewed.id} onChange={onSelect}
           options={state.apiProviders.map((provider) => ({
@@ -106,7 +106,7 @@ function ProviderForm({ state, provider, transport }: {
   };
   return (
     <>
-      <FieldGroup title="Connection">
+      <FieldGroup {...{ title: "Connection" }}>
         <div className="cloud-section-heading">
           {provider.docsUrl && <a href={provider.docsUrl} target="_blank" rel="noreferrer">
             Setup guide
@@ -135,7 +135,7 @@ function ProviderForm({ state, provider, transport }: {
           )}
       </FieldGroup>
 
-      <FieldGroup title="Models">
+      <FieldGroup {...{ title: "Models" }}>
         <div className="cloud-section-heading">
 
           {provider.supportsCatalog && !bedrockRuntime && <Button variant="secondary" size="sm" className="cloud-small-button"
@@ -178,7 +178,7 @@ function ProviderForm({ state, provider, transport }: {
       </div>
 
       {confirmReset && <div role="alert">
-        <InlineAlert variant="warning" title="Reset API settings?"
+        <InlineAlert variant="warning" {...{ title: "Reset API settings?" }}
           body="This clears all saved provider keys, endpoints, and model assignments. It cannot be undone." />
       </div>}
       <div className="settings-button-row cloud-form-actions">
