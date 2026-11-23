@@ -116,9 +116,9 @@ export function McpServersPage({ state, transport }: { state: AppSettingsState; 
         Configure local Model Context Protocol servers. Commands can execute third-party code;
         enabled servers connect on demand, and their tools are approval-gated.
       </p>
-      <FieldGroup title="Configured servers">
+      <FieldGroup {...{ title: "Configured servers" }}>
         {state.mcpServers.length === 0 ? (
-          <EmptyState icon="hub" title="No MCP servers" body="Add a server to make its tools available to Builder." />
+          <EmptyState icon="hub" {...{ title: "No MCP servers" }} body="Add a server to make its tools available to Builder." />
         ) : state.mcpServers.map((server, index) => (
           <div className="settings-server-row" key={server.id}>
             <div className="settings-server-info">
@@ -145,7 +145,7 @@ export function McpServersPage({ state, transport }: { state: AppSettingsState; 
           </div>
         ))}
       </FieldGroup>
-      <FieldGroup title={editingId ? "Edit server" : "Add server"}
+      <FieldGroup {...{ title: editingId ? "Edit server" : "Add server" }}
         description="Only the environment variable names are displayed after saving. Leave the secret field blank when editing to keep saved values.">
         <TextField label="Server name" value={draftName} onValueChange={setDraftName}
           placeholder="e.g. filesystem" />
