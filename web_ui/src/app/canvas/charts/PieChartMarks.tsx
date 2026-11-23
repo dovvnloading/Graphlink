@@ -92,7 +92,7 @@ export function PieChartMarks({ chartData, theme, width, height, onHover, wrappe
             return (
               <g key={`${slice.label}-legend-${index}`} transform={`translate(0 ${index * LEGEND_ITEM_HEIGHT})`}>
                 <rect width={10} height={10} y={-9} fill={theme.categorical[index % theme.categorical.length]} rx={2} />
-                <text x={16} fontSize={10} fill={theme.text}>
+                <text x={16} fontSize={11} fill={theme.text}>
                   {slice.label.length > 20 ? `${slice.label.slice(0, 19)}…` : slice.label}
                   <tspan fill={theme.textMuted}>{`  ${percentage.toFixed(1)}%`}</tspan>
                 </text>
