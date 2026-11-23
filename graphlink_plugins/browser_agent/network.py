@@ -24,6 +24,7 @@ class BrowserPolicyError(ValueError):
 
 
 MAX_RESOURCE_BYTES = 2 * 1024 * 1024
+MAX_SESSION_BYTES = 16 * 1024 * 1024
 MAX_REQUESTS = 80
 MAX_HOSTS = 8
 MAX_URL_LENGTH = 2048
@@ -147,6 +148,7 @@ class BrowserNetworkGate:
         self._approved_hosts: set[str] = set()
         self._seen_hosts: set[str] = set()
         self.request_count = 0
+        self.total_bytes = 0
         self.blocked: list[str] = []
         self._lock = asyncio.Lock()
 
@@ -189,4 +191,10 @@ class BrowserNetworkGate:
         except URLPolicyError as exc:
             self._block("Blocked private/non-public network destination.")
             raise BrowserPolicyError(str(exc)) from exc
-        return await asyncio.to_thread(_fetch_verified, target.canonical_url, target.pinned_ip, headers)
+        response = await asyncio.to_thread(_fetch_verified, target.canonical_url, target.pinned_ip, headers)
+        async with self._lock:
+            if self.total_bytes + len(response.body) > MAX_SESSION_BYTES:
+                self._block("Blocked browser session transfer exceeding 16 MiB.")
+                raise BrowserPolicyError("Browser session transfer budget reached (16 MiB).")
+            self.total_bytes += len(response.body)
+        return response
