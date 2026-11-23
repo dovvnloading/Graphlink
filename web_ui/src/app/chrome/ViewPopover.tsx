@@ -303,7 +303,7 @@ export function ViewPopover({ store }: { store: SceneStore }) {
   return (
     <Popover name="view" label="View settings" className="view-popover" anchored>
       <div className="view-scroll">
-        <FieldGroup title="Canvas" className="view-section">
+        <FieldGroup {...{ title: "Canvas" }} className="view-section">
           <SliderField
             label="Pan speed"
             ariaLabel="Canvas pan speed"
@@ -330,7 +330,7 @@ export function ViewPopover({ store }: { store: SceneStore }) {
           />
         </FieldGroup>
 
-        <FieldGroup title="Grid" className="view-section">
+        <FieldGroup {...{ title: "Grid" }} className="view-section">
           <SliderField
             label="Spacing"
             ariaLabel="Grid spacing"
@@ -375,7 +375,7 @@ export function ViewPopover({ store }: { store: SceneStore }) {
         {/* Fade/orthogonal lived under GRID in the straight port only because
             the legacy grid-control bridge happened to own their checkboxes;
             they configure connections, so they get a section that says so. */}
-        <FieldGroup title="Connections" className="view-section">
+        <FieldGroup {...{ title: "Connections" }} className="view-section">
           <ToggleRow
             label="Fade Connections"
             hint="Dim all lines except the one under the pointer"
@@ -390,7 +390,7 @@ export function ViewPopover({ store }: { store: SceneStore }) {
           />
         </FieldGroup>
 
-        <FieldGroup title="Node font" className="view-section">
+        <FieldGroup {...{ title: "Node font" }} className="view-section">
           <div className="view-field">
             <span className="view-field-label">Family</span>
             <Select
@@ -436,7 +436,7 @@ export function ViewPopover({ store }: { store: SceneStore }) {
           </div>
         </FieldGroup>
 
-        <FieldGroup title="Focus" className="view-section">
+        <FieldGroup {...{ title: "Focus" }} className="view-section">
           <div className="view-section-head">
               {filterCount > 0 && (
               <Button variant="ghost" size="sm" onClick={() => store.clearFilters()}>Clear ({filterCount})</Button>
