@@ -267,7 +267,7 @@ export function ComposerModelMenu({ store, disabled = false }: { store: Composer
                   // The open menu normally dismisses via MenuItem; when Enter
                   // selects from search, request a trigger click to close it.
                   (e.currentTarget.closest('[role="menu"]') as HTMLElement | null)?.dispatchEvent(
-                    new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+                    new globalThis.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
                   );
                 }
               }
