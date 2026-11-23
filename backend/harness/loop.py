@@ -403,9 +403,9 @@ def _approval_summary(
         # The generic 400-character approval preview silently truncated
         # URLs, which could hide a sensitive query string or redirect target.
         return (
-            "browser.run — grant this HTTPS host for the current agent task\\n"
-            f"Hostname: {call.arguments.get('domain', '')!r}\\n"
-            f"Requested URL: {call.arguments.get('url', '')!r}\\n"
+            "browser.run — grant this HTTPS host for the current agent task\n"
+            f"Hostname: {call.arguments.get('domain', '')!r}\n"
+            f"Requested URL: {call.arguments.get('url', '')!r}\n"
             "No other host is approved by this decision."
         )
     if call.name == "browser.run" and call.arguments.get("approval") == "interaction":
@@ -413,13 +413,13 @@ def _approval_summary(
         # newlines/control characters from spoofing separate approval fields.
         # Never truncate the target or field value on a consequential click.
         return (
-            "browser.run — approve this one browser interaction\\n"
-            f"Action: {call.arguments.get('action', '')!r}\\n"
-            f"Page URL: {call.arguments.get('url', '')!r}\\n"
-            f"CSS selector: {call.arguments.get('selector', '')!r}\\n"
-            f"Visible control: {call.arguments.get('element_text', '')!r}\\n"
-            f"Link target: {call.arguments.get('link_target', '')!r}\\n"
-            f"Field value: {call.arguments.get('field_value', '')!r}\\n"
+            "browser.run — approve this one browser interaction\n"
+            f"Action: {call.arguments.get('action', '')!r}\n"
+            f"Page URL: {call.arguments.get('url', '')!r}\n"
+            f"CSS selector: {call.arguments.get('selector', '')!r}\n"
+            f"Visible control: {call.arguments.get('element_text', '')!r}\n"
+            f"Link target: {call.arguments.get('link_target', '')!r}\n"
+            f"Field value: {call.arguments.get('field_value', '')!r}\n"
             "Browser network writes are blocked; GET URLs may still have side effects."
         )
     if call.name == "web.fetch":
