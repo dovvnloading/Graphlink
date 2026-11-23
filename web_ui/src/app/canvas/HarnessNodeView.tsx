@@ -316,14 +316,14 @@ function AgentSettingsPopover({
       <div className="harness-node-settings-field">
         <Select label="Execution profile" className="nodrag nowheel"
           value={profile === "isolated" ? "isolated" : "host"}
-          onChange={onSetExecutionProfile} options={[
+          onChange={(value) => onSetExecutionProfile(value as HarnessExecutionProfile)} options={[
             { value: "host", label: "Host (default)" },
             { value: "isolated", label: "Isolated (Docker / Podman)", disabled: engine === null },
           ]} />
       </div>
       <div className="harness-node-settings-field">
         <Select label="Permission mode" className="nodrag nowheel" value={permissionMode}
-          onChange={onSetPermissionMode} options={[
+          onChange={(value) => onSetPermissionMode(value as HarnessPermissionMode)} options={[
             { value: "ask", label: "Ask — approve each action" },
             { value: "auto_edit", label: "Auto-edit — workspace file writes" },
             { value: "autonomous", label: "Autonomous — Isolated only", disabled: profile !== "isolated" },
@@ -1027,25 +1027,16 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
 
       {running && (
         <div className="plan-node-actions">
-          <button
-            type="button"
-            className="plan-node-button plan-node-button-stop nodrag"
-            onClick={data.onCancel}
-          >
-            Stop
-          </button>
+          <Button size="sm" variant="secondary" className="nodrag"
+            iconStart="stop" onClick={data.onCancel}>Stop</Button>
         </div>
       )}
       {!running && data.harnessRunId && UNDOABLE_RUN_STATUSES.has(data.harnessStatus) && (
         <div className="plan-node-actions">
-          <button
-            type="button"
-            className="plan-node-button plan-node-button-danger nodrag"
-            onClick={data.onUndoRun}
-            aria-label="Undo canvas changes made by this run"
-          >
-            Undo run
-          </button>
+          <Tooltip label="Undo canvas changes made by this run. Workspace files are not reverted.">
+            <Button size="sm" variant="secondary" className="nodrag"
+              iconStart="undo" onClick={data.onUndoRun}>Undo run</Button>
+          </Tooltip>
         </div>
       )}
     </NodeShell>
