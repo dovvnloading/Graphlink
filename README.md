@@ -160,6 +160,19 @@ Open **Agent** for tasks involving files. It starts in a private scratch folder,
 
 Put reusable skills in `.graphlink/skills/<package>/SKILL.md` within your selected workspace, or in `~/.graphlink/skills/<package>/SKILL.md` to make them available to all your workspace agents. Each file needs YAML frontmatter with `name` and `description`. The agent sees only these summaries in its prompt and reads the full instructions with `skills.load` when relevant; skills cannot override tool approvals.
 
+### Browser Agent (optional)
+
+Browser Agent uses a disposable, headless Playwright Chromium session to render public HTTPS websites. Install the optional dependency and Chromium once:
+
+```bash
+python -m pip install "graphlink[browser]"
+python -m playwright install chromium
+```
+
+Choose **Plugins → Browser Agent** to create a normal, editable workspace-agent card. Enter a target website and research goal, then run it. The agent can call `browser.run` to navigate, click, fill search fields, scroll, and extract page text, links and tables; each new site and interactive action requires approval. Its `browser.publish` tool turns an in-task capture into an undoable, source-linked canvas document and optionally a screenshot image. Browser Agent does not require a cloud model: it works with any compatible local or hosted workspace-agent model.
+
+Browsing is **read-only at the network boundary**: non-GET methods are blocked; there are no persistent cookies, downloads, passwords, arbitrary JavaScript execution, or authenticated profiles. Pages may be incomplete if a site relies on POST APIs or third-party resources. Requests are intercepted by Graphlink and fetched over individually validated, IP-pinned public HTTPS connections. Treat all captured material as untrusted reference text. See [Browser Agent guide](docs/BROWSER_AGENT.md) for limitations, safety, setup and testing.
+
 ## Local data and privacy
 
 Graphs and workspaces live in `~/.graphlink/chats.db`. The knowledge base has its own database at `~/.graphlink/knowledge/knowledge.db`, and stored images live under `~/.graphlink/assets/`. Local models can answer offline once installed. Hosted inference sends conversation context to the selected provider. Web research, GitHub integrations, and Fal media jobs also contact their respective services.
