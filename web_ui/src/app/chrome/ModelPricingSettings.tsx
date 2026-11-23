@@ -120,7 +120,7 @@ export function ModelPricingSettings({ state, transport }: {
         Ollama and llama.cpp models run locally and always have $0 token cost.
         Overrides match the model ID exactly (case-insensitive); built-in pricing is used otherwise.
       </p>
-      <FieldGroup title="Effective model prices">
+      <FieldGroup {...{ title: "Effective model prices" }}>
         {rows.length === 0 && (
           <p className="settings-update-status">
             No configured or recently used models yet. Add an override using a model ID below.
@@ -182,7 +182,7 @@ export function ModelPricingSettings({ state, transport }: {
             </Button>
           </div>
         </div>
-        {error && <InlineAlert variant="error" title="Could not update model pricing" body={error} />}
+        {error && <InlineAlert variant="error" {...{ title: "Could not update model pricing" }} body={error} />}
         {notice && <p className="settings-update-status" role="status">{notice}</p>}
       </form>
     </div>
