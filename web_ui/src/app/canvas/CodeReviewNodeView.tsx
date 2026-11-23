@@ -541,7 +541,6 @@ function CodeReviewNodeViewImpl({ id, data, selected }: NodeProps<CodeReviewFlow
           aria-labelledby="code-review-tab-setup"
         >
           <div className="code-review-node-field-row">
-            <span className="code-review-node-field-label">Pull request</span>
             <TextField label="Pull request URL" size="sm" type="text"
               className="code-review-node-input" value={prUrlDraft}
               onValueChange={setPrUrlDraft}
@@ -683,7 +682,6 @@ function CodeReviewNodeViewImpl({ id, data, selected }: NodeProps<CodeReviewFlow
             ))}
 
           <div className="code-review-node-qa">
-            <span className="code-review-node-field-label">Ask about this diff</span>
             <div className="code-review-node-inline-row">
               <TextField label="Ask about this diff" size="sm" type="text"
                 className="code-review-node-input" value={questionDraft}
