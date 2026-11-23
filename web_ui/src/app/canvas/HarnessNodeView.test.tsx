@@ -108,6 +108,16 @@ function renderHarness(
   return { ...rendered, rerenderWithData: (next: HarnessNodeData) => rendered.rerender(element(next)) };
 }
 
+describe("Workspace agent identity", () => {
+  it("uses the Browser Agent badge only for plugin-created nodes", () => {
+    const { rerenderWithData } = renderHarness(makeData({ title: "Agent: ordinary task" }));
+    expect(screen.getByText("Agent", { exact: true })).toBeVisible();
+    rerenderWithData(makeData({ title: "Browser Agent" }));
+    expect(screen.getByText("Browser Agent", { exact: true })).toBeVisible();
+    expect(screen.queryByText("Agent", { exact: true })).toBeNull();
+  });
+});
+
 describe("Agent approval viewport navigation", () => {
   const stage = { left: 0, top: 0, right: 1000, bottom: 600 };
 
