@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import type { StateListener } from "../lib/ws/transport";
+import { ProgressBar } from "./ui/ProgressBar";
+import "./chrome/knowledge-library.css";
 
 /** File imports run in PR #889's session-scoped background manager. The topic
  * survives reconnects and carries terminal results as well as progress. */
@@ -89,8 +91,7 @@ export function KnowledgeFileImportStatus({ state }: { state: ImportState }) {
           {job && job.filesTotal > 0 ? ` ${job.filesProcessed}/${job.filesTotal} files processed.` : ""}
         </span>
         {job && job.status === "running" && (
-          <progress aria-label="Knowledge import progress"
-            max={Math.max(job.filesTotal, 1)} value={job.filesProcessed} />
+          <ProgressBar label="Knowledge import progress" max={Math.max(job.filesTotal, 1)} value={job.filesProcessed} />
         )}
       </div>
     );
