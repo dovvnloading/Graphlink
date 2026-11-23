@@ -324,7 +324,7 @@
 
 .scene-node-surface > .scene-node-body:not(.fal-studio-body) {
   padding: var(--gl-space-2) var(--gl-space-3);
-  font-size: var(--gl-node-font-size, 12px);
+  font-size: var(--gl-node-font-size, var(--gl-text-xs));
   line-height: 1.55;
   color: var(--gl-node-font-color, var(--gl-surface-text-primary));
 }
@@ -343,7 +343,7 @@
 
 .chat-node .chat-node-role-group {
   color: var(--gl-node-font-color, var(--gl-surface-text-secondary));
-  font-size: var(--gl-node-font-size, 12px);
+  font-size: var(--gl-node-font-size, var(--gl-text-xs));
   font-weight: 600;
 }
 
