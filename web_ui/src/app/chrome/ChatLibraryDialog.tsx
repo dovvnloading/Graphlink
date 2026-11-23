@@ -221,7 +221,7 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
     // A failed mutation must not silently dismiss the row-scoped confirmation.
     // Reopen it with the failure message; only another explicit confirmation may retry.
     let failure: string | null = null;
-    while (true) {
+    for (;;) {
       const accepted = await askConfirm({
         title: "Delete chat?",
         body: <>
