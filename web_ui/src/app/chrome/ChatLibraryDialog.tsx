@@ -379,7 +379,7 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
                     const editingTags = editingTagsId === row.id;
                     const word = row.messageCount === 1 ? "message" : "messages";
                     return (
-                      <li className="chat-library-row" key={row.id}>
+                      <li className="chat-library-row library-row" key={row.id}>
                         <Icon name="chat" size="md" className="chat-library-chat-icon" />
                         {editingTitle ? (
                           <div className="chat-library-inline-editor">
