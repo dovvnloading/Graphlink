@@ -208,7 +208,10 @@ export function ComposerModelMenu({ store, disabled = false }: { store: Composer
       });
     });
     return () => { current = false; };
-  }, [store, retry]);
+    // Reload on every open (openEpoch): providers and installed models change
+    // while the composer stays mounted. The previous list stays visible
+    // until the fresh one arrives.
+  }, [store, retry, openEpoch]);
 
   // Focus search after MenuSurface's layout effect initially focuses its first item.
   useEffect(() => { if (openEpoch > 0) input.current?.focus(); }, [openEpoch, result]);

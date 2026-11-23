@@ -753,6 +753,30 @@ describe("Composer", () => {
     expect(openOllamaSettings).toHaveBeenCalledOnce();
   });
 
+  it("reloads the model list on every open so a newly configured provider appears", async () => {
+    const user = userEvent.setup();
+    const { store, loadPickerModels } = makeStore({
+      composer: { request: { ...initialComposerState.request, canSend: true } },
+    });
+    loadPickerModels.mockResolvedValue([]);
+    const { container } = render(
+      <OverlayProvider>
+        {/* @ts-expect-error Test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    const trigger = container.querySelector('[data-overlay-trigger="model"]') as HTMLButtonElement;
+    await user.click(trigger);
+    expect(await screen.findByRole("menuitem", { name: "Manage models…" })).toBeVisible();
+    loadPickerModels.mockResolvedValue([{
+      provider: "Custom endpoint", modelId: "lab/second-chat", label: "lab/second-chat",
+      source: "cloud", capabilities: ["chat"], sizeBytes: null,
+    }]);
+    await user.keyboard("{Escape}");
+    await user.click(trigger);
+    expect(await screen.findByRole("menuitemradio", { name: /lab\/second-chat/ })).toBeVisible();
+  });
+
   it("the model control enables when the backend reports real options, and picking one calls selectModel", async () => {
     const user = userEvent.setup();
     const { store, selectPickerModel } = makeStore({
