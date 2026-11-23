@@ -39,8 +39,8 @@
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 14px;
+  gap: var(--gl-space-3);
+  padding: var(--gl-space-3);
   overflow-y: auto;
   border-right: 1px solid var(--gl-surface-border);
 }
@@ -52,7 +52,7 @@
   box-sizing: border-box;
   width: 100%;
   height: 30px;
-  padding: 0 10px;
+  padding: 0 var(--gl-space-2-5);
   font-family: inherit;
   font-size: var(--gl-text-xs);
   color: var(--gl-surface-text-primary);
@@ -73,7 +73,7 @@
 .help-rail-buttons {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--gl-space-0-5);
 }
 
 /* Hover and selected were the same fill, so the pointer made every row look
@@ -81,7 +81,7 @@
 .help-rail-button {
   box-sizing: border-box;
   width: 100%;
-  padding: 7px 10px;
+  padding: var(--gl-space-1-5) var(--gl-space-2-5);
   text-align: left;
   font: inherit;
   font-size: var(--gl-text-xs);
@@ -117,7 +117,7 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  padding: 18px 22px;
+  padding: var(--gl-space-4) var(--gl-space-5);
   overflow-y: auto;
   /* Some Help sections overflow and get a scrollbar, others don't - without
      reserving the gutter unconditionally, every click between them shifted
@@ -126,7 +126,7 @@
 }
 
 .help-content-title {
-  margin: 0 0 5px;
+  margin: 0 0 var(--gl-space-1);
   font-size: var(--gl-text-xl);
   font-weight: 700;
   letter-spacing: -0.01em;
@@ -134,7 +134,7 @@
 }
 
 .help-content-description {
-  margin: 0 0 20px;
+  margin: 0 0 var(--gl-space-5);
   max-width: 62ch;
   font-size: var(--gl-text-sm);
   line-height: 1.55;
@@ -144,7 +144,7 @@
 .help-scroll-area {
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: var(--gl-space-5);
 }
 
 .help-section-block {
@@ -153,8 +153,8 @@
 }
 
 .help-section-title {
-  margin: 0 0 12px;
-  padding-bottom: 8px;
+  margin: 0 0 var(--gl-space-3);
+  padding-bottom: var(--gl-space-2);
   font-size: var(--gl-text-2xs);
   font-weight: 700;
   text-transform: uppercase;
@@ -164,15 +164,15 @@
 }
 
 .help-item + .help-item {
-  margin-top: 16px;
+  margin-top: var(--gl-space-4);
 }
 
 .help-item-action {
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
-  gap: 8px;
-  margin: 0 0 3px;
+  gap: var(--gl-space-2);
+  margin: 0 0 var(--gl-space-0-5);
 }
 
 .help-item-name {
@@ -194,7 +194,7 @@
 /* Only in search results: which section and subsection this entry came
    from, since a result list has no headings to sit under. */
 .help-item-context {
-  margin: 4px 0 0;
+  margin: var(--gl-space-1) 0 0;
   font-size: var(--gl-text-2xs);
   font-weight: 600;
   letter-spacing: 0.06em;
@@ -209,18 +209,18 @@
 .help-item-keys {
   display: inline-flex;
   align-items: baseline;
-  gap: 6px;
+  gap: var(--gl-space-1-5);
 }
 
 .help-item-keys-or {
-  margin-right: 6px;
+  margin-right: var(--gl-space-1-5);
   font-size: var(--gl-text-2xs);
   color: var(--gl-surface-text-muted);
 }
 
 .help-kbd {
   display: inline-block;
-  padding: 2px 7px;
+  padding: var(--gl-space-0-5) var(--gl-space-1-5);
   font-family: inherit;
   font-size: var(--gl-text-2xs);
   font-weight: 600;
