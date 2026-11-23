@@ -42,7 +42,7 @@ export function AboutDialog({ transport }: { transport: WsTransport }) {
   }, [transport]);
 
   return (
-    <Dialog name="about" title="About" className="about-dialog">
+    <Dialog name="about" {...{ title: "About" }} className="about-dialog">
       <div className="about-identity"><Icon name="brand" size="3xl" label="Graphlink" /><div><p className="about-app-name">{state.appName}</p><p className="about-version">{state.appVersion || "Version unavailable"}</p></div></div>
       <div className="about-links">
         <a href={state.repositoryUrl} target="_blank" rel="noreferrer">
