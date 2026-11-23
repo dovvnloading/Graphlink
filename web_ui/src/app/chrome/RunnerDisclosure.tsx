@@ -8,7 +8,7 @@ export function Disclosure({ label, children, className, onOpen, onToggle, initi
 }) {
   const [open, setOpen] = useState(initiallyOpen);
   return (
-    <KitDisclosure {...{ title: label }} open={open} className={className}
+    <KitDisclosure title={label} open={open} className={className}
       onOpenChange={(next) => {
         setOpen(next);
         onToggle?.();

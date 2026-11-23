@@ -411,7 +411,7 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
       <p className="settings-page-description">Manage local models, reasoning and download status.</p>
       <ProviderModeSwitch mode={MODE_OLLAMA_LOCAL} state={state} transport={transport} />
 
-      <Card {...{ title: "Ollama server" }} actions={
+      <Card title="Ollama server" actions={
         <>
           {state.ollamaServerStatus === "installed" && (
             <Button variant="primary" size="sm" loading={state.ollamaStartStatus === "starting"}
@@ -454,7 +454,7 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
         </p>
       )}
 
-      <FieldGroup {...{ title: "Reasoning level" }}>
+      <FieldGroup title="Reasoning level">
         <FormRow label="Reasoning level" layout="inline">
           <SegmentedControl label="Reasoning level" options={REASONING_LEVEL_OPTIONS}
             value={state.ollamaReasoningLevel}
@@ -484,7 +484,7 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
         </p>
       )}
 
-      <FieldGroup {...{ title: "Local model inventory" }}>
+      <FieldGroup title="Local model inventory">
         <p className="settings-field-hint">
           Check temporarily loads a server-verified model and runs two short prompts.
           It reports sample load and generation speed plus whether the model returned a test tool call.
@@ -539,7 +539,7 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
         ))}
       </datalist>
 
-      <FieldGroup {...{ title: "Model selection (per task)" }}>
+      <FieldGroup title="Model selection (per task)">
         <p className="settings-field-hint">
           Known embedding-only models cannot be assigned to text-generation tasks.
           Selecting a model here changes the task assignment; downloading or checking one does not.
@@ -557,7 +557,7 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
 
 
 
-      <FieldGroup {...{ title: "Download recommended models" }}
+      <FieldGroup title="Download recommended models"
         description="Sizes are approximate. Downloads are opt-in and never change your chat model selection.">
         <table className="settings-recommended-table" aria-label="Recommended Ollama models">
           <thead><tr><th scope="col">Model</th><th scope="col">Purpose</th><th scope="col">Size</th><th scope="col">Action</th></tr></thead>
