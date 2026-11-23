@@ -20,6 +20,7 @@ export function SearchOverlay({ store }: { store: SceneStore }) {
   const [currentIndex, setCurrentIndex] = useState(-1);
   const shellRef = useRef<HTMLDivElement | null>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
+  const lastQueried = useRef("");
   const isOpen = overlays.isOpen("search");
 
   useEffect(() => {
@@ -62,10 +63,16 @@ export function SearchOverlay({ store }: { store: SceneStore }) {
     setCurrentIndex(value.trim() ? 0 : -1);
   }
 
-  // The first matching node becomes the active result as soon as the query changes.
+  // Pan on a changed query, not on unrelated scene/selection publishes.
   useEffect(() => {
     if (!isOpen) return;
     setMatchIds(matches.map((node) => node.id));
+    const normalized = query.trim();
+    if (normalized === lastQueried.current) {
+      setCurrentIndex((old) => matches.length === 0 ? -1 : Math.min(old, matches.length - 1));
+      return;
+    }
+    lastQueried.current = normalized;
     if (matches.length === 0) {
       setCurrentIndex(-1);
       return;
@@ -75,7 +82,7 @@ export function SearchOverlay({ store }: { store: SceneStore }) {
     flow.setNodes?.((nodes) => nodes.map((node) =>
       Boolean(node.selected) === (node.id === match.id) ? node : { ...node, selected: node.id === match.id }));
     flow.setCenter(match.x, match.y, { zoom: 1, duration: motionDuration(300) });
-  }, [isOpen, matches, setMatchIds, flow]);
+  }, [isOpen, query, matches, setMatchIds, flow]);
 
   useEffect(() => {
     if (isOpen) {
@@ -84,6 +91,7 @@ export function SearchOverlay({ store }: { store: SceneStore }) {
       return;
     }
     setQuery("");
+    lastQueried.current = "";
     setMatchIds([]);
     setCurrentIndex(-1);
     previousFocus.current?.focus();
