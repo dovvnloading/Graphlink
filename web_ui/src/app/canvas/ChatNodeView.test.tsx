@@ -477,7 +477,7 @@ describe("ChatNodeView", () => {
     await user.click(screen.getByRole("menuitem", { name: "Generate" }));
     const generateChart = screen.getByRole("menuitem", { name: "Chart" });
     expect(generateChart).not.toBeDisabled();
-    expect(generateChart).toHaveAttribute("aria-haspopup", "true");
+    expect(generateChart).toHaveAttribute("aria-haspopup", "menu");
     expect(generateChart).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("menuitem", { name: "Bar" })).toBeNull();
   });
@@ -547,7 +547,7 @@ describe("ChatNodeView", () => {
   it("omits the 'Reveal Docked Items' menu section entirely when dockedChildren is empty", () => {
     renderChatNode();
     fireEvent.contextMenu(screen.getByText("You"));
-    expect(screen.queryByText("Reveal Docked Items")).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Reveal docked items" })).toBeNull();
   });
 
   it("shows one labeled 'Reveal Docked Items' entry per docked child, and clicking one calls onUndockChild with its id", async () => {
@@ -560,7 +560,11 @@ describe("ChatNodeView", () => {
     });
 
     fireEvent.contextMenu(screen.getByText("You"));
-    expect(screen.getByText("Reveal Docked Items")).toBeInTheDocument();
+    const reveal = screen.getByRole("menuitem", { name: "Reveal docked items" });
+    expect(reveal).toHaveAttribute("aria-haspopup", "menu");
+    expect(reveal).toHaveAttribute("aria-expanded", "false");
+    await user.click(reveal);
+    expect(reveal).toHaveAttribute("aria-expanded", "true");
     const entries = screen.getAllByRole("menuitem", { name: "Thinking" });
     expect(entries).toHaveLength(2);
 
@@ -1026,12 +1030,12 @@ describe("ChatNodeView role labels and quick actions", () => {
     renderChatNode({ content: "Hello **world**" });
 
     const copyBtn = screen.getByRole("button", { name: "Copy text" });
-    expect(copyBtn.querySelector("path")).toBeNull(); // rest state: the copy glyph is two rects, no path
+    expect(screen.queryByRole("button", { name: "Copied" })).toBeNull();
 
     await user.click(copyBtn);
 
     expect(writeText).toHaveBeenCalledWith("Hello **world**");
-    await waitFor(() => expect(copyBtn.querySelector("path")).not.toBeNull()); // check glyph flashed
+    await waitFor(() => expect(screen.getByRole("button", { name: "Copied" })).toBe(copyBtn));
   });
 
   it("the quick-action Branch from Here button calls onBranchFromHere directly, without opening the card menu", async () => {
@@ -1067,9 +1071,9 @@ describe("ChatNodeView role labels and quick actions", () => {
 
     const copyBtn = screen.getByRole("button", { name: "Copy text" });
     await user.click(copyBtn);
-    await waitFor(() => expect(copyBtn.querySelector("path")).not.toBeNull());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Copied" })).toBe(copyBtn));
 
-    await waitFor(() => expect(copyBtn.querySelector("path")).toBeNull(), { timeout: 2000 });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Copy text" })).toBe(copyBtn), { timeout: 2000 });
   });
 
   it("adds the selected class to the card when the selected prop is true", () => {
@@ -1517,7 +1521,7 @@ describe("ChatNodeView tool invocations (ADR-007 stage 7.4)", () => {
 
   it("renders a collapsible summary, closed by default, with each call's name/arguments/result inside", async () => {
     const user = userEvent.setup();
-    const { container } = renderChatNode({
+    renderChatNode({
       isUser: false,
       toolInvocations: [
         {
@@ -1529,15 +1533,16 @@ describe("ChatNodeView tool invocations (ADR-007 stage 7.4)", () => {
         },
       ],
     });
-    const summary = screen.getByText("1 tool call");
-    const details = container.querySelector("details.chat-node-tool-invocations") as HTMLDetailsElement;
-    expect(details.open).toBe(false); // native <details> closed by default
+    const trigger = screen.getByRole("button", { name: "1 tool call" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("region", { name: "1 tool call" })).toBeNull();
 
-    await user.click(summary);
-    expect(details.open).toBe(true);
-    expect(screen.getByText("echo")).toBeInTheDocument();
-    expect(screen.getByText('{"message": "hi"}')).toBeInTheDocument();
-    expect(screen.getByText("hi")).toBeInTheDocument();
+    await user.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    const panel = screen.getByRole("region", { name: "1 tool call" });
+    expect(panel).toHaveTextContent("echo");
+    expect(panel).toHaveTextContent('{"message": "hi"}');
+    expect(panel).toHaveTextContent("hi");
   });
 
   it("pluralizes the summary count for more than one call", () => {
