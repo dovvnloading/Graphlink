@@ -279,155 +279,147 @@ function ModelInputs({
     const next = editJsonValue(draft.argumentsJson, name, value);
     if (next !== null) setJson(next);
   };
+  const renderField = (field: MediaSchema["fields"][number]) => {
+    const val = parsedInputs[field.name] ?? field.default;
+    const value = val === null || val === undefined ? "" : String(val);
+    const label = field.name.replace(/_/g, " ");
+    const description = field.description || (field.required ? "Required" : undefined);
+    if (field.enum?.length) {
+      return <Select key={field.name} label={label} className="fal-studio-schema-control"
+        disabled={busy} value={value}
+        options={[{value: "", label: "Choose a value"},
+          ...field.enum.map((option) => ({value: String(option), label: String(option)}))]}
+        onChange={(next) => {
+          const selected = field.enum.find((option) => String(option) === next);
+          updateField(field.name, selected ?? next);
+        }} />;
+    }
+    if (field.type === "boolean") {
+      return <Checkbox key={field.name} label={label} description={description}
+        disabled={busy} checked={val === true}
+        onChange={(event) => updateField(field.name, event.currentTarget.checked)} />;
+    }
+    if (field.type === "number" || field.type === "integer") {
+      const numeric = val === null || val === undefined || val === "" ? "" : Number(val);
+      return <NumberField key={field.name} label={label} description={description}
+        disabled={busy} value={numeric !== "" && !Number.isFinite(numeric) ? "" : numeric}
+        step={field.type === "integer" ? 1 : 0.01}
+        onValueChange={(next) => updateField(field.name, next)} />;
+    }
+    return <TextField key={field.name} label={label} description={description}
+      className="nodrag nopan" disabled={busy}
+      type="text" value={field.type === "json" && val != null ? JSON.stringify(val) : value}
+      placeholder={field.format === "uri" || field.name.endsWith("_url") ? "https://…" :
+        field.required ? "Required" : "Optional"}
+      onValueChange={(next) => updateField(field.name,
+        field.type === "json" ? (() => { try { return JSON.parse(next); } catch { return next; } })() : next)} />;
+  };
   return (
     <section className="fal-studio-inputs" aria-label="Generation inputs">
       <div className="fal-studio-section-heading">
-        <div>
-          <h4>{draft.mode === "all" ? "Model inputs" : draft.operation === "text-to-speech" ? "Write what to say" : "Describe your creation"}</h4>
-        </div>
-        {draft.modelId && <button type="button" className="fal-studio-mini-link" onClick={onInspect}
-          disabled={schema.status === "loading"}>↻ Model schema</button>}
+        <h4>{draft.mode === "all" ? "Model inputs" :
+          draft.operation === "text-to-speech" ? "Write what to say" : "Describe your creation"}</h4>
+        {draft.modelId && <Button variant="ghost" size="sm" iconStart="refresh"
+          onClick={onInspect} disabled={schema.status === "loading"}>Model schema</Button>}
       </div>
-      {primaryField && <label className="fal-studio-field">
-        <span>{primaryField === "text" ? "Speech text" : "Prompt"} <small>{
-          primaryField === "text" ? "The exact words to speak" : "Describe the outcome you want"
-        }</small></span>
-        <textarea className="fal-studio-prompt nodrag nopan nowheel"
-          value={draft.prompt} disabled={busy} rows={3} maxLength={16000}
+      {primaryField && <>
+        <TextArea className="fal-studio-prompt nodrag nopan nowheel"
+          label={primaryField === "text" ? "Speech text" : "Prompt"}
+          description={primaryField === "text" ? "The exact words to speak" : "Describe the outcome you want"}
+          aria-label={primaryField === "text" ? "Text to speak" : "Media generation prompt"}
+          value={draft.prompt} onValueChange={setPrompt}
+          disabled={busy} minRows={3} maxRows={5} maxLength={16000}
           placeholder={draft.mode === "image" ? "A moody editorial photograph, soft daylight, sculptural architecture…" :
             draft.mode === "video" ? "A slow cinematic dolly shot through a glowing glass forest…" :
-            draft.operation === "text-to-speech" ? "Hello. Welcome to our studio. This is the text to narrate…" :
-            "Warm, expressive music, ambience or a sound effect…"}
-          onChange={(event) => setPrompt(event.target.value)}
-          aria-label={primaryField === "text" ? "Text to speak" : "Media generation prompt"} />
-        <small className="fal-studio-field-meta">{draft.prompt.length.toLocaleString()} / 16,000</small>
-      </label>}
-      {draft.modelId && schema.status === "loading" && (
-        <p className="fal-studio-quiet">Checking required inputs for this model…</p>
-      )}
-      {schema.warning && schema.modelId === draft.modelId && (
-        <p className="fal-studio-inline-warning">{schema.warning}</p>
-      )}
-      {fields.length > 0 && (
-        <div className="fal-studio-schema-grid">
-          {fields.map((field) => {
-            const val = parsedInputs[field.name] ?? field.default;
-            const value = val === null || val === undefined ? "" : String(val);
-            return (
-              <label key={field.name} className="fal-studio-field">
-                <span>{field.name.replace(/_/g, " ")} {field.required && <em>Required</em>}</span>
-                {!!field.description && <small title={field.description}>{field.description}</small>}
-                {(field.enum?.length ?? 0) > 0 ? (
-                  <select className="fal-studio-control nodrag nopan" disabled={busy}
-                    value={value}
-                    onChange={(event) => {
-                      const option = field.enum.find((item) => String(item) === event.target.value);
-                      updateField(field.name, option ?? event.target.value);
-                    }}>
-                    <option value="">Choose a value</option>
-                    {field.enum.map((option) => <option key={String(option)} value={String(option)}>{String(option)}</option>)}
-                  </select>
-                ) : field.type === "boolean" ? (
-                  <input type="checkbox" disabled={busy} checked={val === true}
-                    onChange={(event) => updateField(field.name, event.target.checked)} />
-                ) : (
-                  <input className="fal-studio-control nodrag nopan" disabled={busy}
-                    type={field.type === "number" || field.type === "integer" ? "number" : "text"}
-                    step={field.type === "integer" ? 1 : "any"}
-                    value={field.type === "json" && val != null ? JSON.stringify(val) : value}
-                    placeholder={field.format === "uri" || field.name.endsWith("_url") ? "https://…" : field.required ? "Required" : "Optional"}
-                    onChange={(event) => {
-                      const next = event.target.value;
-                      const number = Number(next);
-                      updateField(field.name,
-                        field.type === "number" || field.type === "integer" ? (next && Number.isFinite(number) ? number : next) :
-                          field.type === "json" ? (() => { try { return JSON.parse(next); } catch { return next; } })() : next);
-                    }} />
-                )}
-              </label>
-            );
-          })}
-        </div>
-      )}
-      <FalMediaUploader key={draft.modelId} mode={draft.mode} operation={draft.operation}
-        fields={fields.filter((field) => field.name.endsWith("_url") || field.format === "uri").map((field) => field.name)}
-        argumentsJson={draft.argumentsJson} disabled={uploadDisabled}
-        onJsonChange={setJson} onBusyChange={onUploadBusy} />
-      <details className="fal-studio-advanced" open={showAdvanced} onToggle={(event) => {
-        setShowAdvanced((event.currentTarget as HTMLDetailsElement).open);
-      }}>
-        <summary>Advanced model JSON <small>Full API control</small></summary>
-        <p>{draft.mode === "all" ? "Enter the input object from this model’s API schema." : "Set model-specific options such as image dimensions, duration, seed, or reference media URLs. JSON fields take precedence over the prompt box."}</p>
-        <textarea className="fal-studio-code nodrag nopan nowheel" aria-label="Advanced Fal model JSON"
-          spellCheck={false} rows={5} disabled={busy} value={draft.argumentsJson}
-          onChange={(event) => setJson(event.target.value)} />
-        {jsonError && <p className="fal-studio-field-error" role="alert">{jsonError}</p>}
-      </details>
+              draft.operation === "text-to-speech" ? "Hello. Welcome to our studio. This is the text to narrate…" :
+                "Warm, expressive music, ambience or a sound effect…"} />
+        <small className="fal-studio-field-meta">{formatCount(draft.prompt.length)} / {formatCount(16000)}</small>
+      </>}
+      {draft.modelId && schema.status === "loading" &&
+        <p className="fal-studio-quiet">Checking required inputs for this model…</p>}
+      {schema.warning && schema.modelId === draft.modelId &&
+        <StudioAlert variant="warning" label="Model inputs" body={schema.warning} />}
+      {!!fields.length && <div className="fal-studio-schema-grid">
+        {fields.slice(0, 4).map(renderField)}
+      </div>}
+      {fields.length > 4 &&
+        <StudioDisclosure label={"More model inputs (" + formatCount(fields.length - 4) + ")"}>
+          <div className="fal-studio-schema-grid">{fields.slice(4).map(renderField)}</div>
+        </StudioDisclosure>}
+      <StudioDisclosure label="Reference media">
+        <FalMediaUploader key={draft.modelId} mode={draft.mode} operation={draft.operation}
+          fields={fields.filter((field) => field.name.endsWith("_url") || field.format === "uri").map((field) => field.name)}
+          argumentsJson={draft.argumentsJson} disabled={uploadDisabled}
+          onJsonChange={setJson} onBusyChange={onUploadBusy} />
+      </StudioDisclosure>
+      <StudioDisclosure className="fal-studio-advanced" label="Advanced model JSON"
+        open={showAdvanced} onOpenChange={setShowAdvanced}>
+        <p>{draft.mode === "all" ? "Enter the input object from this model’s API schema." :
+          "Set model-specific options such as dimensions, duration, seed, or reference URLs. JSON values take precedence over the prompt."}</p>
+        <TextArea className="fal-studio-code nodrag nopan nowheel" label="Advanced Fal model JSON"
+          aria-label="Advanced Fal model JSON" spellCheck={false} minRows={5} maxRows={9}
+          disabled={busy} value={draft.argumentsJson} onValueChange={setJson} />
+        {jsonError && <StudioAlert variant="error" label="Invalid model JSON" body={jsonError} />}
+      </StudioDisclosure>
     </section>
   );
 }
 
 function OutputGallery({ media, id }: { media: MediaState; id: string }) {
   const jobs = media.history || [];
+  const renderJob = (job: MediaJob, index: number) => (
+    <div className="fal-studio-job" key={job.requestId || String(index)}>
+      <div className="fal-studio-job-heading">
+        <span><Icon name={iconFor(job.mode)} size="sm" /> <strong>{job.modelName || job.modelId}</strong></span>
+        <time>{dateString(job.createdAt)}</time>
+      </div>
+      {job.prompt && <p className="fal-studio-job-prompt">{job.prompt}</p>}
+      <div className="fal-studio-asset-grid">
+        {job.outputs?.map((item, i) => {
+          if (!safeAssetUrl(item.url)) return null;
+          const proxyUrl = withAuthToken("/api/fal-media/preview/" + encodeURIComponent(id) + "/" + index + "/" + i);
+          return <div key={item.url} className="fal-studio-asset">
+            {item.kind === "image" && safeInlineMediaUrl(item.url) ? (
+              <img src={proxyUrl} alt={job.prompt || "Generated image"} loading="lazy"
+                referrerPolicy="no-referrer" onError={(event) => { event.currentTarget.hidden = true; }} />
+            ) : item.kind === "video" && safeInlineMediaUrl(item.url) ? (
+              // Fal does not guarantee a caption track for generated video.
+              // eslint-disable-next-line jsx-a11y/media-has-caption
+              <video src={item.url} controls playsInline preload="metadata" className="nowheel"
+                aria-label={job.prompt || "Generated video"} />
+            ) : item.kind === "audio" && safeInlineMediaUrl(item.url) ? (
+              // Audio generation has no guaranteed transcript.
+              // eslint-disable-next-line jsx-a11y/media-has-caption
+              <audio src={item.url} controls preload="none" className="nowheel"
+                aria-label={job.prompt || "Generated audio"} />
+            ) : <p className="fal-studio-quiet">Inline preview unavailable. Open the source link to view this asset.</p>}
+            <a href={item.url} target="_blank" rel="noreferrer"
+              aria-label={"Open generated " + item.kind + " " + (i + 1) + " in a new tab"}>
+              <Icon name="external-link" size="xs" /> Open {item.kind}
+            </a>
+          </div>;
+        })}
+        {!job.resultPreview && (!job.outputs || job.outputs.length === 0) &&
+          <p className="fal-studio-quiet">The model returned no downloadable media URLs.</p>}
+      </div>
+      {typeof job.resultPreview === "string" && job.resultPreview.length > 0 &&
+        <StudioDisclosure className="fal-studio-result" label="Model response" defaultOpen={!job.outputs?.length}>
+          <pre className="nowheel nodrag">{job.resultPreview}</pre>
+        </StudioDisclosure>}
+    </div>
+  );
   return (
     <section className="fal-studio-gallery" aria-label="Generated media library">
-      <div className="fal-studio-section-heading">
-        <div><h4>Outputs <span>{jobs.length}</span></h4></div>
-      </div>
+      <div className="fal-studio-section-heading"><h4>Outputs <Badge>{formatCount(jobs.length)}</Badge></h4></div>
       {jobs.length === 0 ? (
-        <div className="fal-studio-gallery-empty">
-          <span aria-hidden="true">◈</span>
-          <strong>Made here, saved here.</strong>
-          <p>Completed jobs appear here with their output files or model response.</p>
-        </div>
-      ) : (
-        <div className="fal-studio-gallery-list nowheel nodrag">
-          {jobs.map((job, j) => (
-            <div className="fal-studio-job" key={job.requestId || String(j)}>
-              <div className="fal-studio-job-heading">
-                <span>{iconFor(job.mode)} <strong>{job.modelName || job.modelId}</strong></span>
-                <time>{dateString(job.createdAt)}</time>
-              </div>
-              {job.prompt && <p className="fal-studio-job-prompt" title={job.prompt}>{job.prompt}</p>}
-              <div className="fal-studio-asset-grid">
-                {job.outputs?.map((item, i) => {
-                  if (!safeAssetUrl(item.url)) return null;
-                  const proxyUrl = withAuthToken(`/api/fal-media/preview/${encodeURIComponent(id)}/${j}/${i}`);
-                  return (
-                    <div key={item.url} className="fal-studio-asset">
-                      {item.kind === "image" && safeInlineMediaUrl(item.url) ? (
-                        <img src={proxyUrl} alt={job.prompt || "Generated image"} loading="lazy"
-                          referrerPolicy="no-referrer" onError={(event) => { event.currentTarget.hidden = true; }} />
-                      ) : item.kind === "video" && safeInlineMediaUrl(item.url) ? (
-                        // Fal doesn't guarantee a VTT/SRT caption track. Never
-                        // invent inaccurate captions for generated video.
-                        // eslint-disable-next-line jsx-a11y/media-has-caption
-                        <video src={item.url} controls playsInline preload="metadata" className="nowheel" aria-label={job.prompt || "Generated video"} />
-                      ) : item.kind === "audio" && safeInlineMediaUrl(item.url) ? (
-                        // Audio generation has no guaranteed transcript;
-                        // prompt and source link are displayed for context.
-                        // eslint-disable-next-line jsx-a11y/media-has-caption
-                        <audio src={item.url} controls preload="none" className="nowheel" aria-label={job.prompt || "Generated audio"} />
-                      ) : (
-                        <p className="fal-studio-quiet">Inline preview unavailable. Open the source link to view this asset.</p>
-                      )}
-                      <a href={item.url} target="_blank" rel="noreferrer"
-                        aria-label={`Open generated ${item.kind} ${i+1} in a new tab`}>↗ Open {item.kind}</a>
-                    </div>
-                  );
-                })}
-                {!job.resultPreview && (!job.outputs || job.outputs.length === 0) && <p className="fal-studio-quiet">The model returned no downloadable media URLs.</p>}
-              </div>
-              {typeof job.resultPreview === "string" && job.resultPreview.length > 0 && (
-                <details className="fal-studio-result" open={!job.outputs?.length}>
-                  <summary>Model response</summary>
-                  <pre className="nowheel nodrag">{job.resultPreview}</pre>
-                </details>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+        <StudioEmpty icon="image" label="Made here, saved here."
+          body="Completed jobs appear here with their output files or model response." />
+      ) : <>
+        <div className="fal-studio-gallery-list">{jobs.slice(0, 2).map(renderJob)}</div>
+        {jobs.length > 2 && <StudioDisclosure label={"Previous outputs (" + formatCount(jobs.length - 2) + ")"}>
+          <div className="fal-studio-gallery-list">{jobs.slice(2).map((job, index) => renderJob(job, index + 2))}</div>
+        </StudioDisclosure>}
+      </>}
     </section>
   );
 }
