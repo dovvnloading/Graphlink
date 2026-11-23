@@ -78,11 +78,13 @@ KIND_FALLBACK_FOOTPRINTS: dict[str, tuple[float, float]] = {
     "harness": (440.0, 420.0),
     "chart": (600.0, 440.0),
     "placeholder": (220.0, 120.0),
-    # Scientific packs register "<pack plugin>.workbench". ScientificNodeView.css
-    # caps the scrolling body at 550px; include its padding and the header,
-    # with headroom for borders, even while a compact view is measured.
-    "workbench": (392.0, 640.0),
+    # A non-scientific plugin may also register a local "workbench" kind.
+    # Preserve its original fallback; only science_* workbenches use 640px.
+    "workbench": (392.0, 612.0),
 }
+# ScientificNodeView.css: 390px card, scrolling body capped at 550px,
+# plus header and padding. Leave headroom for borders and font scaling.
+SCIENTIFIC_WORKBENCH_MIN_FOOTPRINT = (392.0, 640.0)
 DEFAULT_FALLBACK_FOOTPRINT = (360.0, 240.0)
 
 
@@ -164,13 +166,15 @@ class LayoutOps(SceneDocumentParts):
             # report a compact body that later expands. Reserve the CSS-
             # bounded full card for future spawns, while retaining any
             # measured dimension that is larger than that minimum.
-            fw, fh = _kind_fallback(node.kind)
+            fw, fh = SCIENTIFIC_WORKBENCH_MIN_FOOTPRINT
             width, height = max(width, fw), max(height, fh)
         return float(width), float(height)
 
     def kind_fallback_footprint(self, kind: str) -> tuple[float, float]:
         """The pre-creation footprint estimate for a node that does not
         exist yet (place_child sizes the child before add_*_node runs)."""
+        if kind.startswith("science_") and kind.endswith(".workbench"):
+            return SCIENTIFIC_WORKBENCH_MIN_FOOTPRINT
         return _kind_fallback(kind)
 
     def _placement_obstacles(
