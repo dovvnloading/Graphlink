@@ -83,6 +83,26 @@ describe("kit menu structure and focus", () => {
     expect(trigger).toHaveAttribute("aria-expanded", "false");
   });
 
+  it("activates kit checkbox and radio choices with Space and restores trigger focus", async () => {
+    const user = userEvent.setup();
+    const toggle = vi.fn();
+    const choose = vi.fn();
+    render(<MenuButton label="Choices">
+      <MenuItem label="Toggle" checked={false} onSelect={toggle} />
+      <MenuItem label="Choose" kind="radio" checked onSelect={choose} />
+    </MenuButton>);
+    const trigger = screen.getByRole("button", { name: "Choices" });
+    await user.click(trigger);
+    await user.keyboard("{Space}");
+    expect(toggle).toHaveBeenCalledOnce();
+    expect(trigger).toHaveFocus();
+    await user.click(trigger);
+    await user.keyboard("{ArrowDown}{Space}");
+    expect(choose).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
   it("opens a submenu with ArrowRight and closes only it with ArrowLeft or Escape", async () => {
     const user = userEvent.setup();
     render(<MenuButton label="Export actions">
@@ -162,6 +182,32 @@ describe("context triggers, position and legacy children", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it("activates legacy raw menuitem roles with Space and prevents page scrolling", async () => {
+    const user = userEvent.setup();
+    const plain = vi.fn();
+    const toggle = vi.fn();
+    const select = vi.fn();
+    render(<NodeMenu position={{ x: 10, y: 10 }} onClose={() => {}} ariaLabel="Legacy actions">
+      <button type="button" role="menuitem" onClick={plain}>Plain</button>
+      <button type="button" role="menuitemcheckbox" aria-checked="false" onClick={toggle}>Flag</button>
+      <button type="button" role="menuitemradio" aria-checked="true" onClick={select}>Option</button>
+    </NodeMenu>);
+    const first = screen.getByRole("menuitem", { name: "Plain" });
+    expect(first).toHaveFocus();
+    expect(fireEvent.keyDown(first, { key: "Space", code: "Space", cancelable: true })).toBe(false);
+    expect(plain).toHaveBeenCalledOnce();
+    await user.keyboard("{ArrowDown}");
+    const checkbox = screen.getByRole("menuitemcheckbox", { name: "Flag" });
+    expect(checkbox).toHaveFocus();
+    expect(fireEvent.keyDown(checkbox, { key: " ", code: "Space", cancelable: true })).toBe(false);
+    expect(toggle).toHaveBeenCalledOnce();
+    await user.keyboard("{ArrowDown}");
+    const radio = screen.getByRole("menuitemradio", { name: "Option" });
+    expect(radio).toHaveFocus();
+    expect(fireEvent.keyDown(radio, { key: "Spacebar", code: "Space", cancelable: true })).toBe(false);
+    expect(select).toHaveBeenCalledOnce();
+  });
+
   it("flips and clamps pointer and submenu placement to the viewport", () => {
     expect(clampMenuPosition({ x: 490, y: 390 }, { width: 200, height: 180 }, { width: 500, height: 400 }))
       .toEqual({ x: 290, y: 210 });
@@ -180,9 +226,26 @@ describe("context triggers, position and legacy children", () => {
       ariaLabel="Edge" onClose={() => {}}><MenuItem label="One" /></Menu>);
     const menu = screen.getByRole("menu", { name: "Edge" });
     expect(menu).toHaveStyle({
+      left: (window.innerWidth - 210 - 8) + "px",
+      top: (window.innerHeight - 140 - 8) + "px",
+    });
+  });
+
+  it("preserves original NodeMenu flip placement without extra kit clamping", () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return { x: 0, y: 0, top: 0, left: 0, width: 210, height: 140, right: 210, bottom: 140, toJSON: () => ({}) };
+    });
+    const item = <button type="button" role="menuitem">One</button>;
+    const { rerender } = render(<NodeMenu position={{ x: window.innerWidth - 3, y: window.innerHeight - 3 }}
+      ariaLabel="Canvas edge" onClose={() => {}}>{item}</NodeMenu>);
+    const menu = screen.getByRole("menu", { name: "Canvas edge" });
+    expect(menu).toHaveStyle({
       left: (window.innerWidth - 213) + "px",
       top: (window.innerHeight - 143) + "px",
     });
+    // The original NodeMenu did not nudge an unflipped node menu away from (0, 0).
+    rerender(<NodeMenu position={{ x: 2, y: 3 }} ariaLabel="Canvas edge" onClose={() => {}}>{item}</NodeMenu>);
+    expect(menu).toHaveStyle({ left: "2px", top: "3px" });
   });
 });
 

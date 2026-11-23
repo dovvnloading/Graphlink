@@ -17,7 +17,7 @@ export function NodeMenu({
 }) {
   return (
     <ContextMenu position={position} onClose={onClose} className={className}
-      ignoreRef={ignoreRef} ariaLabel={ariaLabel}>
+      ignoreRef={ignoreRef} ariaLabel={ariaLabel} preserveNodePlacement>
       {children}
     </ContextMenu>
   );

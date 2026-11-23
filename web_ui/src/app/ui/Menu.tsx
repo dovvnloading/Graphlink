@@ -6,7 +6,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { OverlayProviderIfMissing, useOverlays } from "../overlays/overlays";
-import { clampMenuPosition, clampSubMenuPosition, type MenuPosition } from "../canvas/menuPosition";
+import { clampMenuPosition, clampSubMenuPosition, placeLegacyNodeMenu, type MenuPosition } from "../canvas/menuPosition";
 import { isMenuKey } from "../canvas/keyboardContextMenu";
 import { Icon } from "./icons/Icon";
 import type { IconName } from "./icons/registry";
@@ -18,6 +18,11 @@ const ITEM_SELECTOR = [
   '[role="menuitemcheckbox"]:not([disabled]):not([aria-disabled="true"])',
   '[role="menuitemradio"]:not([disabled]):not([aria-disabled="true"])',
 ].join(", ");
+
+// Browsers report Space as " "; user-event and older engines may report aliases.
+function isActivationKey(key: string): boolean {
+  return key === "Enter" || key === " " || key === "Space" || key === "Spacebar";
+}
 
 type MenuContextValue = {
   dismiss: () => void;
@@ -85,8 +90,8 @@ function useMenuKeyboard(
         items[next].scrollIntoView?.({ block: "nearest" });
         return;
       }
-      if ((event.key === "Enter" || event.key === " " || event.key === "Spacebar") &&
-          focused.matches(ITEM_SELECTOR) && focused.getAttribute("aria-haspopup") !== "menu") {
+      if (isActivationKey(event.key) && focused.matches(ITEM_SELECTOR) &&
+          focused.getAttribute("aria-haspopup") !== "menu") {
         event.preventDefault();
         event.stopPropagation();
         focused.click();
@@ -226,6 +231,8 @@ export interface MenuProps {
   ignoreRef?: RefObject<HTMLElement | null>;
   /** Explicit focus origin for a pointer-triggered menu. */
   restoreFocusRef?: RefObject<HTMLElement | null>;
+  /** Keep the original NodeMenu pointer placement for legacy canvas menus. */
+  preserveNodePlacement?: boolean;
 }
 
 export function Menu(props: MenuProps) {
@@ -233,7 +240,7 @@ export function Menu(props: MenuProps) {
 }
 
 function MenuSurface({
-  position, onClose, children, ariaLabel, className, id, ignoreRef, restoreFocusRef,
+  position, onClose, children, ariaLabel, className, id, ignoreRef, restoreFocusRef, preserveNodePlacement,
 }: MenuProps) {
   const overlays = useOverlays();
   const menuId = useId();
@@ -258,9 +265,13 @@ function MenuSurface({
   useLayoutEffect(() => {
     const panel = panelRef.current;
     if (!panel) return;
-    const next = clampMenuPosition({ x: position.x, y: position.y }, panel.getBoundingClientRect());
+    const rect = panel.getBoundingClientRect();
+    const requested = { x: position.x, y: position.y };
+    const next = preserveNodePlacement
+      ? placeLegacyNodeMenu(requested, rect)
+      : clampMenuPosition(requested, rect);
     setPlacement((prev) => prev.x === next.x && prev.y === next.y ? prev : next);
-  }, [position.x, position.y]);
+  }, [position.x, position.y, preserveNodePlacement]);
 
   useLayoutEffect(() => {
     const trigger = restoreFocusRef?.current ??
@@ -396,7 +407,7 @@ export function SubMenu({ label, children, icon, disabled = false, className }: 
         aria-expanded={open}
         onMouseEnter={scheduleOpen}
         onKeyDown={(event: ReactKeyboardEvent<HTMLButtonElement>) => {
-          if (event.key === "ArrowRight" || event.key === "Enter" || event.key === " ") {
+          if (event.key === "ArrowRight" || isActivationKey(event.key)) {
             event.preventDefault();
             event.stopPropagation();
             if (!disabled) openPanel(true);
@@ -486,6 +497,7 @@ export interface ContextMenuProps {
   className?: string;
   ariaLabel?: string;
   ignoreRef?: RefObject<HTMLElement | null>;
+  preserveNodePlacement?: boolean;
 }
 
 type ContextTriggerEvents = {
@@ -494,7 +506,7 @@ type ContextTriggerEvents = {
 };
 
 export function ContextMenu({
-  children, trigger, position, onClose, className, ariaLabel, ignoreRef,
+  children, trigger, position, onClose, className, ariaLabel, ignoreRef, preserveNodePlacement,
 }: ContextMenuProps) {
   const [uncontrolledPosition, setUncontrolledPosition] = useState<MenuPosition | null>(null);
   const location = position ?? uncontrolledPosition;
@@ -518,7 +530,8 @@ export function ContextMenu({
   };
   if (trigger === undefined) {
     return location ? <Menu position={location} onClose={close}
-      className={className} ariaLabel={ariaLabel} ignoreRef={ignoreRef}>{children}</Menu> : null;
+      className={className} ariaLabel={ariaLabel} ignoreRef={ignoreRef}
+        preserveNodePlacement={preserveNodePlacement}>{children}</Menu> : null;
   }
   // Decorate the actual trigger rather than wrapping a button in an interactive
   // span: this preserves its accessible role, focus and native click behavior.
@@ -539,7 +552,8 @@ export function ContextMenu({
     <>
       {triggerElement}
       {location && <Menu position={location} onClose={close}
-        className={className} ariaLabel={ariaLabel} ignoreRef={ignoreRef}>{children}</Menu>}
+        className={className} ariaLabel={ariaLabel} ignoreRef={ignoreRef}
+        preserveNodePlacement={preserveNodePlacement}>{children}</Menu>}
     </>
   );
 }

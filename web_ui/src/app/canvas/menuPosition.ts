@@ -33,6 +33,23 @@ export function clampMenuPosition(
   };
 }
 
+/** Exact pre-kit NodeMenu placement: flip at the same 8px collision threshold,
+ * floor flipped coordinates at 8px, but do not apply an additional far-edge
+ * clamp or nudge unflipped coordinates. All canvas node menus use this path. */
+export function placeLegacyNodeMenu(
+  requested: MenuPosition,
+  menu: Size,
+  viewport = { width: window.innerWidth, height: window.innerHeight },
+): MenuPosition {
+  const margin = MENU_VIEWPORT_MARGIN;
+  return {
+    x: requested.x + menu.width + margin > viewport.width
+      ? Math.max(margin, requested.x - menu.width) : requested.x,
+    y: requested.y + menu.height + margin > viewport.height
+      ? Math.max(margin, requested.y - menu.height) : requested.y,
+  };
+}
+
 /** A submenu prefers the right side of its parent item, flips left if needed,
  * and clamps vertically rather than running off the bottom of the screen. */
 export function clampSubMenuPosition(
