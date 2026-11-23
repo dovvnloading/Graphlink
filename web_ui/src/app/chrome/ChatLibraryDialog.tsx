@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import type { AppChatLibraryRow, AppChatLibraryState, AppWorkspaceRow } from "../../lib/bridge-core/generated/app-chat-library-state";
 import type { AppComposerState } from "../../lib/bridge-core/generated/app-composer-state";
 import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
@@ -65,7 +65,7 @@ function chatMeta(row: AppChatLibraryRow): string {
 
 export function ChatLibraryDialog({ transport, store }: { transport: WsTransport; store: SceneStore }) {
   const overlays = useOverlays();
-  const confirm = useConfirm();
+  const askConfirm = useConfirm();
   const [state, setState] = useState<AppChatLibraryState>(initialState);
   const [composerState, setComposerState] = useState<AppComposerState>(initialComposerState);
   const [query, setQuery] = useState("");
@@ -108,14 +108,6 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
     }
   }, [renamingId, editingTagsId, creatingWorkspace]);
 
-  useEffect(() => {
-    if (selectedWorkspaceId !== null && !state.workspaces.some((row) => row.id === selectedWorkspaceId && !row.archived)) {
-      setSelectedWorkspaceId(null);
-    }
-    if (workspaceSettingsId !== null && !state.workspaces.some((row) => row.id === workspaceSettingsId && !row.archived)) {
-      setWorkspaceSettingsId(null);
-    }
-  }, [state.revision, state.workspaces, selectedWorkspaceId, workspaceSettingsId]);
 
   const workspaces = state.workspaces.filter((workspace) => !workspace.archived);
   const workspaceRows = useMemo(() =>
@@ -226,7 +218,7 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
     setEditingTagsId(null);
   }
   async function deleteChat(row: AppChatLibraryRow) {
-    const accepted = await confirm({
+    const accepted = await askConfirm({
       title: "Delete chat?",
       body: "Delete “" + row.title + "”? This removes the saved chat from the library.",
       confirmLabel: "Delete chat",
@@ -276,7 +268,7 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
     }
   }
 
-  function rowKeys(event: React.KeyboardEvent<HTMLDivElement>) {
+  function rowKeys(event: KeyboardEvent<HTMLDivElement>) {
     const target = event.target;
     if (!(target instanceof HTMLElement) || !target.matches(".chat-library-row-primary")) return;
     const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>(".chat-library-row-primary"));
@@ -297,7 +289,7 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
   }
 
   return (
-    <Dialog name="library" title="Chat library" size="lg" className="chat-library-dialog">
+    <Dialog {...{ title: "Chat library" }} name="library" size="lg" className="chat-library-dialog">
       <div className="chat-library-layout">
         <div className="chat-library-heading">
           <p>Find and manage your conversations.</p>
@@ -330,7 +322,7 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
           </div>
         )}
         {managingWorkspaces && (
-          <Card title="Manage workspaces" actions={<IconButton icon="close" label="Close workspace manager" onClick={() => setManagingWorkspaces(false)} />}>
+          <Card {...{ title: "Manage workspaces" }} actions={<IconButton icon="close" label="Close workspace manager" onClick={() => setManagingWorkspaces(false)} />}>
             <div className="chat-library-workspaces">
               {creatingWorkspace ? (
                 <div className="chat-library-workspace-create">
@@ -370,10 +362,10 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
           {state.rows.length ? formatCount(filtered.length) + " results" : ""}
         </span>
         {state.rows.length === 0 ? (
-          <EmptyState icon="chat" title="No saved chats yet" body="Start a new chat to build your library."
+          <EmptyState icon="chat" {...{ title: "No saved chats yet" }} body="Start a new chat to build your library."
             actions={<Button iconStart="chat-plus" onClick={() => { void newChat(); }}>New chat</Button>} />
         ) : filtered.length === 0 ? (
-          <EmptyState icon="search" title="No matching chats" body="Try another search or change the filters."
+          <EmptyState icon="search" {...{ title: "No matching chats" }} body="Try another search or change the filters."
             actions={<Button onClick={() => { setQuery(""); setFilter("all"); setSelectedTags(new Set()); setSelectedWorkspaceId(null); }}>Clear filters</Button>} />
         ) : (
           <div className="chat-library-groups" onKeyDown={rowKeys}>
