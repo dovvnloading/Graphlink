@@ -13,6 +13,7 @@ import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 import { useStreamBuffer } from "./useStreamBuffer";
+import { MenuItem, MenuGroup, SubMenu } from "../ui/Menu";
 
 /**
  * The chat node (Qt-removal plan R3.1/R3.2) - ChatNode's React successor:
@@ -307,322 +308,81 @@ function ChatNodeMenu({
   onClearModelOverride: () => void;
   onClose: () => void;
 }) {
-  const [chartMenuOpen, setChartMenuOpen] = useState(false);
-  const [statusMenuOpen, setStatusMenuOpen] = useState(false);
-
-
+  const copyText = () => {
+    navigator.clipboard.writeText(content).catch((error: unknown) => {
+      console.error("[chat-node] Copy text failed:", error);
+    });
+  };
   return (
     <NodeMenu position={position} onClose={onClose} className="chat-node-menu" ariaLabel="Chat message actions">
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          // Best-effort clipboard write - a failure (missing Clipboard API,
-          // a denied permissions prompt, an insecure context) is swallowed
-          // rather than left as an unhandled rejection, matching
-          // ImageNodeView.tsx's own handleCopyImage: a menu action like this
-          // should never crash the node, it should just silently not have
-          // copied anything.
-          navigator.clipboard.writeText(content).catch((error) => {
-            console.error("[chat-node] Copy Text failed:", error);
-          });
-          onClose();
-        }}
-      >
-        Copy Text
-      </button>
-      {isUser && (
-        <>
-          <button type="button" role="menuitem" disabled={editDisabled}
-            onClick={() => { onEdit(); onClose(); }}>
-            Edit
-          </button>
-          <button type="button" role="menuitem" disabled={editDisabled}
-            onClick={() => { onEditAsNewBranch(); onClose(); }}>
-            Edit as new branch
-          </button>
-        </>
-      )}
-      {/* ADR-002 Workstream 1: stages this node as the composer's next reply
-          target (sceneStore's replyTargetNodeId) - available regardless of
-          isUser, since either a user message or an assistant reply is a
-          valid point to fork a new branch from. The composer shows a
-          "Replying to" indicator once set; the actual second-child branch
-          is created server-side the moment the user sends. */}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onBranchFromHere();
-          onClose();
-        }}
-      >
-        Branch from Here
-      </button>
-      {canRerun && onRerunFromHere && (
-        <button type="button" role="menuitem" disabled={editDisabled}
-          onClick={() => {
-            // Preserve a connected focus target when the context menu unmounts.
-            const trigger = document.getElementById("chat-rerun-trigger-" + nodeId)
-              ?? menuTriggerRef.current;
-            trigger?.focus();
-            onRerunFromHere();
-            onClose();
-          }}>
-          Re-run from here
-        </button>
-      )}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onToggleCollapse();
-          onClose();
-        }}
-      >
-        {isCollapsed ? "Expand" : "Collapse"}
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          downloadTextFile(content, `chat-${nodeId}.md`);
-          onClose();
-        }}
-      >
-        Export
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onToggleBranchFocus();
-          onClose();
-        }}
-      >
-        {isBranchFocusActive ? "Show All Branches" : "Hide Other Branches"}
-      </button>
-      <button type="button" role="menuitemcheckbox" aria-checked={indexIntoKnowledge}
-        onClick={() => {
-          onSetIndexIntoKnowledge(!indexIntoKnowledge);
-          onClose();
-        }}>
-        {indexIntoKnowledge ? "Remove from Knowledge Library" : "Add branch to Knowledge Library"}
-      </button>
-      {/* ADR-002 Workstream 1 ("Branch status and lifecycle"): the final
-          sequenced item after fork/compare/synthesize. Mark Status reuses
-          the exact click-to-expand submenu
-          idiom Generate Chart below already established (chartMenuOpen),
-          not a new interaction pattern - role="menuitemradio"/aria-checked
-          marks the currently active status. */}
-      <button
-        type="button"
-        role="menuitem"
-        aria-haspopup="true"
-        aria-expanded={statusMenuOpen}
-        onClick={() => setStatusMenuOpen((open) => !open)}
-      >
-        Mark Status
-      </button>
-      {statusMenuOpen && (
-        <div className="chat-node-submenu" role="menu" aria-label="Branch status">
+      <MenuGroup label="Edit">
+        <MenuItem icon="copy" label="Copy text" onSelect={copyText} />
+        {isUser && <>
+          <MenuItem icon="edit" label="Edit" disabled={editDisabled} onSelect={onEdit} />
+          <MenuItem icon="branch" label="Edit as new branch" disabled={editDisabled} onSelect={onEditAsNewBranch} />
+        </>}
+      </MenuGroup>
+      <MenuGroup label="Branch">
+        <MenuItem icon="branch" label="Branch from here" onSelect={onBranchFromHere} />
+        {canRerun && onRerunFromHere && (
+          <MenuItem icon="rerun" label="Re-run from here" disabled={editDisabled}
+            onSelect={() => {
+              const trigger = document.getElementById("chat-rerun-trigger-" + nodeId)
+                ?? menuTriggerRef.current;
+              trigger?.focus();
+              onRerunFromHere();
+            }} />
+        )}
+        {!isUser && <MenuItem icon="rerun" label="Regenerate response" onSelect={onRegenerate} />}
+        <MenuItem icon={isBranchFocusActive ? "eye" : "eye-off"}
+          label={isBranchFocusActive ? "Show all branches" : "Hide other branches"}
+          onSelect={onToggleBranchFocus} />
+        <MenuItem icon={isCollapsed ? "maximize" : "minimize"}
+          label={isCollapsed ? "Expand branch" : "Collapse branch"}
+          onSelect={() => onCollapseBranch(!isCollapsed)} />
+      </MenuGroup>
+      <MenuGroup label="Node">
+        <MenuItem icon={isCollapsed ? "maximize" : "minimize"}
+          label={isCollapsed ? "Expand" : "Collapse"} onSelect={onToggleCollapse} />
+        <SubMenu label="Mark status" icon="tag">
           {BRANCH_STATUS_OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              role="menuitemradio"
-              aria-checked={option.value === branchStatus}
-              onClick={() => {
-                onSetBranchStatus(option.value);
-                onClose();
-              }}
-            >
-              {option.value === branchStatus ? "✓ " : ""}
-              {option.label}
-            </button>
+            <MenuItem key={option.value} label={option.label} kind="radio"
+              checked={option.value === branchStatus}
+              onSelect={() => onSetBranchStatus(option.value)} />
           ))}
-        </div>
-      )}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onSetFinalDeliverable(!isFinalDeliverable);
-          onClose();
-        }}
-      >
-        {isFinalDeliverable ? "Unmark Final Deliverable" : "Mark as Final Deliverable"}
-      </button>
-      {/* ADR-018 stage 18.3: pins this node (and, when it is a branch root,
-          every descendant that doesn't pin its own - see backend/domain/
-          branches.py's resolve_model_for_node) to whatever model is
-          CURRENTLY active in the Composer. A full "browse every installed
-          model" picker needs a live catalog fetch this stage doesn't wire
-          to the frontend yet - see doc/adr/ADR-018-model-routing.md's own
-          status note; "pin to current" is the buildable, honestly-scoped
-          slice of the feature today. */}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onPinToCurrentModel();
-          onClose();
-        }}
-      >
-        Pin to Current Model
-      </button>
-      {overrideModelId && (
-        <button
-          type="button"
-          role="menuitem"
-          onClick={() => {
-            onClearModelOverride();
-            onClose();
-          }}
-        >
-          Clear Model Pin ({overrideModelId})
-        </button>
-      )}
-      {/* "Collapse Branch"/"Expand Branch" flips off THIS node's own
-          isCollapsed (same value/direction the plain single-node
-          "Expand"/"Collapse" item above already reads) but applies
-          server-side across the whole chat-kind subtree rooted here, not
-          just this one node - see onCollapseBranch's own comment on
-          ChatNodeData. Deliberately NOT automatic when status is set to
-          "rejected" above - status and collapse stay decoupled. */}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onCollapseBranch(!isCollapsed);
-          onClose();
-        }}
-      >
-        {isCollapsed ? "Expand Branch" : "Collapse Branch"}
-      </button>
-      {/* Real (not disabled) - matches the legacy's own `if docked_children:`
-          guard exactly. One button per docked child, each undocking that
-          specific child back onto the canvas via the shared setNodeDocked
-          intent (docked=false). */}
-      {dockedChildren.length > 0 && (
-        <>
-          <div className="chat-node-menu-section-label">Reveal Docked Items</div>
-          {dockedChildren.map((child) => (
-            <button
-              key={child.id}
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                onUndockChild(child.id);
-                onClose();
-              }}
-            >
-              {child.label}
-            </button>
-          ))}
-        </>
-      )}
-      {/* R8a: real. Opens the shared DocumentViewPanel (frontend-only, no
-          backend intent) with this node's own content - already client-side. */}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onOpenDocumentView();
-          onClose();
-        }}
-      >
-        Open Document View
-      </button>
-      {/* R8a: real. Each runs its agent over THIS node's text and drops the
-          result into a new note beside it - see backend/canvas.py's
-          _generate_note_from_node. Fire-and-forget like Generate Image
-          above: the note arrives on the next scene snapshot. */}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onGenerateKeyTakeaway();
-          onClose();
-        }}
-      >
-        Generate Key Takeaway
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onGenerateExplainerNote();
-          onClose();
-        }}
-      >
-        Generate Explainer Note
-      </button>
-      {/* R6.2: a real click-to-expand submenu (not disabled) - same
-          click-to-toggle popover interaction GroupColorPicker.tsx already
-          established for a nested picker inside a single flat menu list,
-          rather than inventing a hover-triggered flyout with no other
-          precedent anywhere in this codebase. */}
-      <button
-        type="button"
-        role="menuitem"
-        aria-haspopup="true"
-        aria-expanded={chartMenuOpen}
-        onClick={() => setChartMenuOpen((open) => !open)}
-      >
-        Generate Chart
-      </button>
-      {chartMenuOpen && (
-        <div className="chat-node-submenu" role="menu" aria-label="Chart type">
+        </SubMenu>
+        <MenuItem icon="flag"
+          label={isFinalDeliverable ? "Unmark final deliverable" : "Mark as final deliverable"}
+          onSelect={() => onSetFinalDeliverable(!isFinalDeliverable)} />
+        <MenuItem icon="pin" label="Pin to current model" onSelect={onPinToCurrentModel} />
+        {overrideModelId && <MenuItem icon="pin" label={`Clear model pin (${overrideModelId})`}
+          onSelect={onClearModelOverride} />}
+        {dockedChildren.length > 0 && (
+          <SubMenu label="Reveal docked items" icon="eye">
+            {dockedChildren.map((child) => (
+              <MenuItem key={child.id} label={child.label} onSelect={() => onUndockChild(child.id)} />
+            ))}
+          </SubMenu>
+        )}
+      </MenuGroup>
+      <MenuGroup label="Share">
+        <MenuItem icon="knowledge" label={indexIntoKnowledge ? "Remove from Knowledge Library" : "Add branch to Knowledge Library"}
+          kind="checkbox" checked={indexIntoKnowledge}
+          onSelect={() => onSetIndexIntoKnowledge(!indexIntoKnowledge)} />
+        <MenuItem icon="document-text" label="Open in Document View" onSelect={onOpenDocumentView} />
+        <MenuItem icon="download" label="Export…" onSelect={() => downloadTextFile(content, `chat-${nodeId}.md`)} />
+      </MenuGroup>
+      <SubMenu label="Generate" icon="sparkle">
+        <MenuItem icon="document-text" label="Key takeaway" onSelect={onGenerateKeyTakeaway} />
+        <MenuItem icon="document-text" label="Explainer note" onSelect={onGenerateExplainerNote} />
+        <SubMenu label="Chart" icon="chart-bar">
           {CHART_TYPE_OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                onGenerateChart(option.value);
-                onClose();
-              }}
-            >
-              {option.label}
-            </button>
+            <MenuItem key={option.value} label={option.label} onSelect={() => onGenerateChart(option.value)} />
           ))}
-        </div>
-      )}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onGenerateImage();
-          onClose();
-        }}
-      >
-        Generate Image
-      </button>
-      {!isUser && (
-        <button
-          type="button"
-          role="menuitem"
-          onClick={() => {
-            onRegenerate();
-            onClose();
-          }}
-        >
-          Regenerate Response
-        </button>
-      )}
-      <div className="chat-node-menu-separator" role="separator" />
-      <button
-        type="button"
-        role="menuitem"
-        className="chat-node-menu-danger"
-        onClick={() => {
-          onDelete();
-          onClose();
-        }}
-      >
-        Delete Node
-      </button>
+        </SubMenu>
+        <MenuItem icon="image" label="Image" onSelect={onGenerateImage} />
+      </SubMenu>
+      <MenuItem label="Delete node" destructive onSelect={onDelete} />
     </NodeMenu>
   );
 }
