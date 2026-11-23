@@ -247,7 +247,10 @@ def test_full_card_minimum_is_limited_to_registered_scientific_workbench_kinds()
         document.set_measured_node_sizes([(node.id, 380.0, 720.0)])
         assert document.node_footprint(node) == (392.0, 720.0)
 
-    for kind in ("other_plugin.workbench", "science_core.other", "science_core.workbench_extra", "chat"):
+    for kind in (
+        "other_plugin.workbench", "science_core.other",
+        "science_core.workbench_extra", "chat",
+    ):
         node = document.add_node(0, 0, "other kind")
         node.kind = kind
         document.set_measured_node_sizes([(node.id, 390.0, 240.0)])
