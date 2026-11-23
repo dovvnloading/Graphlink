@@ -1,43 +1,16 @@
 import { ReactFlowProvider } from "@xyflow/react";
-import { render, screen, waitFor, within } from "@testing-library/react";
-import * as download from "../canvas/downloadTextFile";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import * as download from "../canvas/downloadTextFile";
 import { AppBar } from "./AppBar";
-// Preload the lazy overflow chunk: these tests exercise actions, not module-load timing.
+// Preload the lazy overflow chunk; its import timing is not under test.
 import "./AppBarOverflowMenu";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
 import { SceneStore } from "../canvas/sceneStore";
 import type { WsTransport } from "../../lib/ws/transport";
 
-// R8a (UI/UX issue list findings #5 and #8): this is the first dedicated
-// test file for AppBar.tsx. jsdom does not implement CSS @container queries
-// (or any layout at all), so it cannot verify the WIDTH half of finding #5's
-// fix - which of the two copies of a button is actually visible once the bar
-// has folded is a live-browser-only concern, verified separately. What
-// these tests cover instead: the dead provider-mode <select> from finding #8
-// is genuinely gone; every real button (both the inline copy and its
-// overflow-menu duplicate) is present and calls the correct handler; the
-// overflow menu opens/closes correctly; and the two sets stay in step -
-// every collapsible action has a duplicate and every non-collapsible one
-// does not, which is the invariant that silently breaks the CSS wiring in a
-// way no visual glance at one window size would catch.
-//
-// The toolbar redesign added three more contracts worth pinning here,
-// because each is a behavioural claim rather than a visual one:
-//   - Help/Diagnostics/About moved off the bar into a Help MENU, so the
-//     bar must no longer expose them as top-level buttons, and the menu
-//     must actually reach all three;
-//   - the zoom control is a live readout whose accessible name still says
-//     what clicking it does, not just what it currently shows;
-//   - keyboard hints live in `title` and nowhere else - putting them in the
-//     accessible name would make a screen reader recite "Undo Ctrl+Z" and
-//     would break every by-name query in this file.
-
 function makeStore(): SceneStore {
-  // ADR-003 stage 3.1: fireIntent is the transport method SceneStore's own
-  // mutating intent call sites actually use now - see sceneStore.ts's own
-  // module doc.
   const transport = { subscribe: vi.fn(), intent: vi.fn(), fireIntent: vi.fn() } as unknown as WsTransport;
   return new SceneStore(transport);
 }
@@ -46,7 +19,6 @@ function ActiveOverlayProbe() {
   const overlays = useOverlays();
   return <output data-testid="active-overlay">{overlays.openSurface ?? ""}</output>;
 }
-
 function renderAppBar(store = makeStore()) {
   render(
     <OverlayProvider>
@@ -58,38 +30,52 @@ function renderAppBar(store = makeStore()) {
   );
   return { store };
 }
-
-// The lazy overflow menu replaces its loading dialog when the chunk resolves.
-// Re-query the dialog on each retry instead of searching the detached fallback.
-async function findOverflowButton(name: string) {
-  return waitFor(() =>
-    within(screen.getByRole("dialog", { name: "More toolbar actions" })).getByRole("button", { name }),
-  );
+async function openExportMenu(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "Export" }));
+  return screen.findByRole("menu", { name: "Export" });
+}
+async function openOverflowMenu(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
+  return screen.findByRole("menu", { name: "More toolbar actions" });
 }
 
-describe("AppBar", () => {
-  it("no longer renders the provider-mode select (finding #8) - Settings is the only provider surface", () => {
+describe("AppBar (UI-14 kit migration)", () => {
+  it("retains exact accessible names, grouping and the never-collapsible commands", () => {
     renderAppBar();
-    expect(screen.queryByRole("combobox")).toBeNull();
-    expect(screen.queryByText("Ollama (Local)")).toBeNull();
-    expect(screen.queryByTitle("Switching provider modes isn't available yet")).toBeNull();
-  });
-
-  it("Library, Save and Settings are present as plain toolbar buttons (the three that never collapse)", () => {
-    renderAppBar();
-    expect(screen.getByRole("button", { name: "Library" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
-    // None of the three sits in a collapsible group - confirmed by absence
-    // of the marker class, since "never collapses" IS "has no .appbar-tier".
-    for (const label of ["Library", "Save", "Settings"]) {
-      expect(
-        screen.getByRole("button", { name: label }).closest(".appbar-group")?.className,
-      ).not.toContain("appbar-tier");
+    const names = [
+      "Library", "Save", "Undo", "Redo", "Organize", "Pins", "View", "Plugins",
+      "Global Search", "Knowledge", "Builder", "Agent", "Help and diagnostics",
+      "Settings", "More toolbar actions",
+    ];
+    for (const name of names) {
+      expect(screen.getByRole("button", { name })).toBeInTheDocument();
     }
+    for (const name of ["Library", "Save", "Settings"]) {
+      expect(screen.getByRole("button", { name }).closest(".appbar-group"))
+        .not.toHaveClass("appbar-tier");
+    }
+    for (const name of ["Undo", "Redo", "Organize", "Pins", "View", "Plugins",
+      "Global Search", "Knowledge", "Builder", "Agent"]) {
+      expect(screen.getByRole("button", { name }).closest(".appbar-tier")).toBeInTheDocument();
+    }
+    expect(screen.queryByRole("combobox")).toBeNull();
   });
 
-  it("Save calls store.saveChat", async () => {
+  it("uses kit buttons, 16px md icon-buttons and tooltip shortcuts, not title attributes", () => {
+    renderAppBar();
+    for (const name of ["Undo", "Redo", "Organize", "Pins", "Global Search", "Settings"]) {
+      expect(screen.getByRole("button", { name })).toHaveClass("gl-icon-button--md");
+    }
+    expect(screen.getByRole("button", { name: "Save" })).toHaveClass("gl-button--ghost");
+    const undo = screen.getByRole("button", { name: "Undo" });
+    expect(undo).toHaveAttribute("aria-keyshortcuts", "Ctrl+Z");
+    fireEvent.focus(undo);
+    // The shortcut renders as separate Kbd caps ("Ctrl", "Z").
+    expect(screen.getByRole("tooltip")).toHaveTextContent(/Undo.*Ctrl.*Z/);
+    expect(screen.getByRole("toolbar").querySelector("[title]")).toBeNull();
+  });
+
+  it("Save dispatches through SceneStore", async () => {
     const user = userEvent.setup();
     const { store } = renderAppBar();
     const spy = vi.spyOn(store, "saveChat");
@@ -97,319 +83,109 @@ describe("AppBar", () => {
     expect(spy).toHaveBeenCalledOnce();
   });
 
-  it("exports verified workspace methods from the visible desktop toolbar", async () => {
+  it("Library, Pins and Settings reflect the overlay provider's real pressed state", async () => {
     const user = userEvent.setup();
-    const store = makeStore();
-    const verified = "# Graphlink workspace — scientific methods\n\n## Saved result\n";
-    const request = vi.spyOn(store, "exportWorkspaceMethods").mockResolvedValue(verified);
-    const downloadSpy = vi.spyOn(download, "downloadBlob").mockImplementation(() => {});
-    try {
-      renderAppBar(store);
-      const action = screen.getByRole("button", { name: "Export methods" });
-      expect(action.closest(".appbar-tier")).toBeInTheDocument();
-      await user.click(action);
-      await waitFor(() => expect(downloadSpy).toHaveBeenCalledOnce());
-      expect(request).toHaveBeenCalledOnce();
-      expect(downloadSpy.mock.calls[0][1]).toBe("graphlink-workspace-methods.md");
-      expect(await downloadSpy.mock.calls[0][0].text()).toBe(verified);
-    } finally {
-      downloadSpy.mockRestore();
+    renderAppBar();
+    for (const name of ["Library", "Pins", "Settings"]) {
+      const button = screen.getByRole("button", { name });
+      expect(button).toHaveAttribute("aria-pressed", "false");
+      await user.click(button);
+      expect(button).toHaveAttribute("aria-pressed", "true");
+      await user.click(button);
+      expect(button).toHaveAttribute("aria-pressed", "false");
     }
   });
 
-  it("downloads the server-verified workspace methods Markdown from the overflow menu", async () => {
+  it("exports server-verified methods from Export menu using the kit menuitem", async () => {
     const user = userEvent.setup();
     const store = makeStore();
-    const methods = "# Graphlink workspace — scientific methods\n\n## Result\n";
-    const request = vi.spyOn(store, "exportWorkspaceMethods").mockResolvedValue(methods);
+    const markdown = "# Graphlink workspace — scientific methods\n\n## Result\n";
+    const request = vi.spyOn(store, "exportWorkspaceMethods").mockResolvedValue(markdown);
     const saved = vi.spyOn(download, "downloadBlob").mockImplementation(() => {});
     try {
       renderAppBar(store);
-      await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
-      const action = await findOverflowButton("Export methods");
-      await user.click(action);
+      const menu = await openExportMenu(user);
+      expect(within(menu).queryByRole("button", { name: /Export methods/ })).toBeNull();
+      await user.click(within(menu).getByRole("menuitem", { name: "Export methods…" }));
       await waitFor(() => expect(saved).toHaveBeenCalledOnce());
       expect(request).toHaveBeenCalledOnce();
       expect(saved.mock.calls[0][1]).toBe("graphlink-workspace-methods.md");
-      expect(await saved.mock.calls[0][0].text()).toBe(methods);
-      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(await saved.mock.calls[0][0].text()).toBe(markdown);
+      expect(screen.queryByRole("menu", { name: "Export" })).toBeNull();
     } finally {
       saved.mockRestore();
     }
-  }, 15_000);
+  });
 
-  it("shows a workspace methods export failure instead of downloading anything", async () => {
+  it("leaves methods export enabled on an empty canvas so backend can explain any refusal", async () => {
     const user = userEvent.setup();
     const store = makeStore();
-    vi.spyOn(store, "exportWorkspaceMethods").mockRejectedValue(new Error("A receipt is damaged."));
+    const request = vi.spyOn(store, "exportWorkspaceMethods")
+      .mockRejectedValue(new Error("No verified results on this canvas."));
     const saved = vi.spyOn(download, "downloadBlob").mockImplementation(() => {});
     try {
       renderAppBar(store);
-      await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
-      await user.click(await findOverflowButton("Export methods"));
-      expect(await within(screen.getByRole("dialog")).findByRole("alert")).toHaveTextContent("A receipt is damaged.");
+      const menu = await openExportMenu(user);
+      const action = within(menu).getByRole("menuitem", { name: "Export methods…" });
+      expect(action).toBeEnabled();
+      await user.click(action);
+      await waitFor(() => expect(request).toHaveBeenCalledOnce());
       expect(saved).not.toHaveBeenCalled();
     } finally {
       saved.mockRestore();
     }
   });
 
-  it("Settings toggles real overlay-open state, not latched click state (audit B6)", async () => {
+  it("keeps Export PNG and methods as menu items instead of independent toolbar buttons", async () => {
     const user = userEvent.setup();
     renderAppBar();
-    const settings = screen.getByRole("button", { name: "Settings" });
-    expect(settings.className).not.toContain("checked");
-    await user.click(settings);
-    expect(settings.className).toContain("checked");
-    await user.click(settings);
-    expect(settings.className).not.toContain("checked");
+    expect(screen.queryByRole("button", { name: "Export PNG" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Export methods" })).toBeNull();
+    const menu = await openExportMenu(user);
+    expect(within(menu).getByRole("menuitem", { name: "Export PNG…" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: "Export methods…" })).toBeInTheDocument();
   });
 
-  describe("overflow menu (finding #5)", () => {
-    it("does not render until the trigger is clicked", () => {
-      renderAppBar();
-      expect(screen.queryByRole("dialog")).toBeNull();
-    });
-
-    it("opens on trigger click and closes on a second click", async () => {
-      const user = userEvent.setup();
-      renderAppBar();
-      const trigger = screen.getByRole("button", { name: "More toolbar actions" });
-      expect(trigger).toHaveAttribute("aria-expanded", "false");
-      // Popover (overlays.tsx) renders role="dialog", not role="menu" - the
-      // trigger's aria-haspopup must say so too, or a screen reader
-      // announces a control that opens something other than what it does.
-      expect(trigger).toHaveAttribute("aria-haspopup", "dialog");
-
-      await user.click(trigger);
-      expect(screen.getByRole("dialog")).toBeInTheDocument();
-      expect(trigger).toHaveAttribute("aria-expanded", "true");
-
-      await user.click(trigger);
-      expect(screen.queryByRole("dialog")).toBeNull();
-      expect(trigger).toHaveAttribute("aria-expanded", "false");
-    });
-
-    it("closes on Escape", async () => {
-      const user = userEvent.setup();
-      renderAppBar();
-      await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
-      await findOverflowButton("Pins");
-      expect(screen.getByRole("dialog")).toBeInTheDocument();
-      await user.keyboard("{Escape}");
-      expect(screen.queryByRole("dialog")).toBeNull();
-    });
-
-    it("contains a duplicate of every collapsible button", async () => {
-      const user = userEvent.setup();
-      renderAppBar();
-
-      await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
-      await findOverflowButton("Pins");
-      const menuItems = within(screen.getByRole("dialog"));
-
-      for (const label of [
-        "Export PNG",
-        "Export methods",
-        "Pins",
-        "Organize",
-        "View",
-        "Plugins",
-        "About",
-        "Help",
-        "Diagnostics",
-      ]) {
-        expect(menuItems.getByRole("button", { name: label })).toBeInTheDocument();
-      }
-    });
-
-    // R8a: every "plain" action (doesn't open an overlay of its own) is
-    // tested individually, not just one "representative" action - Export
-    // PNG's overflow copy shipped without its closeOverflow() call at
-    // first, and a test that only checked Organize passed anyway, since
-    // Organize happened to be correct. One shared assertion per action
-    // closes that exact gap for good, rather than re-opening it the next
-    // time a plain action is added.
-    it.each(["Export PNG"])(
-      "clicking the overflow copy of a plain action (%s) closes the menu",
-      async (label) => {
-        const user = userEvent.setup();
-        renderAppBar();
-        await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
-      await findOverflowButton("Pins");
-        await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: label }));
-        expect(screen.queryByRole("dialog")).toBeNull();
-      },
-    );
-
-    it("Organize's overflow copy opens preview without moving nodes", async () => {
-      const user = userEvent.setup();
-      const { store } = renderAppBar();
-      const organizeSpy = vi.spyOn(store, "organizeNodes");
-      await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
-      await findOverflowButton("Pins");
-      await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Organize" }));
-      expect(organizeSpy).not.toHaveBeenCalled();
-      expect(screen.getByTestId("active-overlay")).toHaveTextContent("organize");
-    });
-
-    it("clicking an overlay-opening item (Pins) opens that overlay and closes the menu", async () => {
-      const user = userEvent.setup();
-      renderAppBar();
-      await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
-      await findOverflowButton("Pins");
-      await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Pins" }));
-
-      expect(screen.queryByRole("dialog")).toBeNull();
-      // The inline Pins chip (still in the DOM, jsdom does not evaluate the
-      // CSS that would visually hide it) now reads real open state. Pins
-      // rather than About because About no longer HAS an inline copy - see
-      // the Help menu block below.
-      expect(screen.getByRole("button", { name: "Pins" }).className).toContain("checked");
-    });
-
-    it("the six overlay-opening overflow items (Pins/View/Plugins/About/Help/Diagnostics) carry aria-pressed, matching their inline copies' real-state contract", async () => {
-      // Cannot be driven to aria-pressed="true" through normal interaction
-      // in this test: OverlayProvider is single-open, so the instant any of
-      // these becomes the open surface, "toolbar-overflow" stops being it
-      // and this whole menu unmounts. This only pins the attribute exists
-      // (defaulting false) rather than being silently absent, the way it
-      // was before - see AppBar.tsx's own comment on why it's kept anyway.
-      const user = userEvent.setup();
-      renderAppBar();
-      await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
-      await findOverflowButton("Pins");
-      const menu = within(screen.getByRole("dialog"));
-      for (const label of ["Pins", "View", "Plugins", "About", "Help", "Diagnostics"]) {
-        expect(menu.getByRole("button", { name: label })).toHaveAttribute("aria-pressed", "false");
-      }
-    });
-
-    it("the overflow menu holds a copy of every collapsible action and of nothing else", async () => {
-      const user = userEvent.setup();
-      renderAppBar();
-      await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
-      await findOverflowButton("Pins");
-      const menu = screen.getByRole("dialog", { name: "More toolbar actions" });
-
-      // Groups collapse whole and all at once, so an inline action and its
-      // menu copy have to appear and disappear together (styles.css, the
-      // single @container rule).
-      const collapsible = [
-        "Undo",
-        "Redo",
-        "Organize",
-        "Pins",
-        "Export PNG",
-        "Export methods",
-        "View",
-        "Plugins",
-        "Global Search",
-        "Knowledge",
-        "Builder",
-        "Agent",
-      ];
-      for (const label of collapsible) {
-        const matches = screen.getAllByRole("button", { name: new RegExp(label) });
-        const inline = matches.find((el) => !menu.contains(el));
-        const copy = matches.find((el) => menu.contains(el));
-        expect(inline, `${label} has no inline copy`).toBeDefined();
-        expect(copy, `${label} has no overflow copy`).toBeDefined();
-        // The inline copy always sits in a group that CAN collapse.
-        expect(inline?.closest(".appbar-group")?.className).toContain("appbar-tier");
-      }
-
-      // Help/Diagnostics/About have no inline copy at all any more - they
-      // are reached from the Help menu at a normal desktop width. They still
-      // need their own entry here, because the tools cluster that hosts that
-      // menu is itself collapsible.
-      for (const label of ["Diagnostics", "Help", "About"]) {
-        expect(within(menu).getByRole("button", { name: label })).toBeInTheDocument();
-      }
-
-      // The three controls that never collapse have no duplicate, and their
-      // groups carry no .appbar-tier for the CSS to act on.
-      for (const label of ["Library", "Save", "Settings"]) {
-        expect(within(menu).queryByRole("button", { name: label })).toBeNull();
-        expect(
-          screen.getByRole("button", { name: label }).closest(".appbar-group")?.className,
-        ).not.toContain("appbar-tier");
-      }
-    });
-  });
-  // -- Toolbar redesign ----------------------------------------------------
-
-  describe("Help menu", () => {
-    it("Help, Diagnostics and About are no longer top-level toolbar buttons", () => {
-      renderAppBar();
-      for (const label of ["Help", "Diagnostics", "About"]) {
-        expect(screen.queryByRole("button", { name: label })).toBeNull();
-      }
-      // The one control that replaced all three. Icon-only, so its
-      // accessible name has to come from aria-label or it is nameless.
-      expect(screen.getByRole("button", { name: "Help and diagnostics" })).toBeInTheDocument();
-    });
-
-    it("opens a menu that reaches all three destinations", async () => {
-      const user = userEvent.setup();
-      renderAppBar();
-      const trigger = screen.getByRole("button", { name: "Help and diagnostics" });
-      expect(trigger).toHaveAttribute("aria-haspopup", "dialog");
-      expect(trigger).toHaveAttribute("aria-expanded", "false");
-
-      await user.click(trigger);
-      expect(trigger).toHaveAttribute("aria-expanded", "true");
-      const menu = within(screen.getByRole("dialog", { name: "Help and diagnostics" }));
-      for (const label of ["Help", "Diagnostics", "About"]) {
-        expect(menu.getByRole("button", { name: label })).toBeInTheDocument();
-      }
-    });
-
-    it("choosing a destination replaces the menu with that surface", async () => {
-      const user = userEvent.setup();
-      renderAppBar();
-      await user.click(screen.getByRole("button", { name: "Help and diagnostics" }));
-      await user.click(
-        within(screen.getByRole("dialog", { name: "Help and diagnostics" })).getByRole("button", {
-          name: "About",
-        }),
-      );
-      // OverlayProvider is single-open: opening "about" IS what closes this
-      // menu, so an assertion that the menu is gone is the observable proof
-      // the item dispatched - AppBar does not render AboutDialog itself.
-      expect(screen.queryByRole("dialog", { name: "Help and diagnostics" })).toBeNull();
-      expect(screen.getByRole("button", { name: "Help and diagnostics" })).toHaveAttribute(
-        "aria-expanded",
-        "false",
-      );
-    });
-
-    it("the trigger reads real open state, like every other chip on the bar", async () => {
-      const user = userEvent.setup();
-      renderAppBar();
-      const trigger = screen.getByRole("button", { name: "Help and diagnostics" });
-      expect(trigger.className).not.toContain("checked");
-      await user.click(trigger);
-      expect(trigger.className).toContain("checked");
-      await user.click(trigger);
-      expect(trigger.className).not.toContain("checked");
-    });
+  it("the overflow uses the same kit menu, duplicate actions and closes after a command", async () => {
+    const user = userEvent.setup();
+    renderAppBar();
+    const trigger = screen.getByRole("button", { name: "More toolbar actions" });
+    expect(trigger).toHaveAttribute("aria-haspopup", "menu");
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    const menu = await openOverflowMenu(user);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    for (const name of ["Undo", "Redo", "Organize", "Pins", "Export PNG…",
+      "Export methods…", "View", "Plugins", "Global Search", "Knowledge",
+      "Builder", "Agent", "Help", "Keyboard shortcuts", "Diagnostics", "About"]) {
+      expect(within(menu).getByRole("menuitem", { name })).toBeInTheDocument();
+    }
+    expect(within(menu).queryByRole("menuitem", { name: "Save" })).toBeNull();
+    expect(within(menu).queryByRole("menuitem", { name: "Settings" })).toBeNull();
+    await user.click(within(menu).getByRole("menuitem", { name: "Organize" }));
+    expect(screen.queryByRole("menu", { name: "More toolbar actions" })).toBeNull();
+    expect(screen.getByTestId("active-overlay")).toHaveTextContent("organize");
   });
 
-  describe("keyboard hints", () => {
-    // Hints belong in the tooltip and nowhere else: an aria-label of
-    // "Undo (Ctrl+Z)" makes a screen reader recite the binding on every
-    // focus, and would break every by-name query in this file.
-    it.each([
-      ["Library", "Library (Ctrl+L)"],
-      ["Save", "Save (Ctrl+S)"],
-      ["Undo", "Undo (Ctrl+Z)"],
-      ["Redo", "Redo (Ctrl+Shift+Z)"],
-      ["Global Search", "Global Search (Ctrl+F)"],
-    ])("%s names its binding in the tooltip only", (name, title) => {
-      renderAppBar();
-      const button = screen.getByRole("button", { name });
-      expect(button).toHaveAttribute("title", title);
-    });
+  it("overflow Escape and keyboard focus restore to trigger", async () => {
+    const user = userEvent.setup();
+    renderAppBar();
+    await openOverflowMenu(user);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "More toolbar actions" })).toBeNull();
+    expect(screen.getByRole("button", { name: "More toolbar actions" })).toHaveFocus();
+  });
+
+  it("Help and diagnostics is a kit menu with all four destinations", async () => {
+    const user = userEvent.setup();
+    renderAppBar();
+    const help = screen.getByRole("button", { name: "Help and diagnostics" });
+    expect(help).toHaveAttribute("aria-haspopup", "menu");
+    await user.click(help);
+    const menu = screen.getByRole("menu", { name: "Help and diagnostics" });
+    for (const name of ["Help", "Keyboard shortcuts", "Diagnostics", "About"]) {
+      expect(within(menu).getByRole("menuitem", { name })).toBeInTheDocument();
+    }
+    await user.click(within(menu).getByRole("menuitem", { name: "About" }));
+    expect(screen.getByTestId("active-overlay")).toHaveTextContent("about");
   });
 });

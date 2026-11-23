@@ -261,8 +261,8 @@ async function captureTheme(page, theme, capture, interrupted) {
     "Library", "View", "Plugins", "Pins", "Global Search", "Knowledge",
     "Builder", "Agent", "Organize",
   ];
-  // "Export methods" triggers a download, not a panel. The app-bar shot
-  // already includes that button without invoking filesystem side effects.
+  // Export PNG and Export methods now live in a kit menu; capture its
+  // entry points without invoking either filesystem side effect.
   for (const name of barSurfaces) {
     await shot(`App bar: ${name}`, `appbar-${slug(name)}`, async () => {
       await dismiss(page);
@@ -272,17 +272,23 @@ async function captureTheme(page, theme, capture, interrupted) {
     });
     await dismiss(page);
   }
+  await shot("Export menu", "appbar-export-menu", async () => {
+    await toolbarButton(page, "Export").click();
+    await page.getByRole("menu", { name: "Export" }).waitFor();
+    return {};
+  });
+  await dismiss(page);
   await shot("Help and diagnostics menu", "appbar-help-menu", async () => {
     await toolbarButton(page, "Help and diagnostics").click();
-    await page.getByRole("dialog", { name: "Help and diagnostics" }).waitFor();
+    await page.getByRole("menu", { name: "Help and diagnostics" }).waitFor();
     return {};
   });
   await dismiss(page);
   for (const item of ["Help", "Diagnostics", "About"]) {
     await shot(`Help and diagnostics: ${item}`, `appbar-help-${slug(item)}`, async () => {
       await toolbarButton(page, "Help and diagnostics").click();
-      await page.getByRole("dialog", { name: "Help and diagnostics" })
-        .getByRole("button", { name: item, exact: true }).click();
+      await page.getByRole("menu", { name: "Help and diagnostics" })
+        .getByRole("menuitem", { name: item, exact: true }).click();
       await page.getByRole("dialog", { name: item, exact: true }).waitFor();
       return {};
     });
