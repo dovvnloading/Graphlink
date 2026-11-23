@@ -541,8 +541,9 @@ export function DocumentViewPanel({
           <IconButton icon="search" size="sm" label="Find in document"
             onClick={() => isSearchOpen ? onSearchClose() : setIsSearchOpen(true)}
             disabled={!content} aria-expanded={isSearchOpen} />
-          <IconButton icon="copy" size="sm" label="Copy content"
+          <IconButton icon="copy" size="sm" label={copied ? "Copied" : "Copy content" }
             onClick={onCopy} disabled={!content} aria-live="polite" />
+          {copied && <span className="document-view-visually-hidden" role="status">Copied</span>}
           <IconButton icon={isExpanded ? "minimize" : "maximize"} size="sm"
             label={isExpanded ? "Minimize document view" : "Maximize document view"}
             onClick={() => setIsExpanded((expanded) => !expanded)}
