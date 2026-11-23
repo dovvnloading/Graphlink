@@ -1,0 +1,227 @@
+/* UI-15: token-only composer kit surface. Doubled shell specificity overrides
+   pre-migration canvas layout rules without altering that shared stylesheet. */
+.composer-dock.composer-dock {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-2);
+  box-sizing: border-box;
+  width: min(100%, 760px);
+  padding: var(--gl-space-3);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-lg);
+  background: var(--gl-surface-overlay);
+  box-shadow: var(--gl-shadow-popover);
+}
+.composer-dock.composer-dock:focus-within {
+  border-color: var(--gl-focus-ring);
+  box-shadow: var(--gl-shadow-popover);
+}
+.composer-dock .composer-input-wrap { display: flex; min-width: 0; }
+.composer-dock .composer-input {
+  flex: 1;
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  min-height: 42px;
+  max-height: 200px;
+  padding: var(--gl-space-2);
+  field-sizing: content;
+  overflow-y: auto;
+  resize: none;
+  font: inherit;
+  font-size: var(--gl-text-base);
+  line-height: var(--gl-leading-base);
+  color: var(--gl-surface-text-primary);
+  background: transparent;
+  border: none;
+  border-radius: var(--gl-radius-sm);
+}
+.composer-dock .composer-input::placeholder { color: var(--gl-surface-text-muted); }
+.composer-dock .composer-input:focus-visible { outline: 2px solid var(--gl-focus-ring); outline-offset: 2px; }
+.composer-dock .composer-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--gl-space-1);
+  min-height: var(--gl-control-h-lg);
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+}
+.composer-dock .composer-controls-start,
+.composer-dock .composer-rail-end {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--gl-space-1);
+  min-width: 0;
+}
+.composer-dock .composer-rail-end { margin-inline-start: auto; }
+.composer-dock .composer-reply-target,
+.composer-dock .composer-synthesize-target,
+.composer-dock .composer-agent-target {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-2);
+  min-width: 0;
+  padding: var(--gl-space-1) var(--gl-space-2);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-md);
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-surface-inset);
+  font-size: var(--gl-text-xs);
+}
+.composer-dock .composer-reply-target-label,
+.composer-dock .composer-synthesize-target-label,
+.composer-dock .composer-agent-target-label {
+  flex: none;
+  font-size: var(--gl-text-2xs);
+  font-weight: 600;
+  color: var(--gl-surface-text-secondary);
+}
+.composer-dock .composer-reply-target-preview,
+.composer-dock .composer-agent-target-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-dock .composer-synthesize-target-label { flex: 1; }
+.composer-dock .composer-attachment-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gl-space-2);
+}
+.composer-dock .composer-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gl-space-1);
+  min-width: 0;
+  max-width: 100%;
+  padding: var(--gl-space-0-5) var(--gl-space-2);
+  border-radius: var(--gl-radius-full);
+  border: 1px solid var(--gl-surface-border);
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-surface-inset);
+  font-size: var(--gl-text-xs);
+}
+.composer-dock .composer-attachment-chip-kind { color: var(--gl-surface-text-muted); font-size: var(--gl-text-2xs); }
+.composer-dock .composer-attachment-chip-name {
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-dock .composer-model-menu,
+.composer-dock .composer-reasoning-menu {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+.composer-dock .composer-model-menu > .gl-icon,
+.composer-dock .composer-reasoning-menu > .gl-icon {
+  position: absolute;
+  inset-inline-start: var(--gl-space-2);
+  pointer-events: none;
+  color: var(--gl-surface-text-secondary);
+}
+.composer-dock .composer-menu-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gl-space-1);
+  max-width: 220px;
+  min-height: var(--gl-control-h-md);
+  padding: var(--gl-space-1) var(--gl-space-2) var(--gl-space-1) var(--gl-space-8);
+  border: 1px solid transparent;
+  border-radius: var(--gl-radius-sm);
+  background: transparent;
+  font-size: var(--gl-text-xs);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+.composer-dock .composer-menu-button:hover:not(:disabled) { background: var(--gl-neutral-button-hover); }
+.composer-dock .composer-menu-button:focus-visible { outline: 2px solid var(--gl-focus-ring); outline-offset: 2px; }
+.composer-dock .composer-send-button.composer-send-button {
+  flex: none;
+  border-radius: var(--gl-radius-full);
+}
+.composer-dock .composer-stream-preview {
+  position: absolute;
+  inset-inline: 0;
+  bottom: calc(100% + var(--gl-space-2));
+  display: flex;
+  align-items: flex-start;
+  gap: var(--gl-space-2);
+  max-height: 160px;
+  overflow-y: auto;
+  padding: var(--gl-space-3);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-lg);
+  color: var(--gl-surface-text-secondary);
+  background: var(--gl-surface-overlay);
+  box-shadow: var(--gl-shadow-popover);
+  font-size: var(--gl-text-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.composer-dock .composer-stream-preview .gl-spinner { flex: none; }
+.composer-dock .composer-model-capability-warning {
+  margin: 0;
+  padding: var(--gl-space-2);
+  border-inline-start: 2px solid var(--gl-semantic-status-warning);
+  border-radius: var(--gl-radius-sm);
+  background: var(--gl-surface-inset);
+  color: var(--gl-surface-text-primary);
+  font-size: var(--gl-text-xs);
+}
+.composer-dock .composer-agent-error { margin: 0; color: var(--gl-semantic-status-error); font-size: var(--gl-text-xs); }
+.composer-dock .composer-agent-target-note { color: var(--gl-surface-text-secondary); font-size: var(--gl-text-2xs); }
+.composer-dock .composer-compare-count { color: var(--gl-surface-text-muted); font-size: var(--gl-text-2xs); }
+.model-picker-empty { padding: var(--gl-space-2); color: var(--gl-surface-text-secondary); font-size: var(--gl-text-xs); }
+.model-picker-search {
+  min-width: 0;
+  width: 100%;
+  padding: var(--gl-space-2);
+  font: inherit;
+  font-size: var(--gl-text-sm);
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-surface-field);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+}
+.model-picker-search:focus-visible { outline: 2px solid var(--gl-focus-ring); outline-offset: 2px; }
+.model-picker-results { display: grid; overflow-y: auto; min-width: 0; }
+.model-picker-choice { display: grid; gap: var(--gl-space-1); min-width: 0; }
+.model-picker-meta { display: flex; flex-wrap: wrap; gap: var(--gl-space-1); }
+.model-picker-badge,
+.model-picker-origin,
+.model-picker-size {
+  color: var(--gl-surface-text-secondary);
+  font-size: var(--gl-text-2xs);
+}
+.model-picker-setup { width: 100%; }
+.reasoning-popover { width: min(340px, 90vw); max-height: 60vh; overflow-y: auto; }
+.model-picker-popover { width: min(380px, 90vw); }
+.reasoning-option { width: 100%; }
+.reasoning-option-label { font-weight: 600; }
+.reasoning-option-description { color: var(--gl-surface-text-secondary); font-size: var(--gl-text-2xs); }
+.token-counter-summary { white-space: nowrap; font-size: var(--gl-text-2xs); }
+.token-counter-popout {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--gl-space-3);
+  max-width: min(360px, 90vw);
+}
+.token-counter-row { display: grid; gap: var(--gl-space-1); }
+.token-counter-label { color: var(--gl-surface-text-secondary); font-size: var(--gl-text-2xs); }
+.token-counter-value { color: var(--gl-surface-text-primary); font-size: var(--gl-text-xs); font-weight: 600; }
+@media (max-width: 560px) {
+  .composer-dock .composer-rail-end { width: 100%; justify-content: flex-end; }
+  .composer-dock .composer-menu-button { max-width: 148px; }
+}
