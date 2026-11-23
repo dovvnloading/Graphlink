@@ -191,7 +191,7 @@ def test_publish_denial_scope_stale_run_or_invalid_capture_does_not_mutate(monke
     result = asyncio.run(registry.invoke(_call("browser.publish", capture_id="nonexistent"), ctx))
     assert result.is_error and "not found" in result.content
     assert set(document.nodes) == {agent.id}
-    assert document.command_log == []
+    assert not document.command_log
 
 
 def test_picker_creates_an_editable_harness_node_and_undoes(monkeypatch):
