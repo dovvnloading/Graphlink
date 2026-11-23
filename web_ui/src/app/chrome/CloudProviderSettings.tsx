@@ -1,8 +1,11 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useId, useState } from "react";
 import type { AppSettingsState } from "../../lib/bridge-core/generated/app-settings-state";
 import type { WsTransport } from "../../lib/ws/transport";
-import { AppBarIcon } from "./AppBarIcon";
-import { SearchIcon } from "./SearchIcon";
+import { Select } from "../ui/Select";
+import { TextField } from "../ui/TextField";
+import { Button } from "../ui/Button";
+import { FieldGroup, FormRow } from "../ui/Field";
+import { InlineAlert } from "../ui/InlineAlert";
 import "./CloudProviderSettings.css";
 
 type Provider = AppSettingsState["apiProviders"][number];
@@ -32,109 +35,17 @@ function ProviderPicker({ state, viewed, onSelect }: {
   viewed: Provider;
   onSelect: (id: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [highlight, setHighlight] = useState(0);
-  const trigger = useRef<HTMLButtonElement>(null);
-  const input = useRef<HTMLInputElement>(null);
-  const list = useRef<HTMLDivElement>(null);
-  const listId = useId();
-  const terms = query.trim().toLowerCase().split(/\s+/);
-  const groups = new Map<string, Provider[]>();
-  for (const provider of state.apiProviders) {
-    const searchText = [provider.label, provider.id, provider.group, provider.description].join(" ").toLowerCase();
-    if (!terms.every((term) => searchText.includes(term))) continue;
-    const group = groups.get(provider.group) ?? [];
-    group.push(provider);
-    groups.set(provider.group, group);
-  }
-  const results = [...groups.values()].flat();
-  const highlighted = results[Math.min(highlight, results.length - 1)];
-  const optionId = (provider: Provider) => `${listId}-${provider.keySlot}`;
-  useEffect(() => {
-    if (open) input.current?.focus();
-  }, [open]);
-  useEffect(() => {
-    if (open) list.current?.querySelector('[data-highlight="true"]')?.scrollIntoView?.({ block: "nearest" });
-  }, [highlighted?.id, open]);
-
-  const close = () => {
-    setOpen(false);
-    trigger.current?.focus();
-  };
-  const select = (provider: Provider) => {
-    if (provider.id !== viewed.id) onSelect(provider.id);
-    close();
-  };
-
   return (
-    <div className="cloud-provider-picker" onBlur={(event) => {
-      if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
-    }}>
-      <span className="settings-field-label">API Provider</span>
-      <button ref={trigger} type="button" className="custom-select-trigger cloud-provider-trigger"
-        aria-label={`Choose provider, ${viewed.label}`} aria-expanded={open}
-        onClick={() => {
-          setQuery("");
-          setHighlight(0);
-          setOpen(!open);
-        }}>
-        <span className="cloud-provider-choice">
-          <span className="cloud-provider-group">{viewed.group}</span>
-          <strong>{viewed.label}</strong>
-          <span className="cloud-provider-description">{viewed.description}</span>
-        </span>
-        <AppBarIcon name="chevron" />
-      </button>
-      {open && (
-        <div className="cloud-directory">
-          <div className="cloud-provider-search">
-            <SearchIcon />
-            <input ref={input} type="text" role="combobox" aria-label="Search providers"
-              aria-expanded aria-autocomplete="list" aria-controls={listId}
-              aria-activedescendant={highlighted ? optionId(highlighted) : undefined}
-              placeholder="Search providers or model families…" value={query}
-              onChange={(event) => { setQuery(event.target.value); setHighlight(0); }}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  close();
-                } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                  event.preventDefault();
-                  const offset = event.key === "ArrowDown" ? 1 : -1;
-                  setHighlight((index) => Math.max(0, Math.min(index + offset, results.length - 1)));
-                } else if (event.key === "Enter" && highlighted && !event.nativeEvent.isComposing) {
-                  event.preventDefault();
-                  select(highlighted);
-                }
-              }} />
-          </div>
-          <div className="cloud-provider-results" ref={list} id={listId} role="listbox" aria-label="Providers">
-            {[...groups].map(([group, providers]) => (
-              <div key={group} role="group" aria-label={group}>
-                <div className="cloud-provider-group" aria-hidden="true">{group}</div>
-                {providers.map((provider) => {
-                  const isActive = state.providerMode === "API Endpoint" && state.activeApiProvider === provider.id;
-                  const hasKey = state.apiKeyConfigured[provider.keySlot] || state.apiKeySource[provider.keySlot] === "environment";
-                  return (
-                    <button key={provider.id} type="button" role="option" tabIndex={-1}
-                      id={optionId(provider)} aria-selected={provider.id === viewed.id}
-                      data-highlight={provider.id === highlighted?.id}
-                      className="cloud-provider-option"
-                      onMouseDown={(event) => event.preventDefault()} onClick={() => select(provider)}>
-                      <span><strong>{provider.label}</strong><small>{provider.description}</small></span>
-                      {isActive ? <span className="cloud-route-active">Active</span> :
-                        hasKey ? <span className="cloud-credential-state">Key available</span> : null}
-                    </button>
-                  );
-                })}
-              </div>
-            ))}
-          </div>
-          {!results.length && <p role="status" className="cloud-empty">No providers match “{query}”. Try a lab or model family.</p>}
-        </div>
-      )}
-    </div>
+    <FieldGroup title="API provider" description="Choose a provider or a custom endpoint.">
+      <FormRow label="API provider" layout="inline">
+        <Select ariaLabel="API provider" value={viewed.id} onChange={onSelect}
+          options={state.apiProviders.map((provider) => ({
+            value: provider.id, label: provider.label,
+            description: provider.description,
+            group: provider.group,
+          }))} />
+      </FormRow>
+    </FieldGroup>
   );
 }
 
@@ -153,8 +64,6 @@ function ProviderForm({ state, provider, transport }: {
   const [expanded, setExpanded] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const [saving, setSaving] = useState(false);
-  const modelHintId = useId();
-  const endpointHintId = useId();
   const textListId = useId();
   const imageListId = useId();
   const overridesId = useId();
@@ -197,113 +106,96 @@ function ProviderForm({ state, provider, transport }: {
   };
   return (
     <>
-      <section className="cloud-settings-section" aria-label="Connection">
+      <FieldGroup title="Connection">
         <div className="cloud-section-heading">
-          <h3>Connection</h3>
           {provider.docsUrl && <a href={provider.docsUrl} target="_blank" rel="noreferrer">
             Setup guide
-            <svg aria-hidden="true" viewBox="0 0 16 16" className="cloud-link-icon">
-              <path d="M8.5 3.5h4v4m0-4-6 6M6 4H3.5v8.5H12V10" />
-            </svg>
+
           </a>}
         </div>
         {provider.editableEndpoint ? (
-          <label className="settings-field">
-            <span className="settings-field-label">Base URL</span>
-            <input aria-label="Base URL" aria-describedby={provider.endpointHint ? endpointHintId : undefined}
-              className="settings-select cloud-id" type="url" spellCheck={false} autoComplete="off"
-              placeholder={provider.defaultBaseUrl || "https://…"} value={endpoint}
-              onChange={(event) => setEndpoint(event.target.value)} />
-            {provider.endpointHint && <small id={endpointHintId} className="settings-field-hint">{provider.endpointHint}</small>}
-          </label>
+          <TextField label="Base URL" type="url" spellCheck={false}
+            autoComplete="off" mono description={provider.endpointHint}
+            placeholder={provider.defaultBaseUrl || "https://…"} value={endpoint}
+            onValueChange={setEndpoint} />
         ) : provider.defaultBaseUrl && (
           <div className="cloud-fixed-endpoint"><span>Endpoint</span><code>{provider.defaultBaseUrl}</code></div>
         )}
-        <label className="settings-field">
-          <span className="cloud-section-heading">
-            <span className="settings-field-label">API Key</span>
-            {source === "environment" && !endpointChanged && <span className="cloud-credential-state">From environment</span>}
-            {source === "stored" && !endpointChanged && <span className="cloud-credential-state">Saved key</span>}
-          </span>
-          <input type="password" className="settings-select" autoComplete="new-password" spellCheck={false}
-            aria-label="API Key" value={key}
-            placeholder={existingKey && !endpointChanged ? "Leave blank to keep the current key" : "Enter your API key…"}
-            onChange={(event) => setKey(event.target.value)} />
-          {optionalKey ? <small className="settings-field-hint">Optional for this local endpoint.</small> :
-            endpointChanged && existingKey ?
-            <small className="settings-field-hint" role="status">Enter a key for the new endpoint.</small> :
-            provider.envVar && (!provider.editableEndpoint || draftUrl === normalizedEndpoint(provider.defaultBaseUrl)) && (
-              <small className="settings-field-hint">Environment variable: <code>{provider.envVar}</code></small>
-            )}
-        </label>
-      </section>
+        <TextField label="API key" type="password" suffix={{ type: "password" }}
+          autoComplete="new-password" spellCheck={false}
+          placeholder={existingKey && !endpointChanged ? "Leave blank to keep the current key" : "Enter your API key…"}
+          value={key} onValueChange={setKey} />
+        {source === "environment" && !endpointChanged && <span className="cloud-credential-state">From environment</span>}
+        {source === "stored" && !endpointChanged && <span className="cloud-credential-state">Saved key</span>}
+        {optionalKey ? <small className="settings-field-hint">Optional for this local endpoint.</small> :
+          endpointChanged && existingKey ?
+          <small className="settings-field-hint" role="status">Enter a key for the new endpoint.</small> :
+          provider.envVar && (!provider.editableEndpoint || draftUrl === normalizedEndpoint(provider.defaultBaseUrl)) && (
+            <small className="settings-field-hint">Environment variable: <code>{provider.envVar}</code></small>
+          )}
+      </FieldGroup>
 
-      <section className="cloud-settings-section" aria-label="Models">
+      <FieldGroup title="Models">
         <div className="cloud-section-heading">
-          <h3>Models</h3>
+
           {provider.supportsCatalog && !bedrockRuntime && <button type="button" className="settings-button cloud-small-button"
             disabled={!canConnect || catalogLoading} onClick={() => transport.fireIntent(
               "app-settings", "loadApiModels", [provider.id, key.trim(), endpoint.trim()],
-            )}>{catalogLoading ? "Loading models…" : "Load available models"}</button>}
+            )}>{catalogLoading ? "Loading models…" : "Load available models"}</Button>}
         </div>
         {bedrockRuntime && <p className="cloud-catalog-status" role="status">Bedrock Runtime does not provide a models list. Enter the model or inference profile ID from AWS.</p>}
         {provider.supportsCatalog && !bedrockRuntime && state.apiCatalogStatus !== "idle" && (showCatalog || state.apiCatalogStatus !== "success") && (
           <p className="cloud-catalog-status" role="status" data-level={state.apiCatalogStatus}>{state.apiCatalogMessage}</p>
         )}
-        <label className="settings-field">
-          <span className="settings-field-label">Default text model</span>
-          <input aria-label="Default text model" aria-describedby={modelHintId}
-            className="settings-select cloud-id" list={textListId} spellCheck={false} autoComplete="off"
-            value={mainModel} placeholder="Select or enter a model ID" onChange={(event) => setMainModel(event.target.value)} />
-          <small id={modelHintId} className="settings-field-hint">Used for chat, titles, charts, and web tasks.</small>
-        </label>
+        <TextField label="Default text model" list={textListId} mono spellCheck={false}
+          autoComplete="off" placeholder="Select or enter a model ID"
+          description="Used for chat, titles, charts, and web tasks."
+          value={mainModel} onValueChange={setMainModel} />
         <datalist id={textListId}>{textModels.map((id) => <option key={id} value={id} />)}</datalist>
-      </section>
+      </FieldGroup>
 
       <div className="cloud-model-overrides">
-        <button type="button" className="cloud-overrides-toggle" aria-expanded={expanded} aria-controls={overridesId}
+        <Button variant="ghost" className="cloud-overrides-toggle" aria-expanded={expanded} aria-controls={overridesId}
           onClick={() => setExpanded(!expanded)}>
-          <AppBarIcon name="chevron" /><span>Per-task models</span>
+          <span>Per-task models</span>
           <small>{count ? `${count} assigned` : "Optional"}</small>
-        </button>
+        </Button>
         <div id={overridesId} hidden={!expanded}>
           {expanded && <div className="cloud-task-grid">
             {textTasks.map(({ id, label }) => (
-              <label key={id} className="settings-field">
-                <span className="settings-field-label">{label}</span>
-                <input type="text" className="settings-select cloud-id" list={textListId} spellCheck={false}
-                  autoComplete="off" value={overrides[id] ?? ""} placeholder="Use default text model"
-                  onChange={(event) => setOverrides({ ...overrides, [id]: event.target.value })} />
-              </label>
+              <TextField key={id} label={label} type="text" mono list={textListId}
+                autoComplete="off" value={overrides[id] ?? ""} placeholder="Use default text model"
+                onValueChange={(value) => setOverrides({ ...overrides, [id]: value })} />
             ))}
-            {provider.supportsImageGeneration && <label className="settings-field">
-              <span className="settings-field-label">Image generation</span>
-              <input className="settings-select cloud-id" list={imageListId} value={imageModel} spellCheck={false}
-                autoComplete="off" placeholder="Enter an image model ID" onChange={(event) => setImageModel(event.target.value)} />
+            {provider.supportsImageGeneration && <>
+              <TextField label="Image generation" list={imageListId} mono spellCheck={false}
+                autoComplete="off" value={imageModel} placeholder="Enter an image model ID"
+                onValueChange={setImageModel} />
               <datalist id={imageListId}>{imageModels.map((id) => <option key={id} value={id} />)}</datalist>
-            </label>}
+            </>}
           </div>}
         </div>
       </div>
 
-      {confirmReset && <p className="cloud-catalog-status" data-level="error" role="alert">
-        This clears all saved provider keys, endpoints, and model assignments. It cannot be undone.
-      </p>}
+      {confirmReset && <div role="alert">
+        <InlineAlert variant="warning" title="Reset API settings?"
+          body="This clears all saved provider keys, endpoints, and model assignments. It cannot be undone." />
+      </div>}
       <div className="settings-button-row cloud-form-actions">
         {confirmReset ? <>
-          <button type="button" className="settings-button" onClick={() => setConfirmReset(false)}>Cancel</button>
-          <button type="button" className="settings-button" onClick={() => {
+          <Button variant="secondary" onClick={() => setConfirmReset(false)}>Cancel</Button>
+          <Button variant="secondary" onClick={() => {
             transport.fireIntent("app-settings", "resetApiSettings", []);
             setKey(""); setEndpoint(provider.defaultBaseUrl); setMainModel(""); setOverrides({});
             setImageModel(""); setConfirmReset(false);
-          }}>Confirm Reset</button>
-        </> : <button type="button" className="cloud-reset-button" onClick={() => setConfirmReset(true)}>
-          Reset API Settings
-        </button>}
-        <button type="button" className="settings-button settings-button-primary"
+          }}>Confirm reset</Button>
+        </> : <Button variant="ghost" size="sm" className="cloud-reset-button" onClick={() => setConfirmReset(true)}>
+          Reset API settings
+        </Button>}
+        <Button variant="primary"
           disabled={!canConnect || !mainModel.trim() || saving || confirmReset} onClick={save}>
           {saving ? "Saving…" : "Save and activate"}
-        </button>
+        </Button>
       </div>
     </>
   );
@@ -315,12 +207,14 @@ export function CloudProviderSettings({ state, transport }: { state: AppSettings
   const cloudActive = state.providerMode === "API Endpoint";
   return (
     <div className="settings-general-page cloud-settings">
+      <h2 className="settings-page-title">API endpoint</h2>
+      <p className="settings-page-description">Connect hosted models and configure per-task defaults.</p>
       <div className="cloud-route">
         <span>Active route</span>
         <strong>{cloudActive ? active?.label ?? state.activeApiProvider : state.providerMode}</strong>
         {!cloudActive && active && state.apiKeySource[active.keySlot] && state.apiKeySource[active.keySlot] !== "none" && (
-          <button type="button" className="cloud-use-saved" onClick={() =>
-            transport.fireIntent("app-settings", "setProviderMode", ["API Endpoint"])}>Use saved {active.label}</button>
+          <Button variant="ghost" size="sm" className="cloud-use-saved" onClick={() =>
+            transport.fireIntent("app-settings", "setProviderMode", ["API Endpoint"])}>Use saved {active.label}</Button>
         )}
       </div>
       {viewed && <ProviderPicker state={state} viewed={viewed} onSelect={(id) =>
