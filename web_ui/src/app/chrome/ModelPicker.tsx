@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 import { Popover, useOverlays } from "../overlays/overlays";
 import { Icon } from "../ui/icons/Icon";
+import { Button } from "../ui/Button";
 import { MenuButton, MenuGroup, MenuItem, MenuSeparator } from "../ui/Menu";
 import type { ComposerStore, PickerModel } from "./composerStore";
 
@@ -116,21 +117,20 @@ export function ModelPicker({ store, name = "model" }: { store: ComposerStore; n
       {!!error && (
         <>
           <p className="model-picker-empty" role="alert">{error}</p>
-          <button type="button" className="model-picker-setup"
+          <Button variant="ghost" type="button" className="model-picker-setup"
             onClick={() => {
               searchRef.current?.focus();
               setRetryCount((count) => count + 1);
-            }}>Retry model list</button>
+            }}>Retry model list</Button>
         </>
       )}
       <div className="model-picker-results" aria-label="Model choices">
         {matches.map((model) => {
           const selected = activeProvider === model.provider && model.modelId === composer.route.modelId;
           return (
-            <button
+            <Button variant="ghost"
               key={JSON.stringify([model.provider, model.modelId])}
-              type="button"
-              className={`reasoning-option model-picker-option${selected ? " active" : ""}`}
+                            className={`reasoning-option model-picker-option${selected ? " active" : ""}`}
               aria-pressed={selected}
               disabled={!canChat(model)}
               aria-label={!canChat(model)
@@ -157,7 +157,7 @@ export function ModelPicker({ store, name = "model" }: { store: ComposerStore; n
                 </span>
               </span>
               {selected && <Icon name="check" size="sm" />}
-            </button>
+            </Button>
           );
         })}
         {!loading && !error && matches.length === 0 && (
@@ -172,16 +172,15 @@ export function ModelPicker({ store, name = "model" }: { store: ComposerStore; n
           </p>
         )}
       </div>
-      <button
-        type="button"
-        className="model-picker-setup"
+      <Button variant="ghost"
+                className="model-picker-setup"
         onClick={() => {
           store.openOllamaSettings();
           overlays.open("settings", "dialog");
         }}
       >
         Set up a local model
-      </button>
+      </Button>
     </Popover>
   );
 }
