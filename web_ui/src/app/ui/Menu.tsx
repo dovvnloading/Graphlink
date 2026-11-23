@@ -484,6 +484,11 @@ export interface ContextMenuProps {
   ignoreRef?: RefObject<HTMLElement | null>;
 }
 
+type ContextTriggerEvents = {
+  onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void;
+  onKeyDown?: (event: ReactKeyboardEvent<HTMLElement>) => void;
+};
+
 export function ContextMenu({
   children, trigger, position, onClose, className, ariaLabel, ignoreRef,
 }: ContextMenuProps) {
@@ -493,27 +498,44 @@ export function ContextMenu({
     if (position === undefined) setUncontrolledPosition(null);
     onClose?.();
   };
+  const openAtPointer = (event: ReactMouseEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.focus();
+    setUncontrolledPosition({ x: event.clientX, y: event.clientY });
+  };
+  const openAtKeyboard = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (!isMenuKey(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const active = document.activeElement;
+    const rect = (active instanceof HTMLElement ? active : event.currentTarget).getBoundingClientRect();
+    setUncontrolledPosition({ x: rect.left + 16, y: rect.top + 16 });
+  };
   if (trigger === undefined) {
     return location ? <Menu position={location} onClose={close}
       className={className} ariaLabel={ariaLabel} ignoreRef={ignoreRef}>{children}</Menu> : null;
   }
+  // Decorate the actual trigger rather than wrapping a button in an interactive
+  // span: this preserves its accessible role, focus and native click behavior.
+  const triggerElement = isValidElement<ContextTriggerEvents>(trigger)
+    ? cloneElement(trigger, {
+      onContextMenu: (event: ReactMouseEvent<HTMLElement>) => {
+        trigger.props.onContextMenu?.(event);
+        if (!event.defaultPrevented) openAtPointer(event);
+      },
+      onKeyDown: (event: ReactKeyboardEvent<HTMLElement>) => {
+        trigger.props.onKeyDown?.(event);
+        if (!event.defaultPrevented) openAtKeyboard(event);
+      },
+    })
+    : <button type="button" className="gl-menu-button"
+        onContextMenu={openAtPointer} onKeyDown={openAtKeyboard}>{trigger}</button>;
   return (
-    <span className="gl-context-menu-target"
-      onContextMenu={(event) => {
-        event.preventDefault();
-        setUncontrolledPosition({ x: event.clientX, y: event.clientY });
-      }}
-      onKeyDown={(event) => {
-        if (!isMenuKey(event)) return;
-        event.preventDefault();
-        event.stopPropagation();
-        const active = document.activeElement;
-        const rect = (active instanceof HTMLElement ? active : event.currentTarget).getBoundingClientRect();
-        setUncontrolledPosition({ x: rect.left + 16, y: rect.top + 16 });
-      }}>
-      {trigger}
+    <>
+      {triggerElement}
       {location && <Menu position={location} onClose={close}
         className={className} ariaLabel={ariaLabel} ignoreRef={ignoreRef}>{children}</Menu>}
-    </span>
+    </>
   );
 }
