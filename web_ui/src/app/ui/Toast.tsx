@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "./Button";
 import { Disclosure } from "./Disclosure";
@@ -79,7 +79,7 @@ export function Toast({ title, variant, details, action, onDismiss, className }:
   const exitTimer = useRef<number | null>(null);
   const remaining = useRef(TRANSIENT_NOTIFICATION_MS - EXIT_MS);
 
-  function close() {
+  const close = useCallback(() => {
     if (closingRef.current) return;
     closingRef.current = true;
     setClosing(true);
@@ -88,7 +88,7 @@ export function Toast({ title, variant, details, action, onDismiss, className }:
     } else {
       exitTimer.current = window.setTimeout(() => onDismiss?.(), EXIT_MS);
     }
-  }
+  }, [onDismiss]);
 
   useEffect(() => () => {
     if (exitTimer.current !== null) window.clearTimeout(exitTimer.current);
@@ -105,10 +105,7 @@ export function Toast({ title, variant, details, action, onDismiss, className }:
       window.clearTimeout(timer);
       remaining.current = Math.max(0, remaining.current - (Date.now() - started));
     };
-    // close is recreated on render, but only changes to these state values
-    // should change the clock. onDismiss is stable for backend notifications.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [variant, hovered, focused, onDismiss]);
+  }, [variant, hovered, focused, close]);
 
   return (
     <div role={variant === "error" ? "alert" : "status"}

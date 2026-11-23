@@ -1,5 +1,5 @@
 import {
-  Children, cloneElement, useEffect, useId, useLayoutEffect, useRef, useState,
+  Children, cloneElement, useCallback, useEffect, useId, useLayoutEffect, useRef, useState,
   type FocusEvent, type MouseEvent, type ReactElement,
 } from "react";
 import { createPortal } from "react-dom";
@@ -35,14 +35,14 @@ export function Tooltip({ label, shortcut, children, placement = "bottom" }: Too
   const tip = useRef<HTMLDivElement | null>(null);
   const pointerFocus = useRef(false);
 
-  function cancelDelay() {
+  const cancelDelay = useCallback(() => {
     if (timeout.current !== null) window.clearTimeout(timeout.current);
     timeout.current = null;
-  }
-  function hide() {
+  }, []);
+  const hide = useCallback(() => {
     cancelDelay();
     setVisible(false);
-  }
+  }, [cancelDelay]);
 
   useEffect(() => {
     const onPointerDown = () => { pointerFocus.current = true; hide(); };
@@ -61,7 +61,7 @@ export function Tooltip({ label, shortcut, children, placement = "bottom" }: Too
       document.removeEventListener("pointerdown", onPointerDown, true);
       document.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [visible]);
+  }, [visible, hide]);
 
   useEffect(() => () => {
     if (timeout.current !== null) window.clearTimeout(timeout.current);
