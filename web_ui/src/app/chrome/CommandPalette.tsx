@@ -1,28 +1,86 @@
 import { useReactFlow } from "@xyflow/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SceneStore } from "../canvas/sceneStore";
-import { useOverlays } from "../overlays/overlays";
-import { buildCommands } from "./commands";
+import { Dialog, useOverlays } from "../overlays/overlays";
+import { Icon } from "../ui/icons/Icon";
+import { Kbd } from "../ui/Kbd";
+import { buildCommands, type CommandCategory, type PaletteCommand } from "./commands";
+import "./CommandPalette.css";
 
-/**
- * The command palette (Qt-removal plan R2.4) - command-palette island's
- * successor. Opens via the overlay system ("palette", dialog tier, so it
- * gets a scrim + focus trap for free) - Ctrl/Cmd+K is the conventional
- * trigger, wired in App.tsx as a document-level shortcut.
- */
+const CATEGORIES: CommandCategory[] = ["Canvas", "Graph", "Navigate", "App"];
+const RECENTS_KEY = "graphlink:command-palette:recent";
+function readRecentIds(): string[] {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(RECENTS_KEY) || "[]");
+    return Array.isArray(value) ? value.filter((id): id is string => typeof id === "string").slice(0, 8) : [];
+  } catch { return []; }
+}
+function saveRecentIds(ids: string[]) {
+  try { localStorage.setItem(RECENTS_KEY, JSON.stringify(ids)); }
+  catch { /* Palette remains fully usable without storage. */ }
+}
+
+/** Match fuzzy subsequences while preserving the real character offsets for highlighting. */
+function positionsIn(value: string, term: string): number[] | null {
+  const needle = term.toLowerCase().replace(/\s+/g, "");
+  if (!needle) return [];
+  const indices: number[] = [];
+  let index = 0;
+  for (let i = 0; i < value.length && index < needle.length; i++) {
+    if (value[i].toLowerCase() === needle[index]) {
+      indices.push(i);
+      index++;
+    }
+  }
+  return index === needle.length ? indices : null;
+}
+
+function resultScore(command: PaletteCommand, term: string): { score: number; alias?: string } | null {
+  const q = term.toLowerCase().trim();
+  if (!q) return { score: 0 };
+  const start = command.name.toLowerCase().indexOf(q);
+  if (start >= 0) return { score: 200 - start };
+  const namePositions = positionsIn(command.name, q);
+  if (namePositions) {
+    const span = namePositions[namePositions.length - 1] - namePositions[0];
+    return { score: 120 - span };
+  }
+  for (const alias of command.aliases) {
+    const direct = alias.toLowerCase().indexOf(q);
+    if (direct >= 0) return { score: 90 - direct, alias };
+    const positions = positionsIn(alias, q);
+    if (positions) return { score: 50 - positions[positions.length - 1] + positions[0], alias };
+  }
+  return null;
+}
+
+function Highlight({ value, query }: { value: string; query: string }) {
+  const positions = positionsIn(value, query);
+  if (!positions?.length) return <>{value}</>;
+  const highlighted = new Set(positions);
+  const groups: { text: string; selected: boolean }[] = [];
+  for (let index = 0; index < value.length; index++) {
+    const selected = highlighted.has(index);
+    const last = groups[groups.length - 1];
+    if (last?.selected === selected) last.text += value[index];
+    else groups.push({ text: value[index], selected });
+  }
+  return <>{groups.map((group, index) => group.selected
+    ? <mark key={index} className="palette-match">{group.text}</mark>
+    : <span key={index}>{group.text}</span>)}</>;
+}
+
+type Result = { command: PaletteCommand; category: CommandCategory | "Recent"; score: number; alias?: string };
+
+/** Search, recents, icons and shortcuts share a single keyboard-operated listbox. */
 export function CommandPalette({ store }: { store: SceneStore }) {
   const overlays = useOverlays();
   const rf = useReactFlow();
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [recentIds, setRecentIds] = useState<string[]>(readRecentIds);
   const resultsRef = useRef<HTMLUListElement>(null);
   const isOpen = overlays.isOpen("palette");
-
-  // Reset local state during render on the false->true transition (not in
-  // an effect - the react-hooks/set-state-in-effect rule, and the same
-  // pattern the legacy command-palette island's own wasVisible tracking
-  // used for exactly this "reset on fresh open" need).
   const [wasOpen, setWasOpen] = useState(isOpen);
   if (isOpen !== wasOpen) {
     setWasOpen(isOpen);
@@ -32,110 +90,91 @@ export function CommandPalette({ store }: { store: SceneStore }) {
     }
   }
 
-  useEffect(() => {
-    if (isOpen) inputRef.current?.focus();
-  }, [isOpen]);
-
   const commands = useMemo(() => buildCommands(store, rf, overlays), [store, rf, overlays]);
+  const results = useMemo((): Result[] => {
+    const term = query.trim();
+    const matches = commands.filter((command) => command.enabled()).flatMap((command) => {
+      const match = resultScore(command, term);
+      return match ? [{ command, category: command.category, ...match }] : [];
+    });
+    if (term) return matches.sort((a, b) => b.score - a.score || a.command.name.localeCompare(b.command.name));
+    return matches.map((result) => ({
+      ...result, category: recentIds.includes(result.command.id) ? "Recent" as const : result.command.category,
+    })).sort((a, b) => {
+      if (a.category === "Recent" || b.category === "Recent")
+        return a.category === b.category
+          ? recentIds.indexOf(a.command.id) - recentIds.indexOf(b.command.id)
+          : a.category === "Recent" ? -1 : 1;
+      return CATEGORIES.indexOf(a.category) - CATEGORIES.indexOf(b.category)
+        || a.command.name.localeCompare(b.command.name);
+    });
+  }, [commands, query, recentIds]);
 
-  const filtered = useMemo(() => {
-    const term = query.toLowerCase().trim();
-    const candidates = commands.filter((c) => c.enabled());
-    if (!term) return candidates;
-    return candidates.filter(
-      (c) => c.name.toLowerCase().includes(term) || c.aliases.some((a) => a.includes(term)),
-    );
-  }, [commands, query]);
-
-  const clampedIndex = Math.min(selectedIndex, Math.max(filtered.length - 1, 0));
-
-  // Arrow-key selection only moved a data index - past roughly a dozen
-  // results the highlighted row scrolled out of the visible list with
-  // nothing to bring it back, so Enter could run a command the user could
-  // no longer see. "nearest" scrolls only when the row is actually outside
-  // the viewport, so real reordering doesn't also cause a viewport jump.
+  const activeIndex = Math.min(selectedIndex, Math.max(results.length - 1, 0));
   useEffect(() => {
-    resultsRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
-  }, [clampedIndex]);
-
-  if (!isOpen) return null;
+    if (isOpen) resultsRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest" });
+  }, [activeIndex, isOpen, results]);
 
   function execute(id: string) {
-    // Close the palette FIRST, then run the command. The overlay system is
-    // single-open: closing sets openSurface to null, so if the command's
-    // own effect is to open a different surface (e.g. "Open Settings"),
-    // that open() call - which runs second - is the one that wins. Doing
-    // it in the other order let close() always run last and silently
-    // undo whatever the command had just opened.
-    const command = commands.find((c) => c.id === id);
+    const command = commands.find((item) => item.id === id);
+    if (!command) return;
+    const next = [id, ...recentIds.filter((item) => item !== id)].slice(0, 8);
+    setRecentIds(next);
+    saveRecentIds(next);
+    // The overlay manager is single-open. Closing first keeps new dialogs open.
     overlays.close();
-    command?.run();
+    command.run();
   }
 
   function onKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "ArrowDown") {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
-      setSelectedIndex((i) => Math.min(i + 1, Math.max(filtered.length - 1, 0)));
-    } else if (event.key === "ArrowUp") {
-      event.preventDefault();
-      setSelectedIndex((i) => Math.max(i - 1, 0));
+      setSelectedIndex((index) => Math.max(0,
+        Math.min(results.length - 1, index + (event.key === "ArrowDown" ? 1 : -1))));
     } else if (event.key === "Enter") {
       event.preventDefault();
-      const command = filtered[clampedIndex];
-      if (command) execute(command.id);
+      const result = results[activeIndex];
+      if (result) execute(result.command.id);
     }
-    // Escape is handled globally by the overlay system.
   }
 
+  if (!isOpen) return null;
   return (
-    <div className="overlay-scrim" onPointerDown={(e) => e.target === e.currentTarget && overlays.close()}>
-      <div role="dialog" aria-modal="true" aria-label="Command palette" className="palette-shell">
-        <input
-          ref={inputRef}
-          className="palette-search-input"
-          type="text"
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setSelectedIndex(0);
-          }}
-          onKeyDown={onKeyDown}
-          placeholder="Type a command…"
-          aria-label="Search commands"
-          autoComplete="off"
-          spellCheck={false}
-        />
-        <ul className="palette-results" role="listbox" aria-label="Commands" ref={resultsRef}>
-          {filtered.length === 0 && <li className="palette-empty">No matching commands</li>}
-          {filtered.map((command, index) => (
-            // ADR-012 stage 12.3: this <li>'s onClick is a mouse-only
-            // affordance duplicating what the <input>'s own onKeyDown above
-            // already does via a virtual selection (selectedIndex/
-            // clampedIndex, ArrowUp/Down + Enter) while real DOM focus stays
-            // on the input the whole time. Giving the <li> itself its own
-            // tabIndex/onKeyDown would add a SECOND, uncoordinated keyboard
-            // path with no roving-tabindex/aria-activedescendant to keep it
-            // in sync with clampedIndex - Tab would jump real focus to
-            // whichever <li> is first in DOM order, not the one currently
-            // highlighted, and Enter there would run the WRONG command.
-            // The existing input-driven path is the real, tested keyboard
-            // equivalent (see the file's own 5-test suite); this mirrors
-            // PluginPicker.tsx's identical role=listbox/option pattern,
-            // which also leaves its <li> unfocusable for the same reason.
-            // eslint-disable-next-line jsx-a11y/click-events-have-key-events
-            <li
-              key={command.id}
-              role="option"
-              aria-selected={index === clampedIndex}
-              className={"palette-result" + (index === clampedIndex ? " selected" : "")}
-              onMouseEnter={() => setSelectedIndex(index)}
-              onClick={() => execute(command.id)}
-            >
-              {command.name}
-            </li>
-          ))}
-        </ul>
-      </div>
-    </div>
+    <Dialog name="palette" title="Command palette" size="md" className="palette-dialog">
+      <input type="search" className="palette-search-input" autoComplete="off" spellCheck={false}
+        placeholder="Type a command…" aria-label="Search commands"
+        aria-controls="palette-results" aria-activedescendant={results[activeIndex] ? `palette-option-${results[activeIndex].command.id}` : undefined}
+        value={query} onChange={(event) => { setQuery(event.target.value); setSelectedIndex(0); }}
+        onKeyDown={onKeyDown} />
+      <ul id="palette-results" className="palette-results" role="listbox" aria-label="Commands" ref={resultsRef}>
+        {results.length === 0 && <li role="presentation" className="palette-empty">No matching commands</li>}
+        {results.map((result, index) => <ReactCommandRow key={result.command.id}
+          item={result} groupStart={index === 0 || results[index - 1].category !== result.category}
+          selected={index === activeIndex} onHover={() => setSelectedIndex(index)}
+          onExecute={() => execute(result.command.id)} query={query} />)}
+      </ul>
+      <p className="palette-hint"><Kbd shortcut="↑" /> <Kbd shortcut="↓" /> to navigate · <Kbd shortcut="Enter" /> to run</p>
+    </Dialog>
   );
+}
+
+function ReactCommandRow({ item, groupStart, selected, onHover, onExecute, query }: {
+  item: Result; groupStart: boolean; selected: boolean;
+  onHover: () => void; onExecute: () => void; query: string;
+}) {
+  return <>
+    {groupStart && <li role="presentation" className="palette-category">{item.category}</li>}
+    {/* The input retains focus and owns Arrow/Enter; hover and click mirror it. */}
+    {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events */}
+    <li id={`palette-option-${item.command.id}`} role="option" aria-selected={selected}
+      className={"palette-result" + (selected ? " selected" : "")}
+      onMouseEnter={onHover} onClick={onExecute}>
+      <Icon name={item.command.icon} size="md" />
+      <span className="palette-result-label">
+        <Highlight value={item.command.name} query={query} />
+        {item.alias && <span className="palette-result-alias"><Highlight value={item.alias} query={query} /></span>}
+      </span>
+      {item.command.shortcut && <Kbd shortcut={item.command.shortcut} />}
+    </li>
+  </>;
 }
