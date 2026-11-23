@@ -1243,7 +1243,7 @@ describe("Fal.ai settings page", () => {
   it("searches current model metadata, selects an endpoint and inspects pricing without submitting it", async () => {
     const { user, intents, push } = await goToFal();
     await user.type(screen.getByPlaceholderText("e.g. text to video, music, image editing"), "text to video");
-    await user.click(screen.getByRole("button", { name: "Search Catalog" }));
+    await user.click(screen.getByRole("button", { name: "Search catalog" }));
     expect(intents).toContainEqual(["app-settings", "searchFalModels", ["text to video", "", 20, ""]]);
 
     act(() => push({
@@ -1260,11 +1260,11 @@ describe("Fal.ai settings page", () => {
       }),
     }));
     expect(screen.getByText("H3 Max")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Use This Model" }));
+    await user.click(screen.getByRole("button", { name: "Use this model" }));
     expect(screen.getByPlaceholderText("fal-ai/flux/schnell")).toHaveValue("minimax/h3-max/text-to-video");
-    await user.click(screen.getByRole("button", { name: "Inspect Selected Model / Schema" }));
-    await user.click(screen.getByRole("button", { name: "Check Current Pricing" }));
-    await user.click(screen.getByRole("button", { name: "Estimate Cost" }));
+    await user.click(screen.getByRole("button", { name: "Inspect selected model / schema" }));
+    await user.click(screen.getByRole("button", { name: "Check current pricing" }));
+    await user.click(screen.getByRole("button", { name: "Estimate cost" }));
     expect(intents).toContainEqual(["app-settings", "inspectFalModel", ["minimax/h3-max/text-to-video"]]);
     expect(intents).toContainEqual(["app-settings", "getFalModelPricing", ["minimax/h3-max/text-to-video"]]);
     expect(intents).toContainEqual([
@@ -1277,18 +1277,18 @@ describe("Fal.ai settings page", () => {
     const { user, intents, push } = await goToFal();
     expect(screen.getByText(/No API key configured/)).toBeInTheDocument();
     await user.type(screen.getByPlaceholderText("Paste key (never returned to the browser)"), "private-key");
-    await user.click(screen.getByRole("button", { name: "Save API Key" }));
+    await user.click(screen.getByRole("button", { name: "Save API key" }));
     expect(intents).toContainEqual(["app-settings", "setFalApiKey", ["private-key"]]);
     act(() => push({ ...snapshot, activeSection: "fal.ai", falApiKeySource: "stored" }));
     expect(screen.getByText(/An API key is saved/)).toBeInTheDocument();
     expect(screen.queryByText("private-key")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Clear Stored Key" }));
+    await user.click(screen.getByRole("button", { name: "Clear stored key" }));
     expect(intents).toContainEqual(["app-settings", "clearFalApiKey", []]);
   });
 
   it("submits arbitrary model JSON through its dedicated billed queue intent", async () => {
     const { user, intents } = await goToFal();
-    await user.click(screen.getByRole("button", { name: "Submit to Queue" }));
+    await user.click(screen.getByRole("button", { name: "Submit to queue" }));
     expect(await screen.findByRole("dialog", { name: "Submit billable queue request?" })).toBeVisible();
     expect(intents.some(([, intent]) => intent === "submitFalJob")).toBe(false);
     await user.click(screen.getByRole("button", { name: "Submit request" }));
@@ -1306,7 +1306,7 @@ describe("Fal.ai settings page", () => {
     const argsEditor = screen.getByRole("textbox", { name: "Fal model arguments JSON" });
     await user.clear(argsEditor);
     await user.type(argsEditor, "not valid json");
-    await user.click(screen.getByRole("button", { name: "Submit to Queue" }));
+    await user.click(screen.getByRole("button", { name: "Submit to queue" }));
     expect(screen.getByText(/must both be valid JSON objects/)).toBeInTheDocument();
     expect(intents.some((entry) => entry[1] === "submitFalJob")).toBe(false);
   });
@@ -1324,7 +1324,7 @@ describe("Fal.ai settings page", () => {
     }));
     await user.click(screen.getByText(/fal-ai\/flux\/schnell/));
     expect(screen.getByText(/Open generated asset/)).toHaveAttribute("href", "https://v3.fal.media/files/output.png");
-    await user.click(screen.getByRole("button", { name: "Refresh / Fetch Result" }));
+    await user.click(screen.getByRole("button", { name: "Refresh / fetch result" }));
     expect(intents).toContainEqual([
       "app-settings", "refreshFalJob",
       ["fal-ai/flux/schnell", "764cabcf-b745-4b3e-ae38-1200304cf45b", true],
