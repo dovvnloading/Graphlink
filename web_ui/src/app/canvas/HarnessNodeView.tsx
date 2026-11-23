@@ -576,7 +576,11 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
   const submittedApprovalRef = useRef("");
   const approvalActionsRef = useRef<HTMLDivElement>(null);
   const flow = useReactFlow();
-  const [activityOpen, setActivityOpen] = useState(false);
+  // Derive the default open state during render; streaming events must not cause an extra commit.
+  const [activityChoice, setActivityChoice] = useState<{ runId: string; open: boolean } | null>(null);
+  const activityOpen = activityChoice?.runId === data.harnessRunId
+    ? activityChoice.open : running && data.harnessActivity.length > 0;
+  const setActivityOpen = (open: boolean) => setActivityChoice({ runId: data.harnessRunId, open });
   const activityListRef = useRef<HTMLDivElement>(null);
   const activityErrorCount = data.harnessActivity.filter((row) => row.outcome === "error").length;
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
@@ -658,21 +662,8 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
     return () => observer.disconnect();
   }, [data.harnessAwaitingApproval, data.harnessApprovalId, collapsed, revealApprovalActions]);
 
-  // "What is it doing?" is the question a running agent raises, and the
-  // answer was one click away behind a closed <details>. Opened once, on
-  // the first activity of a run - once only, so a deliberate collapse
-  // stays collapsed for the rest of that run instead of springing back
-  // open on the next tool call.
-  const autoOpenedForRun = useRef<string | null>(null);
-  useEffect(() => {
-    if (!running || data.harnessActivity.length === 0) return;
-    if (autoOpenedForRun.current === data.harnessRunId) return;
-    autoOpenedForRun.current = data.harnessRunId;
-    setActivityOpen(true);
-    // Opening the log changes the approval panel's vertical position AFTER
-    // its first layout pass. Recheck once against the new measured rect.
-    revealApprovalActions();
-  }, [data.harnessActivity.length, data.harnessRunId, running, revealApprovalActions]);
+  // A new run opens its activity naturally through the derived open state.
+  // A manual collapse remains closed until the run ID changes.
 
   // Same follow-the-log behavior as PlanNodeView's activity list: pinned
   // to the newest row only while running and only while open.

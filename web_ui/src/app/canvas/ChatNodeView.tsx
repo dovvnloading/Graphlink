@@ -835,7 +835,7 @@ export const ChatNodeView = memo(function ChatNodeView({
             )}
             {data.dockedChildren.length > 0 && (
               <Tooltip label="Docked items">
-                <span className="chat-node-docked-badge"><Icon name="folder" size="sm" />{data.dockedChildren.length}</span>
+                <span className="chat-node-docked-badge" aria-label="Docked items"><Icon name="folder" size="sm" />{data.dockedChildren.length}</span>
               </Tooltip>
             )}
             {data.isBranchSynthesis && (

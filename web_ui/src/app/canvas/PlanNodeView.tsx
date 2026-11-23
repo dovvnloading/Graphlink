@@ -155,7 +155,11 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
   const running = data.builderStatus === "running" || data.builderStatus === "planning";
   const resumable = RESUMABLE.has(data.builderStatus);
   const startLabel = data.builderStatus === "awaiting_start" ? "Start build" : "Resume";
-  const [activityOpen, setActivityOpen] = useState(false);
+  // An automatic disclosure must not add a second node-view commit when activity updates.
+  const [activityChoice, setActivityChoice] = useState<{ runId: string; open: boolean } | null>(null);
+  const activityOpen = activityChoice?.runId === data.builderRunId
+    ? activityChoice.open : running && data.builderActivity.length > 0;
+  const setActivityOpen = (open: boolean) => setActivityChoice({ runId: data.builderRunId, open });
   const activityListRef = useRef<HTMLDivElement>(null);
   const activityErrorCount = data.builderActivity.filter((row) => row.outcome !== "ok").length;
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
