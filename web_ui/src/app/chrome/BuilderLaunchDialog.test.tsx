@@ -292,7 +292,7 @@ describe("BuilderLaunchDialog", () => {
 
     // 30/150000/900 matches no preset combination - none should read active.
     for (const label of ["Quick", "Standard", "Extended"]) {
-      expect(screen.getByRole("button", { name: label })).toHaveAttribute("aria-checked", "false");
+      expect(screen.getByRole("radio", { name: label })).toHaveAttribute("aria-checked", "false");
     }
 
     await user.click(screen.getByRole("radio", { name: "Extended" }));
