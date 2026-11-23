@@ -73,19 +73,19 @@ describe("intent error toasts (UI-13b)", () => {
     const transport = new WsTransport("ws://localhost/test", { webSocketFactory: () => socket });
     const show = vi.spyOn(toast, "show").mockReturnValue("toast-test");
     transport.connect();
-    socket.onopen?.();
+    (socket.onopen as (() => void) | null)?.();
     const unsubscribe = registerIntentErrors(transport);
 
     const first = transport.request("scene", "exportScientificWorkspaceMethods", []);
     const id = JSON.parse(socket.send.mock.calls[0][0] as string).id as number;
-    socket.onmessage?.({ data: JSON.stringify({ kind: "error", id, error: "No verified methods." }) });
+    (socket.onmessage as ((event: { data: string }) => void) | null)?.({ data: JSON.stringify({ kind: "error", id, error: "No verified methods." }) });
     await expect(first).rejects.toThrow("No verified methods.");
     expect(show).toHaveBeenCalledOnce();
 
     unsubscribe();
     const second = transport.request("scene", "exportScientificWorkspaceMethods", []);
     const secondId = JSON.parse(socket.send.mock.calls[1][0] as string).id as number;
-    socket.onmessage?.({ data: JSON.stringify({ kind: "error", id: secondId, error: "No results." }) });
+    (socket.onmessage as ((event: { data: string }) => void) | null)?.({ data: JSON.stringify({ kind: "error", id: secondId, error: "No results." }) });
     await expect(second).rejects.toThrow("No results.");
     expect(show).toHaveBeenCalledOnce();
     transport.dispose();
