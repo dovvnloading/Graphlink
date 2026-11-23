@@ -1336,6 +1336,67 @@ describe("Composer reply target (ADR-002 Workstream 1)", () => {
   });
 });
 
+describe("UI-15 composer context and disabled explanations", () => {
+  it("starts a blank graph with the empty-canvas prompt", () => {
+    const { store } = makeStore();
+    render(<OverlayProvider>
+      {/* @ts-expect-error - fixture store */}
+      <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+    </OverlayProvider>);
+    expect(screen.getByPlaceholderText("Ask anything to start a graph…")).toBeInTheDocument();
+  });
+
+  it("replies to a selected node, exposes its kind and clears the selection", async () => {
+    const user = userEvent.setup();
+    const { store } = makeStore();
+    const { sceneStore, setSelectedNodeId } = makeSceneStore({
+      selectedNodeId: "n1",
+      scene: { nodes: [{ id: "n1", kind: "chat", title: "First idea", content: "An earlier message" }] },
+    });
+    render(<OverlayProvider>
+      {/* @ts-expect-error - fixture store */}
+      <Composer store={store} sceneStore={sceneStore} />
+    </OverlayProvider>);
+    const chip = screen.getByLabelText("Replying to");
+    expect(chip).toHaveTextContent("First idea");
+    expect(chip.querySelector("svg")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Reply to “An earlier message”…")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Clear reply target" }));
+    expect(setSelectedNodeId).toHaveBeenCalledWith(null);
+  });
+
+  it("uses the graph prompt for an existing scene without a reply target", () => {
+    const { store } = makeStore();
+    const { sceneStore } = makeSceneStore({
+      scene: { nodes: [{ id: "n1", kind: "chat", title: "First idea", content: "Hello" }] },
+    });
+    render(<OverlayProvider>
+      {/* @ts-expect-error - fixture store */}
+      <Composer store={store} sceneStore={sceneStore} />
+    </OverlayProvider>);
+    expect(screen.getByPlaceholderText("Ask about this graph…")).toBeInTheDocument();
+  });
+
+  it("explains disabled knowledge and send controls without native titles", () => {
+    const { store } = makeStore({ composer: {
+      draft: { ...initialComposerState.draft, text: "Send this" },
+      request: { ...initialComposerState.request, canSend: true },
+      route: { ...initialComposerState.route, modelId: "" },
+    } });
+    render(<OverlayProvider>
+      {/* @ts-expect-error - fixture store */}
+      <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+    </OverlayProvider>);
+    const knowledge = screen.getByRole("button", { name: "Use knowledge" });
+    expect(knowledge).toBeDisabled();
+    expect(knowledge).not.toHaveAttribute("title");
+    const send = screen.getByRole("button", { name: "Send message" });
+    expect(send).toBeDisabled();
+    fireEvent.focus(send.parentElement!);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Choose a model first");
+  });
+});
+
 describe("Composer synthesize target (ADR-002 Workstream 1)", () => {
   it("renders nothing when no synthesize target is pending", () => {
     const { store } = makeStore();
