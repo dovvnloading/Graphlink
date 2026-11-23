@@ -19,11 +19,11 @@ const MODE_OLLAMA_LOCAL = "Ollama (Local)";
 // Ollama has no image-generation path).
 const OLLAMA_TASKS = ["task_chat", "task_title", "task_chart", "task_web_validate", "task_web_summarize"] as const;
 const OLLAMA_TASK_LABELS: Record<(typeof OLLAMA_TASKS)[number], string> = {
-  task_chat: "Chat Model",
-  task_title: "Chat Naming Model",
-  task_chart: "Chart Generation Model",
-  task_web_validate: "Web Content Validation Model",
-  task_web_summarize: "Web Content Summarization Model",
+  task_chat: "Chat model",
+  task_title: "Chat naming model",
+  task_chart: "Chart generation model",
+  task_web_validate: "Web content validation model",
+  task_web_summarize: "Web content summarization model",
 };
 const OLLAMA_MODELS_DATALIST_ID = "settings-ollama-scanned-models";
 // Mirror the backend strict model-ID grammar; server validation is authoritative.
@@ -137,7 +137,7 @@ function OllamaTaskField({
           </span>
           <Button variant="secondary"
             disabled={!draftId.trim() || draftId.trim() === value}
-            onClick={saveCustomId}>Save {OLLAMA_TASK_LABELS[task]} ID</Button>
+            onClick={saveCustomId}>Save {OLLAMA_TASK_LABELS[task].toLowerCase()} ID</Button>
         </div>
       )}
       {incompatible && (
