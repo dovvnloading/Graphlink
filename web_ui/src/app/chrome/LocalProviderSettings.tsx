@@ -20,7 +20,7 @@ export const REASONING_LEVEL_OPTIONS = [
 export function ProviderModeSwitch({ mode, state, transport }: { mode: string; state: AppSettingsState; transport: WsTransport }) {
   const isActive = state.providerMode === mode;
   return (
-    <Card title="Provider mode" actions={!isActive ? (
+    <Card {...{ title: "Provider mode" }} actions={!isActive ? (
       <Button variant="primary" size="sm"
         onClick={() => transport.fireIntent("app-settings", "setProviderMode", [mode])}>
         Use this provider
