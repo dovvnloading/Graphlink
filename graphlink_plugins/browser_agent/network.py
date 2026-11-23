@@ -82,10 +82,11 @@ def _fetch_verified(url: str, pinned_ip: str, headers: dict[str, str]) -> Browse
         response = connection.getresponse()
         if response.getheader("Content-Length"):
             try:
-                if int(response.getheader("Content-Length") or "0") > MAX_RESOURCE_BYTES:
-                    raise BrowserPolicyError("Browser resource is larger than 2 MiB.")
+                declared_length = int(response.getheader("Content-Length") or "0")
             except ValueError as exc:
                 raise BrowserPolicyError("Invalid browser response length.") from exc
+            if declared_length > MAX_RESOURCE_BYTES:
+                raise BrowserPolicyError("Browser resource is larger than 2 MiB.")
         body = response.read(MAX_RESOURCE_BYTES + 1)
         if len(body) > MAX_RESOURCE_BYTES:
             raise BrowserPolicyError("Browser resource exceeded 2 MiB.")
