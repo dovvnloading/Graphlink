@@ -324,7 +324,7 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
           : data.builderStatus === "awaiting_approval" ? <StatusPill status="Waiting for approval" />
           : data.builderStatus === "stopped" ? <StatusPill status="Cancelled" />
           : <Badge>{STATUS_LABELS[data.builderStatus] ?? data.builderStatus}</Badge>}
-        {data.builderMode === "autopilot" && <Badge className="plan-node-mode-chip">Autopilot</Badge>}
+        {data.builderMode.toLowerCase() === "autopilot" && <Badge className="plan-node-mode-chip">Autopilot</Badge>}
       </div>
       {data.builderStatusDetail && (
         <p className="plan-node-detail" role={data.builderStatus === "failed" ? "alert" : undefined}>
@@ -439,8 +439,8 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
           <InlineAlert variant="warning" {...{ title: `The Builder wants to run: ${data.builderApprovalToolName}` }}
             body={<pre className="plan-node-approval-summary">{data.builderApprovalSummary}</pre>} />
           <div className="plan-node-approval-actions">
-            <Button size="sm" variant="secondary" onClick={data.onApproveTool}>Approve</Button>
-            <Button size="sm" id="plan-node-deny-approval" onClick={data.onDenyTool}>Deny</Button>
+            <Button size="sm" variant="secondary" className="nodrag" onClick={data.onApproveTool}>Approve</Button>
+            <Button size="sm" id="plan-node-deny-approval" className="nodrag" onClick={data.onDenyTool}>Deny</Button>
           </div>
         </div>
       )}
