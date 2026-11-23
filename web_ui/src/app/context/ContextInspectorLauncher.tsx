@@ -3,6 +3,10 @@ import type { SceneStore } from "../canvas/sceneStore";
 import type { ComposerStore } from "../chrome/composerStore";
 import type { WsTransport } from "../../lib/ws/transport";
 import "./ContextInspector.css";
+import { OverlayProviderIfMissing, Popover, useOverlays } from "../overlays/overlays";
+import { IconButton } from "../ui/IconButton";
+import { Spinner } from "../ui/Spinner";
+import { Tooltip } from "../ui/Tooltip";
 import type { ContextPreview } from "./ContextInspectorPanel";
 
 const LazyContextInspectorPanel = lazy(() =>
@@ -26,10 +30,26 @@ export function ContextInspectorLauncher({
   useKnowledge?: boolean | null;
   targetNodeId?: string | null;
 }) {
+  return (
+    <OverlayProviderIfMissing>
+      <ContextInspectorSurface sceneStore={sceneStore} composerStore={composerStore}
+        transport={transport} useKnowledge={useKnowledge} targetNodeId={targetNodeId} />
+    </OverlayProviderIfMissing>
+  );
+}
+
+function ContextInspectorSurface({
+  sceneStore, composerStore, transport, useKnowledge, targetNodeId,
+}: {
+  sceneStore: SceneStore; composerStore: ComposerStore; transport: WsTransport;
+  useKnowledge: boolean | null; targetNodeId?: string | null;
+}) {
+  const overlays = useOverlays();
+  const name = "context-inspector";
+  const isOpen = overlays.isOpen(name);
   const scene = useSyncExternalStore(sceneStore.subscribe, sceneStore.getScene);
   const selectedId = useSyncExternalStore(sceneStore.subscribe, sceneStore.getSelectedNodeId);
   const replyTargetId = useSyncExternalStore(sceneStore.subscribe, sceneStore.getReplyTargetNodeId);
-  const [isOpen, setIsOpen] = useState(false);
   const [revision, setRevision] = useState(0);
   const [response, setResponse] = useState<{ key: string; preview: ContextPreview | null; error: string | null } | null>(null);
 
@@ -66,35 +86,27 @@ export function ContextInspectorLauncher({
     return () => { disposed = true; };
   }, [isOpen, nodeId, requestKey, transport, composerStore, useKnowledge]);
 
+  const toggle = (
+    <IconButton icon="layers" label="Context Inspector" className="context-inspector-toggle"
+      data-overlay-trigger={name} aria-expanded={isOpen} aria-controls="context-inspector-panel"
+      disabled={!nodeId} onClick={() => overlays.toggle(name, "popover")} />
+  );
+
   return (
     <div className="context-inspector-launcher">
-      <button
-        type="button"
-        className="composer-icon-button context-inspector-toggle"
-        disabled={!nodeId}
-        aria-expanded={isOpen}
-        aria-controls="context-inspector-panel"
-        aria-label="Context Inspector"
-        onClick={() => setIsOpen((open) => !open)}
-        title={nodeId ? "Preview sources for the next chat send" : "Add a chat message to inspect its context"}
-      >
-        {/* Stacked layers: the sources that make up the next send. */}
-        <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
-          <path d="m12 4 8 4-8 4-8-4 8-4Zm-8 8 8 4 8-4M4 16l8 4 8-4" />
-        </svg>
-      </button>
-      {isOpen && nodeId && (
-        <Suspense fallback={
-          <aside id="context-inspector-panel" className="context-inspector-panel" aria-label="Next chat context" role="region">
-            <p role="status">Loading context inspector…</p>
-          </aside>
-        }>
-          <LazyContextInspectorPanel
-            preview={preview} error={error} loading={loading}
-            onRefresh={() => setRevision((n) => n + 1)}
-            onClose={() => setIsOpen(false)}
-          />
-        </Suspense>
+      {nodeId ? toggle : (
+        <Tooltip label="Add a chat message to inspect its context">
+          <span className="context-inspector-disabled-trigger" tabIndex={0}>{toggle}</span>
+        </Tooltip>
+      )}
+      {nodeId && (
+        <Popover anchored name={name} label="Next chat context" className="context-inspector-popover">
+          <Suspense fallback={<p role="status"><Spinner size={14} decorative /> Loading context inspector…</p>}>
+            <LazyContextInspectorPanel preview={preview} error={error} loading={loading}
+              onRefresh={() => setRevision((n) => n + 1)}
+              onClose={() => overlays.closeLayer(name)} />
+          </Suspense>
+        </Popover>
       )}
     </div>
   );
