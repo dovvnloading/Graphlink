@@ -1,6 +1,8 @@
-/** A shape and explicit text carry status without any color requirement. */
+import { StatusPill } from "../ui/Badge";
+import { Button } from "../ui/Button";
 import "./NodeCards.css";
 
+/** One consistent status vocabulary; the explanation stays available to AT. */
 export function StalenessBadge({
   status, manualRerun = false, onRunBoundNodes, nodeKind,
 }: {
@@ -9,30 +11,22 @@ export function StalenessBadge({
   onRunBoundNodes?: () => void;
   nodeKind?: string;
 }) {
-  // Thinking traces are refreshed with their assistant reply, never a manual
-  // re-run action. Guard legacy scene payloads as well as new publications.
-  if (nodeKind === "thinking") return null;
-  const label = status === "out_of_date"
-    ? (manualRerun ? "Upstream changed - re-run manually" : "Out of date")
-    : status === "upstream_changed" ? "Upstream changed - re-run manually" : null;
-  if (!label) return null;
-  const explanation = status === "out_of_date"
-    ? "This reply used earlier upstream content or settings."
-    : "This node was created before its upstream inputs changed.";
+  // Thinking traces refresh with the reply; they are not independent jobs.
+  if (nodeKind === "thinking" || (status !== "out_of_date" && status !== "upstream_changed")) return null;
+
+  const explanation = status === "upstream_changed"
+    ? "Upstream inputs have changed; re-run manually."
+    : manualRerun
+      ? "Upstream inputs have changed; re-run manually."
+      : "This reply used earlier upstream content or settings.";
+
   return (
-    <div className="node-staleness-badge" role="status"
-      title={explanation} aria-label={label + ". " + explanation}>
-      <svg aria-hidden="true" viewBox="0 0 20 20" fill="none"
-        stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round">
-        <path d="M10 2.5 18 17H2L10 2.5Z" />
-        <path d="M10 7v4.5M10 14.5h.01" strokeLinecap="round" />
-      </svg>
-      <span>{label}</span>
+    <div className="node-staleness-badge">
+      <StatusPill status="Out of date" />
+      <span className="node-staleness-description">{explanation}</span>
       {status === "upstream_changed" && onRunBoundNodes && (
-        <button type="button" className="node-staleness-run-bound nodrag"
-          onClick={onRunBoundNodes} aria-label="Run bound nodes">
-          Run bound nodes
-        </button>
+        <Button size="sm" variant="ghost" className="node-staleness-run-bound nodrag"
+          onClick={onRunBoundNodes}>Run bound nodes</Button>
       )}
     </div>
   );
