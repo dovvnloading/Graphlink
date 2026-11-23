@@ -8,6 +8,7 @@ import { TEXT_INPUT_HANDLE, TEXT_OUTPUT_HANDLE } from "./textInputs";
 import "./NodeCards.css";
 import { StalenessBadge } from "./StalenessBadge";
 import { RunBoundNodesContext } from "./RunBoundNodesContext";
+import { useCanvasSearchMatchIds, useCanvasSearchQuery } from "./CanvasSearchContext";
 
 // Size-reporting alone misses a port when a lazy node view replaces an
 // equal-sized placeholder. Register the new handle after it enters the DOM.
@@ -59,6 +60,17 @@ function headingText(child: ReactNode): string {
   }
   if (isValidElement<{ children?: ReactNode }>(child)) return headingText(child.props.children);
   return "";
+}
+
+
+/** Context subscriptions live in this tiny leaf, never in a node view or
+ * even NodeShell's main body. Typing changes only its data attribute. */
+export function NodeSearchState({ nodeId }: { nodeId: string | null }) {
+  const query = useCanvasSearchQuery();
+  const matchIds = useCanvasSearchMatchIds();
+  const mode = !query.trim() ? "off"
+    : nodeId && matchIds.includes(nodeId) ? "match" : "dim";
+  return <span className="node-search-state" data-search={mode} aria-hidden="true" />;
 }
 
 /** Shared frame. Clip card content independently of ports and resize handles. */
@@ -135,6 +147,7 @@ export function NodeShell({
       })}
       aria-haspopup={onMenuChange ? "menu" : undefined}
     >
+      <NodeSearchState nodeId={nodeId} />
       {resizer}
       <Handle type="target" position={Position.Top} className="scene-node-handle" />
       <div className="scene-node-surface">
