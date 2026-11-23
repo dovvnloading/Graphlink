@@ -1,0 +1,46 @@
+/* Reference uploader: a compact kit-backed field group. */
+.fal-studio-uploader {
+  margin: var(--gl-space-2) 0; padding: var(--gl-space-3);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-md);
+  background: var(--gl-surface-inset);
+}
+.fal-studio-uploader-heading {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--gl-space-2);
+}
+.fal-studio-uploader-heading strong {
+  font-size: var(--gl-text-sm); font-weight: 600;
+}
+.fal-studio-uploader-grid {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--gl-space-3); margin: var(--gl-space-2) 0;
+}
+.fal-studio-uploader-grid .gl-field { min-width: 0; }
+.fal-studio-kicker, .fal-studio-uploader-fineprint {
+  font-size: var(--gl-text-2xs); color: var(--gl-surface-text-muted);
+}
+.fal-studio-field {
+  display: flex; flex-direction: column; gap: var(--gl-space-1); min-width: 0;
+}
+.fal-studio-field > span {
+  font-size: var(--gl-text-xs);
+}
+.fal-studio-file-input {
+  display: block; width: 100%; min-width: 0; box-sizing: border-box;
+  background: var(--gl-surface-field); color: var(--gl-surface-text-primary);
+  padding: var(--gl-space-2); border: 1px dashed var(--gl-surface-border-strong);
+  border-radius: var(--gl-radius-sm); font-size: var(--gl-text-xs);
+}
+.fal-studio-uploader .fal-studio-quiet {
+  font-size: var(--gl-text-xs); color: var(--gl-surface-text-muted);
+  margin: var(--gl-space-2) 0;
+}
+.fal-studio-uploader .fal-studio-action-row {
+  display: flex; flex-wrap: wrap; gap: var(--gl-space-2);
+  margin: var(--gl-space-2) 0;
+}
+.fal-studio-inline-warning {
+  font-size: var(--gl-text-xs); color: var(--gl-surface-text-secondary);
+  margin: var(--gl-space-2) 0;
+}

@@ -520,7 +520,7 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                   ))}
                 </ul>
                 {filteredPaths.length > 4 && (
-                  <Disclosure title={`Show ${filteredPaths.length - 4} more files`}
+                  <Disclosure {...{ title: `Show ${filteredPaths.length - 4} more files` }}
                     className="gitlink-node-extra-files">
                     <ul className="gitlink-node-file-list">
                       {filteredPaths.slice(4).map((path) => (
@@ -618,7 +618,9 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                         <Checkbox label={"Include " + displayGitlinkPath(change.path) + " in Apply"}
                           checked={approvedSet.has(change.path)} disabled={applying}
                           onChange={(event) => {
-                            setApprovedPaths((current) => event.currentTarget.checked
+                            // Read now: React clears currentTarget before the updater runs.
+                            const include = event.currentTarget.checked;
+                            setApprovedPaths((current) => include
                               ? [...current, change.path]
                               : current.filter((path) => path !== change.path));
                           }} />

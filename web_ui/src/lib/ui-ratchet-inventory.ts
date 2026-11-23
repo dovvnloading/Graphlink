@@ -73,10 +73,6 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/canvas/CodeSandboxNodeView.tsx", rule: "R8", count: 2 },
 
-  { file: "app/canvas/CollapseToggleButton.tsx", rule: "R2", count: 1 },
-
-  { file: "app/canvas/CollapseToggleButton.tsx", rule: "R8", count: 1 },
-
   { file: "app/canvas/ConversationNodeView.tsx", rule: "R2", count: 1 },
 
   { file: "app/canvas/ConversationNodeView.tsx", rule: "R7", count: 5 },
@@ -92,28 +88,6 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
   { file: "app/canvas/DocumentViewToc.tsx", rule: "R7", count: 1 },
 
   { file: "app/canvas/DocumentViewToc.tsx", rule: "R8", count: 1 },
-
-  { file: "app/canvas/FalMediaNodeView.css", rule: "R9", count: 65 },
-
-  { file: "app/canvas/FalMediaNodeView.css", rule: "R10", count: 28 },
-
-  { file: "app/canvas/FalMediaNodeView.css", rule: "R14", count: 132 },
-
-  { file: "app/canvas/FalMediaNodeView.tsx", rule: "R1", count: 23 },
-
-  { file: "app/canvas/FalMediaNodeView.tsx", rule: "R3", count: 3 },
-
-  { file: "app/canvas/FalMediaNodeView.tsx", rule: "R4", count: 2 },
-
-  { file: "app/canvas/FalMediaNodeView.tsx", rule: "R5", count: 2 },
-
-  { file: "app/canvas/FalMediaNodeView.tsx", rule: "R6", count: 1 },
-
-  { file: "app/canvas/FalMediaNodeView.tsx", rule: "R8", count: 6 },
-
-  { file: "app/canvas/FalMediaUploader.tsx", rule: "R1", count: 1 },
-
-  { file: "app/canvas/FalMediaUploader.tsx", rule: "R3", count: 1 },
 
   { file: "app/canvas/GitlinkNodeView.tsx", rule: "R8", count: 1 },
 
@@ -131,17 +105,11 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/canvas/HarnessNodeView.tsx", rule: "R8", count: 9 },
 
-  { file: "app/canvas/NodeCards.css", rule: "R9", count: 14 },
+  { file: "app/canvas/NodeCards.css", rule: "R9", count: 12 },
 
-  { file: "app/canvas/NodeCards.css", rule: "R10", count: 24 },
+  { file: "app/canvas/NodeCards.css", rule: "R10", count: 19 },
 
-  { file: "app/canvas/NodeCards.css", rule: "R14", count: 87 },
-
-  { file: "app/canvas/NodeHeading.tsx", rule: "R2", count: 1 },
-
-  { file: "app/canvas/NodeShell.tsx", rule: "R2", count: 1 },
-
-  { file: "app/canvas/NodeShell.tsx", rule: "R8", count: 6 },
+  { file: "app/canvas/NodeCards.css", rule: "R14", count: 71 },
 
   { file: "app/canvas/PlanNodeView.tsx", rule: "R2", count: 6 },
 
@@ -198,10 +166,6 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
   { file: "app/canvas/ScientificResultViews.tsx", rule: "R8", count: 3 },
 
   { file: "app/canvas/ScientificWorkspace.tsx", rule: "R8", count: 1 },
-
-  { file: "app/canvas/StalenessBadge.tsx", rule: "R2", count: 1 },
-
-  { file: "app/canvas/StalenessBadge.tsx", rule: "R8", count: 1 },
 
   { file: "app/canvas/TableContributors.tsx", rule: "R4", count: 1 },
 
@@ -368,7 +332,6 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
   { file: "app/styles.css", rule: "R12", count: 6666 },
 
   { file: "app/styles.css", rule: "R14", count: 564 },
-
 ];
 
 /** Each historical R1 exception must remain exact, too; it is not a blanket

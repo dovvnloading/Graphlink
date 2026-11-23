@@ -72,15 +72,19 @@ export function OverlayProvider({ children }: { children: ReactNode }) {
   const surfaceElements = useRef(new Map<string, HTMLElement>());
   const exitTimers = useRef(new Map<string, number>());
   const pendingFocusRestore = useRef<{ name: string; trigger: HTMLElement | null } | null>(null);
+  // React runs this provider's unmount cleanup before its children's, so a
+  // child that closes its layer while unmounting must not arm a new timer.
+  const unmounted = useRef(false);
 
   const publish = useCallback((next: Layer[]) => {
     layersRef.current = next;
-    setLayers(next);
+    if (!unmounted.current) setLayers(next);
   }, []);
 
   const scheduleRemoval = useCallback((name: string) => {
     const previous = exitTimers.current.get(name);
     if (previous !== undefined) window.clearTimeout(previous);
+    if (unmounted.current) return;
     if (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) {
       publish(layersRef.current.filter((layer) => !(layer.name === name && layer.state === "closing")));
       return;
@@ -92,9 +96,15 @@ export function OverlayProvider({ children }: { children: ReactNode }) {
     exitTimers.current.set(name, timer);
   }, [publish]);
 
-  useEffect(() => () => {
-    for (const timer of exitTimers.current.values()) window.clearTimeout(timer);
-    exitTimers.current.clear();
+  useEffect(() => {
+    // StrictMode remounts: re-arm after a simulated unmount.
+    unmounted.current = false;
+    const timers = exitTimers.current;
+    return () => {
+      unmounted.current = true;
+      for (const timer of timers.values()) window.clearTimeout(timer);
+      timers.clear();
+    };
   }, []);
 
   const dismiss = useCallback((name?: string) => {
