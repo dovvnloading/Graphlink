@@ -7,9 +7,9 @@ test("creates an upstream dataset from an empty table field, reviews its import 
   await gotoApp(page);
   await page.locator('[data-overlay-trigger="settings"]').click();
   const settings = page.getByRole("dialog", { name: "Settings" });
-  const priorSection = await settings.getByRole("region").getAttribute("aria-label");
+  const priorSection = await settings.locator(".settings-page").getAttribute("aria-label");
   await settings.getByRole("button", { name: "Plugins", exact: true }).click();
-  const grant = settings.getByRole("checkbox", { name: "Granted: Statistics", exact: true });
+  const grant = settings.getByRole("switch", { name: "Granted: Statistics", exact: true });
   const wasGranted = await grant.isChecked();
   if (!wasGranted) await grant.click();
   await expect(grant).toBeChecked();

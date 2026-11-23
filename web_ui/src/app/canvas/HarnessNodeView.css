@@ -1,0 +1,96 @@
+/* PLAN-2026-08-24 H1: the workspace agent node. Deliberately rides the
+   plan-node class vocabulary for everything shared (status band, detail,
+   budgets, activity, buttons) - only the reply body and the follow-up
+   composer are new surfaces. Status colors key off the harness's own
+   status names, same semantic tokens as the plan variants above. */
+.harness-node-status-failed { color: var(--gl-semantic-status-error); }
+.harness-node-status-done { color: var(--gl-semantic-status-success); }
+.harness-node-status-interrupted { color: var(--gl-semantic-status-warning); }
+/* Parked on a human: the same warning token the approval panel's own
+   border uses, so "this is on you now" reads the same in both places. */
+.harness-node-status-waiting { color: var(--gl-semantic-status-warning); }
+.harness-node-reply {
+  font-size: var(--gl-text-xs);
+  line-height: 1.5;
+  color: var(--gl-surface-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  padding: var(--gl-space-2);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+}
+.harness-node-workspace {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-2);
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-muted);
+}
+.harness-node-workspace-dir {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* PLAN-2026-08-24 §2.3's plan.update checklist. Reuses the surrounding
+   node's own type/color tokens rather than introducing any of its own -
+   the same shared-token convention every sibling node section follows. */
+.harness-node-plan {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-0-5);
+  padding: var(--gl-space-1-5) var(--gl-space-2);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+}
+.harness-node-plan-step {
+  display: flex;
+  align-items: baseline;
+  gap: var(--gl-space-1-5);
+  font-size: var(--gl-text-2xs);
+  line-height: 1.5;
+  color: var(--gl-surface-text-primary);
+}
+.harness-node-plan-marker {
+  flex: none;
+  width: 1em;
+  color: var(--gl-surface-text-muted);
+}
+.harness-node-plan-step-done .harness-node-plan-text {
+  color: var(--gl-surface-text-muted);
+  text-decoration: line-through;
+}
+.harness-node-plan-step-active { font-weight: 600; }
+.harness-node-plan-step-active .harness-node-plan-marker {
+  color: var(--gl-surface-text-primary);
+}
+
+.harness-node-composer { display: flex; align-items: flex-end; gap: var(--gl-space-2); }
+.harness-node-input {
+  box-sizing: border-box;
+  flex: 1;
+  font-family: inherit;
+  font-size: var(--gl-text-xs);
+  padding: var(--gl-space-1-5) var(--gl-space-2);
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  resize: vertical;
+  min-height: 40px;
+  line-height: 1.45;
+}
+.harness-node-input:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 1px;
+}
+
+.harness-node-workspace-dir { font-family:var(--gl-font-mono); min-width:0; overflow-wrap:anywhere; }
+.harness-node-workspace > .gl-icon { flex:none; }
+.harness-node-settings-field .gl-select { width:100%; }
+.harness-node-hook-row .gl-select, .harness-node-hook-row .gl-text-field { min-width:0; }

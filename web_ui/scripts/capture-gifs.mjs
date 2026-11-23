@@ -272,7 +272,7 @@ async function grantPacks(page, packs) {
   const settings = page.getByRole("dialog", { name: "Settings" });
   await settings.getByRole("button", { name: "Plugins", exact: true }).click();
   for (const pack of packs) {
-    const box = settings.getByRole("checkbox", { name: `Granted: ${pack}` });
+    const box = settings.getByRole("switch", { name: `Granted: ${pack}` });
     // The checkbox is controlled: it flips once the backend confirms the grant.
     if (!(await box.isChecked())) await box.click();
     const deadline = Date.now() + 10_000;
