@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { previewComparisonRects, previewEdgePath, previewNodeRects } from "./OrganizationDialog";
+import { describe, expect, it, vi } from "vitest";
+import { paintOrganizationMiniature, previewComparisonRects, previewEdgePath, previewNodeRects } from "./OrganizationDialog";
 import type { OrganizationPreview } from "../canvas/sceneStore";
 
 describe("previewNodeRects", () => {
@@ -20,7 +20,7 @@ describe("previewNodeRects", () => {
     }
   });
 
-  it("ignores corrupt nonfinite coordinates instead of breaking the SVG", () => {
+  it("ignores corrupt nonfinite coordinates instead of breaking the preview", () => {
     expect(previewNodeRects([
       { id: "bad", kind: "chat", title: "", x: Infinity, y: 0, width: 10, height: 10, changed: true },
     ])).toEqual([]);
@@ -71,8 +71,50 @@ describe("read-only before/after comparison", () => {
     }
   });
 
-  it("skips corrupt before rectangles rather than drawing invalid SVG coordinates", () => {
+  it("skips corrupt before rectangles rather than drawing invalid preview coordinates", () => {
     const damaged = [{ ...nodes[0], previousWidth: Infinity }];
     expect(previewComparisonRects(damaged, "before")).toEqual([]);
+  });
+});
+
+describe("organization miniature canvas", () => {
+  it("paints groups behind connections and moved cards with the chosen palette", () => {
+    const groupAndCard = previewNodeRects([
+      { id: "frame", kind: "frame", title: "Frame", x: 0, y: 0, width: 100, height: 100, changed: false },
+      { id: "chat", kind: "chat", title: "Chat", x: 200, y: 0, width: 100, height: 100, changed: true },
+    ]);
+    const steps: string[] = [];
+    const context = {
+      clearRect: vi.fn(),
+      beginPath: vi.fn(),
+      roundRect: vi.fn(),
+      fill: () => steps.push("fill"),
+      stroke: () => steps.push("stroke"),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      fillStyle: "",
+      strokeStyle: "",
+      lineWidth: 1,
+      globalAlpha: 1,
+    } as unknown as CanvasRenderingContext2D;
+
+    paintOrganizationMiniature(
+      context, [groupAndCard[0]], [groupAndCard[1]],
+      [{ d: previewEdgePath(groupAndCard[0], groupAndCard[1]) }],
+      {
+        groupFill: "group", nodeFill: "node", movedFill: "moved",
+        strongBorder: "border", movedBorder: "selected", edge: "edge",
+      },
+      true, 260,
+    );
+
+    expect(context.clearRect).toHaveBeenCalledWith(0, 0, 520, 245);
+    expect(context.roundRect).toHaveBeenCalledTimes(2);
+    expect(context.moveTo).toHaveBeenCalledTimes(1);
+    expect(context.lineTo).toHaveBeenCalledTimes(3);
+    expect(steps).toEqual(["fill", "stroke", "stroke", "fill", "stroke"]);
+    expect(context.fillStyle).toBe("moved");
+    expect(context.strokeStyle).toBe("selected");
+    expect(context.globalAlpha).toBe(1);
   });
 });

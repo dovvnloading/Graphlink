@@ -1,4 +1,6 @@
 import { useRef, useState } from "react";
+import { Select } from "../ui/Select";
+import { CanvasDisclosure } from "./CanvasDisclosure";
 import { isImportedTable, type ScienceField, type ScienceOperation, type ScientificImportedTable,
   type SourceOption, type SourceReference } from "./scientificWorkbench";
 
@@ -22,10 +24,10 @@ export function ScienceColumnBinding(props: ColumnBindingProps) {
   const [open, setOpen] = useState(false);
   if (!props.op.fields.some((field) => field.kind === "vector") ||
       !props.options.some((option) => ["typed_table", "result_table"].includes(String(option.reference.selector[0])))) return null;
-  return <details className="science-binding-review" onToggle={(event) => setOpen(event.currentTarget.open)}>
-    <summary>Bind table columns</summary>
+  return <CanvasDisclosure className="science-binding-review" label="Bind table columns"
+    open={open} onOpenChange={setOpen}>
     {open && <ColumnBindingForm {...props} />}
-  </details>;
+  </CanvasDisclosure>;
 }
 
 function ColumnBindingForm({ options, op, values, maxPoints, fetchColumn, apply }: ColumnBindingProps) {
@@ -93,12 +95,12 @@ function ColumnBindingForm({ options, op, values, maxPoints, fetchColumn, apply 
 
   return <>
     <fieldset disabled={pending}>
-      <label>Connected table<select value={table ? selected : ""} onChange={(event) => {
-        setSelected(event.target.value); setColumns({}); setAssumptions({}); setFirst("1"); setLast(""); setError(""); setReview(null);
-      }}>
-        {!table && <option value="">Choose a current source table</option>}
-        {tables.map((item) => <option key={tableId(item)} value={tableId(item)}>{item.label}</option>)}
-      </select></label>
+      <Select label="Connected table" value={table ? selected : ""}
+        placeholder="Choose a current source table" disabled={pending}
+        onChange={(value) => {
+          setSelected(value); setColumns({}); setAssumptions({}); setFirst("1"); setLast(""); setError(""); setReview(null);
+        }}
+        options={tables.map((item) => ({ value: tableId(item), label: item.label }))} />
       {table && <>
         <div className="science-window">
           <label>First data row<input type="number" min="1" max={table.value.rowCount} value={first} onChange={(e) => setFirst(e.target.value)} /></label>
@@ -106,20 +108,24 @@ function ColumnBindingForm({ options, op, values, maxPoints, fetchColumn, apply 
         </div>
         <small>{table.value.rowCount.toLocaleString()} available rows · up to {maxPoints.toLocaleString()} per vector. Row 1 is the first measurement.</small>
         {fields.map((field) => <div className="science-bind-field" key={field.key}>
-          <label>Column for {field.label}<select value={columns[field.key] ?? ""} onChange={(event) => {
-            setColumns({ ...columns, [field.key]: event.target.value }); setAssumptions({ ...assumptions, [field.key]: "" });
-          }}>
-            <option value="">Keep current input</option>
-            {table.value.columns.map((col, i) => col.type === "numeric" && <option key={i} value={i}>{col.label}</option>)}
-          </select></label>
+          <Select label={`Column for ${field.label}`} value={columns[field.key] ?? ""} disabled={pending}
+            onChange={(value) => {
+              setColumns({ ...columns, [field.key]: value }); setAssumptions({ ...assumptions, [field.key]: "" });
+            }}
+            options={[{ value: "", label: "Keep current input" }].concat(
+              table.value.columns.flatMap((col, i) => col.type === "numeric"
+                ? [{ value: String(i), label: col.label }] : []),
+            )} />
           {columns[field.key] !== undefined && columns[field.key] !== "" && <label>Source unit assumption for {field.label}
             <input value={assumptions[field.key] ?? ""} placeholder="Only for a missing or unrecognized header unit" onChange={(e) => setAssumptions({ ...assumptions, [field.key]: e.target.value })} />
           </label>}
         </div>)}
-        <label>Missing observations<select value={policy} onChange={(e) => setPolicy(e.target.value as typeof policy)}>
-          <option value="reject">Reject missing</option><option value="drop">Drop missing in each selected column</option>
-          {!!op.pairedFields?.length && <option value="complete">Use complete rows for paired fields</option>}
-        </select></label>
+        <Select label="Missing observations" value={policy} disabled={pending}
+          onChange={(value) => setPolicy(value as typeof policy)}
+          options={[{ value: "reject", label: "Reject missing" },
+            { value: "drop", label: "Drop missing in each selected column" }].concat(
+            op.pairedFields?.length ? [{ value: "complete", label: "Use complete rows for paired fields" }] : [],
+          )} />
         <button type="button" disabled={!chosen.length} onClick={() => void inspect()}>{pending ? "Checking columns…" : "Preview bindings"}</button>
       </>}
     </fieldset>

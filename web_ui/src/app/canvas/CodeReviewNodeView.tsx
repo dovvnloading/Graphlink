@@ -2,7 +2,8 @@ import "./CodeReviewNodeView.css";
 import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useEffect, useRef, useState } from "react";
 import { CollapseToggleButton } from "./CollapseToggleButton";
-import { Dialog, useOverlays } from "../overlays/overlays";
+import { useOverlays } from "../overlays/overlays";
+import { CanvasDialog } from "./CanvasDialog";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
@@ -857,7 +858,7 @@ function CodeReviewNodeViewImpl({ id, data, selected }: NodeProps<CodeReviewFlow
         </div>
       )}
 
-      <Dialog name={commentOverlayName} title="Post Review Lens comment to GitHub?" className="code-review-node-comment-dialog">
+      <CanvasDialog name={commentOverlayName} heading="Post Review Lens comment to GitHub?" className="code-review-node-comment-dialog">
         {commentPreview && (
           <>
             <p>
@@ -884,7 +885,7 @@ function CodeReviewNodeViewImpl({ id, data, selected }: NodeProps<CodeReviewFlow
             </div>
           </>
         )}
-      </Dialog>
+      </CanvasDialog>
     </NodeShell>
   );
 }

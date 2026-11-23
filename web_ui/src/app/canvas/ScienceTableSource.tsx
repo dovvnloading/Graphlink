@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { Select } from "../ui/Select";
 import type { SceneStore } from "./sceneStore";
 import { readScienceState, type ScienceState } from "./scientificWorkbench";
 
@@ -49,14 +50,11 @@ export function ScienceTableSource({ targetId, packTitle, store, renderImporter 
 
   return <section aria-label="Connect a source table" className="science-table-source">
     <strong>Connect a source table</strong>
-    {nodes.length > 0 && <label>Source workbench<select value={selected?.id ?? ""} disabled={busy} onChange={(e) => {
-      setChosen(e.target.value); setError("");
-    }}>
-      {!selected && <option value="">Choose a source workbench</option>}
-      {nodes.map((n) => <option key={n.id} value={n.id}>{n.title} ({n.id}) · {
-        n.state.table?.sourceName ?? (n.state.latest?.tableAsset ? "Generated result table" : "No table yet")
-      }</option>)}
-    </select></label>}
+    {nodes.length > 0 && <Select label="Source workbench" value={selected?.id ?? ""}
+      disabled={busy} placeholder="Choose a source workbench"
+      onChange={(value) => { setChosen(value); setError(""); }}
+      options={nodes.map((n) => ({ value: n.id, label: n.title + " (" + n.id + ") · " +
+        (n.state.table?.sourceName ?? (n.state.latest?.tableAsset ? "Generated result table" : "No table yet")) }))} />}
     <div className="science-actions">
       {selected && !connected && <button type="button" disabled={busy} onClick={() => void connect(false)}>Connect selected source</button>}
       {canCreate && <button type="button" disabled={busy} onClick={() => void connect(true)}>Create source and import</button>}

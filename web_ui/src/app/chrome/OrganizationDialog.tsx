@@ -1,11 +1,12 @@
 import { useReactFlow } from "@xyflow/react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { OrganizationOptions, OrganizationPreview, SceneStore } from "../canvas/sceneStore";
 import { Dialog, useOverlays } from "../overlays/overlays";
 import { Button } from "../ui/Button";
 import { Checkbox } from "../ui/Checkbox";
 import { Select } from "../ui/Select";
 import { SegmentedControl } from "../ui/SegmentedControl";
+import { Tooltip } from "../ui/Tooltip";
 import { formatCount } from "../ui/format";
 import "./OrganizationDialog.css";
 
@@ -85,6 +86,66 @@ export function previewEdgePath(source: DrawnNode, target: DrawnNode): string {
     + " L " + tx + " " + middle + " L " + tx + " " + endY;
 }
 
+type MiniatureColors = {
+  groupFill: string;
+  nodeFill: string;
+  movedFill: string;
+  strongBorder: string;
+  movedBorder: string;
+  edge: string;
+};
+
+/** Paint the same fitted bounds and orthogonal edges without an ad-hoc SVG. */
+export function paintOrganizationMiniature(
+  context: CanvasRenderingContext2D,
+  groups: ReadonlyArray<DrawnNode>,
+  cards: ReadonlyArray<DrawnNode>,
+  paths: ReadonlyArray<{ d: string }>,
+  colors: MiniatureColors,
+  after: boolean,
+  renderedWidth: number,
+) {
+  context.clearRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
+
+  function paintRect(node: DrawnNode, fill: string, stroke: string, strokeWidth: number) {
+    const width = Math.max(1, node.pw);
+    const height = Math.max(1, node.ph);
+    context.beginPath();
+    context.roundRect(node.px, node.py, width, height, Math.min(3, width / 2, height / 2));
+    context.fillStyle = fill;
+    context.fill();
+    context.strokeStyle = stroke;
+    context.lineWidth = strokeWidth;
+    context.stroke();
+  }
+
+  for (const group of groups) {
+    paintRect(group, colors.groupFill, colors.strongBorder, 1);
+  }
+
+  context.strokeStyle = colors.edge;
+  // The original edge paths used non-scaling strokes, even in narrow panes.
+  context.lineWidth = 1.1 * VIEW_WIDTH / Math.max(1, renderedWidth);
+  context.globalAlpha = 0.65;
+  for (const path of paths) {
+    const coordinates = path.d.split(/[ML\s]+/).filter(Boolean).map(Number);
+    if (coordinates.length !== 8 || !coordinates.every(Number.isFinite)) continue;
+    context.beginPath();
+    context.moveTo(coordinates[0], coordinates[1]);
+    for (let i = 2; i < coordinates.length; i += 2) {
+      context.lineTo(coordinates[i], coordinates[i + 1]);
+    }
+    context.stroke();
+  }
+  context.globalAlpha = 1;
+
+  for (const card of cards) {
+    const moved = after && card.changed;
+    paintRect(card, moved ? colors.movedFill : colors.nodeFill,
+      moved ? colors.movedBorder : colors.strongBorder, 0.6);
+  }
+}
+
 function OrganizationMiniature({
   plan, stage, showConnections,
 }: {
@@ -92,9 +153,11 @@ function OrganizationMiniature({
   stage: PreviewStage;
   showConnections: boolean;
 }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [hoveredTitle, setHoveredTitle] = useState<string | null>(null);
   const rectangles = useMemo(() => previewComparisonRects(plan.nodes, stage), [plan.nodes, stage]);
-  const groups = rectangles.filter((n) => n.kind === "frame" || n.kind === "container");
-  const cards = rectangles.filter((n) => n.kind !== "frame" && n.kind !== "container");
+  const groups = useMemo(() => rectangles.filter((n) => n.kind === "frame" || n.kind === "container"), [rectangles]);
+  const cards = useMemo(() => rectangles.filter((n) => n.kind !== "frame" && n.kind !== "container"), [rectangles]);
   const paths = useMemo(() => {
     if (!showConnections) return [];
     const byId = new Map(rectangles.map((rect) => [rect.id, rect]));
@@ -106,39 +169,63 @@ function OrganizationMiniature({
         : [];
     });
   }, [plan.edges, rectangles, showConnections]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) return;
+
+    const paint = () => {
+      const css = window.getComputedStyle(canvas);
+      const token = (name: string) => css.getPropertyValue(name).trim();
+      paintOrganizationMiniature(context, groups, cards, paths, {
+        groupFill: token("--gl-neutral-button-background"),
+        nodeFill: token("--gl-surface-text-muted"),
+        movedFill: token("--gl-palette-selection"),
+        strongBorder: token("--gl-surface-border-strong"),
+        movedBorder: token("--gl-surface-text-secondary"),
+        edge: token("--gl-surface-text-secondary"),
+      }, stage === "after", canvas.getBoundingClientRect().width || VIEW_WIDTH);
+    };
+    paint();
+
+    // Canvas colors do not update automatically when the CSS theme changes.
+    const themeObserver = new MutationObserver(paint);
+    const themeAttributes = { attributes: true, attributeFilter: ["class", "data-theme", "style"] };
+    themeObserver.observe(document.documentElement, themeAttributes);
+    if (document.body) themeObserver.observe(document.body, themeAttributes);
+    const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(paint);
+    resizeObserver?.observe(canvas);
+    const colorScheme = window.matchMedia?.("(prefers-color-scheme: dark)");
+    colorScheme?.addEventListener?.("change", paint);
+    return () => {
+      themeObserver.disconnect();
+      resizeObserver?.disconnect();
+      colorScheme?.removeEventListener?.("change", paint);
+    };
+  }, [groups, cards, paths, stage]);
+
   const label = stage === "before" ? "Original arrangement" : "Proposed arrangement";
   return (
     <div className="organization-miniature">
-      <svg
-        viewBox={"0 0 " + VIEW_WIDTH + " " + VIEW_HEIGHT}
-        role="img"
-        aria-label={label + " of " + plan.nodes.length + " visible nodes, with " + paths.length + " connections"}
-      >
-        {groups.map((node) => (
-          <rect
-            key={node.id}
-            x={node.px} y={node.py} width={node.pw} height={node.ph}
-            rx={3} className="organization-miniature-group"
-          >
-            <title>{node.title || node.kind}</title>
-          </rect>
-        ))}
-        {paths.map((edge) => (
-          <path key={edge.id} d={edge.d} className="organization-miniature-edge" />
-        ))}
-        {cards.map((node) => (
-          <rect
-            key={node.id}
-            x={node.px} y={node.py} width={Math.max(1, node.pw)} height={Math.max(1, node.ph)}
-            rx={3}
-            className={stage === "after" && node.changed
-              ? "organization-miniature-node moved"
-              : "organization-miniature-node"}
-          >
-            <title>{node.title || node.kind}</title>
-          </rect>
-        ))}
-      </svg>
+      <Tooltip label={hoveredTitle || label} placement="top">
+        <canvas ref={canvasRef} width={VIEW_WIDTH} height={VIEW_HEIGHT}
+          role="img"
+          aria-label={label + " of " + plan.nodes.length + " visible nodes, with " + paths.length + " connections"}
+          style={{ display: "block", width: "100%", height: "auto" }}
+          onMouseMove={(event) => {
+            const bounds = event.currentTarget.getBoundingClientRect();
+            if (!bounds.width || !bounds.height) return;
+            const x = (event.clientX - bounds.left) * VIEW_WIDTH / bounds.width;
+            const y = (event.clientY - bounds.top) * VIEW_HEIGHT / bounds.height;
+            // Topmost cards win over their containing frames, as in the SVG.
+            const hovered = [...cards].reverse().concat([...groups].reverse()).find((node) =>
+              x >= node.px && x <= node.px + Math.max(1, node.pw)
+              && y >= node.py && y <= node.py + Math.max(1, node.ph));
+            setHoveredTitle(hovered ? hovered.title || hovered.kind : null);
+          }}
+          onMouseLeave={() => setHoveredTitle(null)} />
+      </Tooltip>
     </div>
   );
 }

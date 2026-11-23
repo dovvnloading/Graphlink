@@ -6,6 +6,7 @@ import type { AppPluginsState } from "../../lib/bridge-core/generated/app-plugin
 import type { SceneStore } from "../canvas/sceneStore";
 import { scientificFocusName } from "../canvas/scientificFocus";
 import { Popover, useOverlays } from "../overlays/overlays";
+import { Icon } from "../ui/icons/Icon";
 import { searchPlugins, summarizeInputKinds, type PluginSearchHit } from "./pluginPickerSearch";
 
 /**
@@ -262,7 +263,7 @@ export function PluginPicker({ transport, store }: { transport: WsTransport; sto
                           </>)}
                         </span>
                         <span className="plugin-picker-row-chevron" aria-hidden="true">
-                          &rsaquo;
+                          <Icon name="chevron-right" size="sm" />
                         </span>
                       </button>
                     </li>

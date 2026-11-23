@@ -151,6 +151,8 @@ describe("PluginPicker", () => {
     // The active category's name appears twice by design: rail button + pane title.
     expect(screen.getByRole("button", { name: "Branch Foundations" })).toBeInTheDocument();
     expect(screen.getByText("System Prompt")).toBeInTheDocument();
+    expect(screen.getByText("System Prompt").closest("button")?.querySelector(".plugin-picker-row-chevron .gl-icon"))
+      .toHaveAttribute("aria-hidden", "true");
 
     await user.click(screen.getByRole("button", { name: /Build & Execution/ }));
     expect(screen.getByText("Virtual Environment Runner")).toBeInTheDocument();
