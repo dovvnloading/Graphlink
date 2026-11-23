@@ -278,14 +278,14 @@ describe("KnowledgeSearchDialog kit library", () => {
   it("native Add files uses the knowledge picker intent with no browser paths", async () => {
     const { user, request, intents } = await setup();
     await user.click(screen.getByRole("button", { name: "Add files" }));
-    await waitFor(() => expect(request).toHaveBeenCalledWith("knowledge", "addFiles", [], 300000));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("knowledge", "addFiles", []));
     expect(intents).toContainEqual(["knowledge", "addFiles", []]);
   });
 
   it("native Add folder uses a distinct picker intent without a path argument", async () => {
     const { user, request, intents } = await setup();
     await user.click(screen.getByRole("button", { name: "Add folder" }));
-    await waitFor(() => expect(request).toHaveBeenCalledWith("knowledge", "addFolder", [], 300000));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("knowledge", "addFolder", []));
     expect(intents).toContainEqual(["knowledge", "addFolder", []]);
   });
 
@@ -626,8 +626,8 @@ describe("KnowledgeSearchDialog kit library", () => {
     expect(screen.getByText(FOLDER.path)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Actions" }));
     await user.click(await screen.findByRole("menuitem", { name: "Remove watched folder…" }));
-    await user.click((await screen.findByRole("dialog", { name: "Stop watching folder?" }))
-      .querySelector("button:last-child") as HTMLElement);
+    await user.click(within(await screen.findByRole("dialog", { name: "Stop watching folder?" }))
+      .getByRole("button", { name: "Remove watched folder" }));
     await waitFor(() => expect(intents).toContainEqual(["knowledge", "removeWatchedFolder", [7]]));
     expect(await screen.findByText("No watched folders yet")).toBeInTheDocument();
     await user.click(screen.getByRole("tab", { name: "Documents (1)" }));
