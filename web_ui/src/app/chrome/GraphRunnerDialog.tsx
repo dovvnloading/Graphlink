@@ -8,7 +8,7 @@ import { Disclosure } from "./RunnerDisclosure";
 import { Button } from "../ui/Button";
 import { Select } from "../ui/Select";
 import { TextField } from "../ui/TextField";
-import { StatusPill } from "../ui/Badge";
+import { Icon } from "../ui/icons/Icon";
 import { formatCount, formatRelativeTime } from "../ui/format";
 import "./GraphRunnerDialog.css";
 
@@ -419,11 +419,14 @@ function Runner({ store }: { store: SceneStore }) {
     {latest && <section aria-label="Latest run">
       <header className="runner-section-header">
         <h2>Latest run</h2>
+        {/* The runner's own status words are more precise than the shared
+            pill vocabulary (e.g. reconciliation required), so the kit icon
+            carries the shape and the text stays the runner's word. */}
         <span role="status" data-status={latest.status}>
-          <span aria-hidden="true"><StatusPill status={latest.status === "completed" ? "Done"
-            : latest.status === "running" ? "Running" : latest.status === "cancelled" ? "Cancelled"
-            : latest.status === "failed" || latest.status === "reconciliation-required" ? "Failed"
-            : "Out of date"} /></span>
+          <Icon size="sm" name={latest.status === "completed" ? "status-success"
+            : latest.status === "running" ? "status-running" : latest.status === "cancelled" ? "status-cancelled"
+            : latest.status === "failed" || latest.status === "reconciliation-required" ? "status-error"
+            : "status-stale"} />
           {statuses[latest.status] ?? latest.status}
         </span>
       </header>
