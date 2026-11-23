@@ -134,6 +134,7 @@ export function Composer({
     knowledgeResult.sceneSnapshot === scene &&
     knowledgeResult.libraryRevision === knowledgeLibraryRevision;
   const knowledgePreference = knowledgeResolved ? knowledgeResult!.preference : null;
+  const knowledgeCheckFailed = knowledgeResolved && knowledgeResult!.preference === null;
   const [knowledgeUpdating, setKnowledgeUpdating] = useState(false);
   useEffect(() => {
     let current = true;
@@ -466,7 +467,8 @@ export function Composer({
             ? contextInspector(knowledgePreference?.enabled ?? null, knowledgePreference?.nodeId)
             : contextInspector}
           {!knowledgePreference?.hasDocuments ? (
-            <Tooltip label="Nothing is indexed yet" placement="top">
+            <Tooltip label={knowledgeCheckFailed ? "Could not check workspace knowledge"
+              : knowledgeResolved ? "Nothing is indexed yet" : "Checking indexed knowledge…"} placement="top">
               <span className="composer-disabled-control" tabIndex={0}>
                 <ToggleButton icon="knowledge" label="Use knowledge" size="sm" pressed={false} disabled />
               </span>
@@ -543,19 +545,26 @@ export function Composer({
 
 function Reasoning({ store }: { store: ComposerStore }) {
   const composer = useSyncExternalStore(store.subscribe, store.getComposer);
+  const trigger = (
+    <MenuButton label={composer.route.reasoning.label} data-overlay-trigger="reasoning"
+      className="composer-menu-button"
+      aria-label={`Reasoning: ${composer.route.reasoning.label}`}
+      disabled={!composer.request.canSend} menuLabel="Choose a reasoning level">
+      {composer.route.reasoning.options.map((option) => (
+        <MenuItem key={option.id} label={option.label} description={option.description}
+          kind="radio" checked={option.id === composer.route.reasoning.level}
+          onSelect={() => store.setReasoningLevel(option.id)} />
+      ))}
+    </MenuButton>
+  );
   return (
     <span className="composer-reasoning-menu">
       <Icon name="gauge" size="sm" />
-      <MenuButton label={composer.route.reasoning.label} data-overlay-trigger="reasoning"
-        className="composer-menu-button"
-        aria-label={`Reasoning: ${composer.route.reasoning.label}`}
-        disabled={!composer.request.canSend} menuLabel="Choose a reasoning level">
-        {composer.route.reasoning.options.map((option) => (
-          <MenuItem key={option.id} label={option.label} description={option.description}
-            kind="radio" checked={option.id === composer.route.reasoning.level}
-            onSelect={() => store.setReasoningLevel(option.id)} />
-        ))}
-      </MenuButton>
+      {composer.request.canSend ? trigger : (
+        <Tooltip label="Wait for the current response to finish" placement="top">
+          <span className="composer-disabled-control" tabIndex={0}>{trigger}</span>
+        </Tooltip>
+      )}
     </span>
   );
 }
