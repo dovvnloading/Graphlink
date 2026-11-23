@@ -312,6 +312,20 @@ describe("SettingsDialog", () => {
     expect(intents).toContainEqual(["app-settings", "setActiveSection", ["integrations"]]);
   });
 
+  it("switches sections immediately and supports roving rail arrow navigation without a server echo", async () => {
+    const { user, intents } = setup();
+    await user.click(screen.getByText("open settings"));
+    const rail = screen.getByRole("navigation", { name: "Settings sections" });
+    await user.click(within(rail).getByRole("button", { name: "Knowledge" }));
+    expect(screen.getByRole("region", { name: "Knowledge" })).toBeInTheDocument();
+    expect(within(rail).getByRole("button", { name: "Knowledge" })).toHaveAttribute("aria-current", "page");
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("region", { name: "Workspace Agent" })).toBeInTheDocument();
+    expect(within(rail).getByRole("button", { name: "Workspace Agent" })).toHaveFocus();
+    expect(intents).toContainEqual(["app-settings", "setActiveSection", ["knowledge"]]);
+    expect(intents).toContainEqual(["app-settings", "setActiveSection", ["workspace agent"]]);
+  });
+
   it("General page renders the auto model policy select at its current value", async () => {
     const { user } = setup();
     await user.click(screen.getByText("open settings"));
