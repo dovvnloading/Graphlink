@@ -316,14 +316,14 @@ function AgentSettingsPopover({
       <div className="harness-node-settings-field">
         <Select label="Execution profile" className="nodrag nowheel"
           value={profile === "isolated" ? "isolated" : "host"}
-          onChange={(value) => onSetExecutionProfile(value as HarnessExecutionProfile)} options={[
+          onChange={(value) => onSetExecutionProfile(value)} options={[
             { value: "host", label: "Host (default)" },
             { value: "isolated", label: "Isolated (Docker / Podman)", disabled: engine === null },
           ]} />
       </div>
       <div className="harness-node-settings-field">
         <Select label="Permission mode" className="nodrag nowheel" value={permissionMode}
-          onChange={(value) => onSetPermissionMode(value as HarnessPermissionMode)} options={[
+          onChange={(value) => onSetPermissionMode(value)} options={[
             { value: "ask", label: "Ask — approve each action" },
             { value: "auto_edit", label: "Auto-edit — workspace file writes" },
             { value: "autonomous", label: "Autonomous — Isolated only", disabled: profile !== "isolated" },
