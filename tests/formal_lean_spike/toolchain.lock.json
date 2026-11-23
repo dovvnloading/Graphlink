@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "platform": "linux/amd64",
+  "base": "docker.io/library/python@sha256:3c3ba8ad4c85eb63b7568f806434f14e33370056985da7fdf2673621cb1d7e93",
+  "lean": {
+    "version": "4.36.0",
+    "revision": "611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9",
+    "archive": "https://github.com/leanprover/lean4/releases/download/v4.36.0/lean-4.36.0-linux.zip",
+    "sha256": "92a996be487b48e1c2f2985be6b150490475c94d02f5a5e26665a9dab780902a",
+    "executables": {
+      "lean": "db7f559d05795e7af52e42bc966c90240a39dcb9712161c54c97afa546e20c00",
+      "lake": "42678ccbc2605e2f892540dc7236e009fdd1224e823d104dfd72725d2f1a52d2",
+      "leanexport": "8298d4412a1f8986b5dbfd1d9925211778d8d320fc47b72040c8fdfdd5b603d5",
+      "leanchecker": "2b2ff08805ace61c935b023f8114ac3f7f1d3bc79cb4e8c47ef7801a5af58798",
+      "nanoda_bin": "8241c5e6baa29490aa118d382f97961b208ae730fdb96545c2abed74c9ece5a8",
+      "leanchecker-paranoid": "cd9a6ddb5fbf8f649c789dc905236e1ddee9fb32a323c141a4e63478f72e47b6"
+    }
+  },
+  "mathlib": {
+    "url": "https://github.com/leanprover-community/mathlib4",
+    "revision": "fc4f59e577feb1a4956671bc04ac18aaaf8cd842",
+    "manifest_sha256": "11887e45895bc6c521059db7957e78e9fd7aec1884e8c931db4a42be6c1af9b5",
+    "module": "Mathlib.Data.Nat.Basic"
+  },
+  "build": {
+    "buildkit_version": "v0.35.1",
+    "buildkit_image": "docker.io/moby/buildkit@sha256:7583a0667093d941826bcd1d2878d6a360dfd08a82c93e6d6a6f6cce78801e12",
+    "buildkit_config_digest": "sha256:d0ff8587a88d8adf2744704927bc567a23f4e8a1f4e732b579d673623a8a0fb2",
+    "source_date_epoch": 1794852377
+  }
+}

@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "scope": "P0 fixed fixtures, Linux/amd64",
+  "reviewStatus": "Independent imported-inductive audit pending",
+  "testedCommit": "0e58c9af0c5a02443f010e14f265a13b20af9277",
+  "workflowUrl": "https://github.com/dovvnloading/Graphlink/actions/runs/45181342605",
+  "imageConfigDigest": "sha256:aca5b9dafd99e0bdf90c5ec7266f83031636023c668266cd05f514732ba23f57",
+  "manifestDigest": "sha256:a5dfcd15f91c5263cce122ee2699c66509ec6b6876b797fcfdec0d69aa5bc714",
+  "toolchainLockSha256": "c60cf939f1dc71637e260e4737d285688b6c70728919660c155e3a18f832fc13",
+  "moduleInventorySha256": "32a109eadfd951f238afd4d120181df24ecef9282f9c01ebada69efddb405bdb",
+  "challengeExportSha256": "f688b6cb011c35ffbebbc2db980332a930b430ca59bfb50af267e8913108c3d9",
+  "strictAssurance": "disabled",
+  "workers": [
+    {
+      "worker": "first",
+      "artifactUrl": "https://github.com/dovvnloading/Graphlink/actions/runs/45181342605/artifacts/14822096670",
+      "archiveSha256": "44ca00735385f5c441d3e63a677623aa305bc2048e688cecdaada4d126a5eba6",
+      "transcriptSha256": "698ccebd20c427e8a5e7d7d04ce3adcb93438f8b0edba0cba8d6b943cdcb36ae",
+      "manifestDigest": "sha256:a5dfcd15f91c5263cce122ee2699c66509ec6b6876b797fcfdec0d69aa5bc714"
+    },
+    {
+      "worker": "second",
+      "artifactUrl": "https://github.com/dovvnloading/Graphlink/actions/runs/45181342605/artifacts/14822311810",
+      "archiveSha256": "f86bdb13419fc66b0488de994df3cb8296c2fef0f28d91393f4aa983130fb48e",
+      "transcriptSha256": "2764eaf92d46705e3b3893707df7354f7655dcc3da0abb0dbc32cd8441293aed",
+      "manifestDigest": "sha256:a5dfcd15f91c5263cce122ee2699c66509ec6b6876b797fcfdec0d69aa5bc714"
+    }
+  ],
+  "fixtures": [
+    {
+      "name": "positive",
+      "solutionExportSha256": "b6d598c3401025133853e2ac049ee799f994e81167126c01e1bee3f736d9b1d8",
+      "statementMatches": true,
+      "axioms": [],
+      "comparatorOutcome": "accepted",
+      "targetPolicyOutcome": "accepted",
+      "replayedBy": [
+        "nanoda",
+        "Lean default"
+      ]
+    },
+    {
+      "name": "changed_target",
+      "solutionExportSha256": "1dbd10b5d3afc65be50c65e3f08a27305a9403362fb2367bf404df71e010cbb4",
+      "statementMatches": false,
+      "axioms": [],
+      "comparatorOutcome": "statement_mismatch",
+      "targetPolicyOutcome": "statement_mismatch",
+      "replayedBy": []
+    },
+    {
+      "name": "sorry",
+      "solutionExportSha256": "d74c76af872ae9898c035c3f7e79ab45e490a53166f11e674acb8c8ea5e617a3",
+      "statementMatches": true,
+      "axioms": [
+        "sorryAx"
+      ],
+      "comparatorOutcome": "forbidden_axiom",
+      "targetPolicyOutcome": "forbidden_axiom",
+      "replayedBy": []
+    },
+    {
+      "name": "new_axiom",
+      "solutionExportSha256": "8416e427a58a3dd075ea8c88e8aa4dcb04b447ee052b6819d35a647e553c8887",
+      "statementMatches": true,
+      "axioms": [
+        "Graphlink.Spike.extraAssumption"
+      ],
+      "comparatorOutcome": "forbidden_axiom",
+      "targetPolicyOutcome": "forbidden_axiom",
+      "replayedBy": []
+    },
+    {
+      "name": "target_propext",
+      "solutionExportSha256": "5955a7e1ce538e19bc281c7b168af7a472c26e6c20f5c9d155f6d2582ed9d45c",
+      "statementMatches": true,
+      "axioms": [
+        "propext"
+      ],
+      "comparatorOutcome": "accepted",
+      "targetPolicyOutcome": "forbidden_axiom",
+      "replayedBy": [
+        "nanoda",
+        "Lean default"
+      ]
+    },
+    {
+      "name": "imported_axiom",
+      "solutionExportSha256": "ed14b46a7edac84c84cbaba8947ac5cb7f653abdfcbb1c4d4d5631b17364c0dd",
+      "statementMatches": true,
+      "axioms": [
+        "Graphlink.Dependency.assumed"
+      ],
+      "comparatorOutcome": "forbidden_axiom",
+      "targetPolicyOutcome": "forbidden_axiom",
+      "replayedBy": []
+    },
+    {
+      "name": "imported_sorry",
+      "solutionExportSha256": "bf84cc2742d595c610d03041e5e11522480e437106aa3ba6ceadff77c8009511",
+      "statementMatches": true,
+      "axioms": [
+        "sorryAx"
+      ],
+      "comparatorOutcome": "forbidden_axiom",
+      "targetPolicyOutcome": "forbidden_axiom",
+      "replayedBy": []
+    },
+    {
+      "name": "positive",
+      "solutionExportSha256": "b6d598c3401025133853e2ac049ee799f994e81167126c01e1bee3f736d9b1d8",
+      "statementMatches": true,
+      "axioms": [],
+      "comparatorOutcome": "accepted",
+      "targetPolicyOutcome": "accepted",
+      "replayedBy": [
+        "nanoda",
+        "Lean default"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+**
+!toolchain.lock.json
+!isolation_entrypoint.py
+!image
+!image/Dockerfile
+!image/provision.py
+!checker
+!checker/fixtures
+!checker/*.lean
+!checker/*.json
+!checker/stage.py
+!checker/fixtures/*.lean
