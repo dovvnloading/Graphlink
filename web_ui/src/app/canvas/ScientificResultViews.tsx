@@ -3,9 +3,40 @@ import { ScientificDataTable } from "./ScientificDataTable";
 import { CanvasDisclosure } from "./CanvasDisclosure";
 import { GROUP_NAMED_COLORS } from "./GroupColorPicker";
 import { formatCount } from "../ui/format";
-import { exactScienceNumber, formatScienceNumber } from "./scientificWorkbench";
+import { exactScienceNumber, formatScienceNumber, formatScienceRange, type SciencePlot } from "./scientificWorkbench";
+import { createLinearScale } from "./charts/chartScales";
 import type { ScienceForestPlotView, SciencePhylogeneticNode, SciencePhylogeneticTreeView, SciencePlateMapView, ScienceResultView, ScienceSurvivalCurveView, ScienceVolcanoPlotView, ScienceVolcanoPoint } from "./scientificViewTypes";
 import "./ScientificResultViews.css";
+
+
+function scienceScale(values: number[], from: number, to: number) {
+  const low = values.reduce((a, b) => Math.min(a, b)), high = values.reduce((a, b) => Math.max(a, b));
+  // Preserve the canvas preview's overflow-safe scale for opposite-sign bounds near 1e308.
+  const divisor = Number.isFinite(high - low) ? 1 : 2;
+  const position = createLinearScale([low / divisor, high / divisor], [from, to]);
+  return { low, high, at: (value: number) => position(value / divisor) };
+}
+
+/** A compact, accessible scientific preview plot shared with the typed result renderers. */
+export function ScientificMiniPlot({ plot, scatter }: { plot: SciencePlot; scatter: boolean }) {
+  const x = scienceScale(plot.x, 10, 310);
+  const y = scienceScale(plot.y, 98, 8);
+  const points = plot.x.map((value, index) => `${x.at(value)},${y.at(plot.y[index])}`).join(" ");
+
+  return <>
+    <span>{plot.yLabel} · {formatScienceRange(y.low, y.high)}</span>
+    <svg viewBox="0 0 320 110" role="img"
+      aria-label={`${plot.title}. ${plot.yLabel} versus ${plot.xLabel}, ${plot.x.length} points.`}>
+      <path d="M10 8V98H310" fill="none" stroke="currentColor" opacity=".4" />
+      {!scatter && <polyline points={points} fill="none" stroke="currentColor" strokeWidth="1.8" />}
+      {(scatter || plot.x.length <= 48) && plot.x.map((value, index) =>
+        <circle key={index} cx={x.at(value)} cy={y.at(plot.y[index])} r="2.4" fill="currentColor">
+          <title>{value}, {plot.y[index]}</title>
+        </circle>)}
+    </svg>
+    <span>{plot.xLabel} · {formatScienceRange(x.low, x.high)}</span>
+  </>;
+}
 
 const ROWS = "ABCDEFGHIJKLMNOP";
 const COLORS = GROUP_NAMED_COLORS.map((color) => color.hex);
