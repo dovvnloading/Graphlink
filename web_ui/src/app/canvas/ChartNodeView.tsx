@@ -259,8 +259,7 @@ export const ChartNodeView = memo(function ChartNodeView({
       bodyClassName="chart-node-content"
     >
       {!overview && <div className="chart-node-toolbar nodrag">
-        <ToggleButton size="sm" icon={data.chartAspectLocked ? "lock" : "unlock"}
-          label={data.chartAspectLocked ? "Unlock Aspect" : "Lock Aspect"}
+        <ToggleButton size="sm" icon="lock" aria-label="Lock aspect ratio"
           pressed={data.chartAspectLocked} onPressedChange={data.onToggleAspectLock} />
         <Button size="sm" variant="ghost" iconStart="download"
           aria-expanded={publicationOpen} aria-controls={`chart-publication-${id}`}

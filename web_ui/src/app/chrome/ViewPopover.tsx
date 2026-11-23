@@ -23,14 +23,14 @@ const FILTER_KIND_LABELS: Record<string, string> = {
   thinking: "Thinking",
   html: "HTML",
   image: "Image",
-  fal_media: "Fal Media Studio",
+  fal_media: "Fal media studio",
   conversation: "Conversation",
-  web_research: "Web Research",
+  web_research: "Web research",
   plan: "Plan",
   artifact: "Artifact",
   gitlink: "Gitlink",
-  code_review: "Code Review",
-  code_sandbox: "Code Sandbox",
+  code_review: "Code review",
+  code_sandbox: "Code sandbox",
   note: "Note",
   chart: "Chart",
   harness: "Agent",
@@ -317,13 +317,13 @@ export function ViewPopover({ store }: { store: SceneStore }) {
             onPreset={(p) => store.setDragFactor(p / 100)}
           />
           <ToggleRow
-            label="Snap to Grid"
+            label="Snap to grid"
             hint="Dragged nodes land on grid lines"
             checked={scene.snapToGrid}
             onChange={(v) => store.setSnapToGrid(v)}
           />
           <ToggleRow
-            label="Smart Guides"
+            label="Smart guides"
             hint="Snap to alignments with nearby nodes"
             checked={scene.smartGuides}
             onChange={(v) => store.setSmartGuides(v)}
@@ -377,13 +377,13 @@ export function ViewPopover({ store }: { store: SceneStore }) {
             they configure connections, so they get a section that says so. */}
         <FieldGroup title="Connections" className="view-section">
           <ToggleRow
-            label="Fade Connections"
+            label="Fade connections"
             hint="Dim all lines except the one under the pointer"
             checked={scene.fadeConnectionsEnabled}
             onChange={(v) => store.setFadeConnections(v)}
           />
           <ToggleRow
-            label="Orthogonal Routing"
+            label="Orthogonal routing"
             hint="Route eligible lines at right angles"
             checked={scene.orthogonalRouting}
             onChange={(v) => store.setOrthogonalConnections(v)}
@@ -453,7 +453,7 @@ export function ViewPopover({ store }: { store: SceneStore }) {
               own directly above it: dimming rejected branches and dimming
               filtered-out kinds are the same job. */}
           <ToggleRow
-            label="Focus Accepted Paths"
+            label="Focus accepted paths"
             hint="Dim rejected and superseded branches"
             checked={focusAcceptedPaths}
             onChange={(v) => store.setFocusAcceptedPaths(v)}

@@ -70,6 +70,45 @@ function makeOverlays(): OverlayContextValue {
 }
 
 describe("buildCommands", () => {
+  it("uses sentence-case labels for every palette command", () => {
+    const store = makeStore();
+    // @ts-expect-error - test double
+    const names = buildCommands(store, makeRf(), makeOverlays()).map((command) => command.name);
+    expect(names).toEqual([
+          "Fit all to view",
+          "Reset view",
+          "Export canvas as PNG",
+          "Zoom in",
+          "Zoom out",
+          "Organize nodes",
+          "Graph runner",
+          "Select all nodes",
+          "Delete selected items",
+          "Compare branches",
+          "Synthesize branches",
+          "Add navigation pin",
+          "Open library",
+          "Open settings",
+          "Open view controls",
+          "Open navigation pins",
+          "Open help",
+          "Open about",
+          "Open agent",
+          "Open plugins",
+          "Quick switcher",
+          "Open global search",
+          "Add note",
+          "Add table",
+          "New chat",
+          "Save chat",
+          "Focus on selection",
+          "Create frame",
+          "Create container",
+          "Collapse all nodes",
+          "Expand all nodes"
+    ]);
+  });
+
   it("fit-all and organize-nodes are disabled with an empty scene", () => {
     const store = makeStore([]);
     // @ts-expect-error - test double
@@ -226,7 +265,7 @@ describe("buildCommands", () => {
     // @ts-expect-error - test double
     const commands = buildCommands(store, makeRf(), makeOverlays());
     const save = commands.find((c) => c.id === "save-chat")!;
-    expect(save.name).toBe("Save Chat");
+    expect(save.name).toBe("Save chat");
     expect(save.enabled()).toBe(true);
     save.run();
     expect(store.saveChat).toHaveBeenCalledTimes(1);
@@ -261,7 +300,7 @@ describe("buildCommands", () => {
     // @ts-expect-error - test double
     const empty = buildCommands(makeStore([]), makeRf(), makeOverlays());
     const exportEmpty = empty.find((c) => c.id === "export-canvas-png")!;
-    expect(exportEmpty.name).toBe("Export Canvas as PNG");
+    expect(exportEmpty.name).toBe("Export canvas as PNG");
     expect(exportEmpty.enabled()).toBe(false);
 
     const nodeList = [{ id: "n0", x: 0, y: 0, title: "A", kind: "placeholder" }];

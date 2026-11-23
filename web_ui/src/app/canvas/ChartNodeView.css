@@ -30,7 +30,7 @@
   display: flex; flex-direction: column; align-items: stretch; gap: var(--gl-space-1);
   min-height: 32px; padding: var(--gl-space-1); color: var(--gl-surface-text-primary);
 }
-.chart-analysis-toolbar-row { display: flex; align-items: center; gap: var(--gl-space-1); }
+.chart-analysis-toolbar-row { display: flex; align-items: center; gap: var(--gl-space-1); min-width: 0; }
 .chart-analysis-tools-panel {
   display: grid; gap: var(--gl-space-1-5); max-height: 160px; overflow: auto;
   padding: var(--gl-space-1-5); background: var(--gl-surface-inset);
@@ -39,10 +39,9 @@
 .chart-analysis-tool-modes, .chart-analysis-tool-locks { display: flex; gap: var(--gl-space-1); flex-wrap: wrap; }
 .chart-analysis-tool-form { display: flex; align-items: end; flex-wrap: wrap; gap: var(--gl-space-1-5); }
 .chart-analysis-status {
-  position: absolute; bottom: var(--gl-space-0-5); left: var(--gl-space-1-5);
-  padding: var(--gl-space-0-5) var(--gl-space-1); font-size: var(--gl-text-2xs);
-  background: var(--gl-surface-inset-deep); color: var(--gl-surface-text-primary);
-  pointer-events: none;
+  min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-secondary); pointer-events: none;
 }
 .chart-analysis-label { font-size: var(--gl-text-xs); font-weight: 600; }
 .chart-tooltip {

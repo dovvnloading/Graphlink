@@ -137,10 +137,11 @@ function toolbarButton(page, label) {
 
 async function fitAll(page) {
   await dismissToasts(page);
-  // ViewportDock disables Fit All until the scene contains nodes.
-  const button = page.locator('button[aria-label="Fit All"]:enabled');
+  // The canvas navigation dock enables Fit All once the seeded scene has nodes.
+  const button = page.getByRole("group", { name: "Canvas navigation" })
+    .getByRole("button", { name: "Fit All", exact: true });
   await button.waitFor({ state: "visible", timeout: 15_000 });
-  await button.click();
+  await button.click({ timeout: 15_000 });
   await sleep(350);
 }
 
@@ -306,7 +307,7 @@ async function captureTheme(page, theme, capture, interrupted) {
       await page.getByTestId("scene-canvas").locator(".react-flow__pane").click({ position: { x: 20, y: 20 } });
       await page.keyboard.press(shortcut.key);
       if (shortcut.key === "Control+f") {
-        await page.getByRole("textbox", { name: "Search the canvas" }).waitFor();
+        await page.getByRole("searchbox", { name: "Search the canvas" }).waitFor();
       } else {
         await page.getByRole("dialog", { name: shortcut.name }).waitFor();
       }
@@ -314,7 +315,7 @@ async function captureTheme(page, theme, capture, interrupted) {
     });
     if (shortcut.key === "Control+f") {
       await shot("Canvas search: index", "keyboard-search-index", async () => {
-        await page.getByRole("textbox", { name: "Search the canvas" }).fill("index");
+        await page.getByRole("searchbox", { name: "Search the canvas" }).fill("index");
         return {};
       });
     }
@@ -340,14 +341,20 @@ async function captureTheme(page, theme, capture, interrupted) {
     return {};
   });
   const settings = page.getByRole("dialog", { name: "Settings" });
-  const labels = await settings.locator(".settings-rail-button").allTextContents().catch(() => []);
-  for (let index = 0; index < labels.length; index += 1) {
-    const name = labels[index].trim();
+  // Rail copy is abbreviated, but section buttons and the content region expose
+  // the full section name (for example Ollama (Local), not Ollama).
+  const sections = await settings.locator(".settings-rail-button").evaluateAll((buttons) =>
+    buttons.map((button) => ({
+      name: button.textContent?.trim() || "",
+      section: button.getAttribute("aria-label") || "",
+    })),
+  );
+  for (const { name, section } of sections) {
     const stem = `settings-${slug(name)}`;
     await shot(`Settings: ${name}`, stem, async () => {
       if (!await settings.isVisible()) await toolbarButton(page, "Settings").click();
-      await settings.locator(".settings-rail-button").nth(index).click();
-      await settings.getByRole("region", { name, exact: true }).waitFor();
+      await settings.getByRole("button", { name: section, exact: true }).click();
+      await settings.getByRole("region", { name: section, exact: true }).waitFor();
       await sleep(180);
       return {};
     });
@@ -372,7 +379,9 @@ async function captureTheme(page, theme, capture, interrupted) {
     await toolbarButton(page, "Library").click();
     const library = page.getByRole("dialog", { name: "Chat library" });
     await library.waitFor({ state: "visible" });
-    const openChat = library.getByRole("button", { name: /^Open chat "Events API p99 regression"/ }).first();
+    const openChat = library.locator(".chat-library-row")
+      .filter({ hasText: "Events API p99 regression" })
+      .getByRole("button", { name: /^Open chat / }).first();
     // Library rows populate asynchronously after the dialog becomes visible.
     const openChatVisible = await openChat.waitFor({ state: "visible", timeout: 15_000 })
       .then(() => true, () => false);
@@ -430,7 +439,8 @@ async function captureTheme(page, theme, capture, interrupted) {
     await fitAll(page);
     const node = page.locator(".react-flow__node-chat").first();
     await node.waitFor({ state: "visible" });
-    await node.locator(".node-card-header").click();
+    await node.locator(".node-card-title-slot").click();
+    await node.locator(".scene-node.selected").waitFor({ state: "visible" });
     await page.locator(".app-composer-layer").waitFor();
     return {};
   });

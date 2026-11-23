@@ -6,7 +6,6 @@ import { NodeMenu } from "./NodeMenu";
 import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
-import { Icon } from "../ui/icons/Icon";
 import { MenuGroup, MenuItem } from "../ui/Menu";
 
 /**
@@ -98,7 +97,6 @@ function ThinkingNodeViewImpl({ data, selected }: NodeProps<ThinkingFlowNode>) {
       onMenuChange={setMenuPosition}
       header={
         <NodeHeading className="thinking-node-label">
-          <Icon name="node-thinking" size="sm" />
           <span>Thinking</span>
         </NodeHeading>
       }

@@ -11,7 +11,6 @@ import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 import { Button } from "../ui/Button";
-import { IconButton } from "../ui/IconButton";
 import { MenuItem } from "../ui/Menu";
 import { Badge } from "../ui/Badge";
 import { TextArea } from "../ui/TextArea";
@@ -452,20 +451,9 @@ export const CodeSandboxNodeView = memo(function CodeSandboxNodeView({
                 }}
                 disabled={savingCode} spellCheck={false} />
             ) : data.codeSandboxCode ? (
-              <>
-                <div className="code-sandbox-node-code-header">
-                  <span><Icon name="node-code" size="sm" />Python</span>
-                  <IconButton size="sm" icon="copy" label="Copy Python code"
-                    onClick={() => {
-                      navigator.clipboard.writeText(data.codeSandboxCode).catch((error: unknown) => {
-                        console.error("[code-sandbox] Copy Python failed:", error);
-                      });
-                    }} />
-                </div>
-                <div className="chat-node-content code-sandbox-node-code">
-                  <NodeMarkdown content={toPythonFence(data.codeSandboxCode)} />
-                </div>
-              </>
+              <div className="chat-node-content code-sandbox-node-code">
+                <NodeMarkdown content={toPythonFence(data.codeSandboxCode)} />
+              </div>
             ) : null}
           </div>
 
