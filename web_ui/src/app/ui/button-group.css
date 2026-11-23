@@ -1,6 +1,8 @@
+@layer kit {
 .gl-button-group {
   display: inline-flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--gl-space-0-5);
+}
 }

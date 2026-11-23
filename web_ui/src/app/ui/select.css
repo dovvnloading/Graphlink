@@ -1,3 +1,4 @@
+@layer kit {
 .gl-select { display: grid; gap: var(--gl-space-1-5); min-width: 0; }
 .gl-select-label { font-size: var(--gl-text-sm); font-weight: 500; color: var(--gl-surface-text-primary); }
 .gl-select-trigger {
@@ -101,4 +102,5 @@
 @keyframes gl-select-exit { from { opacity: 1; } to { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
   .gl-select-panel { animation: none !important; transform: none !important; }
+}
 }

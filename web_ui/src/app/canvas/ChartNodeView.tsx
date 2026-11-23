@@ -291,7 +291,7 @@ export const ChartNodeView = memo(function ChartNodeView({
           <Button size="sm" type="submit" iconStart="download" loading={publicationBusy}>
             {publicationBusy ? "Exporting…" : `Download ${publicationFormat.toUpperCase()}`}
           </Button>
-          {publicationError && <InlineAlert variant="error" {...{ title: "Publication export failed" }} body={publicationError} />}
+          {publicationError && <InlineAlert variant="error" title="Publication export failed" body={publicationError} />}
         </form>}
       </div>}
       <Suspense fallback={<div className="chart-node-placeholder">Loading chart…</div>}>

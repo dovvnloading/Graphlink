@@ -1,3 +1,4 @@
+@layer nodes {
 /* The agent's on-demand, read-only workspace browser. It sits below the
    folder binding and scrolls internally instead of expanding the canvas card. */
 .harness-workspace-files-actions {
@@ -75,3 +76,4 @@
   overflow-wrap: anywhere;
 }
 .harness-files-row:hover, .harness-files-entry:hover { background:var(--gl-neutral-button-hover); }
+}

@@ -1,3 +1,4 @@
+@layer nodes {
 /* -- R3.25/R3.26 conversation node ------------------------------------------ */
 
 .conversation-node {
@@ -227,4 +228,4 @@
 .conversation-node-cancel-btn:hover:enabled {
   background-color: var(--gl-neutral-button-hover);
 }
-
+}

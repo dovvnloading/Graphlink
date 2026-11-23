@@ -10,6 +10,35 @@
 @import "./HarnessNodeView.css";
 @import "./ChatVersionCompareDialog.css";
 
+@layer nodes {
+/* Factor-scaled panning is handled by the wrapper (React Flow's own pan is
+   disabled), so the wrapper also owns the grab cursors the library would
+   otherwise apply. */
+.scene-canvas .react-flow__pane {
+  cursor: grab;
+  /* The wrapper owns the pan gesture (React Flow's own pan is disabled so
+     the speed factor can apply), so the browser must not claim touch
+     drags for scrolling before the handler sees them. */
+  touch-action: none;
+}
+
+.scene-canvas.panning .react-flow__pane {
+  cursor: grabbing;
+}
+
+.scene-canvas .react-flow {
+  background-color: var(--gl-surface-window);
+}
+
+.scene-canvas .react-flow__edge-path {
+  stroke: var(--gl-surface-border-strong, var(--gl-surface-text-muted));
+  stroke-width: 1.5;
+}
+
+.scene-canvas .react-flow__edge.selected .react-flow__edge-path {
+  stroke: var(--gl-surface-text-primary);
+}
+
 .app-topbar {
   height: 44px;
   flex: none;
@@ -298,3 +327,4 @@
 /* A selected group remains underneath the cards contained in it. */
 .scene-canvas .react-flow__node-frame.selected { z-index: -1; }
 .scene-canvas .react-flow__node-container.selected { z-index: -2; }
+}

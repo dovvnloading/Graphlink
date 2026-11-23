@@ -1,0 +1,277 @@
+@layer surfaces {
+/* -- Plugin picker popover (R2.5c) ----------------------------------------- */
+
+.plugin-picker-shell {
+  box-sizing: border-box;
+  min-width: 0;
+  width: min(520px, calc(100vw - 16px));
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: var(--gl-space-2);
+}
+
+.plugin-picker-search {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-2);
+  padding: var(--gl-space-1-5) var(--gl-space-2) var(--gl-space-2-5);
+  border-bottom: 1px solid var(--gl-surface-border);
+}
+
+.plugin-picker-search-input {
+  box-sizing: border-box;
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: calc(var(--gl-space-1-5) + 1px) var(--gl-space-2-5);
+  font: inherit;
+  font-size: var(--gl-text-xs);
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+}
+
+.plugin-picker-search-input::placeholder {
+  color: var(--gl-surface-text-muted);
+}
+
+.plugin-picker-clear-btn {
+  flex-shrink: 0;
+  padding: var(--gl-space-1-5) var(--gl-space-2);
+  color: var(--gl-surface-text-muted);
+  background: transparent;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  font: inherit;
+  font-size: var(--gl-text-2xs);
+  cursor: pointer;
+}
+
+.plugin-picker-clear-btn:hover {
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.plugin-picker-hint {
+  margin: 0;
+  padding: var(--gl-space-1-5) var(--gl-space-2-5) var(--gl-space-0-5);
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-muted);
+}
+
+.plugin-picker-main {
+  display: flex;
+  min-height: 0;
+}
+
+.plugin-picker-search-input:focus-visible,
+.plugin-picker-clear-btn:focus-visible,
+.plugin-picker-category-btn:focus-visible,
+.plugin-picker-row:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 2px;
+}
+
+.plugin-picker-rail {
+  box-sizing: border-box;
+  width: 190px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-1-5);
+  padding: var(--gl-space-2-5);
+  border-right: 1px solid var(--gl-surface-border);
+}
+
+.plugin-picker-rail-label {
+  margin: 0 0 var(--gl-space-1) var(--gl-space-1);
+  font-size: var(--gl-text-2xs);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--gl-surface-text-muted);
+}
+
+.plugin-picker-rail-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-1-5);
+}
+
+.plugin-picker-category-btn {
+  box-sizing: border-box;
+  width: 100%;
+  padding: var(--gl-space-2) var(--gl-space-2-5);
+  min-height: 34px;
+  text-align: left;
+  font: inherit;
+  font-size: var(--gl-text-xs);
+  font-weight: 650;
+  color: var(--gl-surface-text-muted);
+  background-color: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--gl-radius-sm);
+  cursor: pointer;
+}
+
+.plugin-picker-category-btn:hover {
+  background-color: var(--gl-neutral-button-hover);
+  color: var(--gl-surface-text-primary);
+}
+
+.plugin-picker-category-btn.active {
+  background-color: var(--gl-neutral-button-hover);
+  border-color: var(--gl-surface-border);
+  color: var(--gl-surface-text-primary);
+}
+
+.plugin-picker-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-2);
+  padding: var(--gl-space-2-5) var(--gl-space-3);
+}
+
+.plugin-picker-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--gl-space-2);
+}
+
+.plugin-picker-title {
+  margin: 0;
+  font-size: var(--gl-text-sm);
+  font-weight: 700;
+  color: var(--gl-surface-text-primary);
+}
+
+.plugin-picker-meta {
+  margin: 0;
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-muted);
+  white-space: nowrap;
+}
+
+.plugin-picker-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 300px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-1);
+}
+
+.plugin-picker-empty {
+  margin: 0;
+  padding: var(--gl-space-3) var(--gl-space-2);
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-muted);
+}
+
+.plugin-picker-row {
+  box-sizing: border-box;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-2-5);
+  padding: var(--gl-space-2) var(--gl-space-2-5);
+  min-height: 50px;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--gl-radius-md);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.plugin-picker-row:hover {
+  background-color: var(--gl-neutral-button-hover);
+  border-color: var(--gl-surface-border);
+}
+
+.plugin-picker-row-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--gl-space-0-5) + 1px);
+}
+
+.plugin-picker-row-label {
+  font-size: var(--gl-text-xs);
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plugin-picker-row-description {
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.plugin-picker-operation .plugin-picker-row-label {
+  white-space: normal;
+}
+
+.plugin-picker-operation .plugin-picker-row-description {
+  display: block;
+}
+
+.plugin-picker-row-inputs {
+  font-size: var(--gl-text-2xs);
+  overflow-wrap: anywhere;
+}
+
+.plugin-picker-row-chevron {
+  flex-shrink: 0;
+  font-size: var(--gl-text-lg);
+  color: var(--gl-surface-text-muted);
+}
+
+.plugin-picker-row-category {
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-muted);
+}
+
+@media (max-width: 560px) {
+  .plugin-picker-main {
+    flex-direction: column;
+  }
+
+  .plugin-picker-rail {
+    width: 100%;
+    padding: var(--gl-space-1-5) var(--gl-space-2);
+    border-right: none;
+    border-bottom: 1px solid var(--gl-surface-border);
+  }
+
+  .plugin-picker-rail-buttons {
+    flex-direction: row;
+    overflow-x: auto;
+  }
+
+  .plugin-picker-category-btn {
+    width: auto;
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .plugin-picker-list {
+    max-height: min(300px, 42vh);
+  }
+}
+}

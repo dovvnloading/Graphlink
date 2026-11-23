@@ -1,3 +1,4 @@
+@layer nodes {
 /* -- R3.17/R3.18 html view node -------------------------------------------- */
 
 .html-node {
@@ -148,3 +149,4 @@
 
 
 .html-node-splitter .gl-icon { pointer-events: none; }
+}

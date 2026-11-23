@@ -1,3 +1,4 @@
+@layer surfaces {
 /* Knowledge library surface and the shared file-import status. */
 .knowledge-search-dialog .overlay-dialog-body { display: grid; gap: var(--gl-space-4); }
 .knowledge-search-heading { display: grid; gap: var(--gl-space-2); }
@@ -116,3 +117,4 @@
 }
 .knowledge-file-import-message[role="alert"] { color: var(--gl-semantic-status-error); }
 .knowledge-file-import-message .gl-progress { width: 100%; }
+}

@@ -1,3 +1,4 @@
+@layer nodes {
 /* -- R6.1 note node ---------------------------------------------------- */
 
 /* Deliberately no width/max-height here (unlike every other .scene-node.*
@@ -80,4 +81,4 @@
   outline: none;
   border-color: var(--gl-surface-text-muted);
 }
-
+}

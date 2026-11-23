@@ -1,3 +1,4 @@
+@layer nodes {
 /* -- R5.3 gitlink node ---------------------------------------------------- */
 
 .gitlink-node {
@@ -103,23 +104,9 @@
   line-height: 1.4;
 }
 
-.gitlink-node-input:focus,
-
-
-
-
-
-
 /* The one filled control in the Setup tab - same treatment
    .code-sandbox-node-run carries, so "the action that moves you forward"
    looks the same on every card that has one. */
-
-
-
-
-
-
-
 
 .gitlink-node-repo-options {
   list-style: none;
@@ -130,10 +117,6 @@
   border: 1px solid var(--gl-surface-border);
   border-radius: var(--gl-radius-sm);
 }
-
-
-
-
 
 .gitlink-node-file-tree {
   display: flex;
@@ -246,10 +229,6 @@
   color: var(--gl-surface-text-muted);
 }
 
-
-
-
-
 .gitlink-node-review-selection-bar button:focus-visible,
 .gitlink-node-review-file input:focus-visible {
   outline: 2px solid var(--gl-focus-ring);
@@ -343,12 +322,6 @@
   justify-content: flex-end;
 }
 
-
-
-
-
-
-
 .gitlink-node-apply-dialog {
   max-width: min(460px, calc(100vw - 64px));
 }
@@ -370,21 +343,9 @@
   margin-top: var(--gl-space-1);
 }
 
-
-
-
-
-
-
 /* R8a (UI/UX issue list finding #23): neither of these two buttons had any
    hover at all. Same brightening as .code-exec-approval-approve-btn's
    identical recipe (both wrap AI-generated-code apply/execute prompts). */
-
-
-
-
-
-
 
 /* Kit Checkbox label text is not duplicated alongside a review-file button. */
 .gitlink-node-review-file .gl-checkbox-label { 
@@ -402,3 +363,4 @@
 .gitlink-node-apply-dialog-actions .gl-button { min-width: var(--gl-control-h-sm); }
 
 .gitlink-node-extra-files .gl-disclosure-content { max-height: none; }
+}

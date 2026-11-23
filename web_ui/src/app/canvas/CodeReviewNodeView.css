@@ -1,3 +1,4 @@
+@layer nodes {
 /* -- Review Lens node ----------------------------------------------------
    Same card chrome as .gitlink-node-*: a max-height scrolling flex column
    with flex-shrink: 0 children (THE SQUEEZE fix), tab strip, labelled
@@ -427,8 +428,4 @@
   justify-content: flex-end;
   gap: var(--gl-space-2);
 }
-
-
-
-
-
+}

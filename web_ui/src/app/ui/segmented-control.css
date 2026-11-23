@@ -1,3 +1,4 @@
+@layer kit {
 .gl-segmented-control {
   box-sizing: border-box;
   display: inline-flex;
@@ -49,3 +50,4 @@
 .gl-segmented-control-segment:focus-visible { outline: 2px solid var(--gl-focus-ring); outline-offset: 2px; }
 .gl-segmented-control-segment:disabled { opacity: .45; cursor: not-allowed; }
 .gl-segmented-control-segment--sm { height: var(--gl-control-h-sm); }
+}

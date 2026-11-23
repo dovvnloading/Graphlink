@@ -1,3 +1,4 @@
+@layer kit {
 /* Shared light and modal surfaces. Variants in app/styles.css override the
    zero-specificity base without relying on import order. */
 :where(.overlay-popover) {
@@ -142,4 +143,5 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .overlay-popover, .overlay-scrim, .overlay-dialog { animation: none !important; transform: none !important; }
+}
 }

@@ -1,3 +1,4 @@
+@layer kit {
 /* The only icon sizes: the token branch can land before or after this one. */
 .gl-icon {
   display: inline-block;
@@ -99,3 +100,4 @@
 }
 .gl-icon-gallery-pair-item { display: grid; justify-items: center; gap: var(--gl-space-2); min-width: var(--gl-space-12); }
 .gl-icon-gallery-pair-label { font-family: var(--gl-font-mono); font-size: var(--gl-text-xs); color: var(--gl-surface-text-muted); }
+}

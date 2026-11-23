@@ -1,4 +1,6 @@
+@layer nodes {
 /* Kit Button supplies the focus and click behavior; the disclosure keeps the
    kit chevron and heading separated inside Button's single label span. */
 .gl-disclosure-trigger.gl-button { justify-content: flex-start; }
 .gl-disclosure-trigger .gl-button-label { gap: var(--gl-space-2); }
+}

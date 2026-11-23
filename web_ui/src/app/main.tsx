@@ -1,7 +1,11 @@
+// First import on purpose: base.css declares the cascade layer order
+// (@layer vendor, base, kit, surfaces, nodes, overrides). A layer is ordered
+// by its first appearance, so this must precede every component stylesheet,
+// including lazily loaded vendor CSS, or a late layer would win.
+import "../lib/ui/base.css";
 import { lazy, StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
-import "../lib/ui/base.css";
 // The single-SPA app has no Qt host injecting :root { --gl-* } at build time
 // (that was _inline_bundle()'s job, deleted in the Qt-removal cutover) - the
 // token values ship with the app unconditionally, imported here

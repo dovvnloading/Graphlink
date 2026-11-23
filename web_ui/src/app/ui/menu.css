@@ -1,3 +1,4 @@
+@layer kit {
 /* Kit menu surfaces are portaled to body, outside React Flow transforms. */
 .gl-menu {
   box-sizing: border-box;
@@ -153,4 +154,5 @@
   margin: var(--gl-space-1) 0 var(--gl-space-1) var(--gl-space-3);
   padding-left: var(--gl-space-2);
   border-left: 1px solid var(--gl-surface-border);
+}
 }

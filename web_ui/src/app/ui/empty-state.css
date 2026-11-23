@@ -1,3 +1,4 @@
+@layer kit {
 .gl-empty-state {
   display: flex;
   flex-direction: column;
@@ -18,3 +19,4 @@
 .gl-empty-state--lg .gl-empty-state-title { font-size: var(--gl-text-xl); }
 .gl-empty-state-body { max-width: 36ch; margin: 0; font-size: var(--gl-text-sm); }
 .gl-empty-state-actions { display: flex; justify-content: center; gap: var(--gl-space-2); margin-top: var(--gl-space-2); }
+}

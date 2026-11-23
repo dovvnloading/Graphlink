@@ -1,3 +1,4 @@
+@layer nodes {
 /* -- R3.9/R3.10 document node ---------------------------------------------- */
 
 .document-node {
@@ -76,4 +77,4 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
-
+}

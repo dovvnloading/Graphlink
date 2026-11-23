@@ -1,3 +1,4 @@
+@layer surfaces {
 .global-search-dialog .overlay-dialog-body { display: flex; flex-direction: column; gap: var(--gl-space-3); }
 .global-search-row { display: flex; align-items: center; gap: var(--gl-space-2); }
 .global-search-input { flex: 1; min-width: 0; padding: var(--gl-space-2) var(--gl-space-3); border: 1px solid var(--gl-surface-border); border-radius: var(--gl-radius-sm); color: var(--gl-surface-text-primary); background: var(--gl-surface-field); font-size: var(--gl-text-base); font-family: inherit; }
@@ -16,3 +17,4 @@
 .global-search-result-footer { display: flex; justify-content: space-between; align-items: center; gap: var(--gl-space-2); color: var(--gl-surface-text-muted); font-size: var(--gl-text-xs); }
 .global-search-result-open-link { color: var(--gl-surface-text-primary); background: transparent; border: 0; cursor: pointer; text-decoration: underline; font: inherit; }
 .global-search-jump-error { color: var(--gl-semantic-status-error); font-size: var(--gl-text-xs); }
+}

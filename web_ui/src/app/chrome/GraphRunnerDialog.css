@@ -1,3 +1,4 @@
+@layer surfaces {
 .graph-runner-dialog .overlay-dialog-body { color: var(--gl-surface-text-secondary); font-size: var(--gl-text-sm); line-height: var(--gl-leading-sm); display: flex; flex-direction: column; gap: var(--gl-space-4); }
 .graph-runner-dialog p { margin: 0; }
 .runner-controls, .runner-commit, .runner-section-header, .runner-step-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--gl-space-2); }
@@ -29,3 +30,4 @@
 .runner-attempts { margin-top: var(--gl-space-2); }
 .runner-attempts ol { padding-inline-start: var(--gl-space-5); margin: var(--gl-space-1) 0; }
 .runner-attempts li { overflow-wrap: anywhere; }
+}

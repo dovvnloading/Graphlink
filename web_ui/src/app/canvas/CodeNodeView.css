@@ -1,3 +1,4 @@
+@layer nodes {
 /* -- R3.5/R3.6 code node --------------------------------------------------- */
 
 .chat-node,
@@ -32,4 +33,4 @@
 .code-node-content > :last-child {
   margin-bottom: 0;
 }
-
+}

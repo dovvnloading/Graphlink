@@ -1,3 +1,4 @@
+@layer nodes {
 /* Kit controls own their visuals; studio CSS supplies compact node layout. */
 .fal-studio-node { width: min(680px, 90vw); max-width: 100%; }
 .fal-studio-node .scene-node-body.fal-studio-body { min-width: 0; padding: 0; }
@@ -70,3 +71,4 @@
 .fal-studio-result { margin-top: var(--gl-space-2); }
 .fal-studio-result pre { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--gl-font-mono); font-size: var(--gl-text-xs); }
 .fal-studio-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: var(--gl-space-2); padding: var(--gl-space-3); background: var(--gl-surface-inset); border-top: 1px solid var(--gl-surface-border); color: var(--gl-surface-text-muted); font-size: var(--gl-text-2xs); }
+}

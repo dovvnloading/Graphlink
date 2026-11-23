@@ -58,7 +58,7 @@ function Rows({ store, node, group, offset, setOffset }: {
   }, [store, id, tableSourceHash, group, offset]);
 
   if (!result) return <p role="status"><Spinner size={12} decorative /> Loading source rows…</p>;
-  if (result.state === "error") return <InlineAlert variant="error" {...{ title: "Could not load source rows" }} body={result.message} />;
+  if (result.state === "error") return <InlineAlert variant="error" title="Could not load source rows" body={result.message} />;
   const { rows, totalRows } = result.page;
   return <>
     <div className="table-workflow-scroll">
@@ -104,7 +104,7 @@ function GroupPicker({ store, node }: { store: SceneStore; node: SceneNodeRow })
 export function TableContributors({ node, store }: { node: SceneNodeRow; store: SceneStore }) {
   const [open, setOpen] = useState(false);
   const current = node.tableInputStatus === "current" && !node.tableOutputEdited;
-  return <Disclosure {...{ title: "Inspect source rows" }} disabled={!current} open={current && open} onOpenChange={setOpen}>
+  return <Disclosure title="Inspect source rows" disabled={!current} open={current && open} onOpenChange={setOpen}>
     {current && open && <GroupPicker key={JSON.stringify([node.tableInputSourceId, node.tableSourceHash])} node={node} store={store} />}
   </Disclosure>;
 }

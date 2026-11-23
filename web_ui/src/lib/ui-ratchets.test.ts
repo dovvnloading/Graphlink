@@ -184,6 +184,9 @@ function inspectTsx(source: string): { clean: string; code: string; tags: JsxTag
     tagEnds.add(match.index + match[0].length - 1);
   }
   const jsxTexts = [...code.matchAll(/(?:>|\})([^<>{}]+)(?=[<{])/g)]
+    // A brace inside a JSX attribute expression (e.g. options={[...rows]})
+    // is not rendered text. Never scan that attribute body as copy.
+    .filter((match) => !tags.some((tag) => match.index >= tag.start && match.index < tag.end))
     .filter((match) => match[0].startsWith(">")
       ? tagEnds.has(match.index)
       : code.lastIndexOf(">", match.index) > code.lastIndexOf(";", match.index))
@@ -192,7 +195,7 @@ function inspectTsx(source: string): { clean: string; code: string; tags: JsxTag
   return { clean, code, tags, literalTexts: [...literals, ...expressions, ...jsxTexts] };
 }
 
-type JsxTag = { name: string; attributes: Map<string, string>; end: number };
+type JsxTag = { name: string; attributes: Map<string, string>; start: number; end: number };
 
 function jsxTags(clean: string, code: string): JsxTag[] {
   const tags: JsxTag[] = [];
@@ -254,7 +257,7 @@ function jsxTags(clean: string, code: string): JsxTag[] {
         k += Math.max(1, value.length);
       }
     }
-    tags.push({ name, attributes, end: j });
+    tags.push({ name, attributes, start: i, end: j });
   }
   return tags;
 }
@@ -290,7 +293,7 @@ function tsxCounts(source: string, file: string): Partial<Record<RatchetRule, nu
     R5: tags.filter((tag) => tag.name === "details").length,
     R6: tags.filter((tag) => tag.name === "input" && ["checkbox", "radio", "range"].includes(tag.attributes.get("type") ?? "")).length,
     R7: tags.filter((tag) => ["menuitem", "menuitemcheckbox", "menuitemradio"].includes(tag.attributes.get("role") ?? "")).length,
-    R8: tags.filter((tag) => tag.name !== "iframe" && tag.attributes.has("title")).length,
+    R8: tags.filter((tag) => /^[a-z]/.test(tag.name) && tag.name !== "iframe" && tag.attributes.has("title")).length,
     R13: texts.reduce((sum, text) => sum + count(text, ELLIPSIS_RE), 0),
   };
 }
@@ -459,9 +462,9 @@ describe("UI-02 detector self-tests (positive and known false-positive shapes)",
     const counts = tsxCounts(src, "app/sample.tsx");
     expect([counts.R4, counts.R5, counts.R6, counts.R7]).toEqual([1, 1, 3, 1]);
   });
-  it("R8 ignores iframe titles and object-type prop names", () => {
-    const src = 'type Props = { title: string }; const p: Props = { title: "x" }; <iframe title="Video" /><div title="Legacy tooltip" />';
-    expect(tsxCounts(src, "app/sample.tsx").R8).toBe(1);
+  it("R8 counts native title attributes, not kit component title props or object fields", () => {
+    const src = 'type Props = { title: string }; const p: Props = { title: "x" }; <iframe title="Video" /><div title="Legacy tooltip" /><Dialog title="Dialog heading" /><Card title="Card heading" /><my-element title="Native attribute" />';
+    expect(tsxCounts(src, "app/sample.tsx").R8).toBe(2);
   });
   it("R9–R11 allow tokens, markdown em, standard radius and z-index values", () => {
     const css = '.foo { font-size: var(--gl-small); border-radius: 50%; z-index: -1; }\n.node-md p {font-size: 0.9em} .katex span { font-size: 1.1em }\n.foo {font-size: 13px; border-radius: 8px; z-index: 7}';
@@ -475,6 +478,10 @@ describe("UI-02 detector self-tests (positive and known false-positive shapes)",
     const src = 'const a = {...x}; function fn(...args: string[]) {} const r = /[.]{3}/; <p>Wait...</p>; const s = "Loading..."';
     expect(tsxCounts(src, "app/sample.tsx").R13).toBe(2);
     expect(tsxCounts("<p>{value}Wait...</p>", "app/sample.tsx").R13).toBe(1);
+  });
+  it("R13 excludes array spread syntax inside multiline JSX attributes", () => {
+    const src = '<Select options={[\n  ...(!choice ? [{ value: "x" }] : []),\n  ...items.map((item) => ({ value: item }))\n]} /><p>Wait...</p>';
+    expect(tsxCounts(src, "app/sample.tsx").R13).toBe(1);
   });
   it("R1 exception scanner requires its exact justified context", () => {
     expect(allowableGlyphCount('return " × 10";', "app/canvas/scientificWorkbench.ts", "×")).toBe(1);

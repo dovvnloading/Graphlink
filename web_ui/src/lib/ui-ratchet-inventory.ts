@@ -4,7 +4,7 @@
  * line between entries to minimize conflicts with parallel UI migrations.
  * Zero-count files are intentionally absent: an unpinned file must stay at 0.
  *
- * app/styles.css pins for R9–R12 and R14 are maxima rather than exact counts,
+ * app/styles.css R12 line count is a maximum rather than an exact count,
  * to avoid blocking unrelated ongoing CSS cleanups. All other pins are exact.
  * See docs/DESIGN_SYSTEM.md for the replacement component conventions.
  */
@@ -39,19 +39,14 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
 
 
-  { file: "app/chrome/KnowledgeSettingsPage.tsx", rule: "R13", count: 1 },
 
 
 
-  { file: "app/styles.css", rule: "R9", count: 259 },
 
-  { file: "app/styles.css", rule: "R10", count: 128 },
 
-  { file: "app/styles.css", rule: "R11", count: 2 },
 
-  { file: "app/styles.css", rule: "R12", count: 6662 },
+  { file: "app/styles.css", rule: "R12", count: 153 },
 
-  { file: "app/styles.css", rule: "R14", count: 564 },
 ];
 
 /** Each historical R1 exception must remain exact, too; it is not a blanket

@@ -1,3 +1,4 @@
+@layer surfaces {
 /* Chat library and quick switcher surface rules; kit owns all controls. */
 .chat-library-dialog {
   min-width: min(360px, calc(100vw - 32px));
@@ -190,3 +191,4 @@
   font-size: var(--gl-text-xs);
 }
 .quick-switcher-shortcuts > span { display: inline-flex; align-items: center; gap: var(--gl-space-1); }
+}

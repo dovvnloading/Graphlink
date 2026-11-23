@@ -153,7 +153,7 @@ export function ChatVersionCompareDialog({
   };
 
   return (
-    <Dialog name="chat-version-compare" {...{ title: `Document View · Compare ${target.isUser ? "message" : "reply"} versions` }} size="lg" className="chat-version-compare-dialog">
+    <Dialog name="chat-version-compare" title={`Document View · Compare ${target.isUser ? "message" : "reply"} versions`} size="lg" className="chat-version-compare-dialog">
       <p className="chat-version-compare-help">
         Choose two saved {target.isUser ? "versions" : "replies"}. This comparison is read-only and never changes the active version.
         Use Alt+Left/Right Arrow to switch reading panes, or Tab to the pane focus buttons. Escape closes.

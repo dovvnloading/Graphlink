@@ -1,3 +1,4 @@
+@layer nodes {
 /* UI-17: common node defaults moved from the global stylesheet. */
 .scene-node {
   min-width: 160px;
@@ -1010,4 +1011,20 @@
 .scene-node.scene-node-card:has(> .node-search-state[data-search="match"]) {
   outline: 2px solid var(--gl-accent);
   outline-offset: var(--gl-space-0-5);
+}
+
+/* The deferred node view placeholder keeps node geometry stable. */
+.scene-node-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 260px;
+  min-height: 120px;
+  padding: var(--gl-space-4);
+  color: var(--gl-surface-text-muted);
+  font-size: var(--gl-text-2xs);
+  text-align: center;
+  border: 1px dashed var(--gl-surface-border);
+  border-radius: var(--gl-radius-md);
+}
 }

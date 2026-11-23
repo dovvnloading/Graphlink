@@ -1,3 +1,4 @@
+@layer kit {
 .gl-field { display: grid; align-content: start; gap: var(--gl-space-1-5); min-width: 0; }
 .gl-field-label { color: var(--gl-surface-text-primary); font-size: var(--gl-text-sm); font-weight: var(--gl-weight-medium); line-height: var(--gl-leading-sm); }
 .gl-field-required { color: var(--gl-surface-text-secondary); }
@@ -13,3 +14,4 @@
 .gl-field-group-title { margin: 0; font-size: var(--gl-text-sm); font-weight: var(--gl-weight-semibold); line-height: var(--gl-leading-sm); color: var(--gl-surface-text-primary); }
 .gl-field-group-description { margin: 0; font-size: var(--gl-text-xs); line-height: var(--gl-leading-xs); color: var(--gl-surface-text-muted); }
 .gl-field-group-rows { display: grid; gap: var(--gl-space-3); }
+}

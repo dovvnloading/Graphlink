@@ -1,3 +1,4 @@
+@layer kit {
 .gl-toaster {
   position: fixed;
   top: calc(44px + var(--gl-space-3));
@@ -68,4 +69,5 @@
 /* Keep the centered canvas-search strip unobstructed on narrower desktops. */
 @media (max-width: 1200px) {
   .gl-toaster { top: calc(44px + var(--gl-space-12) + var(--gl-space-4)); }
+}
 }

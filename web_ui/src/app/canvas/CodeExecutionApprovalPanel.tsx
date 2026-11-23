@@ -348,7 +348,7 @@ export function CodeExecutionApprovalPanel({
         </header>
         <div className="overlay-dialog-body">
           <InlineAlert variant="warning" className="code-exec-approval-warning"
-            {...{ title: "Approval required" }} body={WARNING_TEXT[kind]} />
+            title="Approval required" body={WARNING_TEXT[kind]} />
           {!!resourceLimitsText && (
             <p className="code-exec-approval-resource-limits">{resourceLimitsText}</p>
           )}

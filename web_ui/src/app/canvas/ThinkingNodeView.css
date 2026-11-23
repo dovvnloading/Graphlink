@@ -1,3 +1,4 @@
+@layer nodes {
 /* -- R3.13/R3.14 thinking node + docked-child badge ------------------------ */
 
 .thinking-node {
@@ -31,4 +32,4 @@
 .thinking-node-content > :last-child {
   margin-bottom: 0;
 }
-
+}

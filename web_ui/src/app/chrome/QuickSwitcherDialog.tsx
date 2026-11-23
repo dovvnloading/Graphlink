@@ -96,7 +96,7 @@ export function QuickSwitcherDialog({ transport }: { transport: WsTransport }) {
   }
 
   return (
-    <Dialog {...{ title: "Quick switcher" }} name="quick-switcher" size="md" className="quick-switcher-dialog">
+    <Dialog title="Quick switcher" name="quick-switcher" size="md" className="quick-switcher-dialog">
       <TextField
         label="Search graphs by title"
         type="search"
@@ -114,7 +114,7 @@ export function QuickSwitcherDialog({ transport }: { transport: WsTransport }) {
         spellCheck={false}
       />
       {filtered.length === 0 ? (
-        <EmptyState icon="search" {...{ title: "No matching graphs" }} body="Try a different title or open the chat library." />
+        <EmptyState icon="search" title="No matching graphs" body="Try a different title or open the chat library." />
       ) : (
         <ul id="quick-switcher-results" className="quick-switcher-results" role="listbox" aria-label="Graphs" ref={resultsRef}>
           {filtered.map((row, index) => {

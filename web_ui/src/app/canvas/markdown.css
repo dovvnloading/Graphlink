@@ -1,3 +1,4 @@
+@layer nodes {
 /* Markdown surfaces: code chrome, syntax, tables, callouts and image zoom. */
 .document-view-heading-anchor {
   margin-left: var(--gl-space-1-5);
@@ -120,4 +121,5 @@
   right: var(--gl-space-3);
   z-index: var(--gl-z-dialog);
   background: var(--gl-surface-overlay);
+}
 }

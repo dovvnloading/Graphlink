@@ -1,3 +1,4 @@
+@layer nodes {
 /* -- R6.1 frame/container group node --------------------------------------- */
 /* GroupNodeView.tsx - one shared component for both "frame" and "container"
    NODE_TYPES entries. Renders as a background decoration BEHIND its member
@@ -290,4 +291,5 @@
   border-bottom: 1px solid var(--gl-surface-border);
   background-color: color-mix(in srgb, var(--group-header-color, var(--group-frame-color)) var(--group-frame-alpha), transparent);
   pointer-events: none;
+}
 }

@@ -1,3 +1,4 @@
+@layer surfaces {
 .pins-popover { width: 300px; }
 .pins-header {
   display: flex;
@@ -56,4 +57,5 @@
 .pins-empty {
   color: var(--gl-surface-text-muted);
   font-size: var(--gl-text-sm);
+}
 }

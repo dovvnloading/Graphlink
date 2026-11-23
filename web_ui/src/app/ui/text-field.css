@@ -1,3 +1,4 @@
+@layer kit {
 .gl-text-field { box-sizing: border-box; display: flex; align-items: center; gap: var(--gl-space-1-5); width: 100%; min-width: 0; height: var(--gl-control-h-md); padding: 0 var(--gl-space-2); border: 1px solid var(--gl-surface-border-strong); border-radius: var(--gl-radius-sm); background: var(--gl-surface-field); color: var(--gl-surface-text-primary); transition: border-color var(--gl-motion-fast) var(--gl-ease); }
 .gl-text-field-sm { height: var(--gl-control-h-sm); }
 .gl-text-field-mono { font-family: var(--gl-font-mono); }
@@ -15,3 +16,4 @@
 .gl-text-field-button:active { background: var(--gl-state-pressed); }
 .gl-text-field-button:focus-visible { outline: 2px solid var(--gl-focus-ring); outline-offset: 2px; }
 .gl-text-field-button:disabled { opacity: .45; cursor: not-allowed; }
+}

@@ -1,3 +1,4 @@
+import "./PluginPicker.css";
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
 import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";

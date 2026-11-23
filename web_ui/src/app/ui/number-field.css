@@ -1,3 +1,4 @@
+@layer kit {
 .gl-number-field { box-sizing: border-box; display: flex; align-items: center; min-width: 0; height: var(--gl-control-h-md); width: 100%; gap: var(--gl-space-1); padding: 0 var(--gl-space-0-5); border: 1px solid var(--gl-surface-border-strong); border-radius: var(--gl-radius-sm); background: var(--gl-surface-field); color: var(--gl-surface-text-primary); }
 .gl-number-field-disabled { opacity: .45; cursor: not-allowed; }
 .gl-number-field:where(:has(.gl-number-field-input:focus-visible)) { outline: 2px solid var(--gl-focus-ring); outline-offset: 2px; }
@@ -12,3 +13,4 @@
 .gl-number-step:focus-visible { outline: 2px solid var(--gl-focus-ring); outline-offset: 2px; }
 .gl-number-step:disabled { opacity: .45; cursor: not-allowed; }
 .gl-number-unit { flex: none; color: var(--gl-surface-text-muted); font-size: var(--gl-text-xs); }
+}

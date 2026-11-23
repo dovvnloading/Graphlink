@@ -1,3 +1,4 @@
+@layer surfaces {
 /* Context inspection shares the overlay surface with composer tools. */
 .context-inspector-launcher { flex: none; display: inline-flex; align-items: center; }
 .context-inspector-disabled-trigger { display: inline-flex; }
@@ -56,4 +57,5 @@
   padding: var(--gl-space-2) 0;
   border-top: 1px solid var(--gl-surface-border);
   overflow-wrap: anywhere;
+}
 }

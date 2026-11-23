@@ -1,3 +1,4 @@
+@layer kit {
 .gl-inline-alert {
   display: flex;
   align-items: flex-start;
@@ -14,3 +15,4 @@
 .gl-inline-alert-body { color: var(--gl-surface-text-secondary); }
 .gl-inline-alert--error .gl-inline-alert-title,
 .gl-inline-alert--warning .gl-inline-alert-title { font-weight: var(--gl-weight-semibold); }
+}

@@ -1,3 +1,4 @@
+@layer kit {
 .gl-confirm-content { display: grid; gap: var(--gl-space-4); }
 .gl-confirm-body {
   color: var(--gl-surface-text-primary);
@@ -17,3 +18,4 @@
   font-size: var(--gl-text-sm);
 }
 .gl-confirm-detail { overflow-wrap: anywhere; font-size: var(--gl-text-xs); }
+}

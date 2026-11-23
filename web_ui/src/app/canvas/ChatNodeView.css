@@ -1,3 +1,4 @@
+@layer nodes {
 /* -- R3.1/R3.2 chat node --------------------------------------------------- */
 
 .chat-node {
@@ -570,3 +571,4 @@
 .chat-node-version-switcher { display:inline-flex; align-items:center; gap:var(--gl-space-0-5); font-variant-numeric:tabular-nums; }
 .chat-node-status-badge, .chat-node-synthesis-badge, .chat-node-final-badge, .chat-node-knowledge-badge { display:inline-flex; align-items:center; gap:var(--gl-space-0-5); }
 .chat-node-footer-meta .gl-badge { min-width:0; max-width:100%; }
+}

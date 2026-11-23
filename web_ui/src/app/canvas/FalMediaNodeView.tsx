@@ -101,13 +101,13 @@ function categoryIcon(category: string): IconName {
 }
 /** Adapters use label for a kit component's heading, never a native tooltip attribute. */
 function StudioDisclosure({ label, ...rest }: Omit<ComponentProps<typeof Disclosure>, "title"> & { label: string }) {
-  return <Disclosure {...rest} {...{ title: label }} />;
+  return <Disclosure {...rest} title={label} />;
 }
 function StudioAlert({ label, ...rest }: Omit<ComponentProps<typeof InlineAlert>, "title"> & { label: string }) {
-  return <InlineAlert {...rest} {...{ title: label }} />;
+  return <InlineAlert {...rest} title={label} />;
 }
 function StudioEmpty({ label, ...rest }: Omit<ComponentProps<typeof EmptyState>, "title"> & { label: string }) {
-  return <EmptyState {...rest} {...{ title: label }} />;
+  return <EmptyState {...rest} title={label} />;
 }
 function dateString(raw: string): string {
   const date = new Date(raw);

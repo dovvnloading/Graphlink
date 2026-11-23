@@ -1,3 +1,4 @@
+@layer kit {
 .gl-switch { display: inline-flex; gap: var(--gl-space-2); align-items: flex-start; min-height: var(--gl-control-h-sm); cursor: pointer; color: var(--gl-surface-text-primary); }
 .gl-switch-track-wrap { position: relative; display: inline-grid; place-items: center; height: var(--gl-control-h-sm); width: var(--gl-space-10); flex: none; }
 .gl-switch-input { position: absolute; width: 1px; height: 1px; opacity: 0; margin: 0; padding: 0; }
@@ -12,3 +13,4 @@
 .gl-switch-error { display: flex; align-items: center; gap: var(--gl-space-1); color: var(--gl-surface-text-primary); font-size: var(--gl-text-xs); }
 .gl-switch-disabled { opacity: .45; cursor: not-allowed; }
 :where(.gl-switch:active) .gl-switch-track { border-color: var(--gl-accent); }
+}

@@ -1,3 +1,4 @@
+@layer nodes {
 /* -- R3.21/R3.22 image node ------------------------------------------------ */
 
 .image-node {
@@ -50,4 +51,4 @@
   border: 1px dashed var(--gl-surface-border);
   border-radius: var(--gl-radius-md);
 }
-
+}

@@ -159,7 +159,7 @@ export function LlamaCppPage({ state, transport }: { state: AppSettingsState; tr
           first to switch to what you just typed. */}
       <ProviderModeSwitch mode={MODE_LLAMACPP_LOCAL} state={state} transport={transport} />
 
-      <FieldGroup {...{ title: "Reasoning level" }}>
+      <FieldGroup title="Reasoning level">
         <FormRow label="Reasoning level" layout="inline">
           <SegmentedControl label="Reasoning level"
             options={REASONING_LEVEL_OPTIONS} value={state.llamaCppReasoningLevel}

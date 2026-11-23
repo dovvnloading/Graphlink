@@ -1,3 +1,4 @@
+@layer nodes {
 /* -- R5.4 code_sandbox node ------------------------------------------------
 
    Rebuilt from the straight port, which had two structural defects and a
@@ -320,3 +321,4 @@
 .code-sandbox-node-deps-summary { display:flex; align-items:center; gap:var(--gl-space-1-5); font-size:var(--gl-text-xs); color:var(--gl-surface-text-muted); }
 .code-sandbox-node-section-label { display:inline-flex; align-items:center; gap:var(--gl-space-1); }
 .code-sandbox-node-code .node-md-code-block-language { text-transform: capitalize; }
+}

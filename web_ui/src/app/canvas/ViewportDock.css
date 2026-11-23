@@ -1,3 +1,4 @@
+@layer nodes {
 .viewport-dock.react-flow__panel {
   display: inline-flex;
   align-items: center;
@@ -24,3 +25,4 @@
 .viewport-scale:hover { background: var(--gl-neutral-button-hover); }
 .viewport-scale:focus-visible { outline: 2px solid var(--gl-palette-selection); outline-offset: 1px; }
 .viewport-divider { width: 1px; height: var(--gl-space-5); background: var(--gl-surface-border); margin-inline: var(--gl-space-0-5); }
+}

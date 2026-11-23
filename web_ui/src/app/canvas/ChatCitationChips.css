@@ -1,3 +1,4 @@
+@layer nodes {
 .chat-citations {
   margin: var(--gl-space-2-5) 0 var(--gl-space-1);
   padding: var(--gl-space-2) var(--gl-space-2-5) 0;
@@ -30,3 +31,4 @@
 }
 .chat-citation-inline:hover { text-decoration: underline; }
 .chat-citation-unverified { font-size: var(--gl-text-2xs); color: var(--gl-surface-text-muted); }
+}

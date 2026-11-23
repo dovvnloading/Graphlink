@@ -1,3 +1,6 @@
+@layer vendor, base, kit, surfaces, nodes, overrides;
+
+@layer base {
 /* Shared base stylesheet imported by EVERY island's styles.css (first import).
 
    Qt 6.11's Chromium ships Windows-11 "Fluent" overlay scrollbars: large
@@ -106,4 +109,5 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
+}
 }
