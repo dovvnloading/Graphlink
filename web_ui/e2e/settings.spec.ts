@@ -32,7 +32,7 @@ test("opens Settings and renders the real provider/general section tabs", async 
   await expect(dialog.getByRole("region", { name: "General" })).toBeVisible();
 });
 
-// The kit Select is an independent nested overlay, not a second dialog.
+// The policy kit Select is an independent nested overlay, not a second dialog.
 test("Escape closes only the nested listbox before closing Settings", async ({ page }) => {
   await gotoApp(page);
   const opener = page.locator('[data-overlay-trigger="settings"]');
@@ -43,17 +43,17 @@ test("Escape closes only the nested listbox before closing Settings", async ({ p
   await dialog.getByRole("navigation", { name: "Settings sections" })
     .getByRole("button", { name: "General", exact: true }).click();
 
-  const theme = dialog.getByRole("button", { name: "Theme" });
-  await theme.click();
-  const listbox = page.getByRole("listbox", { name: "Theme" });
+  const policy = dialog.getByRole("button", { name: "Model selection policy" });
+  await policy.click();
+  const listbox = page.getByRole("listbox", { name: "Model selection policy" });
   await expect(listbox).toBeVisible();
-  await expect(listbox.getByRole("option", { name: "Dark" })).toBeVisible();
+  await expect(listbox.getByRole("option", { name: "Best quality" })).toBeVisible();
   await expect(listbox).toBeFocused();
 
   await page.keyboard.press("Escape");
   await expect(listbox).toBeHidden();
   await expect(dialog).toBeVisible();
-  await expect(theme).toBeFocused();
+  await expect(policy).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
   await expect(opener).toBeFocused();
