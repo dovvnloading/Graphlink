@@ -49,10 +49,10 @@
   text-align: left;
   cursor: pointer;
 }
-.gl-menu-item:hover:not(:disabled) { background-color: var(--gl-neutral-button-hover); }
-.gl-menu-item:active:not(:disabled) { background-color: var(--gl-neutral-button-pressed, var(--gl-neutral-button-hover)); }
+.gl-menu-item:hover:not(:disabled) { background-image: linear-gradient(var(--gl-state-hover), var(--gl-state-hover)); }
+.gl-menu-item:active:not(:disabled) { background-image: linear-gradient(var(--gl-state-pressed), var(--gl-state-pressed)); }
 .gl-menu-item[aria-checked="true"] {
-  background-color: var(--gl-neutral-button-pressed, var(--gl-neutral-button-hover));
+  background-image: linear-gradient(var(--gl-state-selected), var(--gl-state-selected));
   border-inline-start: 2px solid var(--gl-accent);
 }
 .gl-menu-item:focus-visible {
