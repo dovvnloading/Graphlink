@@ -1,10 +1,20 @@
 import json
 import unittest
 
+from compare_runs import compare
 import run_spike
 
 
 class TestEvidence(unittest.TestCase):
+    def test_clean_build_comparison_ignores_clock_and_requires_image_and_proof_identity(self):
+        path = run_spike.HERE.parents[1] / "docs/evidence/formal_lean_p0_run_45179416012.json"
+        first = json.loads(path.read_bytes())
+        compare(first, {**first, "startedAt": "another time"})
+        with self.assertRaisesRegex(ValueError, "imageId"):
+            compare(first, {**first, "imageId": "sha256:" + "0" * 64})
+        with self.assertRaisesRegex(ValueError, "fixtures"):
+            compare(first, {**first, "fixtures": first["fixtures"][:-1]})
+
     def test_probe_must_match_binary_and_import_lock(self):
         raw = (run_spike.HERE / "toolchain.lock.json").read_bytes()
         lock = json.loads(raw)

@@ -18,9 +18,13 @@ concurrency:
 
 jobs:
   fixtures:
-    name: Replay fixed Lean fixtures on Linux x86-64
+    name: Replay fixed Lean fixtures (build ${{ matrix.build }})
     runs-on: ubuntu-24.04
     timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        build: [first, second]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -28,14 +32,7 @@ jobs:
       - name: Test fixture runner contracts
         run: python3 -m unittest discover -s tests/formal_lean_spike
       - name: Provision the pinned fixture image
-        shell: bash
-        run: |
-          mkdir -p "$RUNNER_TEMP/formal-lean"
-          docker version > "$RUNNER_TEMP/formal-lean/docker-version.txt"
-          DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --progress=plain \
-            --iidfile "$RUNNER_TEMP/formal-lean/image-id.txt" \
-            -f tests/formal_lean_spike/image/Dockerfile tests/formal_lean_spike \
-            2>&1 | tee "$RUNNER_TEMP/formal-lean/build.log"
+        run: bash tests/formal_lean_spike/image/build.sh "$RUNNER_TEMP/formal-lean"
       - name: Run fixtures against the local immutable image
         run: |
           python3 tests/formal_lean_spike/run_spike.py \
@@ -45,7 +42,26 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: formal-lean-spike-${{ github.run_id }}-${{ github.run_attempt }}
+          name: formal-lean-${{ matrix.build }}
           path: ${{ runner.temp }}/formal-lean/
           if-no-files-found: warn
           retention-days: 14
+
+  reproduce:
+    name: Compare image and proof identities across clean builds
+    needs: fixtures
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          pattern: formal-lean-*
+          path: ${{ runner.temp }}/evidence
+      - name: Compare measured identities and outcomes
+        run: |
+          python3 tests/formal_lean_spike/compare_runs.py \
+            "$RUNNER_TEMP/evidence/formal-lean-first/results.json" \
+            "$RUNNER_TEMP/evidence/formal-lean-second/results.json"

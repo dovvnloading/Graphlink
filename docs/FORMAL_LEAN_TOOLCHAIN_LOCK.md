@@ -8,14 +8,14 @@ Run from the repository root on Linux x86-64 with Docker Engine, cgroup v2, runc
 
 ```sh
 evidence=$(mktemp -d)
-DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --progress=plain \
-  --iidfile "$evidence/image-id.txt" -f tests/formal_lean_spike/image/Dockerfile \
-  tests/formal_lean_spike
+bash tests/formal_lean_spike/image/build.sh "$evidence"
 python3 tests/formal_lean_spike/run_spike.py \
   --image-id "$(cat "$evidence/image-id.txt")" --report "$evidence/results.json"
+# After completing any repeat runs, release the local tag created for this build.
+docker image rm "$(cat "$evidence/image-tag.txt")"
 ```
 
-The workflow retains the Docker version, build transcript, local image ID and JSON measurements for 14 days. A failed measurement returns a nonzero status. Inspect the error and the last completed fixture in the report. A failed provisioning step leaves the build log. The stdlib-only host tests can also run without Docker.
+The build script uses Docker Buildx and a pinned BuildKit builder. The workflow builds on two fresh Ubuntu machines and compares the local image IDs, toolchains and complete replay measurements. It retains the Docker version, build transcript, local image identity and JSON measurements for 14 days. A failed measurement returns a nonzero status. Inspect the error and the last completed fixture in the report. A failed provisioning step leaves the build log. The stdlib-only host tests can also run without Docker.
 
 ```sh
 python3 -m unittest discover -s tests/formal_lean_spike
@@ -64,4 +64,6 @@ The earlier positive run stopped when nanoda could not resolve `propext` while r
 
 ## Release disposition
 
-Strict assurance is disabled. The fresh replay inspects dependencies directly from exported declarations. Coverage of the imported-inductive case in [Lean issue 15226](https://github.com/leanprover/lean4/issues/15226) and independent review of the completeness of this traversal remain release gates. A passing direct or imported-placeholder fixture alone cannot close that issue. Likewise, a working Ubuntu fixture suite does not establish desktop sandbox support, receipt persistence, undo or grant revocation. See the [acceptance matrix](https://github.com/dovvnloading/Graphlink/blob/4523324e890aada048fe8b82a2c447704f7cc442/docs/FORMAL_LEAN_PLUGIN_PLAN.md#17-delivery-acceptance-matrix-release-blockers).
+Strict assurance is disabled. The inspector follows references in exported expressions, declaration types and bodies, mutual inductive families, constructors, and recursor rules. Its own two compile-time checks exercise mutual-family and recursor records. Coverage of the specific imported-inductive case and independent review of the completeness of this traversal remain release gates. [Lean issue 15226](https://github.com/leanprover/lean4/issues/15226)
+
+The live transcript covers the fixed fixtures and the Ubuntu profile. Product gates for desktop isolation, editor behavior, receipt persistence, undo and grant revocation remain open. [Acceptance matrix](https://github.com/dovvnloading/Graphlink/blob/4523324e890aada048fe8b82a2c447704f7cc442/docs/FORMAL_LEAN_PLUGIN_PLAN.md#17-delivery-acceptance-matrix-release-blockers)

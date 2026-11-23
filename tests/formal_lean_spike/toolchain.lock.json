@@ -21,5 +21,11 @@
     "revision": "fc4f59e577feb1a4956671bc04ac18aaaf8cd842",
     "manifest_sha256": "11887e45895bc6c521059db7957e78e9fd7aec1884e8c931db4a42be6c1af9b5",
     "module": "Mathlib.Data.Nat.Basic"
+  },
+  "build": {
+    "buildkit_version": "v0.35.1",
+    "buildkit_image": "docker.io/moby/buildkit@sha256:7583a0667093d941826bcd1d2878d6a360dfd08a82c93e6d6a6f6cce78801e12",
+    "buildkit_config_digest": "sha256:d0ff8587a88d8adf2744704927bc567a23f4e8a1f4e732b579d673623a8a0fb2",
+    "source_date_epoch": 1794852377
   }
 }
