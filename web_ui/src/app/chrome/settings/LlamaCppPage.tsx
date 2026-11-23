@@ -1,7 +1,13 @@
 import { useId, useState, type ReactNode } from "react";
 import type { WsTransport } from "../../../lib/ws/transport";
 import type { AppSettingsState } from "../../../lib/bridge-core/generated/app-settings-state";
-import { CustomSelect } from "../CustomSelect";
+import { Select } from "../../ui/Select";
+import { NumberField } from "../../ui/NumberField";
+import { TextField } from "../../ui/TextField";
+import { Button } from "../../ui/Button";
+import { FieldGroup, FormRow } from "../../ui/Field";
+import { SegmentedControl } from "../../ui/SegmentedControl";
+import { Spinner } from "../../ui/Spinner";
 import { formatLocalModelBytes, ProviderModeSwitch, REASONING_LEVEL_OPTIONS } from "../LocalProviderSettings";
 
 const LLAMA_CPP_MODELS_DATALIST_ID = "settings-llama-cpp-scanned-models";
@@ -64,24 +70,21 @@ function LlamaCppNumberField({
   }
 
   return (
-    <label className="settings-field">
-      <span className="settings-field-label">{label}</span>
-      <input
-        type="number"
-        className="settings-select"
-        min={min}
-        max={max}
-        step={step}
-        placeholder={placeholder}
-        value={draft}
-        onChange={(event) => {
-          setDraft(event.target.value);
-          const n = Number(event.target.value);
-          if (!Number.isNaN(n) && event.target.value.trim() !== "") onCommit(n);
-        }}
-      />
-    </label>
+    <NumberField label={label} value={draft.trim() ? Number(draft) : ""}
+      min={min} max={max} step={step} placeholder={placeholder}
+      onChange={(event) => {
+        const text = event.currentTarget.value;
+        setDraft(text);
+        const parsed = Number(text);
+        if (text.trim() && Number.isFinite(parsed)) onCommit(parsed);
+      }}
+      onValueChange={(next) => {
+        setDraft(String(next));
+        if (next !== "") onCommit(next);
+      }}
+    />
   );
+
 }
 
 type LlamaCppModel = AppSettingsState["llamaCppModels"][number];
@@ -146,6 +149,8 @@ export function LlamaCppPage({ state, transport }: { state: AppSettingsState; tr
 
   return (
     <div className="settings-general-page">
+      <h2 className="settings-page-title">Llama.cpp</h2>
+      <p className="settings-page-description">Configure your local GGUF models, runtime and reasoning preferences.</p>
       {/* Compares against the PERSISTED Llama.cpp config, same as
           apply_provider_mode's own Llama.cpp branch reads
           (settings_manager.get_llama_cpp_settings()) - if the model path
@@ -154,42 +159,31 @@ export function LlamaCppPage({ state, transport }: { state: AppSettingsState; tr
           first to switch to what you just typed. */}
       <ProviderModeSwitch mode={MODE_LLAMACPP_LOCAL} state={state} transport={transport} />
 
-      <fieldset className="settings-fieldset">
-        <legend>Reasoning Level</legend>
-        {REASONING_LEVEL_OPTIONS.map((option) => (
-          <label className="settings-checkbox-row" key={option.id}>
-            <input
-              type="radio"
-              name="llama-cpp-reasoning-level"
-              checked={state.llamaCppReasoningLevel === option.id}
-              onChange={() => transport.fireIntent("app-settings", "setLlamaCppReasoningLevel", [option.id], undefined, true)}
-            />
-            {option.label}
-          </label>
-        ))}
-      </fieldset>
+      <FieldGroup title="Reasoning Level">
+        <FormRow label="Reasoning level" layout="inline">
+          <SegmentedControl label="Reasoning level"
+            options={REASONING_LEVEL_OPTIONS} value={state.llamaCppReasoningLevel}
+            onChange={(value) => transport.fireIntent("app-settings", "setLlamaCppReasoningLevel", [value], undefined, true)} />
+        </FormRow>
+      </FieldGroup>
 
       <p className="settings-update-status">
         Current Active GGUF: <strong>{state.llamaCppChatModelPath ? basename(state.llamaCppChatModelPath) : "No model selected"}</strong>
       </p>
 
       <div className="settings-button-row">
-        <button
-          type="button"
-          className="settings-button"
+        <Button variant="secondary"
           disabled={state.llamaCppScanStatus === "running"}
           onClick={() => transport.fireIntent("app-settings", "scanLlamaCppSystem", [])}
         >
-          {state.llamaCppScanStatus === "running" ? "Scanning..." : "System Scan"}
-        </button>
-        <button
-          type="button"
-          className="settings-button"
+          {state.llamaCppScanStatus === "running" ? "Scanning…" : "System Scan"}
+        </Button>
+        <Button variant="secondary"
           disabled={state.llamaCppScanStatus === "running"}
           onClick={() => transport.fireIntent("app-settings", "pickLlamaCppScanFolder", [])}
         >
-          Scan Folder...
-        </button>
+          Scan folder…
+        </Button>
       </div>
       <p className="settings-update-status">{state.llamaCppScanSummary}</p>
 
@@ -202,12 +196,12 @@ export function LlamaCppPage({ state, transport }: { state: AppSettingsState; tr
       {state.llamaCppScannedModels.length > 0 && (
         <div className="settings-field">
           <span className="settings-field-label">Scanned Chat Model</span>
-          <CustomSelect
+          <Select
             ariaLabel="Scanned Chat Model"
             value={scannedChatValue}
             options={[
-              { id: "", label: "Select a scanned model..." },
-              ...state.llamaCppScannedModels.map((path) => ({ id: path, label: basename(path) })),
+              { value: "", label: "Select a scanned model…" },
+              ...state.llamaCppScannedModels.map((path) => ({ value: path, label: basename(path) })),
             ]}
             onChange={(path) => transport.fireIntent("app-settings", "setLlamaCppChatModelPath", [path], undefined, true)}
           />
@@ -217,24 +211,22 @@ export function LlamaCppPage({ state, transport }: { state: AppSettingsState; tr
       <div className="settings-field">
         <span className="settings-field-label">Chat Model File</span>
         <span className="settings-update-status">{state.llamaCppChatModelPath || "No file selected"}</span>
-        <button
-          type="button"
-          className="settings-button"
+        <Button variant="secondary"
           onClick={() => transport.fireIntent("app-settings", "pickLlamaCppChatModelFile", [])}
         >
-          Browse...
-        </button>
+          Browse…
+        </Button>
       </div>
 
       {state.llamaCppScannedModels.length > 0 && (
         <div className="settings-field">
           <span className="settings-field-label">Scanned Naming Model</span>
-          <CustomSelect
+          <Select
             ariaLabel="Scanned Naming Model"
             value={scannedTitleValue}
             options={[
-              { id: "", label: "Select a scanned model..." },
-              ...state.llamaCppScannedModels.map((path) => ({ id: path, label: basename(path) })),
+              { value: "", label: "Select a scanned model…" },
+              ...state.llamaCppScannedModels.map((path) => ({ value: path, label: basename(path) })),
             ]}
             onChange={(path) => transport.fireIntent("app-settings", "setLlamaCppTitleModelPath", [path], undefined, true)}
           />
@@ -244,13 +236,11 @@ export function LlamaCppPage({ state, transport }: { state: AppSettingsState; tr
       <div className="settings-field">
         <span className="settings-field-label">Chat Naming File (optional)</span>
         <span className="settings-update-status">{state.llamaCppTitleModelPath || "Reusing the main chat model"}</span>
-        <button
-          type="button"
-          className="settings-button"
+        <Button variant="secondary"
           onClick={() => transport.fireIntent("app-settings", "pickLlamaCppTitleModelFile", [])}
         >
-          Browse...
-        </button>
+          Browse…
+        </Button>
       </div>
 
       <div className="settings-field">
@@ -287,19 +277,12 @@ export function LlamaCppPage({ state, transport }: { state: AppSettingsState; tr
         </p>
       </div>
 
-      <label className="settings-field">
-        <span className="settings-field-label">Chat Format Override</span>
-        <input
-          type="text"
-          className="settings-select"
-          placeholder="Leave blank to let the GGUF metadata decide"
-          value={draftChatFormat}
-          onChange={(event) => {
-            setDraftChatFormat(event.target.value);
-            transport.fireIntent("app-settings", "setLlamaCppChatFormat", [event.target.value], undefined, true);
-          }}
-        />
-      </label>
+      <TextField label="Chat Format Override" type="text"
+        placeholder="Leave blank to let the GGUF metadata decide" value={draftChatFormat} mono
+        onValueChange={(value) => {
+          setDraftChatFormat(value);
+          transport.fireIntent("app-settings", "setLlamaCppChatFormat", [value], undefined, true);
+        }} />
 
       <LlamaCppNumberField
         label="GPU Layers"
@@ -324,13 +307,11 @@ export function LlamaCppPage({ state, transport }: { state: AppSettingsState; tr
       )}
 
       <div className="settings-button-row">
-        <button
-          type="button"
-          className="settings-button settings-button-primary"
+        <Button variant="primary"
           onClick={() => transport.fireIntent("app-settings", "saveLlamaCppSettings", [])}
         >
           Save Settings
-        </button>
+        </Button>
       </div>
     </div>
   );
