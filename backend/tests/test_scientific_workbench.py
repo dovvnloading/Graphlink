@@ -9,7 +9,11 @@ import pytest
 
 from backend.canvas import SceneDocument
 from backend.domain.graph_runner import plan_graph_run
-from backend.domain.layout import KIND_FALLBACK_FOOTPRINTS
+from backend.domain.layout import (
+    NODE_GAP_X,
+    NODE_GAP_Y,
+    SCIENTIFIC_WORKBENCH_MIN_FOOTPRINT,
+)
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.plugin_sdk import DEFAULT_PLUGINS_ROOT, discover_plugins
@@ -197,13 +201,15 @@ def test_csv_result_table_growth_cannot_cover_new_statistics_workbench(session, 
     }) == {"ok": True}
     snapshot = envelope(document, source_id)
     assert len(snapshot["latest"]["table"]["rows"]) == 3
-    assert document.node_footprint(source) == KIND_FALLBACK_FOOTPRINTS["workbench"]
 
     # Both ways the picker can launch a node must use the source's eventual
     # footprint: selected source -> child, or no selection -> viewport pin.
+    # The viewport pin is deliberately beyond the compact 240px + 70px
+    # clearance: on main it stays at this x and overlaps when the card grows.
+    # A closer pin would be fanned right even by the broken placement code.
     statistics_id = dispatch(
         bus, "executePlugin", "Statistics", source_id if selected_source else None,
-        source.x, source.y + 300.0,
+        source.x, source.y + 350.0,
     )
     statistics = document.nodes[statistics_id]
     ref = {
@@ -225,6 +231,51 @@ def test_csv_result_table_growth_cannot_cover_new_statistics_workbench(session, 
     assert ax + aw <= bx or bx + bw <= ax or ay + ah <= by or by + bh <= ay, (
         "an expanded scientific result table must not overlap the next workbench"
     )
+
+
+def test_full_card_minimum_is_limited_to_registered_scientific_workbench_kinds():
+    document = SceneDocument()
+    for pack in PACKS:
+        node = document.add_node(0, 0, "fixture")
+        node.kind = f"science_{pack}.workbench"
+        document.set_measured_node_sizes([(node.id, 390.0, 240.0)])
+        assert document.node_footprint(node) == SCIENTIFIC_WORKBENCH_MIN_FOOTPRINT
+
+        # Larger reports remain authoritative on each axis independently.
+        document.set_measured_node_sizes([(node.id, 450.0, 720.0)])
+        assert document.node_footprint(node) == (450.0, 720.0)
+        document.set_measured_node_sizes([(node.id, 380.0, 720.0)])
+        assert document.node_footprint(node) == (392.0, 720.0)
+
+    for kind in ("other_plugin.workbench", "science_core.other", "science_core.workbench_extra", "chat"):
+        node = document.add_node(0, 0, "other kind")
+        node.kind = kind
+        document.set_measured_node_sizes([(node.id, 390.0, 240.0)])
+        assert document.node_footprint(node) == (390.0, 240.0)
+
+
+def test_organize_scientific_workbenches_uses_card_height_without_extra_gaps(session):
+    document, bus, _registry, _settings = session
+    grant(bus, "core")
+    grant(bus, "statistics")
+    parent_id = dispatch(bus, "executePlugin", "Scientific Core", None, 110.0, 90.0)
+    statistics_id = dispatch(bus, "executePlugin", "Statistics", parent_id)
+    sibling_id = dispatch(bus, "executePlugin", "Scientific Core", parent_id)
+    document.set_measured_node_sizes([
+        (node_id, 390.0, 240.0) for node_id in (parent_id, statistics_id, sibling_id)
+    ])
+
+    document.organize()
+    parent = document.nodes[parent_id]
+    children = [document.nodes[statistics_id], document.nodes[sibling_id]]
+    assert children[0].y == children[1].y == (
+        parent.y + SCIENTIFIC_WORKBENCH_MIN_FOOTPRINT[1] + NODE_GAP_Y
+    )
+    left, right = sorted(children, key=lambda node: node.x)
+    assert right.x == left.x + SCIENTIFIC_WORKBENCH_MIN_FOOTPRINT[0] + NODE_GAP_X
+    positions = [(node.x, node.y) for node in (parent, *children)]
+    document.organize()
+    assert positions == [(node.x, node.y) for node in (parent, *children)]
 
 
 @pytest.mark.parametrize("op,inputs", [
