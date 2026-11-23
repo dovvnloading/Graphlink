@@ -1,0 +1,63 @@
+/* Chart node chrome and controls, moved from the monolithic stylesheet. */
+.chart-node { display: flex; flex-direction: column; }
+.chart-node-title { display: flex; align-items: center; gap: var(--gl-space-1-5); }
+.chart-node-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.chart-node-badge { flex-shrink: 0; }
+.chart-node-error-badge { display: inline-flex; flex-shrink: 0; color: var(--gl-surface-text-primary); }
+.chart-node-content { display: flex; flex-direction: column; gap: var(--gl-space-1); flex: 1; min-height: 0; }
+.chart-node-toolbar, .chart-legacy-toolbar, .chart-analysis-controls {
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--gl-space-1); flex-shrink: 0;
+}
+.chart-node-toolbar { padding: var(--gl-space-1) 0; }
+.chart-node-publication-options {
+  flex-basis: 100%; width: 100%; display: flex; flex-wrap: wrap; align-items: end;
+  gap: var(--gl-space-2); padding: var(--gl-space-2);
+  max-height: 190px; overflow-y: auto; background: var(--gl-surface-inset);
+  border: 1px solid var(--gl-surface-border); border-radius: var(--gl-radius-sm);
+}
+.chart-node-publication-options .gl-select { min-width: 110px; }
+.chart-node-publication-options .gl-number-field { min-width: 100px; }
+.chart-canvas-wrapper {
+  position: relative; display: flex; flex-direction: column; flex: 1;
+  min-height: 0; min-width: 0; border-radius: var(--gl-radius-sm);
+  overflow: hidden; outline: 2px solid transparent; outline-offset: -2px;
+}
+.chart-canvas-wrapper[data-interactive="true"] { outline-color: var(--gl-focus-ring); }
+.chart-canvas-svg { display: block; width: 100%; height: 100%; flex: 1; min-height: 0; touch-action: none; }
+.chart-legacy-toolbar { min-height: 32px; padding: var(--gl-space-1); }
+.chart-analysis-controls {
+  display: flex; flex-direction: column; align-items: stretch; gap: var(--gl-space-1);
+  min-height: 32px; padding: var(--gl-space-1); color: var(--gl-surface-text-primary);
+}
+.chart-analysis-toolbar-row { display: flex; align-items: center; gap: var(--gl-space-1); }
+.chart-analysis-tools-panel {
+  display: grid; gap: var(--gl-space-1-5); max-height: 160px; overflow: auto;
+  padding: var(--gl-space-1-5); background: var(--gl-surface-inset);
+  border: 1px solid var(--gl-surface-border); border-radius: var(--gl-radius-sm);
+}
+.chart-analysis-tool-modes, .chart-analysis-tool-locks { display: flex; gap: var(--gl-space-1); flex-wrap: wrap; }
+.chart-analysis-tool-form { display: flex; align-items: end; flex-wrap: wrap; gap: var(--gl-space-1-5); }
+.chart-analysis-status {
+  position: absolute; bottom: var(--gl-space-0-5); left: var(--gl-space-1-5);
+  padding: var(--gl-space-0-5) var(--gl-space-1); font-size: var(--gl-text-2xs);
+  background: var(--gl-surface-inset-deep); color: var(--gl-surface-text-primary);
+  pointer-events: none;
+}
+.chart-analysis-label { font-size: var(--gl-text-xs); font-weight: 600; }
+.chart-tooltip {
+  position: absolute; z-index: var(--gl-z-popover); pointer-events: none;
+  min-width: 90px; padding: var(--gl-space-1-5) var(--gl-space-2);
+  border: 1px solid; border-radius: var(--gl-radius-sm);
+  font-size: var(--gl-text-2xs); line-height: 1.5; box-shadow: var(--gl-shadow-2);
+}
+.chart-tooltip-title {
+  font-weight: 600; margin-bottom: var(--gl-space-0-5); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; max-width: 220px;
+}
+.chart-tooltip-row { display: flex; justify-content: space-between; gap: var(--gl-space-3); white-space: nowrap; }
+.chart-node-placeholder, .chart-canvas-placeholder {
+  display: flex; align-items: center; justify-content: center; width: 100%;
+  min-height: 120px; padding: var(--gl-space-4); color: var(--gl-surface-text-muted);
+  font-size: var(--gl-text-2xs); text-align: center; border: 1px dashed var(--gl-surface-border);
+  border-radius: var(--gl-radius-md);
+}
