@@ -4,13 +4,13 @@
   z-index: var(--gl-z-node-menu);
   display: flex;
   flex-direction: column;
-  gap: var(--gl-space-0-5, 2px);
+  gap: var(--gl-space-1);
   min-width: 170px;
-  max-width: calc(100vw - (2 * var(--gl-space-2)));
-  max-height: calc(100vh - (2 * var(--gl-space-2)));
+  max-width: calc(100vw - var(--gl-space-4));
+  max-height: calc(100vh - var(--gl-space-4));
   overflow-x: hidden;
   overflow-y: auto;
-  padding: var(--gl-space-1-5, 6px);
+  padding: var(--gl-space-2);
   background-color: var(--gl-surface-overlay);
   color: var(--gl-surface-text-primary);
   border: 1px solid var(--gl-surface-border);
