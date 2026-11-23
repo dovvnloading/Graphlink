@@ -1,0 +1,17 @@
+.gl-text-field { box-sizing: border-box; display: flex; align-items: center; gap: var(--gl-space-1-5); width: 100%; min-width: 0; height: var(--gl-control-h-md); padding: 0 var(--gl-space-2); border: 1px solid var(--gl-surface-border-strong); border-radius: var(--gl-radius-sm); background: var(--gl-surface-field); color: var(--gl-surface-text-primary); transition: border-color var(--gl-motion-fast) var(--gl-ease); }
+.gl-text-field-sm { height: var(--gl-control-h-sm); }
+.gl-text-field-mono { font-family: var(--gl-font-mono); }
+.gl-text-field-disabled { opacity: .45; cursor: not-allowed; }
+.gl-text-field:where(:has(.gl-text-field-input:focus-visible)) { outline: 2px solid var(--gl-focus-ring); outline-offset: 2px; }
+.gl-text-field:where(:has(.gl-text-field-input:focus-visible)) { border-color: var(--gl-accent); }
+.gl-text-field:hover { border-color: var(--gl-accent); }
+.gl-text-field-input { box-sizing: border-box; flex: 1; min-width: 0; width: 100%; height: 100%; padding: 0; border: 0; outline: 0; background: transparent; color: inherit; font: inherit; font-size: var(--gl-text-sm); }
+.gl-text-field-input:disabled { cursor: not-allowed; }
+.gl-text-field-input::placeholder { color: var(--gl-surface-text-muted); opacity: 1; }
+.gl-text-field-prefix { display: inline-grid; place-items: center; color: var(--gl-surface-text-secondary); flex: none; }
+.gl-text-field-unit { flex: none; color: var(--gl-surface-text-muted); font-size: var(--gl-text-xs); }
+.gl-text-field-button { display: inline-grid; place-items: center; flex: none; box-sizing: border-box; width: var(--gl-control-h-sm); height: var(--gl-control-h-sm); padding: 0; border: 0; border-radius: var(--gl-radius-xs); background: transparent; color: var(--gl-surface-text-secondary); cursor: pointer; }
+.gl-text-field-button:hover { background: var(--gl-state-hover); }
+.gl-text-field-button:active { background: var(--gl-state-pressed); }
+.gl-text-field-button:focus-visible { outline: 2px solid var(--gl-focus-ring); outline-offset: 2px; }
+.gl-text-field-button:disabled { opacity: .45; cursor: not-allowed; }

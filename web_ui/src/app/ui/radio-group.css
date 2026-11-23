@@ -1,0 +1,21 @@
+.gl-radio-group { display: grid; min-width: 0; margin: 0; padding: 0; border: 0; gap: var(--gl-space-2); color: var(--gl-surface-text-primary); }
+.gl-radio-legend { padding: 0; margin-bottom: var(--gl-space-1-5); font-size: var(--gl-text-sm); font-weight: var(--gl-weight-medium); }
+.gl-radio-options { display: grid; gap: var(--gl-space-1); }
+.gl-radio-option { display: flex; position: relative; align-items: flex-start; min-height: var(--gl-control-h-sm); gap: var(--gl-space-2); cursor: pointer; }
+.gl-radio-input-wrap { position: relative; display: grid; place-items: center; flex: none; width: var(--gl-control-h-sm); height: var(--gl-control-h-sm); }
+.gl-radio-input { position: absolute; width: 1px; height: 1px; padding: 0; margin: 0; opacity: 0; }
+.gl-radio-dot { display: grid; place-items: center; box-sizing: border-box; width: var(--gl-space-4); height: var(--gl-space-4); border: 1px solid var(--gl-surface-border-strong); border-radius: var(--gl-radius-full); background: var(--gl-surface-field); }
+.gl-radio-dot::after { content: ""; display: block; width: var(--gl-space-2); height: var(--gl-space-2); border-radius: var(--gl-radius-full); background: var(--gl-accent); opacity: 0; }
+:where(.gl-radio-input:checked) + .gl-radio-dot::after { opacity: 1; }
+:where(.gl-radio-input:focus-visible) + .gl-radio-dot { outline: 2px solid var(--gl-focus-ring); outline-offset: 2px; }
+.gl-radio-copy { display: grid; gap: var(--gl-space-1); padding-top: var(--gl-space-0-5); min-width: 0; }
+.gl-radio-label { font-size: var(--gl-text-sm); line-height: var(--gl-leading-sm); font-weight: var(--gl-weight-medium); }
+.gl-radio-description { font-size: var(--gl-text-xs); color: var(--gl-surface-text-muted); line-height: var(--gl-leading-xs); }
+.gl-radio-disabled { opacity: .45; cursor: not-allowed; }
+.gl-radio-card { align-items: center; padding: var(--gl-space-3); border: 1px solid var(--gl-surface-border); border-radius: var(--gl-radius-md); background: var(--gl-surface-field); transition: background var(--gl-motion-fast) var(--gl-ease); }
+.gl-radio-card:where(:not(.gl-radio-disabled)):hover { background: var(--gl-state-hover); }
+.gl-radio-card:where(:not(.gl-radio-disabled)):active { background: var(--gl-state-pressed); }
+.gl-radio-card:where(.gl-radio-selected) { background: var(--gl-state-selected); border-color: var(--gl-surface-border-strong); }
+.gl-radio-card:where(.gl-radio-selected)::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 2px; border-radius: var(--gl-radius-xs) 0 0 var(--gl-radius-xs); background: var(--gl-accent); }
+.gl-radio-check { margin-left: auto; color: var(--gl-accent); }
+.gl-radio-error { display: flex; align-items: center; gap: var(--gl-space-1); font-size: var(--gl-text-xs); color: var(--gl-surface-text-primary); }
