@@ -66,7 +66,8 @@ test("discovers models, switches chat model and receives its streamed reply", as
     const picker = page.locator('[data-overlay-trigger="model"]');
     await expect(picker).toContainText(models[0]);
     await picker.click();
-    await page.getByRole("dialog", { name: "Choose a model" }).getByRole("button", { name: models[1] }).click();
+    // UI-15: the model picker is a kit menu; models are menuitemradio items.
+    await page.getByRole("menu", { name: "Choose a model" }).getByRole("menuitemradio", { name: models[1] }).click();
     await expect(picker).toContainText(models[1]);
     await page.getByRole("textbox", { name: "Message composer" }).fill("Hello");
     await page.getByRole("button", { name: "Send message" }).click();

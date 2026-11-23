@@ -258,6 +258,18 @@ function MenuSurface({
   const context = useMemo<MenuContextValue>(() => ({
     dismiss: onClose, nested: overlays.isNested(layerName), submenuPanels, submenuClosers,
   }), [onClose, overlays, layerName]);
+  // The overlay stack can dismiss this layer itself (Escape while focus has
+  // left the panel, an outer close). Mirror that into the owner's state so a
+  // dismissed menu never stays rendered.
+  const layerOpen = overlays.isOpen(layerName);
+  const layerWasOpen = useRef(false);
+  useEffect(() => {
+    if (layerOpen) layerWasOpen.current = true;
+    else if (layerWasOpen.current) {
+      layerWasOpen.current = false;
+      onClose();
+    }
+  }, [layerOpen, onClose]);
   const { regular, destructive } = partitionItems(children);
 
   useMenuKeyboard(panelRef, true, closeTop);
@@ -478,6 +490,12 @@ export function MenuButton({ label, children, menuLabel, className, disabled, on
           if (event.key === "ArrowDown" && !position) {
             event.preventDefault();
             showMenu();
+          } else if (event.key === "Escape" && position) {
+            // Focus can sit on the trigger while the menu is open (a pointer
+            // open, or a sibling layer's focus restore); Escape still closes.
+            event.preventDefault();
+            event.stopPropagation();
+            setPosition(null);
           }
         }}>
         {label}<Icon name="chevron-down" size="sm" />

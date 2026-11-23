@@ -33,6 +33,19 @@ describe("Tooltip", () => {
     expect(button).toHaveFocus();
   });
 
+  it("lets Escape through while the tooltip is only pending, so an open surface still closes", () => {
+    vi.useFakeTimers();
+    const surfaceEscape = vi.fn();
+    document.addEventListener("keydown", surfaceEscape);
+    render(<Tooltip label="Undo"><button type="button">Action</button></Tooltip>);
+    fireEvent.mouseEnter(screen.getByRole("button", { name: "Action" }));
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(surfaceEscape).toHaveBeenCalledOnce();
+    act(() => { vi.advanceTimersByTime(600); });
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    document.removeEventListener("keydown", surfaceEscape);
+  });
+
   it("hides on pointerdown, including outside its trigger", () => {
     render(<Tooltip label="Inspect"><button type="button">Inspect control</button></Tooltip>);
     screen.getByRole("button").focus();

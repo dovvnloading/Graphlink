@@ -187,10 +187,10 @@ describe("HelpDialog", () => {
       // The Builder's section is not selected, but its entry is reachable.
       expect(screen.queryByRole("region", { name: HELP_SECTIONS[0].name })).toBeNull();
       const results = screen.getByRole("region", { name: "Help search results" });
-      expect(within(results).getByText(/Co-pilot or Autopilot/)).toBeInTheDocument();
+      expect(within(results).getByText(/Co-pilot or autopilot/)).toBeInTheDocument();
       // Each result says where it came from, since there are no headings to
       // sit under in a flat list.
-      expect(within(results).getAllByText(/The Builder · /).length).toBeGreaterThan(0);
+      expect(within(results).getAllByText(/The builder · /).length).toBeGreaterThan(0);
     });
 
     it("says so plainly when nothing matches", async () => {
@@ -204,9 +204,9 @@ describe("HelpDialog", () => {
       const user = userEvent.setup();
       await renderOpen();
       await user.type(screen.getByRole("searchbox", { name: "Search help" }), "budget");
-      await user.click(screen.getByRole("button", { name: "The Agent" }));
+      await user.click(screen.getByRole("button", { name: "The agent" }));
       expect(screen.getByRole("searchbox", { name: "Search help" })).toHaveValue("");
-      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("The Agent");
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("The agent");
     });
 
     it("Escape clears the query before it closes the dialog", async () => {

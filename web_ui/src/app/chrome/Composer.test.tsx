@@ -16,7 +16,11 @@ function makeStore(
 ) {
   const listeners = new Set<() => void>();
   const state = {
-    composer: { ...initialComposerState, ...overrides.composer },
+    composer: {
+      ...initialComposerState,
+      route: { ...initialComposerState.route, modelId: "qwen3:8b", modelLabel: "qwen3:8b" },
+      ...overrides.composer,
+    },
     tokenCounter: { ...initialTokenCounterState, ...overrides.tokenCounter },
     notification: { ...initialNotificationState, ...overrides.notification },
     streamText: overrides.streamText ?? "",
@@ -99,6 +103,7 @@ function makeSceneStore(
     overrides.isolationEngine === undefined ? "docker" : overrides.isolationEngine,
   );
   const setReplyTargetNodeId = vi.fn();
+  const setSelectedNodeId = vi.fn();
   const setSynthesizeTargetNodeIds = vi.fn();
   const getChatKnowledgePreference = vi.fn().mockResolvedValue(
     overrides.knowledgePreference ?? { nodeId: null, hasDocuments: false, enabled: false, override: null },
@@ -122,6 +127,7 @@ function makeSceneStore(
     sendComposerAgentMessage,
     getHarnessIsolationEngine,
     setReplyTargetNodeId,
+    setSelectedNodeId,
     setSynthesizeTargetNodeIds,
     getChatKnowledgePreference,
     setChatUseKnowledge,
@@ -139,7 +145,7 @@ function makeSceneStore(
     getSynthesizeTargetNodeIds: () => synthesizeTargetNodeIds,
   };
   return { sceneStore, sendMessage, sendComposerAgentMessage, getHarnessIsolationEngine,
-    setReplyTargetNodeId, setSynthesizeTargetNodeIds, getChatKnowledgePreference, setChatUseKnowledge,
+    setReplyTargetNodeId, setSelectedNodeId, setSynthesizeTargetNodeIds, getChatKnowledgePreference, setChatUseKnowledge,
     emitScene, emitLibraryRevision };
 }
 
@@ -349,7 +355,9 @@ describe("Composer", () => {
     </OverlayProvider>);
 
     const toggle = screen.getByRole("button", { name: "Use knowledge" });
-    await waitFor(() => expect(toggle).toHaveAttribute("title", "Could not check workspace knowledge"));
+    await waitFor(() => expect(toggle).toBeDisabled());
+    fireEvent.focus(toggle.parentElement!);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Could not check workspace knowledge");
     expect(toggle).toBeDisabled();
     act(() => emitScene({ revision: 0 }));
     await waitFor(() => expect(getChatKnowledgePreference).toHaveBeenCalledTimes(2));
@@ -374,13 +382,16 @@ describe("Composer", () => {
     </OverlayProvider>);
 
     const toggle = screen.getByRole("button", { name: "Use knowledge" });
-    await waitFor(() => expect(toggle).not.toBeDisabled());
+    // Nothing is indexed yet: the toggle is disabled with a reason (UI-15 spec).
+    await waitFor(() => expect(toggle).toBeDisabled());
     expect(toggle).toHaveAttribute("aria-pressed", "false");
 
     act(() => emitLibraryRevision(1)); // an import completed
     await waitFor(() => expect(toggle).toHaveAttribute("aria-pressed", "true"));
+    expect(toggle).not.toBeDisabled();
     act(() => emitLibraryRevision(2)); // the last document was removed
     await waitFor(() => expect(toggle).toHaveAttribute("aria-pressed", "false"));
+    await waitFor(() => expect(toggle).toBeDisabled());
     expect(getChatKnowledgePreference).toHaveBeenCalledTimes(3);
     expect(getChatKnowledgePreference).toHaveBeenCalledWith(null);
   });
@@ -392,7 +403,7 @@ describe("Composer", () => {
       request: { ...initialComposerState.request, canSend: true },
     } });
     const { sceneStore, sendMessage, getChatKnowledgePreference, emitLibraryRevision } =
-      makeSceneStore();
+      makeSceneStore({ knowledgePreference: { nodeId: null, hasDocuments: true, enabled: false, override: null } });
     render(<OverlayProvider>
       {/* @ts-expect-error - minimal test store */}
       <Composer store={store} sceneStore={sceneStore} />
@@ -740,9 +751,54 @@ describe("Composer", () => {
     const trigger = container.querySelector('[data-overlay-trigger="model"]') as HTMLButtonElement;
     expect(trigger).toBeEnabled();
     await user.click(trigger);
-    expect(await screen.findByRole("button", { name: "Set up a local model" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Set up a local model" }));
+    expect(await screen.findByRole("menuitem", { name: "Manage models…" })).toBeVisible();
+    await user.click(screen.getByRole("menuitem", { name: "Manage models…" }));
     expect(openOllamaSettings).toHaveBeenCalledOnce();
+  });
+
+  it("keeps keyboard focus inside the model menu after the list reloads, so Escape closes it", async () => {
+    const user = userEvent.setup();
+    const { store, loadPickerModels } = makeStore({
+      composer: { request: { ...initialComposerState.request, canSend: true } },
+    });
+    loadPickerModels.mockResolvedValue([]);
+    const { container } = render(
+      <OverlayProvider>
+        {/* @ts-expect-error Test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    const trigger = container.querySelector('[data-overlay-trigger="model"]') as HTMLButtonElement;
+    await user.click(trigger);
+    const menu = await screen.findByRole("menu", { name: "Choose a model" });
+    await screen.findByText("No models available. Configure a model in Settings.");
+    expect(menu.contains(document.activeElement)).toBe(true);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "Choose a model" })).toBeNull();
+  });
+
+  it("reloads the model list on every open so a newly configured provider appears", async () => {
+    const user = userEvent.setup();
+    const { store, loadPickerModels } = makeStore({
+      composer: { request: { ...initialComposerState.request, canSend: true } },
+    });
+    loadPickerModels.mockResolvedValue([]);
+    const { container } = render(
+      <OverlayProvider>
+        {/* @ts-expect-error Test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    const trigger = container.querySelector('[data-overlay-trigger="model"]') as HTMLButtonElement;
+    await user.click(trigger);
+    expect(await screen.findByRole("menuitem", { name: "Manage models…" })).toBeVisible();
+    loadPickerModels.mockResolvedValue([{
+      provider: "Custom endpoint", modelId: "lab/second-chat", label: "lab/second-chat",
+      source: "cloud", capabilities: ["chat"], sizeBytes: null,
+    }]);
+    await user.keyboard("{Escape}");
+    await user.click(trigger);
+    expect(await screen.findByRole("menuitemradio", { name: /lab\/second-chat/ })).toBeVisible();
   });
 
   it("the model control enables when the backend reports real options, and picking one calls selectModel", async () => {
@@ -774,7 +830,7 @@ describe("Composer", () => {
     expect(trigger).not.toBeDisabled();
 
     await user.click(trigger);
-    await user.click(await screen.findByRole("button", { name: /Ollama · nemotron-3-nano:4b/ }));
+    await user.click(await screen.findByRole("menuitemradio", { name: /Ollama · nemotron-3-nano:4b/ }));
 
     expect(selectPickerModel).toHaveBeenCalledWith("Ollama", "nemotron-3-nano:4b");
     // and the popover closes on choose, like the reasoning picker
@@ -803,16 +859,16 @@ describe("Composer", () => {
     );
     const trigger = screen.getByRole("button", { name: /OpenRouter/ });
     await user.click(trigger);
-    const search = screen.getByRole("searchbox", { name: "Search models" });
+    const search = await screen.findByRole("searchbox", { name: "Search models" });
     expect(search).toHaveFocus();
     await user.type(search, "LAB/MODEL-11");
-    expect(screen.queryByRole("button", { name: "Model 0" })).toBeNull();
+    expect(screen.queryByRole("menuitemradio", { name: "Model 0" })).toBeNull();
     // Enter while focus is still in the search input must choose the lone
     // match; previously this worked only after tabbing onto the result.
     await user.keyboard("{Enter}");
     expect(selectPickerModel).toHaveBeenCalledWith("OpenRouter", "lab/model-11");
     await user.click(trigger);
-    expect(screen.getByRole("button", { name: "Model 0" })).toBeVisible();
+    expect(screen.getByRole("menuitemradio", { name: "Model 0" })).toBeVisible();
   });
 
   it("Send is enabled once there's text, calls sceneStore.sendMessage, and clears the draft", async () => {
@@ -918,7 +974,7 @@ describe("Composer", () => {
         <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
       </OverlayProvider>,
     );
-    expect(screen.queryByLabelText("Cancel response")).toBeNull();
+    expect(screen.queryByLabelText("Stop generating")).toBeNull();
   });
 
   it("Cancel control is present when request.canCancel is true and calls cancelChatRequest with the request id", async () => {
@@ -934,7 +990,7 @@ describe("Composer", () => {
         <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
       </OverlayProvider>,
     );
-    const cancelButton = screen.getByLabelText("Cancel response");
+    const cancelButton = screen.getByLabelText("Stop generating");
     expect(cancelButton).toBeInTheDocument();
     await user.click(cancelButton);
     expect(cancelChatRequest).toHaveBeenCalledWith("req-42");
@@ -1016,7 +1072,43 @@ describe("Composer", () => {
     await user.click(screen.getByText("Off"));
     await user.click(screen.getByText("High"));
     expect(setReasoningLevel).toHaveBeenCalledWith("high");
-    expect(screen.queryByText("High")).toBeNull();
+    expect(screen.queryByRole("menu", { name: "Choose a reasoning level" })).toBeNull();
+  });
+
+  it("closes the empty model menu with Escape right after choosing a reasoning level", async () => {
+    const user = userEvent.setup();
+    const { store, loadPickerModels } = makeStore({
+      composer: {
+        route: {
+          ...initialComposerState.route,
+          reasoning: {
+            level: "off", label: "Off",
+            options: [
+              { id: "off", label: "Off", description: "No extended reasoning." },
+              { id: "high", label: "High", description: "Thorough reasoning." },
+            ],
+          },
+        },
+        capabilities: { ...initialComposerState.capabilities, reasoningSelection: true },
+        request: { ...initialComposerState.request, canSend: true },
+      },
+    });
+    loadPickerModels.mockResolvedValue([]);
+    const { container } = render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    await user.click(container.querySelector('[data-overlay-trigger="reasoning"]') as HTMLElement);
+    await user.click(screen.getAllByRole("menuitemradio")[0]);
+    expect(screen.queryByRole("menu", { name: "Choose a reasoning level" })).toBeNull();
+    await user.click(container.querySelector('[data-overlay-trigger="model"]') as HTMLElement);
+    const menu = await screen.findByRole("menu", { name: "Choose a model" });
+    await screen.findByText("No models available. Configure a model in Settings.");
+    expect(menu.contains(document.activeElement)).toBe(true);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "Choose a model" })).toBeNull();
   });
 
   it("hides the Reasoning chip when the provider and model expose no reasoning selection", () => {
@@ -1061,7 +1153,7 @@ describe("Composer", () => {
     expect(container.querySelector('[data-overlay-trigger="reasoning"]')).not.toBeDisabled();
   });
 
-  it("R8a finding #11: Reasoning trigger explains itself via title when disabled because a request is busy", () => {
+  it("Reasoning uses a kit MenuButton with a disabled explanation and no title attribute", () => {
     const { store } = makeStore();
     const { container } = render(
       <OverlayProvider>
@@ -1069,13 +1161,14 @@ describe("Composer", () => {
         <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
       </OverlayProvider>,
     );
-    expect(container.querySelector('[data-overlay-trigger="reasoning"]')).toHaveAttribute(
-      "title",
-      "Wait for the current response to finish",
-    );
+    const trigger = container.querySelector('[data-overlay-trigger="reasoning"]') as HTMLButtonElement;
+    expect(trigger).toBeDisabled();
+    expect(trigger).not.toHaveAttribute("title");
+    fireEvent.focus(trigger.parentElement!);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Wait for the current response to finish");
   });
 
-  it("the enabled Reasoning chip names its level for assistive tech and shows a plain tooltip", () => {
+  it("enabled Reasoning names its level for assistive tech without a title attribute", () => {
     const { store } = makeStore({
       composer: { request: { ...initialComposerState.request, canSend: true } },
     });
@@ -1086,7 +1179,7 @@ describe("Composer", () => {
       </OverlayProvider>,
     );
     const trigger = container.querySelector('[data-overlay-trigger="reasoning"]');
-    expect(trigger).toHaveAttribute("title", "Reasoning level");
+    expect(trigger).not.toHaveAttribute("title");
     expect(trigger).toHaveAttribute("aria-label", `Reasoning: ${store.getComposer().route.reasoning.label}`);
   });
 
@@ -1280,7 +1373,7 @@ describe("Composer reply target (ADR-002 Workstream 1)", () => {
         <Composer store={store} sceneStore={sceneStore} />
       </OverlayProvider>,
     );
-    expect(screen.queryByLabelText("Branching from")).toBeNull();
+    expect(screen.queryByLabelText("Replying to")).toBeNull();
   });
 
   it("shows a preview of the target node's content when a reply target is pending", () => {
@@ -1295,7 +1388,7 @@ describe("Composer reply target (ADR-002 Workstream 1)", () => {
         <Composer store={store} sceneStore={sceneStore} />
       </OverlayProvider>,
     );
-    const indicator = screen.getByLabelText("Branching from");
+    const indicator = screen.getByLabelText("Replying to");
     expect(indicator).toBeInTheDocument();
     expect(screen.getByText("the original root message")).toBeInTheDocument();
   });
@@ -1309,7 +1402,7 @@ describe("Composer reply target (ADR-002 Workstream 1)", () => {
         <Composer store={store} sceneStore={sceneStore} />
       </OverlayProvider>,
     );
-    expect(screen.queryByLabelText("Branching from")).toBeNull();
+    expect(screen.queryByLabelText("Replying to")).toBeNull();
   });
 
   it("the clear button calls sceneStore.setReplyTargetNodeId(null)", async () => {
@@ -1325,8 +1418,83 @@ describe("Composer reply target (ADR-002 Workstream 1)", () => {
         <Composer store={store} sceneStore={sceneStore} />
       </OverlayProvider>,
     );
-    await user.click(screen.getByLabelText("Cancel branching from this message"));
+    await user.click(screen.getByLabelText("Clear reply target"));
     expect(setReplyTargetNodeId).toHaveBeenCalledWith(null);
+  });
+});
+
+describe("UI-15 composer context and disabled explanations", () => {
+  it("starts a blank graph with the empty-canvas prompt", () => {
+    const { store } = makeStore();
+    render(<OverlayProvider>
+      {/* @ts-expect-error - fixture store */}
+      <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+    </OverlayProvider>);
+    expect(screen.getByPlaceholderText("Ask anything to start a graph…")).toBeInTheDocument();
+  });
+
+  it("replies to a selected node, exposes its kind and clears the selection", async () => {
+    const user = userEvent.setup();
+    const { store } = makeStore();
+    const { sceneStore, setSelectedNodeId } = makeSceneStore({
+      selectedNodeId: "n1",
+      scene: { nodes: [{ id: "n1", kind: "chat", title: "First idea", content: "An earlier message" }] },
+    });
+    render(<OverlayProvider>
+      {/* @ts-expect-error - fixture store */}
+      <Composer store={store} sceneStore={sceneStore} />
+    </OverlayProvider>);
+    const chip = screen.getByLabelText("Replying to");
+    expect(chip).toHaveTextContent("First idea");
+    expect(chip.querySelector("svg")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Reply to “An earlier message”…")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Clear reply target" }));
+    expect(setSelectedNodeId).toHaveBeenCalledWith(null);
+  });
+
+  it("keeps the reply placeholder on one line for multi-line node content", () => {
+    const { store } = makeStore();
+    const { sceneStore } = makeSceneStore({
+      selectedNodeId: "n1",
+      scene: { nodes: [{ id: "n1", kind: "note", title: "", content: "Team,Hours\r\nDesign,7\nOps,4" }] },
+    });
+    render(<OverlayProvider>
+      {/* @ts-expect-error - fixture store */}
+      <Composer store={store} sceneStore={sceneStore} />
+    </OverlayProvider>);
+    expect(screen.getByLabelText("Message composer"))
+      .toHaveAttribute("placeholder", "Reply to “Team,Hours Design,7 Ops,4”…");
+  });
+
+  it("uses the graph prompt for an existing scene without a reply target", () => {
+    const { store } = makeStore();
+    const { sceneStore } = makeSceneStore({
+      scene: { nodes: [{ id: "n1", kind: "chat", title: "First idea", content: "Hello" }] },
+    });
+    render(<OverlayProvider>
+      {/* @ts-expect-error - fixture store */}
+      <Composer store={store} sceneStore={sceneStore} />
+    </OverlayProvider>);
+    expect(screen.getByPlaceholderText("Ask about this graph…")).toBeInTheDocument();
+  });
+
+  it("explains disabled knowledge and send controls without native titles", () => {
+    const { store } = makeStore({ composer: {
+      draft: { ...initialComposerState.draft, text: "Send this" },
+      request: { ...initialComposerState.request, canSend: true },
+      route: { ...initialComposerState.route, modelId: "" },
+    } });
+    render(<OverlayProvider>
+      {/* @ts-expect-error - fixture store */}
+      <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+    </OverlayProvider>);
+    const knowledge = screen.getByRole("button", { name: "Use knowledge" });
+    expect(knowledge).toBeDisabled();
+    expect(knowledge).not.toHaveAttribute("title");
+    const send = screen.getByRole("button", { name: "Send message" });
+    expect(send).toBeDisabled();
+    fireEvent.focus(send.parentElement!);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Choose a model first");
   });
 });
 
