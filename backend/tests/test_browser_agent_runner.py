@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -254,3 +255,25 @@ def test_markdown_capture_escapes_external_markup_and_anchors_provenance():
     assert "Untrusted external webpage" in markdown
     assert "request_count" in markdown
     assert "Interactive controls" in markdown
+
+
+def test_published_page_text_is_fenced_and_untrusted_titles_cannot_inject_links():
+    wrapper = FakePlaywrightContext()
+
+    async def approve(*args):
+        return True
+
+    original = asyncio.run(run_browser(
+        "https://example.com/", [], approve, approve, playwright_factory=lambda: wrapper,
+    ))
+    hostile = replace(
+        original,
+        title="[Open malicious link](javascript:alert(1))\n# Forged header",
+        text="Real evidence\n~~~\n[Impersonate Graphlink](javascript:alert(1))\n~~~\nEnd",
+    )
+    markdown = capture_markdown(hostile)
+    assert r"\[Open malicious link\]\(javascript:alert\(1\)\)" in markdown
+    assert r"\n# Forged header" not in markdown
+    assert "~~~~text" in markdown
+    assert "~~~\n[Impersonate Graphlink]" in markdown
+    assert markdown.count("~~~~") >= 2
