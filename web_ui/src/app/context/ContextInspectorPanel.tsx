@@ -1,3 +1,8 @@
+import { Button } from "../ui/Button";
+import { IconButton } from "../ui/IconButton";
+import { Spinner } from "../ui/Spinner";
+import { Badge } from "../ui/Badge";
+
 type ContextSource = {
   sourceId: string;
   origin: string;
@@ -55,11 +60,12 @@ export function ContextInspectorPanel({ preview, error, loading, onRefresh, onCl
           <header className="context-inspector-heading">
             <strong>Next send: Context Inspector</strong>
             <div>
-              <button type="button" onClick={onRefresh} aria-label="Refresh context">Refresh</button>
-              <button type="button" onClick={onClose} aria-label="Close context inspector">Close</button>
+              <Button size="sm" variant="ghost" iconStart="refresh" onClick={onRefresh}
+                aria-label="Refresh context">Refresh</Button>
+              <IconButton size="sm" icon="close" label="Close context inspector" onClick={onClose} />
             </div>
           </header>
-          {loading && <p role="status">Inspecting context…</p>}
+          {loading && <p role="status"><Spinner size={14} decorative /> Inspecting context…</p>}
           {error && <p role="alert">{error}</p>}
           {preview && (
             <>
@@ -101,7 +107,7 @@ export function ContextInspectorPanel({ preview, error, loading, onRefresh, onCl
                   <li key={source.sourceId} className={source.included ? "included" : "excluded"}>
                     <div className="context-inspector-source-title">
                       <strong>{source.included ? "Included" : "Excluded"} · {source.kind.replaceAll("_", " ")}</strong>
-                      <span>{source.tokenCount} tokens</span>
+                      <Badge>{source.tokenCount} tokens</Badge>
                     </div>
                     <div className="context-inspector-source-origin">{source.origin} · {source.trust} trust</div>
                     {source.citationId && <div>{source.citationId} · {source.documentTitle} · {source.section}</div>}
