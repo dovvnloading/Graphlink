@@ -972,3 +972,14 @@
     pointer-events: none;
   }
 }
+
+/* UI-17 search: the Context-subscribed marker alone changes during typing.
+   :has() applies the visual state without rendering the node component. */
+.scene-node-card .node-search-state { display: none; }
+.scene-node.scene-node-card:has(> .node-search-state[data-search="dim"]) {
+  opacity: 0.35;
+}
+.scene-node.scene-node-card:has(> .node-search-state[data-search="match"]) {
+  outline: 2px solid var(--gl-accent);
+  outline-offset: var(--gl-space-0-5);
+}
