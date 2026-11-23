@@ -518,7 +518,7 @@ describe("KnowledgeSearchDialog kit library", () => {
     });
     await waitFor(() => expect(intents).toContainEqual(["knowledge", "finishUpload", ["upload-33"]]));
     expect(intents).toContainEqual(["knowledge", "beginUpload", [[{ name: "dragged.md", size: bytes.length }]]]);
-    expect(intents.some((entry) => entry[1] === "appendUpload" && entry[2]?.[0] === "upload-33")).toBe(true);
+    expect(intents.some((entry) => entry[1] === "appendUpload" && (entry[2] as unknown[] | undefined)?.[0] === "upload-33")).toBe(true);
     expect(intents.some((entry) => JSON.stringify(entry[2]).includes("C:\\Users\\"))).toBe(false);
   });
 
