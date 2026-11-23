@@ -105,6 +105,7 @@ def test_run_uses_per_host_consent_and_fresh_action_approval(monkeypatch):
     assert [item[1]["approval"] for item in approvals] == ["website", "interaction"]
     assert "https://example.com/" in approvals[0][1]["url"]
     assert "#go" == approvals[1][1]["selector"]
+    assert approvals[1][1]["element_text"] == "Go"
 
 
 def test_denied_host_cannot_capture_or_cache_consent(monkeypatch):
@@ -126,7 +127,7 @@ def test_denied_host_cannot_capture_or_cache_consent(monkeypatch):
     result = asyncio.run(registry.invoke(_call("browser.run", url="https://example.com/"), ctx))
     assert result.is_error and "denied" in result.content
     assert not tools_browser._captures(ctx)
-    assert "example.com" not in ctx._approved_web_domains
+    assert "example.com" not in getattr(ctx, "_approved_browser_domains", set())
 
 
 def test_publishing_capture_produces_source_linked_undoable_nodes(monkeypatch):
