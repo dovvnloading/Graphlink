@@ -17,14 +17,6 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
   readonly rule: RatchetRule;
   readonly count: number;
 }> = [
-  { file: "app/canvas/ChartNodeView.tsx", rule: "R1", count: 1 },
-
-  { file: "app/canvas/ChartNodeView.tsx", rule: "R4", count: 3 },
-
-  { file: "app/canvas/ChartNodeView.tsx", rule: "R6", count: 2 },
-
-  { file: "app/canvas/ChartNodeView.tsx", rule: "R8", count: 1 },
-
   { file: "app/canvas/ChatCitationChips.css", rule: "R9", count: 5 },
 
   { file: "app/canvas/ChatCitationChips.css", rule: "R10", count: 1 },
@@ -63,45 +55,9 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/canvas/ScientificDataTable.tsx", rule: "R5", count: 1 },
 
-  { file: "app/canvas/ScientificNodeView.css", rule: "R9", count: 18 },
-
-  { file: "app/canvas/ScientificNodeView.css", rule: "R10", count: 5 },
-
-  { file: "app/canvas/ScientificNodeView.css", rule: "R14", count: 66 },
-
   { file: "app/canvas/ScientificNodeView.tsx", rule: "R2", count: 1 },
 
-  { file: "app/canvas/ScientificNodeView.tsx", rule: "R4", count: 9 },
-
-  { file: "app/canvas/ScientificNodeView.tsx", rule: "R5", count: 7 },
-
-  { file: "app/canvas/ScientificNodeView.tsx", rule: "R6", count: 1 },
-
-  { file: "app/canvas/ScientificNodeView.tsx", rule: "R8", count: 8 },
-
-  { file: "app/canvas/ScientificResultViews.css", rule: "R9", count: 6 },
-
-  { file: "app/canvas/ScientificResultViews.css", rule: "R10", count: 3 },
-
-  { file: "app/canvas/ScientificResultViews.css", rule: "R14", count: 12 },
-
-  { file: "app/canvas/ScientificResultViews.tsx", rule: "R1", count: 1 },
-
-  { file: "app/canvas/ScientificResultViews.tsx", rule: "R5", count: 2 },
-
-  { file: "app/canvas/ScientificResultViews.tsx", rule: "R8", count: 3 },
-
   { file: "app/canvas/ScientificWorkspace.tsx", rule: "R8", count: 1 },
-
-  { file: "app/canvas/TableContributors.tsx", rule: "R4", count: 1 },
-
-  { file: "app/canvas/TableSource.tsx", rule: "R4", count: 2 },
-
-  { file: "app/canvas/TableWorkflow.css", rule: "R9", count: 1 },
-
-  { file: "app/canvas/TableWorkflow.css", rule: "R10", count: 1 },
-
-  { file: "app/canvas/TableWorkflow.css", rule: "R14", count: 17 },
 
   { file: "app/canvas/workspace.css", rule: "R11", count: 2 },
 

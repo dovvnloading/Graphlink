@@ -43,13 +43,18 @@ function mount(raw = JSON.stringify(state), parents = [parent], charts: ScienceC
   return { request, fireIntent, generateChart, remount: (value: string) => { view.unmount(); view = render(draw(value), { wrapper: ReactFlowProvider }); }, refresh: (value: string, currentParents = parents, currentCharts = charts) => view.rerender(draw(value, currentParents, currentCharts)) };
 }
 
+function chooseKit(label: string, option: string | RegExp) {
+  fireEvent.click(screen.getByRole("button", { name: label }));
+  fireEvent.click(screen.getByRole("option", { name: option }));
+}
+
 function openImporter() {
   fireEvent.click(screen.getByText(/^(Import a data table|Replace data table)$/));
 }
 
 function expandResult(label: string | RegExp) {
   const latest = screen.getByRole("region", { name: "Latest result" });
-  fireEvent.click(within(latest).getByText(label));
+  fireEvent.click(within(latest).getByRole("button", { name: label }));
 }
 
 describe("scientific workbench card", () => {
@@ -88,7 +93,7 @@ describe("scientific workbench card", () => {
     expect(within(region).getByText("0.1234567890123456")).toBeVisible();
     fireEvent.change(screen.getByRole("textbox", { name: "Samples (m)" }), { target: { value: "[1,4]" } });
     expect(within(region).getByRole("note")).toHaveTextContent("Inputs have been edited");
-    fireEvent.change(screen.getByRole("combobox", { name: "Operation" }), { target: { value: "scale" } });
+    chooseKit("Operation", "Scale length");
     expect(within(region).getByRole("note")).toHaveTextContent("different operation");
     expect(within(region).getByText("0.1234567890123456")).toBeVisible();
   });
@@ -147,7 +152,7 @@ describe("scientific workbench card", () => {
     expandResult("Plots & views");
     expect(within(latest).getByRole("img")).toBeVisible();
     expandResult("Units used");
-    const unitDetails = within(latest).getByText("Units used").closest("details")!;
+    const unitDetails = within(latest).getByRole("region", { name: "Units used" });
     expect(within(unitDetails).getByText(/"mm"/)).toBeVisible();
     expandResult("Inputs and provenance");
     expect(within(latest).getByText(/"resultHash": "abc"/)).toBeVisible();
@@ -178,8 +183,8 @@ describe("scientific workbench card", () => {
     expect(latest.querySelector(".science-result-highlight")).toHaveTextContent("3 rows");
     expect(latest.querySelector(".science-result-summary")).toHaveClass("science-result-summary--clamped");
     expandResult("Read full summary");
-    const fullSummary = within(latest).getByText("Read full summary").closest("details");
-    expect(fullSummary?.querySelector("p")?.textContent).toBe(long);
+    const fullSummary = within(latest).getByRole("region", { name: "Read full summary" });
+    expect(within(fullSummary).getByText(long.trim())).toBeVisible();
     expect(within(latest).queryByRole("table")).not.toBeInTheDocument();
   });
 
@@ -240,17 +245,19 @@ describe("scientific workbench card", () => {
       citations: [{ label: "Sebaugh (2011)", url: "https://doi.org/10.1002/pst.426" }],
     };
     const { request } = mount(JSON.stringify({ ...state, operations: [choiceOp] }));
-    const metric = screen.getByRole("combobox", { name: "Potency metric" });
-    expect(metric).toHaveValue("EC50");
-    expect(within(metric).getAllByRole("option")).toHaveLength(2);
-    const methods = screen.getByText("About & methods").closest("details");
-    expect(methods).not.toHaveAttribute("open");
-    fireEvent.click(screen.getByText("About & methods"));
-    expect(methods).toHaveAttribute("open");
+    const metric = screen.getByRole("button", { name: "Potency metric" });
+    expect(metric).toHaveTextContent("EC50");
+    fireEvent.click(metric);
+    expect(screen.getAllByRole("option")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("option", { name: "EC50" }));
+    const methods = screen.getByRole("button", { name: "About & methods" });
+    expect(methods).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(methods);
+    expect(methods).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText(/Four-parameter logistic fit/)).toBeVisible();
     expect(screen.getByRole("link", { name: "Sebaugh (2011)" }))
       .toHaveAttribute("href", "https://doi.org/10.1002/pst.426");
-    fireEvent.change(metric, { target: { value: "IC50" } });
+    chooseKit("Potency metric", "IC50");
     fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
     expect(request.mock.lastCall?.[2]?.[2]).toMatchObject({
       operation_id: "potency", inputs: { metric: "IC50" },
@@ -265,15 +272,16 @@ describe("scientific workbench card", () => {
     const { generateChart } = mount(JSON.stringify({ ...state, latest: result }), [parent], charts);
     expandResult("Actions & exports");
     expect(screen.getByRole("button", { name: "Chart this" })).toBeEnabled();
-    expect(screen.getByRole("combobox", { name: "Chart type" })).toHaveValue("scatter");
+    expect(screen.getByRole("button", { name: "Chart type" })).toHaveTextContent("Scatter");
     fireEvent.click(screen.getByRole("button", { name: "Chart this" }));
     expect(generateChart).toHaveBeenCalledWith("target", "scatter", "abc");
-    fireEvent.change(screen.getByRole("combobox", { name: "Chart type" }), { target: { value: "heatmap" } });
+    chooseKit("Chart type", "Heatmap");
     fireEvent.click(screen.getByRole("button", { name: "Chart this" }));
     expect(generateChart).toHaveBeenCalledWith("target", "heatmap", "abc");
-    expect(screen.getByText("Source changed · refresh to update")).toBeVisible();
-    expect(screen.getByText(/Receipt bbbbbbbbbbbb/)).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Refresh chart" }));
+    const linked = screen.getByRole("region", { name: "Linked charts" });
+    expect(within(linked).getByText(/Source changed · refresh to update/)).toBeVisible();
+    expect(within(linked).getByText(/Receipt bbbbbbbbbbbb/)).toBeVisible();
+    fireEvent.click(within(linked).getByRole("button", { name: "Refresh chart" }));
     expect(generateChart).toHaveBeenCalledWith("child-chart", "scatter", "abc");
   });
 
@@ -297,9 +305,7 @@ describe("scientific workbench card", () => {
 
   it("imports a connected column with its provenance, clears the citation when edited, and switches operations", async () => {
     const { request } = mount();
-    const source = screen.getByRole("combobox", { name: "Import Samples from a connected result" });
-    const index = Array.from((source as HTMLSelectElement).options).find((o) => o.text === "Samples · y")!.value;
-    fireEvent.change(source, { target: { value: index } });
+    chooseKit("Import Samples from a connected result", "Samples · y");
     expect(screen.getByLabelText("Samples (m)")).toHaveValue("[1,8,3]");
     expect(request).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText("Run calculation"));
@@ -312,7 +318,7 @@ describe("scientific workbench card", () => {
     fireEvent.click(screen.getByText("Run calculation"));
     expect(request.mock.lastCall?.[2]?.[2]).toMatchObject({ inputs: { samples: [2] }, sources: {} });
     await waitFor(() => expect(screen.getByText("Run calculation")).toBeEnabled());
-    fireEvent.change(screen.getByLabelText("Operation"), { target: { value: "scale" } });
+    chooseKit("Operation", "Scale length");
     expect(screen.getByLabelText("Length (m)")).toHaveValue("3");
     fireEvent.change(screen.getByLabelText("Length (m)"), { target: { value: ".5e1" } });
     fireEvent.click(screen.getByText("Run calculation"));
@@ -322,9 +328,7 @@ describe("scientific workbench card", () => {
 
   it("restores edited source bindings after loading an example, including across remount", async () => {
     const { request, remount } = mount();
-    const source = screen.getByRole("combobox", { name: "Import Samples from a connected result" }) as HTMLSelectElement;
-    const option = Array.from(source.options).find((item) => item.text === "Samples · y")!;
-    fireEvent.change(source, { target: { value: option.value } });
+    chooseKit("Import Samples from a connected result", "Samples · y");
     fireEvent.click(screen.getByRole("button", { name: "Load example" }));
     expect(screen.getByLabelText("Samples (m)")).toHaveValue("[1,2,3]");
     remount(JSON.stringify(state));
@@ -488,11 +492,11 @@ describe("scientific workbench card", () => {
     fireEvent.change(field, { target: { value: "[4,5]" } });
     refresh(JSON.stringify({ ...state, latest: result, runToken: "b" }));
     expect(field).toHaveValue("[4,5]");
-    expect(screen.getByText("Run calculation")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Run calculation" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Keep my inputs" }));
-    fireEvent.click(screen.getByText("Run calculation"));
+    fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
     expect(request.mock.lastCall?.[2]?.[2]).toMatchObject({ expected_run: "b", inputs: { samples: [4, 5] } });
-    await waitFor(() => expect(screen.getByText("Run calculation")).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Run calculation" })).toBeEnabled());
     fireEvent.change(field, { target: { value: "[7]" } });
     refresh(JSON.stringify({ ...state, latest: result, runToken: "c" }));
     fireEvent.click(screen.getByRole("button", { name: "Load saved inputs" }));
@@ -522,11 +526,11 @@ describe("scientific workbench card", () => {
     const { request, refresh } = mount(JSON.stringify({ ...state, latest: {
       ...result, provenance: { ...result.provenance, sources },
     } }), [parent]);
-    expect(screen.getByText("Run calculation")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Run calculation" })).toBeDisabled();
     const field = screen.getByRole("textbox", { name: "Samples (m)" });
     expect(field).toHaveAccessibleDescription(/Result changed or disconnected/);
     fireEvent.change(field, { target: { value: "[4,5]" } });
-    expect(screen.getByText("Run calculation")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Run calculation" })).toBeEnabled();
     refresh("");
     expect(screen.queryByText("Run calculation")).toBeNull();
     expect(screen.getByRole("status")).toHaveTextContent("Enable Mathematics");
@@ -590,12 +594,12 @@ describe("scientific workbench card", () => {
     const current = JSON.stringify({ ...state, runToken: "a", nodeKey: "saved-node" });
     const { remount } = mount(current);
     fireEvent.change(screen.getByLabelText("Samples (m)"), { target: { value: "[4,5]" } });
-    fireEvent.change(screen.getByLabelText("Operation"), { target: { value: "scale" } });
+    chooseKit("Operation", "Scale length");
     fireEvent.change(screen.getByLabelText("Length (m)"), { target: { value: "7" } });
     remount(current);
-    expect(screen.getByLabelText("Operation")).toHaveValue("scale");
+    expect(screen.getByRole("button", { name: "Operation" })).toHaveTextContent("Scale length");
     expect(screen.getByLabelText("Length (m)")).toHaveValue("7");
-    fireEvent.change(screen.getByLabelText("Operation"), { target: { value: "integral" } });
+    chooseKit("Operation", "Integrate samples");
     expect(screen.getByLabelText("Samples (m)")).toHaveValue("[4,5]");
   });
 
@@ -679,8 +683,10 @@ describe("scientific workbench card", () => {
     const map = screen.getByRole("table", { name: "96-well plate map" });
     expect(within(map).getAllByRole("row")).toHaveLength(9);
     expect(within(map).getByRole("cell", { name: "A1: control" })).toHaveTextContent("co");
-    expect(within(map).getByRole("cell", { name: "A2: 0 RFU" })).toHaveTextContent("●");
-    expect(within(map).getByRole("cell", { name: "A3: empty" })).toHaveTextContent("·");
+    const zero = within(map).getByRole("cell", { name: "A2: 0 RFU" });
+    expect(within(zero).getByRole("button", { name: "A2: 0 RFU" })).toBeInTheDocument();
+    expect(zero.querySelector(".science-well-value-number")).toBeInTheDocument();
+    expect(within(map).getByRole("cell", { name: "A3: empty" })).toHaveTextContent("—");
     expect(within(map).getByRole("cell", { name: "H12: 12.4 RFU" })).toBeInTheDocument();
     expect(screen.getByText(/Numeric scale: 0 – 12.4 RFU/)).toBeVisible();
 
@@ -719,7 +725,9 @@ describe("scientific workbench card", () => {
       /H.*V/.test(path.getAttribute("d") ?? ""))).toBe(true);
     expect(svg.querySelectorAll("line[stroke-width='2']")).toHaveLength(2);
     expect(screen.getByText("C · 0 censor times")).toBeVisible();
-    const keys = [...document.querySelectorAll(".science-survival-key line")];
+    const legend = screen.getByRole("list", { name: "Survival curve legend" });
+    expect(within(legend).getAllByRole("listitem")).toHaveLength(3);
+    const keys = [...legend.querySelectorAll(".science-survival-key line")];
     expect(keys.map(key => key.getAttribute("stroke-dasharray")))
       .toEqual([...svg.querySelectorAll("g path")].map(curve => curve.getAttribute("stroke-dasharray")));
     fireEvent.click(screen.getByText("Survival curve data"));
@@ -856,7 +864,7 @@ describe("typed table import and numeric selections", () => {
   it("imports pasted TSV with explicit missing markers and type overrides", async () => {
     const { request } = mount();
     openImporter();
-    fireEvent.change(screen.getByLabelText("Table format"), { target: { value: "tsv" } });
+    chooseKit("Table format", "TSV (tab-separated)");
     fireEvent.change(screen.getByLabelText("Pasted table text"), { target: { value: "X\tFlag\n1\ttrue" } });
     fireEvent.change(screen.getByLabelText("Missing-value markers"), { target: { value: "NA,missing" } });
     fireEvent.click(screen.getByText("Advanced column overrides"));
@@ -885,7 +893,7 @@ describe("typed table import and numeric selections", () => {
     request.mockResolvedValueOnce({ ok: true, table: meta, runToken: "reviewed-token" });
     fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
     await screen.findByRole("button", { name: "Apply reviewed table" });
-    fireEvent.change(screen.getByRole("combobox", { name: "Type for Station" }), { target: { value: "categorical" } });
+    chooseKit("Type for Station", "categorical");
     expect(screen.queryByRole("button", { name: "Apply reviewed table" })).toBeNull();
     expect(screen.getByRole("button", { name: "Preview table" })).toBeEnabled();
     expect(request).toHaveBeenCalledTimes(1);
@@ -894,7 +902,7 @@ describe("typed table import and numeric selections", () => {
   it("imports file bytes rather than decoding and repasting CSV into the field", async () => {
     const { request } = mount();
     openImporter();
-    fireEvent.change(screen.getByLabelText("Table data source"), { target: { value: "file" } });
+    chooseKit("Table data source", "Choose a file");
     const file = new File(["Time (s)\tValue\n0\t1"], "samples.tsv", { type: "text/tab-separated-values" });
     Object.defineProperty(file, "arrayBuffer", { value: async () => new TextEncoder().encode("Time (s)\tValue\n0\t1").buffer });
     fireEvent.change(screen.getByLabelText("CSV or TSV file"), { target: { files: [file] } });
@@ -911,7 +919,7 @@ describe("typed table import and numeric selections", () => {
   it("clears a selected file when the importer closes and requires a new visible selection", async () => {
     const { request } = mount();
     openImporter();
-    fireEvent.change(screen.getByLabelText("Table data source"), { target: { value: "file" } });
+    chooseKit("Table data source", "Choose a file");
     const oldFile = new File(["X\n1"], "old.csv", { type: "text/csv" });
     const oldInput = screen.getByLabelText("CSV or TSV file") as HTMLInputElement;
     fireEvent.change(oldInput, { target: { files: [oldFile] } });
@@ -940,12 +948,12 @@ describe("typed table import and numeric selections", () => {
   it("clears a file selection when switching between file and paste sources", async () => {
     const { request } = mount();
     openImporter();
-    fireEvent.change(screen.getByLabelText("Table data source"), { target: { value: "file" } });
+    chooseKit("Table data source", "Choose a file");
     fireEvent.change(screen.getByLabelText("CSV or TSV file"), {
       target: { files: [new File(["X\n1"], "hidden.csv", { type: "text/csv" })] },
     });
-    fireEvent.change(screen.getByLabelText("Table data source"), { target: { value: "paste" } });
-    fireEvent.change(screen.getByLabelText("Table data source"), { target: { value: "file" } });
+    chooseKit("Table data source", "Paste CSV / TSV");
+    chooseKit("Table data source", "Choose a file");
     expect((screen.getByLabelText("CSV or TSV file") as HTMLInputElement).files).toHaveLength(0);
     fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Choose a CSV or TSV file.");
@@ -962,14 +970,13 @@ describe("typed table import and numeric selections", () => {
     expect(screen.getByText("numeric · 1 missing")).toBeVisible();
     expect(screen.getByText(/samples.tsv · 3 rows · 2 columns/)).toBeVisible();
 
-    const select = screen.getByRole("combobox", { name: "Import Samples from a connected result" }) as HTMLSelectElement;
-    const opts = Array.from(select.options);
-    const reject = opts.find((op) => op.text.includes("Reject missing"))!;
-    const drop = opts.find((op) => op.text.includes("Drop missing (explicit)"))!;
+    fireEvent.click(screen.getByRole("button", { name: "Import Samples from a connected result" }));
+    const reject = screen.getByRole("option", { name: /Reject missing/ });
+    const drop = screen.getByRole("option", { name: /Drop missing \(explicit\)/ });
     expect(reject).toBeDefined();
     expect(drop).toBeDefined();
     request.mockResolvedValueOnce({ ok: false, error: "This column contains missing values." });
-    fireEvent.change(select, { target: { value: reject.value } });
+    fireEvent.click(reject);
     expect(await screen.findByRole("alert")).toHaveTextContent("missing values");
     const reference = {
       nodeId: "parent", sourceKey: "d".repeat(32), resultHash: meta.asset_ref,
@@ -977,7 +984,7 @@ describe("typed table import and numeric selections", () => {
     };
     let finishColumn: (value: unknown) => void = () => {};
     request.mockReturnValueOnce(new Promise((resolve) => { finishColumn = resolve; }));
-    fireEvent.change(select, { target: { value: drop.value } });
+    chooseKit("Import Samples from a connected result", /Drop missing \(explicit\)/);
     expect(screen.getByRole("button", { name: "Run calculation" })).toBeDisabled();
     expect(screen.getByText("Loading selected table column…")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Cancel calculation" })).toBeNull();
@@ -1046,20 +1053,14 @@ describe("typed table import and numeric selections", () => {
       ...state, nodeKey: "d".repeat(32), latest: null, table: meta,
     }) };
     const { request } = mount(JSON.stringify({ ...state, operations: [tableOp] }), [parentTable]);
-    const input = screen.getByRole("combobox", { name: "Import Typed table from a connected result" });
-    const complete = Array.from((input as HTMLSelectElement).options).find((option) =>
-      option.text.includes("Whole typed table"))!;
-    expect(complete).toBeDefined();
-    fireEvent.change(input, { target: { value: complete.value } });
+    chooseKit("Import Typed table from a connected result", /Whole typed table/);
     expect(screen.getByRole("textbox", { name: "Typed table" }))
       .toHaveValue("Connected typed table selected");
-    const measurement = screen.getByRole("combobox", { name: "Measurement" });
-    expect(within(measurement).getByRole("option", { name: "Temperature (degC) · numeric" })).toBeVisible();
-    expect(within(measurement).queryByRole("option", { name: /Station/ })).toBeNull();
-    const group = screen.getByRole("combobox", { name: "Group" });
-    expect(within(group).getByRole("option", { name: "Station · text" })).toBeVisible();
-    fireEvent.change(measurement, { target: { value: "0" } });
-    fireEvent.change(group, { target: { value: "1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Measurement" }));
+    expect(screen.getByRole("option", { name: "Temperature (degC) · numeric" })).toBeVisible();
+    expect(screen.queryByRole("option", { name: /Station/ })).toBeNull();
+    fireEvent.click(screen.getByRole("option", { name: "Temperature (degC) · numeric" }));
+    chooseKit("Group", "Station · text");
     fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
     await waitFor(() => expect(request.mock.lastCall?.[2]?.[1]).toBe("run"));
     expect(request.mock.lastCall?.[2]?.[2]).toMatchObject({
@@ -1107,9 +1108,9 @@ describe("unit-aware scientific node inputs and receipts", () => {
         ...result.provenance, inputUnits: { samples: ["mm", "cm", "m"] },
       },
     } }), []);
-    fireEvent.click(screen.getByText("Units used"));
-    const unitsUsed = screen.getByText("Units used").closest("details");
-    expect(within(unitsUsed!).getByText(/"mm"/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Units used" }));
+    const unitsUsed = screen.getByRole("region", { name: "Units used" });
+    expect(within(unitsUsed).getByText(/"mm"/)).toBeVisible();
     const input = screen.getByRole("textbox", { name: "Samples (m)" });
     fireEvent.change(input, { target: { value: '["25 mm", "2 cm", 3]' } });
     fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));

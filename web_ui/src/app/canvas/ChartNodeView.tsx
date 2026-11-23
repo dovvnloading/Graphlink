@@ -1,5 +1,15 @@
 import { NodeResizer, type Node, type NodeProps } from "@xyflow/react";
 import { lazy, memo, Suspense, useEffect, useRef, useState } from "react";
+import { Badge } from "../ui/Badge";
+import { Button } from "../ui/Button";
+import { Checkbox } from "../ui/Checkbox";
+import { Icon } from "../ui/icons/Icon";
+import { NumberField } from "../ui/NumberField";
+import { Select } from "../ui/Select";
+import { ToggleButton } from "../ui/ToggleButton";
+import { Tooltip } from "../ui/Tooltip";
+import { InlineAlert } from "../ui/InlineAlert";
+import "./ChartNodeView.css";
 import type { ChartDataRow } from "../../lib/bridge-core/generated/scene-state";
 import {
   CHART_MAX_HEIGHT,
@@ -166,6 +176,11 @@ export const ChartNodeView = memo(function ChartNodeView({
   const [publicationSize, setPublicationSize] = useState<PublicationSize>("single");
   const [publicationBusy, setPublicationBusy] = useState(false);
   const [publicationError, setPublicationError] = useState("");
+  const [publicationDpi, setPublicationDpi] = useState<300 | 600>(300);
+  const [publicationWidth, setPublicationWidth] = useState<number | "">(120);
+  const [publicationHeight, setPublicationHeight] = useState<number | "">(80);
+  const [colorblindSafe, setColorblindSafe] = useState(false);
+  const [grayscaleSafe, setGrayscaleSafe] = useState(false);
 
   function persistChartAnalysis(analysis: ChartAnalysis): Promise<void> {
     // Retain order if a user adds two annotations before the previous
@@ -175,18 +190,17 @@ export const ChartNodeView = memo(function ChartNodeView({
     return next;
   }
 
-  async function exportPublication(form: HTMLFormElement) {
+  async function exportPublication() {
     if (publicationBusy) return;
-    const fields = new FormData(form);
     const settings: PublicationExportOptions = {
       format: publicationFormat, size: publicationSize,
       ...(publicationSize === "custom" ? {
-        widthMm: Number(fields.get("widthMm")),
-        heightMm: Number(fields.get("heightMm")),
+        widthMm: Number(publicationWidth),
+        heightMm: Number(publicationHeight),
       } : {}),
-      dpi: Number(fields.get("dpi")) as 300 | 600,
-      colorblindSafe: fields.has("colorblindSafe"),
-      grayscaleSafe: fields.has("grayscaleSafe"),
+      dpi: publicationDpi,
+      colorblindSafe,
+      grayscaleSafe,
     };
     setPublicationBusy(true);
     setPublicationError("");
@@ -234,96 +248,58 @@ export const ChartNodeView = memo(function ChartNodeView({
       header={
         <NodeHeading glyph="chart" className="chart-node-title">
           <span className="chart-node-name">{title}</span>
-          <span className="chart-node-badge">{chartTypeBadgeLabel(data.chartType)}</span>
-          {data.chartError && (
-            <span className="chart-node-error-badge" title={data.chartError} aria-label="Chart generation warning">
-              ⚠
+          <Badge className="chart-node-badge">{chartTypeBadgeLabel(data.chartType)}</Badge>
+          {data.chartError && <Tooltip label={data.chartError}>
+            <span className="chart-node-error-badge" role="img" aria-label="Chart generation warning">
+              <Icon name="status-warning" size="sm" />
             </span>
-          )}
+          </Tooltip>}
         </NodeHeading>
       }
       bodyClassName="chart-node-content"
     >
+      {!overview && <div className="chart-node-toolbar nodrag">
+        <ToggleButton size="sm" icon={data.chartAspectLocked ? "lock" : "unlock"}
+          label={data.chartAspectLocked ? "Unlock Aspect" : "Lock Aspect"}
+          pressed={data.chartAspectLocked} onPressedChange={data.onToggleAspectLock} />
+        <Button size="sm" variant="ghost" iconStart="download"
+          aria-expanded={publicationOpen} aria-controls={`chart-publication-${id}`}
+          onClick={() => setPublicationOpen(!publicationOpen)}>Publication export…</Button>
+        {publicationOpen && <form
+          id={`chart-publication-${id}`} role="group" aria-label="Publication export settings"
+          className="chart-node-publication-options nodrag nowheel"
+          onSubmit={(event) => { event.preventDefault(); void exportPublication(); }}
+        >
+          <Select label="Publication format" value={publicationFormat}
+            onChange={(value) => setPublicationFormat(value as PublicationFormat)}
+            options={[{ value: "svg", label: "SVG (vector)" }, { value: "pdf", label: "PDF (vector)" }, { value: "png", label: "PNG" }]} />
+          <Select label="Publication size" value={publicationSize}
+            onChange={(value) => setPublicationSize(value as PublicationSize)}
+            options={[{ value: "single", label: "Single column (85 mm)" }, { value: "double", label: "Double column (180 mm)" }, { value: "custom", label: "Custom (mm)" }]} />
+          {publicationSize === "custom" && <>
+            <NumberField label="Custom width in millimeters" min={35} max={300}
+              value={publicationWidth} onValueChange={setPublicationWidth} unit="mm" />
+            <NumberField label="Custom height in millimeters" min={30} max={300}
+              value={publicationHeight} onValueChange={setPublicationHeight} unit="mm" />
+          </>}
+          <Select label="Publication DPI" value={String(publicationDpi)}
+            onChange={(value) => setPublicationDpi(Number(value) as 300 | 600)}
+            options={[{ value: "300", label: "300" }, { value: "600", label: "600" }]} />
+          <Checkbox label="Colorblind-safe palette" checked={colorblindSafe}
+            onChange={(event) => setColorblindSafe(event.currentTarget.checked)} />
+          <Checkbox label="Grayscale-safe hatches, markers and dashes" checked={grayscaleSafe}
+            onChange={(event) => setGrayscaleSafe(event.currentTarget.checked)} />
+          <Button size="sm" type="submit" iconStart="download" loading={publicationBusy}>
+            {publicationBusy ? "Exporting…" : `Download ${publicationFormat.toUpperCase()}`}
+          </Button>
+          {publicationError && <InlineAlert variant="error" {...{ title: "Publication export failed" }} body={publicationError} />}
+        </form>}
+      </div>}
       <Suspense fallback={<div className="chart-node-placeholder">Loading chart…</div>}>
         {overview
           ? <LazyChartOverview chartType={data.chartType} chartData={data.chartData} />
           : <LazyChartRenderer chartType={data.chartType} chartData={data.chartData} onAnalysisChange={persistChartAnalysis} />}
       </Suspense>
-      {!overview && <div className="chart-node-toolbar nodrag" style={{ flexWrap: "wrap" }}>
-        <button
-          type="button"
-          className="chart-node-btn"
-          onClick={data.onToggleAspectLock}
-          aria-pressed={data.chartAspectLocked}
-        >
-          {data.chartAspectLocked ? "Unlock Aspect" : "Lock Aspect"}
-        </button>
-        {/* The unified export control replaces duplicate format shortcuts.
-            It keeps download credentials on the authenticated connection. */}
-        <button
-          type="button"
-          className="chart-node-btn"
-          aria-expanded={publicationOpen}
-          aria-controls={`chart-publication-${id}`}
-          onClick={() => setPublicationOpen(!publicationOpen)}
-        >
-          Publication export…
-        </button>
-        {publicationOpen && (
-          <form
-            id={`chart-publication-${id}`} role="group" aria-label="Publication export settings"
-            className="chart-node-publication-options nodrag nowheel"
-            style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", padding: 8,
-                     flexBasis: "100%", width: "100%", maxHeight: 190, overflowY: "auto" }}
-            onSubmit={(event) => { event.preventDefault(); void exportPublication(event.currentTarget); }}
-          >
-            <label>Format{" "}
-              <select aria-label="Publication format" value={publicationFormat}
-                onChange={(event) => setPublicationFormat(event.target.value as PublicationFormat)}>
-                <option value="svg">SVG (vector)</option>
-                <option value="pdf">PDF (vector)</option>
-                <option value="png">PNG</option>
-              </select>
-            </label>
-            <label>Size{" "}
-              <select aria-label="Publication size" value={publicationSize}
-                onChange={(event) => setPublicationSize(event.target.value as PublicationSize)}>
-                <option value="single">Single column (85 mm)</option>
-                <option value="double">Double column (180 mm)</option>
-                <option value="custom">Custom (mm)</option>
-              </select>
-            </label>
-            {publicationSize === "custom" && (
-              <>
-                <label>Width (mm){" "}
-                  <input aria-label="Custom width in millimeters" name="widthMm" type="number"
-                    min={35} max={300} step={1} defaultValue={120} style={{ width: 68 }} />
-                </label>
-                <label>Height (mm){" "}
-                  <input aria-label="Custom height in millimeters" name="heightMm" type="number"
-                    min={30} max={300} step={1} defaultValue={80} style={{ width: 68 }} />
-                </label>
-              </>
-            )}
-            <label>DPI{" "}
-              <select aria-label="Publication DPI" name="dpi" defaultValue="300">
-                <option value="300">300</option>
-                <option value="600">600</option>
-              </select>
-            </label>
-            <label>
-              <input type="checkbox" name="colorblindSafe" />Colorblind-safe palette
-            </label>
-            <label>
-              <input type="checkbox" name="grayscaleSafe" />Grayscale-safe hatches, markers and dashes
-            </label>
-            <button type="submit" className="chart-node-btn" disabled={publicationBusy}>
-              {publicationBusy ? "Exporting…" : `Download ${publicationFormat.toUpperCase()}`}
-            </button>
-            {publicationError && <span role="alert">{publicationError}</span>}
-          </form>
-        )}
-      </div>}
     </NodeShell>
   );
 }, chartNodePropsAreEqual);

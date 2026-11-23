@@ -53,7 +53,7 @@ export function CartesianAxes({
         return (
           <Fragment key={tick}>
             <line x1={0} x2={innerWidth} y1={y} y2={y} stroke={theme.gridline} strokeOpacity={0.35} strokeDasharray="3 3" />
-            <text x={-8} y={y} textAnchor="end" dominantBaseline="middle" fill={theme.textMuted} fontSize={10}>
+            <text x={-8} y={y} textAnchor="end" dominantBaseline="middle" fill={theme.textMuted} fontSize={11}>
               {yTickFormat(tick)}
             </text>
           </Fragment>
@@ -71,7 +71,7 @@ export function CartesianAxes({
           y={innerHeight + 16}
           textAnchor={rotateXTicks ? "end" : "middle"}
           fill={theme.textMuted}
-          fontSize={10}
+          fontSize={11}
           transform={rotateXTicks ? `rotate(-25 ${tick.position} ${innerHeight + 16})` : undefined}
         >
           {tick.lines.map((line, index) => (

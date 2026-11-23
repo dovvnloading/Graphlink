@@ -1,4 +1,9 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { Button } from "../ui/Button";
+import { Select } from "../ui/Select";
+import { Disclosure } from "../ui/Disclosure";
+import { Spinner } from "../ui/Spinner";
+import { InlineAlert } from "../ui/InlineAlert";
 import type { SceneNodeRow } from "../../lib/bridge-core/generated/scene-state";
 import type { SceneStore } from "./sceneStore";
 import { readTableCsv } from "./tableCsv";
@@ -52,8 +57,8 @@ function Rows({ store, node, group, offset, setOffset }: {
     return () => { active = false; };
   }, [store, id, tableSourceHash, group, offset]);
 
-  if (!result) return <p>Loading source rows…</p>;
-  if (result.state === "error") return <p role="alert">{result.message}</p>;
+  if (!result) return <p role="status"><Spinner size={12} decorative /> Loading source rows…</p>;
+  if (result.state === "error") return <InlineAlert variant="error" {...{ title: "Could not load source rows" }} body={result.message} />;
   const { rows, totalRows } = result.page;
   return <>
     <div className="table-workflow-scroll">
@@ -63,10 +68,10 @@ function Rows({ store, node, group, offset, setOffset }: {
       </table>
     </div>
     {totalRows > PAGE_SIZE && <div className="table-workflow-actions">
-      <button type="button" disabled={!offset} onClick={() => setOffset(offset - PAGE_SIZE)}>Previous source rows</button>
+      <Button size="sm" type="button" disabled={!offset} onClick={() => setOffset(offset - PAGE_SIZE)}>Previous source rows</Button>
       <span>{offset + 1}–{offset + rows.length} of {totalRows}</span>
-      <button type="button" disabled={offset + rows.length >= totalRows}
-        onClick={() => setOffset(offset + PAGE_SIZE)}>Next source rows</button>
+      <Button size="sm" type="button" disabled={offset + rows.length >= totalRows}
+        onClick={() => setOffset(offset + PAGE_SIZE)}>Next source rows</Button>
     </div>}
   </>;
 }
@@ -89,22 +94,17 @@ function GroupPicker({ store, node }: { store: SceneStore; node: SceneNodeRow })
   const group = groups.includes(selected) ? selected : groups[0];
   if (!group) return <p>No groups available.</p>;
   return <>
-    <label>Inspect group<select value={group} onChange={(event) => { setSelected(event.target.value); setOffset(0); }}>
-      {groups.map((name) => <option key={name}>{name}</option>)}
-    </select></label>
+    <Select label="Inspect group" value={group}
+      options={groups.map((name) => ({ value: name, label: name }))}
+      onChange={(next) => { setSelected(next); setOffset(0); }} />
     <Rows key={JSON.stringify([group, offset])} store={store} node={node} group={group} offset={offset} setOffset={setOffset} />
   </>;
 }
 
 export function TableContributors({ node, store }: { node: SceneNodeRow; store: SceneStore }) {
   const [open, setOpen] = useState(false);
-  const region = useId();
   const current = node.tableInputStatus === "current" && !node.tableOutputEdited;
-  return <div>
-    <button type="button" disabled={!current} aria-expanded={current && open} aria-controls={region}
-      onClick={() => setOpen(!open)}>Inspect source rows</button>
-    <div id={region} hidden={!current || !open}>
-      {current && open && <GroupPicker key={JSON.stringify([node.tableInputSourceId, node.tableSourceHash])} node={node} store={store} />}
-    </div>
-  </div>;
+  return <Disclosure {...{ title: "Inspect source rows" }} disabled={!current} open={current && open} onOpenChange={setOpen}>
+    {current && open && <GroupPicker key={JSON.stringify([node.tableInputSourceId, node.tableSourceHash])} node={node} store={store} />}
+  </Disclosure>;
 }

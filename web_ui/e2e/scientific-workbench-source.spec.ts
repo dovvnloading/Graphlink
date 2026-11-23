@@ -21,7 +21,11 @@ test("creates an upstream dataset from an empty table field, reviews its import 
     await page.getByRole("list", { name: "Plugin search results" }).getByText("Statistics", { exact: true }).click();
     const target = page.locator(".react-flow__node-scientific").first();
     await page.getByRole("button", { name: "Fit All" }).click();
-    await target.getByLabel("Operation", { exact: true }).selectOption("grouped_table_summary");
+    const operation = target.getByRole("button", { name: "Operation", exact: true });
+    await operation.click();
+    await page.getByRole("listbox", { name: "Operation", exact: true })
+      .getByRole("option", { name: "Summarize a typed table by group", exact: true }).click();
+    await expect(operation).toContainText("Summarize a typed table by group");
     const recovery = target.getByRole("region", { name: "Connect a source table" });
     await recovery.getByRole("button", { name: "Create source and import" }).click();
     await expect(page.locator(".react-flow__node-scientific")).toHaveCount(2);
@@ -30,11 +34,21 @@ test("creates an upstream dataset from an empty table field, reviews its import 
     await recovery.getByRole("button", { name: "Preview table", exact: true }).click();
     await expect(recovery.getByRole("table", { name: "Pending import preview" })).toContainText("25");
     await recovery.getByRole("button", { name: "Apply reviewed table" }).click();
-    const sourceTable = target.getByRole("combobox", { name: "Import Typed table from a connected result" });
+    const sourceTable = target.getByRole("button", { name: "Import Typed table from a connected result" });
     await expect(sourceTable).toBeVisible();
-    await sourceTable.selectOption({ index: 1 });
-    await target.getByLabel("Numeric measurement column").selectOption({ label: "Value · numeric" });
-    await target.getByLabel("Group column").selectOption({ index: 1 });
+    await sourceTable.click();
+    await page.getByRole("listbox", { name: "Import Typed table from a connected result", exact: true })
+      .getByRole("option", { name: "Statistics · Whole typed table (3 rows, 2 columns)", exact: true }).click();
+    const measurement = target.getByRole("button", { name: "Numeric measurement column", exact: true });
+    await measurement.click();
+    await page.getByRole("listbox", { name: "Numeric measurement column", exact: true })
+      .getByRole("option", { name: "Value · numeric", exact: true }).click();
+    await expect(measurement).toContainText("Value · numeric");
+    const group = target.getByRole("button", { name: "Group column", exact: true });
+    await group.click();
+    await page.getByRole("listbox", { name: "Group column", exact: true })
+      .getByRole("option", { name: "Group · categorical", exact: true }).click();
+    await expect(group).toContainText("Group · categorical");
     await target.getByRole("button", { name: "Run calculation" }).click();
     const result = target.getByRole("region", { name: "Latest result" });
     await expect(result.locator(".science-result-highlight strong")).toHaveText("2");

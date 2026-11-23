@@ -15,7 +15,8 @@
  * guarantees for a bad render server-side, never a hard crash.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { IconButton } from "../../ui/IconButton";
 import { supportsChartAnalysis } from "./chartViewport";
 import { ChartAnalysisPane } from "./ChartAnalysisPane";
 import type { ChartDataRow } from "../../../lib/bridge-core/generated/scene-state";
@@ -41,7 +42,27 @@ export interface ChartRendererProps {
 function ChartRenderer({ chartType, chartData, onAnalysisChange }: ChartRendererProps) {
   const [wrapperRef, size] = useElementSize<HTMLDivElement>();
   const theme = useChartTheme(wrapperRef);
-  const { zoom, isZoomed, handlers, reset } = useZoomPane();
+  const [interactive, setInteractive] = useState(false);
+  const { zoom, isZoomed, handlers, reset } = useZoomPane(interactive, () => setInteractive(true));
+  const plotHeight = Math.max(1, size.height - 32);
+  useEffect(() => {
+    if (!interactive) return;
+    const outside = (event: globalThis.PointerEvent) => {
+      if (!wrapperRef.current?.contains(event.target as Node)) setInteractive(false);
+    };
+    const escape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setInteractive(false);
+      if (wrapperRef.current?.contains(document.activeElement)) (document.activeElement as HTMLElement)?.blur();
+      event.stopPropagation();
+    };
+    document.addEventListener("pointerdown", outside, true);
+    document.addEventListener("keydown", escape, true);
+    return () => {
+      document.removeEventListener("pointerdown", outside, true);
+      document.removeEventListener("keydown", escape, true);
+    };
+  }, [interactive, wrapperRef]);
   const [hover, setHover] = useState<TooltipContent | null>(null);
 
   const canonical = useMemo(() => {
@@ -64,12 +85,14 @@ function ChartRenderer({ chartType, chartData, onAnalysisChange }: ChartRenderer
   // marks and non-analysis chart zoom implementations without SVG scaling.
   if (supportsChartAnalysis(chartType)) {
     return (
-      <div className="chart-canvas-wrapper" ref={wrapperRef}>
+      <div className="chart-canvas-wrapper" ref={wrapperRef} data-interactive={interactive}
+        onPointerDownCapture={() => setInteractive(true)} onFocusCapture={() => setInteractive(true)}>
         {size.width > 0 && size.height > 0 && (
           <ChartAnalysisPane
             chartType={chartType} chartData={canonical.data}
             width={size.width} height={size.height} theme={theme}
             wrapperRef={wrapperRef} onAnalysisChange={onAnalysisChange}
+            interactive={interactive} onActivate={() => setInteractive(true)}
           />
         )}
       </div>
@@ -80,18 +103,23 @@ function ChartRenderer({ chartType, chartData, onAnalysisChange }: ChartRenderer
     chartData: canonical.data,
     theme,
     width: size.width,
-    height: size.height,
+    height: plotHeight,
     onHover: setHover,
     wrapperRef,
   };
 
   return (
-    <div className="chart-canvas-wrapper" ref={wrapperRef}>
+    <div className="chart-canvas-wrapper" ref={wrapperRef} data-interactive={interactive}
+      onPointerDownCapture={() => setInteractive(true)} onFocusCapture={() => setInteractive(true)}>
+      <div className="chart-legacy-toolbar nodrag">
+        <IconButton icon="fit-view" label="Reset zoom" shortcut="Home" size="sm" disabled={!isZoomed} onClick={reset} />
+      </div>
       {size.width > 0 && size.height > 0 && (
         <svg
-          className="chart-canvas-svg nodrag nowheel nopan"
+          className={`chart-canvas-svg nodrag nopan${interactive ? " nowheel" : ""}`}
+          tabIndex={0} role="application" aria-label={`Interactive ${chartType} chart`}
           width={size.width}
-          height={size.height}
+          height={plotHeight}
           onPointerDown={handlers.onPointerDown}
           onPointerMove={handlers.onPointerMove}
           onPointerUp={handlers.onPointerUp}
@@ -112,11 +140,6 @@ function ChartRenderer({ chartType, chartData, onAnalysisChange }: ChartRenderer
             {chartType === "heatmap" && <HeatmapChartMarks {...marksProps} />}
           </g>
         </svg>
-      )}
-      {isZoomed && (
-        <button type="button" className="chart-zoom-reset nodrag" onClick={reset}>
-          Reset zoom
-        </button>
       )}
       <ChartTooltip content={hover} theme={theme} />
     </div>

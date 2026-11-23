@@ -42,10 +42,11 @@ describe("source rows for a computed group", () => {
     const request = vi.fn(async (_id: string, group: string) => group === "A" ? delayed : page(group, 0, 1, "old"));
     render(<TableContributors node={chart} store={lookup(request)} />);
     fireEvent.click(screen.getByRole("button", { name: "Inspect source rows" }));
-    fireEvent.change(screen.getByRole("combobox", { name: "Inspect group" }), { target: { value: "B" } });
+    fireEvent.click(screen.getByRole("button", { name: "Inspect group" }));
+    fireEvent.click(screen.getByRole("option", { name: "B" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("result changed");
     await act(async () => { finishFirst(page("A", 0, 1)); });
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
-    expect(screen.getByRole("combobox")).toHaveValue("B");
+    expect(screen.getByRole("button", { name: "Inspect group" })).toHaveTextContent("B");
   });
 });
