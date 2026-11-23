@@ -64,6 +64,7 @@ def test_real_playwright_chromium_renders_clicks_and_captures_without_network(mo
     assert result.links[0]["url"] == "https://example.com/details"
     assert result.screenshot is not None and result.screenshot.startswith(b"\x89PNG\r\n\x1a\n")
     assert result.title == "Offline pricing fixture"
+    assert any(item["selector"] == "#reveal" for item in result.controls)
     assert result.url == "https://example.com/"
     assert requests and all(method == "GET" and url == "https://example.com/" for method, url in requests)
     assert approvals == [("click", "Reveal the plan")]
