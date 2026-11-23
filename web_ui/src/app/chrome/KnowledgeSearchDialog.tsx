@@ -549,13 +549,20 @@ export function KnowledgeSearchDialog({
   }, [knowledgeOpen, query, runSearch]);
 
   async function removeDocument(doc: KnowledgeLibraryDocument) {
+    const actionTrigger = document.getElementById("knowledge-document-actions-" + doc.documentId);
     const accepted = await askConfirm({
       title: "Remove document?",
       body: "Remove “" + doc.title + "” from the current workspace?",
       confirmLabel: "Remove document",
       destructive: true,
     });
-    if (accepted) await documentIntent(doc.documentId, "removeDocument");
+    if (!accepted) {
+      // The menu item that opened this nested dialog has unmounted; return
+      // focus to its stable document-actions trigger rather than the page body.
+      actionTrigger?.focus();
+      return;
+    }
+    await documentIntent(doc.documentId, "removeDocument");
   }
 
   async function removeWatchedFolder(folder: WatchedFolder) {
@@ -699,7 +706,8 @@ export function KnowledgeSearchDialog({
                           <span className="knowledge-library-status">
                             {doc.status === "indexed" ? "Indexed" : doc.status === "embedding" ? "Embedding" : "Failed"}
                           </span>
-                          <MenuButton label="Actions" menuLabel={"Actions for " + doc.title}
+                          <MenuButton id={"knowledge-document-actions-" + doc.documentId}
+                            label="Actions" menuLabel={"Actions for " + doc.title}
                             disabled={documentAction !== null}>
                             <MenuItem icon="document-text" label="Open in Document View"
                               onSelect={() => void documentIntent(doc.documentId, "openDocument")} />
