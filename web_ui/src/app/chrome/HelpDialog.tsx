@@ -2,6 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import helpDataUrl from "./help-data/sections.json?url";
 import type { HelpItem, HelpSection } from "./help-data/sections";
 import { Dialog } from "../overlays/overlays";
+import { Icon } from "../ui/icons/Icon";
+import type { IconName } from "../ui/icons/registry";
+import { Kbd } from "../ui/Kbd";
+import { resolveShortcut, type ShortcutId } from "./shortcuts";
+import "./HelpDialog.css";
 
 /**
  * The Help panel (Qt-removal plan R2.5) - help-web's SPA successor.
@@ -32,6 +37,58 @@ import { Dialog } from "../overlays/overlays";
  * sentence instructing the reader to use the list of section buttons
  * directly beneath it, which the list already affords.
  */
+
+
+const HELP_ICONS: Record<string, IconName> = {
+  "Start Here": "help", "The Canvas": "workspace", "Node Types": "layers",
+  "Finding Things": "search", "Organizing": "organize", Plugins: "puzzle",
+  "The Builder": "builder", "The Agent": "agent", "Models and Settings": "settings",
+  "Saving and Output": "download", Keyboard: "keyboard",
+};
+
+const SHORTCUT_INFO: Record<ShortcutId, { group: string; action: string; description: string }> = {
+  "new-chat": { group: "Project", action: "New chat", description: "Start a fresh graph." },
+  "toggle-library": { group: "Project", action: "Open library", description: "Find saved graphs." },
+  "save-chat": { group: "Project", action: "Save chat", description: "Save the current graph." },
+  "toggle-palette": { group: "Finding", action: "Command palette", description: "Find a command by name." },
+  "toggle-search": { group: "Finding", action: "Search this graph", description: "Find text in canvas nodes." },
+  "toggle-quick-switcher": { group: "Finding", action: "Quick switcher", description: "Switch to a saved graph." },
+  "create-frame": { group: "Editing", action: "Create frame", description: "Frame selected nodes." },
+  "create-container": { group: "Editing", action: "Create container", description: "Group selected nodes." },
+  "undo": { group: "Editing", action: "Undo", description: "Undo a canvas change." },
+  "redo": { group: "Editing", action: "Redo", description: "Redo an undone change." },
+  "compare-branches": { group: "Branches", action: "Compare branches", description: "Compare selected branches." },
+  "synthesize-branches": { group: "Branches", action: "Synthesize branches", description: "Combine selected branches." },
+  "navigate-up": { group: "Branches", action: "Navigate to parent", description: "Move through the graph." },
+  "navigate-down": { group: "Branches", action: "Navigate to child", description: "Move through the graph." },
+  "navigate-left": { group: "Branches", action: "Navigate left", description: "Move through siblings." },
+  "navigate-right": { group: "Branches", action: "Navigate right", description: "Move through siblings." },
+};
+
+/** Discover actual chords from the dispatch resolver rather than copying shortcuts by hand. */
+function generatedKeyboardSection(source: HelpSection): HelpSection {
+  const chords = new Map<ShortcutId, string[]>();
+  const keys = [..."abcdefghijklmnopqrstuvwxyz", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
+  for (const shiftKey of [false, true]) {
+    for (const key of keys) {
+      const id = resolveShortcut({ key, ctrlKey: true, metaKey: false, shiftKey, altKey: false });
+      if (!id) continue;
+      const displayKey = key.startsWith("Arrow")
+        ? { ArrowUp: "↑", ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→" }[key as "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight"]
+        : key.toUpperCase();
+      const chord = "Ctrl+" + (shiftKey ? "Shift+" : "") + displayKey;
+      const existing = chords.get(id) ?? [];
+      if (!existing.includes(chord)) chords.set(id, [...existing, chord]);
+    }
+  }
+  const subsections = ["Project", "Finding", "Editing", "Branches"].map((title) => ({
+    title,
+    items: (Object.entries(SHORTCUT_INFO) as [ShortcutId, typeof SHORTCUT_INFO[ShortcutId]][])
+      .filter(([id, details]) => details.group === title && chords.has(id))
+      .map(([id, details]) => ({ action: details.action, description: details.description, keys: chords.get(id)! })),
+  }));
+  return { ...source, subsections: [...subsections, ...source.subsections.filter((item) => item.title === "In a Text Field")] };
+}
 
 interface Match {
   section: HelpSection;
@@ -71,7 +128,7 @@ function Keys({ keys }: { keys: string[] }) {
       {keys.map((chord, index) => (
         <span key={chord}>
           {index > 0 && <span className="help-item-keys-or">or</span>}
-          <kbd className="help-kbd">{chord}</kbd>
+          <Kbd className="help-kbd" shortcut={chord} />
         </span>
       ))}
     </span>
@@ -114,13 +171,14 @@ export function HelpDialog() {
     return () => { disposed = true; };
   }, []);
 
-  const availableSections = sections ?? [];
+  const availableSections = useMemo(() => (sections ?? []).map((section) =>
+    section.name === "Keyboard" ? generatedKeyboardSection(section) : section), [sections]);
   const results = useMemo(() => matches(query, availableSections), [query, availableSections]);
   const searching = query.trim().length > 0;
   const activeSection = availableSections.find((section) => section.name === activeSectionName) ?? availableSections[0];
 
   return (
-    <Dialog name="help" title="Help" className="help-dialog">
+    <Dialog name="help" title="Help" size="xl" className="help-dialog">
       {loadError ? <p role="alert">{loadError}</p> : !sections ? <p role="status">Loading help…</p> : (
       <div className="help-shell">
         <nav className="help-rail" aria-label="Help sections">
@@ -159,7 +217,8 @@ export function HelpDialog() {
                   setActiveSectionName(section.name);
                 }}
               >
-                {section.name}
+                <Icon name={HELP_ICONS[section.name] ?? "help"} size="sm" />
+                <span>{section.name}</span>
               </button>
             ))}
           </div>
