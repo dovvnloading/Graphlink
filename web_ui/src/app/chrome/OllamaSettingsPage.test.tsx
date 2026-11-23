@@ -298,21 +298,21 @@ describe("Settings > Ollama", () => {
       ollamaInventory: modelNames.map((name) => inventoryModel(name)),
     });
     const tasks = [
-      ["Chat Model", "task_chat"],
-      ["Chat Naming Model", "task_title"],
-      ["Chart Generation Model", "task_chart"],
-      ["Web Content Validation Model", "task_web_validate"],
-      ["Web Content Summarization Model", "task_web_summarize"],
+      ["Chat model", "task_chat"],
+      ["Chat naming model", "task_title"],
+      ["Chart generation model", "task_chart"],
+      ["Web content validation model", "task_web_validate"],
+      ["Web content summarization model", "task_web_summarize"],
     ];
     for (const [label, task] of tasks) {
       await chooseOption(user, label, "beta:latest");
       expect(intents).toContainEqual(["app-settings", "setOllamaModelAssignment", [task, "beta:latest"]]);
     }
-    await chooseOption(user, "Chat Naming Model", "Use chat model");
+    await chooseOption(user, "Chat naming model", "Use chat model");
     expect(intents).toContainEqual(["app-settings", "setOllamaModelAssignment", ["task_title", "inherit"]]);
-    await chooseOption(user, "Chat Model", "Auto — choose a compatible installed model");
+    await chooseOption(user, "Chat model", "Auto — choose a compatible installed model");
     expect(intents).toContainEqual(["app-settings", "setOllamaModelAssignment", ["task_chat", "auto"]]);
-    await user.click(screen.getByRole("button", { name: "Chat Model" }));
+    await user.click(screen.getByRole("button", { name: "Chat model" }));
     expect(screen.queryByRole("option", { name: "Use chat model" })).toBeNull();
   });
 
@@ -322,7 +322,7 @@ describe("Settings > Ollama", () => {
       ollamaInventory: [inventoryModel("disk:latest", { source: "folder" })],
       ollamaScannedModels: ["disk:latest", "only-in-datalist:latest"],
     });
-    await user.click(screen.getByRole("button", { name: "Chat Model" }));
+    await user.click(screen.getByRole("button", { name: "Chat model" }));
     expect(screen.queryByRole("option", { name: "disk:latest" })).toBeNull();
     expect(screen.queryByRole("option", { name: "only-in-datalist:latest" })).toBeNull();
     expect(screen.getByRole("option", { name: "Custom model ID…" })).toBeInTheDocument();
@@ -334,16 +334,16 @@ describe("Settings > Ollama", () => {
       ollamaInventory: [inventoryModel("alpha:latest")],
       ollamaModelAssignments: { task_chart: "private:tag" },
     });
-    expect(screen.getByRole("combobox", { name: "Chart Generation Model (custom model ID)" }))
+    expect(screen.getByRole("combobox", { name: "Chart generation model (custom model ID)" }))
       .toHaveValue("private:tag");
-    await chooseOption(user, "Chat Model", "Custom model ID…");
-    const input = screen.getByRole("combobox", { name: "Chat Model (custom model ID)" });
+    await chooseOption(user, "Chat model", "Custom model ID…");
+    const input = screen.getByRole("combobox", { name: "Chat model (custom model ID)" });
     await user.type(input, "my-model:latest");
     expect(input).toHaveValue("my-model:latest");
     expect(intents).not.toContainEqual([
       "app-settings", "setOllamaModelAssignment", ["task_chat", "my-model:latest"],
     ]);
-    await user.click(screen.getByRole("button", { name: "Save Chat Model ID" }));
+    await user.click(screen.getByRole("button", { name: "Save chat model ID" }));
     expect(intents.filter(([, action, args]) => action === "setOllamaModelAssignment" && args[0] === "task_chat"))
       .toEqual([["app-settings", "setOllamaModelAssignment", ["task_chat", "my-model:latest"]]]);
   });
@@ -353,17 +353,17 @@ describe("Settings > Ollama", () => {
       ollamaInventorySource: "server",
       ollamaInventory: [inventoryModel("alpha:latest"), inventoryModel("beta:latest")],
     });
-    const trigger = screen.getByRole("button", { name: "Chat Naming Model" });
+    const trigger = screen.getByRole("button", { name: "Chat naming model" });
     trigger.focus();
     await user.keyboard("{Enter}");
-    const listbox = screen.getByRole("listbox", { name: "Chat Naming Model" });
+    const listbox = screen.getByRole("listbox", { name: "Chat naming model" });
     expect(listbox).toHaveFocus();
     expect(listbox).toHaveAttribute("aria-activedescendant", screen.getByRole("option", { name: "Auto — choose a compatible installed model" }).id);
     await user.keyboard("{ArrowDown}{Enter}");
     expect(intents).toContainEqual(["app-settings", "setOllamaModelAssignment", ["task_title", "alpha:latest"]]);
     expect(trigger).toHaveFocus();
     await user.keyboard("{Enter}{Escape}");
-    expect(screen.queryByRole("listbox", { name: "Chat Naming Model" })).toBeNull();
+    expect(screen.queryByRole("listbox", { name: "Chat naming model" })).toBeNull();
     expect(trigger).toHaveFocus();
   });
 
@@ -524,7 +524,7 @@ describe("Settings > Ollama", () => {
 
   it("reveals selected values and traverses the portaled task picker with a single Tab", async () => {
     const { user } = setup();
-    const field = screen.getByRole("button", { name: "Chat Model" });
+    const field = screen.getByRole("button", { name: "Chat model" });
     expect(field).toHaveTextContent("Auto — choose a compatible installed model");
     expect(field).not.toHaveAccessibleDescription(/Selected:/);
     field.focus();
@@ -532,8 +532,8 @@ describe("Settings > Ollama", () => {
     expect(screen.getByRole("option", { name: "Auto — choose a compatible installed model" }))
       .toHaveAttribute("aria-selected", "true");
     await user.keyboard("{Tab}");
-    expect(screen.queryByRole("listbox", { name: "Chat Model" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Chat Naming Model" })).toHaveFocus();
+    expect(screen.queryByRole("listbox", { name: "Chat model" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Chat naming model" })).toHaveFocus();
   });
 
   it("filters known embedding-only models from text tasks and warns on an existing incompatible assignment", async () => {
@@ -547,7 +547,7 @@ describe("Settings > Ollama", () => {
       ollamaModelAssignments: { task_chat: "nomic-embed-text:latest" },
     });
     expect(screen.getByRole("alert")).toHaveTextContent(/embedding-only model and cannot generate text/);
-    await user.click(screen.getByRole("button", { name: "Chat Model" }));
+    await user.click(screen.getByRole("button", { name: "Chat model" }));
     expect(screen.queryByRole("option", { name: "nomic-embed-text:latest" })).not.toBeInTheDocument();
     expect(screen.getByRole("option", { name: "chat:latest" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "unverified:latest" })).toBeInTheDocument();
@@ -629,14 +629,14 @@ describe("Settings > Ollama", () => {
 
   it("saves custom model IDs only on explicit confirmation or Enter, not for each keystroke", async () => {
     const { user, intents } = setup();
-    await chooseOption(user, "Chat Model", "Custom model ID…");
-    const input = screen.getByRole("combobox", { name: "Chat Model (custom model ID)" });
+    await chooseOption(user, "Chat model", "Custom model ID…");
+    const input = screen.getByRole("combobox", { name: "Chat model (custom model ID)" });
     await user.type(input, "local:7b");
     expect(intents.some(([, action]) => action === "setOllamaModelAssignment")).toBe(false);
     await user.keyboard("{Enter}");
     expect(intents.filter(([, action]) => action === "setOllamaModelAssignment"))
       .toEqual([["app-settings", "setOllamaModelAssignment", ["task_chat", "local:7b"]]]);
-    expect(screen.getByRole("button", { name: "Save Chat Model ID" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save chat model ID" })).toBeEnabled();
   });
 
   it("announces downloading, cancellation and completion without implying a model was selected", () => {
