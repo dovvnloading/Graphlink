@@ -487,10 +487,11 @@ describe("ChatNodeView", () => {
     renderChatNode({ isUser: true });
     fireEvent.contextMenu(screen.getByText("You"));
 
-    await user.click(screen.getByRole("menuitem", { name: "Generate Chart" }));
-    expect(screen.getByRole("menuitem", { name: "Generate Chart" })).toHaveAttribute("aria-expanded", "true");
+    await user.click(screen.getByRole("menuitem", { name: "Generate" }));
+    await user.click(screen.getByRole("menuitem", { name: "Chart" }));
+    expect(screen.getByRole("menuitem", { name: "Chart" })).toHaveAttribute("aria-expanded", "true");
 
-    const submenu = screen.getByRole("menu", { name: "Chart type" });
+    const submenu = screen.getByRole("menu", { name: "Chart" });
     const optionNames = Array.from(submenu.querySelectorAll('[role="menuitem"]')).map((el) => el.textContent);
     expect(optionNames).toEqual(["Bar", "Line", "Histogram", "Pie", "Sankey"]);
   });
