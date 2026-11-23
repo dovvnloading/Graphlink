@@ -205,8 +205,15 @@
 }
 
 .science-array-editor, .science-binding-review { min-width: 0; }
-.science-array-editor > summary, .science-binding-review > summary { font-weight: 600; }
-.science-array-editor[open], .science-binding-review[open] { display: grid; gap: var(--gl-space-2); }
+.science-array-editor > .gl-disclosure-trigger, .science-binding-review > .gl-disclosure-trigger { font-weight: 600; }
+.science-array-editor[data-open="true"], .science-binding-review[data-open="true"] { display: grid; gap: var(--gl-space-2); }
+.science-array-editor > .gl-disclosure-content, .science-binding-review > .gl-disclosure-content {
+  display: grid; gap: var(--gl-space-2); padding: 0;
+}
+.science-array-editor > .gl-disclosure-content[hidden], .science-binding-review > .gl-disclosure-content[hidden] {
+  display: none;
+}
+.science-view-data > .gl-disclosure-content { padding: 0; }
 .science-window { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--gl-space-2); }
 .science-bind-field, .science-binding-review section { display: grid; min-width: 0; gap: var(--gl-space-1-5); }
 .science-binding-review section > div { padding-block: var(--gl-space-1-5); border-top: 1px solid var(--gl-surface-border); }
