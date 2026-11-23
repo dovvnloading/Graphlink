@@ -3,8 +3,9 @@
   display: block;
   max-width: 100%;
   border-radius: var(--gl-radius-sm);
-  background-color: var(--gl-surface-inset);
-  background-image: linear-gradient(90deg, var(--gl-surface-inset), var(--gl-surface-raised), var(--gl-surface-inset));
+  /* State washes read on every surface in both themes; surface tokens can match the panel. */
+  background-color: var(--gl-state-selected);
+  background-image: linear-gradient(90deg, var(--gl-state-selected), var(--gl-state-hover), var(--gl-state-selected));
   background-size: 200% 100%;
   animation: gl-skeleton-shimmer 1.4s ease-in-out infinite;
 }
