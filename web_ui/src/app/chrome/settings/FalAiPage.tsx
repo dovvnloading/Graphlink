@@ -129,7 +129,7 @@ export function FalAiPage({
         each model's exact JSON schema and pricing.
       </p>
 
-      <FieldGroup title="Connection">
+      <FieldGroup {...{ title: "Connection" }}>
         <TextField label="Fal.ai API key" type="password" suffix={{ type: "password" }}
           autoComplete="new-password" mono placeholder="Paste key (never returned to the browser)" value={keyDraft}
           onValueChange={setKeyDraft} />
@@ -152,7 +152,7 @@ export function FalAiPage({
         </div>
       </FieldGroup>
 
-      <FieldGroup title="Live model discovery & pricing">
+      <FieldGroup {...{ title: "Live model discovery & pricing" }}>
         <p className="settings-field-hint">
           Search the current Fal catalog and inspect a model's OpenAPI schema before sending
           model-specific inputs. Price checks and cost estimates do not run an inference or
@@ -217,8 +217,8 @@ export function FalAiPage({
               [modelId.trim(), estimateQuantity, estimateBasis])}>Estimate Cost</Button>
         </div>
         {!!discovery && discovery.kind !== "models" && (
-          <Disclosure title={discovery.kind === "details" ? "Model metadata / OpenAPI schema" :
-              discovery.kind === "pricing" ? "Current model pricing" : "Cost estimate"}>
+          <Disclosure {...{ title: discovery.kind === "details" ? "Model metadata / OpenAPI schema" :
+              discovery.kind === "pricing" ? "Current model pricing" : "Cost estimate" }}>
             <pre className="settings-code-output">
               {JSON.stringify(discovery.data, null, 2)}
             </pre>
@@ -229,7 +229,7 @@ export function FalAiPage({
         )}
       </FieldGroup>
 
-      <FieldGroup title="Model inference">
+      <FieldGroup {...{ title: "Model inference" }}>
         <TextField label="Model endpoint ID (including optional nested path)" value={modelId}
           mono spellCheck={false} onValueChange={setModelId} placeholder="fal-ai/flux/schnell" />
         <label className="settings-field">
@@ -271,7 +271,7 @@ export function FalAiPage({
         </div>
       </FieldGroup>
 
-      <FieldGroup title="Input media">
+      <FieldGroup {...{ title: "Input media" }}>
         <p className="settings-field-hint">
           Small files can be passed as base64 data URIs when the model supports them.
           For large audio, video or images, use the CDN uploader (requires the optional
@@ -313,14 +313,14 @@ export function FalAiPage({
       </p>
 
       {!!state.falSyncResultJson && (
-        <Disclosure title="Last synchronous result">
+        <Disclosure {...{ title: "Last synchronous result" }}>
           <pre className="settings-code-output">
             {state.falSyncResultJson}
           </pre>
         </Disclosure>
       )}
 
-      <FieldGroup title="Queue jobs (persisted across sessions)">
+      <FieldGroup {...{ title: "Queue jobs (persisted across sessions)" }}>
         <p className="settings-field-hint">
           Queue requests can outlive Graphlink. Refresh a completed job to fetch its output.
           Cancellation is best-effort; Fal may already be running the model. A completed
@@ -328,7 +328,7 @@ export function FalAiPage({
         </p>
         {jobs.length === 0 && <p className="settings-update-status">No submitted queue jobs yet.</p>}
         {jobs.map((job) => (
-          <Disclosure key={job.requestId} title={`${job.modelId} — ${job.status} — ${job.requestId.slice(0, 8)}`}>
+          <Disclosure key={job.requestId} {...{ title: `${job.modelId} — ${job.status} — ${job.requestId.slice(0, 8)}` }}>
             <p className="settings-update-status">Request ID: <code>{job.requestId}</code></p>
             <div className="settings-button-row">
               <Button variant="secondary" disabled={state.falBusy}
@@ -350,7 +350,7 @@ export function FalAiPage({
               </p>
             ))}
             {!!job.resultJson && (
-              <Disclosure title="JSON output">
+              <Disclosure {...{ title: "JSON output" }}>
                 <pre className="settings-code-output">
                   {job.resultJson}
                 </pre>
