@@ -176,7 +176,7 @@ export function LlamaCppPage({ state, transport }: { state: AppSettingsState; tr
           disabled={state.llamaCppScanStatus === "running"}
           onClick={() => transport.fireIntent("app-settings", "scanLlamaCppSystem", [])}
         >
-          {state.llamaCppScanStatus === "running" ? "Scanning…" : "System Scan"}
+          {state.llamaCppScanStatus === "running" ? <><Spinner size={14} decorative /> Scanning…</> : "System scan"}
         </Button>
         <Button variant="secondary"
           disabled={state.llamaCppScanStatus === "running"}
