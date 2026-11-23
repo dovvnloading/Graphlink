@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
+import { Card } from "../ui/Card";
+import { Button } from "../ui/Button";
+import { Badge, StatusPill } from "../ui/Badge";
+import { ProgressBar } from "../ui/ProgressBar";
+import { formatCount } from "../ui/format";
+import "./knowledge-library.css";
 
 interface EmbeddingJob {
   jobId: string;
@@ -70,9 +76,11 @@ function sourceLabel(source: string): string {
 export function KnowledgeEmbeddingStatus({
   transport,
   open,
+  onSetUpEmbeddings,
 }: {
   transport: WsTransport;
   open: boolean;
+  onSetUpEmbeddings?: () => void;
 }) {
   const [snapshot, setSnapshot] = useState<EmbeddingSnapshot | null>(null);
   const [choice, setChoice] = useState<EmbeddingChoice | null>(null);
@@ -153,65 +161,56 @@ export function KnowledgeEmbeddingStatus({
     }
   }
 
+  const statusLabel = active ? "Running" : choice?.source === "off" ? "Off" : "Ready";
   return (
-    <section className="knowledge-library-section" aria-label="Knowledge embeddings">
-      <div className="knowledge-library-heading">
-        <h2 className="knowledge-section-title">Knowledge embeddings</h2>
-        <div className="knowledge-library-actions">
-          {active ? (
-            <button
-              type="button"
-              className="knowledge-search-button"
-              disabled={pendingAction || job.cancelRequested}
-              onClick={() => void perform("cancelEmbedding", [job.jobId])}
-            >
-              {job.cancelRequested ? "Cancelling embeddings…" : "Cancel embeddings"}
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="knowledge-search-button"
-              disabled={!canRun || pendingAction}
-              onClick={() => void perform("resumeEmbedding", [])}
-            >
-              {resume ? "Resume embeddings" : "Start embeddings"}
-            </button>
-          )}
-        </div>
-      </div>
-      <div className="knowledge-import-job">
-        <p className="knowledge-import-stats">
+    <Card title="Embeddings" className="knowledge-embeddings-card"
+      actions={<div className="knowledge-embeddings-status">
+        <StatusPill status={active ? "Running" : choice?.source === "off" ? "Skipped" : "Done"} />
+        <Badge>{statusLabel}</Badge>
+      </div>}>
+      <div className="knowledge-embeddings-body">
+        <p className="knowledge-library-muted">
           Source: {choice ? sourceLabel(choice.source) : "Loading…"} · Model: {choice?.model || "None"}
         </p>
-        <p className="knowledge-import-stats" role="status" aria-live="polite">
-          Status: {job?.cancelRequested && active ? "Cancelling" :
-            job ? job.status.charAt(0).toUpperCase() + job.status.slice(1) :
-            choice?.source === "off" ? "Off" : "Not started"}
+        <p role="status" aria-live="polite" className="knowledge-library-muted">
+          Status: {job?.cancelRequested && active ? "Cancelling" : statusLabel}
         </p>
         {job ? (
           <>
-            <p className="knowledge-import-stats">
-              {job.chunksEmbedded} embedded · {job.chunksRemaining} pending chunks (this run)
+            <p className="knowledge-library-muted">
+              {formatCount(job.chunksEmbedded)} embedded · {formatCount(job.chunksRemaining)} pending chunks (this run)
             </p>
             {job.status === "running" && (
-              <progress
-                className="knowledge-import-progress"
-                aria-label="Knowledge embedding progress"
-                max={Math.max(job.chunksTotal, 1)}
-                value={job.chunksTotal > 0 ? Math.min(job.chunksEmbedded, job.chunksTotal) : undefined}
-              />
+              <ProgressBar label="Knowledge embedding progress" max={Math.max(job.chunksTotal, 1)}
+                value={job.chunksEmbedded} />
             )}
           </>
         ) : (
-          <p className="knowledge-import-stats">
+          <p className="knowledge-library-muted">
             {choice?.source === "off"
               ? "Enable a source in Settings > Knowledge to generate embeddings."
               : "No embedding job for this workspace and model yet."}
           </p>
         )}
-        {lastError && <p className="knowledge-watch-error" role="alert">Last error: {lastError}</p>}
-        {actionError && <p className="knowledge-watch-error" role="alert">{actionError}</p>}
+        <div className="knowledge-embeddings-actions">
+          {choice?.source === "off" ? (
+            <Button variant="primary" iconStart="settings" disabled={!onSetUpEmbeddings}
+              onClick={onSetUpEmbeddings}>Set up embeddings</Button>
+          ) : active ? (
+            <Button disabled={pendingAction || job.cancelRequested}
+              onClick={() => void perform("cancelEmbedding", [job.jobId])}>
+              {job.cancelRequested ? "Cancelling embeddings…" : "Cancel embeddings"}
+            </Button>
+          ) : (
+            <Button variant="primary" disabled={!canRun || pendingAction}
+              onClick={() => void perform("resumeEmbedding", [])}>
+              {resume ? "Resume embeddings" : "Start embeddings"}
+            </Button>
+          )}
+        </div>
+        {lastError && <p role="alert" className="knowledge-library-error">Last error: {lastError}</p>}
+        {actionError && <p role="alert" className="knowledge-library-error">{actionError}</p>}
       </div>
-    </section>
+    </Card>
   );
 }
