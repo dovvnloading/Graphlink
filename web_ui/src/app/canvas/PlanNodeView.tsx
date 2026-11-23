@@ -6,6 +6,17 @@ import { NodeMenu } from "./NodeMenu";
 import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
+import { Icon } from "../ui/icons/Icon";
+import { IconButton } from "../ui/IconButton";
+import { Button } from "../ui/Button";
+import { MenuItem } from "../ui/Menu";
+import { Badge, StatusPill } from "../ui/Badge";
+import { Spinner } from "../ui/Spinner";
+import { Disclosure } from "../ui/Disclosure";
+import { InlineAlert } from "../ui/InlineAlert";
+import { Tooltip } from "../ui/Tooltip";
+import { TextField } from "../ui/TextField";
+import { formatCount, formatDuration, formatTokens } from "../ui/format";
 
 /**
  * ADR-008 stage 8.3: the Builder's plan node - the checklist the user
@@ -90,98 +101,22 @@ function PlanNodeMenu({
 }) {
   return (
     <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onToggleCollapse();
-          onClose();
-        }}
-      >
-        {isCollapsed ? "Expand" : "Collapse"}
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="chat-node-menu-danger"
-        onClick={() => {
-          onDelete();
-          onClose();
-        }}
-      >
-        Delete Node
-      </button>
+      <MenuItem icon="minimize" label={isCollapsed ? "Expand" : "Collapse"} onSelect={onToggleCollapse} />
+      <MenuItem label="Delete node" destructive onSelect={onDelete} />
     </NodeMenu>
-  );
-}
+  );}
 
-/**
- * The per-step status marker.
- *
- * Was a table of text glyphs - "○ ◐ ● ✕ –" - rendered at whatever weight
- * and baseline the UI font happened to give them, next to an icon set drawn
- * at a consistent 1.7 stroke everywhere else in the app. "◐" in particular
- * read as a rendering artifact rather than as "this step is running now".
- *
- * The distinctions are carried by SHAPE, not by colour, and that is not a
- * stylistic preference: this app's palette is a deliberate monochrome, and
- * its four semantic status tokens currently resolve to #848484, #919191,
- * #838383 and #828282 - error, warning, success and info are the same grey
- * to within a couple of levels. A done step and a failed step were
- * previously distinguished by a one-level luminance difference and nothing
- * else. A check, a cross, a dash and a ring are unmistakable at any size,
- * on any palette, and to anyone who cannot separate those greys at all.
- */
 function StepMarker({ status }: { status: string }) {
-  switch (status) {
-    case "done":
-      return (
-        <svg aria-hidden="true" viewBox="0 0 16 16" className="plan-node-step-icon">
-          <circle cx="8" cy="8" r="6.25" />
-          <path d="m5.2 8.2 2 2 3.6-4.2" />
-        </svg>
-      );
-    case "running":
-      return (
-        <svg aria-hidden="true" viewBox="0 0 16 16" className="plan-node-step-icon">
-          <circle cx="8" cy="8" r="6.25" />
-          <circle cx="8" cy="8" r="2.6" fill="currentColor" stroke="none" />
-        </svg>
-      );
-    case "failed":
-      return (
-        <svg aria-hidden="true" viewBox="0 0 16 16" className="plan-node-step-icon">
-          <circle cx="8" cy="8" r="6.25" />
-          <path d="m5.8 5.8 4.4 4.4M10.2 5.8l-4.4 4.4" />
-        </svg>
-      );
-    case "skipped":
-      return (
-        <svg aria-hidden="true" viewBox="0 0 16 16" className="plan-node-step-icon">
-          <circle cx="8" cy="8" r="6.25" />
-          <path d="M5.4 8h5.2" />
-        </svg>
-      );
-    default:
-      return (
-        <svg aria-hidden="true" viewBox="0 0 16 16" className="plan-node-step-icon">
-          <circle cx="8" cy="8" r="6.25" />
-        </svg>
-      );
-  }
+  if (status === "running") return <Spinner size={16} decorative />;
+  const icon = status === "done" ? "status-success"
+    : status === "failed" ? "status-error"
+    : status === "skipped" ? "status-skipped" : "status-pending";
+  return <Icon name={icon} size="md" className="plan-node-step-icon" />;
 }
 
-/** The three per-row controls in the step editor. Same reason as
- * StepMarker: "↑ ↓ ✕" were font glyphs sitting inside buttons whose every
- * neighbour draws an SVG. */
 function EditorIcon({ name }: { name: "up" | "down" | "remove" }) {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16" className="plan-node-step-icon">
-      {name === "up" && <path d="M8 12.5v-9M4.5 7 8 3.5 11.5 7" />}
-      {name === "down" && <path d="M8 3.5v9M4.5 9 8 12.5 11.5 9" />}
-      {name === "remove" && <path d="m4.5 4.5 7 7M11.5 4.5l-7 7" />}
-    </svg>
-  );
+  return <Icon name={name === "up" ? "arrow-up" : name === "down" ? "arrow-down" : "close"}
+    size="sm" className="plan-node-step-icon" />;
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -225,8 +160,7 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
   const running = data.builderStatus === "running" || data.builderStatus === "planning";
   const resumable = RESUMABLE.has(data.builderStatus);
   const startLabel = data.builderStatus === "awaiting_start" ? "Start build" : "Resume";
-  const denyButtonRef = useRef<HTMLButtonElement>(null);
-  const activityDetailsRef = useRef<HTMLDetailsElement>(null);
+  const [activityOpen, setActivityOpen] = useState(false);
   const activityListRef = useRef<HTMLDivElement>(null);
   const activityErrorCount = data.builderActivity.filter((row) => row.outcome !== "ok").length;
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
@@ -238,10 +172,10 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
   // only while running, so a landed build's log stops moving under the
   // user once there is nothing left to follow.
   useEffect(() => {
-    if (running && activityDetailsRef.current?.open) {
+    if (running && activityOpen) {
       activityListRef.current?.scrollTo({ top: activityListRef.current.scrollHeight });
     }
-  }, [data.builderActivity, running]);
+  }, [data.builderActivity, running, activityOpen]);
 
   // ADR-021 stage 21.3: plan editing is local-draft-then-commit, not
   // per-keystroke intent firing - a checklist edit is a single undoable
@@ -354,7 +288,7 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
   // time with nothing left to re-fire the effect, leaving it unfocused.
   useEffect(() => {
     if (data.builderAwaitingToolApproval && !collapsed) {
-      denyButtonRef.current?.focus();
+      document.getElementById("plan-node-deny-approval")?.focus();
     }
   }, [data.builderAwaitingToolApproval, collapsed]);
 
@@ -366,7 +300,7 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
       onMenuChange={setMenuPosition}
       header={
         <NodeHeading className="plan-node-title">
-          <span className="plan-node-badge">Build</span>
+          <Badge className="plan-node-badge">Build</Badge>
           <span className="plan-node-goal">{data.planGoal || "Untitled build"}</span>
           <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
         </NodeHeading>
@@ -385,10 +319,13 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
       }
     >
       <div className={`plan-node-status plan-node-status-${data.builderStatus}`}>
-        {STATUS_LABELS[data.builderStatus] ?? data.builderStatus}
-        {data.builderMode === "autopilot" && (
-          <span className="plan-node-mode-chip">autopilot</span>
-        )}
+        {(["running", "planning"].includes(data.builderStatus)) ? <StatusPill status="Running" />
+          : data.builderStatus === "done" ? <StatusPill status="Done" />
+          : data.builderStatus === "failed" ? <StatusPill status="Failed" />
+          : data.builderStatus === "awaiting_approval" ? <StatusPill status="Waiting for approval" />
+          : data.builderStatus === "stopped" ? <StatusPill status="Cancelled" />
+          : <Badge>{STATUS_LABELS[data.builderStatus] ?? data.builderStatus}</Badge>}
+        {data.builderMode === "autopilot" && <Badge className="plan-node-mode-chip">Autopilot</Badge>}
       </div>
       {data.builderStatusDetail && (
         <p className="plan-node-detail" role={data.builderStatus === "failed" ? "alert" : undefined}>
@@ -435,13 +372,9 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
                     <span className="plan-node-step-title">{step.title}</span>
                   ) : (
                     <>
-                      <input
-                        type="text"
-                        className="plan-node-step-input nodrag"
-                        value={step.title}
-                        aria-label={`Step ${index + 1} title`}
-                        onChange={(event) => retitleStep(index, event.target.value)}
-                      />
+                      <TextField size="sm" className="plan-node-step-input nodrag"
+                        value={step.title} label={`Step ${index + 1} title`}
+                        onValueChange={(value) => retitleStep(index, value)} />
                       <button
                         type="button"
                         className="plan-node-step-action nodrag"
@@ -499,114 +432,64 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
       )}
 
       <div className="plan-node-budgets">
-        <span>
-          Steps {data.builderSpentSteps}/{data.builderMaxSteps}
-        </span>
-        <span>
-          Tokens {data.builderSpentTokens.toLocaleString()}/{data.builderMaxTokens.toLocaleString()}
-        </span>
-        <span>
-          Time {data.builderSpentWallSeconds}s/{data.builderMaxWallSeconds}s
-        </span>
+        {formatCount(data.builderSpentSteps)} of {formatCount(data.builderMaxSteps)} steps ·{" "}
+        {formatTokens(data.builderSpentTokens)} / {formatTokens(data.builderMaxTokens)} tokens ·{" "}
+        {formatDuration(data.builderSpentWallSeconds)} / {formatDuration(data.builderMaxWallSeconds)}
       </div>
+      {data.builderStatus === "done" && data.planSteps.length > data.builderSpentSteps && (
+        <Tooltip label={data.builderStatusDetail || "The Builder finished before all planned steps were executed."}>
+          <span className="plan-node-skipped">
+            <Icon name="status-skipped" size="sm" />
+            {formatCount(data.planSteps.length - data.builderSpentSteps)} steps skipped
+          </span>
+        </Tooltip>
+      )}
 
-      {/* stage 8.7: the build's own visible record of what it did - real
-          backend state (PlanState.builder_activity), not a debug aid.
-          Reuses ChatNodeView's own "an assistant turn's tool calls,
-          disclosed" pattern (.chat-node-tool-invocations) rather than a
-          parallel widget, since the content is the same shape (a tool
-          name, an outcome, one block of detail text) - just scoped to a
-          whole BUILD instead of one turn, and potentially many more rows,
-          which is the one thing that needs its own scrollable container. */}
       {data.builderActivity.length > 0 && (
-        <details className="chat-node-tool-invocations plan-node-activity" ref={activityDetailsRef}>
-          <summary>
-            {data.builderActivity.length === 1
-              ? "1 activity entry"
-              : `${data.builderActivity.length} activity entries`}
-            {/* The error count is the only part of this summary worth
-                reading at a glance, and it was set in the same muted grey
-                as the row count next to it - a build that failed five tool
-                calls looked exactly like one that failed none. */}
-            {activityErrorCount > 0 && (
-              <span className="plan-node-activity-errors">
-                {` · ${activityErrorCount} error${activityErrorCount === 1 ? "" : "s"}`}
-              </span>
-            )}
-          </summary>
+        <Disclosure className="chat-node-tool-invocations plan-node-activity"
+          open={activityOpen} onOpenChange={setActivityOpen}
+          title={`${data.builderActivity.length} activity ${data.builderActivity.length === 1 ? "entry" : "entries"}${activityErrorCount ? ` · ${activityErrorCount} errors` : ""}`}>
           <div className="plan-node-activity-list nowheel nodrag" ref={activityListRef}>
             {data.builderActivity.map((row, index) => (
-              <div
-                key={index}
-                className={`chat-node-tool-invocation${row.outcome !== "ok" ? " error" : ""}`}
-              >
-                <div className="chat-node-tool-invocation-name">
-                  {row.tool}
-                  <span className="plan-node-activity-elapsed">{row.elapsedMs}ms</span>
+              <div key={index}
+                className={`chat-node-tool-invocation${row.outcome !== "ok" ? " error" : ""}`}>
+                <div className="chat-node-tool-invocation-name">{row.tool}
+                  <span className="plan-node-activity-elapsed">{formatDuration(row.elapsedMs / 1000)}</span>
                 </div>
                 <pre className="chat-node-tool-invocation-arguments">{row.summary}</pre>
               </div>
             ))}
           </div>
-        </details>
+        </Disclosure>
       )}
 
       {data.builderAwaitingToolApproval && (
         <div className="plan-node-approval" role="group" aria-label="Builder tool approval">
-          <div className="plan-node-approval-title">
-            The Builder wants to run: <code>{data.builderApprovalToolName}</code>
-          </div>
-          <pre className="plan-node-approval-summary">{data.builderApprovalSummary}</pre>
+          <InlineAlert variant="warning" title={`The Builder wants to run: ${data.builderApprovalToolName}`}
+            body={<pre className="plan-node-approval-summary">{data.builderApprovalSummary}</pre>} />
           <div className="plan-node-approval-actions">
-            <button type="button" className="plan-node-button nodrag" onClick={data.onApproveTool}>
-              Approve
-            </button>
-            <button
-              type="button"
-              className="plan-node-button plan-node-button-deny nodrag"
-              onClick={data.onDenyTool}
-              ref={denyButtonRef}
-            >
-              Deny
-            </button>
+            <Button size="sm" variant="secondary" onClick={data.onApproveTool}>Approve</Button>
+            <Button size="sm" id="plan-node-deny-approval" onClick={data.onDenyTool}>Deny</Button>
           </div>
         </div>
       )}
 
       <div className="plan-node-actions">
-        {resumable && (
-          <button type="button" className="plan-node-button plan-node-button-start nodrag" onClick={data.onStartExecution}>
-            {startLabel}
-          </button>
-        )}
+        {resumable && <Button size="sm" variant="primary" className="nodrag"
+          onClick={data.onStartExecution}>{startLabel}</Button>}
         {running && (
-          <button
-            type="button"
-            className="plan-node-button plan-node-button-stop nodrag"
-            title="Stop this build. A stopped build cannot be resumed."
-            onClick={data.onCancel}
-          >
-            Stop
-          </button>
+          <Tooltip label="Stop this build. A stopped build cannot be resumed.">
+            <Button size="sm" variant="secondary" className="nodrag" onClick={data.onCancel}>Stop</Button>
+          </Tooltip>
         )}
         {UNDOABLE.has(data.builderStatus) && data.builderRunId && (
-          <button
-            type="button"
-            className="plan-node-button plan-node-button-danger nodrag"
-            onClick={data.onUndoBuild}
-          >
-            Undo build
-          </button>
+          <Button size="sm" variant="secondary" className="nodrag" onClick={data.onUndoBuild}
+            iconStart="undo">Undo build</Button>
         )}
-        {canEditPlan && !editing && (
-          <button type="button" className="plan-node-button nodrag" onClick={startEditing}>
-            Edit plan
-          </button>
-        )}
+        {canEditPlan && !editing && <Button size="sm" className="nodrag" onClick={startEditing}>Edit plan</Button>}
         {data.builderStatus === "done" && data.planSteps.length > 0 && (
-          <button type="button" className="plan-node-button nodrag" onClick={data.onSaveRecipe}>
-            Save as recipe
-          </button>
+          <Button size="sm" variant="ghost" iconStart="bookmark" className="nodrag"
+            onClick={data.onSaveRecipe}>Save as recipe</Button>
         )}
       </div>
     </NodeShell>
