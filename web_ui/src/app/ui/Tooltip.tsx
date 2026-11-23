@@ -1,12 +1,13 @@
 import {
   Children, cloneElement, useCallback, useEffect, useId, useLayoutEffect, useRef, useState,
-  type FocusEvent, type MouseEvent, type ReactElement,
+  type FocusEvent, type MouseEvent, type MutableRefObject, type ReactElement, type Ref,
 } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { Kbd } from "./Kbd";
 import "./tooltip.css";
 
 type TriggerEvents = {
+  ref?: Ref<HTMLElement>;
   onMouseEnter?: (event: MouseEvent<HTMLElement>) => void;
   onMouseLeave?: (event: MouseEvent<HTMLElement>) => void;
   onFocus?: (event: FocusEvent<HTMLElement>) => void;
@@ -24,6 +25,27 @@ export type TooltipProps = {
 const HOVER_DELAY_MS = 500;
 const VIEWPORT_MARGIN = 8;
 const TRIGGER_GAP = 8;
+
+// Keep cloneElement's render-time call separate from the component holding refs.
+// Ref attachment and measurement happen during commit and layout effects.
+type TooltipTriggerProps = {
+  child: ReactElement<TriggerEvents>;
+  describedBy?: string;
+  onTriggerNode: (node: HTMLElement | null) => void;
+} & Pick<TriggerEvents, "onMouseEnter" | "onMouseLeave" | "onFocus" | "onBlur">;
+
+function TooltipTrigger({
+  child, describedBy, onTriggerNode, onMouseEnter, onMouseLeave, onFocus, onBlur,
+}: TooltipTriggerProps) {
+  return cloneElement(child, {
+    ref: onTriggerNode,
+    "aria-describedby": describedBy,
+    onMouseEnter,
+    onMouseLeave,
+    onFocus,
+    onBlur,
+  });
+}
 
 export function Tooltip({ label, shortcut, children, placement = "bottom" }: TooltipProps) {
   const child = Children.only(children);
@@ -43,6 +65,14 @@ export function Tooltip({ label, shortcut, children, placement = "bottom" }: Too
     cancelDelay();
     setVisible(false);
   }, [cancelDelay]);
+
+  const attachTrigger = useCallback((node: HTMLElement | null) => {
+    trigger.current = node;
+    // Preserve the child's ref when installing the tooltip's trigger ref.
+    const originalRef = (child as ReactElement<TriggerEvents> & { ref?: Ref<HTMLElement> }).ref;
+    if (typeof originalRef === "function") originalRef(node);
+    else if (originalRef) (originalRef as MutableRefObject<HTMLElement | null>).current = node;
+  }, [child]);
 
   useEffect(() => {
     const onPointerDown = () => { pointerFocus.current = true; hide(); };
@@ -96,8 +126,7 @@ export function Tooltip({ label, shortcut, children, placement = "bottom" }: Too
     };
   }, [visible, placement]);
 
-  // cloneElement is evaluated during render. Keep ref access in deferred
-  // event callbacks rather than in handlers constructed inside that call.
+  // Ref access below is deferred until these event handlers run.
   const handleMouseEnter = useCallback((event: MouseEvent<HTMLElement>) => {
     child.props.onMouseEnter?.(event);
     trigger.current = event.currentTarget;
@@ -131,13 +160,15 @@ export function Tooltip({ label, shortcut, children, placement = "bottom" }: Too
 
   return (
     <>
-      {cloneElement(child, {
-        "aria-describedby": describedBy,
-        onMouseEnter: handleMouseEnter,
-        onMouseLeave: handleMouseLeave,
-        onFocus: handleFocus,
-        onBlur: handleBlur,
-      })}
+      <TooltipTrigger
+        child={child}
+        describedBy={describedBy}
+        onTriggerNode={attachTrigger}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
+      />
       {visible && createPortal(
         <div ref={tip} id={id} role="tooltip" className="gl-tooltip" style={position}>
           <span>{label}</span>
