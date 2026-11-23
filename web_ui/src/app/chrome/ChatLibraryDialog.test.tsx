@@ -52,7 +52,42 @@ function makeTransport() {
   } as unknown as WsTransport;
   return {
     transport, intents, resubscribes, request,
-    push: (snapshot: Record<string, unknown>) => listeners.get("app-chat-library")?.(snapshot),
+    push: (snapshot: Record<string, unknown>, topic = "app-chat-library") => listeners.get(topic)?.(snapshot),
+  };
+}
+
+function composerSnapshot(overrides: Record<string, unknown> = {}) {
+  return {
+    schemaVersion: 1,
+    minCompatibleSchemaVersion: 1,
+    revision: 1,
+    draft: { id: "", text: "", contextMode: "branch", sendMode: "enter_to_send" },
+    context: { anchor: null, items: [], totalTokens: 0, reviewAvailable: false },
+    route: {
+      mode: "ollama",
+      provider: "Ollama (Local)",
+      modelId: "",
+      modelLabel: "",
+      modelOptions: [
+        { id: "llama3", label: "Llama 3" },
+        { id: "mistral", label: "Mistral" },
+      ],
+      reasoning: { level: "off", label: "Off", options: [] },
+      label: "Ollama (Local)",
+      available: true,
+      canChange: true,
+    },
+    request: { id: null, state: "idle", message: "", canSend: true, canCancel: false, canRetry: false },
+    capabilities: {
+      attachments: false,
+      contextReview: false,
+      routeSelection: false,
+      modelSelection: true,
+      reasoningSelection: true,
+      settingsShortcut: true,
+      cancellation: false,
+    },
+    ...overrides,
   };
 }
 
@@ -85,6 +120,33 @@ beforeEach(() => {
   vi.setSystemTime(new Date("2026-01-15T12:00:00"));
 });
 afterEach(() => { vi.useRealTimers(); });
+
+
+async function chooseWorkspace(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(screen.getByRole("button", { name: "Workspace" }));
+  await user.click(within(await screen.findByRole("listbox", { name: "Workspace" }))
+    .getByRole("option", { name }));
+}
+
+async function openWorkspaceManager(user: ReturnType<typeof userEvent.setup>) {
+  await chooseWorkspace(user, "Manage workspaces…");
+}
+
+function actionsFor(title: string) {
+  const row = screen.getByRole("button", { name: new RegExp('Open chat "' + title + '"') }).closest("li");
+  if (!row) throw new Error("Chat row missing: " + title);
+  return within(row);
+}
+
+async function chooseRowAction(user: ReturnType<typeof userEvent.setup>, title: string, action: string) {
+  await user.click(actionsFor(title).getByRole("button", { name: "More" }));
+  await user.click(await screen.findByRole("menuitem", { name: action }));
+}
+
+async function startDelete(user: ReturnType<typeof userEvent.setup>, title: string) {
+  await chooseRowAction(user, title, "Delete…");
+  return screen.findByRole("dialog", { name: "Delete chat?" });
+}
 
 describe("ChatLibraryDialog on the kit", () => {
   it("renders the kit dialog, live search, filters, workspace picker, and overline groups", async () => {
@@ -252,4 +314,282 @@ describe("ChatLibraryDialog on the kit", () => {
     await user.click(screen.getByRole("button", { name: "Import workspace…" }));
     expect(intents).toContainEqual(["app-chat-library", "importWorkspace", [1]]);
   });
+
+  it("empty library has an actual EmptyState rather than an empty list", async () => {
+    const { user, push } = setup();
+    act(() => push({ ...SNAPSHOT, revision: 2, rows: [] }));
+    await user.click(screen.getByText("open library"));
+    expect(screen.getByText("No saved chats yet")).toBeInTheDocument();
+    expect(screen.queryByRole("list")).toBeNull();
+    expect(screen.queryByText("No matching chats")).toBeNull();
+  });
+
+  it("clicking the row body loads that exact chat immediately, with no Load step", async () => {
+    const { user, intents } = setup();
+    await user.click(screen.getByText("open library"));
+    await user.click(actionsFor("Second chat").getByRole("button", { name: /Open chat/ }));
+    await waitFor(() => expect(intents).toContainEqual(["app-chat-library", "loadChat", [2]]));
+    expect(screen.queryByRole("button", { name: /^Load$/ })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Chat library" })).toBeNull());
+  });
+
+  it("declining a dirty-scene chat switch leaves the library open and never navigates", async () => {
+    const { user, intents, cancelWorkspacePreview } = setup(true);
+    await user.click(screen.getByText("open library"));
+    await user.click(actionsFor("Second chat").getByRole("button", { name: /Open chat/ }));
+    expect(await screen.findByRole("dialog", { name: "Open another chat?" })).toBeInTheDocument();
+    expect(intents.some((entry) => entry[1] === "loadChat")).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("dialog", { name: "Chat library" })).toBeInTheDocument();
+    expect(cancelWorkspacePreview).not.toHaveBeenCalled();
+    expect(intents.some((entry) => entry[1] === "loadChat")).toBe(false);
+  });
+
+  it("asks before a new chat from a populated canvas and does not dispatch before consent", async () => {
+    const { user, intents, cancelWorkspacePreview } = setup(true);
+    await user.click(screen.getByText("open library"));
+    await user.click(screen.getByRole("button", { name: "New chat" }));
+    expect(await screen.findByRole("dialog", { name: "Start a new chat?" })).toBeInTheDocument();
+    expect(intents.some((entry) => entry[1] === "newChat")).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(intents).toContainEqual(["app-chat-library", "newChat", []]));
+    expect(cancelWorkspacePreview).toHaveBeenCalledOnce();
+  });
+
+  it("New chat on All sends no workspaceId and closes the dialog", async () => {
+    const { user, intents } = setup();
+    await user.click(screen.getByText("open library"));
+    await user.click(screen.getByRole("button", { name: "New chat" }));
+    await waitFor(() => expect(intents).toContainEqual(["app-chat-library", "newChat", []]));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Chat library" })).toBeNull());
+  });
+
+  it("declining the second incomplete-copy confirmation never retries loading", async () => {
+    const { user, request, intents } = setup();
+    request.mockResolvedValueOnce("discard-required");
+    await user.click(screen.getByText("open library"));
+    await user.click(actionsFor("First chat").getByRole("button", { name: /Open chat/ }));
+    expect(await screen.findByRole("dialog", { name: "Discard incomplete chat?" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(intents.filter((item) => item[1] === "loadChat")).toEqual([
+      ["app-chat-library", "loadChat", [1]],
+    ]);
+    expect(screen.getByRole("dialog", { name: "Chat library" })).toBeInTheDocument();
+  });
+
+  it("New chat without a selected workspace requires a distinct incomplete-copy confirmation", async () => {
+    const { user, request, intents } = setup();
+    request.mockResolvedValueOnce("discard-required").mockResolvedValueOnce(true);
+    await user.click(screen.getByText("open library"));
+    await user.click(screen.getByRole("button", { name: "New chat" }));
+    const dialog = await screen.findByRole("dialog", { name: "Discard incomplete chat?" });
+    expect(within(dialog).getByText(/original saved chat/i)).toBeInTheDocument();
+    expect(intents.filter((item) => item[1] === "newChat")).toEqual([
+      ["app-chat-library", "newChat", []],
+    ]);
+    await user.click(within(dialog).getByRole("button", { name: "Discard incomplete copy" }));
+    await waitFor(() => expect(intents.filter((item) => item[1] === "newChat")).toEqual([
+      ["app-chat-library", "newChat", []],
+      ["app-chat-library", "newChat", [null, true]],
+    ]));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Chat library" })).toBeNull());
+  });
+
+  it("date groups are newest first and undated chats sort last", async () => {
+    const { user, push } = setup();
+    act(() => push({ ...SNAPSHOT, revision: 2, rows: [
+      row({ id: 11, title: "Undated", updatedAtIso: null, createdAtIso: null }),
+      row({ id: 12, title: "Old", updatedAtIso: "2025-12-01T08:00:00" }),
+      row({ id: 13, title: "Yesterday row", updatedAtIso: "2026-01-14T08:00:00" }),
+      row({ id: 14, title: "Today row", updatedAtIso: "2026-01-15T08:00:00" }),
+    ] }));
+    await user.click(screen.getByText("open library"));
+    expect(screen.getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent))
+      .toEqual(["Today", "Yesterday", "Earlier"]);
+    const titles = within(screen.getByRole("region", { name: "Earlier" }))
+      .getAllByRole("button", { name: /^Open chat/ }).map((button) => button.textContent);
+    expect(titles[0]).toContain("Old");
+    expect(titles[1]).toContain("Undated");
+  });
+
+  it("uses a visible placeholder for a chat with no preview", async () => {
+    const { user, push } = setup();
+    act(() => push({ ...SNAPSHOT, revision: 2, rows: [row({ title: "No preview", preview: "" })] }));
+    await user.click(screen.getByText("open library"));
+    expect(screen.getByText("No messages yet")).toBeInTheDocument();
+  });
+
+  it("live search matches titles as well as preview text", async () => {
+    const { user } = setup();
+    await user.click(screen.getByText("open library"));
+    const search = screen.getByRole("searchbox", { name: "Search chats" });
+    await user.type(search, "FIRST");
+    expect(screen.getByText("First chat")).toBeInTheDocument();
+    expect(screen.queryByText("Second chat")).toBeNull();
+    await user.clear(search);
+    await user.type(search, "Another conversation");
+    expect(screen.getByText("Second chat")).toBeInTheDocument();
+    expect(screen.queryByText("First chat")).toBeNull();
+  });
+
+  it("search no-matches differs from an empty library and Clear search restores results", async () => {
+    const { user } = setup();
+    await user.click(screen.getByText("open library"));
+    await user.type(screen.getByRole("searchbox", { name: "Search chats" }), "unlikely phrase");
+    expect(screen.getByText("No matching chats")).toBeInTheDocument();
+    expect(screen.queryByText("No saved chats yet")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Clear search" }));
+    expect(screen.getByText("First chat")).toBeInTheDocument();
+    expect(screen.getByText("Second chat")).toBeInTheDocument();
+  });
+
+  it("canceling the inline pencil rename does not request a mutation", async () => {
+    const { user, intents } = setup();
+    await user.click(screen.getByText("open library"));
+    await user.click(screen.getByRole("button", { name: 'Rename "First chat"' }));
+    expect(screen.getByRole("textbox", { name: 'Rename "First chat"' })).toHaveValue("First chat");
+    await user.click(screen.getByRole("button", { name: "Cancel rename" }));
+    expect(screen.queryByRole("textbox", { name: 'Rename "First chat"' })).toBeNull();
+    expect(intents.some((entry) => entry[1] === "renameChat")).toBe(false);
+    expect(screen.getByRole("dialog", { name: "Chat library" })).toBeInTheDocument();
+  });
+
+  it("successful rename removes its inline editor only after the request resolves truthy", async () => {
+    const { user, request } = setup();
+    let finish!: (value: unknown) => void;
+    request.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    await user.click(screen.getByText("open library"));
+    await user.click(screen.getByRole("button", { name: 'Rename "First chat"' }));
+    const field = screen.getByRole("textbox", { name: 'Rename "First chat"' });
+    await user.type(field, " changed");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(field).toBeInTheDocument();
+    await act(async () => { finish(true); });
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: 'Rename "First chat"' })).toBeNull());
+  });
+
+  it("a falsy rename response leaves the editor available for correction", async () => {
+    const { user, request } = setup();
+    request.mockResolvedValueOnce(null);
+    await user.click(screen.getByText("open library"));
+    await user.click(screen.getByRole("button", { name: 'Rename "First chat"' }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/couldn't rename/i));
+    expect(screen.getByRole("textbox", { name: 'Rename "First chat"' })).toBeInTheDocument();
+  });
+
+  it("a rejected rename logs an error and retains the inline editor", async () => {
+    const { user, request } = setup();
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    request.mockRejectedValueOnce(new Error("socket dropped"));
+    try {
+      await user.click(screen.getByText("open library"));
+      await user.click(screen.getByRole("button", { name: 'Rename "First chat"' }));
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(error).toHaveBeenCalledWith("[chat-library] Rename failed:", expect.any(Error)));
+      expect(screen.getByRole("textbox", { name: 'Rename "First chat"' })).toBeInTheDocument();
+    } finally { error.mockRestore(); }
+  });
+
+  it("Delete confirmation names the chosen row and never mutates another row", async () => {
+    const { user, intents } = setup();
+    await user.click(screen.getByText("open library"));
+    const dialog = await startDelete(user, "Second chat");
+    expect(within(dialog).getByText(/Second chat/)).toBeInTheDocument();
+    expect(screen.getByText("First chat")).toBeInTheDocument();
+    expect(intents.some((entry) => entry[1] === "deleteChat")).toBe(false);
+    await user.click(within(dialog).getByRole("button", { name: "Delete chat" }));
+    await waitFor(() => expect(intents.filter((entry) => entry[1] === "deleteChat"))
+      .toEqual([["app-chat-library", "deleteChat", [2]]]));
+  });
+
+  it("canceling a row-scoped delete sends no mutation", async () => {
+    const { user, intents } = setup();
+    await user.click(screen.getByText("open library"));
+    const dialog = await startDelete(user, "Second chat");
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(intents.some((entry) => entry[1] === "deleteChat")).toBe(false);
+    expect(screen.getByText("Second chat")).toBeInTheDocument();
+  });
+
+  it("successful delete closes its confirmation", async () => {
+    const { user, request } = setup();
+    request.mockResolvedValueOnce(true);
+    await user.click(screen.getByText("open library"));
+    await startDelete(user, "Second chat");
+    await user.click(screen.getByRole("button", { name: "Delete chat" }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("app-chat-library", "deleteChat", [2]));
+    expect(screen.queryByRole("dialog", { name: "Delete chat?" })).toBeNull();
+  });
+
+  it("a falsy delete reply retains a retryable confirmation instead of silently dismissing it", async () => {
+    const { user, request } = setup();
+    request.mockResolvedValueOnce(false);
+    await user.click(screen.getByText("open library"));
+    await startDelete(user, "Second chat");
+    await user.click(screen.getByRole("button", { name: "Delete chat" }));
+    const retry = await screen.findByRole("dialog", { name: "Delete chat?" });
+    expect(within(retry).getByText(/may have changed elsewhere/i)).toBeInTheDocument();
+    expect(request).toHaveBeenCalledTimes(1);
+    await user.click(within(retry).getByRole("button", { name: "Cancel" }));
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("a rejected delete logs and offers another explicit confirm without auto-retrying", async () => {
+    const { user, request } = setup();
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    request.mockRejectedValueOnce(new Error("connection lost"));
+    try {
+      await user.click(screen.getByText("open library"));
+      await startDelete(user, "Second chat");
+      await user.click(screen.getByRole("button", { name: "Delete chat" }));
+      const retry = await screen.findByRole("dialog", { name: "Delete chat?" });
+      expect(within(retry).getByText(/details were written to the log/i)).toBeInTheDocument();
+      expect(error).toHaveBeenCalled();
+      expect(request).toHaveBeenCalledTimes(1);
+      await user.click(within(retry).getByRole("button", { name: "Cancel" }));
+      expect(request).toHaveBeenCalledTimes(1);
+    } finally { error.mockRestore(); }
+  });
+
+  it("renders the backend DB-read notice even with populated chats", async () => {
+    const { user, push } = setup();
+    await user.click(screen.getByText("open library"));
+    act(() => push({ ...SNAPSHOT, revision: 2, notice: "Could not load saved chats: disk error" }));
+    expect(screen.getByRole("status")).toHaveTextContent(/Could not load saved chats: disk error/);
+  });
+
+  it("workspace picker shows only selected graphs, and All restores the full list", async () => {
+    const { user } = setup();
+    await user.click(screen.getByText("open library"));
+    await chooseWorkspace(user, "Work");
+    expect(screen.getByText("Second chat")).toBeInTheDocument();
+    expect(screen.queryByText("First chat")).toBeNull();
+    await chooseWorkspace(user, "All workspaces");
+    expect(screen.getByText("First chat")).toBeInTheDocument();
+    expect(screen.getByText("Second chat")).toBeInTheDocument();
+  });
+
+  it("Enter commits a trimmed workspace name in the inline manager", async () => {
+    const { user, intents } = setup();
+    await user.click(screen.getByText("open library"));
+    await openWorkspaceManager(user);
+    await user.click(screen.getByRole("button", { name: "Create workspace" }));
+    const field = screen.getByRole("textbox", { name: "New workspace name" });
+    await user.type(field, "  Product docs  {Enter}");
+    expect(intents).toContainEqual(["app-chat-library", "createWorkspace", ["Product docs"]]);
+    expect(screen.queryByRole("textbox", { name: "New workspace name" })).toBeNull();
+  });
+
+  it("Escape cancels workspace creation without dispatching", async () => {
+    const { user, intents } = setup();
+    await user.click(screen.getByText("open library"));
+    await openWorkspaceManager(user);
+    await user.click(screen.getByRole("button", { name: "Create workspace" }));
+    await user.type(screen.getByRole("textbox", { name: "New workspace name" }), "Discard me{Escape}");
+    expect(screen.queryByRole("textbox", { name: "New workspace name" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Chat library" })).toBeInTheDocument();
+    expect(intents.some((entry) => entry[1] === "createWorkspace")).toBe(false);
+  });
+
 });
