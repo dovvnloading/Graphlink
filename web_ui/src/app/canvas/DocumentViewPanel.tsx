@@ -3,6 +3,8 @@ import { DocumentViewToc } from "./DocumentViewToc";
 import { DocumentViewSearch } from "./DocumentViewSearch";
 import type { DocumentHeading } from "./documentViewHeadings";
 import type { DocumentCitationTarget } from "./DocumentViewMarkdown";
+import { IconButton } from "../ui/IconButton";
+import "./DocumentViewPanel.css";
 
 // Everything that parses or renders markdown loads on first open, not at
 // module scope. Between them, DocumentViewMarkdown (react-markdown plus six
@@ -536,72 +538,24 @@ export function DocumentViewPanel({
             {sourceLabel && <span className="document-view-panel-subtitle">{sourceLabel}</span>}
           </div>
           <DocumentViewToc headings={headings} scrollContainerRef={scrollRef} />
-          <button
-            type="button"
-            className="document-view-panel-search-toggle"
-            onClick={() => (isSearchOpen ? onSearchClose() : setIsSearchOpen(true))}
-            disabled={!content}
-            title="Find in document"
-            aria-label="Find in document"
-            aria-expanded={isSearchOpen}
-          >
-            Find
-          </button>
-          <button
-            type="button"
-            className="document-view-panel-copy"
-            onClick={onCopy}
-            disabled={!content}
-            title="Copy content"
-            aria-label="Copy content"
-          >
-            {copied ? "Copied" : "Copy"}
-          </button>
-          <button type="button" className="document-view-panel-close" onClick={onClose}>
-            Close
-          </button>
+          <IconButton icon="search" size="sm" label="Find in document"
+            onClick={() => isSearchOpen ? onSearchClose() : setIsSearchOpen(true)}
+            disabled={!content} aria-expanded={isSearchOpen} />
+          <IconButton icon="copy" size="sm" label="Copy content"
+            onClick={onCopy} disabled={!content} aria-live="polite" />
+          <IconButton icon={isExpanded ? "minimize" : "maximize"} size="sm"
+            label={isExpanded ? "Minimize document view" : "Maximize document view"}
+            onClick={() => setIsExpanded((expanded) => !expanded)}
+            aria-pressed={isExpanded} />
+          <IconButton icon="close" size="sm" label="Close document view" onClick={onClose} />
         </header>
-        {/* A separate row, not folded into the header above: with the main
-            header already carrying 5 controls (title + Outline/Find/Copy/
-            Close), adding these 3 more (font stepper x2, Expand) there too
-            would overflow this panel's own supported MIN_WIDTH (320px) -
-            confirmed by rough measurement, not just a hunch (~444px of
-            fixed-width buttons alone against a ~300px content budget at
-            MIN_WIDTH, before even the title). This row has far fewer
-            neighbors competing for space. */}
         <div className="document-view-panel-toolbar">
           <div className="document-view-panel-font-stepper">
-            <button
-              type="button"
-              className="document-view-panel-font-step"
-              onClick={onFontSizeDecrease}
-              disabled={fontSizeStepIndex === 0}
-              title="Decrease text size"
-              aria-label="Decrease text size"
-            >
-              A-
-            </button>
-            <button
-              type="button"
-              className="document-view-panel-font-step"
-              onClick={onFontSizeIncrease}
-              disabled={fontSizeStepIndex === FONT_SIZE_STEPS.length - 1}
-              title="Increase text size"
-              aria-label="Increase text size"
-            >
-              A+
-            </button>
+            <IconButton icon="minus" size="sm" label="Decrease text size" onClick={onFontSizeDecrease}
+              disabled={fontSizeStepIndex === 0} />
+            <IconButton icon="plus" size="sm" label="Increase text size" onClick={onFontSizeIncrease}
+              disabled={fontSizeStepIndex === FONT_SIZE_STEPS.length - 1} />
           </div>
-          <button
-            type="button"
-            className="document-view-panel-expand-toggle"
-            onClick={() => setIsExpanded((expanded) => !expanded)}
-            title={isExpanded ? "Collapse" : "Expand"}
-            aria-label={isExpanded ? "Collapse" : "Expand"}
-            aria-pressed={isExpanded}
-          >
-            {isExpanded ? "Collapse" : "Expand"}
-          </button>
         </div>
         <DocumentViewSearch
           isOpen={isSearchOpen}
@@ -667,7 +621,6 @@ export function DocumentViewPanel({
         tabIndex={0}
         aria-orientation="vertical"
         aria-label="Resize Document View panel. Press Enter to reset to the default width."
-        title="Drag to resize, double-click or Enter to reset"
       />
     </aside>
   );
