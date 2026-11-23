@@ -114,7 +114,7 @@ describe("scientific workbench card", () => {
 
   it("paginates exact data and keeps rows readable when a new result is shorter", () => {
     const rows = Array.from({ length: 41 }, (_, i) => [String(i + 1)]);
-    const table = (count: number) => <ScientificDataTable title="Sample values" columns={["Sample"]} rows={() => rows.slice(0, count)} />;
+    const table = (count: number) => <ScientificDataTable heading="Sample values" columns={["Sample"]} rows={() => rows.slice(0, count)} />;
     const view = render(table(41));
     fireEvent.click(screen.getByText("Sample values"));
     expect(within(screen.getByRole("table")).getAllByRole("row")).toHaveLength(41);
