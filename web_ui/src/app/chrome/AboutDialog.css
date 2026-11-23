@@ -1,0 +1,8 @@
+.about-dialog .overlay-dialog-body { display: flex; flex-direction: column; gap: var(--gl-space-4); }
+.about-identity { display: flex; align-items: center; gap: var(--gl-space-3); }
+.about-app-name { margin: 0; font-size: var(--gl-text-xl); font-weight: var(--gl-weight-semibold); }
+.about-version { margin: var(--gl-space-1) 0 0; font-size: var(--gl-text-sm); color: var(--gl-surface-text-muted); }
+.about-links { display: grid; gap: var(--gl-space-2); }
+.about-links a { color: var(--gl-surface-text-primary); display: flex; align-items: center; gap: var(--gl-space-1); font-size: var(--gl-text-sm); }
+.about-links a:hover { color: var(--gl-accent); text-decoration: underline; }
+.about-copyright { margin: 0; color: var(--gl-surface-text-muted); font-size: var(--gl-text-xs); }
