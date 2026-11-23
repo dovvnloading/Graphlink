@@ -945,10 +945,10 @@ export const ChatNodeView = memo(function ChatNodeView({
           {staleEdit && <p role="alert">The message changed while editing. Reopen its latest version.</p>}
           {editError && <p role="alert">{editError}</p>}
           <div className="chat-node-edit-actions">
-            <button type="button" disabled={editSaving || staleEdit || !editDraft.trim()} onClick={saveEdit}>
+            <Button size="sm" variant="primary" disabled={editSaving || staleEdit || !editDraft.trim()} onClick={saveEdit}>
               {editSaving ? "Saving…" : editMode === "in-place" ? "Save changes" : "Save as new branch"}
-            </button>
-            <button type="button" disabled={editSaving} onClick={cancelEdit}>Cancel</button>
+            </Button>
+            <Button size="sm" disabled={editSaving} onClick={cancelEdit}>Cancel</Button>
           </div>
           <small className="chat-node-edit-hint">Ctrl+Enter to save · Escape to cancel</small>
         </div>
@@ -985,44 +985,26 @@ export const ChatNodeView = memo(function ChatNodeView({
             <ChatCitationChips citations={replyCitations ?? []} onOpenCitation={data.onOpenCitation} />
           )}
           {contentOverflows && (
-            <button
-              type="button"
-              className="chat-node-show-more nodrag"
+            <Button size="sm" variant="ghost" className="chat-node-show-more nodrag"
               aria-expanded={contentExpanded}
-              onClick={() => setContentExpanded((expanded) => !expanded)}
-            >
+              onClick={() => setContentExpanded((expanded) => !expanded)}>
               {contentExpanded ? "Show less" : "Show more"}
-            </button>
+            </Button>
           )}
         </>
       )}
-      {/* ADR-007 stage 7.4: an assistant turn's tool calls + results - the
-          ADR's own "renders the calls and their results (collapsible)".
-          Native <details>/<summary> rather than the useState-driven
-          expand/collapse pattern above (contentExpanded) - this section's
-          state doesn't need to survive a re-render triggered by anything
-          else on the node, and a native disclosure widget is free
-          keyboard/AT support for a debug-style panel like this one. Hidden
-          entirely (not just collapsed) when the turn made no tool calls -
-          the overwhelming majority of chat nodes. */}
       {visibleToolInvocations.length > 0 && (
-        <details className="chat-node-tool-invocations">
-          <summary>
-            {visibleToolInvocations.length === 1
-              ? "1 tool call"
-              : `${visibleToolInvocations.length} tool calls`}
-          </summary>
+        <Disclosure className="chat-node-tool-invocations"
+          title={visibleToolInvocations.length === 1 ? "1 tool call" : `${visibleToolInvocations.length} tool calls`}>
           {visibleToolInvocations.map((invocation, index) => (
-            <div
-              key={invocation.id || index}
-              className={`chat-node-tool-invocation${invocation.isError ? " error" : ""}`}
-            >
+            <div key={invocation.id || index}
+              className={`chat-node-tool-invocation${invocation.isError ? " error" : ""}`}>
               <div className="chat-node-tool-invocation-name">{invocation.name}</div>
               <pre className="chat-node-tool-invocation-arguments">{invocation.argumentsJson}</pre>
               <pre className="chat-node-tool-invocation-result">{invocation.result}</pre>
             </div>
           ))}
-        </details>
+        </Disclosure>
       )}
       {/* ADR-006 stage 6.4 review fix: per-node Stop for an in-flight
           streamed regenerate - see onCancelRegenerate's own comment on
@@ -1031,14 +1013,8 @@ export const ChatNodeView = memo(function ChatNodeView({
           ConversationNodeView's Cancel button already uses. */}
       {data.pendingRequestId && (
         <div className="chat-node-streaming-actions">
-          <button
-            type="button"
-            className="chat-node-stop-btn nodrag"
-            onClick={data.onCancelRegenerate}
-            title="Cancel regenerate"
-          >
-            Stop
-          </button>
+          <Button size="sm" variant="secondary" className="chat-node-stop-btn nodrag"
+            onClick={data.onCancelRegenerate}>Stop</Button>
         </div>
       )}
       {/* ADR-006 stage 6.4 (partial-output preservation): shown when the
@@ -1052,13 +1028,8 @@ export const ChatNodeView = memo(function ChatNodeView({
         <div className="chat-node-incomplete-banner" role="status">
           <span>Response interrupted — use Regenerate to retry.</span>
           {!data.isUser && (
-            <button
-              type="button"
-              className="chat-node-incomplete-retry nodrag"
-              onClick={data.onRegenerate}
-            >
-              Regenerate
-            </button>
+            <IconButton size="sm" className="chat-node-incomplete-retry nodrag"
+              icon="rerun" label="Regenerate" onClick={data.onRegenerate} />
           )}
         </div>
       )}
