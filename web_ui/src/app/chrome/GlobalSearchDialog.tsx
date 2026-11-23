@@ -1,9 +1,14 @@
 import { useReactFlow } from "@xyflow/react";
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
 import { motionDuration } from "../reducedMotion";
 import { Dialog, useOverlays } from "../overlays/overlays";
 import { knowledgeSourceLabel } from "../knowledgeSourceLabel";
+import { Button } from "../ui/Button";
+import { Icon } from "../ui/icons/Icon";
+import { InlineAlert } from "../ui/InlineAlert";
+import { SegmentedControl } from "../ui/SegmentedControl";
+import "./GlobalSearchDialog.css";
 
 /**
  * ADR-020 stage 20.4: the "Global Search" dialog - search across every
@@ -116,6 +121,7 @@ function GlobalSearchResultCard({ transport, result }: { transport: WsTransport;
       <button
         type="button"
         className="global-search-result-header"
+        id={`global-search-result-${result.chunkId}`}
         aria-expanded={expanded}
         onClick={() => setExpanded((value) => !value)}
       >
@@ -165,84 +171,174 @@ function GlobalSearchResultCard({ transport, result }: { transport: WsTransport;
   );
 }
 
+
+type SearchScope = "all" | "graphs" | "knowledge";
+const RECENT_LIMIT = 6;
+const SEARCH_DEBOUNCE_MS = 250;
+
+/** localStorage is isolated per browser profile; a viewer URL scope distinguishes shared profiles. */
+function recentStorageKey(): string {
+  const viewer = new URLSearchParams(window.location.search).get("viewer") || "local";
+  return `graphlink:global-search:recent:${window.location.pathname}:${viewer}`;
+}
+function loadRecents(): string[] {
+  try {
+    const stored: unknown = JSON.parse(window.localStorage.getItem(recentStorageKey()) || "[]");
+    return Array.isArray(stored)
+      ? stored.filter((item): item is string => typeof item === "string" && !!item.trim()).slice(0, RECENT_LIMIT)
+      : [];
+  } catch { return []; }
+}
+function saveRecents(next: string[]): void {
+  try { window.localStorage.setItem(recentStorageKey(), JSON.stringify(next)); }
+  catch { /* Storage can be disabled or full. Search still works. */ }
+}
+
 export function GlobalSearchDialog({ transport }: { transport: WsTransport }) {
+  const overlays = useOverlays();
+  const { setCenter } = useReactFlow();
+  const isOpen = overlays.isOpen("global-search");
   const [query, setQuery] = useState("");
+  const [scope, setScope] = useState<SearchScope>("all");
   const [results, setResults] = useState<GlobalSearchResult[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Same monotonic-requestId stale-response guard as KnowledgeSearchDialog's
-  // own latestRequestId - see that component's comment for the full
-  // rationale. Checked before ever touching state in a resolved/rejected
-  // handler, so only the MOST RECENTLY SENT request's own response ever
-  // wins, regardless of network arrival order.
+  const [recents, setRecents] = useState<string[]>(loadRecents);
+  const [selectedIndex, setSelectedIndex] = useState(0);
   const latestRequestId = useRef(0);
+  const lastRequested = useRef("");
 
-  function runSearch() {
-    const trimmed = query.trim();
-    if (!trimmed || searching) return;
+  const runSearch = useCallback((searchText: string) => {
+    const trimmed = searchText.trim();
+    if (!trimmed || lastRequested.current === trimmed) return;
+    lastRequested.current = trimmed;
     const requestId = ++latestRequestId.current;
     setSearching(true);
     setError(null);
-    transport
-      .request("globalSearch", "search", [trimmed, 10])
+    transport.request("globalSearch", "search", [trimmed, 10])
       .then((value) => {
-        if (requestId !== latestRequestId.current) return; // a newer search has since been sent
+        if (requestId !== latestRequestId.current) return;
         const payload = value as { results: GlobalSearchResult[] };
-        setResults(payload.results);
+        setResults(Array.isArray(payload.results) ? payload.results : []);
+        setSelectedIndex(0);
+        setRecents((previous) => {
+          const next = [trimmed, ...previous.filter((item) => item !== trimmed)].slice(0, RECENT_LIMIT);
+          saveRecents(next);
+          return next;
+        });
       })
       .catch(() => {
         if (requestId !== latestRequestId.current) return;
-        setError("Search failed - see graphlink.log for details.");
+        setError("Search failed. Check the connection and try again.");
       })
       .finally(() => {
         if (requestId === latestRequestId.current) setSearching(false);
       });
+  }, [transport]);
+
+  useEffect(() => {
+    if (!isOpen || !query.trim()) return;
+    const timer = window.setTimeout(() => runSearch(query), SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [isOpen, query, runSearch]);
+
+  const visible = useMemo(() => (results ?? []).filter((result) =>
+    scope === "all" || (scope === "graphs" ? isGraphHit(result) : !isGraphHit(result)),
+  ), [results, scope]);
+  const graphs = visible.filter(isGraphHit);
+  const knowledge = visible.filter((result) => !isGraphHit(result));
+  const activeIndex = Math.min(selectedIndex, Math.max(visible.length - 1, 0));
+  const selected = visible[activeIndex];
+
+  function changeQuery(value: string) {
+    if (value === query) return;
+    ++latestRequestId.current; // Invalidates a reply sent for earlier text, immediately.
+    lastRequested.current = "";
+    setQuery(value);
+    setResults(null);
+    setError(null);
+    setSearching(false);
+    setSelectedIndex(0);
+  }
+
+  async function activateResult(result: GlobalSearchResult) {
+    if (!isGraphHit(result)) {
+      if (isHttpUrl(result.sourceUri)) window.open(result.sourceUri, "_blank", "noopener,noreferrer");
+      return;
+    }
+    try {
+      const position = await transport.request("app-chat-library", "loadGraphAndFocusNode",
+        [result.graphId, result.sourceNodeId]) as { x: number; y: number } | null;
+      if (!position) {
+        setError("This node no longer exists in that graph.");
+        return;
+      }
+      setCenter(position.x, position.y, { zoom: 1, duration: motionDuration(300) });
+      overlays.close();
+    } catch {
+      setError("Couldn't open that graph. Check the connection and try again.");
+    }
   }
 
   return (
-    <Dialog name="global-search" title="Global Search" className="global-search-dialog">
+    <Dialog name="global-search" title="Global search" size="md" className="global-search-dialog">
       <div className="global-search-row">
-        <input
-          type="text"
-          className="global-search-input"
+        <input type="search" className="global-search-input"
           aria-label="Search every workspace"
+          aria-controls="global-search-results"
+          aria-activedescendant={selected ? `global-search-result-${selected.chunkId}` : undefined}
           placeholder="Search every workspace's graphs and knowledge base…"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
+          value={query} onChange={(event) => changeQuery(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter") runSearch();
-          }}
-        />
-        <button
-          type="button"
-          className="global-search-button"
-          onClick={runSearch}
-          disabled={searching || !query.trim()}
-        >
-          {searching ? "Searching…" : "Search"}
-        </button>
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              event.preventDefault();
+              if (visible.length) setSelectedIndex((index) =>
+                (index + (event.key === "ArrowDown" ? 1 : -1) + visible.length) % visible.length);
+            } else if (event.key === "Enter") {
+              event.preventDefault();
+              if (results && selected) void activateResult(selected);
+              else runSearch(query);
+            }
+          }} />
+        <Button variant="primary" iconStart="search" onClick={() => runSearch(query)}
+          disabled={!query.trim() || searching} loading={searching}>Search</Button>
       </div>
-
-      {error && (
-        <p className="global-search-empty" role="alert">
-          {error}
+      <SegmentedControl label="Search scope" size="sm" value={scope}
+        options={[
+          { value: "all", label: "All" },
+          { value: "graphs", label: "Graphs", icon: "workspace" },
+          { value: "knowledge", label: "Knowledge", icon: "knowledge" },
+        ]}
+        onChange={(next) => { setScope(next as SearchScope); setSelectedIndex(0); }} />
+      {!query.trim() && recents.length > 0 && <section className="global-search-recent">
+        <h3>Recent searches</h3>
+        <div className="global-search-recent-items">{recents.map((item) => (
+          <Button key={item} size="sm" variant="ghost" iconStart="history" onClick={() => {
+            changeQuery(item);
+            runSearch(item);
+          }}>{item}</Button>
+        ))}</div>
+      </section>}
+      {error && <InlineAlert variant="error" title="Search unavailable" body={error} />}
+      {results && !error && <div id="global-search-results" role="region" aria-label="Search results">
+        <p className="global-search-section-title" role="status">
+          {visible.length === 0 ? "No results found" : `${visible.length} result${visible.length === 1 ? "" : "s"} found`}
         </p>
-      )}
-
-      {results != null && !error && (
-        <>
-          <h2 className="global-search-section-title">
-            {results.length === 0
-              ? "No results found"
-              : `${results.length} result${results.length === 1 ? "" : "s"} found`}
-          </h2>
-          <ul className="global-search-result-list">
-            {results.map((result) => (
+        {([
+          { label: "Graphs", items: graphs },
+          { label: "Knowledge", items: knowledge },
+        ] as const).map((group) => group.items.length > 0 && <section key={group.label}>
+          <h3 className="global-search-group-heading">
+            <Icon name={group.label === "Graphs" ? "workspace" : "knowledge"} size="sm" />
+            {group.label}
+          </h3>
+          <ul className="global-search-result-list" role="listbox" aria-label={group.label + " results"}>
+            {group.items.map((result) => (
               <GlobalSearchResultCard key={result.chunkId} transport={transport} result={result} />
             ))}
           </ul>
-        </>
-      )}
+        </section>)}
+      </div>}
     </Dialog>
   );
 }
