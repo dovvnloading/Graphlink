@@ -51,7 +51,7 @@ export function GroupColorPicker({ color, headerColor, onSelect }: GroupColorPic
       <div key={c.name} className="group-color-option"
         style={{ "--group-option-color": c.hex } as CSSProperties}>
         <MenuItem label={headerOnly ? `${c.name} Header` : c.name}
-          checked={chosen} onSelect={() => choose(headerOnly ? color : c.hex, headerOnly ? c.hex : headerColor)} />
+          checked={chosen || undefined} onSelect={() => choose(headerOnly ? color : c.hex, headerOnly ? c.hex : headerColor)} />
       </div>
     );
   }
