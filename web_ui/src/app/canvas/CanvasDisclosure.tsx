@@ -2,6 +2,7 @@ import { useId, useState, type ReactNode } from "react";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/icons/Icon";
 import "../ui/disclosure.css";
+import "./CanvasDisclosure.css";
 
 /** Canvas disclosure with the same kit presentation and accessible region.
  * The heading is supplied as visible button content, not a browser title. */
