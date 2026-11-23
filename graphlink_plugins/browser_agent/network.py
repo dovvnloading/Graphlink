@@ -81,6 +81,12 @@ def _fetch_verified(url: str, pinned_ip: str, headers: dict[str, str]) -> Browse
     try:
         connection.request("GET", path, headers=request_headers)
         response = connection.getresponse()
+        # A remote origin can ignore Accept-Encoding: identity. Returning a
+        # tiny gzip/brotli bomb to Chromium would bypass the bound on decoded
+        # page bytes. Fail closed rather than forwarding encoded content.
+        encoding = (response.getheader("Content-Encoding") or "identity").strip().lower()
+        if encoding not in ("", "identity"):
+            raise BrowserPolicyError("Compressed browser responses are blocked by the size policy.")
         if response.getheader("Content-Length"):
             try:
                 declared_length = int(response.getheader("Content-Length") or "0")
@@ -149,6 +155,7 @@ class BrowserNetworkGate:
         self._seen_hosts: set[str] = set()
         self.request_count = 0
         self.total_bytes = 0
+        self._reserved_bytes = 0
         self.blocked: list[str] = []
         self._lock = asyncio.Lock()
 
@@ -184,17 +191,30 @@ class BrowserNetworkGate:
                     self._block("Approval denied for browser host: " + host)
                     raise BrowserPolicyError("Browser host approval was denied.")
                 self._approved_hosts.add(host)
+            # Reserve the maximum resource body before starting any transfer.
+            # Concurrent requests must not each consume the same remaining
+            # 16 MiB allowance. Release the reservation on every exit path.
+            if self.total_bytes + self._reserved_bytes + MAX_RESOURCE_BYTES > MAX_SESSION_BYTES:
+                self._block("Blocked browser session transfer exceeding 16 MiB.")
+                raise BrowserPolicyError("Browser session transfer budget reached (16 MiB).")
+            self._reserved_bytes += MAX_RESOURCE_BYTES
         # DNS only occurs after human approval. Never use the original host
         # as the TCP destination after this check: FetchPolicy pins an IP.
         try:
-            target = await asyncio.to_thread(self._policy.validate, canonical)
-        except URLPolicyError as exc:
-            self._block("Blocked private/non-public network destination.")
-            raise BrowserPolicyError(str(exc)) from exc
-        response = await asyncio.to_thread(_fetch_verified, target.canonical_url, target.pinned_ip, headers)
-        async with self._lock:
-            if self.total_bytes + len(response.body) > MAX_SESSION_BYTES:
-                self._block("Blocked browser session transfer exceeding 16 MiB.")
-                raise BrowserPolicyError("Browser session transfer budget reached (16 MiB).")
-            self.total_bytes += len(response.body)
-        return response
+            try:
+                target = await asyncio.to_thread(self._policy.validate, canonical)
+            except URLPolicyError as exc:
+                self._block("Blocked private/non-public network destination.")
+                raise BrowserPolicyError(str(exc)) from exc
+            response = await asyncio.to_thread(
+                _fetch_verified, target.canonical_url, target.pinned_ip, headers,
+            )
+            if len(response.body) > MAX_RESOURCE_BYTES:
+                raise BrowserPolicyError("Browser resource exceeded 2 MiB.")
+            async with self._lock:
+                # This response's 2 MiB was reserved before the network call.
+                self.total_bytes += len(response.body)
+            return response
+        finally:
+            async with self._lock:
+                self._reserved_bytes -= MAX_RESOURCE_BYTES
