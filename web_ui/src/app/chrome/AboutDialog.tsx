@@ -3,6 +3,8 @@ import type { WsTransport } from "../../lib/ws/transport";
 import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
 import type { AppAboutState } from "../../lib/bridge-core/generated/app-about-state";
 import { Dialog } from "../overlays/overlays";
+import { Icon } from "../ui/icons/Icon";
+import "./AboutDialog.css";
 
 /**
  * The About dialog (Qt-removal plan R2.5) - about-web's SPA successor.
@@ -41,17 +43,16 @@ export function AboutDialog({ transport }: { transport: WsTransport }) {
 
   return (
     <Dialog name="about" title="About" className="about-dialog">
-      <p className="about-app-name">{state.appName}</p>
-      <p className="about-version">{state.appVersion}</p>
+      <div className="about-identity"><Icon name="brand" size="3xl" label="Graphlink" /><div><p className="about-app-name">{state.appName}</p><p className="about-version">{state.appVersion || "Version unavailable"}</p></div></div>
       <div className="about-links">
         <a href={state.repositoryUrl} target="_blank" rel="noreferrer">
-          Repository
+          Repository <Icon name="external-link" size="sm" />
         </a>
         <a href={state.developerWebsiteUrl} target="_blank" rel="noreferrer">
-          {state.developerName}
+          {state.developerName} <Icon name="external-link" size="sm" />
         </a>
         <a href={state.developerGithubUrl} target="_blank" rel="noreferrer">
-          Developer GitHub
+          Developer GitHub <Icon name="external-link" size="sm" />
         </a>
       </div>
       <p className="about-copyright">{state.copyrightText}</p>
