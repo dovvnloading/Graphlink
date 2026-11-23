@@ -45,7 +45,7 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
 
 
-  { file: "app/styles.css", rule: "R12", count: 243 },
+  { file: "app/styles.css", rule: "R12", count: 153 },
 
 ];
 

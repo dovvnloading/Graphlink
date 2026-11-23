@@ -1,19 +1,6 @@
 @layer surfaces {
 /* -- R2.4 command palette + search overlay -------------------------------- */
 
-.palette-shell {
-  width: 480px;
-  max-width: calc(100vw - 64px);
-  max-height: calc(100vh - 120px);
-  display: flex;
-  flex-direction: column;
-  background-color: var(--gl-surface-node-body);
-  border: 1px solid var(--gl-surface-border);
-  border-radius: var(--gl-radius-lg);
-  box-shadow: var(--gl-shadow-dialog);
-  overflow: hidden;
-}
-
 .palette-search-input {
   font-size: var(--gl-text-base);
   font-family: inherit;

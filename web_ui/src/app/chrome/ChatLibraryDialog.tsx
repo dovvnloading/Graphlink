@@ -300,7 +300,7 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
   }
 
   return (
-    <Dialog {...{ title: "Chat library" }} name="library" size="lg" className="chat-library-dialog">
+    <Dialog title="Chat library" name="library" size="lg" className="chat-library-dialog">
       <div className="chat-library-layout">
         <div className="chat-library-heading">
           <p>Find and manage your conversations.</p>
@@ -333,7 +333,7 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
           </div>
         )}
         {managingWorkspaces && (
-          <Card {...{ title: "Manage workspaces" }} actions={<IconButton icon="close" label="Close workspace manager" onClick={() => setManagingWorkspaces(false)} />}>
+          <Card title="Manage workspaces" actions={<IconButton icon="close" label="Close workspace manager" onClick={() => setManagingWorkspaces(false)} />}>
             <div className="chat-library-workspaces">
               {creatingWorkspace ? (
                 <div className="chat-library-workspace-create">
@@ -380,10 +380,10 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
           {state.rows.length ? formatCount(filtered.length) + " results" : ""}
         </span>
         {state.rows.length === 0 ? (
-          <EmptyState icon="chat" {...{ title: "No saved chats yet" }} body="Start a new chat to build your library."
+          <EmptyState icon="chat" title="No saved chats yet" body="Start a new chat to build your library."
             actions={<Button iconStart="chat-plus" onClick={() => { void newChat(); }}>New chat</Button>} />
         ) : filtered.length === 0 ? (
-          <EmptyState icon="search" {...{ title: "No matching chats" }} body="Try another search or change the filters."
+          <EmptyState icon="search" title="No matching chats" body="Try another search or change the filters."
             actions={<Button onClick={() => { setQuery(""); setFilter("all"); setSelectedTags(new Set()); setSelectedWorkspaceId(null); }}>{query.trim() ? "Clear search" : "Clear filters"}</Button>} />
         ) : (
           <div className="chat-library-groups">
