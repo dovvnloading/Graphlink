@@ -125,7 +125,7 @@ export function KnowledgeSettingsPage({
         retrieval, independently of your chat model selection.
       </p>
 
-      <FieldGroup title="Embedding source">
+      <FieldGroup {...{ title: "Embedding source" }}>
         <FormRow label="Embedding source" layout="inline">
           <Select ariaLabel="Embedding source" options={SOURCE_OPTIONS} value={source} onChange={selectSource} />
         </FormRow>
@@ -139,7 +139,7 @@ export function KnowledgeSettingsPage({
       )}
 
       {source === "ollama" && (
-        <FieldGroup title="Local Ollama embedding model">
+        <FieldGroup {...{ title: "Local Ollama embedding model" }}>
           <FormRow label="Installed model" layout="inline">
             <Select ariaLabel="Installed Ollama embedding model"
               value={localChoice}
@@ -194,7 +194,7 @@ export function KnowledgeSettingsPage({
       )}
 
       {source === "cloud" && (
-        <FieldGroup title="OpenAI-compatible embedding service">
+        <FieldGroup {...{ title: "OpenAI-compatible embedding service" }}>
           <p className="settings-field-hint">
             Uses an existing connection and API key from Settings &gt; API Endpoint.
             Embedding requests may incur provider charges.
