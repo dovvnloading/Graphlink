@@ -5,6 +5,7 @@ import { SettingsDialog, parseEnvLines } from "./SettingsDialog";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
 import { ExecutionLimitsProvider } from "../canvas/ExecutionLimitsContext";
 import { WsTimeoutError, type WsTransport } from "../../lib/ws/transport";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 
 // R7.4a: the first dedicated test file for SettingsDialog.tsx - recon for
 // this increment confirmed every sibling chrome dialog built in the same
@@ -186,6 +187,7 @@ function setup(initial: Record<string, unknown> = snapshot) {
           text rather than exercising the real subscribe path. */}
       <ExecutionLimitsProvider transport={fake.transport}>
         <SettingsDialog transport={fake.transport} />
+        <ConfirmDialog />
       </ExecutionLimitsProvider>
     </OverlayProvider>,
   );
@@ -314,8 +316,8 @@ describe("SettingsDialog", () => {
     const { user } = setup();
     await user.click(screen.getByText("open settings"));
 
-    expect(screen.getByRole("button", { name: "Automatic Model Selection Policy" })).toHaveTextContent(
-      "Cheapest Capable",
+    expect(screen.getByRole("button", { name: "Model selection policy" })).toHaveTextContent(
+      "Cheapest capable",
     );
   });
 
@@ -323,7 +325,7 @@ describe("SettingsDialog", () => {
     const { user, intents } = setup();
     await user.click(screen.getByText("open settings"));
 
-    await chooseCustomOption(user, "Automatic Model Selection Policy", "Best Quality");
+    await chooseCustomOption(user, "Model selection policy", "Best quality");
 
     expect(intents).toContainEqual(["app-settings", "setAutoModelPolicy", ["best-quality"]]);
   });
@@ -332,14 +334,14 @@ describe("SettingsDialog", () => {
     const { user } = setup();
     await user.click(screen.getByText("open settings"));
 
-    expect(screen.getByRole("button", { name: "Theme" })).toHaveTextContent("Match System");
+    expect(screen.getByRole("radio", { name: "Match system" })).toBeChecked();
   });
 
   it("choosing a theme option fires setTheme with the option's id", async () => {
     const { user, intents } = setup();
     await user.click(screen.getByText("open settings"));
 
-    await chooseCustomOption(user, "Theme", "Dark");
+    await user.click(screen.getByRole("radio", { name: "Dark" }));
 
     expect(intents).toContainEqual(["app-settings", "setTheme", ["dark"]]);
   });
@@ -349,7 +351,7 @@ describe("SettingsDialog", () => {
     await goToApiEndpoint(user, push);
 
     expect(screen.queryByText(/lands in R7\.4b\/R7\.4c/)).toBeNull();
-    expect(screen.getByText("API Provider")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "API provider" })).toBeInTheDocument();
   });
 
   it("Llama.cpp page renders for the real (not deferred-placeholder) section", async () => {
@@ -365,7 +367,7 @@ describe("SettingsDialog", () => {
     await goToOllama(user, push);
 
     expect(screen.queryByText(/lands in R7\.4c/)).toBeNull();
-    expect(screen.getByText("Reasoning Level")).toBeInTheDocument();
+    expect(screen.getByRole("radiogroup", { name: "Reasoning level" })).toBeInTheDocument();
   });
 
   it("checks health on Settings open, focus, and each 30-second tick, stopping on close", async () => {
@@ -438,7 +440,7 @@ describe("SettingsDialog", () => {
       apiKeySource: { anthropic: "environment" },
     });
 
-    expect(screen.getByLabelText("API Key")).toHaveValue("");
+    expect(screen.getByLabelText("API key")).toHaveValue("");
     expect(screen.getByText("From environment")).toBeVisible();
     expect(screen.getByText("ANTHROPIC_API_KEY")).toBeVisible();
     expect(screen.getByRole("link", { name: /setup guide/i })).toHaveAttribute("href", "https://platform.claude.com/docs");
@@ -449,24 +451,17 @@ describe("SettingsDialog", () => {
   it("searches by model family, selects with Enter, and drops the previous provider's drafts", async () => {
     const { user, push, intents } = setup();
     await goToApiEndpoint(user, push);
-    const trigger = screen.getByRole("button", { name: /choose provider/i });
-    await user.type(screen.getByLabelText("API Key"), "draft-key");
+    const trigger = screen.getByRole("button", { name: "API provider" });
+    await user.type(screen.getByLabelText("API key"), "draft-key");
     await user.type(screen.getByLabelText("Default text model"), "private-model");
     await user.click(trigger);
-    const search = screen.getByRole("combobox", { name: "Search providers" });
-    expect(search).toHaveFocus();
-    await user.type(search, "not-a-provider");
-    expect(screen.getByRole("status")).toHaveTextContent("No providers match");
-    await user.clear(search);
-    await user.type(search, "claude");
-    const results = screen.getByRole("listbox", { name: "Providers" });
+    const results = await screen.findByRole("listbox", { name: "API provider" });
     expect(within(results).getByRole("option", { name: /Anthropic/ })).toBeVisible();
-    expect(within(results).queryByRole("option", { name: /Custom endpoint/ })).toBeNull();
-    await user.keyboard("{Enter}");
+    await user.click(within(results).getByRole("option", { name: /Anthropic/ }));
     expect(intents).toContainEqual(["app-settings", "setViewingApiProvider", ["Anthropic Claude"]]);
     expect(trigger).toHaveFocus();
     act(() => push({ ...snapshot, activeSection: "api endpoint", viewingApiProvider: "Anthropic Claude" }));
-    expect(screen.getByLabelText("API Key")).toHaveValue("");
+    expect(screen.getByLabelText("API key")).toHaveValue("");
     expect(screen.getByLabelText("Default text model")).toHaveValue("");
     expect(screen.queryByLabelText("Base URL")).toBeNull();
   });
@@ -474,10 +469,10 @@ describe("SettingsDialog", () => {
   it("keeps keyboard navigation and Escape inside Settings", async () => {
     const { user, push, intents } = setup();
     await goToApiEndpoint(user, push);
-    const trigger = screen.getByRole("button", { name: /choose provider/i });
+    const trigger = screen.getByRole("button", { name: "API provider" });
     await user.click(trigger);
     await user.keyboard("{ArrowDown}{Escape}");
-    expect(screen.queryByRole("listbox", { name: "Providers" })).toBeNull();
+    expect(screen.queryByRole("listbox", { name: "API provider" })).toBeNull();
     expect(screen.getByRole("dialog", { name: "Settings" })).toBeVisible();
     expect(trigger).toHaveFocus();
     await user.click(trigger);
@@ -490,7 +485,7 @@ describe("SettingsDialog", () => {
     await goToApiEndpoint(user, push);
     const save = screen.getByRole("button", { name: "Save and activate" });
     expect(save).toBeDisabled();
-    await user.type(screen.getByLabelText("API Key"), "test-key");
+    await user.type(screen.getByLabelText("API key"), "test-key");
     expect(save).toBeDisabled();
     await user.type(screen.getByLabelText("Default text model"), "custom-chat");
     await user.click(save);
@@ -499,7 +494,7 @@ describe("SettingsDialog", () => {
         task_chat: "custom-chat",
       },
     ]]);
-    expect(screen.getByLabelText("API Key")).toHaveValue("");
+    expect(screen.getByLabelText("API key")).toHaveValue("");
   });
 
   it("preserves existing task assignments and sends only explicit overrides", async () => {
@@ -541,7 +536,7 @@ describe("SettingsDialog", () => {
     expect(load).toBeDisabled();
     expect(save).toBeDisabled();
     expect(screen.getByRole("status")).toHaveTextContent("Enter a key for the new endpoint");
-    await user.type(screen.getByLabelText("API Key"), "replacement");
+    await user.type(screen.getByLabelText("API key"), "replacement");
     expect(load).toBeEnabled();
     expect(save).toBeEnabled();
   });
@@ -580,7 +575,7 @@ describe("SettingsDialog", () => {
     const { user, push } = setup();
     await goToApiEndpoint(user, push, { viewingApiProvider: "Azure OpenAI", apiBaseUrl: "" });
     expect(screen.queryByRole("button", { name: /load available models/i })).toBeNull();
-    await user.type(screen.getByLabelText("API Key"), "azure-test");
+    await user.type(screen.getByLabelText("API key"), "azure-test");
     await user.type(screen.getByLabelText("Default text model"), "my-deployment");
     expect(screen.getByRole("button", { name: "Save and activate" })).toBeDisabled();
     await user.type(screen.getByLabelText("Base URL"), "https://resource.example/openai/v1");
@@ -620,13 +615,13 @@ describe("SettingsDialog", () => {
     await user.clear(screen.getByLabelText("Base URL"));
     await user.type(screen.getByLabelText("Base URL"), "https://custom.example/v1");
     await user.type(screen.getByLabelText("Default text model"), "test");
-    await user.click(screen.getByText("Reset API Settings"));
+    await user.click(screen.getByText("Reset API settings"));
     expect(intents.some(([, intent]) => intent === "resetApiSettings")).toBe(false);
     expect(screen.getByRole("alert")).toHaveTextContent(/cannot be undone/);
     await user.click(screen.getByText("Cancel"));
-    expect(screen.queryByText("Confirm Reset")).toBeNull();
-    await user.click(screen.getByText("Reset API Settings"));
-    await user.click(screen.getByText("Confirm Reset"));
+    expect(screen.queryByText("Confirm reset")).toBeNull();
+    await user.click(screen.getByText("Reset API settings"));
+    await user.click(screen.getByText("Confirm reset"));
     expect(intents).toContainEqual(["app-settings", "resetApiSettings", []]);
     expect(screen.getByLabelText("Base URL")).toHaveValue(snapshot.apiBaseUrl);
     expect(screen.getByLabelText("Default text model")).toHaveValue("");
@@ -659,10 +654,10 @@ describe("SettingsDialog", () => {
     const { user, push, intents } = setup();
     await goToLlamaCpp(user, push, { llamaCppScanStatus: "running" });
 
-    expect(screen.getByText("Scanning...")).toBeDisabled();
+    expect(screen.getByText("Scanning…")).toBeDisabled();
 
     act(() => push({ ...snapshot, activeSection: "llama.cpp (local)", llamaCppScanStatus: "idle" }));
-    await user.click(screen.getByText("System Scan"));
+    await user.click(screen.getByText("System scan"));
 
     expect(intents).toContainEqual(["app-settings", "scanLlamaCppSystem", []]);
   });
@@ -671,7 +666,7 @@ describe("SettingsDialog", () => {
     const { user, push, intents } = setup();
     await goToLlamaCpp(user, push);
 
-    await user.click(screen.getByText("Scan Folder..."));
+    await user.click(screen.getByText("Scan folder…"));
 
     expect(intents).toContainEqual(["app-settings", "pickLlamaCppScanFolder", []]);
   });
@@ -680,7 +675,7 @@ describe("SettingsDialog", () => {
     const { user, push } = setup();
     await goToLlamaCpp(user, push, { llamaCppScanStatus: "running" });
 
-    expect(screen.getByText("Scan Folder...")).toBeDisabled();
+    expect(screen.getByText("Scan folder…")).toBeDisabled();
   });
 
   it("the shared scanned-models datalist populates from llamaCppScannedModels", async () => {
@@ -714,7 +709,7 @@ describe("SettingsDialog", () => {
 
     // CustomSelect's trigger is a <button>, not a native <select> - its
     // "current value" is its own displayed text, not a .value DOM property.
-    expect(screen.getByRole("button", { name: "Scanned Chat Model" })).toHaveTextContent("Select a scanned model...");
+    expect(screen.getByRole("button", { name: "Scanned Chat Model" })).toHaveTextContent("Select a scanned model…");
   });
 
   it("Chat Model File shows 'No file selected' by default and Browse fires pickLlamaCppChatModelFile", async () => {
@@ -722,7 +717,7 @@ describe("SettingsDialog", () => {
     await goToLlamaCpp(user, push);
 
     expect(screen.getByText("No file selected")).toBeInTheDocument();
-    const browseButtons = screen.getAllByRole("button", { name: "Browse..." });
+    const browseButtons = screen.getAllByRole("button", { name: "Browse…" });
     await user.click(browseButtons[0]);
 
     expect(intents).toContainEqual(["app-settings", "pickLlamaCppChatModelFile", []]);
@@ -740,7 +735,7 @@ describe("SettingsDialog", () => {
     await goToLlamaCpp(user, push);
 
     expect(screen.getByText("Reusing the main chat model")).toBeInTheDocument();
-    const browseButtons = screen.getAllByRole("button", { name: "Browse..." });
+    const browseButtons = screen.getAllByRole("button", { name: "Browse…" });
     await user.click(browseButtons[1]);
 
     expect(intents).toContainEqual(["app-settings", "pickLlamaCppTitleModelFile", []]);
@@ -931,7 +926,7 @@ describe("SettingsDialog", () => {
     const { user, push } = setup();
     await goToResourceLimits(user, push);
 
-    expect(screen.getByText("No resource limits have been reported by the backend yet.")).toBeInTheDocument();
+    expect(screen.getByText("No resource limits have been reported for this system yet.")).toBeInTheDocument();
   });
 
   describe("Workspace Agent trusted folders", () => {
@@ -940,7 +935,7 @@ describe("SettingsDialog", () => {
       await goToWorkspaceAgent(user, push);
 
       expect(intents).toContainEqual(["app-settings", "setActiveSection", ["workspace agent"]]);
-      expect(screen.getByText(/No trusted folders yet/)).toBeInTheDocument();
+      expect(screen.getByText(/No trusted folders/)).toBeInTheDocument();
     });
 
     it("shows the exact paths and revokes only the selected grant", async () => {
@@ -992,7 +987,7 @@ describe("SettingsDialog", () => {
       const { user, push } = setup();
       await goToMcpServers(user, push);
 
-      expect(screen.getByText("No MCP servers configured yet.")).toBeInTheDocument();
+      expect(screen.getByText("No MCP servers")).toBeInTheDocument();
     });
 
     it("lists a configured server's name, command+args, and enabled state", async () => {
@@ -1001,7 +996,7 @@ describe("SettingsDialog", () => {
 
       expect(screen.getByText("fs")).toBeInTheDocument();
       expect(screen.getByText("npx -y server-filesystem")).toBeInTheDocument();
-      expect(screen.getByRole("checkbox")).toBeChecked();
+      expect(screen.getByRole("switch")).toBeChecked();
     });
 
     // SECURITY-FIX (mcp-approval-auto-invisible-in-settings-ui): before this
@@ -1045,7 +1040,7 @@ describe("SettingsDialog", () => {
       const { user, push, intents } = setup();
       await goToMcpServers(user, push, { mcpServers: [fsServer] });
 
-      await user.click(screen.getByRole("checkbox"));
+      await user.click(screen.getByRole("switch"));
 
       expect(intents).toContainEqual([
         "app-settings",
@@ -1058,10 +1053,10 @@ describe("SettingsDialog", () => {
       const { user, push } = setup();
       await goToMcpServers(user, push);
 
-      const addButton = screen.getByRole("button", { name: "Add Server" });
+      const addButton = screen.getByRole("button", { name: "Add server" });
       expect(addButton).toBeDisabled();
 
-      await user.type(screen.getByLabelText("Server Name"), "git");
+      await user.type(screen.getByLabelText("Server name"), "git");
       expect(addButton).toBeDisabled();
 
       await user.type(screen.getByLabelText("Command"), "uvx");
@@ -1072,10 +1067,10 @@ describe("SettingsDialog", () => {
       const { user, push, intents } = setup();
       await goToMcpServers(user, push, { mcpServers: [fsServer] });
 
-      await user.type(screen.getByLabelText("Server Name"), "git");
+      await user.type(screen.getByLabelText("Server name"), "git");
       await user.type(screen.getByLabelText("Command"), "uvx");
       await user.type(screen.getByLabelText("Arguments (optional, space-separated)"), "mcp-server-git --repo /tmp");
-      await user.click(screen.getByRole("button", { name: "Add Server" }));
+      await user.click(screen.getByRole("button", { name: "Add server" }));
 
       expect(intents).toContainEqual([
         "app-settings",
@@ -1100,7 +1095,7 @@ describe("SettingsDialog", () => {
           },
         ]],
       ]);
-      expect(screen.getByLabelText("Server Name")).toHaveValue("");
+      expect(screen.getByLabelText("Server name")).toHaveValue("");
       expect(screen.getByLabelText("Command")).toHaveValue("");
       expect(screen.getByLabelText("Arguments (optional, space-separated)")).toHaveValue("");
     });
@@ -1109,9 +1104,9 @@ describe("SettingsDialog", () => {
       const { user, push, intents } = setup();
       await goToMcpServers(user, push);
 
-      await user.type(screen.getByLabelText("Server Name"), "git");
+      await user.type(screen.getByLabelText("Server name"), "git");
       await user.type(screen.getByLabelText("Command"), "uvx");
-      await user.click(screen.getByRole("button", { name: "Add Server" }));
+      await user.click(screen.getByRole("button", { name: "Add server" }));
 
       const addCall = intents.find(([, intent]) => intent === "setMcpServers");
       expect(addCall).toBeDefined();
@@ -1136,7 +1131,10 @@ describe("SettingsDialog", () => {
       const { user, push, intents } = setup();
       await goToMcpServers(user, push, { mcpServers: [fsServer, gitServer] });
 
-      await user.click(screen.getByRole("button", { name: "Remove fs" }));
+      await user.click(screen.getByRole("button", { name: "Actions for fs" }));
+      await user.click(await screen.findByRole("menuitem", { name: "Remove" }));
+      expect(intents.some(([, intent]) => intent === "setMcpServers")).toBe(false);
+      await user.click(await screen.findByRole("button", { name: "Remove server" }));
 
       expect(intents).toContainEqual(["app-settings", "setMcpServers", [[gitServer]]]);
     });
@@ -1176,7 +1174,7 @@ describe("SettingsDialog", () => {
       await goToPlugins(user, push);
 
       expect(screen.getByText("No discovered plugins need a grant right now.")).toBeInTheDocument();
-      expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+      expect(screen.queryAllByRole("switch")).toHaveLength(0);
     });
 
     it("an empty grants array renders sensibly - no crash, no phantom rows", async () => {
@@ -1185,7 +1183,7 @@ describe("SettingsDialog", () => {
       pushGrants(pushPlugins, []);
 
       expect(screen.getByText("No discovered plugins need a grant right now.")).toBeInTheDocument();
-      expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+      expect(screen.queryAllByRole("switch")).toHaveLength(0);
     });
 
     it("renders one row per grants entry with its name, declared scopes, and current granted state", async () => {
@@ -1198,8 +1196,8 @@ describe("SettingsDialog", () => {
       expect(screen.getByText("Counter Node")).toBeInTheDocument();
       expect(screen.getByText("graph.mutate, graph.read")).toBeInTheDocument();
 
-      expect(screen.getByRole("checkbox", { name: "Granted: Hello Node" })).not.toBeChecked();
-      expect(screen.getByRole("checkbox", { name: "Granted: Counter Node" })).toBeChecked();
+      expect(screen.getByRole("switch", { name: "Hello Node" })).not.toBeChecked();
+      expect(screen.getByRole("switch", { name: "Counter Node" })).toBeChecked();
     });
 
     it("a plugin with no declared scopes shows a 'No declared scopes' placeholder, not an empty string", async () => {
@@ -1215,7 +1213,7 @@ describe("SettingsDialog", () => {
       await goToPlugins(user, push);
       pushGrants(pushPlugins, [helloGrant]);
 
-      await user.click(screen.getByRole("checkbox", { name: "Granted: Hello Node" }));
+      await user.click(screen.getByRole("switch", { name: "Hello Node" }));
 
       expect(intents).toContainEqual(["app-plugins", "setPluginGrant", ["hello_node", true]]);
     });
@@ -1225,7 +1223,7 @@ describe("SettingsDialog", () => {
       await goToPlugins(user, push);
       pushGrants(pushPlugins, [counterGrant]);
 
-      await user.click(screen.getByRole("checkbox", { name: "Granted: Counter Node" }));
+      await user.click(screen.getByRole("switch", { name: "Counter Node" }));
 
       expect(intents).toContainEqual(["app-plugins", "setPluginGrant", ["counter_node", false]]);
     });
@@ -1290,29 +1288,24 @@ describe("Fal.ai settings page", () => {
 
   it("submits arbitrary model JSON through its dedicated billed queue intent", async () => {
     const { user, intents } = await goToFal();
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
-    try {
-      await user.click(screen.getByRole("button", { name: "Submit to Queue" }));
-      expect(confirm).toHaveBeenCalled();
-      expect(intents).toContainEqual([
-        "app-settings", "submitFalJob", [
-          "fal-ai/flux/schnell",
-          '{"prompt": "A cinematic mountain landscape at sunrise"}',
-          '{"priority": "normal", "store_io": false}',
-        ],
-      ]);
-    } finally {
-      confirm.mockRestore();
-    }
+    await user.click(screen.getByRole("button", { name: "Submit to Queue" }));
+    expect(await screen.findByRole("dialog", { name: "Submit billable queue request?" })).toBeVisible();
+    expect(intents.some(([, intent]) => intent === "submitFalJob")).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Submit request" }));
+    expect(intents).toContainEqual([
+      "app-settings", "submitFalJob", [
+        "fal-ai/flux/schnell",
+        '{"prompt": "A cinematic mountain landscape at sunrise"}',
+        '{"priority": "normal", "store_io": false}',
+      ],
+    ]);
   });
 
   it("rejects malformed model input before any billable request", async () => {
     const { user, intents } = await goToFal();
-    const editors = screen.getAllByRole("textbox");
-    const argsEditor = editors.find((el) => el.getAttribute("aria-label") === "Fal model arguments JSON");
-    expect(argsEditor).toBeTruthy();
-    await user.clear(argsEditor!);
-    await user.type(argsEditor!, "not valid json");
+    const argsEditor = screen.getByRole("textbox", { name: "Fal model arguments JSON" });
+    await user.clear(argsEditor);
+    await user.type(argsEditor, "not valid json");
     await user.click(screen.getByRole("button", { name: "Submit to Queue" }));
     expect(screen.getByText(/must both be valid JSON objects/)).toBeInTheDocument();
     expect(intents.some((entry) => entry[1] === "submitFalJob")).toBe(false);
@@ -1399,9 +1392,10 @@ describe("Settings > Knowledge embedding source", () => {
     await user.click(screen.getByRole("button", { name: "Embedding source" }));
     await user.click(await screen.findByRole("option", { name: /^Ollama \(local\)/ }));
     expect(intents).toContainEqual(["app-settings", "scanOllamaSystem", []]);
-    const models = screen.getByRole("combobox", { name: "Installed Ollama embedding model" });
+    await user.click(screen.getByRole("button", { name: "Installed Ollama embedding model" }));
+    const models = await screen.findByRole("listbox", { name: "Installed Ollama embedding model" });
     const options = within(models).getAllByRole("option");
-    expect(options.map((option) => option.getAttribute("value"))).toEqual([
+    expect(options.map((option) => option.textContent?.split("Recommended")[0]?.split("Embeddings")[0]?.split("Does not")[0]?.trim())).toEqual([
       "nomic-embed-text:latest", "mxbai-embed-large:latest", "llama3:latest",
     ]);
     expect(options[2]).toBeDisabled();
@@ -1448,14 +1442,14 @@ describe("Settings > Knowledge embedding source", () => {
       ...snapshot, ...models, activeSection: "knowledge",
       knowledgeTestStatus: "running", knowledgeNotice: "",
     }));
-    expect(screen.getByRole("button", { name: "Testing..." })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Testing…" })).toBeDisabled();
     expect(screen.getByRole("status")).toHaveTextContent(/may take several minutes to load/i);
 
     await act(async () => {
       rejectReply(new WsTimeoutError("request timed out: app-settings/testKnowledgeEmbedding"));
       await Promise.resolve();
     });
-    expect(screen.getByRole("button", { name: "Testing..." })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Testing…" })).toBeDisabled();
     expect(screen.getByRole("status")).toHaveTextContent(/may take several minutes to load/i);
 
     act(() => push({
@@ -1483,7 +1477,7 @@ describe("Settings > Knowledge embedding source", () => {
     await user.type(screen.getByRole("textbox", { name: "Cloud embedding model ID" }), "text-embedding-3-small");
     expect(screen.getByRole("button", { name: "Test" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Save choice" })).toBeDisabled();
-    const consent = screen.getByRole("checkbox", { name: /I consent to sending indexed content and search queries/i });
+    const consent = screen.getByRole("switch", { name: /I consent to sending indexed content and search queries/i });
     await user.click(consent);
     await user.click(screen.getByRole("button", { name: "Test" }));
     await user.click(screen.getByRole("button", { name: "Save choice" }));
