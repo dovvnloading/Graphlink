@@ -184,8 +184,8 @@
 /* The ports and resize handles straddle the perimeter. Only the content
    surface clips, so the full target stays available at every zoom. */
 .scene-node.scene-node-card {
-  --node-edge: var(--gl-graph-border);
-  --node-paper: var(--gl-graph-surface);
+  --node-edge: var(--gl-surface-border);
+  --node-paper: var(--gl-surface-raised);
   position: relative;
   overflow: visible;
   font-family: var(--gl-node-font-family, var(--gl-font-family)), system-ui, sans-serif;
@@ -499,7 +499,7 @@
 }
 
 .node-card-menu-trigger {
-  position: absolute;
+  position: static;
   inset-inline-end: 8px;
   top: 7px;
 }
@@ -799,4 +799,175 @@
 .node-staleness-run-bound:focus-visible {
   outline: 2px solid var(--gl-focus-ring);
   outline-offset: 2px;
+}
+
+/* UI-17 node shell: CSS-only zoom modes, inherited by all cards.
+   Steep clamped numeric functions switch at .5 and .25 without a
+   React subscription in any node view. */
+.scene-canvas {
+  --gl-canvas-zoom: 1;
+  --gl-lod-full: clamp(0, calc((var(--gl-canvas-zoom) - 0.4999) * 10000), 1);
+  --gl-lod-two-line: clamp(0, calc((var(--gl-canvas-zoom) - 0.2499) * 10000), 1);
+  --gl-lod-overview: calc(1 - var(--gl-lod-full));
+  --gl-lod-font-size: calc(var(--gl-text-2xs) / var(--gl-canvas-zoom));
+}
+.scene-node.scene-node-card {
+  --node-edge: var(--gl-surface-border);
+  --node-paper: var(--gl-surface-raised);
+  min-width: 160px;
+  border: 1px solid var(--node-edge);
+  border-radius: var(--gl-radius-md);
+  background: var(--node-paper);
+  box-shadow: var(--gl-shadow-1);
+}
+.scene-node.scene-node-card:hover {
+  border-color: var(--gl-surface-border-strong);
+  box-shadow: var(--gl-shadow-2);
+}
+.scene-node.scene-node-card.selected,
+.react-flow__node.dragging .scene-node.scene-node-card.selected:hover {
+  border-color: var(--gl-accent);
+  box-shadow: 0 0 0 2px var(--gl-accent), var(--gl-shadow-1);
+}
+.react-flow__node:focus-visible:has(.scene-node-card) {
+  border-radius: var(--gl-radius-md);
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: var(--gl-space-1);
+}
+.react-flow__node.dragging .scene-node.scene-node-card:hover {
+  border-color: var(--node-edge);
+  box-shadow: var(--gl-shadow-1);
+}
+/* Preserve the existing heading children and actions from each node view. */
+.scene-node-card .node-card-header {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-1);
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: calc(var(--gl-lod-full, 1) * var(--gl-control-h-lg));
+  max-height: calc(var(--gl-lod-full, 1) * 10000px);
+  padding: calc(var(--gl-lod-full, 1) * var(--gl-space-2))
+    calc(var(--gl-lod-full, 1) * var(--gl-space-3));
+  overflow: hidden;
+  opacity: var(--gl-lod-full, 1);
+}
+.node-card-kind-icon { flex: none; color: var(--gl-surface-text-secondary); }
+.node-card-title-slot { flex: 1 1 auto; min-width: 0; }
+.node-card-status { flex: 0 1 auto; min-width: 0; }
+.node-card-spacer { flex: 1 1 auto; min-width: var(--gl-space-1); }
+.scene-node-card .node-card-menu-trigger {
+  position: static;
+  inset: auto;
+  flex: none;
+  color: var(--gl-surface-text-secondary);
+}
+.scene-node-card .node-card-title-slot > .node-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  padding: 0;
+  min-height: 0;
+  border: 0;
+  background: transparent;
+  color: var(--gl-node-font-color, var(--gl-surface-text-primary));
+  font-size: var(--gl-text-sm);
+  font-weight: 500;
+  line-height: 1.3;
+}
+.scene-node-card .node-card-title-slot > .node-heading > .node-glyph { display: none; }
+.node-glyph { display: inline-flex; align-items: center; justify-content: center; }
+.scene-node-card .node-card-title-slot .node-heading-detail { grid-column: 1 / -1; }
+.scene-node-card .scene-node-surface > :is(.scene-node-body, .node-card-footer) {
+  max-height: calc(var(--gl-lod-full, 1) * 10000px);
+  opacity: var(--gl-lod-full, 1);
+}
+.scene-node-card .scene-node-surface > .scene-node-body {
+  padding-block-start: calc(var(--gl-lod-full, 1) * var(--gl-space-2));
+  padding-block-end: calc(var(--gl-lod-full, 1) * var(--gl-space-3));
+}
+.scene-node-card .node-lod-overview {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-2);
+  box-sizing: border-box;
+  min-height: calc(var(--gl-lod-overview, 0) * var(--gl-control-h-lg));
+  max-height: calc(var(--gl-lod-overview, 0) * 1000px);
+  padding: calc(var(--gl-lod-overview, 0) * var(--gl-space-3));
+  overflow: hidden;
+  opacity: var(--gl-lod-overview, 0);
+  color: var(--gl-surface-text-primary);
+}
+.scene-node-card .node-lod-icon {
+  flex: none;
+  width: calc(var(--gl-icon-sm) / var(--gl-canvas-zoom, 1));
+  height: calc(var(--gl-icon-sm) / var(--gl-canvas-zoom, 1));
+}
+.scene-node-card .node-lod-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  min-width: 0;
+  max-width: calc(var(--gl-lod-two-line, 1) * 100%);
+  overflow: hidden;
+  font-size: var(--gl-lod-font-size, var(--gl-text-2xs));
+  font-weight: 500;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  opacity: var(--gl-lod-two-line, 1);
+}
+.scene-node-card .scene-node-handle,
+.scene-node-card .scene-text-handle {
+  box-sizing: border-box;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--gl-surface-border-strong);
+  border-radius: 50%;
+  background: var(--gl-surface-raised);
+  opacity: 0;
+}
+.scene-node-card .scene-node-handle::after { content: none; }
+.scene-node-card:is(:hover, :focus-within, .selected) :is(.scene-node-handle, .scene-text-handle),
+.react-flow__node:focus-visible .scene-node-card :is(.scene-node-handle, .scene-text-handle),
+.scene-canvas:has(.react-flow__connectionline) .scene-node-card :is(.scene-node-handle, .scene-text-handle) {
+  opacity: 1;
+}
+.scene-node-card :is(.scene-node-handle, .scene-text-handle):hover,
+.scene-node-card .scene-text-handle.connectionindicator.valid {
+  border-color: var(--gl-accent);
+  background: var(--gl-surface-inset);
+}
+/* StatusPill owns the icon and word; keep manual-run optional and explicit. */
+.scene-node-card .node-staleness-badge {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--gl-space-1);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+}
+.node-staleness-description {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.scene-node-card .node-staleness-run-bound {
+  padding-inline: var(--gl-space-1);
+  border: 0;
+  border-radius: var(--gl-radius-sm);
+  background: transparent;
+  font-size: var(--gl-text-2xs);
+}
+@media (hover: hover) and (pointer: fine) {
+  .react-flow__node:not(:hover, :focus-within) .scene-node-card:not(.selected)
+  .node-card-header :is(.node-card-menu-trigger, .chat-node-collapse-btn, .note-node-controls, .html-node-controls) {
+    opacity: 0;
+    pointer-events: none;
+  }
 }
