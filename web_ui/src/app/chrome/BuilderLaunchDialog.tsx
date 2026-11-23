@@ -205,6 +205,9 @@ export function BuilderLaunchDialog({ transport, store }: { transport: WsTranspo
         preset.maxWallSeconds === maxWallSeconds,
     )?.id ?? null;
   const canStart = Boolean(goal.trim() || recipe);
+  const budgetPresetOptions: { value: string; label: string }[] =
+    BUDGET_PRESETS.map((preset) => ({ value: preset.id, label: preset.label }));
+  if (!selectedPresetId) budgetPresetOptions.push({ value: "custom", label: "Custom" });
 
   return (
     <Dialog name="builder-launch" {...{ title: "Builder" }} size="md" className="builder-launch-dialog"
@@ -248,8 +251,7 @@ export function BuilderLaunchDialog({ transport, store }: { transport: WsTranspo
       <div className="builder-launch-budgets-control">
         <h3>Budgets</h3>
         <SegmentedControl label="Budget preset" value={selectedPresetId ?? "custom"}
-          options={[...BUDGET_PRESETS.map((preset) => ({ value: preset.id, label: preset.label })),
-            ...(selectedPresetId ? [] : [{ value: "custom", label: "Custom" }])]}
+          options={budgetPresetOptions}
           onChange={(id) => {
             const preset = BUDGET_PRESETS.find((item) => item.id === id);
             if (!preset) return;

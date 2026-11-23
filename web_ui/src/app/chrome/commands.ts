@@ -55,11 +55,6 @@ const COMMAND_META: Readonly<Record<string, CommandMeta>> = {
   "expand-all-nodes": { icon: "chevron-down", category: "Canvas" },
 };
 
-function sentenceCase(label: string): string {
-  return label.replace(/\b[A-Z][a-z]+\b/g, (word, offset: number) =>
-    offset === 0 ? word : word.toLowerCase());
-}
-
 export interface PaletteCommand {
   icon: IconName;
   category: CommandCategory;
@@ -372,7 +367,6 @@ export function buildCommands(
   ];
   return commands.map((command) => ({
     ...command,
-    name: sentenceCase(command.name),
     ...COMMAND_META[command.id],
   }));
 }

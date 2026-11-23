@@ -166,7 +166,7 @@ function ReactCommandRow({ item, groupStart, selected, onHover, onExecute, query
     {groupStart && <li role="presentation" className="palette-category">{item.category}</li>}
     {/* The input retains focus and owns Arrow/Enter; hover and click mirror it. */}
     {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events */}
-    <li id={`palette-option-${item.command.id}`} role="option" aria-selected={selected}
+    <li id={`palette-option-${item.command.id}`} role="option" aria-label={item.command.name} aria-selected={selected}
       className={"palette-result" + (selected ? " selected" : "")}
       onMouseEnter={onHover} onClick={onExecute}>
       <Icon name={item.command.icon} size="md" />

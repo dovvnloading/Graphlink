@@ -68,7 +68,7 @@ const SHORTCUT_INFO: Record<ShortcutId, { group: string; action: string; descrip
 /** Discover actual chords from the dispatch resolver rather than copying shortcuts by hand. */
 function generatedKeyboardSection(source: HelpSection): HelpSection {
   const chords = new Map<ShortcutId, string[]>();
-  const keys = [..."abcdefghijklmnopqrstuvwxyz", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
+  const keys = "abcdefghijklmnopqrstuvwxyz".split("").concat(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
   for (const shiftKey of [false, true]) {
     for (const key of keys) {
       const id = resolveShortcut({ key, ctrlKey: true, metaKey: false, shiftKey, altKey: false });

@@ -12,7 +12,9 @@ import "./OrganizationDialog.css";
 type Scope = OrganizationOptions["scope"];
 type PreviewState = { data: OrganizationPreview; options: OrganizationOptions };
 type PreviewNode = OrganizationPreview["nodes"][number];
-type PreviewRect = Pick<PreviewNode, "id" | "kind" | "title" | "x" | "y" | "width" | "height" | "changed">;
+type PreviewRect = {
+  [Key in "id" | "kind" | "title" | "x" | "y" | "width" | "height" | "changed"]: PreviewNode[Key];
+};
 type PreviewStage = "before" | "after";
 
 const VIEW_WIDTH = 520;

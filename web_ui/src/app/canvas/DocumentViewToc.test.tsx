@@ -105,20 +105,22 @@ describe("DocumentViewToc", () => {
     const user = userEvent.setup();
     renderToc();
     await user.click(screen.getByRole("button", { name: "Table of contents" }));
-    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Table of contents" })).toBeInTheDocument();
 
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("navigation")).toBeNull();
+    expect(screen.getByRole("button", { name: "Table of contents" })).toHaveAttribute("aria-expanded", "false");
   });
 
   it("a click outside the dropdown closes it", async () => {
     const user = userEvent.setup();
     renderToc();
     await user.click(screen.getByRole("button", { name: "Table of contents" }));
-    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Table of contents" })).toBeInTheDocument();
 
     fireEvent.pointerDown(document.body);
     expect(screen.queryByRole("navigation")).toBeNull();
+    expect(screen.getByRole("button", { name: "Table of contents" })).toHaveAttribute("aria-expanded", "false");
   });
 
   it("clicking a heading scrolls the container by the heading's own offset and closes the dropdown", async () => {

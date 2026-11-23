@@ -115,7 +115,7 @@ export function HarnessLaunchDialog({ transport, store }: { transport: WsTranspo
             startAgent();
           }
         }}
-        description="The agent reads and writes workspace files, runs shell and Python, and searches your knowledge. It asks before changing your machine." />
+        description="The agent reads and writes files in your workspace, runs shell and Python, and searches your knowledge. It asks before changing your machine." />
       <FieldGroup {...{ title: "Workspace" }} description="Choose a folder to grant access, or use a private scratch folder.">
         <div className="harness-launch-workspace">
           <span className="harness-launch-workspace-dir">{workspace || "Private scratch folder"}</span>

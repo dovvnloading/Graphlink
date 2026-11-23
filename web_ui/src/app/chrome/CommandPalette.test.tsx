@@ -55,13 +55,13 @@ describe("CommandPalette", () => {
     const user = setup();
     await user.click(screen.getByText("open palette"));
     const input = screen.getByLabelText("Search commands");
-    expect(screen.getByText("Fit all to view")).toBeInTheDocument();
+    expect(screen.getByText("Fit All to View")).toBeInTheDocument();
 
     await user.type(input, "organize");
     expect(screen.getByRole("option", { name: /Organize nodes/i })).toBeInTheDocument();
-    expect(screen.queryByText("Fit all to view")).toBeNull();
+    expect(screen.queryByText("Fit All to View")).toBeNull();
 
-    await user.click(screen.getByText("Organize nodes"));
+    await user.click(screen.getByRole("option", { name: /Organize nodes/i }));
     expect(screen.queryByLabelText("Search commands")).toBeNull();
   });
 
