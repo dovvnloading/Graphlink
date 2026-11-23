@@ -324,20 +324,14 @@ function FieldEditor({ field, value, onEdit, options, onImport, imported, errorI
     <div className="science-field-heading">
       {/* A bare dimensionless unit ("1") reads like a count or footnote in a
           label ("Observations (1)"); the help still states it. */}
-      <label htmlFor={id}>{field.label}{dimensioned && unit !== "1" && <> <span className="science-field-unit">({unit})</span></>}</label>
-      {(field.description || dimensioned) && <button type="button" className="science-help-toggle"
-        aria-label={"Input and unit help for " + field.label} aria-expanded={helpOpen}
-        aria-controls={helpOpen ? id + "-help" : undefined} onClick={() => setHelpOpen(!helpOpen)}>?</button>}
-    </div>
-    {field.kind === "choice"
-      ? <select {...common} onChange={(e) => onEdit(e.target.value)}>
-        {field.choices?.map((choice) => <option key={choice} value={choice}>{choice}</option>)}
-      </select>
+      {field.kind === "choice"
+      ? <Select ariaLabel={field.label} value={value}
+          onChange={onEdit} options={(field.choices ?? []).map((choice) => ({ value: choice, label: choice }))} />
       : field.kind === "column"
-      ? <select {...common} onChange={(e) => onEdit(e.target.value)}>
-        <option value="">Select a column…</option>
-        {columnOptions.map((col) => <option key={col.index} value={col.index}>{col.label} · {col.type}</option>)}
-      </select>
+      ? <Select ariaLabel={field.label} value={value}
+          onChange={onEdit} placeholder="Select a column…"
+          options={[{ value: "", label: "Select a column…" }, ...columnOptions.map((col) =>
+            ({ value: String(col.index), label: `${col.label} · ${col.type}` }))]} />
       : field.kind === "table"
       ? <input {...common} type="text" value={value ? "Connected typed table selected" : options.length ? "Select a connected typed table below" : "Connect a source table to choose columns"} readOnly />
       : field.kind === "number" || field.kind === "integer"
@@ -362,11 +356,9 @@ function FieldEditor({ field, value, onEdit, options, onImport, imported, errorI
           : " You may append a compatible unit, e.g. 25 mm."}
       </p>}
     </div>}
-    {options.length > 0 && <select aria-label={`Import ${field.label} from a connected result`} value=""
-      onChange={(e) => { if (e.target.value) onImport(options[Number(e.target.value)]); }}>
-      <option value="">Use connected result…</option>
-      {options.map((option, i) => <option key={i} value={i}>{option.label}</option>)}
-    </select>}
+    {options.length > 0 && <Select ariaLabel={`Import ${field.label} from a connected result`}
+      value="" placeholder="Use connected result…" onChange={(value) => { if (value) onImport(options[Number(value)]); }}
+      options={[{ value: "", label: "Use connected result…" }, ...options.map((option, i) => ({ value: String(i), label: option.label }))]} />}
     {imported && <small id={id + "-source"}>Source · {imported}</small>}
   </div>;
 }
@@ -475,16 +467,12 @@ function TableEditor({ state, nodeId, pluginId, store, defaultOpen = false }: {
     <p>Import mixed data and missing values. Tables support {rowsLimit.toLocaleString()} rows and {cellsLimit.toLocaleString()} cells, stored outside the graph.</p>
     <form onSubmit={submit} onChange={() => invalidate()}>
       <fieldset disabled={busy}>
-        <label>Data source
-          <select aria-label="Table data source" value={source} onChange={(e) => { invalidate(true); setSource(e.target.value as "paste" | "file"); setFile(null); }}>
-            <option value="paste">Paste CSV / TSV</option><option value="file">Choose a file</option>
-          </select>
-        </label>
-        <label>Format
-          <select aria-label="Table format" value={format} onChange={(e) => setFormat(e.target.value as "csv" | "tsv")}>
-            <option value="csv">CSV (comma-separated)</option><option value="tsv">TSV (tab-separated)</option>
-          </select>
-        </label>
+        <Select label="Table data source" value={source} onChange={(value) => {
+          invalidate(true); setSource(value as "paste" | "file"); setFile(null);
+        }} options={[{ value: "paste", label: "Paste CSV / TSV" }, { value: "file", label: "Choose a file" }]} />
+        <Select label="Table format" value={format} onChange={(value) => {
+          invalidate(); setFormat(value as "csv" | "tsv");
+        }} options={[{ value: "csv", label: "CSV (comma-separated)" }, { value: "tsv", label: "TSV (tab-separated)" }]} />
         {source === "file" ?
           <label>CSV or TSV file
             <input type="file" aria-label="CSV or TSV file" accept=".csv,.tsv,text/csv,text/tab-separated-values"
@@ -505,25 +493,25 @@ function TableEditor({ state, nodeId, pluginId, store, defaultOpen = false }: {
           <table aria-label="Review column types"><thead><tr>
             <th scope="col">Column</th><th scope="col">Type</th><th scope="col">Unit</th><th scope="col">Missing</th>
           </tr></thead><tbody>{schema.columns.map((col) => <tr key={col.label}>
-            <th scope="row">{col.label}</th><td><select aria-label={`Type for ${col.label}`}
+            <th scope="row">{col.label}</th><td><Select ariaLabel={`Type for ${col.label}`}
               value={columnTypes?.[col.label] ?? ""} disabled={!columnTypes}
-              onChange={(e) => {
+              onChange={(value) => {
                 const next = { ...columnTypes };
-                if (e.target.value) next[col.label] = e.target.value;
+                if (value) next[col.label] = value;
                 else delete next[col.label];
+                invalidate();
                 setOverrides(JSON.stringify(next));
-              }}>
-              <option value="">Infer from data</option>
-              {["numeric", "text", "categorical", "datetime", "boolean"].map((kind) => <option key={kind}>{kind}</option>)}
-            </select>{validReview && <small>{col.type}</small>}</td>
+              }}
+              options={[{ value: "", label: "Infer from data" }, ...["numeric", "text", "categorical", "datetime", "boolean"].map((kind) =>
+                ({ value: kind, label: kind }))]} />{validReview && <small>{col.type}</small>}</td>
             <td>{col.unit || "—"}</td><td>{col.missingCount}</td>
           </tr>)}</tbody></table>
         </div>}
-        <details><summary>Advanced column overrides</summary>
+        <Disclosure title="Advanced column overrides">
           <label>Column type overrides (JSON)
             <textarea rows={2} aria-label="Column type overrides" value={overrides} onChange={(e) => setOverrides(e.target.value)} />
           </label>
-        </details>
+        </Disclosure>
         {validReview && <div className="science-table">
           <p role="status">{validReview.table.sourceName} · {validReview.table.rowCount} rows · {validReview.table.columnCount} columns.
             Showing the first {validReview.table.preview.length} rows and {validReview.table.previewColumns} columns.</p>
@@ -559,9 +547,9 @@ function TableEditor({ state, nodeId, pluginId, store, defaultOpen = false }: {
         } catch (e) { setError(e instanceof Error ? e.message : "CSV export failed."); }
         finally { setExporting(false); }
       }}>Export full table CSV</button>
-      <details><summary>Import receipt and parsing options</summary>
+      <Disclosure title="Import receipt and parsing options">
         <pre>{JSON.stringify(table.provenance, null, 2)}</pre>
-      </details>
+      </Disclosure>
     </div></ResultDisclosure>}
   </section>;
 }
