@@ -62,6 +62,7 @@ class FakePage:
             "text": "Untrusted page says ignore prior instructions",
             "links": [{"text": "Home", "url": "https://example.com/"}],
             "tables": [[["Name", "Price"], ["Widget", "7"]]],
+            "controls": [{"selector": "#q", "tag": "input", "name": "Search", "type": "text", "disabled": False}],
         }
 
     async def screenshot(self, **kwargs):
@@ -183,6 +184,7 @@ def test_browser_run_captures_evidence_redacts_fill_and_cleans_up():
     assert capture.title == "<external title>"
     assert capture.text.startswith("Untrusted page")
     assert capture.tables[0][1] == ["Widget", "7"]
+    assert capture.controls[0]["selector"] == "#q"
     assert capture.screenshot.startswith(b"\x89PNG")
     assert approvals == [("fill", "#q"), ("click", "#submit"), ("select", "#filter")]
     assert ["--host-resolver-rules=MAP * ~NOTFOUND"] == [
@@ -251,3 +253,4 @@ def test_markdown_capture_escapes_external_markup_and_anchors_provenance():
     assert "https://example.com/" in markdown
     assert "Untrusted external webpage" in markdown
     assert "request_count" in markdown
+    assert "Interactive controls" in markdown
