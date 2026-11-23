@@ -1,0 +1,92 @@
+/* UI-14: shell-specific geometry; control visuals, menus and icons belong to the kit. */
+.app-topbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  height: 44px;
+  padding: 0 var(--gl-space-2-5);
+  background-color: var(--gl-surface-node-body);
+  border-bottom: 1px solid var(--gl-surface-border);
+}
+.app-topbar-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-2);
+  padding: 0 var(--gl-space-3) 0 var(--gl-space-1);
+  margin-right: var(--gl-space-3);
+  border-right: 1px solid var(--gl-surface-divider);
+  white-space: nowrap;
+}
+.app-title {
+  color: var(--gl-surface-text-strong);
+  font-size: var(--gl-text-sm);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.app-topbar-status {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  margin-left: var(--gl-space-3);
+}
+.app-topbar-status:empty { margin-left: 0; }
+.app-conn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gl-space-1-5);
+  white-space: nowrap;
+  font-size: var(--gl-text-xs);
+  color: var(--gl-surface-text-secondary);
+}
+.app-conn-closed { color: var(--gl-semantic-status-error); }
+.app-conn .gl-status-pill { color: inherit; }
+.app-conn .gl-status-pill > span:last-child { display: none; }
+
+.appbar {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-3);
+  min-width: 0;
+  position: relative;
+  container: appbar / inline-size;
+}
+.appbar-group {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-1);
+  position: relative;
+  flex-shrink: 0;
+}
+.appbar-group + .appbar-group::before {
+  content: "";
+  position: absolute;
+  left: calc(-1 * var(--gl-space-2));
+  top: 50%;
+  height: 18px;
+  width: 1px;
+  transform: translateY(-50%);
+  background-color: var(--gl-surface-divider);
+}
+.appbar-spacer { flex: 1; min-width: var(--gl-space-4); }
+.appbar .gl-button--sm { min-height: var(--gl-control-h-md); }
+.appbar .gl-button[aria-pressed="true"],
+.appbar .gl-icon-button[aria-pressed="true"],
+.appbar .gl-button[aria-expanded="true"],
+.appbar .appbar-menu-button[aria-expanded="true"] {
+  background-color: var(--gl-neutral-button-hover);
+  border-color: var(--gl-neutral-button-border);
+  color: var(--gl-surface-text-bright);
+}
+.appbar-menu-button.gl-menu-button {
+  min-height: var(--gl-control-h-md);
+  background-color: transparent;
+  border-color: transparent;
+  font-size: var(--gl-text-sm);
+  font-weight: var(--gl-weight-medium);
+}
+.appbar-menu-button.gl-menu-button:hover { background-color: var(--gl-neutral-button-hover); }
+.appbar-overflow-trigger { display: none; }
+@container appbar (max-width: 820px) {
+  .appbar-overflow-trigger { display: inline-flex; }
+  .appbar-tier { display: none; }
+}
