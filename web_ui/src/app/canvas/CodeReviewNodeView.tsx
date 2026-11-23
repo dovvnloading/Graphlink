@@ -606,7 +606,7 @@ function CodeReviewNodeViewImpl({ id, data, selected }: NodeProps<CodeReviewFlow
             <Button variant="primary" size="sm" iconStart="play" disabled={!canRun}
               onClick={data.onRun}>Run Review</Button>
             {data.pendingRequestId && (
-              <Button variant="secondary" size="sm" aria-label="Cancel Review Lens request"
+              <Button variant="secondary" size="sm"
                 onClick={() => data.onCancel()}>Cancel</Button>
             )}
           </div>

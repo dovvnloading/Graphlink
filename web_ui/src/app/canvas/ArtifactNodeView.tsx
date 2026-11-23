@@ -480,7 +480,7 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
             disabled={!draft.trim() || busy || editing || !!data.artifactProposalId}
             onClick={submit}>{submitLabel}</Button>
           {busy && (
-            <Button variant="secondary" size="sm" aria-label="Cancel response"
+            <Button variant="secondary" size="sm"
               onClick={() => data.onCancel()}>Cancel</Button>
           )}
         </div>

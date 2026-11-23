@@ -537,7 +537,7 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                   <Button variant="primary" size="sm" iconStart="sparkle" disabled={busy || !taskPromptDraft.trim()}
                     onClick={runChangeSet}>Generate Change Set</Button>
                   {data.pendingRequestId && (
-                    <Button variant="secondary" size="sm" aria-label="Cancel Gitlink request"
+                    <Button variant="secondary" size="sm"
                       onClick={() => data.onCancel()}>Cancel</Button>
                   )}
                 </div>

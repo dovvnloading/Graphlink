@@ -237,7 +237,7 @@ function WebResearchNodeViewImpl({ data, selected }: NodeProps<WebResearchFlowNo
             disabled={!draft.trim() || !!data.pendingRequestId} onClick={run}>Run</Button>
           {data.pendingRequestId && (
             <Button variant="secondary" size="sm"
-              onClick={() => data.onCancel()} aria-label="Cancel research">Cancel</Button>
+              onClick={() => data.onCancel()}>Cancel</Button>
           )}
         </div>
         {/* ADR-021 stage 21.5: the opt-in that finally reaches ADR-017's
