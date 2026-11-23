@@ -661,7 +661,11 @@ def test_imported_dependency_cycle_is_blocked_then_undo_leaves_unconfigured_leaf
 
 
 def test_scientific_intents_are_not_builder_or_agent_tools():
-    registry = discover_plugins()
+    # Science plugins need consent, so the default secure registry only holds
+    # their intents after some earlier test in the same worker activated them.
+    # Load every declared intent explicitly so this check never depends on
+    # xdist test ordering.
+    registry = discover_plugins(load_unapproved_for_tests=True)
     science = [
         spec for spec in registry.intents
         if spec.plugin_id.startswith("science_")

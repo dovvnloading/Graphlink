@@ -7,7 +7,9 @@ cloud endpoint, and every knowledge database is created under tmp_path.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import threading
+import time
 
 from backend import knowledge_embedding_config as config, knowledge_store, native_dialogs
 from backend.api import intents_knowledge
@@ -21,6 +23,26 @@ from backend.knowledge_ingest import ingest_text
 from backend.providers.base import ProviderCapabilities
 from backend.settings import register_settings
 from graphlink_settings_store import SettingsManager
+
+# Jobs run on worker threads, so the tests poll for their outcome. The bound is
+# a deadline, not an iteration count: a slow CI runner (coverage, xdist, a busy
+# disk) only makes a passing test take longer, never fail. The chunker's
+# tiktoken encoding is loaded up front by backend/tests/conftest.py.
+_POLL_TIMEOUT_S = 30.0
+
+
+async def _eventually(probe, failure: str):
+    """Poll ``probe`` (sync or async) until it returns something other than None."""
+    deadline = time.monotonic() + _POLL_TIMEOUT_S
+    while True:
+        value = probe()
+        if inspect.isawaitable(value):
+            value = await value
+        if value is not None:
+            return value
+        if time.monotonic() >= deadline:
+            raise AssertionError(failure)
+        await asyncio.sleep(0.01)
 
 
 class FakeProvider:
@@ -64,12 +86,19 @@ def _add(db, workspace: int, count: int, *, prefix: str = "document"):
 
 
 async def _terminal(jobs: KnowledgeEmbeddingJobManager, job_id: str) -> dict:
-    for _ in range(500):
+    def probe():
         row = next(row for row in jobs.snapshot()["jobs"] if row["jobId"] == job_id)
-        if row["status"] in {"completed", "cancelled", "failed"}:
-            return row
-        await asyncio.sleep(0.01)
-    raise AssertionError(f"Embedding job {job_id} never completed")
+        return row if row["status"] in {"completed", "cancelled", "failed"} else None
+
+    return await _eventually(probe, f"Embedding job {job_id} never completed")
+
+
+def _published_job_states(messages: list[dict]) -> list[dict]:
+    return [
+        row
+        for message in messages if message.get("topic") == "knowledge-embedding"
+        for row in message["payload"]["jobs"]
+    ]
 
 
 def test_background_batches_32_and_emits_progress_without_cross_workspace_leaks(tmp_path, monkeypatch):
@@ -93,14 +122,23 @@ def test_background_batches_32_and_emits_progress_without_cross_workspace_leaks(
         loop_thread = threading.get_ident()
         start = jobs.schedule(7)
         try:
-            # Ensure the progress event for the committed 32-row batch has
-            # time to publish before releasing the second batch.
+            # The progress event for the committed 32-row batch must publish
+            # before the second batch is released.
             assert await asyncio.to_thread(provider.started.wait, 5)
-            await asyncio.sleep(0.04)
+            await _eventually(
+                lambda: any(row["chunksEmbedded"] == 32 for row in _published_job_states(messages)) or None,
+                "The 32-row batch progress was never published",
+            )
         finally:
             provider.release.set()
         finished = await _terminal(jobs, start["jobId"])
-        await asyncio.sleep(0.04)
+        await _eventually(
+            lambda: any(
+                row["status"] == "completed" and row["chunksEmbedded"] == 35
+                for row in _published_job_states(messages)
+            ) or None,
+            "The completed job state was never published",
+        )
         return finished, messages, loop_thread
 
     finished, messages, loop_thread = asyncio.run(scenario())
@@ -112,11 +150,7 @@ def test_background_batches_32_and_emits_progress_without_cross_workspace_leaks(
     assert all(thread != loop_thread for _, thread in provider.calls)
     assert len(knowledge_store.list_embeddings_for_search(db, "ollama:model-a", collection_id=collection)) == 35
     assert knowledge_store.list_embeddings_for_search(db, "ollama:model-a", collection_id=other) == []
-    states = [
-        row
-        for message in messages if message.get("topic") == "knowledge-embedding"
-        for row in message["payload"]["jobs"]
-    ]
+    states = _published_job_states(messages)
     assert any(row["status"] == "completed" and row["chunksEmbedded"] == 35 for row in states)
     assert any(row["chunksEmbedded"] == 32 for row in states)
 
@@ -174,12 +208,12 @@ def test_model_change_cancels_old_provider_and_embeds_new_space(tmp_path, monkey
         finally:
             first_provider.release.set()
         old = await _terminal(jobs, first["jobId"])
-        for _ in range(500):
+
+        def new_model_finished():
             all_rows = jobs.snapshot()["jobs"]
-            if len(all_rows) >= 2 and all_rows[-1]["status"] == "completed":
-                return old, all_rows[-1]
-            await asyncio.sleep(0.01)
-        raise AssertionError("New model never ran")
+            return all_rows[-1] if len(all_rows) >= 2 and all_rows[-1]["status"] == "completed" else None
+
+        return old, await _eventually(new_model_finished, "New model never ran")
 
     stopped, finished = asyncio.run(scenario())
     assert stopped["status"] == "cancelled"
@@ -256,23 +290,20 @@ def test_settings_change_and_file_ingestion_start_real_intent_jobs(tmp_path, mon
     monkeypatch.setattr(native_dialogs, "pick_files", picker)
 
     async def wait_for_ingest(bus, job_id):
-        for _ in range(500):
+        async def probe():
             payload = await bus.dispatch_intent("knowledge", "getIngestJobs", [])
             row = next(r for r in payload["jobs"] if r["jobId"] == job_id)
-            if row["status"] in {"completed", "cancelled", "failed"}:
-                assert row["status"] == "completed"
-                return
-            await asyncio.sleep(0.01)
-        raise AssertionError("File ingestion never finished")
+            return row if row["status"] in {"completed", "cancelled", "failed"} else None
+
+        row = await _eventually(probe, "File ingestion never finished")
+        assert row["status"] == "completed"
 
     async def wait_for_job_count(bus, expected):
-        for _ in range(500):
-            payload = await bus.dispatch_intent("knowledge", "getEmbeddingJobs", [])
-            rows = payload["jobs"]
-            if len(rows) >= expected and rows[-1]["status"] in {"completed", "failed"}:
-                return rows[-1]
-            await asyncio.sleep(0.01)
-        raise AssertionError("Automatic embedding was not scheduled")
+        async def probe():
+            rows = (await bus.dispatch_intent("knowledge", "getEmbeddingJobs", []))["jobs"]
+            return rows[-1] if len(rows) >= expected and rows[-1]["status"] in {"completed", "failed"} else None
+
+        return await _eventually(probe, "Automatic embedding was not scheduled")
 
     async def scenario():
         bus = SessionBus("wiring")
@@ -334,12 +365,12 @@ def test_ingest_reports_completion_only_after_its_follow_up_is_scheduled(tmp_pat
         )
         bus.register_topic("knowledge-ingest", jobs.snapshot)
         jobs.start([str(source)], folder=False, workspace_id=17)
-        for _ in range(500):
+
+        def finished():
             [row] = jobs.snapshot()["jobs"]
-            if row["status"] in {"completed", "failed"}:
-                return row
-            await asyncio.sleep(0.01)
-        raise AssertionError("Import never completed")
+            return row if row["status"] in {"completed", "failed"} else None
+
+        return await _eventually(finished, "Import never completed")
 
     completed = asyncio.run(scenario())
     assert completed["status"] == "completed"
