@@ -284,4 +284,21 @@ def register_workspace_tools(registry: ToolRegistry, dispatcher, document) -> No
             "undoable": True,
         }))
 
-    registry.register(BROWSER_PUBLISH_SPEC, publish, scopes={GRAPH_MUTATE}, approval="once")
+    async def validate_publish(call: ToolCall, ctx: RunContext) -> str | None:
+        # The registry calls this before showing approval. An invalid,
+        # evicted or already-consumed capture must never consume human
+        # attention or reuse an earlier authorization.
+        if not _harness_live(ctx, document):
+            return "An active workspace agent run is required to publish."
+        capture_id = call.arguments.get("capture_id")
+        include_screenshot = call.arguments.get("include_screenshot", True)
+        if not isinstance(capture_id, str) or type(include_screenshot) is not bool:
+            return "Provide a valid capture_id and boolean include_screenshot."
+        if capture_id not in _captures(ctx):
+            return "Capture not found in this task; rerun browser.run."
+        return None
+
+    registry.register(
+        BROWSER_PUBLISH_SPEC, publish, scopes={GRAPH_MUTATE}, approval="always",
+        always_reprompt=lambda _call: True, pre_approval_check=validate_publish,
+    )
