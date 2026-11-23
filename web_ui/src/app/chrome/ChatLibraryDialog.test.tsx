@@ -528,8 +528,9 @@ describe("ChatLibraryDialog on the kit", () => {
     await user.click(screen.getByText("open library"));
     await startDelete(user, "Second chat");
     await user.click(screen.getByRole("button", { name: "Delete chat" }));
-    const retry = await screen.findByRole("dialog", { name: "Delete chat?" });
-    expect(within(retry).getByText(/may have changed elsewhere/i)).toBeInTheDocument();
+    await waitFor(() => expect(within(screen.getByRole("dialog", { name: "Delete chat?" }))
+      .getByText(/may have changed elsewhere/i)).toBeInTheDocument());
+    const retry = screen.getByRole("dialog", { name: "Delete chat?" });
     expect(request).toHaveBeenCalledTimes(1);
     await user.click(within(retry).getByRole("button", { name: "Cancel" }));
     expect(request).toHaveBeenCalledTimes(1);
@@ -543,8 +544,9 @@ describe("ChatLibraryDialog on the kit", () => {
       await user.click(screen.getByText("open library"));
       await startDelete(user, "Second chat");
       await user.click(screen.getByRole("button", { name: "Delete chat" }));
-      const retry = await screen.findByRole("dialog", { name: "Delete chat?" });
-      expect(within(retry).getByText(/details were written to the log/i)).toBeInTheDocument();
+      await waitFor(() => expect(within(screen.getByRole("dialog", { name: "Delete chat?" }))
+        .getByText(/details were written to the log/i)).toBeInTheDocument());
+      const retry = screen.getByRole("dialog", { name: "Delete chat?" });
       expect(error).toHaveBeenCalled();
       expect(request).toHaveBeenCalledTimes(1);
       await user.click(within(retry).getByRole("button", { name: "Cancel" }));
