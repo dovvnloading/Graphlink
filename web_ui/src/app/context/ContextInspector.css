@@ -1,66 +1,59 @@
-/* Lives in the composer control rail (Composer.tsx's contextInspector slot)
-   and takes the shared .composer-control look. The launcher stays unpositioned
-   so the panel anchors to .composer-dock: it opens upward, right-aligned with
-   the composer at every width, whether or not the control rail has wrapped. */
-.context-inspector-launcher {
-  flex: none;
-  font-size: 12px;
-  color: var(--gl-surface-text-primary);
+/* Context inspection shares the overlay surface with composer tools. */
+.context-inspector-launcher { flex: none; display: inline-flex; align-items: center; }
+.context-inspector-disabled-trigger { display: inline-flex; }
+.context-inspector-disabled-trigger:focus-visible { outline: 2px solid var(--gl-focus-ring); outline-offset: 2px; border-radius: var(--gl-radius-sm); }
+.context-inspector-toggle[aria-expanded="true"] {
+  background-color: var(--gl-state-selected);
 }
-.context-inspector-toggle[aria-expanded="true"] { background-color: var(--gl-neutral-button-hover); }
-.context-inspector-heading button {
-  border: 1px solid var(--gl-surface-border);
-  border-radius: 5px;
-  padding: 5px 9px;
-  background: var(--gl-graph-surface);
-  color: inherit;
-  cursor: pointer;
+.context-inspector-popover {
+  box-sizing: border-box;
+  width: min(460px, calc(100vw - var(--gl-space-4)));
+  max-height: min(520px, 67vh);
+  overflow-y: auto;
 }
 .context-inspector-panel {
-  position: absolute;
-  bottom: calc(100% + 9px);
-  right: 16px;
-  width: min(460px, calc(100vw - 34px));
-  max-height: min(520px, 67vh);
-  overflow: auto;
-  box-sizing: border-box;
-  padding: 12px;
-  background: var(--gl-graph-surface);
-  border: 1px solid var(--gl-graph-border);
-  border-radius: 8px;
-  box-shadow: var(--gl-shadow-3);
+  display: grid;
+  gap: var(--gl-space-2);
+  color: var(--gl-surface-text-primary);
+  font-size: var(--gl-text-sm);
 }
 .context-inspector-heading,
 .context-inspector-source-title {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--gl-space-3);
 }
-.context-inspector-heading > div { display: flex; gap: 4px; }
-.context-inspector-meta, .context-inspector-note {
+.context-inspector-heading > div { display: inline-flex; align-items: center; gap: var(--gl-space-1); }
+.context-inspector-meta,
+.context-inspector-note {
   color: var(--gl-surface-text-secondary);
   overflow-wrap: anywhere;
-  margin: 7px 0;
+  margin: 0;
+  font-size: var(--gl-text-xs);
 }
 .context-inspector-sources {
   padding: 0;
-  margin: 10px 0 0;
+  margin: 0;
   list-style: none;
   display: grid;
-  gap: 7px;
+  gap: var(--gl-space-2);
 }
 .context-inspector-sources li {
-  border: 1px solid var(--gl-graph-border);
-  border-radius: 5px;
-  padding: 8px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  padding: var(--gl-space-2);
   display: grid;
-  gap: 3px;
+  gap: var(--gl-space-1);
+  overflow-wrap: anywhere;
+  background: var(--gl-surface-inset);
+}
+.context-inspector-sources .excluded { opacity: 0.75; }
+.context-inspector-source-origin { color: var(--gl-surface-text-secondary); }
+.context-inspector-citations { display: grid; gap: var(--gl-space-1); margin-top: var(--gl-space-2); }
+.context-inspector-citations ul { list-style: none; margin: 0; padding: 0; }
+.context-inspector-citations li {
+  padding: var(--gl-space-2) 0;
+  border-top: 1px solid var(--gl-surface-border);
   overflow-wrap: anywhere;
 }
-.context-inspector-sources .excluded { opacity: .75; }
-.context-inspector-source-origin { color: var(--gl-surface-text-secondary); }
-
-.context-inspector-citations { margin-top: 12px; }
-.context-inspector-citations ul { list-style: none; margin: 8px 0 0; padding: 0; }
-.context-inspector-citations li { padding: 8px 0; border-top: 1px solid var(--border-color, currentColor); overflow-wrap: anywhere; }
