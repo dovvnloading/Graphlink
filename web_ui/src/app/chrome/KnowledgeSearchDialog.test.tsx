@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { KnowledgeSearchDialog } from "./KnowledgeSearchDialog";
@@ -65,6 +65,22 @@ async function setup({
       act(() => { listeners.get(topic)?.(payload); });
     },
   };
+}
+
+
+function documentActions(title: string) {
+  const item = screen.getByText(title).closest("li");
+  if (!item) throw new Error("Missing document row " + title);
+  return within(item);
+}
+
+async function chooseDocumentAction(user: ReturnType<typeof userEvent.setup>, title: string, action: string) {
+  await user.click(documentActions(title).getByRole("button", { name: "Actions" }));
+  await user.click(await screen.findByRole("menuitem", { name: action }));
+}
+
+async function searchFor(user: ReturnType<typeof userEvent.setup>, term: string) {
+  await user.type(screen.getByRole("searchbox", { name: "Search the knowledge base" }), term);
 }
 
 describe("KnowledgeSearchDialog kit library", () => {
@@ -258,4 +274,171 @@ describe("KnowledgeSearchDialog kit library", () => {
       expect(intents.filter((row) => row[1] === "listDocuments").length).toBeGreaterThanOrEqual(2);
     });
   });
+
+  it("native Add files uses the knowledge picker intent with no browser paths", async () => {
+    const { user, request, intents } = await setup();
+    await user.click(screen.getByRole("button", { name: "Add files" }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("knowledge", "addFiles", [], 300000));
+    expect(intents).toContainEqual(["knowledge", "addFiles", []]);
+  });
+
+  it("native Add folder uses a distinct picker intent without a path argument", async () => {
+    const { user, request, intents } = await setup();
+    await user.click(screen.getByRole("button", { name: "Add folder" }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("knowledge", "addFolder", [], 300000));
+    expect(intents).toContainEqual(["knowledge", "addFolder", []]);
+  });
+
+  it("import progress exposes current totals and release of controls after cancellation", async () => {
+    const { user, emit } = await setup();
+    const running = {
+      jobId: "job-77", kind: "file", workspaceId: 5, status: "running",
+      filesTotal: 8, filesProcessed: 3, bytesTotal: 100, bytesProcessed: 40,
+      added: 2, updated: 1, duplicates: 0, unchanged: 0, skipped: 0,
+      failedFiles: 0, lastFile: "chapter.md", error: "", warnings: [], cancelRequested: false,
+    };
+    emit("knowledge-ingest", { jobs: [running] });
+    expect(screen.getByRole("progressbar", { name: "Files processed" })).toHaveAttribute("aria-valuenow", "3");
+    expect(screen.getByText(/3\/8 files/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add folder" })).toBeDisabled();
+    emit("knowledge-ingest", { jobs: [{ ...running, status: "cancelled", cancelRequested: true }] });
+    expect(screen.queryByRole("button", { name: "Cancel import" })).toBeNull();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add files" })).toBeEnabled());
+  });
+
+  it("a completed query sends its typed text and default top-k, not source counts", async () => {
+    const { user, intents } = await setup();
+    await searchFor(user, "brown fox");
+    await waitFor(() => expect(intents).toContainEqual(["knowledge", "search", ["brown fox", 10]]));
+    expect(intents.some((item) => item[1] === "search" && JSON.stringify(item[2]) === JSON.stringify(["brown fox", 1]))).toBe(false);
+  });
+
+  it("two retrieved hits are labelled search results, not sources used", async () => {
+    const { user, request } = await setup();
+    request.mockImplementation(async (_topic, intent) => intent === "search"
+      ? { results: [RESULT, { ...RESULT, chunkId: 2, documentId: 11, documentTitle: "Second hit" }] } : {});
+    await searchFor(user, "fox");
+    expect(await screen.findByText("2 search results")).toBeInTheDocument();
+    expect(screen.queryByText(/sources used/i)).toBeNull();
+  });
+
+  it("a result with only lexical rank displays Keyword without a Semantic badge", async () => {
+    const { user, request } = await setup();
+    request.mockImplementation(async (_topic, intent) => intent === "search"
+      ? { results: [{ ...RESULT, rankSignals: { fts5: 4 } }] } : {});
+    await searchFor(user, "fox");
+    const signals = await screen.findByRole("group", { name: "Match signals" });
+    expect(within(signals).getByText("Keyword #4")).toBeInTheDocument();
+    expect(within(signals).queryByText(/Semantic/)).toBeNull();
+  });
+
+  it("a result with only vector rank displays Semantic without a Keyword badge", async () => {
+    const { user, request } = await setup();
+    request.mockImplementation(async (_topic, intent) => intent === "search"
+      ? { results: [{ ...RESULT, rankSignals: { vector: 3 } }] } : {});
+    await searchFor(user, "fox");
+    const signals = await screen.findByRole("group", { name: "Match signals" });
+    expect(within(signals).getByText("Semantic #3")).toBeInTheDocument();
+    expect(within(signals).queryByText(/Keyword/)).toBeNull();
+  });
+
+  it("older search responses without rank signals do not fabricate match groups", async () => {
+    const { user, request } = await setup();
+    request.mockImplementation(async (_topic, intent) => intent === "search"
+      ? { results: [{ ...RESULT, rankSignals: undefined }] } : {});
+    await searchFor(user, "fox");
+    await screen.findByText("Fox story");
+    expect(screen.queryByRole("group", { name: "Match signals" })).toBeNull();
+  });
+
+  it("expanding the cited passage reveals the exact excerpt and source offsets", async () => {
+    const { user, request } = await setup();
+    request.mockImplementation(async (_topic, intent) => intent === "search"
+      ? { results: [RESULT] } : {});
+    await searchFor(user, "fox");
+    const expand = await screen.findByRole("button", { name: "Show cited passage" });
+    expect(screen.queryByRole("region", { name: "Cited passage for Fox story" })).toBeNull();
+    await user.click(expand);
+    const passage = screen.getByRole("region", { name: "Cited passage for Fox story" });
+    expect(within(passage).getByText(RESULT.text)).toBeInTheDocument();
+    expect(within(passage).getByText("Offset 0–44")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Hide cited passage" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("a genuine HTTPS source has a working external link", async () => {
+    const { user, request } = await setup();
+    request.mockImplementation(async (_topic, intent) => intent === "search"
+      ? { results: [RESULT] } : {});
+    await searchFor(user, "fox");
+    const link = await screen.findByRole("link", { name: "Open source" });
+    expect(link).toHaveAttribute("href", "https://example.com/fox");
+    expect(link).toHaveAttribute("target", "_blank");
+  });
+
+  it("a local source path never creates a fake Open source URL", async () => {
+    const { user, request } = await setup();
+    request.mockImplementation(async (_topic, intent) => intent === "search"
+      ? { results: [{ ...RESULT, sourceUri: "/private/notes.txt", sourceFile: "/private/notes.txt" }] } : {});
+    await searchFor(user, "fox");
+    await screen.findByText("Fox story");
+    expect(screen.queryByRole("link", { name: "Open source" })).toBeNull();
+  });
+
+  it("search renders browser-safe names instead of private Windows and POSIX upload paths", async () => {
+    const windows = String.raw`C:\Users\Ada\.graphlink\uploads\secret\guide.md`;
+    const posix = "/home/ada/.graphlink/knowledge/uploads/secret/notes.md";
+    const { user, request } = await setup();
+    request.mockImplementation(async (_topic, intent) => intent === "search" ? { results: [
+      { ...RESULT, sourceUri: windows, sourceFile: windows, documentTitle: "Guide" },
+      { ...RESULT, chunkId: 2, documentId: 11, sourceUri: posix, sourceFile: posix, documentTitle: "Notes" },
+    ] } : {});
+    await searchFor(user, "fox");
+    expect(await screen.findByText("2 search results")).toBeInTheDocument();
+    expect(screen.getByText("guide.md")).toBeInTheDocument();
+    expect(screen.getByText("notes.md")).toBeInTheDocument();
+    expect(screen.queryByText(windows)).toBeNull();
+    expect(screen.queryByText(posix)).toBeNull();
+  });
+
+  it("failed searches show an alert rather than empty results", async () => {
+    const { user, request } = await setup();
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    request.mockImplementation(async (_topic, intent) => {
+      if (intent === "search") throw new Error("offline");
+      return {};
+    });
+    try {
+      await searchFor(user, "fox");
+      expect(await screen.findByRole("alert")).toHaveTextContent(/Search failed/);
+      expect(screen.queryByText("No search results")).toBeNull();
+      expect(log).toHaveBeenCalled();
+    } finally { log.mockRestore(); }
+  });
+
+  it("the Search button is disabled until the query has non-whitespace text", async () => {
+    const { user } = await setup();
+    const button = screen.getByRole("button", { name: "Search" });
+    expect(button).toBeDisabled();
+    await searchFor(user, "   ");
+    expect(button).toBeDisabled();
+    await user.type(screen.getByRole("searchbox", { name: "Search the knowledge base" }), "fox");
+    expect(button).toBeEnabled();
+  });
+
+  it("Enter submits search without a duplicate request from the live debounce", async () => {
+    const { user, intents } = await setup();
+    await searchFor(user, "fox{Enter}");
+    await waitFor(() => expect(intents).toContainEqual(["knowledge", "search", ["fox", 10]]));
+    expect(intents.filter((entry) => entry[1] === "search")).toHaveLength(1);
+  });
+
+  it("workspace documents show type, formatted size, chunk count, date, and indexed status", async () => {
+    await setup({ documents: [DOC] });
+    const item = await screen.findByText("report.csv");
+    const row = item.closest("li");
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLElement).getByText(/CSV · 2\.0 KB · 4 chunks · Added/)).toBeInTheDocument();
+    expect(within(row as HTMLElement).getByText("Indexed")).toBeInTheDocument();
+  });
+
 });
