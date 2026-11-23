@@ -16,7 +16,11 @@ function makeStore(
 ) {
   const listeners = new Set<() => void>();
   const state = {
-    composer: { ...initialComposerState, ...overrides.composer },
+    composer: {
+      ...initialComposerState,
+      route: { ...initialComposerState.route, modelId: "qwen3:8b", modelLabel: "qwen3:8b" },
+      ...overrides.composer,
+    },
     tokenCounter: { ...initialTokenCounterState, ...overrides.tokenCounter },
     notification: { ...initialNotificationState, ...overrides.notification },
     streamText: overrides.streamText ?? "",
@@ -99,6 +103,7 @@ function makeSceneStore(
     overrides.isolationEngine === undefined ? "docker" : overrides.isolationEngine,
   );
   const setReplyTargetNodeId = vi.fn();
+  const setSelectedNodeId = vi.fn();
   const setSynthesizeTargetNodeIds = vi.fn();
   const getChatKnowledgePreference = vi.fn().mockResolvedValue(
     overrides.knowledgePreference ?? { nodeId: null, hasDocuments: false, enabled: false, override: null },
@@ -122,6 +127,7 @@ function makeSceneStore(
     sendComposerAgentMessage,
     getHarnessIsolationEngine,
     setReplyTargetNodeId,
+    setSelectedNodeId,
     setSynthesizeTargetNodeIds,
     getChatKnowledgePreference,
     setChatUseKnowledge,
@@ -737,7 +743,7 @@ describe("Composer", () => {
     const trigger = container.querySelector('[data-overlay-trigger="model"]') as HTMLButtonElement;
     expect(trigger).toBeEnabled();
     await user.click(trigger);
-    expect(await screen.findByRole("button", { name: "Set up a local model" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Manage models…" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Set up a local model" }));
     expect(openOllamaSettings).toHaveBeenCalledOnce();
   });
@@ -771,7 +777,7 @@ describe("Composer", () => {
     expect(trigger).not.toBeDisabled();
 
     await user.click(trigger);
-    await user.click(await screen.findByRole("button", { name: /Ollama · nemotron-3-nano:4b/ }));
+    await user.click(await screen.findByRole("menuitemradio", { name: /Ollama · nemotron-3-nano:4b/ }));
 
     expect(selectPickerModel).toHaveBeenCalledWith("Ollama", "nemotron-3-nano:4b");
     // and the popover closes on choose, like the reasoning picker
@@ -800,16 +806,16 @@ describe("Composer", () => {
     );
     const trigger = screen.getByRole("button", { name: /OpenRouter/ });
     await user.click(trigger);
-    const search = screen.getByRole("searchbox", { name: "Search models" });
+    const search = await screen.findByRole("searchbox", { name: "Search models" });
     expect(search).toHaveFocus();
     await user.type(search, "LAB/MODEL-11");
-    expect(screen.queryByRole("button", { name: "Model 0" })).toBeNull();
+    expect(screen.queryByRole("menuitemradio", { name: "Model 0" })).toBeNull();
     // Enter while focus is still in the search input must choose the lone
     // match; previously this worked only after tabbing onto the result.
     await user.keyboard("{Enter}");
     expect(selectPickerModel).toHaveBeenCalledWith("OpenRouter", "lab/model-11");
     await user.click(trigger);
-    expect(screen.getByRole("button", { name: "Model 0" })).toBeVisible();
+    expect(screen.getByRole("menuitemradio", { name: "Model 0" })).toBeVisible();
   });
 
   it("Send is enabled once there's text, calls sceneStore.sendMessage, and clears the draft", async () => {
@@ -915,7 +921,7 @@ describe("Composer", () => {
         <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
       </OverlayProvider>,
     );
-    expect(screen.queryByLabelText("Cancel response")).toBeNull();
+    expect(screen.queryByLabelText("Stop generating")).toBeNull();
   });
 
   it("Cancel control is present when request.canCancel is true and calls cancelChatRequest with the request id", async () => {
@@ -931,7 +937,7 @@ describe("Composer", () => {
         <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
       </OverlayProvider>,
     );
-    const cancelButton = screen.getByLabelText("Cancel response");
+    const cancelButton = screen.getByLabelText("Stop generating");
     expect(cancelButton).toBeInTheDocument();
     await user.click(cancelButton);
     expect(cancelChatRequest).toHaveBeenCalledWith("req-42");
@@ -1013,7 +1019,7 @@ describe("Composer", () => {
     await user.click(screen.getByText("Off"));
     await user.click(screen.getByText("High"));
     expect(setReasoningLevel).toHaveBeenCalledWith("high");
-    expect(screen.queryByText("High")).toBeNull();
+    expect(screen.getByRole("button", { name: "Reasoning: High" })).toBeInTheDocument();
   });
 
   it("hides the Reasoning chip when the provider and model expose no reasoning selection", () => {
@@ -1058,7 +1064,7 @@ describe("Composer", () => {
     expect(container.querySelector('[data-overlay-trigger="reasoning"]')).not.toBeDisabled();
   });
 
-  it("R8a finding #11: Reasoning trigger explains itself via title when disabled because a request is busy", () => {
+  it("Reasoning uses a kit MenuButton with a disabled explanation and no title attribute", () => {
     const { store } = makeStore();
     const { container } = render(
       <OverlayProvider>
@@ -1066,13 +1072,14 @@ describe("Composer", () => {
         <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
       </OverlayProvider>,
     );
-    expect(container.querySelector('[data-overlay-trigger="reasoning"]')).toHaveAttribute(
-      "title",
-      "Wait for the current response to finish",
-    );
+    const trigger = container.querySelector('[data-overlay-trigger="reasoning"]') as HTMLButtonElement;
+    expect(trigger).toBeDisabled();
+    expect(trigger).not.toHaveAttribute("title");
+    fireEvent.focus(trigger.parentElement!);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Wait for the current response to finish");
   });
 
-  it("the enabled Reasoning chip names its level for assistive tech and shows a plain tooltip", () => {
+  it("enabled Reasoning names its level for assistive tech without a title attribute", () => {
     const { store } = makeStore({
       composer: { request: { ...initialComposerState.request, canSend: true } },
     });
@@ -1083,7 +1090,7 @@ describe("Composer", () => {
       </OverlayProvider>,
     );
     const trigger = container.querySelector('[data-overlay-trigger="reasoning"]');
-    expect(trigger).toHaveAttribute("title", "Reasoning level");
+    expect(trigger).not.toHaveAttribute("title");
     expect(trigger).toHaveAttribute("aria-label", `Reasoning: ${store.getComposer().route.reasoning.label}`);
   });
 
@@ -1277,7 +1284,7 @@ describe("Composer reply target (ADR-002 Workstream 1)", () => {
         <Composer store={store} sceneStore={sceneStore} />
       </OverlayProvider>,
     );
-    expect(screen.queryByLabelText("Branching from")).toBeNull();
+    expect(screen.queryByLabelText("Replying to")).toBeNull();
   });
 
   it("shows a preview of the target node's content when a reply target is pending", () => {
@@ -1292,7 +1299,7 @@ describe("Composer reply target (ADR-002 Workstream 1)", () => {
         <Composer store={store} sceneStore={sceneStore} />
       </OverlayProvider>,
     );
-    const indicator = screen.getByLabelText("Branching from");
+    const indicator = screen.getByLabelText("Replying to");
     expect(indicator).toBeInTheDocument();
     expect(screen.getByText("the original root message")).toBeInTheDocument();
   });
@@ -1306,7 +1313,7 @@ describe("Composer reply target (ADR-002 Workstream 1)", () => {
         <Composer store={store} sceneStore={sceneStore} />
       </OverlayProvider>,
     );
-    expect(screen.queryByLabelText("Branching from")).toBeNull();
+    expect(screen.queryByLabelText("Replying to")).toBeNull();
   });
 
   it("the clear button calls sceneStore.setReplyTargetNodeId(null)", async () => {
@@ -1322,7 +1329,7 @@ describe("Composer reply target (ADR-002 Workstream 1)", () => {
         <Composer store={store} sceneStore={sceneStore} />
       </OverlayProvider>,
     );
-    await user.click(screen.getByLabelText("Cancel branching from this message"));
+    await user.click(screen.getByLabelText("Clear reply target"));
     expect(setReplyTargetNodeId).toHaveBeenCalledWith(null);
   });
 });
