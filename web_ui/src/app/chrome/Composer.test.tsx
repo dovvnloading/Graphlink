@@ -743,7 +743,7 @@ describe("Composer", () => {
     const trigger = container.querySelector('[data-overlay-trigger="model"]') as HTMLButtonElement;
     expect(trigger).toBeEnabled();
     await user.click(trigger);
-    expect(await screen.findByRole("button", { name: "Manage models…" })).toBeVisible();
+    expect(await screen.findByRole("menuitem", { name: "Manage models…" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Set up a local model" }));
     expect(openOllamaSettings).toHaveBeenCalledOnce();
   });
