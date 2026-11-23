@@ -70,8 +70,8 @@ describe("KnowledgeEmbeddingStatus", () => {
 
     expect(screen.getByText("12 embedded · 28 pending chunks (this run)")).toBeInTheDocument();
     const progress = screen.getByRole("progressbar", { name: "Knowledge embedding progress" });
-    expect(progress).toHaveAttribute("max", "40");
-    expect(progress).toHaveAttribute("value", "12");
+    expect(progress).toHaveAttribute("aria-valuemax", "40");
+    expect(progress).toHaveAttribute("aria-valuenow", "12");
     const cancel = screen.getByRole("button", { name: "Cancel embeddings" });
     cancel.focus();
     await user.keyboard(" ");
@@ -82,7 +82,7 @@ describe("KnowledgeEmbeddingStatus", () => {
       jobs: [{ ...JOB, cancelRequested: true, chunksEmbedded: 32, chunksRemaining: 8 }],
     });
     expect(screen.getByRole("button", { name: "Cancelling embeddings…" })).toBeDisabled();
-    expect(progress).toHaveAttribute("value", "32");
+    expect(progress).toHaveAttribute("aria-valuenow", "32");
   });
 
   it("resumes a failed job by keyboard, retaining the last error and its pending count", async () => {
@@ -108,17 +108,18 @@ describe("KnowledgeEmbeddingStatus", () => {
       jobs: [failed, { ...JOB, jobId: "retry", chunksTotal: 8, chunksEmbedded: 4, chunksRemaining: 4 }],
     });
     expect(screen.getByRole("progressbar", { name: "Knowledge embedding progress" }))
-      .toHaveAttribute("value", "4");
+      .toHaveAttribute("aria-valuenow", "4");
     expect(screen.getByRole("alert")).toHaveTextContent("Last error:");
   });
 
-  it("disables start while embeddings are off, regardless of historical jobs", async () => {
+  it("offers setup instead of starting embeddings while off", async () => {
     const { emit } = setup();
     emit("app-settings", { knowledgeEmbeddingSource: "off", knowledgeEmbeddingModel: "" });
     emit("knowledge-embedding", { workspaceId: null, jobs: [JOB] });
 
     expect(screen.getByText(/Source: Off.*Model: None/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Start embeddings" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Set up embeddings" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Start embeddings" })).toBeNull();
     expect(screen.getByText(/Enable a source in Settings/)).toBeInTheDocument();
     expect(screen.queryByText(/12 embedded/)).not.toBeInTheDocument();
   });
@@ -140,7 +141,7 @@ describe("KnowledgeEmbeddingStatus", () => {
     });
     expect(screen.getByText("32 embedded · 8 pending chunks (this run)")).toBeInTheDocument();
     expect(screen.getByRole("progressbar", { name: "Knowledge embedding progress" }))
-      .toHaveAttribute("value", "32");
+      .toHaveAttribute("aria-valuenow", "32");
   });
 
   it("reports failed controls and refreshes the workspace context when reopened", async () => {
