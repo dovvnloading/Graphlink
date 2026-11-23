@@ -2865,6 +2865,21 @@ function CanvasInner({
   const canvasWrapperRef = useRef<HTMLDivElement | null>(null);
   useCanvasFontVars(canvasWrapperRef, scene.fontFamily, scene.fontSizePt, scene.fontColor);
 
+  // UI-17: the one zoom subscriber for the entire canvas. Write an inherited
+  // CSS number directly to the root: no React state update or per-node
+  // subscription, so panning/zooming cannot render node content views.
+  useEffect(() => {
+    const root = canvasWrapperRef.current;
+    if (!root) return;
+    const setZoom = (zoom: number) => {
+      root.style.setProperty("--gl-canvas-zoom", String(zoom));
+    };
+    setZoom(storeApi.getState().transform[2]);
+    return storeApi.subscribe((state, previous) => {
+      if (state.transform[2] !== previous.transform[2]) setZoom(state.transform[2]);
+    });
+  }, [storeApi]);
+
   // R8a: "Hide Other Branches" - which node id branch focus is currently
   // anchored to, or null when off. Local-only state (never scene state),
   // same posture as App.tsx's documentViewContent - a pure display concern.
