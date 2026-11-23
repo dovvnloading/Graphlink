@@ -47,6 +47,21 @@ The image build exports the trusted challenge before any run. Each candidate com
 
 The report binds the local image ID, toolchain and module inventory hashes, challenge and solution export hashes, elaborated type, assumptions, checker outcomes and timestamps. Review the command transcripts alongside the machine-readable measurements. Timestamps vary between runs. The report is unsigned experimental evidence. It grants no authority to a restored Graphlink session.
 
+## Observed run on November 23, 2026
+
+On Ubuntu 24.04 x86-64 with Docker Engine 28.0.4 and runc 1.5.3, all seven fixture cases produced their expected outcomes. The eighth measurement repeated the positive case in two fresh containers. Both kernels accepted the same proof export on both attempts. The timeout fixture started and its container was removed. The [unaltered JSON transcript](evidence/formal_lean_p0_run_45179416012.json) preserves all eight outcomes, commands, assumptions and runtime measurements. [GitHub Actions run 45179416012](https://github.com/dovvnloading/Graphlink/actions/runs/45179416012)
+
+| Measured input or output | Identity |
+| --- | --- |
+| Tested source commit | `287ebeaed10b61de23727579d1413cc0c8494ce5` |
+| Final local Docker image ID | `sha256:e301ca4a7de945a8f119044cc042ade43adaf99fcaaa164ebebe8b4b98214661` |
+| Lake version | `5.0.0-src+611c117` |
+| Compiled module inventory SHA-256 | `32a109eadfd951f238afd4d120181df24ecef9282f9c01ebada69efddb405bdb` |
+| Immutable challenge export SHA-256 | `f688b6cb011c35ffbebbc2db980332a930b430ca59bfb50af267e8913108c3d9` |
+| Transcript SHA-256 | `578a4b2a39e12aa9a8706c86168de749dd002633512669b4a6e8101c7460b0da` |
+
+The earlier positive run stopped when nanoda could not resolve `propext` while replaying primitive declarations. The final experiment supplies that declaration to the replay environment. The additional `target_propext` fixture records kernel acceptance and target-policy rejection together. [Earlier run 45178525906](https://github.com/dovvnloading/Graphlink/actions/runs/45178525906)
+
 ## Release disposition
 
 Strict assurance is disabled. The fresh replay inspects dependencies directly from exported declarations. Coverage of the imported-inductive case in [Lean issue 15226](https://github.com/leanprover/lean4/issues/15226) and independent review of the completeness of this traversal remain release gates. A passing direct or imported-placeholder fixture alone cannot close that issue. Likewise, a working Ubuntu fixture suite does not establish desktop sandbox support, receipt persistence, undo or grant revocation. See the [acceptance matrix](https://github.com/dovvnloading/Graphlink/blob/4523324e890aada048fe8b82a2c447704f7cc442/docs/FORMAL_LEAN_PLUGIN_PLAN.md#17-delivery-acceptance-matrix-release-blockers).

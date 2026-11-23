@@ -1,0 +1,249 @@
+{
+  "schemaVersion": 1,
+  "imageId": "sha256:e301ca4a7de945a8f119044cc042ade43adaf99fcaaa164ebebe8b4b98214661",
+  "toolchainLockSha256": "da6ca64f5264b48e838aeb50ed6d0b1d00fde13ffd1e9807da9c221c30ad07c4",
+  "startedAt": "2026-11-23T13:02:01.898125+00:00",
+  "strictAssurance": "disabled",
+  "fixtures": [
+    {
+      "name": "positive",
+      "replay": {
+        "axioms": [],
+        "challengeExportSha256": "f688b6cb011c35ffbebbc2db980332a930b430ca59bfb50af267e8913108c3d9",
+        "challengeType": "Lean.Expr.forallE\n  `n\n  (Lean.Expr.const `Nat [])\n  (Lean.Expr.app\n    (Lean.Expr.app\n      (Lean.Expr.app (Lean.Expr.const `Eq [Lean.Level.succ (Lean.Level.zero)]) (Lean.Expr.const `Nat []))\n      (Lean.Expr.app\n        (Lean.Expr.app\n          (Lean.Expr.app\n            (Lean.Expr.app\n              (Lean.Expr.app\n                (Lean.Expr.app\n                  (Lean.Expr.const `HAdd.hAdd [Lean.Level.zero, Lean.Level.zero, Lean.Level.zero])\n                  (Lean.Expr.const `Nat []))\n                (Lean.Expr.const `Nat []))\n              (Lean.Expr.const `Nat []))\n            (Lean.Expr.app\n              (Lean.Expr.app (Lean.Expr.const `instHAdd [Lean.Level.zero]) (Lean.Expr.const `Nat []))\n              (Lean.Expr.const `instAddNat [])))\n          (Lean.Expr.bvar 0))\n        (Lean.Expr.app\n          (Lean.Expr.app\n            (Lean.Expr.app (Lean.Expr.const `OfNat.ofNat [Lean.Level.zero]) (Lean.Expr.const `Nat []))\n            (Lean.Expr.lit (Lean.Literal.natVal 0)))\n          (Lean.Expr.app (Lean.Expr.const `instOfNatNat []) (Lean.Expr.lit (Lean.Literal.natVal 0))))))\n    (Lean.Expr.bvar 0))\n  (Lean.BinderInfo.default)",
+        "comparatorExit": 0,
+        "comparatorOutcome": "accepted",
+        "policy": "no-axioms-v1",
+        "replayEnvironmentAxioms": [
+          "propext"
+        ],
+        "replayedBy": [
+          "nanoda",
+          "Lean default"
+        ],
+        "schemaVersion": 1,
+        "solutionExportSha256": "b6d598c3401025133853e2ac049ee799f994e81167126c01e1bee3f736d9b1d8",
+        "statementMatches": true,
+        "strictAssurance": "disabled",
+        "target": "Graphlink.Spike.addZero",
+        "targetPolicyOutcome": "accepted"
+      },
+      "exportDiagnostic": "{\"argv\": [\"lean\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lean\", \"version\": \"Lean (version 4.36.0, x86_64-unknown-linux-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)\"}\n{\"argv\": [\"lake\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lake\", \"version\": \"Lake version 5.0.0-src+611c117 (Lean version 4.36.0)\"}\n{\"argv\": [\"lean\", \"-o\", \"Solution.olean\", \"Solution.lean\"], \"exit\": 0}\n{\"argv\": [\"leanexport\", \"Solution\", \"--\", \"Graphlink.Spike.addZero\", \"propext\", \"Nat.add\", \"Nat.sub\", \"Nat.mul\", \"Nat.pow\", \"Nat.gcd\", \"Nat.div\", \"Nat.mod\", \"Nat.beq\", \"Nat.ble\", \"Nat.land\", \"Nat.lor\", \"Nat.xor\", \"Nat.shiftLeft\", \"Nat.shiftRight\", \"String.ofList\", \"Char.ofNat\", \"List\", \"eagerReduce\", \"Nat\", \"String\", \"String.mk\", \"Char\", \"optParam\", \"autoParam\", \"semiOutParam\", \"outParam\"], \"exit\": 0}\n",
+      "replayDiagnostic": "{\"argv\": [\"lean\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lean\", \"version\": \"Lean (version 4.36.0, x86_64-unknown-linux-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)\"}\n{\"argv\": [\"lake\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lake\", \"version\": \"Lake version 5.0.0-src+611c117 (Lean version 4.36.0)\"}\n{\"argv\": [\"lean\", \"--run\", \"Inspect.lean\", \"/opt/graphlink/checker/Challenge.ndjson\", \"/tmp/tmpn1vseyry/Solution.ndjson\"], \"exit\": 0}\n{\"argv\": [\"lake\", \"comparator\", \"--config\", \"/opt/graphlink/checker/comparator.json\", \"--challenge-from-export\", \"/opt/graphlink/checker/Challenge.ndjson\", \"--solution-from-export\", \"/tmp/tmpn1vseyry/Solution.ndjson\", \"--inadvisably-no-sandbox\"], \"exit\": 0}\nWARNING: Sandbox disabled, this run is not trustworthy.\nRunning nanoda kernel on solution\nnanoda kernel accepts the solution\nRunning Lean default kernel on solution\nLean default kernel accepts the solution\nYour solution is okay!\n"
+    },
+    {
+      "name": "changed_target",
+      "replay": {
+        "axioms": [],
+        "challengeExportSha256": "f688b6cb011c35ffbebbc2db980332a930b430ca59bfb50af267e8913108c3d9",
+        "challengeType": "Lean.Expr.forallE\n  `n\n  (Lean.Expr.const `Nat [])\n  (Lean.Expr.app\n    (Lean.Expr.app\n      (Lean.Expr.app (Lean.Expr.const `Eq [Lean.Level.succ (Lean.Level.zero)]) (Lean.Expr.const `Nat []))\n      (Lean.Expr.app\n        (Lean.Expr.app\n          (Lean.Expr.app\n            (Lean.Expr.app\n              (Lean.Expr.app\n                (Lean.Expr.app\n                  (Lean.Expr.const `HAdd.hAdd [Lean.Level.zero, Lean.Level.zero, Lean.Level.zero])\n                  (Lean.Expr.const `Nat []))\n                (Lean.Expr.const `Nat []))\n              (Lean.Expr.const `Nat []))\n            (Lean.Expr.app\n              (Lean.Expr.app (Lean.Expr.const `instHAdd [Lean.Level.zero]) (Lean.Expr.const `Nat []))\n              (Lean.Expr.const `instAddNat [])))\n          (Lean.Expr.bvar 0))\n        (Lean.Expr.app\n          (Lean.Expr.app\n            (Lean.Expr.app (Lean.Expr.const `OfNat.ofNat [Lean.Level.zero]) (Lean.Expr.const `Nat []))\n            (Lean.Expr.lit (Lean.Literal.natVal 0)))\n          (Lean.Expr.app (Lean.Expr.const `instOfNatNat []) (Lean.Expr.lit (Lean.Literal.natVal 0))))))\n    (Lean.Expr.bvar 0))\n  (Lean.BinderInfo.default)",
+        "comparatorExit": 1,
+        "comparatorOutcome": "statement_mismatch",
+        "policy": "no-axioms-v1",
+        "replayEnvironmentAxioms": [
+          "propext"
+        ],
+        "replayedBy": [],
+        "schemaVersion": 1,
+        "solutionExportSha256": "1dbd10b5d3afc65be50c65e3f08a27305a9403362fb2367bf404df71e010cbb4",
+        "statementMatches": false,
+        "strictAssurance": "disabled",
+        "target": "Graphlink.Spike.addZero",
+        "targetPolicyOutcome": "statement_mismatch"
+      },
+      "exportDiagnostic": "{\"argv\": [\"lean\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lean\", \"version\": \"Lean (version 4.36.0, x86_64-unknown-linux-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)\"}\n{\"argv\": [\"lake\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lake\", \"version\": \"Lake version 5.0.0-src+611c117 (Lean version 4.36.0)\"}\n{\"argv\": [\"lean\", \"-o\", \"Solution.olean\", \"Solution.lean\"], \"exit\": 0}\n{\"argv\": [\"leanexport\", \"Solution\", \"--\", \"Graphlink.Spike.addZero\", \"propext\", \"Nat.add\", \"Nat.sub\", \"Nat.mul\", \"Nat.pow\", \"Nat.gcd\", \"Nat.div\", \"Nat.mod\", \"Nat.beq\", \"Nat.ble\", \"Nat.land\", \"Nat.lor\", \"Nat.xor\", \"Nat.shiftLeft\", \"Nat.shiftRight\", \"String.ofList\", \"Char.ofNat\", \"List\", \"eagerReduce\", \"Nat\", \"String\", \"String.mk\", \"Char\", \"optParam\", \"autoParam\", \"semiOutParam\", \"outParam\"], \"exit\": 0}\n",
+      "replayDiagnostic": "{\"argv\": [\"lean\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lean\", \"version\": \"Lean (version 4.36.0, x86_64-unknown-linux-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)\"}\n{\"argv\": [\"lake\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lake\", \"version\": \"Lake version 5.0.0-src+611c117 (Lean version 4.36.0)\"}\n{\"argv\": [\"lean\", \"--run\", \"Inspect.lean\", \"/opt/graphlink/checker/Challenge.ndjson\", \"/tmp/tmpk7q_4al1/Solution.ndjson\"], \"exit\": 0}\n{\"argv\": [\"lake\", \"comparator\", \"--config\", \"/opt/graphlink/checker/comparator.json\", \"--challenge-from-export\", \"/opt/graphlink/checker/Challenge.ndjson\", \"--solution-from-export\", \"/tmp/tmpk7q_4al1/Solution.ndjson\", \"--inadvisably-no-sandbox\"], \"exit\": 1}\nWARNING: Sandbox disabled, this run is not trustworthy.\nerror: Challenge and solution theorem statement do not match: 'Graphlink.Spike.addZero'\n"
+    },
+    {
+      "name": "sorry",
+      "replay": {
+        "axioms": [
+          "sorryAx"
+        ],
+        "challengeExportSha256": "f688b6cb011c35ffbebbc2db980332a930b430ca59bfb50af267e8913108c3d9",
+        "challengeType": "Lean.Expr.forallE\n  `n\n  (Lean.Expr.const `Nat [])\n  (Lean.Expr.app\n    (Lean.Expr.app\n      (Lean.Expr.app (Lean.Expr.const `Eq [Lean.Level.succ (Lean.Level.zero)]) (Lean.Expr.const `Nat []))\n      (Lean.Expr.app\n        (Lean.Expr.app\n          (Lean.Expr.app\n            (Lean.Expr.app\n              (Lean.Expr.app\n                (Lean.Expr.app\n                  (Lean.Expr.const `HAdd.hAdd [Lean.Level.zero, Lean.Level.zero, Lean.Level.zero])\n                  (Lean.Expr.const `Nat []))\n                (Lean.Expr.const `Nat []))\n              (Lean.Expr.const `Nat []))\n            (Lean.Expr.app\n              (Lean.Expr.app (Lean.Expr.const `instHAdd [Lean.Level.zero]) (Lean.Expr.const `Nat []))\n              (Lean.Expr.const `instAddNat [])))\n          (Lean.Expr.bvar 0))\n        (Lean.Expr.app\n          (Lean.Expr.app\n            (Lean.Expr.app (Lean.Expr.const `OfNat.ofNat [Lean.Level.zero]) (Lean.Expr.const `Nat []))\n            (Lean.Expr.lit (Lean.Literal.natVal 0)))\n          (Lean.Expr.app (Lean.Expr.const `instOfNatNat []) (Lean.Expr.lit (Lean.Literal.natVal 0))))))\n    (Lean.Expr.bvar 0))\n  (Lean.BinderInfo.default)",
+        "comparatorExit": 1,
+        "comparatorOutcome": "forbidden_axiom",
+        "policy": "no-axioms-v1",
+        "replayEnvironmentAxioms": [
+          "propext"
+        ],
+        "replayedBy": [],
+        "schemaVersion": 1,
+        "solutionExportSha256": "d74c76af872ae9898c035c3f7e79ab45e490a53166f11e674acb8c8ea5e617a3",
+        "statementMatches": true,
+        "strictAssurance": "disabled",
+        "target": "Graphlink.Spike.addZero",
+        "targetPolicyOutcome": "forbidden_axiom"
+      },
+      "exportDiagnostic": "{\"argv\": [\"lean\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lean\", \"version\": \"Lean (version 4.36.0, x86_64-unknown-linux-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)\"}\n{\"argv\": [\"lake\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lake\", \"version\": \"Lake version 5.0.0-src+611c117 (Lean version 4.36.0)\"}\n{\"argv\": [\"lean\", \"-o\", \"Solution.olean\", \"Solution.lean\"], \"exit\": 0}\n{\"argv\": [\"leanexport\", \"Solution\", \"--\", \"Graphlink.Spike.addZero\", \"propext\", \"Nat.add\", \"Nat.sub\", \"Nat.mul\", \"Nat.pow\", \"Nat.gcd\", \"Nat.div\", \"Nat.mod\", \"Nat.beq\", \"Nat.ble\", \"Nat.land\", \"Nat.lor\", \"Nat.xor\", \"Nat.shiftLeft\", \"Nat.shiftRight\", \"String.ofList\", \"Char.ofNat\", \"List\", \"eagerReduce\", \"Nat\", \"String\", \"String.mk\", \"Char\", \"optParam\", \"autoParam\", \"semiOutParam\", \"outParam\"], \"exit\": 0}\n",
+      "replayDiagnostic": "{\"argv\": [\"lean\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lean\", \"version\": \"Lean (version 4.36.0, x86_64-unknown-linux-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)\"}\n{\"argv\": [\"lake\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lake\", \"version\": \"Lake version 5.0.0-src+611c117 (Lean version 4.36.0)\"}\n{\"argv\": [\"lean\", \"--run\", \"Inspect.lean\", \"/opt/graphlink/checker/Challenge.ndjson\", \"/tmp/tmp98wiabv5/Solution.ndjson\"], \"exit\": 0}\n{\"argv\": [\"lake\", \"comparator\", \"--config\", \"/opt/graphlink/checker/comparator.json\", \"--challenge-from-export\", \"/opt/graphlink/checker/Challenge.ndjson\", \"--solution-from-export\", \"/tmp/tmp98wiabv5/Solution.ndjson\", \"--inadvisably-no-sandbox\"], \"exit\": 1}\nWARNING: Sandbox disabled, this run is not trustworthy.\nerror: Illegal axiom detected: 'sorryAx'\n"
+    },
+    {
+      "name": "new_axiom",
+      "replay": {
+        "axioms": [
+          "Graphlink.Spike.extraAssumption"
+        ],
+        "challengeExportSha256": "f688b6cb011c35ffbebbc2db980332a930b430ca59bfb50af267e8913108c3d9",
+        "challengeType": "Lean.Expr.forallE\n  `n\n  (Lean.Expr.const `Nat [])\n  (Lean.Expr.app\n    (Lean.Expr.app\n      (Lean.Expr.app (Lean.Expr.const `Eq [Lean.Level.succ (Lean.Level.zero)]) (Lean.Expr.const `Nat []))\n      (Lean.Expr.app\n        (Lean.Expr.app\n          (Lean.Expr.app\n            (Lean.Expr.app\n              (Lean.Expr.app\n                (Lean.Expr.app\n                  (Lean.Expr.const `HAdd.hAdd [Lean.Level.zero, Lean.Level.zero, Lean.Level.zero])\n                  (Lean.Expr.const `Nat []))\n                (Lean.Expr.const `Nat []))\n              (Lean.Expr.const `Nat []))\n            (Lean.Expr.app\n              (Lean.Expr.app (Lean.Expr.const `instHAdd [Lean.Level.zero]) (Lean.Expr.const `Nat []))\n              (Lean.Expr.const `instAddNat [])))\n          (Lean.Expr.bvar 0))\n        (Lean.Expr.app\n          (Lean.Expr.app\n            (Lean.Expr.app (Lean.Expr.const `OfNat.ofNat [Lean.Level.zero]) (Lean.Expr.const `Nat []))\n            (Lean.Expr.lit (Lean.Literal.natVal 0)))\n          (Lean.Expr.app (Lean.Expr.const `instOfNatNat []) (Lean.Expr.lit (Lean.Literal.natVal 0))))))\n    (Lean.Expr.bvar 0))\n  (Lean.BinderInfo.default)",
+        "comparatorExit": 1,
+        "comparatorOutcome": "forbidden_axiom",
+        "policy": "no-axioms-v1",
+        "replayEnvironmentAxioms": [
+          "propext"
+        ],
+        "replayedBy": [],
+        "schemaVersion": 1,
+        "solutionExportSha256": "8416e427a58a3dd075ea8c88e8aa4dcb04b447ee052b6819d35a647e553c8887",
+        "statementMatches": true,
+        "strictAssurance": "disabled",
+        "target": "Graphlink.Spike.addZero",
+        "targetPolicyOutcome": "forbidden_axiom"
+      },
+      "exportDiagnostic": "{\"argv\": [\"lean\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lean\", \"version\": \"Lean (version 4.36.0, x86_64-unknown-linux-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)\"}\n{\"argv\": [\"lake\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lake\", \"version\": \"Lake version 5.0.0-src+611c117 (Lean version 4.36.0)\"}\n{\"argv\": [\"lean\", \"-o\", \"Solution.olean\", \"Solution.lean\"], \"exit\": 0}\n{\"argv\": [\"leanexport\", \"Solution\", \"--\", \"Graphlink.Spike.addZero\", \"propext\", \"Nat.add\", \"Nat.sub\", \"Nat.mul\", \"Nat.pow\", \"Nat.gcd\", \"Nat.div\", \"Nat.mod\", \"Nat.beq\", \"Nat.ble\", \"Nat.land\", \"Nat.lor\", \"Nat.xor\", \"Nat.shiftLeft\", \"Nat.shiftRight\", \"String.ofList\", \"Char.ofNat\", \"List\", \"eagerReduce\", \"Nat\", \"String\", \"String.mk\", \"Char\", \"optParam\", \"autoParam\", \"semiOutParam\", \"outParam\"], \"exit\": 0}\n",
+      "replayDiagnostic": "{\"argv\": [\"lean\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lean\", \"version\": \"Lean (version 4.36.0, x86_64-unknown-linux-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)\"}\n{\"argv\": [\"lake\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lake\", \"version\": \"Lake version 5.0.0-src+611c117 (Lean version 4.36.0)\"}\n{\"argv\": [\"lean\", \"--run\", \"Inspect.lean\", \"/opt/graphlink/checker/Challenge.ndjson\", \"/tmp/tmpik8pq_18/Solution.ndjson\"], \"exit\": 0}\n{\"argv\": [\"lake\", \"comparator\", \"--config\", \"/opt/graphlink/checker/comparator.json\", \"--challenge-from-export\", \"/opt/graphlink/checker/Challenge.ndjson\", \"--solution-from-export\", \"/tmp/tmpik8pq_18/Solution.ndjson\", \"--inadvisably-no-sandbox\"], \"exit\": 1}\nWARNING: Sandbox disabled, this run is not trustworthy.\nerror: Illegal axiom detected: 'Graphlink.Spike.extraAssumption'\n"
+    },
+    {
+      "name": "target_propext",
+      "replay": {
+        "axioms": [
+          "propext"
+        ],
+        "challengeExportSha256": "f688b6cb011c35ffbebbc2db980332a930b430ca59bfb50af267e8913108c3d9",
+        "challengeType": "Lean.Expr.forallE\n  `n\n  (Lean.Expr.const `Nat [])\n  (Lean.Expr.app\n    (Lean.Expr.app\n      (Lean.Expr.app (Lean.Expr.const `Eq [Lean.Level.succ (Lean.Level.zero)]) (Lean.Expr.const `Nat []))\n      (Lean.Expr.app\n        (Lean.Expr.app\n          (Lean.Expr.app\n            (Lean.Expr.app\n              (Lean.Expr.app\n                (Lean.Expr.app\n                  (Lean.Expr.const `HAdd.hAdd [Lean.Level.zero, Lean.Level.zero, Lean.Level.zero])\n                  (Lean.Expr.const `Nat []))\n                (Lean.Expr.const `Nat []))\n              (Lean.Expr.const `Nat []))\n            (Lean.Expr.app\n              (Lean.Expr.app (Lean.Expr.const `instHAdd [Lean.Level.zero]) (Lean.Expr.const `Nat []))\n              (Lean.Expr.const `instAddNat [])))\n          (Lean.Expr.bvar 0))\n        (Lean.Expr.app\n          (Lean.Expr.app\n            (Lean.Expr.app (Lean.Expr.const `OfNat.ofNat [Lean.Level.zero]) (Lean.Expr.const `Nat []))\n            (Lean.Expr.lit (Lean.Literal.natVal 0)))\n          (Lean.Expr.app (Lean.Expr.const `instOfNatNat []) (Lean.Expr.lit (Lean.Literal.natVal 0))))))\n    (Lean.Expr.bvar 0))\n  (Lean.BinderInfo.default)",
+        "comparatorExit": 0,
+        "comparatorOutcome": "accepted",
+        "policy": "no-axioms-v1",
+        "replayEnvironmentAxioms": [
+          "propext"
+        ],
+        "replayedBy": [
+          "nanoda",
+          "Lean default"
+        ],
+        "schemaVersion": 1,
+        "solutionExportSha256": "5955a7e1ce538e19bc281c7b168af7a472c26e6c20f5c9d155f6d2582ed9d45c",
+        "statementMatches": true,
+        "strictAssurance": "disabled",
+        "target": "Graphlink.Spike.addZero",
+        "targetPolicyOutcome": "forbidden_axiom"
+      },
+      "exportDiagnostic": "{\"argv\": [\"lean\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lean\", \"version\": \"Lean (version 4.36.0, x86_64-unknown-linux-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)\"}\n{\"argv\": [\"lake\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lake\", \"version\": \"Lake version 5.0.0-src+611c117 (Lean version 4.36.0)\"}\n{\"argv\": [\"lean\", \"-o\", \"Solution.olean\", \"Solution.lean\"], \"exit\": 0}\n{\"argv\": [\"leanexport\", \"Solution\", \"--\", \"Graphlink.Spike.addZero\", \"propext\", \"Nat.add\", \"Nat.sub\", \"Nat.mul\", \"Nat.pow\", \"Nat.gcd\", \"Nat.div\", \"Nat.mod\", \"Nat.beq\", \"Nat.ble\", \"Nat.land\", \"Nat.lor\", \"Nat.xor\", \"Nat.shiftLeft\", \"Nat.shiftRight\", \"String.ofList\", \"Char.ofNat\", \"List\", \"eagerReduce\", \"Nat\", \"String\", \"String.mk\", \"Char\", \"optParam\", \"autoParam\", \"semiOutParam\", \"outParam\"], \"exit\": 0}\n",
+      "replayDiagnostic": "{\"argv\": [\"lean\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lean\", \"version\": \"Lean (version 4.36.0, x86_64-unknown-linux-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)\"}\n{\"argv\": [\"lake\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lake\", \"version\": \"Lake version 5.0.0-src+611c117 (Lean version 4.36.0)\"}\n{\"argv\": [\"lean\", \"--run\", \"Inspect.lean\", \"/opt/graphlink/checker/Challenge.ndjson\", \"/tmp/tmp1y23_dn8/Solution.ndjson\"], \"exit\": 0}\n{\"argv\": [\"lake\", \"comparator\", \"--config\", \"/opt/graphlink/checker/comparator.json\", \"--challenge-from-export\", \"/opt/graphlink/checker/Challenge.ndjson\", \"--solution-from-export\", \"/tmp/tmp1y23_dn8/Solution.ndjson\", \"--inadvisably-no-sandbox\"], \"exit\": 0}\nWARNING: Sandbox disabled, this run is not trustworthy.\nRunning nanoda kernel on solution\nnanoda kernel accepts the solution\nRunning Lean default kernel on solution\nLean default kernel accepts the solution\nYour solution is okay!\n"
+    },
+    {
+      "name": "imported_axiom",
+      "replay": {
+        "axioms": [
+          "Graphlink.Dependency.assumed"
+        ],
+        "challengeExportSha256": "f688b6cb011c35ffbebbc2db980332a930b430ca59bfb50af267e8913108c3d9",
+        "challengeType": "Lean.Expr.forallE\n  `n\n  (Lean.Expr.const `Nat [])\n  (Lean.Expr.app\n    (Lean.Expr.app\n      (Lean.Expr.app (Lean.Expr.const `Eq [Lean.Level.succ (Lean.Level.zero)]) (Lean.Expr.const `Nat []))\n      (Lean.Expr.app\n        (Lean.Expr.app\n          (Lean.Expr.app\n            (Lean.Expr.app\n              (Lean.Expr.app\n                (Lean.Expr.app\n                  (Lean.Expr.const `HAdd.hAdd [Lean.Level.zero, Lean.Level.zero, Lean.Level.zero])\n                  (Lean.Expr.const `Nat []))\n                (Lean.Expr.const `Nat []))\n              (Lean.Expr.const `Nat []))\n            (Lean.Expr.app\n              (Lean.Expr.app (Lean.Expr.const `instHAdd [Lean.Level.zero]) (Lean.Expr.const `Nat []))\n              (Lean.Expr.const `instAddNat [])))\n          (Lean.Expr.bvar 0))\n        (Lean.Expr.app\n          (Lean.Expr.app\n            (Lean.Expr.app (Lean.Expr.const `OfNat.ofNat [Lean.Level.zero]) (Lean.Expr.const `Nat []))\n            (Lean.Expr.lit (Lean.Literal.natVal 0)))\n          (Lean.Expr.app (Lean.Expr.const `instOfNatNat []) (Lean.Expr.lit (Lean.Literal.natVal 0))))))\n    (Lean.Expr.bvar 0))\n  (Lean.BinderInfo.default)",
+        "comparatorExit": 1,
+        "comparatorOutcome": "forbidden_axiom",
+        "policy": "no-axioms-v1",
+        "replayEnvironmentAxioms": [
+          "propext"
+        ],
+        "replayedBy": [],
+        "schemaVersion": 1,
+        "solutionExportSha256": "ed14b46a7edac84c84cbaba8947ac5cb7f653abdfcbb1c4d4d5631b17364c0dd",
+        "statementMatches": true,
+        "strictAssurance": "disabled",
+        "target": "Graphlink.Spike.addZero",
+        "targetPolicyOutcome": "forbidden_axiom"
+      },
+      "exportDiagnostic": "{\"argv\": [\"lean\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lean\", \"version\": \"Lean (version 4.36.0, x86_64-unknown-linux-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)\"}\n{\"argv\": [\"lake\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lake\", \"version\": \"Lake version 5.0.0-src+611c117 (Lean version 4.36.0)\"}\n{\"argv\": [\"lean\", \"-o\", \"Dependency.olean\", \"Dependency.lean\"], \"exit\": 0}\n{\"argv\": [\"lean\", \"-o\", \"Solution.olean\", \"Solution.lean\"], \"exit\": 0}\n{\"argv\": [\"leanexport\", \"Solution\", \"--\", \"Graphlink.Spike.addZero\", \"propext\", \"Nat.add\", \"Nat.sub\", \"Nat.mul\", \"Nat.pow\", \"Nat.gcd\", \"Nat.div\", \"Nat.mod\", \"Nat.beq\", \"Nat.ble\", \"Nat.land\", \"Nat.lor\", \"Nat.xor\", \"Nat.shiftLeft\", \"Nat.shiftRight\", \"String.ofList\", \"Char.ofNat\", \"List\", \"eagerReduce\", \"Nat\", \"String\", \"String.mk\", \"Char\", \"optParam\", \"autoParam\", \"semiOutParam\", \"outParam\"], \"exit\": 0}\n",
+      "replayDiagnostic": "{\"argv\": [\"lean\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lean\", \"version\": \"Lean (version 4.36.0, x86_64-unknown-linux-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)\"}\n{\"argv\": [\"lake\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lake\", \"version\": \"Lake version 5.0.0-src+611c117 (Lean version 4.36.0)\"}\n{\"argv\": [\"lean\", \"--run\", \"Inspect.lean\", \"/opt/graphlink/checker/Challenge.ndjson\", \"/tmp/tmpf2uzx6ws/Solution.ndjson\"], \"exit\": 0}\n{\"argv\": [\"lake\", \"comparator\", \"--config\", \"/opt/graphlink/checker/comparator.json\", \"--challenge-from-export\", \"/opt/graphlink/checker/Challenge.ndjson\", \"--solution-from-export\", \"/tmp/tmpf2uzx6ws/Solution.ndjson\", \"--inadvisably-no-sandbox\"], \"exit\": 1}\nWARNING: Sandbox disabled, this run is not trustworthy.\nerror: Illegal axiom detected: 'Graphlink.Dependency.assumed'\n"
+    },
+    {
+      "name": "imported_sorry",
+      "replay": {
+        "axioms": [
+          "sorryAx"
+        ],
+        "challengeExportSha256": "f688b6cb011c35ffbebbc2db980332a930b430ca59bfb50af267e8913108c3d9",
+        "challengeType": "Lean.Expr.forallE\n  `n\n  (Lean.Expr.const `Nat [])\n  (Lean.Expr.app\n    (Lean.Expr.app\n      (Lean.Expr.app (Lean.Expr.const `Eq [Lean.Level.succ (Lean.Level.zero)]) (Lean.Expr.const `Nat []))\n      (Lean.Expr.app\n        (Lean.Expr.app\n          (Lean.Expr.app\n            (Lean.Expr.app\n              (Lean.Expr.app\n                (Lean.Expr.app\n                  (Lean.Expr.const `HAdd.hAdd [Lean.Level.zero, Lean.Level.zero, Lean.Level.zero])\n                  (Lean.Expr.const `Nat []))\n                (Lean.Expr.const `Nat []))\n              (Lean.Expr.const `Nat []))\n            (Lean.Expr.app\n              (Lean.Expr.app (Lean.Expr.const `instHAdd [Lean.Level.zero]) (Lean.Expr.const `Nat []))\n              (Lean.Expr.const `instAddNat [])))\n          (Lean.Expr.bvar 0))\n        (Lean.Expr.app\n          (Lean.Expr.app\n            (Lean.Expr.app (Lean.Expr.const `OfNat.ofNat [Lean.Level.zero]) (Lean.Expr.const `Nat []))\n            (Lean.Expr.lit (Lean.Literal.natVal 0)))\n          (Lean.Expr.app (Lean.Expr.const `instOfNatNat []) (Lean.Expr.lit (Lean.Literal.natVal 0))))))\n    (Lean.Expr.bvar 0))\n  (Lean.BinderInfo.default)",
+        "comparatorExit": 1,
+        "comparatorOutcome": "forbidden_axiom",
+        "policy": "no-axioms-v1",
+        "replayEnvironmentAxioms": [
+          "propext"
+        ],
+        "replayedBy": [],
+        "schemaVersion": 1,
+        "solutionExportSha256": "bf84cc2742d595c610d03041e5e11522480e437106aa3ba6ceadff77c8009511",
+        "statementMatches": true,
+        "strictAssurance": "disabled",
+        "target": "Graphlink.Spike.addZero",
+        "targetPolicyOutcome": "forbidden_axiom"
+      },
+      "exportDiagnostic": "{\"argv\": [\"lean\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lean\", \"version\": \"Lean (version 4.36.0, x86_64-unknown-linux-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)\"}\n{\"argv\": [\"lake\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lake\", \"version\": \"Lake version 5.0.0-src+611c117 (Lean version 4.36.0)\"}\n{\"argv\": [\"lean\", \"-o\", \"Dependency.olean\", \"Dependency.lean\"], \"exit\": 0}\n{\"argv\": [\"lean\", \"-o\", \"Solution.olean\", \"Solution.lean\"], \"exit\": 0}\n{\"argv\": [\"leanexport\", \"Solution\", \"--\", \"Graphlink.Spike.addZero\", \"propext\", \"Nat.add\", \"Nat.sub\", \"Nat.mul\", \"Nat.pow\", \"Nat.gcd\", \"Nat.div\", \"Nat.mod\", \"Nat.beq\", \"Nat.ble\", \"Nat.land\", \"Nat.lor\", \"Nat.xor\", \"Nat.shiftLeft\", \"Nat.shiftRight\", \"String.ofList\", \"Char.ofNat\", \"List\", \"eagerReduce\", \"Nat\", \"String\", \"String.mk\", \"Char\", \"optParam\", \"autoParam\", \"semiOutParam\", \"outParam\"], \"exit\": 0}\n",
+      "replayDiagnostic": "{\"argv\": [\"lean\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lean\", \"version\": \"Lean (version 4.36.0, x86_64-unknown-linux-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)\"}\n{\"argv\": [\"lake\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lake\", \"version\": \"Lake version 5.0.0-src+611c117 (Lean version 4.36.0)\"}\n{\"argv\": [\"lean\", \"--run\", \"Inspect.lean\", \"/opt/graphlink/checker/Challenge.ndjson\", \"/tmp/tmp114vovkm/Solution.ndjson\"], \"exit\": 0}\n{\"argv\": [\"lake\", \"comparator\", \"--config\", \"/opt/graphlink/checker/comparator.json\", \"--challenge-from-export\", \"/opt/graphlink/checker/Challenge.ndjson\", \"--solution-from-export\", \"/tmp/tmp114vovkm/Solution.ndjson\", \"--inadvisably-no-sandbox\"], \"exit\": 1}\nWARNING: Sandbox disabled, this run is not trustworthy.\nerror: Illegal axiom detected: 'sorryAx'\n"
+    },
+    {
+      "name": "positive",
+      "replay": {
+        "axioms": [],
+        "challengeExportSha256": "f688b6cb011c35ffbebbc2db980332a930b430ca59bfb50af267e8913108c3d9",
+        "challengeType": "Lean.Expr.forallE\n  `n\n  (Lean.Expr.const `Nat [])\n  (Lean.Expr.app\n    (Lean.Expr.app\n      (Lean.Expr.app (Lean.Expr.const `Eq [Lean.Level.succ (Lean.Level.zero)]) (Lean.Expr.const `Nat []))\n      (Lean.Expr.app\n        (Lean.Expr.app\n          (Lean.Expr.app\n            (Lean.Expr.app\n              (Lean.Expr.app\n                (Lean.Expr.app\n                  (Lean.Expr.const `HAdd.hAdd [Lean.Level.zero, Lean.Level.zero, Lean.Level.zero])\n                  (Lean.Expr.const `Nat []))\n                (Lean.Expr.const `Nat []))\n              (Lean.Expr.const `Nat []))\n            (Lean.Expr.app\n              (Lean.Expr.app (Lean.Expr.const `instHAdd [Lean.Level.zero]) (Lean.Expr.const `Nat []))\n              (Lean.Expr.const `instAddNat [])))\n          (Lean.Expr.bvar 0))\n        (Lean.Expr.app\n          (Lean.Expr.app\n            (Lean.Expr.app (Lean.Expr.const `OfNat.ofNat [Lean.Level.zero]) (Lean.Expr.const `Nat []))\n            (Lean.Expr.lit (Lean.Literal.natVal 0)))\n          (Lean.Expr.app (Lean.Expr.const `instOfNatNat []) (Lean.Expr.lit (Lean.Literal.natVal 0))))))\n    (Lean.Expr.bvar 0))\n  (Lean.BinderInfo.default)",
+        "comparatorExit": 0,
+        "comparatorOutcome": "accepted",
+        "policy": "no-axioms-v1",
+        "replayEnvironmentAxioms": [
+          "propext"
+        ],
+        "replayedBy": [
+          "nanoda",
+          "Lean default"
+        ],
+        "schemaVersion": 1,
+        "solutionExportSha256": "b6d598c3401025133853e2ac049ee799f994e81167126c01e1bee3f736d9b1d8",
+        "statementMatches": true,
+        "strictAssurance": "disabled",
+        "target": "Graphlink.Spike.addZero",
+        "targetPolicyOutcome": "accepted"
+      },
+      "exportDiagnostic": "{\"argv\": [\"lean\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lean\", \"version\": \"Lean (version 4.36.0, x86_64-unknown-linux-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)\"}\n{\"argv\": [\"lake\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lake\", \"version\": \"Lake version 5.0.0-src+611c117 (Lean version 4.36.0)\"}\n{\"argv\": [\"lean\", \"-o\", \"Solution.olean\", \"Solution.lean\"], \"exit\": 0}\n{\"argv\": [\"leanexport\", \"Solution\", \"--\", \"Graphlink.Spike.addZero\", \"propext\", \"Nat.add\", \"Nat.sub\", \"Nat.mul\", \"Nat.pow\", \"Nat.gcd\", \"Nat.div\", \"Nat.mod\", \"Nat.beq\", \"Nat.ble\", \"Nat.land\", \"Nat.lor\", \"Nat.xor\", \"Nat.shiftLeft\", \"Nat.shiftRight\", \"String.ofList\", \"Char.ofNat\", \"List\", \"eagerReduce\", \"Nat\", \"String\", \"String.mk\", \"Char\", \"optParam\", \"autoParam\", \"semiOutParam\", \"outParam\"], \"exit\": 0}\n",
+      "replayDiagnostic": "{\"argv\": [\"lean\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lean\", \"version\": \"Lean (version 4.36.0, x86_64-unknown-linux-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)\"}\n{\"argv\": [\"lake\", \"--version\"], \"exit\": 0}\n{\"tool\": \"lake\", \"version\": \"Lake version 5.0.0-src+611c117 (Lean version 4.36.0)\"}\n{\"argv\": [\"lean\", \"--run\", \"Inspect.lean\", \"/opt/graphlink/checker/Challenge.ndjson\", \"/tmp/tmppfah3g0_/Solution.ndjson\"], \"exit\": 0}\n{\"argv\": [\"lake\", \"comparator\", \"--config\", \"/opt/graphlink/checker/comparator.json\", \"--challenge-from-export\", \"/opt/graphlink/checker/Challenge.ndjson\", \"--solution-from-export\", \"/tmp/tmppfah3g0_/Solution.ndjson\", \"--inadvisably-no-sandbox\"], \"exit\": 0}\nWARNING: Sandbox disabled, this run is not trustworthy.\nRunning nanoda kernel on solution\nnanoda kernel accepts the solution\nRunning Lean default kernel on solution\nLean default kernel accepts the solution\nYour solution is okay!\n"
+    }
+  ],
+  "fixtureRunComplete": true,
+  "isolation": {
+    "runtime": {
+      "apparmor": "docker-default (enforce)",
+      "capabilities": [],
+      "cpuPeriod": 100000,
+      "cpuQuota": 100000,
+      "interfaces": [
+        "lo"
+      ],
+      "memoryBytes": 4294967296,
+      "noNewPrivileges": true,
+      "pids": 64,
+      "readOnlyRoot": true,
+      "seccompMode": 2,
+      "swapBytes": 0,
+      "tmpfsBytes": 268435456,
+      "uid": 65534
+    },
+    "toolchain": {
+      "executables": {
+        "lake": "42678ccbc2605e2f892540dc7236e009fdd1224e823d104dfd72725d2f1a52d2",
+        "lean": "db7f559d05795e7af52e42bc966c90240a39dcb9712161c54c97afa546e20c00",
+        "leanchecker": "2b2ff08805ace61c935b023f8114ac3f7f1d3bc79cb4e8c47ef7801a5af58798",
+        "leanchecker-paranoid": "cd9a6ddb5fbf8f649c789dc905236e1ddee9fb32a323c141a4e63478f72e47b6",
+        "leanexport": "8298d4412a1f8986b5dbfd1d9925211778d8d320fc47b72040c8fdfdd5b603d5",
+        "nanoda_bin": "8241c5e6baa29490aa118d382f97961b208ae730fdb96545c2abed74c9ece5a8"
+      },
+      "lean_revision": "611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9",
+      "lock_sha256": "da6ca64f5264b48e838aeb50ed6d0b1d00fde13ffd1e9807da9c221c30ad07c4",
+      "mathlib_revision": "fc4f59e577feb1a4956671bc04ac18aaaf8cd842",
+      "modules_sha256": "32a109eadfd951f238afd4d120181df24ecef9282f9c01ebada69efddb405bdb",
+      "schema": 1
+    }
+  },
+  "timedOutFixtureRemoved": true,
+  "finishedAt": "2026-11-23T13:02:40.800563+00:00"
+}
