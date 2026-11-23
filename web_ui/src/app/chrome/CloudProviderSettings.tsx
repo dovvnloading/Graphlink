@@ -219,7 +219,11 @@ export function CloudProviderSettings({ state, transport }: { state: AppSettings
       </div>
       {viewed && <ProviderPicker state={state} viewed={viewed} onSelect={(id) =>
         transport.fireIntent("app-settings", "setViewingApiProvider", [id], undefined, true)} />}
-      {viewed ? <ProviderForm key={viewed.id} state={state} provider={viewed} transport={transport} /> :
+      {/* Re-seed the drafts whenever the persisted values change (instant
+          section navigation can mount this before the settings state lands). */}
+      {viewed ? <ProviderForm key={JSON.stringify([viewed.id, state.apiBaseUrl, state.apiModels,
+        state.apiKeyConfigured[viewed.keySlot] ?? false, state.apiKeySource[viewed.keySlot] ?? null])}
+        state={state} provider={viewed} transport={transport} /> :
         <p role="status" className="settings-update-status">Provider settings are unavailable.</p>}
     </div>
   );

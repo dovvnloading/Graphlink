@@ -282,7 +282,8 @@ async function chooseCustomOption(
   optionName: string,
 ) {
   await user.click(screen.getByRole("button", { name: triggerName }));
-  await user.click(within(await screen.findByRole("listbox", { name: triggerName })).getByRole("option", { name: optionName }));
+  // Kit Select options include their description in the accessible name.
+  await user.click(within(await screen.findByRole("listbox", { name: triggerName })).getByRole("option", { name: (name) => name.startsWith(optionName) }));
 }
 
 describe("SettingsDialog", () => {
@@ -373,7 +374,7 @@ describe("SettingsDialog", () => {
     await goToLlamaCpp(user, push);
 
     expect(screen.queryByText(/lands in R7\.4c/)).toBeNull();
-    expect(screen.getByText("Reasoning level")).toBeInTheDocument();
+    expect(screen.getAllByText("Reasoning level").length).toBeGreaterThan(0);
   });
 
   it("Ollama page renders for the real (not deferred-placeholder) section", async () => {
@@ -668,7 +669,7 @@ describe("SettingsDialog", () => {
     const { user, push, intents } = setup();
     await goToLlamaCpp(user, push, { llamaCppScanStatus: "running" });
 
-    expect(screen.getByText("Scanning…")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Scanning…" })).toBeDisabled();
 
     act(() => push({ ...snapshot, activeSection: "llama.cpp (local)", llamaCppScanStatus: "idle" }));
     await user.click(screen.getByText("System scan"));
@@ -689,7 +690,7 @@ describe("SettingsDialog", () => {
     const { user, push } = setup();
     await goToLlamaCpp(user, push, { llamaCppScanStatus: "running" });
 
-    expect(screen.getByText("Scan folder…")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Scan folder…" })).toBeDisabled();
   });
 
   it("the shared scanned-models datalist populates from llamaCppScannedModels", async () => {
@@ -831,8 +832,10 @@ describe("SettingsDialog", () => {
     await user.clear(field);
     await user.keyboard("8192");
     expect(intents).toContainEqual(["app-settings", "setLlamaCppNCtx", [8192]]);
-    await user.tab();
-    expect(screen.getByLabelText("Chat format override")).toHaveFocus();
+    // The kit NumberField's increase stepper sits between the input and the next field.
+    const next = screen.getByLabelText("Chat format override");
+    for (let i = 0; i < 3 && document.activeElement !== next; i += 1) await user.tab();
+    expect(next).toHaveFocus();
   });
 
   it("GPU layers fires setLlamaCppNGpuLayers with the parsed number", async () => {
@@ -881,7 +884,7 @@ describe("SettingsDialog", () => {
       screen.getByText("Llama.cpp (Local) is configured here, but Ollama (Local) is the active provider mode."),
     ).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Use This Provider" }));
+    await user.click(screen.getByRole("button", { name: "Use this provider" }));
 
     expect(intents).toContainEqual(["app-settings", "setProviderMode", ["Llama.cpp (Local)"]]);
   });

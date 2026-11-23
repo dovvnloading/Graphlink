@@ -323,6 +323,8 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/chrome/KnowledgeSearchDialog.tsx", rule: "R8", count: 7 },
 
+  { file: "app/chrome/KnowledgeSettingsPage.tsx", rule: "R13", count: 1 },
+
   { file: "app/chrome/ModelComparisonPicker.tsx", rule: "R1", count: 1 },
 
   { file: "app/chrome/ModelPicker.tsx", rule: "R1", count: 1 },
