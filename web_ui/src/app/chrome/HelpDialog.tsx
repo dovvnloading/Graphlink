@@ -74,7 +74,7 @@ function generatedKeyboardSection(source: HelpSection): HelpSection {
       const id = resolveShortcut({ key, ctrlKey: true, metaKey: false, shiftKey, altKey: false });
       if (!id) continue;
       const displayKey = key.startsWith("Arrow")
-        ? { ArrowUp: "↑", ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→" }[key as "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight"]
+        ? { ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right" }[key as "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight"]
         : key.toUpperCase();
       const chord = "Ctrl+" + (shiftKey ? "Shift+" : "") + displayKey;
       const existing = chords.get(id) ?? [];
