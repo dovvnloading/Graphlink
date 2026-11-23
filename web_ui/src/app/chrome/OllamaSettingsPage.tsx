@@ -5,7 +5,7 @@ import { Select } from "../ui/Select";
 import { TextField } from "../ui/TextField";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
-import { StatusPill } from "../ui/Badge";
+import { Icon } from "../ui/icons/Icon";
 import { ProgressBar } from "../ui/ProgressBar";
 import { Spinner } from "../ui/Spinner";
 import { FieldGroup, FormRow } from "../ui/Field";
@@ -425,8 +425,12 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
         </>
       }>
         <div className="settings-button-row" role="status" aria-label="Ollama server status">
-          <StatusPill status={state.ollamaServerStatus === "running" ? "Running" :
-            state.ollamaServerStatus === "installed" ? "Skipped" : "Failed"} />
+          {/* Server states are not job states: a shape icon (a spinner while
+              unknown) carries the state and the words stay specific. */}
+          {state.ollamaServerStatus === "running" ? <Icon name="status-success" size="sm" />
+            : state.ollamaServerStatus === "installed" ? <Icon name="status-skipped" size="sm" />
+            : state.ollamaServerStatus === "not_found" ? <Icon name="status-error" size="sm" />
+            : <Spinner size={14} decorative />}
           <strong>{state.ollamaServerStatus === "running" ? "Running" :
             state.ollamaServerStatus === "installed" ? "Installed, not running" :
             state.ollamaServerStatus === "not_found" ? "Not installed" : "Checking…"}</strong>
