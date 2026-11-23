@@ -25,6 +25,21 @@ settings.register_profile("ci", max_examples=25, deadline=None, suppress_health_
 settings.load_profile("ci" if os.environ.get("CI") else "default")
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _warm_token_encoder():
+    """Load the tiktoken encoding once per worker, before any test's timed wait.
+
+    The first ``TokenEstimator()`` in a process loads ``cl100k_base``. On a
+    fresh CI runner there is no tiktoken cache, so that is a network download,
+    and it used to land inside a knowledge-ingest job's polling window (the
+    Windows flake in test_knowledge_embedding_jobs.py). The estimator is a
+    process singleton, so paying the cost here removes it from every test.
+    """
+    from graphlink_token_estimator import TokenEstimator
+
+    TokenEstimator()
+
+
 @pytest.fixture(autouse=True)
 def _never_probe_a_real_ollama_daemon(monkeypatch):
     """Hard-stop any test from reaching out to a live Ollama daemon.
