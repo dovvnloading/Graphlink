@@ -7,6 +7,12 @@ import { Dialog, useOverlays } from "../overlays/overlays";
 import {
   HarnessExecutionProfileSelect, MAX_HARNESS_TASK_LENGTH, exceedsHarnessTaskLimit, type HarnessExecutionProfile,
 } from "./HarnessLaunchOptions";
+import { Button } from "../ui/Button";
+import { FieldGroup } from "../ui/Field";
+import { InlineAlert } from "../ui/InlineAlert";
+import { NumberField } from "../ui/NumberField";
+import { TextArea } from "../ui/TextArea";
+import "./BuilderLaunchDialog.css";
 
 /**
  * PLAN-2026-08-24 H1: the workspace agent's launcher - a task and a turn
@@ -34,11 +40,6 @@ const DEFAULT_MAX_TURNS = 16;
 // clamps regardless; the field should settle on what it will submit.
 const MIN_TURNS = 1;
 const MAX_TURNS = 64;
-
-function clamp(value: number): number {
-  if (!Number.isFinite(value)) return DEFAULT_MAX_TURNS;
-  return Math.min(Math.max(Math.round(value), MIN_TURNS), MAX_TURNS);
-}
 
 export function HarnessLaunchDialog({ transport, store }: { transport: WsTransport; store: SceneStore }) {
   const overlays = useOverlays();
@@ -101,111 +102,40 @@ export function HarnessLaunchDialog({ transport, store }: { transport: WsTranspo
   }
 
   return (
-    <Dialog name="harness-launch" title="Agent" className="builder-launch-dialog">
-      <div className="builder-launch-field">
-        <label className="builder-launch-label" htmlFor="harness-task">
-          What should the agent work on?
-        </label>
-        <textarea
-          id="harness-task"
-          className="builder-launch-goal"
-          placeholder="e.g. Read the files in the workspace and summarize what they contain"
-          value={task}
-          onChange={(event) => setTask(event.target.value)}
-          onKeyDown={(event) => {
-            // Enter sends, Shift+Enter breaks the line - the same contract
-            // the agent card's own follow-up composer uses, so the habit
-            // formed in one place works in the other.
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              startAgent();
-            }
-          }}
-          rows={3}
-        />
-        <p className="builder-launch-hint">
-          The agent reads and writes files in its workspace, runs shell and
-          Python there, and searches your knowledge. It asks before anything
-          that changes your machine, and replies on the canvas.
-        </p>
-      </div>
-
-      <fieldset className="builder-launch-fieldset">
-        <legend>Workspace</legend>
-        <p className="builder-launch-hint">
-          Where the agent works. A private scratch folder unless you choose
-          one of your own - choosing it here is what grants access to it.
-        </p>
+    <Dialog name="harness-launch" title="Agent" size="md" className="builder-launch-dialog"
+      status={!task.trim() ? "Describe a task to start." : "Actions that change your machine require approval."}
+      footer={<Button variant="primary" disabled={starting || !task.trim()} loading={starting}
+        onClick={startAgent}>Start agent</Button>}>
+      <TextArea id="harness-task" label="What should the agent work on?"
+        value={task} onValueChange={setTask} minRows={3} maxRows={10}
+        placeholder="Read the files in the workspace and summarize what they contain"
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            startAgent();
+          }
+        }}
+        description="The agent reads and writes workspace files, runs shell and Python, and searches your knowledge. It asks before changing your machine." />
+      <FieldGroup title="Workspace" description="Choose a folder to grant access, or use a private scratch folder.">
         <div className="harness-launch-workspace">
-          <span className="harness-launch-workspace-dir" title={workspace || undefined}>
-            {workspace || "Private scratch folder"}
-          </span>
-          <button
-            type="button"
-            className="builder-launch-secondary"
-            onClick={pickWorkspace}
-            disabled={picking || starting}
-          >
-            {picking ? "Choosing…" : "Choose folder…"}
-          </button>
-          {workspace && (
-            <button
-              type="button"
-              className="builder-launch-secondary"
-              onClick={() => setWorkspace("")}
-              disabled={starting}
-            >
-              Use scratch
-            </button>
-          )}
+          <span className="harness-launch-workspace-dir">{workspace || "Private scratch folder"}</span>
+          <Button size="sm" onClick={pickWorkspace} disabled={picking || starting} loading={picking}>
+            Choose folder…
+          </Button>
+          {workspace && <Button size="sm" variant="ghost" onClick={() => setWorkspace("")} disabled={starting}>
+            Use scratch
+          </Button>}
         </div>
-      </fieldset>
-
-      <fieldset className="builder-launch-fieldset">
-        <legend>First task execution</legend>
-        <HarnessExecutionProfileSelect
-          store={store}
-          value={executionProfile}
-          onChange={setExecutionProfile}
-          disabled={starting}
-        />
-      </fieldset>
-
-      <fieldset className="builder-launch-fieldset">
-        <legend>Budget</legend>
-        <p className="builder-launch-hint">Hard limit - the run stops when it is reached.</p>
-        <div className="builder-launch-budgets">
-          <label className="builder-launch-budget">
-            <span className="builder-launch-budget-label">Max turns</span>
-            <input
-              className="builder-launch-number"
-              type="number"
-              min={MIN_TURNS}
-              max={MAX_TURNS}
-              value={maxTurns}
-              onChange={(event) => setMaxTurns(Number(event.target.value))}
-              onBlur={(event) => setMaxTurns(clamp(Number(event.target.value)))}
-            />
-          </label>
-        </div>
-      </fieldset>
-
-      {error && (
-        <p className="builder-launch-error" role="alert">
-          {error}
-        </p>
-      )}
-
-      <div className="builder-launch-actions">
-        <button
-          type="button"
-          className="builder-launch-start"
-          onClick={startAgent}
-          disabled={starting || !task.trim()}
-        >
-          {starting ? "Starting…" : "Start the agent"}
-        </button>
-      </div>
+      </FieldGroup>
+      <FieldGroup title="First task execution">
+        <HarnessExecutionProfileSelect store={store} value={executionProfile}
+          onChange={setExecutionProfile} disabled={starting} />
+      </FieldGroup>
+      <FieldGroup title="Budget" description="Hard limit — the run stops when it is reached.">
+        <NumberField label="Max turns" min={MIN_TURNS} max={MAX_TURNS}
+          value={maxTurns} onValueChange={(value) => setMaxTurns(value === "" ? DEFAULT_MAX_TURNS : value)} />
+      </FieldGroup>
+      {error && <InlineAlert variant="error" title="Couldn't start the agent" body={error} />}
     </Dialog>
   );
 }
