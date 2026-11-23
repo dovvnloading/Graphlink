@@ -1,4 +1,4 @@
-import { createContext, memo, useContext, useMemo, useRef, useState, type JSX, type ReactElement } from "react";
+import { createContext, memo, useContext, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
 import ReactMarkdown, { type ExtraProps } from "react-markdown";
 import { IconButton } from "../ui/IconButton";
 import { Icon } from "../ui/icons/Icon";
@@ -189,7 +189,7 @@ function TableWrapper({ node: _node, ...props }: JSX.IntrinsicElements["table"] 
   );
 }
 
-function MarkdownZoomChrome({ img, onUnzoom }: { img: ReactElement | null; onUnzoom: () => void }) {
+function MarkdownZoomChrome({ img, onUnzoom }: { img: ReactNode; onUnzoom: () => void }) {
   return <>{img}<IconButton className="markdown-zoom-close" icon="close" label="Close image zoom" onClick={onUnzoom} /></>;
 }
 
