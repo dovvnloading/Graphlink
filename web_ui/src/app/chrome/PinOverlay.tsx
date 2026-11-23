@@ -1,26 +1,18 @@
 import { useReactFlow } from "@xyflow/react";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 import type { SceneStore } from "../canvas/sceneStore";
 import { motionDuration } from "../reducedMotion";
 import { Popover } from "../overlays/overlays";
+import { Button } from "../ui/Button";
+import { IconButton } from "../ui/IconButton";
+import { TextField } from "../ui/TextField";
+import { TextArea } from "../ui/TextArea";
+import { EmptyState } from "../ui/EmptyState";
+import "./PinOverlay.css";
 
-// Mirrors graphlink_navigation_pins.py's MAX_PIN_TITLE_LENGTH/
-// MAX_PIN_NOTE_LENGTH - compile-time constants on both sides, not worth a
-// wire round-trip for values that never change at runtime.
 const MAX_PIN_TITLE_LENGTH = 120;
 const MAX_PIN_NOTE_LENGTH = 4000;
 
-/**
- * The pin overlay (Qt-removal plan R2.4) - pin-overlay island's successor.
- *
- * Real feature parity with the legacy island: search filter, rename + note
- * editing (backend/canvas.py's new `updatePin` intent), jump-to, remove.
- * Simpler than the original's async draft flow, though: that existed
- * because a QWebEngineView popup needed a request/signal round-trip to
- * open an editor. In one SPA process, "start editing" is just local
- * component state - no draft handshake needed - until Save sends the
- * final title/note in a single intent.
- */
 export function PinOverlay({ store }: { store: SceneStore }) {
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
   const { setCenter } = useReactFlow();
@@ -29,28 +21,19 @@ export function PinOverlay({ store }: { store: SceneStore }) {
   const [draftTitle, setDraftTitle] = useState("");
   const [draftNote, setDraftNote] = useState("");
   const [draftError, setDraftError] = useState<string | null>(null);
-  const titleInputRef = useRef<HTMLInputElement>(null);
+  const editRowRef = useRef<HTMLLIElement>(null);
 
-  // Focus the title field the moment a pin's edit row mounts, matching the
-  // old autoFocus behavior without the jsx-a11y/no-autofocus violation - the
-  // JSX attribute autofocuses unconditionally on every mount (including ones
-  // a screen-reader user didn't initiate), whereas this only fires when we
-  // deliberately entered edit mode for a specific pin.
   useEffect(() => {
-    if (editingId) titleInputRef.current?.focus();
+    if (editingId) editRowRef.current?.querySelector<HTMLInputElement>("input")?.focus();
   }, [editingId]);
 
   const filtered = useMemo(() => {
-    const term = query.trim().toLowerCase();
-    if (!term) return scene.pins;
-    return scene.pins.filter(
-      (pin) => pin.title.toLowerCase().includes(term) || pin.note.toLowerCase().includes(term),
-    );
+    const term = query.trim().toLocaleLowerCase();
+    return term ? scene.pins.filter((pin) =>
+      pin.title.toLocaleLowerCase().includes(term) || pin.note.toLocaleLowerCase().includes(term)) : scene.pins;
   }, [query, scene.pins]);
 
   const addPinHere = useCallback(() => {
-    // Pin the current view center - the R1/R2 equivalent of the Qt canvas's
-    // "Pin this location" context-menu verb.
     const { x, y } = store.getSpawnPoint();
     store.addPin(`Pin ${scene.pins.length + 1}`, x, y);
   }, [scene.pins.length, store]);
@@ -61,132 +44,67 @@ export function PinOverlay({ store }: { store: SceneStore }) {
     setDraftNote(note);
     setDraftError(null);
   }
-
   function cancelEditing() {
     setEditingId(null);
     setDraftError(null);
   }
-
-  // R8a (UI/UX issue list finding #16): neither the title input nor the
-  // note textarea below had ANY onKeyDown, so Escape while editing a pin
-  // fell straight through to overlays.tsx's own document-level handler,
-  // which closed the whole Pins popover - discarding the entire panel,
-  // not just cancelling the one pin's edit. Same bug class already fixed
-  // for Chat Library's rename input and the Note/Frame inline label
-  // editors, missed here originally since this file has no `key ===
-  // "Escape"` literal to grep for at all - there was no handler to find,
-  // only one to add.
-  function onEditKeyDown(event: React.KeyboardEvent) {
+  function onEditKeyDown(event: KeyboardEvent<HTMLElement>) {
     if (event.key === "Escape") {
       event.preventDefault();
+      event.stopPropagation();
       cancelEditing();
     }
   }
-
   function saveEditing() {
     const trimmedTitle = draftTitle.trim();
-    if (!trimmedTitle) {
-      setDraftError("A title is required");
-      return;
-    }
-    if (trimmedTitle.length > MAX_PIN_TITLE_LENGTH) {
-      setDraftError("The title is too long");
-      return;
-    }
-    if (draftNote.trim().length > MAX_PIN_NOTE_LENGTH) {
-      setDraftError("The note is too long");
-      return;
-    }
+    if (!trimmedTitle) return setDraftError("A title is required");
+    if (trimmedTitle.length > MAX_PIN_TITLE_LENGTH) return setDraftError("The title is too long");
+    if (draftNote.trim().length > MAX_PIN_NOTE_LENGTH) return setDraftError("The note is too long");
     if (editingId) store.updatePin(editingId, trimmedTitle, draftNote);
-    setEditingId(null);
-    setDraftError(null);
+    cancelEditing();
   }
 
   return (
     <Popover name="pins" label="Navigation pins" className="pins-popover" anchored>
       <div className="pins-header">
-        <span className="pins-title">PINS</span>
-        <button type="button" className="pins-add" onClick={addPinHere}>
-          + Pin view
-        </button>
+        <h2 className="pins-title">Pins</h2>
+        <Button size="sm" variant="secondary" iconStart="plus" onClick={addPinHere}>
+          Pin current view
+        </Button>
       </div>
-
       {scene.pins.length > 0 && (
-        <input
-          type="text"
-          className="pins-search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search pins…"
-          aria-label="Search pins"
-        />
+        <TextField label="Search pins" size="sm" type="search" placeholder="Search pins…"
+          value={query} onValueChange={setQuery} />
       )}
-
       {scene.pins.length === 0 ? (
-        <p className="pins-empty">No pins yet.</p>
+        <EmptyState icon="pin" size="sm" title="No pins yet."
+          body="Pins save a place on the canvas. Pin the current view to jump back to it later." />
       ) : filtered.length === 0 ? (
         <p className="pins-empty">No pins match “{query}”.</p>
       ) : (
         <ul className="pins-list">
-          {filtered.map((pin) =>
-            editingId === pin.id ? (
-              <li key={pin.id} className="pins-edit-row">
-                <input
-                  ref={titleInputRef}
-                  type="text"
-                  className="pins-edit-title"
-                  value={draftTitle}
-                  onChange={(e) => setDraftTitle(e.target.value)}
-                  onKeyDown={onEditKeyDown}
-                  aria-label="Pin title"
-                />
-                <textarea
-                  className="pins-edit-note"
-                  value={draftNote}
-                  onChange={(e) => setDraftNote(e.target.value)}
-                  onKeyDown={onEditKeyDown}
-                  aria-label="Pin note"
-                  rows={2}
-                />
-                {draftError && <p className="pins-edit-error">{draftError}</p>}
-                <div className="pins-edit-actions">
-                  <button type="button" onClick={cancelEditing}>
-                    Cancel
-                  </button>
-                  <button type="button" className="pins-edit-save" onClick={saveEditing}>
-                    Save
-                  </button>
-                </div>
-              </li>
-            ) : (
-              <li key={pin.id} className="pins-row">
-                <button
-                  type="button"
-                  className="pins-jump"
-                  onClick={() => setCenter(pin.x, pin.y, { zoom: 1, duration: motionDuration(300) })}
-                  title={pin.note || pin.title}
-                >
-                  {pin.title}
-                </button>
-                <button
-                  type="button"
-                  className="pins-edit-button"
-                  aria-label={`Edit ${pin.title}`}
-                  onClick={() => startEditing(pin.id, pin.title, pin.note)}
-                >
-                  ✎
-                </button>
-                <button
-                  type="button"
-                  className="pins-remove"
-                  aria-label={`Remove ${pin.title}`}
-                  onClick={() => store.removePin(pin.id)}
-                >
-                  ×
-                </button>
-              </li>
-            ),
-          )}
+          {filtered.map((pin) => editingId === pin.id ? (
+            <li key={pin.id} ref={editRowRef} className="pins-edit-row" onKeyDown={onEditKeyDown}>
+              <TextField label="Pin title" size="sm" value={draftTitle}
+                maxLength={MAX_PIN_TITLE_LENGTH + 1} onValueChange={setDraftTitle} error={draftError ?? undefined} />
+              <TextArea label="Pin note" value={draftNote} onValueChange={setDraftNote} minRows={2} maxRows={4} />
+              <div className="pins-edit-actions">
+                <Button variant="ghost" size="sm" onClick={cancelEditing}>Cancel</Button>
+                <Button variant="primary" size="sm" onClick={saveEditing}>Save</Button>
+              </div>
+            </li>
+          ) : (
+            <li key={pin.id} className="pins-row">
+              <button type="button" className="pins-jump"
+                onClick={() => setCenter(pin.x, pin.y, { zoom: 1, duration: motionDuration(300) })}>
+                {pin.title}
+              </button>
+              <IconButton icon="edit" label={`Edit ${pin.title}`} size="sm"
+                onClick={() => startEditing(pin.id, pin.title, pin.note)} />
+              <IconButton icon="trash" label={`Delete ${pin.title}`} size="sm"
+                onClick={() => store.removePin(pin.id)} />
+            </li>
+          ))}
         </ul>
       )}
     </Popover>
