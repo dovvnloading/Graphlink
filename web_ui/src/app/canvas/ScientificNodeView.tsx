@@ -6,7 +6,8 @@ import { Checkbox } from "../ui/Checkbox";
 import { CanvasDisclosure } from "./CanvasDisclosure";
 import { IconButton } from "../ui/IconButton";
 import { Select } from "../ui/Select";
-import { InlineAlert } from "../ui/InlineAlert";
+import { Icon } from "../ui/icons/Icon";
+import "../ui/inline-alert.css";
 import { formatCount, formatDuration } from "../ui/format";
 import { OverlayProviderIfMissing, useOverlays } from "../overlays/overlays";
 import { scientificFocusName } from "./scientificFocus";
@@ -90,8 +91,8 @@ function ResultDisclosure({ label, children, className = "", onClose, defaultOpe
   </CanvasDisclosure>;
 }
 
-function Results({ result, title, headlineKey, scatter, freshness, exportJson, exportCsv, exportMethods, onChart, onRefresh, onDiscuss, charts }: {
-  result: ScienceResult; title: string; headlineKey?: string; scatter: boolean; freshness: string; exportJson: () => Promise<string>; exportCsv: () => Promise<Blob>;
+function Results({ result, heading, headlineKey, scatter, freshness, exportJson, exportCsv, exportMethods, onChart, onRefresh, onDiscuss, charts }: {
+  result: ScienceResult; heading: string; headlineKey?: string; scatter: boolean; freshness: string; exportJson: () => Promise<string>; exportCsv: () => Promise<Blob>;
   exportMethods: () => Promise<string>;
   onChart: (type: ScienceChartType) => void; onRefresh: (chart: ScienceChartLink) => void;
   onDiscuss: (result: ScienceResult) => void; charts: ScienceChartLink[];
@@ -117,7 +118,7 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
   const tableRows = tableAsset?.rowCount ?? table?.rows.length ?? 0;
   return <section className="science-results" aria-label="Latest result">
     <div className="science-result-head">
-      <h4>Last successful run · {title}</h4>
+      <h4>Last successful run · {heading}</h4>
       <div className="science-result-status">
           <span aria-hidden="true"><StatusPill status={freshness ? "Out of date" : "Done"} /></span>
           {freshness && <p role="note" className="science-result-notice">{freshness}</p>}
@@ -278,7 +279,13 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
         <Button size="sm" type="button" disabled={!chart.stale} onClick={() => onRefresh(chart)}>Refresh chart</Button>
       </div>)}
     </section>}
-        {error && <InlineAlert variant="error" {...{ title: "Scientific result action failed" }} body={error} />}
+        {error && <div role="alert" className="gl-inline-alert gl-inline-alert--error">
+          <Icon name="status-error" size="lg" />
+          <div className="gl-inline-alert-content">
+            <strong className="gl-inline-alert-title">Scientific result action failed</strong>
+            <div className="gl-inline-alert-body">{error}</div>
+          </div>
+        </div>}
       </ResultDisclosure>
     </div>
   </section>;
@@ -563,14 +570,14 @@ function restoreDraft(op: ScienceOperation, result: ScienceResult | null, revisi
   return { values, sources, method, revision, dirty: false };
 }
 
-function AttemptProgress({ attempt, title }: { attempt: ScienceAttempt; title: string }) {
+function AttemptProgress({ attempt, heading }: { attempt: ScienceAttempt; heading: string }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
   return <div className="science-attempt-progress"><StatusPill status="Running" />
-    <span>{attempt.status === "cancelling" ? "Stopping" : "Running"} {title}…</span>
+    <span>{attempt.status === "cancelling" ? "Stopping" : "Running"} {heading}…</span>
     <span aria-label="Elapsed time">{formatDuration(Math.max(0, (now - attempt.startedAtMs) / 1000))}</span>
   </div>;
 }
@@ -784,7 +791,7 @@ function OperationEditor({ onDraftChange, session, op, result, configured, revis
         : "Changes not saved to Graph Runner."}</small>}
     </fieldset>
     {submission?.phase === "checking" ? <p role="status">Checking run status…</p>
-      : activeAttempt ? <AttemptProgress attempt={activeAttempt} {...{ title: attemptTitle ?? activeAttempt.operationId }} />
+      : activeAttempt ? <AttemptProgress attempt={activeAttempt} heading={attemptTitle ?? activeAttempt.operationId} />
       : busy && <p role="status">{running || submission?.phase === "submitting" ? "Running calculation…" : configuring ? "Saving Graph Runner configuration…" : "Loading selected table column…"}</p>}
     {/* Outside the disabled fieldset; only real calculations can be cancelled, not table-column imports. */}
     {attemptProtocol && (running || activeAttempt || (submission && submission.phase !== "finished")) && <div className="science-actions">
@@ -850,7 +857,7 @@ function Workbench({ requestedOperation, session, state, options, run, configure
     {state.latest && <Results key={revision} result={state.latest} exportJson={exportJson} exportCsv={exportCsv} exportMethods={exportMethods}
       charts={charts} onChart={onChart} onRefresh={onRefresh} onDiscuss={onDiscuss}
       freshness={freshness} scatter={latestOperation?.plotMark === "scatter"}
-      {...{ title: latestOperation?.title ?? state.latest.operationId }} headlineKey={latestOperation?.headline} />}
+      heading={latestOperation?.title ?? state.latest.operationId} headlineKey={latestOperation?.headline} />}
   </>;
 }
 
