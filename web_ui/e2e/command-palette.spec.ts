@@ -25,7 +25,7 @@ test("opens via Ctrl+K and lists real registered commands", async ({ page }) => 
   // most palette entries it needs no existing node/selection - so it is
   // present on a completely empty, freshly booted canvas, making it a
   // stable spot-check independent of any other test's canvas state.
-  await expect(dialog.getByRole("option", { name: "Reset View" })).toBeVisible();
+  await expect(dialog.getByRole("option", { name: "Reset view" })).toBeVisible();
 
   // Escape is the overlay system's own universal dismiss (overlays.tsx).
   await page.keyboard.press("Escape");
