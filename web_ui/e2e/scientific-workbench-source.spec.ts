@@ -22,7 +22,7 @@ test("creates an upstream dataset from an empty table field, reviews its import 
     const target = page.locator(".react-flow__node-scientific").first();
     await page.getByRole("button", { name: "Fit All" }).click();
     await target.getByRole("button", { name: "Operation", exact: true }).click();
-    await page.getByRole("option", { name: /Grouped table summary/i }).click();
+    await page.getByRole("option", { name: "Summarize a typed table by group" }).click();
     const recovery = target.getByRole("region", { name: "Connect a source table" });
     await recovery.getByRole("button", { name: "Create source and import" }).click();
     await expect(page.locator(".react-flow__node-scientific")).toHaveCount(2);
