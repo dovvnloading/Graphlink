@@ -1,146 +1,116 @@
 import { useReactFlow } from "@xyflow/react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { useCanvasSearchQuery, useSetCanvasSearchQuery } from "../canvas/CanvasSearchContext";
+import {
+  useCanvasSearchQuery, useSetCanvasSearchQuery, useSetCanvasSearchMatchIds,
+} from "../canvas/CanvasSearchContext";
 import type { SceneStore } from "../canvas/sceneStore";
 import { motionDuration } from "../reducedMotion";
 import { useOverlays } from "../overlays/overlays";
+import { TextField } from "../ui/TextField";
+import { IconButton } from "../ui/IconButton";
+import "./SearchOverlay.css";
 
-/**
- * The search overlay (Qt-removal plan R2.4) - search-overlay island's
- * successor. Searches both a node's title and its full text content, the
- * same haystack the legacy SearchOverlay matched conversation text against.
- *
- * ADR-012 stage 12.5: the query itself now lives in CanvasSearchContext
- * (this component still owns everything else - currentIndex, matches,
- * navigation) so NodeMarkdown.tsx can highlight matches inside every
- * rendered node card without prop-drilling through 15 *NodeView.tsx
- * components - see that Context's own doc for the full reasoning.
- */
 export function SearchOverlay({ store }: { store: SceneStore }) {
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
   const overlays = useOverlays();
-  const { setCenter } = useReactFlow();
+  const flow = useReactFlow();
   const query = useCanvasSearchQuery();
   const setQuery = useSetCanvasSearchQuery();
+  const setMatchIds = useSetCanvasSearchMatchIds();
   const [currentIndex, setCurrentIndex] = useState(-1);
-  const inputRef = useRef<HTMLInputElement>(null);
   const shellRef = useRef<HTMLDivElement | null>(null);
+  const previousFocus = useRef<HTMLElement | null>(null);
   const isOpen = overlays.isOpen("search");
 
-  // Unlike every other popover (Pins, View, Plugins, Reasoning, Model),
-  // this shell was never registered as a surface element - it renders a
-  // bare div rather than the shared <Popover>, so the outside-click
-  // light-dismiss effect in overlays.tsx could never find it and clicking
-  // away did nothing at all.
   useEffect(() => {
     overlays.registerSurfaceElement("search", shellRef.current);
     return () => overlays.registerSurfaceElement("search", null);
-  });
-
-  // Reset during render on the false->true transition - see
-  // CommandPalette's identical fix for the full rationale.
-  const [wasOpen, setWasOpen] = useState(isOpen);
-  if (isOpen !== wasOpen) {
-    setWasOpen(isOpen);
-    if (isOpen) {
-      setQuery("");
-      setCurrentIndex(-1);
-    }
-  }
-
-  useEffect(() => {
-    if (isOpen) inputRef.current?.focus();
-  }, [isOpen]);
+  }, [overlays]);
 
   const matches = useMemo(() => {
-    const term = query.toLowerCase().trim();
-    if (!term) return [];
-    return scene.nodes.filter(
-      (n) => n.title.toLowerCase().includes(term) || n.content.toLowerCase().includes(term),
-    );
-  }, [query, scene.nodes]);
+    const term = query.toLocaleLowerCase().trim();
+    if (!isOpen || !term) return [];
+    return scene.nodes.filter((node) =>
+      node.title.toLocaleLowerCase().includes(term) || node.content.toLocaleLowerCase().includes(term));
+  }, [query, isOpen, scene.nodes]);
 
   function jumpTo(index: number) {
     const match = matches[index];
-    if (match) setCenter(match.x, match.y, { zoom: 1, duration: motionDuration(300) });
+    if (!match) return;
+    // Selection is kept in React Flow's transient state, not persisted to the scene.
+    flow.setNodes?.((nodes) => nodes.map((node) =>
+      Boolean(node.selected) === (node.id === match.id) ? node : { ...node, selected: node.id === match.id }));
+    const internal = flow.getInternalNode?.(match.id);
+    if (internal && flow.getNodesBounds) {
+      const bounds = flow.getNodesBounds([match.id]);
+      flow.setCenter(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2,
+        { zoom: flow.getZoom?.() ?? 1, duration: motionDuration(300) });
+    } else {
+      flow.setCenter(match.x, match.y, { zoom: 1, duration: motionDuration(300) });
+    }
   }
 
-  function next() {
+  function move(direction: number) {
     if (matches.length === 0) return;
-    const index = (currentIndex + 1) % matches.length;
-    setCurrentIndex(index);
-    jumpTo(index);
-  }
-
-  function previous() {
-    if (matches.length === 0) return;
-    const index = (currentIndex - 1 + matches.length) % matches.length;
+    const index = (currentIndex + direction + matches.length) % matches.length;
     setCurrentIndex(index);
     jumpTo(index);
   }
 
   function onQueryChange(value: string) {
     setQuery(value);
-    setCurrentIndex(-1);
+    setCurrentIndex(value.trim() ? 0 : -1);
   }
 
-  function onKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "Enter" && event.shiftKey) {
-      event.preventDefault();
-      previous();
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      next();
+  // The first matching node becomes the active result as soon as the query changes.
+  useEffect(() => {
+    if (!isOpen) return;
+    setMatchIds(matches.map((node) => node.id));
+    if (matches.length === 0) {
+      setCurrentIndex(-1);
+      return;
     }
-    // Escape is handled globally by the overlay system.
-  }
+    setCurrentIndex(0);
+    const match = matches[0];
+    flow.setNodes?.((nodes) => nodes.map((node) =>
+      Boolean(node.selected) === (node.id === match.id) ? node : { ...node, selected: node.id === match.id }));
+    flow.setCenter(match.x, match.y, { zoom: 1, duration: motionDuration(300) });
+  }, [isOpen, matches, setMatchIds, flow]);
+
+  useEffect(() => {
+    if (isOpen) {
+      previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      shellRef.current?.querySelector<HTMLInputElement>("input")?.focus();
+      return;
+    }
+    setQuery("");
+    setMatchIds([]);
+    setCurrentIndex(-1);
+    previousFocus.current?.focus();
+    previousFocus.current = null;
+  }, [isOpen, setQuery, setMatchIds]);
 
   if (!isOpen) return null;
-
-  const current = currentIndex + 1;
-  const tone = matches.length === 0 && query ? "error" : current > 0 ? "active" : "idle";
-
+  const current = currentIndex < 0 ? 0 : currentIndex + 1;
   return (
-    <div className="search-overlay-shell" ref={shellRef}>
-      <input
-        ref={inputRef}
-        className="search-overlay-input"
-        type="text"
-        value={query}
-        onChange={(e) => onQueryChange(e.target.value)}
-        onKeyDown={onKeyDown}
-        placeholder="Find node…"
-        aria-label="Search the canvas"
-        autoComplete="off"
-        spellCheck={false}
-      />
-      <span className="search-overlay-count" data-tone={tone}>
-        {current} / {matches.length}
+    <div className="search-overlay-shell" ref={shellRef} role="search" aria-label="Search the canvas">
+      <TextField label="Search the canvas" size="sm" type="search" className="search-overlay-field"
+        placeholder="Find node…" value={query} onValueChange={onQueryChange}
+        autoComplete="off" spellCheck={false} onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            move(event.shiftKey ? -1 : 1);
+          }
+        }} />
+      <span className="search-overlay-count" role="status" aria-live="polite"
+        data-tone={matches.length === 0 && query ? "error" : "idle"}>
+        {current} of {matches.length}
       </span>
-      <button
-        type="button"
-        className="search-overlay-icon-btn"
-        onClick={previous}
-        aria-label="Previous match (Shift+Enter)"
-      >
-        ▲
-      </button>
-      <button
-        type="button"
-        className="search-overlay-icon-btn"
-        onClick={next}
-        aria-label="Next match (Enter)"
-      >
-        ▼
-      </button>
-      <button
-        type="button"
-        className="search-overlay-icon-btn"
-        onClick={overlays.close}
-        aria-label="Close (Esc)"
-      >
-        ×
-      </button>
+      <IconButton icon="arrow-up" label="Previous match" shortcut="Shift+Enter" size="sm"
+        disabled={matches.length === 0} onClick={() => move(-1)} />
+      <IconButton icon="arrow-down" label="Next match" shortcut="Enter" size="sm"
+        disabled={matches.length === 0} onClick={() => move(1)} />
+      <IconButton icon="close" label="Close search" shortcut="Escape" size="sm" onClick={overlays.close} />
     </div>
   );
 }
