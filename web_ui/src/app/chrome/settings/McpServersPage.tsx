@@ -47,7 +47,7 @@ type OutgoingServer = {
 };
 
 export function McpServersPage({ state, transport }: { state: AppSettingsState; transport: WsTransport }) {
-  const confirm = useConfirm();
+  const askConfirm = useConfirm();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
   const [draftCommand, setDraftCommand] = useState("");
@@ -95,7 +95,7 @@ export function McpServersPage({ state, transport }: { state: AppSettingsState; 
     reset();
   };
   const requestRemove = async (id: string, name: string) => {
-    if (!await confirm({ title: "Remove MCP server?", body: `Remove ${name} from your configured servers? Saved environment values for this entry will also be deleted.`,
+    if (!await askConfirm({ title: "Remove MCP server?", body: `Remove ${name} from your configured servers? Saved environment values for this entry will also be deleted.`,
       confirmLabel: "Remove server", destructive: true })) return;
     updateServers(state.mcpServers.filter((server) => server.id !== id));
     if (editingId === id) reset();
