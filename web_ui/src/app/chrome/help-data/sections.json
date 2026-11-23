@@ -1,10 +1,10 @@
 [
   {
-    "name": "Start Here",
-    "description": "What this app is, and the loop everything else hangs off.",
+    "name": "Start here",
+    "description": "Start with a message, branch from a node, and find your way back.",
     "subsections": [
       {
-        "title": "The Idea",
+        "title": "The idea",
         "items": [
           {
             "action": "A graph, not a transcript",
@@ -12,7 +12,7 @@
           },
           {
             "action": "The selected node is the context",
-            "description": "Whatever you have selected is the parent of whatever you do next. Select a reply and send a message, and the new node hangs off that reply with its history. Select a different one and you have branched. This is the single rule the rest of the app is built on - the composer's placeholder tells you which node it is about to answer."
+            "description": "Select a node before sending a message to reply along that path. The composer shows a “Replying to” chip with the node title and a “Clear reply target” button; clear it when you want a new root instead of a reply. A sibling reply does not inherit the other sibling’s messages."
           },
           {
             "action": "It is a project file, not a session",
@@ -21,23 +21,23 @@
         ]
       },
       {
-        "title": "Your First Ten Minutes",
+        "title": "Your first ten minutes",
         "items": [
           {
             "action": "Make a node",
-            "description": "Double-click empty canvas. Or just type in the composer at the bottom and send."
+            "description": "Type in the bottom message composer and use “Send message” to make a chat node. For your own text, open the command palette and choose “Add Note”. Double-clicking empty canvas zooms now; it does not create a node."
           },
           {
             "action": "Branch off an answer",
-            "description": "Click the reply you liked, then send your follow-up. Click a different reply and send a different follow-up. You now have two branches from the same point, and neither overwrote the other."
+            "description": "Select the reply to continue from and send a follow-up. The “Replying to” chip identifies the parent; select a different reply to make a sibling branch. “Clear reply target” removes that attachment before sending."
           },
           {
             "action": "Reach for a specialist",
-            "description": "Plugins in the toolbar adds a node that does something a plain reply cannot - research the web with citations, run Python, render HTML, draft a document. It attaches to the node you have selected."
+            "description": "Open “Plugins” in the toolbar and choose a task or plugin to work from the selected node. The picker groups specialists by category, from Web Research to code execution and drafting; a disabled plugin directs you to settings."
           },
           {
             "action": "When you lose the thread",
-            "description": "Fit All frames everything on the canvas. The command palette finds any action by name. Both are faster than hunting.",
+            "description": "Use “Fit All” in the lower-left canvas navigation dock to show the graph again. Ctrl+K opens the command palette so you can find an action by name.",
             "keys": [
               "Ctrl+K"
             ]
@@ -45,11 +45,11 @@
         ]
       },
       {
-        "title": "Three Ways People Use It",
+        "title": "Three ways people use it",
         "items": [
           {
             "action": "Compare instead of decide early",
-            "description": "Ask the same question three ways from the same parent, leave all three on the canvas, and choose once you can see them together. Compare Branches puts two side by side; Synthesize Branches merges what survived.",
+            "description": "Send alternatives from the same parent so they stay side by side. “Compare Branches” compares two, and “Synthesize Branches” combines selected branches; neither replaces the originals.",
             "keys": [
               "Ctrl+Shift+C",
               "Ctrl+Shift+M"
@@ -61,34 +61,87 @@
           },
           {
             "action": "Write long, in pieces",
-            "description": "An Artifact / Drafter node holds a living document while the branches around it argue about sections. The draft is one node you keep editing, not thirty replies you have to reassemble."
+            "description": "An Artifact / Drafter node holds a Markdown draft that you can refine while the surrounding branches test ideas. Keep the document in one node instead of reconstructing it from many replies."
           }
         ]
       }
     ]
   },
   {
-    "name": "The Canvas",
-    "description": "Moving around, selecting, branching, and what the gestures actually do.",
+    "name": "Composing",
+    "description": "Set the reply target, model, reasoning level and attachments before sending.",
     "subsections": [
       {
-        "title": "Moving Around",
+        "title": "Reply targets",
+        "items": [
+          {
+            "action": "Reply to a node",
+            "description": "Select the chat node you want to continue from. The composer displays “Replying to” with the node kind and title, so you can check the parent before pressing “Send message”."
+          },
+          {
+            "action": "Clear the reply target",
+            "description": "Use “Clear reply target” on that chip when you want to send without the selected reply as parent. The chip is not shown while composing a workspace-agent task or synthesizing branches."
+          }
+        ]
+      },
+      {
+        "title": "Model and reasoning",
+        "items": [
+          {
+            "action": "Choose a model",
+            "description": "Open the model menu labelled “Choose a model” beside the message field. It groups local and cloud models by provider, flags embedding-only models as unavailable for chat, and offers a search field when the list is long."
+          },
+          {
+            "action": "Manage models",
+            "description": "At the end of that menu, “Manage models…” opens Settings for local-model setup. If a model is unavailable, configure a chat-capable model before sending."
+          },
+          {
+            "action": "Choose a reasoning level",
+            "description": "When the chosen model supports reasoning selection, the “Choose a reasoning level” menu offers its supported levels. This is a per-message choice; the menu is not shown for models without that capability."
+          }
+        ]
+      },
+      {
+        "title": "Sending and context",
+        "items": [
+          {
+            "action": "Attach context",
+            "description": "“Attach context” stages a file for the next message; staged attachments have a remove action before sending. “Use knowledge” is a separate option for retrieving indexed material."
+          },
+          {
+            "action": "Compare models",
+            "description": "“Compare models” sends one prompt to multiple selected models rather than changing the ordinary single-model reply. Choose at least two models to send a comparison."
+          },
+          {
+            "action": "Send or stop",
+            "description": "“Send message” submits the draft. During generation the control becomes “Stop generating”; the composer will not send a second ordinary message while that response is running."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "The canvas",
+    "description": "Navigate the viewport, select nodes and use their shared actions.",
+    "subsections": [
+      {
+        "title": "Moving around",
         "items": [
           {
             "action": "Pan",
-            "description": "Drag empty canvas with the left or middle button. Pan speed is adjustable - View, then Canvas, then Pan speed - which matters more than it sounds once a graph is bigger than a screen."
+            "description": "Drag an empty part of the canvas to move the viewport. Open “View” and adjust “Pan speed” under Canvas if movement feels too fast or too slow."
           },
           {
             "action": "Zoom",
-            "description": "The mouse wheel zooms. Holding Ctrl while you scroll does the same thing, so either habit works. The toolbar's zoom readout shows the current level; click it to go back to 100%."
+            "description": "Scroll to zoom, or use “Zoom In” and “Zoom Out” in the lower-left dock. Its percentage is a “Reset zoom to 100%” button; double-clicking blank canvas also zooms."
           },
           {
-            "action": "Fit All",
-            "description": "Reframes the view around everything on the canvas. The one control worth learning first, because it is the way back from anywhere."
+            "action": "Fit all",
+            "description": "The lower-left “Fit All” control fits the graph back into the viewport without moving nodes. Use it after following a distant branch."
           },
           {
             "action": "Minimap",
-            "description": "Bottom right. Click anywhere in it to jump there. It earns its keep at about the point the graph stops fitting on one screen."
+            "description": "The minimap shows the graph’s overall shape at the bottom right. Click anywhere in it to jump there; it is a locator, not a second canvas editor."
           }
         ]
       },
@@ -97,11 +150,11 @@
         "items": [
           {
             "action": "Click to select",
-            "description": "One node. This also sets the context for your next message."
+            "description": "Click a node to select it. That selection also determines the reply target for the next composer message; check the “Replying to” chip before sending."
           },
           {
             "action": "Shift-drag to rubber-band",
-            "description": "Hold Shift and drag across empty canvas to select everything inside the rectangle. Shift is what distinguishes this from panning - without it, dragging the background moves the view."
+            "description": "Hold Shift and drag on empty canvas to select several nodes with a rectangle. Drag without Shift to pan; double-clicking the background zooms rather than creating a node."
           },
           {
             "action": "Ctrl-arrow to walk the branch",
@@ -113,7 +166,7 @@
           },
           {
             "action": "Delete removes the selection",
-            "description": "Whatever is selected, however many. Undo brings it back - the undo stack lives on the backend and survives more than you would expect.",
+            "description": "Delete removes the currently selected items, including a multi-selection. “Undo” restores the last undoable edit; “Delete node” is also the final action in a chat node’s menu.",
             "keys": [
               "Ctrl+Z"
             ]
@@ -129,23 +182,44 @@
           },
           {
             "action": "Regenerate",
-            "description": "Re-asks from the same parent with the same context. Use it when the answer was wrong rather than the question."
+            "description": "A reply’s “Branch” menu contains “Regenerate response” to request another answer from the same parent. “Re-run from here” is a separate action for eligible messages."
           },
           {
             "action": "Hide other branches",
-            "description": "A chat node's own menu can dim everything outside its path, for when the canvas has fanned out further than you can hold in your head. View, then Focus, then Focus Accepted Paths does the same thing graph-wide using branch status."
+            "description": "In a chat node’s “Branch” menu, choose “Hide other branches” to dim paths outside that branch, or “Show all branches” to undo the focus. “Focus Accepted Paths” under View > Focus applies status-based dimming across the graph."
           },
           {
             "action": "Mark what survived",
-            "description": "Branches can be set Accepted, Rejected or Superseded. Nothing is deleted - the rejected attempt stays on the canvas as a record of what you tried - but the filters and the focus lens can then dim it out of the way."
+            "description": "Use the chat node’s “Node” > “Mark status” submenu to set Active, Accepted, Rejected or Superseded. Status changes do not delete the node; View > Focus can dim paths you do not need."
+          }
+        ]
+      },
+      {
+        "title": "Node cards",
+        "items": [
+          {
+            "action": "Open node actions",
+            "description": "The shared node header has a kind icon and a “Node actions” menu on hover or selection. Right-click a node, or focus it and press Shift+F10, to open the same context menu."
+          },
+          {
+            "action": "Use chat quick actions",
+            "description": "Hover a chat node for “Copy text”, “Branch from here”, eligible “Re-run from here”, and “Open in Document View”. In its full menu, Edit, Branch, Node, Share and Generate group the commands; “Delete node” comes last."
+          },
+          {
+            "action": "Read nodes when zoomed out",
+            "description": "Below 50% zoom, node bodies give way to compact kind icons and up to two lines of title. Below 25%, titles drop away too. Zoom back in to read content; this does not delete or rewrite it."
+          },
+          {
+            "action": "Find a match or stale node",
+            "description": "Canvas search highlights matching nodes and dims nonmatches. An “Out of date” pill means upstream content or settings changed; a changed input may need “Run bound nodes” or another manual re-run."
           }
         ]
       }
     ]
   },
   {
-    "name": "Node Types",
-    "description": "What each kind of node is for, and when to reach for it.",
+    "name": "Node types",
+    "description": "Choose a node kind for the work you want to keep on the graph.",
     "subsections": [
       {
         "title": "Conversation",
@@ -160,7 +234,7 @@
           },
           {
             "action": "Thinking",
-            "description": "The model's reasoning, kept separate from its answer so you can read the working without it crowding the result. Produced when the Reasoning level in the composer is above Off."
+            "description": "Reasoning traces live apart from the answer when the selected model supplies them. Set an available level through the composer’s “Choose a reasoning level” menu; not every model exposes that menu."
           },
           {
             "action": "Code",
@@ -173,10 +247,10 @@
         "items": [
           {
             "action": "Note",
-            "description": "Your own text, attached wherever you put it. The command palette makes one; there is deliberately no shortcut, because a note you meant to make is worth two seconds."
+            "description": "Write text directly in a note node, or choose “Add Note” from the command palette. A note’s “Add text input” button can bind text from another note, chat message or Drafter; running it replaces the note’s text."
           },
           {
-            "action": "Document and Image",
+            "action": "Document and image",
             "description": "Attached files become nodes. Documents open in a reading pane with a table of contents and in-document search; images open at full size."
           },
           {
@@ -186,11 +260,15 @@
           {
             "action": "Artifact",
             "description": "A living Markdown document with a source and preview split. Meant to be revised in place across many turns."
+          },
+          {
+            "action": "Connect text to a note",
+            "description": "Choose “Add text input”, select a “Text source” and “Operation” (“Copy text” or “Word count”), then “Connect”. “Run” replaces the note’s text; “Disconnect” removes the binding without running it."
           }
         ]
       },
       {
-        "title": "Agents and Tools",
+        "title": "Agents and tools",
         "items": [
           {
             "action": "Plan",
@@ -198,33 +276,33 @@
           },
           {
             "action": "Agent",
-            "description": "The workspace agent's card - its task, the folder it is bound to, its turns, and any approval it is currently waiting on."
+            "description": "The workspace agent's card — its task, the folder it is bound to, its turns, and any approval it is currently waiting on."
           },
           {
             "action": "Web Research, Gitlink, Virtual Environment Runner, HTML Renderer",
-            "description": "Plugin nodes. Each has its own controls and its own state, and each stays on the canvas as a record of what it did."
+            "description": "These are the plugin names shown by the picker. Their results and controls remain attached to their own nodes instead of disappearing when you change branches."
           }
         ]
       }
     ]
   },
   {
-    "name": "Finding Things",
-    "description": "Six different search surfaces, and which one you actually want.",
+    "name": "Finding things",
+    "description": "Five search surfaces plus pins and focus controls; choose the right scope.",
     "subsections": [
       {
         "title": "Search",
         "items": [
           {
             "action": "Command palette",
-            "description": "Every action in the app, by name. If you cannot remember where a control lives, this is faster than remembering.",
+            "description": "Find an app action by name, including “Add Note”, “Create Frame” and “Fit All to View”. It searches commands, not the text inside your nodes.",
             "keys": [
               "Ctrl+K"
             ]
           },
           {
             "action": "Canvas search",
-            "description": "Text inside the nodes of the graph you have open. Matches are highlighted in place and you can step between them.",
+            "description": "Ctrl+F opens “Search the canvas” for titles and content in the current graph. Matching nodes stand out while the rest dim; “Previous match” and “Next match” move the selection and viewport.",
             "keys": [
               "Ctrl+F"
             ]
@@ -237,12 +315,12 @@
             ]
           },
           {
-            "action": "Global Search",
-            "description": "Across every workspace and every ingested document at once - the one to use when you know you wrote it somewhere and not where."
+            "action": "Global search",
+            "description": "“Global Search” opens a search across workspace graphs and indexed documents. Use it when you cannot remember which graph or source holds the text."
           },
           {
             "action": "Knowledge",
-            "description": "Searches your ingested knowledge base and returns the exact passage, at the exact offset, with a link back to the source where one exists. Lexical always; also vector-based once an embedding model is configured."
+            "description": "“Knowledge” opens the Knowledge Library, where “Search indexed sources” finds passages in the current workspace’s ingested documents. Results show source details and offsets; semantic matches need embeddings configured."
           }
         ]
       },
@@ -251,11 +329,11 @@
         "items": [
           {
             "action": "Navigation pins",
-            "description": "Drop a pin on a spot worth returning to, give it a name, and jump back from the Pins list. Pins are marked on the canvas itself, so they are findable without opening the list."
+            "description": "Use “Pins” to see saved locations, search them, edit titles and notes, and jump to a pin. Pins are for returning to a part of the canvas, not for filtering its content."
           },
           {
             "action": "Filters",
-            "description": "View, then Focus. Filter by node kind or by branch status to dim everything you are not looking at. Nothing is hidden or moved - the filter is a lens, and Clear takes it off."
+            "description": "Open “View” > Focus to filter by node kind or branch status or enable “Focus Accepted Paths”. These controls dim other nodes; clearing filters restores the full view."
           }
         ]
       }
@@ -263,32 +341,36 @@
   },
   {
     "name": "Organizing",
-    "description": "Grouping, tidying, and making a large canvas legible.",
+    "description": "Keep related work together without losing the graph structure.",
     "subsections": [
       {
         "title": "Structure",
         "items": [
           {
             "action": "Frames",
-            "description": "Wrap a selection in a labelled boundary. The nodes stay independent.",
+            "description": "Choose “Create Frame” for a labelled boundary around selected nodes, or use Ctrl+G. Frames keep the member nodes independent; hover or select a frame to show its toolbar.",
             "keys": [
               "Ctrl+G"
             ]
           },
           {
             "action": "Containers",
-            "description": "Group nodes so they move together. Use a container when the group is one thing; use a frame when it is several things about one subject.",
+            "description": "“Create Container” groups selected nodes so they move together (Ctrl+Shift+G). Use a frame for a visual boundary, and a container when its contents should travel as one group.",
             "keys": [
               "Ctrl+Shift+G"
             ]
           },
           {
             "action": "Titles and colors",
-            "description": "Rename any node, and colour frames and containers. Colour is the fastest legend a large canvas can have, and it costs nothing to change later."
+            "description": "Double-click a frame or container label to rename it. Its hover toolbar opens “Set color”; pick a preset or reset the colour. The frame keeps a separate header and body tint."
           },
           {
             "action": "Organize",
-            "description": "Opens a read-only tree-layout preview. Choose the whole canvas, selected nodes, a branch, or a group; Apply changes the positions in one undoable action. Links and group membership stay intact."
+            "description": "“Organize” opens an “Organize graph” preview before changing any positions. Choose a scope, inspect the proposed layout, then apply it as one undoable change."
+          },
+          {
+            "action": "Frame hover toolbar",
+            "description": "Hover or select a frame to reveal “Collapse”, “Lock” or “Unlock”, “Fit to Content”, “Set color” and “Ungroup”. “Fit to Content” is a frame action; a container has no frame-lock control."
           }
         ]
       },
@@ -296,20 +378,20 @@
         "title": "Appearance",
         "items": [
           {
-            "action": "The View panel",
-            "description": "Canvas, Grid, Connections, Node Font and Focus. Pan speed, snapping, grid spacing and style, connection routing, node typography and the focus filters all live here, with Reset to Defaults pinned at the bottom."
+            "action": "The view panel",
+            "description": "The “View” popover groups Canvas, Grid, Connections, Node font and Focus. Pan speed, snapping, grid appearance, connection routing, typography and dimming live here; “Reset to defaults” stays in the footer."
           },
           {
             "action": "Snapping",
-            "description": "Snap to Grid lands dragged nodes on grid lines. Smart Guides aligns them to their neighbours instead. Both are off by default; pick one rather than both."
+            "description": "Under View > Canvas, “Snap to Grid” aligns dragged nodes to grid lines, while “Smart Guides” uses nearby nodes as alignment references. They adjust movement, not graph connections."
           },
           {
             "action": "Quieter connections",
-            "description": "Fade Connections dims every line except the one under the pointer. On a graph with a hundred edges this is the difference between a diagram and a hairball."
+            "description": "Under View > Connections, “Fade Connections” dims edges except the hovered connection. “Orthogonal Routing” draws eligible edges with right-angle paths; neither changes which nodes are connected."
           },
           {
             "action": "Collapse",
-            "description": "Most node types collapse to a title bar. A branch that is finished but still worth keeping connected is exactly what collapse is for. Nodes also collapse automatically when you zoom far enough out."
+            "description": "Use “Collapse” or “Expand” on a node or group to reduce clutter without deleting contents. The canvas also shortens node previews automatically below 50% zoom and hides their titles below 25%."
           }
         ]
       }
@@ -317,10 +399,10 @@
   },
   {
     "name": "Plugins",
-    "description": "Specialist nodes, grouped the way the picker groups them.",
+    "description": "Specialist nodes from the Plugins picker, with separate permissions for third-party plugins.",
     "subsections": [
       {
-        "title": "Branch Foundations",
+        "title": "Branch foundations",
         "items": [
           {
             "action": "System Prompt",
@@ -333,7 +415,7 @@
         ]
       },
       {
-        "title": "Reasoning and Research",
+        "title": "Reasoning and research",
         "items": [
           {
             "action": "Web Research",
@@ -342,7 +424,7 @@
         ]
       },
       {
-        "title": "Build and Execution",
+        "title": "Build and execution",
         "items": [
           {
             "action": "Gitlink",
@@ -359,47 +441,60 @@
         ]
       },
       {
-        "title": "Workflow and Drafting",
+        "title": "Workflow and drafting",
         "items": [
           {
             "action": "Artifact / Drafter",
             "description": "A split-pane node for drafting and refining a Markdown document over many turns."
           }
         ]
+      },
+      {
+        "title": "Permissions",
+        "items": [
+          {
+            "action": "Third-party grants",
+            "description": "In Settings > Agent & tools > Plugins, discovered third-party plugins have “Granted” switches. Turning off a grant blocks that plugin’s actions; a grant is not an individual-tool sandbox."
+          },
+          {
+            "action": "Find a plugin",
+            "description": "The toolbar’s “Plugins” picker includes a search box labelled “Search plugins” and a category rail. Disabled plugins offer an “Open plugin settings” route rather than silently running."
+          }
+        ]
       }
     ]
   },
   {
-    "name": "The Builder",
-    "description": "An agent that plans a job as a checklist, then builds it on the canvas.",
+    "name": "The builder",
+    "description": "Plan a job as a checklist and build it on the canvas.",
     "subsections": [
       {
-        "title": "Starting a Build",
+        "title": "Starting a build",
         "items": [
           {
             "action": "Describe the goal",
-            "description": "A sentence or two of what you want built. The Builder turns it into a plan you can read and edit before anything runs - the plan is the point, and it is worth reading."
+            "description": "Open “Builder” and describe what you want built, or choose a “Recipe”. The generated checklist is a plan you can inspect before execution."
           },
           {
             "action": "Recipes",
-            "description": "A saved goal and step list. Starting from one skips the planning pass entirely, because the checklist already exists. You can save any finished build as a recipe and delete your own again later."
+            "description": "A “Recipe” supplies a saved goal and steps without a new planning pass. You can save a completed build as a recipe and remove your own recipes later."
           },
           {
-            "action": "Co-pilot or Autopilot",
-            "description": "Co-pilot asks before every mutating step. Autopilot does not - it creates nodes and executes code without stopping, inside the budgets. Network access still asks either way. Choose Autopilot when you have read the plan and believe it."
+            "action": "Co-pilot or autopilot",
+            "description": "“Co-pilot” asks before each mutating step. “Autopilot” can create and edit nodes and execute code within its budgets without asking; network access still requires approval."
           },
           {
             "action": "Budgets are hard limits",
-            "description": "Quick, Standard and Extended set steps, tokens and wall-clock time; the exact numbers are under Set exact limits. A breach pauses the build rather than failing it, so a paused run can be resumed once you have decided it is worth more."
+            "description": "“Quick”, “Standard” and “Extended” set limits on steps, tokens and time. Expand “Set exact limits” for the numbers. Reaching a limit pauses the build; it does not remove the plan."
           }
         ]
       },
       {
-        "title": "While It Runs",
+        "title": "While it runs",
         "items": [
           {
             "action": "Watch the checklist",
-            "description": "The running step is highlighted on the plan card, spent budgets are shown against their limits, and every tool call the run has made is listed - including the ones that failed."
+            "description": "The running step is highlighted on the plan card, spent budgets are shown against their limits, and every tool call the run has made is listed — including the ones that failed."
           },
           {
             "action": "Edit the plan",
@@ -407,26 +502,26 @@
           },
           {
             "action": "Stopping is permanent",
-            "description": "Pausing and interruptions can be resumed. Stop cannot - a stopped build is over, and the way forward is Undo build or a new one. This is deliberate, and the card says so before you press it."
+            "description": "Paused, interrupted and failed builds can be resumed when their state permits. “Stop” ends the running build; a stopped run cannot be resumed, but its completed work can be reviewed or undone."
           },
           {
             "action": "Undo build",
-            "description": "Reverses what the build did, back as far as the first thing you changed yourself afterwards. Your own later edits survive."
+            "description": "“Undo build” is available after a run ends. It reverses build changes only up to the first later edit made by someone else; your own subsequent changes are preserved."
           }
         ]
       }
     ]
   },
   {
-    "name": "The Agent",
-    "description": "An agent that works inside a real folder on your machine.",
+    "name": "The agent",
+    "description": "Run a workspace agent inside a chosen folder on your machine.",
     "subsections": [
       {
-        "title": "Setting One Up",
+        "title": "Setting one up",
         "items": [
           {
             "action": "Task and workspace",
-            "description": "Describe the job, then choose where it happens. The default is a private scratch folder. Choosing one of your own folders is what grants access to it - the agent cannot reach outside the folder it is bound to."
+            "description": "Open “Agent”, describe the task, and choose “Choose folder…” or leave “Private scratch folder” selected. Choosing your own folder is how you give the agent access to it."
           },
           {
             "action": "What it can do",
@@ -434,7 +529,7 @@
           },
           {
             "action": "Turn budget",
-            "description": "A hard cap on how many turns one task gets. The run stops when it is reached, which is the backstop against an agent that has misunderstood the job and is busy being thorough about it."
+            "description": "“Max turns” in Agent > Budget is a hard cap for one run. The agent stops when it reaches the limit instead of continuing indefinitely."
           },
           {
             "action": "AGENTS.md",
@@ -443,11 +538,11 @@
         ]
       },
       {
-        "title": "Working With It",
+        "title": "Working with it",
         "items": [
           {
             "action": "Approvals",
-            "description": "Anything that changes your machine asks first, showing the exact command or file write. Deny is the focused default. Some tools can be approved for the whole session; the ones that run arbitrary code cannot, by design."
+            "description": "The agent shows the command or write that needs approval; use the explicit approval controls rather than assuming a running task has unrestricted access. Session-wide approvals are only offered for eligible tools."
           },
           {
             "action": "It can ask you things",
@@ -458,27 +553,52 @@
             "description": "Send another instruction to a finished agent and it picks up with its workspace and history intact."
           },
           {
-            "action": "Agent or Builder?",
-            "description": "The Builder builds a graph - nodes, charts, documents, on the canvas. The Agent changes files in a folder. If the output is something you want to read here, use the Builder; if it is something you want on disk, use the Agent."
+            "action": "Agent or builder?",
+            "description": "The Builder builds a graph — nodes, charts, documents, on the canvas. The Agent changes files in a folder. If the output is something you want to read here, use the Builder; if it is something you want on disk, use the Agent."
           }
         ]
       }
     ]
   },
   {
-    "name": "Models and Settings",
-    "description": "Providers, per-task routing, and the settings worth knowing about.",
+    "name": "Models and settings",
+    "description": "Find model providers, defaults, agent tools and resource limits in the grouped Settings rail.",
     "subsections": [
       {
-        "title": "Where Models Come From",
+        "title": "Settings rail",
+        "items": [
+          {
+            "action": "General",
+            "description": "“General” has Theme, “Show token counter”, “Model selection policy” and “Notification types”. The rail groups the other settings under Models, Knowledge, Agent & tools and System."
+          },
+          {
+            "action": "Models",
+            "description": "The “Models” group contains “Ollama”, “Llama.cpp”, “API endpoint”, “Fal.ai” and “Model pricing”. Model setup and provider prices belong here, not in the composer menu."
+          },
+          {
+            "action": "Knowledge",
+            "description": "The “Knowledge” group opens its own Knowledge page, including embedding choices. The toolbar’s Knowledge Library is the separate place to import and search documents."
+          },
+          {
+            "action": "Agent & tools",
+            "description": "The “Agent & tools” group contains “Workspace agent”, “MCP servers”, “Plugins” and “Integrations”. Plugin grants are switches on the Plugins page, not buttons in the picker."
+          },
+          {
+            "action": "System",
+            "description": "The “System” group contains “Resource limits”, which describes the execution limits enforced for sandboxed runs."
+          }
+        ]
+      },
+      {
+        "title": "Where models come from",
         "items": [
           {
             "action": "Ollama and Llama.cpp",
-            "description": "Local models have separate Settings pages. Ollama shows server status, can start an already-installed server, pull or remove models, and configure per-model context windows; install the Ollama runtime yourself. Llama.cpp uses selected GGUF files. Model downloads and approved Agent network tools can still use the internet."
+            "description": "Settings > Models has separate “Ollama” and “Llama.cpp” pages. Ollama can manage a local server and installed models; Llama.cpp works with selected GGUF files. Installing a runtime is still a separate step."
           },
           {
-            "action": "API Endpoint",
-            "description": "Search for a lab, model family, or cloud platform. Choose a provider, connect its API key, and load its models or enter a model ID. Endpoints that support image generation have a separate image model field."
+            "action": "API endpoint",
+            "description": "Settings > Models > “API endpoint” is for configured cloud providers, API keys and model choices. “Fal.ai” has its own page, and “Model pricing” is a separate entry in the same group."
           },
           {
             "action": "Per-task routing",
@@ -486,58 +606,62 @@
           },
           {
             "action": "Routing preference",
-            "description": "Cheapest Capable, Fastest or Best Quality, for tasks that are set to choose automatically rather than pinned to a model."
+            "description": "In Settings > General, “Model selection policy” offers “Cheapest capable”, “Fastest” and “Best quality” for tasks without an assigned model or pin."
           }
         ]
       },
       {
-        "title": "Worth Knowing",
+        "title": "Worth knowing",
         "items": [
           {
             "action": "Reasoning level",
-            "description": "Off, Low, Medium or High, in the composer, per message. Higher levels think longer and cost more; High on a question that did not need it is the most common way to waste tokens here."
+            "description": "The composer shows “Choose a reasoning level” only for a model that supports it. Higher levels can use more tokens; the menu is a per-message selection, not a global Settings page."
           },
           {
             "action": "Token counter",
-            "description": "Estimates what the draft in the composer will cost before you send it. An estimate, not an invoice."
+            "description": "Settings > General has the “Show token counter” switch. The composer’s count estimates a draft’s tokens before sending; it is not a billing receipt."
           },
           {
             "action": "Resource limits",
-            "description": "Caps on what executed code may consume. They apply to plugin runs, sandboxes and agents alike, including under Autopilot."
+            "description": "Settings > System > “Resource limits” shows limits applied to executed work. They also matter when the Builder runs in Autopilot; increasing a Builder budget does not bypass resource caps."
           },
           {
             "action": "MCP servers and integrations",
-            "description": "Connect external tools through their own Settings pages. What a connected server exposes becomes available to agents - worth knowing before connecting one you have not read."
+            "description": "Settings > Agent & tools separates “MCP servers” and “Integrations” from “Plugins” and “Workspace agent”. Review which tools an integration exposes before letting an agent use them."
           },
           {
             "action": "Theme",
-            "description": "Match System, Light or Dark. The canvas follows."
+            "description": "In Settings > General, “Theme” offers “Match system”, “Light” and “Dark”. The canvas and dialogs follow that choice."
           },
           {
             "action": "Optional dependencies",
             "description": "PDF and DOCX handling and HTML preview need libraries that may not be installed. When one is missing the app names it rather than failing quietly."
+          },
+          {
+            "action": "Notifications",
+            "description": "Success, warning and error messages appear as toasts in the “Notifications” region, not as a permanent banner. Expand “Details” when offered or choose “Dismiss notification”; Settings > General controls notification types."
           }
         ]
       }
     ]
   },
   {
-    "name": "Saving and Output",
-    "description": "Persistence, attachments, and getting work back out.",
+    "name": "Saving and output",
+    "description": "Save graphs, import context and export the work you want to share.",
     "subsections": [
       {
         "title": "Saving",
         "items": [
           {
             "action": "Save",
-            "description": "Writes the current graph to the Library. Work is also saved in the background as you go, so Save is a bookmark more than a rescue.",
+            "description": "“Save” writes the graph to the Library. It is also saved during normal work, but Ctrl+S is a useful deliberate checkpoint.",
             "keys": [
               "Ctrl+S"
             ]
           },
           {
             "action": "Library",
-            "description": "Every saved graph, grouped by when you touched it, with a preview of its last message. Rename and delete are per row.",
+            "description": "“Library” opens saved graphs in the “Chat Library”; you can search, rename, tag, archive or delete them by row.",
             "keys": [
               "Ctrl+L"
             ]
@@ -549,19 +673,19 @@
         ]
       },
       {
-        "title": "In and Out",
+        "title": "In and out",
         "items": [
           {
             "action": "Attachments",
-            "description": "Drop files onto the canvas or attach them in the composer. Text, documents, code and images all become nodes you can branch from."
+            "description": "Use the composer’s “Attach context” button to stage a file; its attachment chips let you remove files before sending. Imported knowledge documents are handled separately in “Knowledge”."
           },
           {
             "action": "Export PNG",
-            "description": "The whole canvas as an image - the fastest way to show someone the shape of a project without giving them the project."
+            "description": "Open the toolbar’s “Export” menu and choose “Export PNG…” to capture the canvas as an image. “Export methods…” is a separate export action for supported methods."
           },
           {
             "action": "Copy anything",
-            "description": "Code blocks, replies and document text all copy out cleanly. A graph is a place to think, not a place work gets trapped."
+            "description": "Chat nodes expose “Copy text” in their hover actions and Edit menu; code and document views have their own copy controls. Copying text does not change the graph."
           }
         ]
       }
@@ -569,7 +693,7 @@
   },
   {
     "name": "Keyboard",
-    "description": "Every global shortcut. All of them are Ctrl on Windows and Linux, Cmd on macOS.",
+    "description": "Global Ctrl shortcuts on Windows and Linux; use Cmd for the corresponding macOS shortcuts.",
     "subsections": [
       {
         "title": "Project",
@@ -582,7 +706,7 @@
             ]
           },
           {
-            "action": "Open the Library",
+            "action": "Open the library",
             "description": "Your saved graphs.",
             "keys": [
               "Ctrl+L"
@@ -635,7 +759,7 @@
           },
           {
             "action": "Redo",
-            "description": "Both spellings are wired - use whichever your hands already know.",
+            "description": "Both spellings are wired — use whichever your hands already know.",
             "keys": [
               "Ctrl+Shift+Z",
               "Ctrl+Y"
@@ -685,11 +809,11 @@
         ]
       },
       {
-        "title": "In a Text Field",
+        "title": "In a text field",
         "items": [
           {
             "action": "Shortcuts stand down",
-            "description": "While a text field has focus, editing keys go to the field. Ctrl+Z undoes your typing, not the graph. The exceptions are deliberate: Ctrl+S saves and Ctrl+K opens the palette from anywhere, because both are reflexes worth honouring mid-sentence."
+            "description": "When a text field has focus, editing chords work inside it. Ctrl+Z undoes typing rather than the graph; Ctrl+S and Ctrl+K still save and open the command palette."
           }
         ]
       }
