@@ -121,9 +121,6 @@ function OllamaTaskField({
       </div>
       {uiMode === "custom" && (
         <div className="settings-field">
-          <label className="settings-field-label" htmlFor={`ollama-task-custom-${task}`}>
-            {OLLAMA_TASK_LABELS[task]} (custom model ID)
-          </label>
           <TextField id={`ollama-task-custom-${task}`}
             label={OLLAMA_TASK_LABELS[task] + " (custom model ID)"}
             type="text" mono list={OLLAMA_MODELS_DATALIST_ID}
@@ -354,7 +351,7 @@ function OllamaModelCard({
               }}>Confirm remove</Button>
             <Button variant="secondary" onKeyDown={onConfirmKeyDown} onClick={() => {
               setConfirming(false);
-              removeButtonRef.current?.focus();
+              [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.getAttribute("aria-label") === `Remove ${model.name}`)?.focus();
             }}>Keep model</Button>
           </div>
         </div>
@@ -410,6 +407,8 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
 
   return (
     <div className="settings-general-page">
+      <h2 className="settings-page-title">Ollama</h2>
+      <p className="settings-page-description">Manage local models, reasoning and download status.</p>
       <ProviderModeSwitch mode={MODE_OLLAMA_LOCAL} state={state} transport={transport} />
 
       <Card {...{ title: "Ollama server" }} actions={
@@ -455,7 +454,7 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
         </p>
       )}
 
-      <FieldGroup {...{ title: "Reasoning Level" }}>
+      <FieldGroup {...{ title: "Reasoning level" }}>
         <FormRow label="Reasoning level" layout="inline">
           <SegmentedControl label="Reasoning level" options={REASONING_LEVEL_OPTIONS}
             value={state.ollamaReasoningLevel}
@@ -464,7 +463,7 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
       </FieldGroup>
 
       <p className="settings-update-status">
-        Current Active Model: <strong>{state.ollamaCurrentModel || "Auto — no compatible installed model found"}</strong>
+        Current active model: <strong>{state.ollamaCurrentModel || "Auto — no compatible installed model found"}</strong>
       </p>
 
       <div className="settings-button-row">
@@ -477,7 +476,7 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
       </div>
       <p className="settings-update-status">{state.ollamaScanSummary}</p>
       {state.ollamaScanStatus === "running" && (
-        <p className="settings-update-status" role="status">Scanning for Ollama models…</p>
+        <p className="settings-update-status" role="status"><Spinner size={14} decorative /> Scanning…</p>
       )}
       {state.ollamaInventorySource === "folder" && (
         <p className="settings-field-hint">
