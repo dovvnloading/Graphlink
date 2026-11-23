@@ -17,6 +17,7 @@ FIXTURES = {
     "changed_target": ("statement_mismatch", []),
     "sorry": ("forbidden_axiom", ["sorryAx"]),
     "new_axiom": ("forbidden_axiom", ["Graphlink.Spike.extraAssumption"]),
+    "target_propext": ("accepted", ["propext"]),
     "imported_axiom": ("forbidden_axiom", ["Graphlink.Dependency.assumed"]),
     "imported_sorry": ("forbidden_axiom", ["sorryAx"]),
 }
@@ -62,10 +63,12 @@ def validate_replay(name, artifact, measurement):
         "solutionExportSha256": digest(artifact),
         "target": "Graphlink.Spike.addZero",
         "policy": "no-axioms-v1",
+        "replayEnvironmentAxioms": ["propext"],
         "statementMatches": outcome != "statement_mismatch",
         "axioms": axioms,
         "comparatorExit": 0 if accepted else 1,
         "comparatorOutcome": outcome,
+        "targetPolicyOutcome": "forbidden_axiom" if axioms else outcome,
         "replayedBy": ["nanoda", "Lean default"] if accepted else [],
         "strictAssurance": "disabled",
     }

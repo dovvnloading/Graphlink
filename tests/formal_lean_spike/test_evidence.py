@@ -29,10 +29,12 @@ class TestEvidence(unittest.TestCase):
             "challengeType": "elaborated test type",
             "target": "Graphlink.Spike.addZero",
             "policy": "no-axioms-v1",
+            "replayEnvironmentAxioms": ["propext"],
             "statementMatches": False,
             "axioms": [],
             "comparatorExit": 1,
             "comparatorOutcome": "statement_mismatch",
+            "targetPolicyOutcome": "statement_mismatch",
             "replayedBy": [],
             "strictAssurance": "disabled",
         }

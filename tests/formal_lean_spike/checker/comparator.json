@@ -2,6 +2,6 @@
   "challenge_module": "Challenge",
   "solution_module": "Solution",
   "theorem_names": ["Graphlink.Spike.addZero"],
-  "permitted_axioms": [],
+  "permitted_axioms": ["propext"],
   "external_kernels": {"nanoda": ["nanoda_bin"]}
 }

@@ -15,9 +15,13 @@ import tempfile
 ASSETS = Path("/opt/graphlink/checker")
 CHALLENGE = ASSETS / "Challenge.ndjson"
 TARGET = "Graphlink.Spike.addZero"
-FIXTURES = {"positive", "changed_target", "sorry", "new_axiom", "imported_axiom", "imported_sorry"}
+FIXTURES = {"positive", "changed_target", "sorry", "new_axiom", "imported_axiom", "imported_sorry", "target_propext"}
 EXPORT_LIMIT = 16 * 1024 * 1024
 LOG_LIMIT = 64 * 1024
+
+# The pinned kernel's primitive closure contains propext. The target policy
+# separately requires an empty list measured from the named theorem.
+REPLAY_ENVIRONMENT_AXIOMS = ("propext",)
 
 # lake comparator's primitiveTargets at the locked Lean revision. Supplying an
 # export bypasses its exporter, so we must request its full set of primitive roots.
@@ -80,7 +84,7 @@ def export_module(source: Path, module: str, work: Path, output) -> None:
     if source.stem in {"imported_axiom", "imported_sorry"}:
         compile_module(ASSETS / "fixtures" / "Dependency.lean", "Dependency", work, env)
     compile_module(source, module, work, env)
-    require_success(["leanexport", module, "--", TARGET, *PRIMITIVES], work, env, output)
+    require_success(["leanexport", module, "--", TARGET, *REPLAY_ENVIRONMENT_AXIOMS, *PRIMITIVES], work, env, output)
     size = output.tell()
     if not 0 < size < EXPORT_LIMIT:
         raise ValueError("Incomplete or oversized Lean export")
@@ -104,23 +108,24 @@ def inspect_export(solution: Path) -> dict:
     return inspected
 
 
-def classify_report(facts: dict, code: int, log: bytes) -> tuple[str, list[str]]:
+def classify_report(facts: dict, code: int, log: bytes) -> tuple[str, list[str], str]:
     # Exclusively the fresh replay container produces this log. The candidate
     # compiler's streams never reach this function. A tool failure, even with
     # comparator's generic exit 1, cannot satisfy an expected semantic rejection.
     lines = log.decode("utf-8", errors="strict").splitlines()
     if not facts["statementMatches"]:
         if code == 1 and f"error: Challenge and solution theorem statement do not match: '{TARGET}'" in lines:
-            return "statement_mismatch", []
-    elif facts["axioms"]:
-        if code == 1 and any(f"error: Illegal axiom detected: '{name}'" in lines for name in facts["axioms"]):
-            return "forbidden_axiom", []
+            return "statement_mismatch", [], "statement_mismatch"
+    elif rejected := set(facts["axioms"]).difference(REPLAY_ENVIRONMENT_AXIOMS):
+        if code == 1 and any(f"error: Illegal axiom detected: '{name}'" in lines for name in rejected):
+            return "forbidden_axiom", [], "forbidden_axiom"
     else:
         kernels = ["nanoda", "Lean default"]
         if code == 0 and "Your solution is okay!" in lines and all(
             f"{name} kernel accepts the solution" in lines for name in kernels
         ):
-            return "accepted", kernels
+            target_outcome = "forbidden_axiom" if facts["axioms"] else "accepted"
+            return "accepted", kernels, target_outcome
     sys.stderr.buffer.write(log)
     raise ValueError("Comparator result and independent proof measurements disagree or a checker is unavailable")
 
@@ -138,7 +143,7 @@ def replay(data: bytes, work: Path) -> dict:
         "--inadvisably-no-sandbox",
     ]
     code, log = run_command(args, work, os.environ.copy())
-    outcome, kernels = classify_report(facts, code, log)
+    outcome, kernels, target_outcome = classify_report(facts, code, log)
     sys.stderr.write(log.decode("utf-8", errors="strict"))
     return {
         **facts,
@@ -146,6 +151,8 @@ def replay(data: bytes, work: Path) -> dict:
         "challengeExportSha256": hashlib.sha256(CHALLENGE.read_bytes()).hexdigest(),
         "solutionExportSha256": hashlib.sha256(data).hexdigest(),
         "policy": "no-axioms-v1",
+        "replayEnvironmentAxioms": list(REPLAY_ENVIRONMENT_AXIOMS),
+        "targetPolicyOutcome": target_outcome,
         "comparatorExit": code,
         "comparatorOutcome": outcome,
         "replayedBy": kernels,

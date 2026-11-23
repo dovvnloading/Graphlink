@@ -4,7 +4,10 @@ import io
 
 import pytest
 
-from stage import TARGET, classify_report, read_bounded
+import json
+from pathlib import Path
+
+from stage import REPLAY_ENVIRONMENT_AXIOMS, TARGET, classify_report, read_bounded
 
 
 def test_accepted_measurement_requires_both_kernel_verdicts():
@@ -14,7 +17,10 @@ def test_accepted_measurement_requires_both_kernel_verdicts():
         b"Lean default kernel accepts the solution\n"
         b"Your solution is okay!\n"
     )
-    assert classify_report(facts, 0, log) == ("accepted", ["nanoda", "Lean default"])
+    assert classify_report(facts, 0, log) == ("accepted", ["nanoda", "Lean default"], "accepted")
+    assert classify_report({**facts, "axioms": ["propext"]}, 0, log) == (
+        "accepted", ["nanoda", "Lean default"], "forbidden_axiom"
+    )
     with pytest.raises(ValueError):
         classify_report(facts, 0, log.split(b"\n", 1)[1])
     with pytest.raises(ValueError):
@@ -31,7 +37,7 @@ def test_accepted_measurement_requires_both_kernel_verdicts():
     ],
 )
 def test_negative_measurement_requires_the_specific_comparator_rejection(facts, diagnostic, outcome):
-    assert classify_report(facts, 1, diagnostic.encode()) == (outcome, [])
+    assert classify_report(facts, 1, diagnostic.encode()) == (outcome, [], outcome)
     with pytest.raises(ValueError):
         classify_report(facts, 1, b"error: missing checker")
     with pytest.raises(ValueError):
@@ -42,3 +48,8 @@ def test_excess_input_is_rejected_in_full():
     assert read_bounded(io.BytesIO(b"abc"), 3) == b"abc"
     with pytest.raises(ValueError):
         read_bounded(io.BytesIO(b"abcd"), 3)
+
+
+def test_exported_replay_foundations_match_comparator_configuration():
+    config = json.loads(Path(__file__).with_name("comparator.json").read_bytes())
+    assert config["permitted_axioms"] == list(REPLAY_ENVIRONMENT_AXIOMS) == ["propext"]

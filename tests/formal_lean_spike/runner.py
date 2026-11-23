@@ -17,7 +17,8 @@ from threading import Event
 
 ARTIFACT_LIMIT = 16 * 1024**2
 DIAGNOSTIC_LIMIT = 256 * 1024
-FIXTURES = {b"positive", b"changed_target", b"sorry", b"new_axiom", b"imported_axiom", b"imported_sorry"}
+FIXTURES = {b"positive", b"changed_target", b"sorry", b"new_axiom", b"imported_axiom",
+            b"imported_sorry", b"target_propext"}
 STAGES = {"probe", "wait", "export", "replay"}
 ENTRYPOINT = ["/usr/local/bin/python3", "-I", "/opt/graphlink/isolation_entrypoint.py"]
 TMPFS = "rw,nosuid,nodev,noexec,size=268435456,mode=1777"

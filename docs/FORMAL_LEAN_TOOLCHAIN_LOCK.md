@@ -1,6 +1,6 @@
 # Formal Lean toolchain spike
 
-Graphlink's first Lean milestone tests whether an independently replayed proof can be tied to an exact theorem in an offline container. It accepts six source-controlled fixtures. There is no Graphlink plugin, workspace input, or user-facing verification status in this milestone. The [implementation plan, §19](https://github.com/dovvnloading/Graphlink/blob/4523324e890aada048fe8b82a2c447704f7cc442/docs/FORMAL_LEAN_PLUGIN_PLAN.md#19-final-implementation-handoff) makes this evidence a prerequisite for product work.
+Graphlink's first Lean milestone tests whether an independently replayed proof can be tied to an exact theorem in an offline container. It accepts seven source-controlled fixtures. Product integration follows review of the proof and isolation evidence. [Implementation plan, §19](https://github.com/dovvnloading/Graphlink/blob/4523324e890aada048fe8b82a2c447704f7cc442/docs/FORMAL_LEAN_PLUGIN_PLAN.md#19-final-implementation-handoff)
 
 ## Reproduce the experiment
 
@@ -29,7 +29,7 @@ python3 -m unittest discover -s tests/formal_lean_spike
 | mathlib | Revision `fc4f59e577feb1a4956671bc04ac18aaaf8cd842`. Provisioning checks the dependency manifest digest, checks out each manifest revision and compiles the `Mathlib.Data.Nat.Basic` closure from source. |
 | Image identity | The lock pins the Linux/amd64 base image manifest. Each build produces its own final local image configuration digest. The runner requires this build's full ID. A distributed release would also need a reviewed final registry manifest digest. |
 | Trusted challenge | `checker/Challenge.lean` declares `Graphlink.Spike.addZero (n : Nat) : n + 0 = n`. The placeholder belongs to the challenge. The proof must come from the solution export. |
-| Assumptions | The fixture policy allows zero axioms, including zero uses of classical choice, propositional extensionality or quotient soundness. The policy applies to the candidate's transitive dependencies. |
+| Assumptions | nanoda needs the pinned declaration of propositional extensionality (`propext`) to check the kernel primitive exports. The candidate theorem's separate policy allows zero transitive axioms, including zero uses of `propext`. Both appear separately in the report. |
 | Platform scope | Experimental Linux/amd64 only. Windows, macOS, ARM, Podman and production desktop checking are outside the measured profile. |
 
 The image build exports the trusted challenge before any run. Each candidate compiles in its own fresh container. Only the bounded declaration export crosses into the replay container. The replay stage reads the challenge from the read-only image, compares the target, traverses exported declarations, and runs Lake's comparator with the Lean kernel and nanoda. Only the outer Docker container provides process isolation in this profile. The comparator's inner sandbox is disabled for export-to-export replay.
@@ -42,6 +42,7 @@ The image build exports the trusted challenge before any run. Each candidate com
 | Changed proposition | A valid proof of `True` with the same theorem name is rejected for statement mismatch. |
 | Direct and imported placeholders | Each candidate compiles. Independent replay attributes `sorryAx` to the target and rejects it. |
 | Direct and imported custom axioms | Replay identifies the specific transitive assumption and records comparator rejection. |
+| Proof using `propext` | Both kernels accept the proof under the replay environment's assumptions. The inspector attributes `propext` to the theorem and the zero-axiom target policy rejects it. |
 | Isolation and cleanup | The runner checks daemon metadata and kernel-visible restrictions. A fixed waiting fixture must start, exceed its deadline, and be removed. |
 
 The report binds the local image ID, toolchain and module inventory hashes, challenge and solution export hashes, elaborated type, assumptions, checker outcomes and timestamps. Review the command transcripts alongside the machine-readable measurements. Timestamps vary between runs. The report is unsigned experimental evidence. It grants no authority to a restored Graphlink session.
