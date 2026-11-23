@@ -25,14 +25,6 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/canvas/ArtifactNodeView.tsx", rule: "R8", count: 1 },
 
-  { file: "app/canvas/ChartNodeView.tsx", rule: "R1", count: 1 },
-
-  { file: "app/canvas/ChartNodeView.tsx", rule: "R4", count: 3 },
-
-  { file: "app/canvas/ChartNodeView.tsx", rule: "R6", count: 2 },
-
-  { file: "app/canvas/ChartNodeView.tsx", rule: "R8", count: 1 },
-
   { file: "app/canvas/ChatCitationChips.css", rule: "R9", count: 5 },
 
   { file: "app/canvas/ChatCitationChips.css", rule: "R10", count: 1 },
@@ -209,49 +201,13 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/canvas/ScientificDataTable.tsx", rule: "R5", count: 1 },
 
-  { file: "app/canvas/ScientificNodeView.css", rule: "R9", count: 18 },
-
-  { file: "app/canvas/ScientificNodeView.css", rule: "R10", count: 5 },
-
-  { file: "app/canvas/ScientificNodeView.css", rule: "R14", count: 66 },
-
   { file: "app/canvas/ScientificNodeView.tsx", rule: "R2", count: 1 },
-
-  { file: "app/canvas/ScientificNodeView.tsx", rule: "R4", count: 9 },
-
-  { file: "app/canvas/ScientificNodeView.tsx", rule: "R5", count: 7 },
-
-  { file: "app/canvas/ScientificNodeView.tsx", rule: "R6", count: 1 },
-
-  { file: "app/canvas/ScientificNodeView.tsx", rule: "R8", count: 8 },
-
-  { file: "app/canvas/ScientificResultViews.css", rule: "R9", count: 6 },
-
-  { file: "app/canvas/ScientificResultViews.css", rule: "R10", count: 3 },
-
-  { file: "app/canvas/ScientificResultViews.css", rule: "R14", count: 12 },
-
-  { file: "app/canvas/ScientificResultViews.tsx", rule: "R1", count: 1 },
-
-  { file: "app/canvas/ScientificResultViews.tsx", rule: "R5", count: 2 },
-
-  { file: "app/canvas/ScientificResultViews.tsx", rule: "R8", count: 3 },
 
   { file: "app/canvas/ScientificWorkspace.tsx", rule: "R8", count: 1 },
 
   { file: "app/canvas/StalenessBadge.tsx", rule: "R2", count: 1 },
 
   { file: "app/canvas/StalenessBadge.tsx", rule: "R8", count: 1 },
-
-  { file: "app/canvas/TableContributors.tsx", rule: "R4", count: 1 },
-
-  { file: "app/canvas/TableSource.tsx", rule: "R4", count: 2 },
-
-  { file: "app/canvas/TableWorkflow.css", rule: "R9", count: 1 },
-
-  { file: "app/canvas/TableWorkflow.css", rule: "R10", count: 1 },
-
-  { file: "app/canvas/TableWorkflow.css", rule: "R14", count: 17 },
 
   { file: "app/canvas/ThinkingNodeView.tsx", rule: "R7", count: 4 },
 
@@ -412,15 +368,15 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/context/ContextInspectorLauncher.tsx", rule: "R8", count: 1 },
 
-  { file: "app/styles.css", rule: "R9", count: 355 },
+  { file: "app/styles.css", rule: "R9", count: 342 },
 
-  { file: "app/styles.css", rule: "R10", count: 183 },
+  { file: "app/styles.css", rule: "R10", count: 172 },
 
-  { file: "app/styles.css", rule: "R11", count: 3 },
+  { file: "app/styles.css", rule: "R11", count: 2 },
 
-  { file: "app/styles.css", rule: "R12", count: 9534 },
+  { file: "app/styles.css", rule: "R12", count: 8864 },
 
-  { file: "app/styles.css", rule: "R14", count: 771 },
+  { file: "app/styles.css", rule: "R14", count: 731 },
 
 ];
 
