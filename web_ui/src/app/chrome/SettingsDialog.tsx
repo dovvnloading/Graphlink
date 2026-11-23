@@ -1,9 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
 import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
 import type { AppPluginsState } from "../../lib/bridge-core/generated/app-plugins-state";
 import type { AppSettingsState } from "../../lib/bridge-core/generated/app-settings-state";
 import { Dialog, useOverlays } from "../overlays/overlays";
+import { InlineAlert } from "../ui/InlineAlert";
+import { Icon } from "../ui/icons/Icon";
+import "./settings/settings.css";
 import { CloudProviderSettings } from "./CloudProviderSettings";
 import { KnowledgeSettingsPage } from "./KnowledgeSettingsPage";
 import { ModelPricingSettings } from "./ModelPricingSettings";
@@ -28,22 +31,32 @@ export { parseEnvLines } from "./settings/McpServersPage";
  * backend/native_dialogs.py's docstring for the mechanism.
  */
 
-const SECTIONS = [
-  "General",
-  "Model pricing",
-  "Knowledge",
-  "Ollama (Local)",
-  "Llama.cpp (Local)",
-  "API Endpoint",
-  "Fal.ai",
-  "Integrations",
-  "MCP Servers",
-  "Workspace Agent",
-  "Plugins",
-  "Resource Limits",
+const SECTION_GROUPS = [
+  { label: "", items: [
+    { section: "General", label: "General", icon: "settings" },
+  ] },
+  { label: "Models", items: [
+    { section: "Ollama (Local)", label: "Ollama", icon: "cpu" },
+    { section: "Llama.cpp (Local)", label: "Llama.cpp", icon: "cpu" },
+    { section: "API Endpoint", label: "API endpoint", icon: "cloud" },
+    { section: "Fal.ai", label: "Fal.ai", icon: "sparkle" },
+    { section: "Model pricing", label: "Model pricing", icon: "coins" },
+  ] },
+  { label: "Knowledge", items: [
+    { section: "Knowledge", label: "Knowledge", icon: "database" },
+  ] },
+  { label: "Agent & tools", items: [
+    { section: "Workspace Agent", label: "Workspace agent", icon: "agent" },
+    { section: "MCP Servers", label: "MCP servers", icon: "hub" },
+    { section: "Plugins", label: "Plugins", icon: "puzzle" },
+    { section: "Integrations", label: "Integrations", icon: "plug" },
+  ] },
+  { label: "System", items: [
+    { section: "Resource Limits", label: "Resource limits", icon: "shield" },
+  ] },
 ] as const;
+const SECTIONS = SECTION_GROUPS.flatMap((group) => group.items.map((item) => item.section));
 type Section = (typeof SECTIONS)[number];
-
 
 // Local mode IDs are also used by the backend setProviderMode intent.
 const MODE_OLLAMA_LOCAL = "Ollama (Local)";
@@ -179,6 +192,7 @@ function sectionKey(section: Section): string {
 
 export function SettingsDialog({ transport }: { transport: WsTransport }) {
   const [state, setState] = useState<AppSettingsState>(initialState);
+  const [localSection, setLocalSection] = useState<Section | null>(null);
   // ADR-014 stage 14.4: a second, independent subscription to "app-plugins"
   // (the same topic PluginPicker.tsx already reads) - the grants list isn't
   // part of "app-settings" (which this dialog otherwise reads exclusively),
@@ -226,41 +240,53 @@ export function SettingsDialog({ transport }: { transport: WsTransport }) {
     });
   }, [transport]);
 
-  const activeSection = (SECTIONS.find((s) => sectionKey(s) === state.activeSection) ?? "General") as Section;
+  // A section change is immediate; the persisted choice is acknowledged later
+  // by app-settings. A stale snapshot must not visibly bounce the rail back.
+  const persistedSection = SECTIONS.find((section) => sectionKey(section) === state.activeSection) ?? "General";
+  const activeSection = localSection && sectionKey(localSection) !== state.activeSection
+    ? localSection : persistedSection;
+  const switchSection = (section: Section) => {
+    setLocalSection(section);
+    transport.fireIntent("app-settings", "setActiveSection", [sectionKey(section)], undefined, true);
+  };
+  const onRailKeyDown = (event: KeyboardEvent<HTMLButtonElement>, section: Section) => {
+    const index = SECTIONS.indexOf(section);
+    const next = event.key === "ArrowDown" || event.key === "ArrowRight" ? (index + 1) % SECTIONS.length
+      : event.key === "ArrowUp" || event.key === "ArrowLeft" ? (index - 1 + SECTIONS.length) % SECTIONS.length
+      : event.key === "Home" ? 0 : event.key === "End" ? SECTIONS.length - 1 : -1;
+    if (next < 0) return;
+    event.preventDefault();
+    const target = SECTIONS[next];
+    switchSection(target);
+    event.currentTarget.closest("nav")?.querySelectorAll<HTMLButtonElement>(".settings-rail-button")[next]?.focus();
+  };
 
   return (
     <Dialog name="settings" title="Settings" className="settings-dialog">
-      {/* ADR-004 stage 4.4: persistent (visible regardless of which
-          section tab is active, not a one-time toast) - a DPAPI failure
-          means every API key/GitHub token this dialog saves from now on
-          is written to disk in PLAINTEXT, a fact worth surfacing no
-          matter which page a user happens to be on when it's true. Hidden
-          entirely in the common case (secretsEncryptedAtRest is true).
-          role="alert" (adversarial-review fix) matches every other warning/
-          error banner in this codebase (BridgeErrorState.tsx, the 3
-          node-view banner-error divs) - without it, the dialog's own focus
-          trap moves focus straight to the rail buttons on open (this <p>
-          isn't focusable), so screen-reader users could tab straight past
-          this security-relevant text and never encounter it, and a later
-          flip from encrypted to unencrypted while the dialog is already
-          open would render with no assistive-tech announcement at all. */}
       {!state.secretsEncryptedAtRest && (
-        <p className="settings-update-status settings-secrets-warning" data-level="warning" role="alert">
-          API keys are stored unencrypted on this system (Windows DPAPI is unavailable or failing here).
-        </p>
+        <div className="settings-secrets-warning" role="alert">
+          <InlineAlert variant="warning" title="Secrets are not encrypted"
+            body="API keys are stored unencrypted on this system (Windows DPAPI is unavailable or failing here)." />
+        </div>
       )}
       <div className="settings-shell">
         <nav className="settings-rail" aria-label="Settings sections">
-          {SECTIONS.map((section) => (
-            <button
-              key={section}
-              type="button"
-              className={"settings-rail-button" + (section === activeSection ? " active" : "")}
-              aria-current={section === activeSection ? "page" : undefined}
-              onClick={() => transport.fireIntent("app-settings", "setActiveSection", [sectionKey(section)], undefined, true)}
-            >
-              {section}
-            </button>
+          {SECTION_GROUPS.map((group) => (
+            <div className="settings-rail-group" key={group.label || "general"}>
+              {group.label && <span className="settings-rail-overline">{group.label}</span>}
+              {group.items.map(({ section, label, icon }) => (
+                <button key={section} type="button"
+                  className={"settings-rail-button" + (section === activeSection ? " active" : "")}
+                  aria-label={section}
+                  aria-current={section === activeSection ? "page" : undefined}
+                  tabIndex={section === activeSection ? 0 : -1}
+                  onClick={() => switchSection(section)}
+                  onKeyDown={(event) => onRailKeyDown(event, section)}>
+                  <Icon name={icon} size="md" />
+                  <span>{label}</span>
+                </button>
+              ))}
+            </div>
           ))}
         </nav>
         <div className="settings-page" role="region" aria-label={activeSection}>
