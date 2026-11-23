@@ -1,3 +1,4 @@
+@layer kit {
 .gl-checkbox { display: inline-flex; align-items: flex-start; gap: var(--gl-space-2); width: fit-content; min-height: var(--gl-control-h-sm); cursor: pointer; color: var(--gl-surface-text-primary); font-size: var(--gl-text-sm); }
 .gl-checkbox-control { position: relative; display: inline-grid; place-items: center; flex: none; width: var(--gl-control-h-sm); height: var(--gl-control-h-sm); }
 .gl-checkbox-input { position: absolute; width: 1px; height: 1px; margin: 0; padding: 0; opacity: 0; overflow: hidden; }
@@ -13,3 +14,4 @@
 .gl-checkbox-error { display: flex; align-items: center; gap: var(--gl-space-1); font-size: var(--gl-text-xs); color: var(--gl-surface-text-primary); }
 .gl-checkbox-disabled { opacity: .45; cursor: not-allowed; }
 :where(.gl-checkbox:active) .gl-checkbox-box { border-color: var(--gl-accent); }
+}

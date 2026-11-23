@@ -1,3 +1,4 @@
+@layer kit {
 .gl-icon-button {
   box-sizing: border-box;
   display: inline-flex;
@@ -28,3 +29,4 @@
 .gl-icon-button:active:not(:disabled) { background-image: linear-gradient(var(--gl-state-pressed), var(--gl-state-pressed)); }
 .gl-icon-button:focus-visible { outline: 2px solid var(--gl-focus-ring); outline-offset: 2px; }
 .gl-icon-button:disabled { opacity: .45; cursor: not-allowed; }
+}

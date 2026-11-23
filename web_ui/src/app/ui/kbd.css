@@ -1,3 +1,4 @@
+@layer kit {
 .gl-kbd {
   display: inline-flex;
   align-items: center;
@@ -19,4 +20,5 @@
   font-size: var(--gl-text-2xs);
   line-height: var(--gl-leading-2xs);
   white-space: nowrap;
+}
 }
