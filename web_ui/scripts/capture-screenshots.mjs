@@ -159,7 +159,7 @@ async function main() {
 
     console.log("loading the demo graph...");
     await page.locator('[data-overlay-trigger="library"]').click();
-    const library = page.getByRole("dialog", { name: "Chat Library" });
+    const library = page.getByRole("dialog", { name: "Chat library" });
     await library.waitFor({ state: "visible" });
     await library.getByRole("button", { name: /^Open chat/ }).first().click();
     await library.waitFor({ state: "hidden" });
