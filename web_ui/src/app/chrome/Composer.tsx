@@ -1,11 +1,19 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { ChatKnowledgePreference, SceneStore } from "../canvas/sceneStore";
 import { KnowledgeFileImportStatus, useKnowledgeFileImport } from "../knowledgeFileImport";
 import type { StateListener } from "../../lib/ws/transport";
 import { Popover, useOverlays } from "../overlays/overlays";
 import type { ComparisonModel, ComposerStore } from "./composerStore";
 import { TokenCounter } from "./TokenCounter";
-import { ModelPicker } from "./ModelPicker";
+import { Icon } from "../ui/icons/Icon";
+import type { IconName } from "../ui/icons/registry";
+import { Button } from "../ui/Button";
+import { IconButton } from "../ui/IconButton";
+import { ToggleButton } from "../ui/ToggleButton";
+import { MenuButton, MenuItem } from "../ui/Menu";
+import { Spinner } from "../ui/Spinner";
+import "./Composer.css";
+import { ComposerModelMenu } from "./ModelPicker";
 import { useModelCapabilityPreview } from "../context/ModelCapabilityContext";
 import {
   HarnessExecutionProfileSelect, MAX_HARNESS_TASK_LENGTH, exceedsHarnessTaskLimit, type HarnessExecutionProfile,
@@ -46,24 +54,15 @@ const LazyModelComparisonPicker = lazy(() =>
   import("./ModelComparisonPicker").then((m) => ({ default: m.ModelComparisonPicker })),
 );
 
-function Icon({ name }: { name: "attach" | "send" | "chevron" | "stop" | "compare" | "reasoning" | "agent" | "knowledge" }) {
-  const paths: Record<string, string> = {
-    attach:
-      "M12 5.5 6.4 11.1a3.6 3.6 0 0 0 5.1 5.1l6-6a2.5 2.5 0 0 0-3.5-3.5l-6.1 6.1a1.35 1.35 0 0 0 1.9 1.9l5.5-5.5",
-    send: "M12 19V5m-6 6 6-6 6 6",
-    chevron: "m7 10 5 5 5-5",
-    stop: "M7 7h10v10H7z",
-    compare: "M9 8V5.5A1.5 1.5 0 0 1 10.5 4h8A1.5 1.5 0 0 1 20 5.5v8a1.5 1.5 0 0 1-1.5 1.5H16M5.5 9h8A1.5 1.5 0 0 1 15 10.5v8a1.5 1.5 0 0 1-1.5 1.5h-8A1.5 1.5 0 0 1 4 18.5v-8A1.5 1.5 0 0 1 5.5 9Z",
-    reasoning: "M12 3.5v2m0 13v2M3.5 12h2m13 0h2M6 6l1.4 1.4m9.2 9.2L18 18M6 18l1.4-1.4m9.2-9.2L18 6M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z",
-    agent: "M8 4h8m-4 0v3m-7 6V9a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v4m-14 0v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4M9 12h.01M15 12h.01M9 16h6",
-    knowledge: "M12 6.5a6 6 0 0 0-8-1v13a6 6 0 0 1 8 1m0-13a6 6 0 0 1 8-1v13a6 6 0 0 0-8 1m0-13v13",
-  };
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
-      <path d={paths[name]} />
-    </svg>
-  );
-}
+const replyIcons: Record<string, IconName> = {
+  chat: "node-user", user: "node-user", assistant: "node-assistant", thinking: "node-thinking",
+  code: "node-code", code_sandbox: "node-runner", document: "node-document",
+  html: "node-html", image: "node-image", conversation: "node-conversation",
+  web_research: "node-web", artifact: "node-artifact", gitlink: "node-git",
+  code_review: "node-review", note: "node-note", model: "node-model",
+  scientific: "node-science", chart: "node-chart", table: "node-table",
+  plan: "node-plan", harness: "node-agent", frame: "node-frame",
+};
 
 export function Composer({
   store,
@@ -101,6 +100,15 @@ export function Composer({
   const replyTargetNode = replyTargetNodeId ? scene.nodes.find((n) => n.id === replyTargetNodeId) : undefined;
   const selectedNodeId = useSyncExternalStore(sceneStore.subscribe, sceneStore.getSelectedNodeId);
   const selectedAgent = scene.nodes.find((n) => n.id === selectedNodeId && n.kind === "harness");
+  const selectedNode = scene.nodes.find((n) => n.id === selectedNodeId);
+  const effectiveReplyTarget = replyTargetNode ?? selectedNode;
+  const replyPreview = effectiveReplyTarget
+    ? (effectiveReplyTarget.content?.trim() || effectiveReplyTarget.title?.trim() || "(empty message)")
+    : "";
+  const clearReplyTarget = () => {
+    if (replyTargetNode) sceneStore.setReplyTargetNodeId(null);
+    else sceneStore.setSelectedNodeId(null);
+  };
 
   // A fresh scene's initial snapshot may have the SAME revision (0) as the
   // placeholder. Track the snapshot itself so a lookup rejected before the
@@ -112,7 +120,7 @@ export function Composer({
     if (typeof payload.revision === "number") setKnowledgeLibraryRevision(payload.revision);
   }), [sceneStore]);
 
-  const knowledgeTargetNodeId = replyTargetNode?.id ?? null;
+  const knowledgeTargetNodeId = effectiveReplyTarget?.id ?? null;
   const [knowledgeResult, setKnowledgeResult] = useState<{
     store: SceneStore;
     targetNodeId: string | null;
@@ -254,6 +262,7 @@ export function Composer({
   function send() {
     const text = composer.draft.text.trim();
     if (!text || !composer.request.canSend || knowledgeUpdating) return;
+    if (!composer.route.available || !composer.route.modelId) return;
     if (agentMode) {
       if (exceedsHarnessTaskLimit(text)) {
         setAgentError(`Agent tasks cannot exceed ${MAX_HARNESS_TASK_LENGTH.toLocaleString()} characters. Shorten the task; your draft is preserved.`);
@@ -281,16 +290,20 @@ export function Composer({
       const models = selectedComparisonModels.map(({ provider, modelId }) => ({ provider, modelId }));
       const onSettled = (succeeded: boolean) => {
         if (!succeeded) return; // preserve the draft and staged branch target
-        if (replyTargetNode?.id) sceneStore.setReplyTargetNodeId(null);
+        if (effectiveReplyTarget?.id) clearReplyTarget();
         if (store.getComposer().draft.text === text) store.updateDraft("");
       };
       const firstRootOverride = knowledgePreference?.nodeId === null ? knowledgePreference.override : null;
       if (firstRootOverride !== null && firstRootOverride !== undefined) {
-        store.sendModelComparison(text, models, replyTargetNode?.id ?? null, onSettled, firstRootOverride);
+        store.sendModelComparison(text, models, effectiveReplyTarget?.id ?? null, onSettled, firstRootOverride);
       } else {
-        store.sendModelComparison(text, models, replyTargetNode?.id ?? null, onSettled);
+        store.sendModelComparison(text, models, effectiveReplyTarget?.id ?? null, onSettled);
       }
       return;
+    }
+    // Stage a selected canvas node through the existing branch-send path.
+    if (!isSynthesizing && !replyTargetNode && effectiveReplyTarget) {
+      sceneStore.setReplyTargetNodeId(effectiveReplyTarget.id);
     }
     // Unmodified single-model and Synthesize Branches paths.
     const firstRootOverride = knowledgePreference?.nodeId === null ? knowledgePreference.override : null;
@@ -323,24 +336,14 @@ export function Composer({
           )}
         </div>
       )}
-      {!agentMode && replyTargetNode && (
-        // ADR-002 Workstream 1: the "Branch from here" pick, staged via a
-        // chat node's own context menu (ChatNodeView.tsx) and cleared
-        // either by this button or automatically once consumed by the next
-        // Send (sceneStore.ts's sendMessage).
-        <div className="composer-reply-target" aria-label="Branching from">
-          <span className="composer-reply-target-label">Branching from</span>
+      {!agentMode && effectiveReplyTarget && (
+        <div className="composer-reply-target" aria-label="Replying to">
+          <span className="composer-reply-target-label">Replying to</span>
+          <Icon name={replyIcons[effectiveReplyTarget.kind] ?? "node-conversation"} size="sm" />
           <span className="composer-reply-target-preview">
-            {replyTargetNode.content.trim().slice(0, 80) || "(empty message)"}
+            {effectiveReplyTarget.title?.trim() || replyPreview}
           </span>
-          <button
-            type="button"
-            className="composer-reply-target-clear"
-            aria-label="Cancel branching from this message"
-            onClick={() => sceneStore.setReplyTargetNodeId(null)}
-          >
-            ×
-          </button>
+          <IconButton icon="close" size="sm" label="Clear reply target" onClick={clearReplyTarget} />
         </div>
       )}
       {!agentMode && isSynthesizing && (
@@ -355,14 +358,8 @@ export function Composer({
           <span className="composer-synthesize-target-label">
             Synthesizing {synthesizeTargetNodeIds!.length} branches
           </span>
-          <button
-            type="button"
-            className="composer-synthesize-target-clear"
-            aria-label="Cancel synthesizing these branches"
-            onClick={() => sceneStore.setSynthesizeTargetNodeIds(null)}
-          >
-            ×
-          </button>
+          <IconButton icon="close" size="sm" label="Cancel synthesizing these branches"
+            onClick={() => sceneStore.setSynthesizeTargetNodeIds(null)} />
         </div>
       )}
       {composer.context.items.length > 0 && (
@@ -372,31 +369,19 @@ export function Composer({
         <div className="composer-attachment-chips" aria-label="Staged attachments">
           {composer.context.items.map((item) => (
             <span key={item.id} className="composer-attachment-chip">
+              <Icon name="file" size="sm" />
               <span className="composer-attachment-chip-kind">{item.contextLabel}</span>
-              <span className="composer-attachment-chip-name" title={item.name}>
-                {item.name}
-              </span>
+              <span className="composer-attachment-chip-name">{item.name}</span>
               {item.kind === "document" && (
-                <button
-                  type="button"
-                  className="composer-attachment-chip-add"
-                  aria-label={`Add ${item.name} to knowledge`}
-                  disabled={knowledgeImport.busy}
+                <Button size="sm" variant="ghost" disabled={knowledgeImport.busy}
                   onClick={() => void knowledgeImport.add(
                     item.name, () => store.addAttachmentToKnowledge(item.id),
-                  )}
-                >
+                  )} aria-label={`Add ${item.name} to knowledge`}>
                   Add to knowledge
-                </button>
+                </Button>
               )}
-              <button
-                type="button"
-                className="composer-attachment-chip-remove"
-                aria-label={`Remove ${item.name}`}
-                onClick={() => store.removeAttachment(item.id)}
-              >
-                ×
-              </button>
+              <IconButton icon="close" size="sm" label={`Remove ${item.name}`}
+                onClick={() => store.removeAttachment(item.id)} />
             </span>
           ))}
         </div>
@@ -443,7 +428,11 @@ export function Composer({
               ? "Give the workspace agent a task…"
               : isSynthesizing
                 ? "Describe how to combine these branches…"
-                : "Ask about this graph…"
+                : effectiveReplyTarget
+                  ? `Reply to “${replyPreview.slice(0, 40)}”…`
+                  : scene.nodes.length === 0
+                    ? "Ask anything to start a graph…"
+                    : "Ask about this graph…"
           }
           aria-label="Message composer"
           rows={1}
@@ -458,156 +447,57 @@ export function Composer({
       <div className="composer-controls">
         {composer.request.state === "generating" && (
           <div className="composer-stream-preview" role="status" aria-live="polite">
-            {streamText || "Thinking…"}
+            <Spinner size={14} decorative />
+            <span>{streamText || "Thinking…"}</span>
           </div>
         )}
-
         <div className="composer-controls-start">
-          {/* R8a: real now - opens a native file dialog (backend/native_dialogs.py)
-              and stages whatever is picked. */}
-          <button
-            type="button"
-            className="composer-icon-button"
+          <IconButton icon="attach" label="Attach context"
             disabled={!composer.capabilities.attachments || !composer.request.canSend}
-            title="Attach a file (image, audio, or a text/PDF/DOCX document)"
-            aria-label="Attach context"
-            onClick={() => store.attachFile()}
-          >
-            <Icon name="attach" />
-          </button>
-
+            onClick={() => store.attachFile()} />
           {typeof contextInspector === "function"
             ? contextInspector(knowledgePreference?.enabled ?? null, knowledgePreference?.nodeId)
             : contextInspector}
-
-          <button
-            type="button"
-            className={`composer-icon-button composer-agent-toggle composer-knowledge-toggle${knowledgePreference?.enabled ? " active" : ""}`}
-            aria-label="Use knowledge"
-            aria-pressed={knowledgePreference?.enabled ?? false}
-            disabled={!knowledgePreference || !composer.request.canSend || knowledgeUpdating || agentMode}
-            title={!knowledgePreference
-              ? (knowledgeCheckFailed ? "Could not check workspace knowledge" : "Checking workspace knowledge…")
-              : knowledgePreference.override === null
-                ? "Uses knowledge automatically when this workspace has documents"
-                : "Knowledge retrieval overridden for this branch"}
-            onClick={toggleUseKnowledge}
-          >
-            <Icon name="knowledge" />
-            <span>Use knowledge</span>
-          </button>
-
-          <button
-            type="button"
-            className={`composer-icon-button composer-agent-toggle${agentMode ? " active" : ""}`}
-            aria-label="Send to workspace agent"
-            aria-pressed={agentMode}
-            disabled={!composer.request.canSend || agentSending}
-            title={selectedAgent ? "Send a task to the selected agent" : "Start a new workspace agent from this message"}
-            onClick={() => {
-              setAgentMode((enabled) => !enabled);
+          <ToggleButton icon="knowledge" label="Use knowledge" size="sm"
+            pressed={knowledgePreference?.enabled ?? false}
+            disabled={!knowledgePreference || !knowledgePreference.hasDocuments ||
+              !composer.request.canSend || knowledgeUpdating || agentMode}
+            onPressedChange={toggleUseKnowledge} />
+          <ToggleButton icon="agent" label="Agent" aria-label="Send to workspace agent" size="sm"
+            pressed={agentMode} disabled={!composer.request.canSend || agentSending}
+            onPressedChange={(enabled) => {
+              setAgentMode(enabled);
               setComparisonMode(false);
               setAgentError("");
               overlays.close();
-            }}
-          >
-            <Icon name="agent" />
-            <span>Agent</span>
-          </button>
-
-          <button
-            type="button"
-            className="composer-icon-button composer-compare-button"
-            data-overlay-trigger="model-comparison"
-            aria-haspopup="dialog"
-            aria-pressed={comparisonMode}
-            aria-label={comparisonMode ? `Compare models: ${selectedComparisonModels.length} selected` : "Compare models"}
+            }} />
+          <IconButton icon="compare" label={comparisonMode
+            ? `Compare models: ${selectedComparisonModels.length} selected` : "Compare models"}
+            data-overlay-trigger="model-comparison" aria-pressed={comparisonMode}
             disabled={!composer.request.canSend || isSynthesizing || agentMode}
-            title="Send one message to two to four models in parallel"
-            onClick={() => { void openComparisonPicker(); }}
-          >
-            <Icon name="compare" />
-            {comparisonMode && (
-              <span className="composer-compare-count" aria-hidden="true">
-                {selectedComparisonModels.length}
-              </span>
-            )}
-          </button>
+            onClick={() => { void openComparisonPicker(); }} />
+          {comparisonMode && <span className="composer-compare-count">{selectedComparisonModels.length}</span>}
         </div>
-
         <div className="composer-rail-end">
-          {/* R8a: a REAL model picker; it enables exactly when the backend
-              says there is something to choose (capabilities.modelSelection)
-              and writes through the same per-task assignment Settings edits.
-              The provider stays in the accessible name and tooltip. */}
-          <button
-            type="button"
-            className="composer-control composer-model-chip"
-            data-overlay-trigger="model"
-            aria-haspopup="dialog"
-            aria-pressed={overlays.isOpen("model")}
-            aria-label={`${composer.route.provider} model: ${modelLabel}`}
-            disabled={!composer.request.canSend}
-            title="Choose a local or configured cloud model"
-            onClick={() => overlays.toggle("model", "popover")}
-          >
-            <span className="composer-control-value composer-control-value-model">{modelLabel}</span>
-            <Icon name="chevron" />
-          </button>
-
-          {/* Shown only when the provider and model expose adjustable
-              reasoning; an always-disabled chip was clutter. While a reply is
-              in flight it stays visible but disabled, and says why. */}
-          {composer.capabilities.reasoningSelection && (
-            <button
-              type="button"
-              className="composer-control composer-reasoning-chip"
-              data-overlay-trigger="reasoning"
-              aria-haspopup="dialog"
-              aria-pressed={overlays.isOpen("reasoning")}
-              aria-label={`Reasoning: ${composer.route.reasoning.label}`}
-              disabled={!composer.request.canSend}
-              title={!composer.request.canSend ? "Wait for the current response to finish" : "Reasoning level"}
-              onClick={() => overlays.toggle("reasoning", "popover")}
-            >
-              <Icon name="reasoning" />
-              <span className="composer-control-value composer-control-value-reasoning">
-                {composer.route.reasoning.label}
-              </span>
-              <Icon name="chevron" />
-            </button>
-          )}
-
+          <ComposerModelMenu store={store} disabled={!composer.request.canSend} />
+          {composer.capabilities.reasoningSelection && <Reasoning store={store} />}
           {showTokenCounter && <TokenCounter store={store} />}
-
           {composer.request.canCancel ? (
-            // One primary slot, two states: while a response can still be
-            // cancelled the slot IS the stop control - Send never renders
-            // beside it as a competing (and necessarily disabled) twin.
-            <button
-              type="button"
+            <IconButton icon="stop" label="Stop generating" size="lg" variant="primary"
               className="composer-send-button"
               onClick={() => {
                 if (composer.request.id) store.cancelChatRequest(composer.request.id);
-              }}
-              title="Cancel response"
-              aria-label="Cancel response"
-            >
-              <Icon name="stop" />
-            </button>
+              }} />
           ) : (
-            <button
-              type="button"
+            <IconButton icon="arrow-up" label="Send message" size="lg"
+              variant={composer.draft.text.trim() && composer.route.modelId && composer.route.available
+                ? "primary" : "ghost"}
               className="composer-send-button"
-              disabled={!composer.draft.text.trim() || !composer.request.canSend || knowledgeUpdating || agentSending || (agentMode && (!composer.route.available || !composer.route.modelId)) || (comparisonMode && !agentMode && !isSynthesizing && !comparisonReady)}
-              title={agentMode
-                ? (agentSending ? "Starting agent…" : !composer.route.modelId || !composer.route.available ? "Choose an available model first" : "Send task to workspace agent")
-                : comparisonMode && !comparisonReady && !isSynthesizing ? "Choose at least two comparison models" : "Send message"}
-              aria-label="Send message"
-              onClick={send}
-            >
-              <Icon name="send" />
-            </button>
+              disabled={!composer.draft.text.trim() || !composer.request.canSend ||
+                !composer.route.modelId || !composer.route.available ||
+                knowledgeUpdating || agentSending ||
+                (comparisonMode && !agentMode && !isSynthesizing && !comparisonReady)}
+              onClick={send} />
           )}
         </div>
       </div>
@@ -631,35 +521,26 @@ export function Composer({
           />
         </Suspense>
       )}
-      <Reasoning store={store} />
-      {overlays.isOpen("model") && <ModelPicker key={composer.route.provider} store={store} />}
+
     </div>
   );
 }
 
 function Reasoning({ store }: { store: ComposerStore }) {
   const composer = useSyncExternalStore(store.subscribe, store.getComposer);
-  const overlays = useOverlays();
-  const options = useMemo(() => composer.route.reasoning.options, [composer.route.reasoning.options]);
-
   return (
-    <Popover anchored name="reasoning" label="Choose a reasoning level" className="reasoning-popover">
-      {options.map((option) => (
-        <button
-          key={option.id}
-          type="button"
-          className={
-            "reasoning-option" + (option.id === composer.route.reasoning.level ? " active" : "")
-          }
-          onClick={() => {
-            store.setReasoningLevel(option.id);
-            overlays.close();
-          }}
-        >
-          <span className="reasoning-option-label">{option.label}</span>
-          <span className="reasoning-option-description">{option.description}</span>
-        </button>
-      ))}
-    </Popover>
+    <span className="composer-reasoning-menu">
+      <Icon name="gauge" size="sm" />
+      <MenuButton label={composer.route.reasoning.label} data-overlay-trigger="reasoning"
+        className="composer-menu-button"
+        aria-label={`Reasoning: ${composer.route.reasoning.label}`}
+        disabled={!composer.request.canSend} menuLabel="Choose a reasoning level">
+        {composer.route.reasoning.options.map((option) => (
+          <MenuItem key={option.id} label={option.label} description={option.description}
+            kind="radio" checked={option.id === composer.route.reasoning.level}
+            onSelect={() => store.setReasoningLevel(option.id)} />
+        ))}
+      </MenuButton>
+    </span>
   );
 }
