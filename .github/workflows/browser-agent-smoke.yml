@@ -36,7 +36,7 @@ jobs:
       - name: Install Graphlink runtime and Chromium test dependencies
         run: |
           python -m pip install -r requirements.txt
-          python -m pip install pytest==9.1.1 pytest-xdist==3.8.0 playwright==1.57.0
+          python -m pip install pytest==9.1.1 pytest-xdist==3.8.0 hypothesis==6.165.10 playwright==1.57.0
       - name: Install headless Chromium
         run: python -m playwright install --with-deps chromium
       - name: Exercise the actual Playwright/Chromium path without network
