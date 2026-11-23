@@ -727,4 +727,23 @@ describe("KnowledgeSearchDialog kit library", () => {
     expect(intents.some((entry) => entry[1] === "openDocument")).toBe(false);
   });
 
+
+  it("an explicitly retried failed search can succeed without editing the query", async () => {
+    const { user, intents, request } = await setup();
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    let attempts = 0;
+    request.mockImplementation(async (_topic, intent) => {
+      if (intent !== "search") return {};
+      if (attempts++ === 0) throw new Error("temporarily unavailable");
+      return { results: [RESULT] };
+    });
+    try {
+      await searchFor(user, "fox{Enter}");
+      expect(await screen.findByRole("alert")).toHaveTextContent(/Search failed/);
+      await user.click(screen.getByRole("button", { name: "Search" }));
+      expect(await screen.findByText("Fox story")).toBeInTheDocument();
+      expect(intents.filter((entry) => entry[1] === "search")).toHaveLength(2);
+    } finally { log.mockRestore(); }
+  });
+
 });
