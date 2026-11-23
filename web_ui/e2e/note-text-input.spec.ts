@@ -50,10 +50,10 @@ test("runs a word count on demand and reconnects it when the saved graph reopens
 
   await page.getByRole("button", { name: "Save", exact: true }).click();
   const libraryTrigger = page.locator('[data-overlay-trigger="library"]');
-  const library = page.getByRole("dialog", { name: "Chat Library" });
+  const library = page.getByRole("dialog", { name: "Chat library" });
   await libraryTrigger.click();
   page.once("dialog", (dialog) => { void dialog.accept(); });
-  await library.getByRole("button", { name: "New Chat", exact: true }).first().click();
+  await library.getByRole("button", { name: "New chat", exact: true }).first().click();
   await expect(page.locator(".react-flow__node")).toHaveCount(0);
   await libraryTrigger.click();
   await library.locator(".library-row").first().getByRole("button", { name: /^Open chat/ }).click();
