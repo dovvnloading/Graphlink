@@ -36,7 +36,7 @@
 .gl-toast-details pre {
   flex: 1;
   min-width: 0;
-  max-height: 16em;
+  max-height: calc(var(--gl-space-12) * 4);
   overflow: auto;
   overflow-wrap: anywhere;
   white-space: pre-wrap;

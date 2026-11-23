@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ComposerStore } from "../chrome/composerStore";
+import { ComposerStore, initialNotificationState } from "../chrome/composerStore";
+import type { WsTransport } from "../../lib/ws/transport";
 import { NotificationToaster } from "../chrome/NotificationBanner";
 import { Toaster, toast } from "./Toast";
 
@@ -86,17 +87,17 @@ describe("Toast and Toaster", () => {
 
   it("dismisses backend notifications through the unchanged store method", () => {
     vi.useFakeTimers();
-    const dismissNotification = vi.fn();
-    const notification = { visible: true, message: "Backend failed", msgType: "error" as const, revision: 4 };
-    const store = {
-      subscribe: () => () => {},
-      getNotification: () => notification,
-      dismissNotification,
-    } as unknown as ComposerStore;
+    const fireIntent = vi.fn();
+    const store = new ComposerStore({ fireIntent } as unknown as WsTransport);
+    const notification = {
+      ...initialNotificationState,
+      visible: true, message: "Backend failed", msgType: "error" as const, revision: 4,
+    };
+    store.getNotification = () => notification;
     render(<NotificationToaster store={store} />);
     expect(screen.getByRole("alert")).toHaveTextContent("Backend failed");
     fireEvent.click(screen.getByRole("button", { name: "Dismiss notification" }));
     act(() => vi.advanceTimersByTime(120));
-    expect(dismissNotification).toHaveBeenCalledOnce();
+    expect(fireIntent).toHaveBeenCalledExactlyOnceWith("notification", "dismiss", []);
   });
 });

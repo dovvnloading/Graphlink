@@ -1,10 +1,10 @@
-.gl-confirm-dialog .gl-confirm-content { display: grid; gap: var(--gl-space-4); }
-.gl-confirm-dialog .gl-confirm-body {
+.gl-confirm-content { display: grid; gap: var(--gl-space-4); }
+.gl-confirm-body {
   color: var(--gl-surface-text-primary);
   font-size: var(--gl-text-base);
   line-height: var(--gl-leading-base);
 }
-.gl-confirm-dialog .gl-confirm-billing {
+.gl-confirm-billing {
   display: flex;
   align-items: center;
   gap: var(--gl-space-1-5);
@@ -16,4 +16,4 @@
   color: var(--gl-surface-text-secondary);
   font-size: var(--gl-text-sm);
 }
-.gl-confirm-dialog .gl-confirm-detail { overflow-wrap: anywhere; font-size: var(--gl-text-xs); }
+.gl-confirm-detail { overflow-wrap: anywhere; font-size: var(--gl-text-xs); }
