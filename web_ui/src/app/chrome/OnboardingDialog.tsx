@@ -6,6 +6,7 @@ import type { AppSettingsState } from "../../lib/bridge-core/generated/app-setti
 import type { AppComposerRoute, AppComposerState } from "../../lib/bridge-core/generated/app-composer-state";
 import type { SceneStore } from "../canvas/sceneStore";
 import { Dialog, useOverlays } from "../overlays/overlays";
+import "./OnboardingDialog.css";
 
 const LazyOnboardingSteps = lazy(() =>
   import("./OnboardingSteps").then((m) => ({ default: m.OnboardingSteps })),
@@ -47,6 +48,7 @@ export function OnboardingDialog({ transport, store }: { transport: WsTransport;
   const [step, setStep] = useState(0);
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState<boolean | null>(null);
   const [providerMode, setProviderMode] = useState("");
+  const [ollamaServerStatus, setOllamaServerStatus] = useState("");
   const [route, setRoute] = useState<AppComposerRoute | null>(null);
   // Guards the auto-open to exactly once per page load - without it, every
   // later app-settings snapshot that still (briefly, before the dismissal
@@ -66,6 +68,7 @@ export function OnboardingDialog({ transport, store }: { transport: WsTransport;
         const value = validated.value as AppSettingsState;
         setHasCompletedOnboarding(value.hasCompletedOnboarding);
         setProviderMode(value.providerMode);
+        setOllamaServerStatus(value.ollamaServerStatus);
       } else {
         console.error("[app-settings] rejected snapshot:", validated.errors);
       }
@@ -119,6 +122,8 @@ export function OnboardingDialog({ transport, store }: { transport: WsTransport;
         <LazyOnboardingSteps
           step={step} setStep={setStep} providerMode={providerMode} route={route}
           store={store} openProviderSettings={openProviderSettings}
+          ollamaServerStatus={ollamaServerStatus}
+          startOllama={() => transport.fireIntent("app-settings", "startOllama", [])}
         />
       </Suspense>
     ) : null
