@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useConfirm } from "../../ui/ConfirmDialog";
 import { Button } from "../../ui/Button";
 import { TextField } from "../../ui/TextField";
@@ -39,6 +39,8 @@ export function FalAiPage({
   const [optionsJson, setOptionsJson] = useState('{"priority": "normal", "store_io": false}');
   const [localPath, setLocalPath] = useState("");
   const [fileField, setFileField] = useState("image_url");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [selectedFileName, setSelectedFileName] = useState("");
   const [modelSearch, setModelSearch] = useState("");
   const [modelCategory, setModelCategory] = useState("");
   const [estimateQuantity, setEstimateQuantity] = useState(1);
@@ -271,10 +273,26 @@ export function FalAiPage({
         </p>
         <TextField label="Input JSON field for file" value={fileField}
           onValueChange={setFileField} placeholder="image_url" />
-        <label className="settings-field">
-          <span className="settings-field-label">Attach local file as data URI (up to 8 MiB)</span>
-          <input type="file" onChange={(event) => attachFile(event.target.files?.[0])} />
-        </label>
+        <div className="settings-field">
+          <label className="settings-field-label" htmlFor="fal-local-file">
+            Attach local file as data URI (up to 8 MiB)
+          </label>
+          <input id="fal-local-file" ref={fileInputRef} className="fal-local-file-input"
+            type="file" tabIndex={-1} onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              if (file) setSelectedFileName(file.name);
+              attachFile(file);
+              event.currentTarget.value = "";
+            }} />
+          <div className="settings-button-row">
+            <Button variant="secondary" onClick={() => fileInputRef.current?.click()}>
+              Choose file…
+            </Button>
+          </div>
+          <p className="settings-field-hint" role="status" aria-live="polite">
+            {selectedFileName || "No file selected"}
+          </p>
+        </div>
         <TextField label="Local file path for CDN upload" value={localPath} mono
           onValueChange={setLocalPath} placeholder="Absolute path to a local file" />
         <div className="settings-button-row">

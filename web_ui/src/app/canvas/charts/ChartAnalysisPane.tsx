@@ -288,9 +288,12 @@ export function ChartAnalysisPane({
     <>
       <div className="chart-analysis-controls nodrag nowheel nopan">
         <div className="chart-analysis-toolbar-row">
-          <IconButton icon="settings" size="sm" label="Chart tools" shortcut="Ctrl+Wheel"
+          <IconButton icon="settings" size="sm" label="Chart tools" shortcut="Arrows · ＋/− · Home"
             aria-expanded={toolsOpen} aria-controls={toolsId} onClick={() => setToolsOpen(!toolsOpen)} />
           <IconButton icon="fit-view" size="sm" label="Reset view" shortcut="Home" disabled={!view} onClick={() => setView(null)} />
+          <div className="chart-analysis-status" role="status" aria-live="polite">
+            {cursor ? "X: " + exact(cursor.x, chartData.xUnit) + " · Y: " + exact(cursor.y, chartData.yUnit) : ""}
+          </div>
         </div>
         {toolsOpen && (
           <div id={toolsId} role="group" aria-label="Chart analysis tools" className="chart-analysis-tools-panel">
@@ -420,11 +423,6 @@ export function ChartAnalysisPane({
           </>}
         </g>
       </svg>
-      <div className="chart-analysis-status nodrag nowheel" role="status" aria-live="polite">
-        {cursor
-          ? "X: " + exact(cursor.x, chartData.xUnit) + " · Y: " + exact(cursor.y, chartData.yUnit)
-          : "Chart: focus and use arrows, +/−, Home"}
-      </div>
       <ChartTooltip content={hover} theme={theme} />
     </>
   );

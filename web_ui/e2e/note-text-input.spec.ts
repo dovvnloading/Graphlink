@@ -16,8 +16,8 @@ async function addPair(page: Page) {
   await editNote(notes.first(), "Review the deployment notes");
   await page.keyboard.press("Control+k");
   const palette = page.getByRole("dialog", { name: "Command palette" });
-  await palette.getByRole("textbox", { name: "Search commands" }).fill("Add Note");
-  await palette.getByRole("option", { name: "Add Note", exact: true }).click();
+  await palette.getByRole("textbox", { name: "Search commands" }).fill("Add note");
+  await palette.getByRole("option", { name: "Add note", exact: true }).click();
   await expect(notes).toHaveCount(2);
   await page.getByRole("button", { name: "Fit All" }).click();
   const source = notes.filter({ hasText: "Review the deployment notes" });

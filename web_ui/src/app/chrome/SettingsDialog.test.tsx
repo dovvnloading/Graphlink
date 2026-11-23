@@ -1257,6 +1257,19 @@ describe("Fal.ai settings page", () => {
     return fixture;
   }
 
+  it("uses a keyboard-operable kit file picker with an accessible hidden input and filename", async () => {
+    const { user } = await goToFal();
+    const picker = screen.getByLabelText("Attach local file as data URI (up to 8 MiB)");
+    expect(picker).toHaveClass("fal-local-file-input");
+    expect(screen.getByText("No file selected")).toBeInTheDocument();
+    const click = vi.spyOn(picker, "click").mockImplementation(() => {});
+    await user.click(screen.getByRole("button", { name: "Choose file…" }));
+    expect(click).toHaveBeenCalledOnce();
+    click.mockRestore();
+    await user.upload(picker, new File(["image"], "chart.png", { type: "image/png" }));
+    expect(screen.getByText("chart.png")).toBeInTheDocument();
+  });
+
   it("searches current model metadata, selects an endpoint and inspects pricing without submitting it", async () => {
     const { user, intents, push } = await goToFal();
     await user.type(screen.getByPlaceholderText("e.g. text to video, music, image editing"), "text to video");

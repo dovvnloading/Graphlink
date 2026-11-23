@@ -286,11 +286,14 @@ describe("CodeSandboxNodeView", () => {
       codeSandboxCode: "import numpy as np\nprint(np.pi)",
       codeSandboxAnalysis: "This **prints pi**.",
     });
-    // The code pane has no separate "Code" label any more - the markdown
-    // fence's own PYTHON header names it, once.
+    // The code pane has no separate "Code" label any more - the shared markdown
+    // fence's own Python header names it, once.
     expect(screen.queryByText("Code")).toBeNull();
     expect(document.querySelector(".code-sandbox-node-code")).not.toBeNull();
     expect(document.querySelector("pre code")).not.toBeNull();
+    expect(document.querySelectorAll(".code-sandbox-node-code .node-md-code-block-header")).toHaveLength(1);
+    expect(document.querySelector(".code-sandbox-node-code-header")).toBeNull();
+    expect(screen.getByRole("button", { name: "Copy code" })).toBeInTheDocument();
     expect(screen.getByText("Analysis")).toBeInTheDocument();
     expect(screen.getByText("prints pi")).toBeInTheDocument();
   });
