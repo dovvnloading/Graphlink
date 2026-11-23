@@ -53,7 +53,7 @@ export function HarnessExecutionProfileSelect({
         ]} />
       {engine === undefined ? <p role="status">Checking Docker / Podman availability…</p> :
         engine ? <p role="status">{engine === "docker" ? "Docker" : "Podman"} detected. Isolated never falls back to Host.</p> :
-        <InlineAlert variant="warning" title="Isolation unavailable"
+        <InlineAlert variant="warning" {...{ title: "Isolation unavailable" }}
           body={probeFailed
             ? "Docker or Podman isn't available, so Isolated mode can't start. The connection check failed."
             : "Docker or Podman isn't available, so Isolated mode can't start."}
