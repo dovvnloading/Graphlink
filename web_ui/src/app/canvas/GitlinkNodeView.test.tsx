@@ -415,7 +415,7 @@ describe("GitlinkNodeView", () => {
     // un-restyled control left on any card.
     renderGitlinkNode({ gitlinkRepoFilePaths: ["src/a.py", "src/b.py"] });
     for (const box of screen.getAllByRole("checkbox")) {
-      expect(box).toHaveClass("gl-checkbox");
+      expect(box).toHaveClass("gl-checkbox-input");
     }
   });
 

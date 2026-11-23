@@ -221,7 +221,7 @@ describe("DocumentNodeView", () => {
 
     const exportItem = screen.getByRole("menuitem", { name: "Export" });
     expect(exportItem).toBeDisabled();
-    expect(exportItem).toHaveAttribute("title", "Document export isn't available yet");
+    expect(exportItem).toHaveAccessibleDescription("Document export is not available yet.");
 
     // filePath is empty -> Open File must be entirely absent, matching the
     // legacy menu's own conditional (only added when file_path is set).
@@ -253,10 +253,7 @@ describe("DocumentNodeView", () => {
 
     const openFile = screen.getByRole("menuitem", { name: "Open File" });
     expect(openFile).toBeDisabled();
-    expect(openFile).toHaveAttribute(
-      "title",
-      "Opening local files needs a new backend endpoint - browsers can't open arbitrary local paths",
-    );
+    expect(openFile).toHaveAccessibleDescription("Opening local files needs a backend endpoint; browsers cannot open arbitrary local paths.");
 
     // attachmentKind "audio" -> Export must be entirely absent, matching the
     // legacy menu's own conditional (export submenu only added for "document").

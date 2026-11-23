@@ -1,0 +1,79 @@
+/* -- R3.9/R3.10 document node ---------------------------------------------- */
+
+.document-node {
+  width: 420px;
+  /* No shell max-height: the shell is overflow-hidden, so a cap here
+     amputates the card bottom whenever header chrome plus the capped
+     content region outgrow it. Height is bounded by the content
+     region's own cap instead, so the bottom border always renders. */
+  min-height: 110px;
+}
+
+.document-node.collapsed {
+  width: 290px;
+  min-height: 58px;
+}
+
+.document-node-content {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* Label/value pairs, 2-column grid (dt/dd) - the 88px label column mirrors
+   the legacy scene's own td.meta-label width (graphlink_node_document.py's
+   _setup_document stylesheet). */
+.document-node-metadata {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-1-5);
+  margin: 0 0 var(--gl-space-2-5) 0;
+}
+
+.document-node-metadata-row {
+  display: grid;
+  grid-template-columns: 88px 1fr;
+  gap: var(--gl-space-2-5);
+}
+
+.document-node-metadata-row dt {
+  margin: 0;
+  font-size: var(--gl-text-2xs);
+  font-weight: 600;
+  color: var(--gl-surface-text-muted);
+  white-space: nowrap;
+}
+
+.document-node-metadata-row dd {
+  margin: 0;
+  color: var(--gl-surface-text-primary);
+  word-break: break-word;
+}
+
+/* The gated "Contents" preview panel - a plain preformatted block (not
+   markdown), so it does not reuse .chat-node-content's markdown-body rules;
+   colors/spacing still reuse the shared surface tokens. */
+.document-node-preview-label {
+  margin: 0 0 var(--gl-space-1-5) 0;
+  font-size: var(--gl-text-2xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--gl-surface-text-muted);
+}
+
+.document-node-preview {
+  padding: var(--gl-space-2-5) var(--gl-space-3);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-md);
+}
+
+.document-node-preview-text {
+  margin: 0;
+  color: var(--gl-surface-text-muted);
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: var(--gl-text-2xs);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+

@@ -1,10 +1,12 @@
 import { NodeResizer, type Node, type NodeProps } from "@xyflow/react";
-import { memo, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { memo, useEffect, useRef, useState, type CSSProperties } from "react";
 import { swatchStyle } from "./nodeSwatch";
+import { IconButton } from "../ui/IconButton";
 import { NodeGlyph } from "./NodeHeading";
 import { GroupColorPicker } from "./GroupColorPicker";
 import { StalenessBadge } from "./StalenessBadge";
 import { GROUP_RESIZE_MIN_HEIGHT, GROUP_RESIZE_MIN_WIDTH } from "./canvasConstants";
+import "./GroupNodeView.css";
 
 /**
  * The shared frame/container node view (Qt-removal plan R6.1) - one
@@ -123,7 +125,7 @@ function GroupNodeViewImpl({ id, data, selected }: NodeProps<GroupFlowNode>) {
   // tint visible around them - the collapsed pill IS the whole visible
   // object, so it falls back to the body color too (same headerColor-first
   // fallback GroupColorPicker's own swatch trigger already uses).
-  const chipStyle = swatchStyle(data.headerColor);
+  const chipStyle = data.headerColor ? ({ ...swatchStyle(data.headerColor), "--group-header-color": data.headerColor } as CSSProperties) : undefined;
   const pillStyle = swatchStyle(data.headerColor ?? data.color);
 
   function beginEdit() {
@@ -193,38 +195,17 @@ function GroupNodeViewImpl({ id, data, selected }: NodeProps<GroupFlowNode>) {
   const controlsCluster = (
     <>
       {isFrame && (
-        <button
-          type="button"
-          className="group-node-btn"
-          title={data.isLocked ? "Unlock" : "Lock"}
-          aria-label={data.isLocked ? "Unlock" : "Lock"}
-          onClick={data.onToggleLock}
-        >
-          <GroupIcon name={data.isLocked ? "unlock" : "lock"} />
-        </button>
+        <IconButton size="sm" icon={data.isLocked ? "unlock" : "lock"}
+          label={data.isLocked ? "Unlock" : "Lock"} onClick={data.onToggleLock} />
       )}
       {isFrame && !data.isCollapsed && (
-        <button
-          type="button"
-          className="group-node-btn"
-          title="Fit to Content"
-          aria-label="Fit to Content"
-          onClick={data.onFitToContent}
-        >
-          <GroupIcon name="fit" />
-        </button>
+        <IconButton size="sm" icon="fit-view" label="Fit to Content"
+          onClick={data.onFitToContent} />
       )}
       {isFrame && <span className="group-node-controls-divider" aria-hidden="true" />}
       <GroupColorPicker color={data.color} headerColor={data.headerColor} onSelect={data.onSetColor} />
-      <button
-        type="button"
-        className="group-node-btn group-node-ungroup-btn"
-        title="Ungroup"
-        aria-label="Ungroup"
-        onClick={data.onUngroup}
-      >
-        <GroupIcon name="ungroup" />
-      </button>
+      <IconButton size="sm" icon="unlink" label="Ungroup"
+        className="group-node-ungroup-btn" onClick={data.onUngroup} />
     </>
   );
 
@@ -238,7 +219,7 @@ function GroupNodeViewImpl({ id, data, selected }: NodeProps<GroupFlowNode>) {
         (hasBodyColor ? " has-body-color" : "") +
         (hasHeaderColor ? " has-header-color" : "")
       }
-      style={{ width: "100%", height: "100%", backgroundColor: data.color ?? undefined }}
+      style={{ width: "100%", height: "100%", "--group-frame-color": data.color ?? "var(--gl-surface-raised)" } as CSSProperties}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
@@ -264,15 +245,7 @@ function GroupNodeViewImpl({ id, data, selected }: NodeProps<GroupFlowNode>) {
           <NodeGlyph name={data.groupKind} />
           {labelNode}
           <div className="group-node-controls nodrag">
-            <button
-              type="button"
-              className="group-node-btn"
-              title="Expand"
-              aria-label="Expand"
-              onClick={data.onToggleCollapsed}
-            >
-              <GroupIcon name="expand" />
-            </button>
+            <IconButton size="sm" icon="chevron-up" label="Expand" onClick={data.onToggleCollapsed} />
             {controlsCluster}
           </div>
         </div>
@@ -287,15 +260,8 @@ function GroupNodeViewImpl({ id, data, selected }: NodeProps<GroupFlowNode>) {
             {labelNode}
           </div>
           <div className="group-node-controls-row nodrag">
-            <button
-              type="button"
-              className="group-node-btn group-node-collapse-btn"
-              title="Collapse"
-              aria-label="Collapse"
-              onClick={data.onToggleCollapsed}
-            >
-              <GroupIcon name="collapse" />
-            </button>
+            <IconButton size="sm" icon="chevron-down" className="group-node-collapse-btn"
+              label="Collapse" onClick={data.onToggleCollapsed} />
             <div className="group-node-controls-chip" style={chipStyle}>
               {controlsCluster}
             </div>
@@ -324,46 +290,6 @@ function GhostPreview({ memberKinds }: { memberKinds: string[] }) {
       </span>
       <span className="group-node-ghost-preview-breakdown">{breakdown.join(", ")}</span>
     </div>
-  );
-}
-
-// R8a visual-quality pass: small hand-authored stroke icons (fill:none,
-// stroke:currentColor, matching the same convention Composer.tsx's own
-// Icon() already established) replacing the previous text-label buttons -
-// every control is now an icon-only 22x22px hit target with the action name
-// carried as aria-label/title instead of visible text, per the design-panel
-// review's unanimous "icon-only, hover-reveal" recommendation.
-type GroupIconName = "collapse" | "expand" | "lock" | "unlock" | "fit" | "ungroup";
-
-const GROUP_ICON_PATHS: Record<GroupIconName, ReactNode> = {
-  collapse: <path d="M4 6l4 4 4-4" />,
-  expand: <path d="M4 10l4-4 4 4" />,
-  lock: (
-    <>
-      <rect x="4" y="7" width="8" height="6" rx="1.2" />
-      <path d="M6 7V5a2 2 0 0 1 4 0v2" />
-    </>
-  ),
-  unlock: (
-    <>
-      <rect x="4" y="7" width="8" height="6" rx="1.2" />
-      <path d="M6 7V5a2 2 0 0 1 4 0v1" />
-    </>
-  ),
-  fit: <path d="M3 6V3h3M13 6V3h-3M3 10v3h3M13 10v3h-3" />,
-  ungroup: (
-    <>
-      <rect x="2" y="5" width="5.5" height="5.5" rx="1" />
-      <rect x="8.5" y="5" width="5.5" height="5.5" rx="1" />
-    </>
-  ),
-};
-
-function GroupIcon({ name }: { name: GroupIconName }) {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16" className="group-node-icon">
-      {GROUP_ICON_PATHS[name]}
-    </svg>
   );
 }
 
