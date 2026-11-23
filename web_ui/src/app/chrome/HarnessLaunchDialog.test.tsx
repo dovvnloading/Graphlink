@@ -118,7 +118,7 @@ describe("HarnessLaunchDialog", () => {
   });
 
   it("does not offer Isolated without Docker or Podman", async () => {
-    await setup(undefined, null);
+    const { user } = await setup(undefined, null);
     expect(await screen.findByText(/Docker or Podman isn't available/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Execution profile" }));
     const isolated = screen.getByRole("option", { name: /Isolated \(Docker \/ Podman\)/ });
