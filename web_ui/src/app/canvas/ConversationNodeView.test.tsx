@@ -235,12 +235,12 @@ describe("ConversationNodeView", () => {
 
       const userBubble = screen.getByText("world").closest(".conversation-node-bubble") as HTMLElement;
       const copyBtn = within(userBubble).getByRole("button", { name: "Copy message 1" });
-      expect(copyBtn.querySelector("path")).toBeNull(); // rest state: the copy glyph is two rects, no path
+      expect(within(userBubble).queryByRole("button", { name: "Copied message 1" })).toBeNull();
 
       await user.click(copyBtn);
 
       expect(writeText).toHaveBeenCalledWith("Hello **world**");
-      await waitFor(() => expect(copyBtn.querySelector("path")).not.toBeNull());
+      await waitFor(() => expect(within(userBubble).getByRole("button", { name: "Copied message 1" })).toBe(copyBtn));
     });
 
     it("the quick-action Delete button on the FIRST (user, index 0) bubble calls onDeleteMessage(0), without opening the right-click menu", async () => {
@@ -368,13 +368,14 @@ describe("ConversationNodeView", () => {
 
       const firstBubble = screen.getByText("world").closest(".conversation-node-bubble") as HTMLElement;
       await user.click(within(firstBubble).getByRole("button", { name: "Copy message 1" }));
-      await waitFor(() => expect(within(firstBubble).getByRole("button", { name: "Copy message 1" }).querySelector("path")).not.toBeNull());
+      await waitFor(() => expect(within(firstBubble).getByRole("button", { name: "Copied message 1" })).toBeInTheDocument());
 
       await user.click(within(firstBubble).getByRole("button", { name: "Delete message 1 from history" }));
 
       const survivor = screen.getByText("Hi there").closest(".conversation-node-bubble") as HTMLElement;
       const survivorCopyBtn = within(survivor).getByRole("button", { name: "Copy message 1" });
-      expect(survivorCopyBtn.querySelector("path")).toBeNull();
+      expect(survivorCopyBtn).toBeInTheDocument();
+      expect(within(survivor).queryByRole("button", { name: "Copied message 1" })).toBeNull();
     });
   });
 
