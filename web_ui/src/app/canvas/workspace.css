@@ -13,13 +13,13 @@
 .app-topbar {
   height: 44px;
   flex: none;
-  padding-inline: 14px;
+  padding-inline: var(--gl-space-3);
   background: var(--gl-graph-surface);
   border-color: var(--gl-graph-border);
 }
 
-.app-title { font-size: 15px; letter-spacing: -.025em; }
-.appbar-btn { height: 32px; border-radius: 4px; }
+.app-title { font-size: var(--gl-text-base); letter-spacing: -.025em; }
+.appbar-btn { height: 32px; border-radius: var(--gl-radius-xs); }
 .appbar-btn-icon { width: 32px; }
 
 .app-canvas-content {
@@ -49,10 +49,10 @@
   display: flex;
   align-items: center;
   gap: 1px;
-  padding: 2px;
+  padding: var(--gl-space-0-5);
   margin: var(--gl-chrome-inset);
   border: 1px solid var(--gl-graph-border);
-  border-radius: 5px;
+  border-radius: var(--gl-radius-sm);
   background: var(--gl-graph-surface);
 }
 
@@ -62,7 +62,7 @@
   width: 30px;
   height: 30px;
   border: 0;
-  border-radius: 3px;
+  border-radius: var(--gl-radius-xs);
   padding: 0;
   color: var(--gl-surface-text-secondary);
   background: transparent;
@@ -79,8 +79,8 @@
 .viewport-dock button:focus-visible,
 .empty-graph button:focus-visible { outline: 2px solid var(--gl-graph-selection); outline-offset: 1px; }
 .viewport-dock .icon { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-.viewport-dock .viewport-scale { width: 43px; font-size: 12px; font-variant-numeric: tabular-nums; }
-.viewport-divider { width: 1px; height: 15px; margin-inline: 3px; background: var(--gl-graph-border); }
+.viewport-dock .viewport-scale { width: 43px; font-size: var(--gl-text-xs); font-variant-numeric: tabular-nums; }
+.viewport-divider { width: 1px; height: 15px; margin-inline: var(--gl-space-0-5); background: var(--gl-graph-border); }
 
 .empty-graph {
   position: absolute;
@@ -93,22 +93,22 @@
 }
 
 .empty-graph h1 {
-  margin: 0 0 16px;
+  margin: 0 0 var(--gl-space-4);
   color: var(--gl-surface-text-strong);
-  font-size: 25px;
+  font-size: var(--gl-text-2xl);
   line-height: 1.2;
   font-weight: 550;
   letter-spacing: -.035em;
 }
 
-.empty-graph-actions { display: flex; gap: 8px; justify-content: center; }
+.empty-graph-actions { display: flex; gap: var(--gl-space-2); justify-content: center; }
 .empty-graph button {
-  padding: 7px 12px;
+  padding: var(--gl-space-1-5) var(--gl-space-3);
   border: 1px solid var(--gl-graph-border);
-  border-radius: 4px;
+  border-radius: var(--gl-radius-xs);
   color: var(--gl-surface-text-secondary);
   background: var(--gl-graph-surface);
-  font: 500 13px/1.4 var(--gl-font-family);
+  font: 500 var(--gl-text-sm)/1.4 var(--gl-font-family);
   pointer-events: auto;
   cursor: pointer;
 }
@@ -133,7 +133,7 @@
   /* The bottom inset is the canvas chrome inset, so the composer card, the
      zoom dock and the minimap share one baseline; the side padding keeps the
      card clear of both. */
-  padding: 6px var(--canvas-hud-reserve) var(--gl-chrome-inset);
+  padding: var(--gl-space-1-5) var(--canvas-hud-reserve) var(--gl-chrome-inset);
   /* The canvas colour, so the card floats on the canvas rather than sitting
      in a separate band. */
   background: var(--gl-graph-canvas);
@@ -178,13 +178,13 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--gl-space-1);
   box-sizing: border-box;
   width: min(100%, 760px);
-  padding: 8px 8px 6px 12px;
+  padding: var(--gl-space-2) var(--gl-space-2) var(--gl-space-1-5) var(--gl-space-3);
   background: var(--gl-surface-node-body);
   border: 1px solid var(--gl-graph-border);
-  border-radius: 14px;
+  border-radius: var(--gl-radius-lg);
   box-shadow: 0 6px 22px var(--gl-composer-shell-shadow-drop),
     inset 0 1px 0 var(--gl-composer-shell-shadow-inset);
   transition: border-color 120ms ease, box-shadow 120ms ease;
@@ -204,11 +204,11 @@
   min-width: 0;
   min-height: 28px;
   max-height: 200px;
-  padding: 4px 4px 2px 0;
+  padding: var(--gl-space-1) var(--gl-space-1) var(--gl-space-0-5) 0;
   border: none;
   border-radius: 0;
   background: transparent;
-  font-size: 14px;
+  font-size: var(--gl-text-base);
   line-height: 20px;
 }
 
@@ -217,50 +217,50 @@
 .composer-controls {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--gl-space-0-5);
   min-width: 0;
   min-height: 32px;
   padding-top: 0;
-  margin-left: -6px;
+  margin-left: calc(-1 * var(--gl-space-1-5));
 }
 
 .composer-controls-start {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--gl-space-0-5);
 }
 
 .composer-rail-end {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--gl-space-0-5);
   min-width: 0;
   margin-left: auto;
 }
 
-.composer-icon-button { flex: none; width: 30px; height: 30px; border-radius: 8px; }
+.composer-icon-button { flex: none; width: 30px; height: 30px; border-radius: var(--gl-radius-md); }
 /* The workspace rail's 30px icon rule must not squeeze labeled mode toggles
    into icon-sized hit targets (their text would paint over the next button). */
 .composer-icon-button.composer-agent-toggle {
   width: auto;
   min-width: max-content;
-  padding-inline: 8px;
+  padding-inline: var(--gl-space-2);
 }
 .composer-icon-button .icon { width: 16px; height: 16px; }
 
 .composer-control {
   min-width: 0;
   height: 30px;
-  gap: 5px;
-  padding: 0 8px;
-  border-radius: 8px;
+  gap: var(--gl-space-1);
+  padding: 0 var(--gl-space-2);
+  border-radius: var(--gl-radius-md);
   color: var(--gl-surface-text-muted);
 }
 
 .composer-control:hover:enabled,
 .composer-control[aria-pressed="true"] { color: var(--gl-surface-text-primary); }
 
-.composer-control-value { font-size: 12px; font-weight: 500; }
+.composer-control-value { font-size: var(--gl-text-xs); font-weight: 500; }
 .composer-control-value-reasoning { width: auto; }
 .composer-control-value-model { width: auto; max-width: 180px; }
 .composer-reasoning-chip .icon:first-child { width: 14px; height: 14px; }
@@ -275,23 +275,23 @@
   box-sizing: border-box;
   min-width: 13px;
   height: 13px;
-  padding: 0 3px;
-  font-size: 9px;
+  padding: 0 var(--gl-space-0-5);
+  font-size: var(--gl-text-2xs);
   font-weight: 700;
   line-height: 13px;
   text-align: center;
   color: var(--gl-surface-window);
   background: var(--gl-surface-text-bright, var(--gl-surface-text-muted));
-  border-radius: 999px;
+  border-radius: var(--gl-radius-full);
 }
 
 .composer-controls .token-counter-trigger { flex: none; }
-.composer-controls .token-counter-summary { padding: 0 6px; gap: 3px; }
+.composer-controls .token-counter-summary { padding: 0 var(--gl-space-1-5); gap: var(--gl-space-0-5); }
 
-.composer-send-button { flex: none; width: 32px; height: 32px; margin-left: 4px; border-radius: 50%; }
+.composer-send-button { flex: none; width: 32px; height: 32px; margin-left: var(--gl-space-1); border-radius: 50%; }
 
 @container graph-workspace (max-width: 480px) {
-  .composer-dock { padding: 6px 6px 4px 10px; }
+  .composer-dock { padding: var(--gl-space-1-5) var(--gl-space-1-5) var(--gl-space-1) var(--gl-space-2-5); }
   .composer-control-value-model { max-width: 28cqw; }
 }
 
