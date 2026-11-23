@@ -207,7 +207,7 @@ export function BuilderLaunchDialog({ transport, store }: { transport: WsTranspo
   const canStart = Boolean(goal.trim() || recipe);
 
   return (
-    <Dialog name="builder-launch" title="Builder" size="md" className="builder-launch-dialog"
+    <Dialog name="builder-launch" {...{ title: "Builder" }} size="md" className="builder-launch-dialog"
       status={!canStart ? "Describe a goal, or pick a recipe." : "Review the plan before anything runs."}
       footer={<Button variant="primary" onClick={startBuild} disabled={starting || !canStart} loading={starting}>
         Plan the build
@@ -227,7 +227,7 @@ export function BuilderLaunchDialog({ transport, store }: { transport: WsTranspo
           value: row.name, label: row.builtIn ? row.name + " (built-in)" : row.name,
           description: row.description || undefined,
         }))]} />
-      {selectedRecipe && <Card title={selectedRecipe.name} className="builder-launch-recipe-preview">
+      {selectedRecipe && <Card {...{ title: selectedRecipe.name }} className="builder-launch-recipe-preview">
         {selectedRecipe.description && <p>{selectedRecipe.description}</p>}
         {selectedRecipe.steps.length > 0 && <>
           <p>Starts with {formatCount(selectedRecipe.steps.length)} steps</p>
@@ -243,7 +243,7 @@ export function BuilderLaunchDialog({ transport, store }: { transport: WsTranspo
           { value: "copilot", label: "Co-pilot", description: "Approve every mutating step." },
           { value: "autopilot", label: "Autopilot", description: "Run to completion within the budgets." },
         ]} />
-      {mode === "autopilot" && <InlineAlert variant="warning" title="Autopilot approval"
+      {mode === "autopilot" && <InlineAlert variant="warning" {...{ title: "Autopilot approval" }}
         body="Autopilot creates and edits nodes and executes code without asking, within the limits below. Network access still requires approval." />}
       <div className="builder-launch-budgets-control">
         <h3>Budgets</h3>
@@ -259,7 +259,7 @@ export function BuilderLaunchDialog({ transport, store }: { transport: WsTranspo
           }} />
         <p className="builder-launch-budget-summary">{formatBudgetLine(maxSteps, maxTokens, maxWallSeconds)}</p>
         <p className="builder-launch-hint">Hard limits — a breach pauses the build.</p>
-        <Disclosure title="Set exact limits">
+        <Disclosure {...{ title: "Set exact limits" }}>
           <div className="builder-launch-budgets">
             <NumberField label="Max steps" min={MIN_STEPS} max={MAX_STEPS} value={maxSteps}
               onValueChange={(value) => setMaxSteps(value === "" ? DEFAULT_MAX_STEPS : value)} />
@@ -270,7 +270,7 @@ export function BuilderLaunchDialog({ transport, store }: { transport: WsTranspo
           </div>
         </Disclosure>
       </div>
-      {error && <InlineAlert variant="error" title="Couldn't plan the build" body={error} />}
+      {error && <InlineAlert variant="error" {...{ title: "Couldn't plan the build" }} body={error} />}
     </Dialog>
   );
 }
