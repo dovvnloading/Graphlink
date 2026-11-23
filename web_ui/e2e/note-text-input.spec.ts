@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { gotoApp } from "./helpers";
+import { confirmLibraryNavigation, gotoApp } from "./helpers";
 
 async function editNote(note: Locator, text: string) {
   await note.locator(".note-node-markdown").dblclick();
@@ -52,10 +52,10 @@ test("runs a word count on demand and reconnects it when the saved graph reopens
 
   await page.getByRole("button", { name: "Save", exact: true }).click();
   const libraryTrigger = page.locator('[data-overlay-trigger="library"]');
-  const library = page.getByRole("dialog", { name: "Chat Library" });
+  const library = page.getByRole("dialog", { name: "Chat library" });
   await libraryTrigger.click();
-  page.once("dialog", (dialog) => { void dialog.accept(); });
-  await library.getByRole("button", { name: "New Chat", exact: true }).first().click();
+  await library.getByRole("button", { name: "New chat", exact: true }).first().click();
+  await confirmLibraryNavigation(page, library);
   await expect(page.locator(".react-flow__node")).toHaveCount(0);
   await libraryTrigger.click();
   await library.locator(".library-row").first().getByRole("button", { name: /^Open chat/ }).click();

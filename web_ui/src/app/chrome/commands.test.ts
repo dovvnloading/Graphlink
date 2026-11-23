@@ -376,44 +376,47 @@ describe("buildCommands", () => {
   });
 });
 
-// R7.5c: the New Chat confirm, restored from legacy's blocking QMessageBox.
+// A command registry cannot use hooks, so its confirmation is injected from
+// the eagerly mounted quick switcher and remains async/non-blocking.
 describe("requestNewChat", () => {
-  it("skips the confirm on an empty, never-saved canvas - nothing to lose", () => {
+  it("skips confirmation only when nothing is on the never-saved canvas", async () => {
     const store = makeStore([]);
-    const confirmFn = vi.fn(() => true);
+    const confirmFn = vi.fn().mockResolvedValue(true);
     // @ts-expect-error - test double
-    requestNewChat(store, confirmFn);
+    await requestNewChat(store, confirmFn);
     expect(confirmFn).not.toHaveBeenCalled();
     expect(store.newChat).toHaveBeenCalledTimes(1);
   });
 
-  it("still asks when the canvas is empty but the scene IS a saved chat", () => {
-    // Legacy's skip needs BOTH halves (graphlink_window.py:1429). Emptying a
-    // loaded chat and hitting Ctrl+T must not silently detach it: newChat()
-    // drops current_chat_id, so the next Save would INSERT a new row instead
-    // of updating the one the user believes they are editing.
+  it("asks even when a previously saved chat has an empty canvas", async () => {
     const store = makeStore([], true);
-    const confirmFn = vi.fn(() => false);
+    const confirmFn = vi.fn().mockResolvedValue(false);
     // @ts-expect-error - test double
-    requestNewChat(store, confirmFn);
+    await requestNewChat(store, confirmFn);
     expect(confirmFn).toHaveBeenCalledOnce();
     expect(store.newChat).not.toHaveBeenCalled();
   });
 
-  it("asks before discarding a canvas that has content, and proceeds on yes", () => {
+  it("uses the nested kit confirm options before changing a populated canvas", async () => {
     const store = makeStore([{ id: "n0", x: 0, y: 0, title: "A", kind: "chat" }]);
-    const confirmFn = vi.fn(() => true);
+    const confirmFn = vi.fn().mockResolvedValue(true);
     // @ts-expect-error - test double
-    requestNewChat(store, confirmFn);
-    expect(confirmFn).toHaveBeenCalledWith("Start a new chat? Your current edits will be saved before switching.");
-    expect(store.newChat).toHaveBeenCalledTimes(1);
+    await requestNewChat(store, confirmFn);
+    expect(confirmFn).toHaveBeenCalledWith({
+      title: "Start a new chat?",
+      body: "Your current edits will be saved before switching.",
+      confirmLabel: "Start new chat",
+    });
+    expect(store.newChat).toHaveBeenCalledOnce();
   });
 
-  it("does NOT clear the canvas when the confirm is declined", () => {
+  it("never clears a populated canvas when confirmation is declined or absent", async () => {
     const store = makeStore([{ id: "n0", x: 0, y: 0, title: "A", kind: "chat" }]);
-    const confirmFn = vi.fn(() => false);
+    const confirmFn = vi.fn().mockResolvedValue(false);
     // @ts-expect-error - test double
-    requestNewChat(store, confirmFn);
+    await requestNewChat(store, confirmFn);
+    // @ts-expect-error - test double
+    await requestNewChat(store, null);
     expect(confirmFn).toHaveBeenCalledOnce();
     expect(store.newChat).not.toHaveBeenCalled();
   });

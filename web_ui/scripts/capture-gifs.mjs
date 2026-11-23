@@ -238,17 +238,25 @@ async function newCanvas(page) {
   if (await cancelBranch.isVisible().catch(() => false)) await cancelBranch.click();
   await page.getByRole("textbox", { name: "Message composer" }).fill("");
   await page.locator('[data-overlay-trigger="library"]').click();
-  const library = page.getByRole("dialog", { name: "Chat Library" });
-  // New Chat confirms before discarding the unsaved canvas.
-  // On an already-empty canvas no confirm appears and this handler lingers
-  // to the next call, so tolerate a dialog that another handler accepted.
-  page.once("dialog", (dialog) => dialog.accept().catch(() => {}));
+  const library = page.getByRole("dialog", { name: "Chat library" });
   // The empty-library state repeats New Chat; either one starts a canvas.
-  await library.getByRole("button", { name: "New Chat", exact: true }).first().click();
-  await library.waitFor({ state: "hidden" }).catch(() => page.keyboard.press("Escape"));
+  await library.getByRole("button", { name: "New chat", exact: true }).first().click();
+  // Leaving a populated canvas confirms in the kit ConfirmDialog.
+  await confirmLibraryNavigation(page, library).catch(() => page.keyboard.press("Escape"));
   await page.getByRole("button", { name: "Add a table" }).waitFor();
   await dismissToasts(page);
   await sleep(500);
+}
+
+/** Accept the kit confirmations ("Continue", "Discard incomplete copy") until the library closes. */
+async function confirmLibraryNavigation(page, library) {
+  const confirm = page.getByRole("button", { name: /^(Continue|Discard incomplete copy)$/ });
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline && await library.isVisible()) {
+    if (await confirm.first().isVisible()) await confirm.first().click();
+    else await sleep(100);
+  }
+  await library.waitFor({ state: "hidden" });
 }
 
 /** Open the seeded incident graph fitted to the window, discarding any edits. */
@@ -257,10 +265,9 @@ async function openSeededGraph(page) {
   if (await cancelBranch.isVisible().catch(() => false)) await cancelBranch.click();
   await page.getByRole("textbox", { name: "Message composer" }).fill("");
   await page.locator('[data-overlay-trigger="library"]').click();
-  const library = page.getByRole("dialog", { name: "Chat Library" });
-  page.once("dialog", (dialog) => dialog.accept().catch(() => {}));
+  const library = page.getByRole("dialog", { name: "Chat library" });
   await library.getByRole("button", { name: /^Open chat/ }).first().click();
-  await library.waitFor({ state: "hidden" });
+  await confirmLibraryNavigation(page, library);
   await page.locator(".react-flow__node").first().waitFor();
   await dismissToasts(page);
   await page.getByRole("button", { name: "Fit All" }).click();

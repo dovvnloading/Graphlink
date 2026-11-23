@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
 import type { StateListener } from "../lib/ws/transport";
+import { ProgressBar } from "./ui/ProgressBar";
+import { useConfirm } from "./ui/ConfirmDialog";
+import { registerNewChatConfirm } from "./chrome/requestNewChat";
+import "./chrome/knowledge-library.css";
 
 /** File imports run in PR #889's session-scoped background manager. The topic
  * survives reconnects and carries terminal results as well as progress. */
@@ -34,6 +38,10 @@ function active(job: KnowledgeFileJob): boolean {
 }
 
 export function useKnowledgeFileImport(subscribe: (listener: StateListener) => () => void) {
+  // The composer is mounted before lazy dialogs. Register its kit confirmation
+  // for the global New chat shortcut without altering the shortcut owner.
+  const askConfirm = useConfirm();
+  useEffect(() => registerNewChatConfirm(askConfirm), [askConfirm]);
   const [jobs, setJobs] = useState<KnowledgeFileJob[]>([]);
   const [jobId, setJobId] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -89,8 +97,7 @@ export function KnowledgeFileImportStatus({ state }: { state: ImportState }) {
           {job && job.filesTotal > 0 ? ` ${job.filesProcessed}/${job.filesTotal} files processed.` : ""}
         </span>
         {job && job.status === "running" && (
-          <progress aria-label="Knowledge import progress"
-            max={Math.max(job.filesTotal, 1)} value={job.filesProcessed} />
+          <ProgressBar label="Knowledge import progress" max={Math.max(job.filesTotal, 1)} value={job.filesProcessed} />
         )}
       </div>
     );

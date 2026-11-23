@@ -61,25 +61,11 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/canvas/workspace.css", rule: "R11", count: 2 },
 
-  { file: "app/chrome/ChatLibraryDialog.tsx", rule: "R2", count: 10 },
-
-  { file: "app/chrome/ChatLibraryDialog.tsx", rule: "R3", count: 3 },
-
-  { file: "app/chrome/ChatLibraryDialog.tsx", rule: "R8", count: 2 },
-
-  { file: "app/chrome/ChatLibraryDialog.tsx", rule: "R13", count: 1 },
-
-  { file: "app/chrome/KnowledgeSearchDialog.tsx", rule: "R8", count: 7 },
-
   { file: "app/chrome/KnowledgeSettingsPage.tsx", rule: "R13", count: 1 },
 
   { file: "app/chrome/OrganizationDialog.tsx", rule: "R2", count: 1 },
 
   { file: "app/chrome/PluginPicker.tsx", rule: "R1", count: 1 },
-
-  { file: "app/chrome/QuickSwitcherDialog.tsx", rule: "R3", count: 1 },
-
-  { file: "app/chrome/SearchIcon.tsx", rule: "R2", count: 1 },
 
   { file: "app/styles.css", rule: "R9", count: 259 },
 
