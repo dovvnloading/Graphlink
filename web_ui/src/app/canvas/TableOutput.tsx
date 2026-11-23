@@ -126,6 +126,6 @@ export default function TableOutput({ node, store, editing = false }: TableOutpu
       })}>Restore previous version</Button>
     </div>}
     <TableContributors node={node} store={store} />
-    {error && <InlineAlert variant="error" title="Table output action failed" body={error} />}
+    {error && <InlineAlert variant="error" {...{ title: "Table output action failed" }} body={error} />}
   </section>;
 }
