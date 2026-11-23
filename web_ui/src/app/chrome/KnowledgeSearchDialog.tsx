@@ -507,13 +507,17 @@ export function KnowledgeSearchDialog({
   // correlation).
   const latestRequestId = useRef(0);
   const lastSentTerm = useRef<string | null>(null);
+  const pendingTerm = useRef<string | null>(null);
 
-  const runSearch = useCallback((term: string) => {
+  const runSearch = useCallback((term: string, explicit = false) => {
     const trimmed = term.trim();
-    // Enter and the live debounce may both submit the same query; never start
-    // a duplicate, but allow a different typed query to supersede an in-flight one.
-    if (trimmed && lastSentTerm.current === trimmed) return;
+    // A second Enter during a pending request is a no-op. Also avoid
+    // re-submitting a just-searched term when the debounce fires, but let
+    // someone deliberately retry the same query after it finishes.
+    if (trimmed && (pendingTerm.current === trimmed ||
+      (!explicit && lastSentTerm.current === trimmed))) return;
     lastSentTerm.current = trimmed || null;
+    pendingTerm.current = trimmed || null;
     const requestId = ++latestRequestId.current;
     if (!trimmed) {
       setResults(null);
@@ -536,7 +540,10 @@ export function KnowledgeSearchDialog({
         setError("Search failed. See graphlink.log for details.");
       })
       .finally(() => {
-        if (requestId === latestRequestId.current) setSearching(false);
+        if (requestId === latestRequestId.current) {
+          pendingTerm.current = null;
+          setSearching(false);
+        }
       });
   }, [transport]);
 
@@ -589,15 +596,16 @@ export function KnowledgeSearchDialog({
             onValueChange={(value) => {
               ++latestRequestId.current;
               lastSentTerm.current = null;
+              pendingTerm.current = null;
               setQuery(value);
               setResults(null);
               setSearching(false);
               setError(null);
             }}
-            onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); runSearch(query); } }}
+            onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); runSearch(query, true); } }}
             autoComplete="off"
           />
-          <Button iconStart="search" onClick={() => runSearch(query)} disabled={!query.trim()}
+          <Button iconStart="search" onClick={() => runSearch(query, true)} disabled={!query.trim()}
             loading={searching}>Search</Button>
         </div>
         {searching && <p role="status" className="knowledge-library-muted"><Spinner size={14} decorative /> Searching indexed sources…</p>}
