@@ -12,6 +12,7 @@ import { IconButton } from "../ui/IconButton";
 import { ToggleButton } from "../ui/ToggleButton";
 import { MenuButton, MenuItem } from "../ui/Menu";
 import { Spinner } from "../ui/Spinner";
+import { Tooltip } from "../ui/Tooltip";
 import "./Composer.css";
 import { ComposerModelMenu } from "./ModelPicker";
 import { useModelCapabilityPreview } from "../context/ModelCapabilityContext";
@@ -133,7 +134,6 @@ export function Composer({
     knowledgeResult.sceneSnapshot === scene &&
     knowledgeResult.libraryRevision === knowledgeLibraryRevision;
   const knowledgePreference = knowledgeResolved ? knowledgeResult!.preference : null;
-  const knowledgeCheckFailed = knowledgeResolved && knowledgeResult!.preference === null;
   const [knowledgeUpdating, setKnowledgeUpdating] = useState(false);
   useEffect(() => {
     let current = true;
@@ -258,11 +258,18 @@ export function Composer({
     && modelCapabilities.provider === composer.route.provider
     && modelCapabilities.modelId === composer.route.modelId ? modelCapabilities : null;
   const isSynthesizing = !!synthesizeTargetNodeIds && synthesizeTargetNodeIds.length > 0;
+  const hasUsableModel = comparisonMode && !agentMode && !isSynthesizing
+    ? comparisonReady : composer.route.available && !!composer.route.modelId;
+  const sendDisabled = !composer.draft.text.trim() || !composer.request.canSend ||
+    !hasUsableModel || knowledgeUpdating || agentSending;
+  const sendDisabledReason = !composer.draft.text.trim()
+    ? "Type a message" : !hasUsableModel
+      ? "Choose a model first" : "Wait for the current response to finish";
 
   function send() {
     const text = composer.draft.text.trim();
     if (!text || !composer.request.canSend || knowledgeUpdating) return;
-    if (!composer.route.available || !composer.route.modelId) return;
+    if (!hasUsableModel) return;
     if (agentMode) {
       if (exceedsHarnessTaskLimit(text)) {
         setAgentError(`Agent tasks cannot exceed ${MAX_HARNESS_TASK_LENGTH.toLocaleString()} characters. Shorten the task; your draft is preserved.`);
@@ -336,7 +343,7 @@ export function Composer({
           )}
         </div>
       )}
-      {!agentMode && effectiveReplyTarget && (
+      {!agentMode && !isSynthesizing && effectiveReplyTarget && (
         <div className="composer-reply-target" aria-label="Replying to">
           <span className="composer-reply-target-label">Replying to</span>
           <Icon name={replyIcons[effectiveReplyTarget.kind] ?? "node-conversation"} size="sm" />
@@ -458,11 +465,18 @@ export function Composer({
           {typeof contextInspector === "function"
             ? contextInspector(knowledgePreference?.enabled ?? null, knowledgePreference?.nodeId)
             : contextInspector}
-          <ToggleButton icon="knowledge" label="Use knowledge" size="sm"
-            pressed={knowledgePreference?.enabled ?? false}
-            disabled={!knowledgePreference || !knowledgePreference.hasDocuments ||
-              !composer.request.canSend || knowledgeUpdating || agentMode}
-            onPressedChange={toggleUseKnowledge} />
+          {!knowledgePreference?.hasDocuments ? (
+            <Tooltip label="Nothing is indexed yet" placement="top">
+              <span className="composer-disabled-control" tabIndex={0}>
+                <ToggleButton icon="knowledge" label="Use knowledge" size="sm" pressed={false} disabled />
+              </span>
+            </Tooltip>
+          ) : (
+            <ToggleButton icon="knowledge" label="Use knowledge" size="sm"
+              pressed={knowledgePreference.enabled}
+              disabled={!composer.request.canSend || knowledgeUpdating || agentMode}
+              onPressedChange={toggleUseKnowledge} />
+          )}
           <ToggleButton icon="agent" label="Agent" aria-label="Send to workspace agent" size="sm"
             pressed={agentMode} disabled={!composer.request.canSend || agentSending}
             onPressedChange={(enabled) => {
@@ -479,7 +493,7 @@ export function Composer({
           {comparisonMode && <span className="composer-compare-count">{selectedComparisonModels.length}</span>}
         </div>
         <div className="composer-rail-end">
-          <ComposerModelMenu store={store} disabled={!composer.request.canSend} />
+          <ComposerModelMenu store={store} disabled={composer.request.state === "generating"} />
           {composer.capabilities.reasoningSelection && <Reasoning store={store} />}
           {showTokenCounter && <TokenCounter store={store} />}
           {composer.request.canCancel ? (
@@ -488,15 +502,16 @@ export function Composer({
               onClick={() => {
                 if (composer.request.id) store.cancelChatRequest(composer.request.id);
               }} />
+          ) : sendDisabled ? (
+            <Tooltip label={sendDisabledReason} placement="top">
+              <span className="composer-disabled-control" tabIndex={0}>
+                <IconButton icon="arrow-up" label="Send message" size="lg"
+                  variant="ghost" className="composer-send-button" disabled />
+              </span>
+            </Tooltip>
           ) : (
             <IconButton icon="arrow-up" label="Send message" size="lg"
-              variant={composer.draft.text.trim() && composer.route.modelId && composer.route.available
-                ? "primary" : "ghost"}
-              className="composer-send-button"
-              disabled={!composer.draft.text.trim() || !composer.request.canSend ||
-                !composer.route.modelId || !composer.route.available ||
-                knowledgeUpdating || agentSending ||
-                (comparisonMode && !agentMode && !isSynthesizing && !comparisonReady)}
+              variant="primary" className="composer-send-button"
               onClick={send} />
           )}
         </div>
