@@ -143,7 +143,7 @@ describe("NodeMarkdown", () => {
       await user.click(screen.getByRole("button", { name: "Copy code" }));
 
       expect(writeText).toHaveBeenCalledWith("print('hi')\n");
-      expect(await screen.findByText("Copied")).toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
     });
 
     it("marks the copy button nodrag, so clicking it inside a React Flow node doesn't start a canvas drag", () => {
