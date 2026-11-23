@@ -1,3 +1,4 @@
+import "./ArtifactNodeView.css";
 import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useState } from "react";
 import { artifactDiffPreview } from "./artifactProposalDiff";

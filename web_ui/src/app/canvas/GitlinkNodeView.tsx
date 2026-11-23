@@ -1,3 +1,4 @@
+import "./GitlinkNodeView.css";
 import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useEffect, useRef, useState } from "react";
 import { CustomSelect, type CustomSelectOption } from "../chrome/CustomSelect";

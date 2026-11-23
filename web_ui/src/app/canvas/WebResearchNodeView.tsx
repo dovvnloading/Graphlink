@@ -1,3 +1,4 @@
+import "./WebResearchNodeView.css";
 import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useState } from "react";
 import { CollapseToggleButton } from "./CollapseToggleButton";

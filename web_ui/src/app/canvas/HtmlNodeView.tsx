@@ -1,3 +1,4 @@
+import "./HtmlNodeView.css";
 import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
 import { resolveShortcut } from "../chrome/shortcuts";

@@ -1,3 +1,4 @@
+import "./CodeReviewNodeView.css";
 import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useEffect, useRef, useState } from "react";
 import { CollapseToggleButton } from "./CollapseToggleButton";

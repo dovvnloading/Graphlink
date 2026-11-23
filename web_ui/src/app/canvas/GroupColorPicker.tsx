@@ -1,3 +1,4 @@
+import "./GroupColorPicker.css";
 import { useRef, useState, type CSSProperties } from "react";
 import { IconButton } from "../ui/IconButton";
 import { MenuGroup, MenuItem } from "../ui/Menu";

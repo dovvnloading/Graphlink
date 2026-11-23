@@ -1,3 +1,4 @@
+import "./ImageNodeView.css";
 import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useState } from "react";
 import { withAuthToken } from "../../lib/auth/token";
