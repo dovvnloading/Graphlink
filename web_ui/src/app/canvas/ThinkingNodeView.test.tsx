@@ -53,8 +53,8 @@ function renderThinkingNode(overrides: Partial<ThinkingFlowNode["data"]> = {}) {
 describe("ThinkingNodeView", () => {
   it("shows exactly one kind glyph in the thinking node header", () => {
     renderThinkingNode();
-    expect(document.querySelectorAll(".thinking-node .node-card-header svg")).toHaveLength(1);
-    expect(document.querySelector(".thinking-node .node-card-kind-icon")).toBeInTheDocument();
+    expect(document.querySelectorAll(".thinking-node .node-card-kind-icon")).toHaveLength(1);
+    expect(document.querySelector(".thinking-node .node-card-title-slot svg")).toBeNull();
   });
 
   it("renders the markdown thinking text", () => {
