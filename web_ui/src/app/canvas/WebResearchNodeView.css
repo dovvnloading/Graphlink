@@ -58,21 +58,9 @@
    shared-token convention .chat-node-content's markdown rules already
    establish across sibling node views) rather than duplicating the two
    declarations under a new name. */
-.web-research-node-run-btn,
-
-
-
-
-
-
-.web-research-node-run-btn:disabled,
-
-
-
 
 /* R8a (UI/UX issue list finding #23): see .conversation-node-cancel-btn's
    identical comment above - same shape, same gap, same fix. */
-
 
 /* Stage stepper - pending/active/done, one pill per STAGE_STEPS entry. */
 .web-research-node-stepper {

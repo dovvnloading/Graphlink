@@ -99,12 +99,6 @@
   gap: var(--gl-space-1-5);
 }
 
-
-
-
-
-
-
 .artifact-node-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -118,12 +112,6 @@
   color: var(--gl-surface-text-muted);
   font-variant-numeric: tabular-nums;
 }
-
-
-
-
-
-
 
 .artifact-node-editor {
   box-sizing: border-box;
@@ -247,17 +235,6 @@
    verbatim (same shared-token convention already established across sibling
    node views) rather than duplicating the two declarations under a new
    name. */
-.artifact-node-submit-btn,
-
-
-
-
-
-
-.artifact-node-submit-btn:disabled,
-
-
-
 
 /* R8a (UI/UX issue list finding #23): see .conversation-node-cancel-btn's
    identical comment above - same shape, same gap, same fix. */
