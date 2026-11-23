@@ -48,7 +48,7 @@ test("discovers models, switches chat model and receives its streamed reply", as
     const provider = settings.getByRole("button", { name: "API provider" });
     await provider.click();
     const search = page.getByRole("combobox", { name: "Search API provider" });
-    await search.fill("Grok");
+    await search.fill("xAI");
     await search.press("Enter");
     await expect(provider).toContainText("xAI");
     await expect(settings.getByText("https://api.x.ai/v1", { exact: true })).toBeVisible();
