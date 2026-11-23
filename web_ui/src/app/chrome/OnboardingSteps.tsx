@@ -23,7 +23,7 @@ export function OnboardingSteps({ step, setStep, providerMode, route, store, ope
   const modelReady = route?.available === true;
 
   return (
-    <Dialog name="onboarding" title="Welcome to Graphlink" size="md" className="onboarding-dialog"
+    <Dialog name="onboarding" {...{ title: "Welcome to Graphlink" }} size="md" className="onboarding-dialog"
       status={<Button size="sm" variant="ghost" onClick={overlays.close}>Skip setup</Button>}
       footer={<>
         {step > 0 && <Button variant="secondary" onClick={() => setStep((value) => value - 1)}>Back</Button>}
@@ -48,7 +48,7 @@ export function OnboardingSteps({ step, setStep, providerMode, route, store, ope
         </>}
         {step === 1 && <>
           <h3>Choose a model</h3>
-          <Card title={route?.label ?? (providerMode || "Model connection")}
+          <Card {...{ title: route?.label ?? (providerMode || "Model connection") }}
             status={route === null ? "Running" : modelReady ? "Done" : "Failed"}>
             <p role="status">{route === null
               ? "Checking your configured provider…"
