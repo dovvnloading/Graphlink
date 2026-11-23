@@ -2,7 +2,14 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { FILTERABLE_NODE_KINDS } from "../canvas/SceneCanvas";
 import type { SceneStore } from "../canvas/sceneStore";
 import { Popover } from "../overlays/overlays";
-import { CustomSelect } from "./CustomSelect";
+import { Slider } from "../ui/Slider";
+import { Switch } from "../ui/Switch";
+import { SegmentedControl } from "../ui/SegmentedControl";
+import { ToggleButton } from "../ui/ToggleButton";
+import { FieldGroup } from "../ui/Field";
+import { Button } from "../ui/Button";
+import { Select } from "../ui/Select";
+import "./ViewPopover.css";
 
 // ADR-012 stage 12.5: display labels for FILTERABLE_NODE_KINDS' own raw
 // kind strings - most already read fine title-cased, but "web_research"/
@@ -126,39 +133,9 @@ function FieldRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-/**
- * A numeric setting: name, live value, one slider, and - where the backend
- * publishes them - its landmark values as scale marks under the track.
- *
- * ONE CONTROL PER VALUE, which is the main thing this popover was missing.
- * Pan speed and grid spacing each used to render a value badge, a slider,
- * AND a four-button segmented control, all bound to the same number and
- * stacked vertically: three representations of one setting, with nothing
- * saying which was authoritative. That is a straight artifact of the port -
- * the Qt controls offered presets, the SPA rewrite added sliders, and
- * neither was taken away.
- *
- * The presets are worth keeping (they are the values the backend actually
- * publishes as landmarks), so they stay - as small marks belonging to the
- * slider's scale rather than as a competing control. Half the height, and
- * no ambiguity about what sets the value.
- *
- * The track's fill is driven by --view-slider-fill rather than by a second
- * element: a custom property set on the input inherits into the
- * ::-webkit-slider-runnable-track pseudo-element, which is the only way to
- * paint progress on a range input in this engine.
- */
+/** Slider values are buffered to avoid a backend publish for every pixel dragged. */
 function SliderField({
-  label,
-  ariaLabel,
-  value,
-  display,
-  min,
-  max,
-  presets,
-  formatPreset,
-  onInput,
-  onPreset,
+  label, ariaLabel, value, display, min, max, presets, formatPreset, onInput, onPreset,
 }: {
   label: string;
   ariaLabel: string;
@@ -171,33 +148,16 @@ function SliderField({
   onInput: (value: number) => void;
   onPreset?: (value: number) => void;
 }) {
-  const span = max - min;
-  const fill = span > 0 ? ((value - min) / span) * 100 : 0;
   return (
     <div className="view-field">
       <FieldRow label={label} value={display} />
-      <input
-        type="range"
-        className="view-slider"
-        style={{ ["--view-slider-fill" as string]: `${Math.min(100, Math.max(0, fill))}%` }}
-        min={min}
-        max={max}
-        value={value}
-        aria-label={ariaLabel}
-        onChange={(e) => onInput(Number(e.target.value))}
-      />
-      {presets && presets.length > 0 && onPreset && (
-        <div className="view-ticks" role="group" aria-label={`${ariaLabel} presets`}>
+      <Slider label={ariaLabel} min={min} max={max} value={value} onValueChange={onInput}
+        ticks={presets?.map((tick) => ({ value: tick, label: formatPreset ? formatPreset(tick) : String(tick) }))} />
+      {presets && onPreset && (
+        <div className="view-presets" role="group" aria-label={`${ariaLabel} presets`}>
           {presets.map((preset) => (
-            <button
-              key={preset}
-              type="button"
-              className={"view-tick" + (preset === value ? " active" : "")}
-              aria-pressed={preset === value}
-              onClick={() => onPreset(preset)}
-            >
-              {formatPreset ? formatPreset(preset) : preset}
-            </button>
+            <ToggleButton key={preset} size="sm" label={formatPreset ? formatPreset(preset) : String(preset)}
+              pressed={value === preset} onPressedChange={() => onPreset(preset)} />
           ))}
         </div>
       )}
@@ -205,50 +165,16 @@ function SliderField({
   );
 }
 
-/** One toggle with an explanatory hint, the Settings checkbox-row idiom. */
 function ToggleRow({
-  label,
-  hint,
-  checked,
-  onChange,
+  label, hint, checked, onChange,
 }: {
-  label: string;
-  hint: string;
-  checked: boolean;
-  onChange: (next: boolean) => void;
+  label: string; hint: string; checked: boolean; onChange: (next: boolean) => void;
 }) {
-  return (
-    <label className="view-toggle-row">
-      {/* Explicit aria-label: the wrapping label would otherwise fold the
-          hint into the checkbox's accessible NAME, when the hint is a
-          description of the behaviour, not part of what the control is
-          called. */}
-      <input
-        type="checkbox"
-        className="gl-checkbox"
-        aria-label={label}
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-      <span className="view-toggle-text">
-        <span className="view-toggle-label">{label}</span>
-        <span className="view-toggle-hint">{hint}</span>
-      </span>
-    </label>
-  );
+  return <Switch label={label} description={hint} checked={checked} onCheckedChange={onChange} />;
 }
 
-/** Preset color swatches plus a free-choice picker at the end of the row.
- * `autoLabel`, when given, prepends an "follow the theme" swatch that picks
- * the empty string - the reset-to-adaptive affordance the font color needs
- * (an unset font color inherits the palette's own text token and stays
- * readable in both themes). Grid color has no such state and omits it. */
 function SwatchRow({
-  presets,
-  current,
-  ariaPrefix,
-  autoLabel,
-  onPick,
+  presets, current, ariaPrefix, autoLabel, onPick,
 }: {
   presets: readonly string[];
   current: string;
@@ -260,48 +186,20 @@ function SwatchRow({
   return (
     <div className="view-row" role="group" aria-label={`${ariaPrefix} presets`}>
       {autoLabel && (
-        <button
-          type="button"
-          className={"view-color-swatch view-color-auto" + (current === "" ? " active" : "")}
-          title={autoLabel}
-          aria-label={`${ariaPrefix}, ${autoLabel}`}
-          aria-pressed={current === ""}
-          onClick={() => onPick("")}
-        >
-          A
-        </button>
+        <ToggleButton size="sm" className="view-color-swatch view-color-auto" label="Auto"
+          aria-label={`${ariaPrefix}, ${autoLabel}`} pressed={current === ""}
+          icon={current === "" ? "check" : undefined} onPressedChange={() => onPick("")} />
       )}
       {presets.map((color) => (
-        <button
-          key={color}
-          type="button"
-          className={"view-color-swatch" + (color === current ? " active" : "")}
-          style={{ backgroundColor: color }}
-          title={color}
-          aria-label={`${ariaPrefix} ${color}`}
-          onClick={() => onPick(color)}
-        />
+        <ToggleButton key={color} size="sm" className="view-color-swatch"
+          aria-label={`${ariaPrefix} ${color}`} pressed={color === current}
+          icon={color === current ? "check" : undefined}
+          style={{ backgroundColor: color }} onPressedChange={() => onPick(color)} />
       ))}
-      {/* The custom-color affordance the preset-only conversion dropped: the
-          backend accepts any hex (set_grid_color/set_font store the string
-          verbatim), so limiting the UI to five fixed swatches was purely a
-          porting gap. A native color input, styled as one more swatch,
-          carries the current CUSTOM value when one is active. */}
-      <label
-        className={"view-color-swatch view-color-custom" + (currentIsPreset ? "" : " active")}
-        style={currentIsPreset ? undefined : { backgroundColor: current }}
-        title="Custom color"
-      >
-        <input
-          type="color"
-          // A color input cannot hold "" - the browser coerces invalid
-          // values (to #000000, with a console warning). When the current
-          // value is "follow the theme" the picker just needs a sane
-          // starting point for the dialog it opens.
-          value={current || "#949494"}
-          aria-label={`${ariaPrefix}, custom`}
-          onChange={(e) => onPick(e.target.value)}
-        />
+      <label className={"view-color-custom" + (!currentIsPreset && current ? " active" : "")}
+        style={!currentIsPreset && current ? { backgroundColor: current } : undefined}>
+        <input type="color" value={current || "#949494"}
+          aria-label={`${ariaPrefix}, custom`} onChange={(event) => onPick(event.currentTarget.value)} />
       </label>
     </div>
   );
@@ -405,8 +303,7 @@ export function ViewPopover({ store }: { store: SceneStore }) {
   return (
     <Popover name="view" label="View settings" className="view-popover" anchored>
       <div className="view-scroll">
-        <section className="view-section" aria-label="Canvas">
-          <p className="view-section-title">Canvas</p>
+        <FieldGroup title="Canvas" className="view-section">
           <SliderField
             label="Pan speed"
             ariaLabel="Canvas pan speed"
@@ -431,10 +328,9 @@ export function ViewPopover({ store }: { store: SceneStore }) {
             checked={scene.smartGuides}
             onChange={(v) => store.setSmartGuides(v)}
           />
-        </section>
+        </FieldGroup>
 
-        <section className="view-section" aria-label="Grid">
-          <p className="view-section-title">Grid</p>
+        <FieldGroup title="Grid" className="view-section">
           <SliderField
             label="Spacing"
             ariaLabel="Grid spacing"
@@ -456,24 +352,14 @@ export function ViewPopover({ store }: { store: SceneStore }) {
             max={100}
             onInput={setGridOpacity}
           />
-          {/* No value readout above this one: the segmented control IS the
-              readout - the selected segment says "Dots" as plainly as a
-              badge above it did. */}
           <div className="view-field">
             <span className="view-field-label">Style</span>
-            <div className="view-segment" role="group" aria-label="Grid style">
-              {grid.stylePresets.map((style) => (
-                <button
-                  key={style}
-                  type="button"
-                  className={"view-segment-btn" + (style === grid.gridStyle ? " active" : "")}
-                  aria-pressed={style === grid.gridStyle}
-                  onClick={() => store.setGridStyle(style)}
-                >
-                  {style}
-                </button>
-              ))}
-            </div>
+            <SegmentedControl size="sm" label="Grid style" value={grid.gridStyle}
+              options={grid.stylePresets.map((style) => ({
+                value: style, label: style,
+                icon: style === "Dots" ? "grid-dots" : style === "Lines" ? "grid-lines" : "grid-cross",
+              }))}
+              onChange={(style) => store.setGridStyle(style)} />
           </div>
           <div className="view-field">
             <FieldRow label="Color" value={gridColor.toUpperCase()} />
@@ -484,13 +370,12 @@ export function ViewPopover({ store }: { store: SceneStore }) {
               onPick={setGridColor}
             />
           </div>
-        </section>
+        </FieldGroup>
 
         {/* Fade/orthogonal lived under GRID in the straight port only because
             the legacy grid-control bridge happened to own their checkboxes;
             they configure connections, so they get a section that says so. */}
-        <section className="view-section" aria-label="Connections">
-          <p className="view-section-title">Connections</p>
+        <FieldGroup title="Connections" className="view-section">
           <ToggleRow
             label="Fade Connections"
             hint="Dim all lines except the one under the pointer"
@@ -503,15 +388,14 @@ export function ViewPopover({ store }: { store: SceneStore }) {
             checked={scene.orthogonalRouting}
             onChange={(v) => store.setOrthogonalConnections(v)}
           />
-        </section>
+        </FieldGroup>
 
-        <section className="view-section" aria-label="Node font">
-          <p className="view-section-title">Node Font</p>
+        <FieldGroup title="Node font" className="view-section">
           <div className="view-field">
             <span className="view-field-label">Family</span>
-            <CustomSelect
+            <Select
               value={scene.fontFamily}
-              options={fontConfig.fontFamilies.map((family) => ({ id: family, label: family }))}
+              options={fontConfig.fontFamilies.map((family) => ({ value: family, label: family }))}
               onChange={(family) => store.setFontFamily(family)}
               ariaLabel="Font family"
             />
@@ -550,15 +434,12 @@ export function ViewPopover({ store }: { store: SceneStore }) {
           >
             The quick brown fox jumps over the lazy dog
           </div>
-        </section>
+        </FieldGroup>
 
-        <section className="view-section" aria-label="Focus">
+        <FieldGroup title="Focus" className="view-section">
           <div className="view-section-head">
-            <p className="view-section-title">Focus</p>
-            {filterCount > 0 && (
-              <button type="button" className="view-clear-btn" onClick={() => store.clearFilters()}>
-                Clear ({filterCount})
-              </button>
+              {filterCount > 0 && (
+              <Button variant="ghost" size="sm" onClick={() => store.clearFilters()}>Clear ({filterCount})</Button>
             )}
           </div>
           {/* ADR-002 Workstream 1 ("Branch status and lifecycle"): dims every
@@ -585,41 +466,25 @@ export function ViewPopover({ store }: { store: SceneStore }) {
           <p className="view-subsection-title">By kind</p>
           <div className="view-row" role="group" aria-label="Filter by node kind">
             {FILTERABLE_NODE_KINDS.map((kind) => (
-              <button
-                key={kind}
-                type="button"
-                className={"view-chip" + (filterKinds.has(kind) ? " active" : "")}
-                aria-pressed={filterKinds.has(kind)}
-                onClick={() => store.toggleFilterKind(kind)}
-              >
-                {FILTER_KIND_LABELS[kind]}
-              </button>
+              <ToggleButton key={kind} size="sm" label={FILTER_KIND_LABELS[kind]}
+                pressed={filterKinds.has(kind)} onPressedChange={() => store.toggleFilterKind(kind)} />
             ))}
           </div>
           <p className="view-subsection-title">By branch status</p>
           <div className="view-row" role="group" aria-label="Filter by branch status">
             {FILTER_STATUS_VALUES.map((status) => (
-              <button
-                key={status}
-                type="button"
-                className={"view-chip" + (filterStatuses.has(status) ? " active" : "")}
-                aria-pressed={filterStatuses.has(status)}
-                onClick={() => store.toggleFilterStatus(status)}
-              >
-                {FILTER_STATUS_LABELS[status]}
-              </button>
+              <ToggleButton key={status} size="sm" label={FILTER_STATUS_LABELS[status]}
+                pressed={filterStatuses.has(status)} onPressedChange={() => store.toggleFilterStatus(status)} />
             ))}
           </div>
-        </section>
+        </FieldGroup>
       </div>
 
       {/* Outside .view-scroll on purpose: the panel is taller than the
           popover, and a footer inside the scroller means scrolling past
           every control this button undoes in order to reach it. */}
       <div className="view-footer">
-        <button type="button" className="view-reset-btn" onClick={resetAll}>
-          Reset to Defaults
-        </button>
+        <Button variant="ghost" size="sm" fullWidth onClick={resetAll}>Reset to defaults</Button>
       </div>
     </Popover>
   );
