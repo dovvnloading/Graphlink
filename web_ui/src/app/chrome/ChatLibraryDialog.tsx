@@ -218,19 +218,29 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
     setEditingTagsId(null);
   }
   async function deleteChat(row: AppChatLibraryRow) {
-    const accepted = await askConfirm({
-      title: "Delete chat?",
-      body: "Delete “" + row.title + "”? This removes the saved chat from the library.",
-      confirmLabel: "Delete chat",
-      destructive: true,
-    });
-    if (!accepted) return;
-    try {
-      const deleted = await transport.request("app-chat-library", "deleteChat", [row.id]);
-      if (!deleted) setActionError("Couldn't delete this chat. It may have changed elsewhere.");
-    } catch (cause) {
-      console.error("[chat-library] Delete failed:", cause);
-      setActionError("Couldn't delete this chat. Details were written to the log.");
+    // A failed mutation must not silently dismiss the row-scoped confirmation.
+    // Reopen it with the failure message; only another explicit confirmation may retry.
+    let failure: string | null = null;
+    while (true) {
+      const accepted = await askConfirm({
+        title: "Delete chat?",
+        body: <>
+          <p>Delete “{row.title}”? This removes the saved chat from the library.</p>
+          {failure && <p role="alert">{failure}</p>}
+        </>,
+        confirmLabel: "Delete chat",
+        destructive: true,
+      });
+      if (!accepted) return;
+      try {
+        const deleted = await transport.request("app-chat-library", "deleteChat", [row.id]);
+        if (deleted) return;
+        failure = "Couldn't delete this chat. It may have changed elsewhere.";
+      } catch (cause) {
+        console.error("[chat-library] Delete failed:", cause);
+        failure = "Couldn't delete this chat. Details were written to the log.";
+      }
+      setActionError(failure);
     }
   }
   function selectWorkspace(value: string) {
@@ -336,11 +346,18 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
               {workspaces.map((workspace) => (
                 <div className="chat-library-workspace" key={workspace.id}>
                   <Button variant="ghost" onClick={() => setWorkspaceSettingsId(workspaceSettingsId === workspace.id ? null : workspace.id)}
-                    iconStart="workspace" aria-expanded={workspaceSettingsId === workspace.id}>
+                    iconStart="settings" aria-expanded={workspaceSettingsId === workspace.id}>
                     {workspace.name}
                   </Button>
                   {activeWorkspace?.id === workspace.id && (
                     <div className="chat-library-workspace-details">
+                      <p>Workspace settings for {workspace.name}. Export or import this workspace.</p>
+                      <p>{workspace.defaultModelId
+                        ? "Current default: " + workspace.defaultModelProvider + " / " +
+                          (composerState.route.modelOptions.find((model) => model.id === workspace.defaultModelId)?.label ?? workspace.defaultModelId)
+                        : "No default set"}</p>
+                      {composerState.route.modelOptions.length === 0 &&
+                        <p>No models available for {composerState.route.provider || "the active provider"}.</p>}
                       <Select label={"Default model for " + workspace.name} value={workspace.defaultModelId}
                         onChange={(value) => setWorkspaceDefaultModel(workspace, value)}
                         options={[
@@ -367,7 +384,7 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
             actions={<Button iconStart="chat-plus" onClick={() => { void newChat(); }}>New chat</Button>} />
         ) : filtered.length === 0 ? (
           <EmptyState icon="search" {...{ title: "No matching chats" }} body="Try another search or change the filters."
-            actions={<Button onClick={() => { setQuery(""); setFilter("all"); setSelectedTags(new Set()); setSelectedWorkspaceId(null); }}>Clear filters</Button>} />
+            actions={<Button onClick={() => { setQuery(""); setFilter("all"); setSelectedTags(new Set()); setSelectedWorkspaceId(null); }}>{query.trim() ? "Clear search" : "Clear filters"}</Button>} />
         ) : (
           <div className="chat-library-groups">
             {groups.map((group) => (
