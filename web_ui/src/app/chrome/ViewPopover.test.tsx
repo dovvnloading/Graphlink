@@ -101,13 +101,13 @@ describe("ViewPopover (R7.5b-1 Fade Connections checkbox)", () => {
   it("reflects fadeConnectionsEnabled=false as unchecked", () => {
     const { store } = makeStore({ fadeConnectionsEnabled: false });
     renderOpen(store);
-    expect(screen.getByRole("checkbox", { name: "Fade Connections" })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Fade Connections" })).not.toBeChecked();
   });
 
   it("reflects fadeConnectionsEnabled=true as checked", () => {
     const { store } = makeStore({ fadeConnectionsEnabled: true });
     renderOpen(store);
-    expect(screen.getByRole("checkbox", { name: "Fade Connections" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Fade Connections" })).toBeChecked();
   });
 
   it("calls store.setFadeConnections with the new value on toggle, independent of Snap to Grid", async () => {
@@ -115,7 +115,7 @@ describe("ViewPopover (R7.5b-1 Fade Connections checkbox)", () => {
     const { store, setFadeConnections, setSnapToGrid } = makeStore({ fadeConnectionsEnabled: false });
     renderOpen(store);
 
-    await user.click(screen.getByRole("checkbox", { name: "Fade Connections" }));
+    await user.click(screen.getByRole("switch", { name: "Fade Connections" }));
 
     expect(setFadeConnections).toHaveBeenCalledWith(true);
     expect(setSnapToGrid).not.toHaveBeenCalled();
@@ -128,13 +128,13 @@ describe("ViewPopover (R7.5b-2 Orthogonal Routing checkbox)", () => {
   it("reflects orthogonalRouting=false as unchecked", () => {
     const { store } = makeStore({ orthogonalRouting: false });
     renderOpen(store);
-    expect(screen.getByRole("checkbox", { name: "Orthogonal Routing" })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Orthogonal Routing" })).not.toBeChecked();
   });
 
   it("reflects orthogonalRouting=true as checked", () => {
     const { store } = makeStore({ orthogonalRouting: true });
     renderOpen(store);
-    expect(screen.getByRole("checkbox", { name: "Orthogonal Routing" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Orthogonal Routing" })).toBeChecked();
   });
 
   it("calls store.setOrthogonalConnections with the new value on toggle, independent of Fade Connections", async () => {
@@ -142,7 +142,7 @@ describe("ViewPopover (R7.5b-2 Orthogonal Routing checkbox)", () => {
     const { store, setOrthogonalConnections, setFadeConnections } = makeStore({ orthogonalRouting: false });
     renderOpen(store);
 
-    await user.click(screen.getByRole("checkbox", { name: "Orthogonal Routing" }));
+    await user.click(screen.getByRole("switch", { name: "Orthogonal Routing" }));
 
     expect(setOrthogonalConnections).toHaveBeenCalledWith(true);
     expect(setFadeConnections).not.toHaveBeenCalled();
@@ -154,12 +154,12 @@ describe("ViewPopover (R7.5b-3 Smart Guides checkbox)", () => {
   it("reflects smartGuides=false as unchecked and smartGuides=true as checked", () => {
     const off = makeStore({ smartGuides: false });
     const { unmount } = renderOpen(off.store);
-    expect(screen.getByRole("checkbox", { name: "Smart Guides" })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Smart Guides" })).not.toBeChecked();
     unmount();
 
     const on = makeStore({ smartGuides: true });
     renderOpen(on.store);
-    expect(screen.getByRole("checkbox", { name: "Smart Guides" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Smart Guides" })).toBeChecked();
   });
 
   it("calls store.setSmartGuides with the new value on toggle, independent of the other toggles", async () => {
@@ -167,7 +167,7 @@ describe("ViewPopover (R7.5b-3 Smart Guides checkbox)", () => {
     const { store, setSmartGuides, setOrthogonalConnections, setFadeConnections } = makeStore({ smartGuides: false });
     renderOpen(store);
 
-    await user.click(screen.getByRole("checkbox", { name: "Smart Guides" }));
+    await user.click(screen.getByRole("switch", { name: "Smart Guides" }));
 
     expect(setSmartGuides).toHaveBeenCalledWith(true);
     expect(setOrthogonalConnections).not.toHaveBeenCalled();
@@ -181,12 +181,12 @@ describe("ViewPopover (ADR-002 Workstream 1 Focus Accepted Paths checkbox)", () 
   it("reflects focusAcceptedPaths=false as unchecked and =true as checked", () => {
     const off = makeStore({}, false);
     const { unmount } = renderOpen(off.store);
-    expect(screen.getByRole("checkbox", { name: "Focus Accepted Paths" })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Focus Accepted Paths" })).not.toBeChecked();
     unmount();
 
     const on = makeStore({}, true);
     renderOpen(on.store);
-    expect(screen.getByRole("checkbox", { name: "Focus Accepted Paths" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Focus Accepted Paths" })).toBeChecked();
   });
 
   it("calls store.setFocusAcceptedPaths with the new value on toggle, independent of the other toggles", async () => {
@@ -194,7 +194,7 @@ describe("ViewPopover (ADR-002 Workstream 1 Focus Accepted Paths checkbox)", () 
     const { store, setFocusAcceptedPaths, setSmartGuides, setFadeConnections } = makeStore({}, false);
     renderOpen(store);
 
-    await user.click(screen.getByRole("checkbox", { name: "Focus Accepted Paths" }));
+    await user.click(screen.getByRole("switch", { name: "Focus Accepted Paths" }));
 
     expect(setFocusAcceptedPaths).toHaveBeenCalledWith(true);
     expect(setSmartGuides).not.toHaveBeenCalled();
@@ -284,7 +284,7 @@ describe("ViewPopover font color (theme-following default)", () => {
     const setFontColor = store.setFontColor as ReturnType<typeof vi.fn>;
     renderOpen(store);
 
-    await user.click(screen.getByRole("button", { name: "Reset to Defaults" }));
+    await user.click(screen.getByRole("button", { name: "Reset to defaults" }));
     expect(setFontColor).toHaveBeenCalledWith("");
   });
 });
