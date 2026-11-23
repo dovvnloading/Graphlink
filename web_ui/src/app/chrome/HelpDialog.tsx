@@ -178,7 +178,7 @@ export function HelpDialog() {
   const activeSection = availableSections.find((section) => section.name === activeSectionName) ?? availableSections[0];
 
   return (
-    <Dialog name="help" title="Help" size="xl" className="help-dialog">
+    <Dialog name="help" {...{ title: "Help" }} size="xl" className="help-dialog">
       {loadError ? <p role="alert">{loadError}</p> : !sections ? <p role="status">Loading help…</p> : (
       <div className="help-shell">
         <nav className="help-rail" aria-label="Help sections">
