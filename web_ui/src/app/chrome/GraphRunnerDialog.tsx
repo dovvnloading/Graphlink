@@ -420,10 +420,10 @@ function Runner({ store }: { store: SceneStore }) {
       <header className="runner-section-header">
         <h2>Latest run</h2>
         <span role="status" data-status={latest.status}>
-          <StatusPill status={latest.status === "completed" ? "Done"
+          <span aria-hidden="true"><StatusPill status={latest.status === "completed" ? "Done"
             : latest.status === "running" ? "Running" : latest.status === "cancelled" ? "Cancelled"
             : latest.status === "failed" || latest.status === "reconciliation-required" ? "Failed"
-            : "Out of date"} />
+            : "Out of date"} /></span>
           {statuses[latest.status] ?? latest.status}
         </span>
       </header>
