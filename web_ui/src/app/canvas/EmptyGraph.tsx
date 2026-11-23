@@ -20,7 +20,7 @@ export function EmptyGraph({ store }: { store: SceneStore }) {
   const noModelReady = composerStore !== null && (!route.provider || !route.modelId);
   return (
     <section className="empty-graph" aria-label="Empty canvas">
-      <EmptyState icon="brand" size="lg" title="Start a graph"
+      <EmptyState icon="brand" size="lg" {...{ title: "Start a graph" }}
         body="Write a message, add a note, or open a saved chat."
         actions={
           <>
@@ -40,7 +40,7 @@ export function EmptyGraph({ store }: { store: SceneStore }) {
         </Button>
       </div>
       {noModelReady && <InlineAlert className="empty-graph-model-alert" variant="warning"
-        title="No model selected" body="Set up a model to start a conversation."
+        {...{ title: "No model selected" }} body="Set up a model to start a conversation."
         action={{ label: "Set up a model", onClick: () => {
           store.openModelTaskSettings("general");
           overlays.open("settings", "dialog");
