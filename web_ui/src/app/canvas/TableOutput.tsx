@@ -1,4 +1,7 @@
 import { useState } from "react";
+import { Button } from "../ui/Button";
+import { StatusPill } from "../ui/Badge";
+import { InlineAlert } from "../ui/InlineAlert";
 import type { SceneNodeRow } from "../../lib/bridge-core/generated/scene-state";
 import { TableContributors } from "./TableContributors";
 import { artifactDiffPreview } from "./artifactProposalDiff";
@@ -98,28 +101,31 @@ export default function TableOutput({ node, store, editing = false }: TableOutpu
       <strong>{node.tableValueColumn} by {node.tableLabelColumn}</strong>
       <span>Version {node.tableOutputVersion}{node.tableInputSourceId && ` · Table ${node.tableInputSourceId}`}</span>
     </div>
-    <span role="status" data-state={node.tableInputStatus}>{statusText}</span>
+    <div className="table-output-status" data-state={node.tableInputStatus}>
+      <StatusPill status={node.tableInputStatus === "current" ? "Done" : node.tableInputStatus === "stale" ? "Out of date" : "Skipped"} />
+      <span>{statusText}</span>
+    </div>
     {(node.tableOutputEdited || editing || node.pendingRequestId || node.artifactProposalId) && <p>
       {node.tableOutputEdited ? "This result has manual edits. Create a new output from the table to keep both."
         : editing ? "Finish editing to update from the table." : "Finish the Drafter request or proposal before updating."}
     </p>}
     <div className="table-workflow-actions">
-      <button type="button" disabled={busy || !node.tableInputSourceId || protectedOutput}
-        onClick={() => void action(async () => { await store.runTableOutput(node.id); setHistory(null); })}>Rerun from table</button>
-      {node.tableHasPrevious && <button type="button" aria-expanded={!!compare} disabled={busy}
+      <Button size="sm" type="button" disabled={busy || !node.tableInputSourceId || protectedOutput}
+        onClick={() => void action(async () => { await store.runTableOutput(node.id); setHistory(null); })}>Rerun from table</Button>
+      {node.tableHasPrevious && <Button size="sm" type="button" aria-expanded={!!compare} disabled={busy}
         onClick={() => {
           if (compare) { setHistory(null); return; }
           void action(openHistory);
-        }}>{compare ? "Close comparison" : "Compare versions"}</button>}
+        }}>{compare ? "Close comparison" : "Compare versions"}</Button>}
     </div>
     {compare && <div className="table-version-comparison">
       <ComparisonView {...compare} />
-      <button type="button" disabled={busy || protectedOutput} onClick={() => void action(async () => {
+      <Button size="sm" type="button" disabled={busy || protectedOutput} onClick={() => void action(async () => {
         setHistory(null);
         await store.restoreTableOutput(node.id, compare.revisionToken);
-      })}>Restore previous version</button>
+      })}>Restore previous version</Button>
     </div>}
     <TableContributors node={node} store={store} />
-    {error && <p role="alert">{error}</p>}
+    {error && <InlineAlert variant="error" title="Table output action failed" body={error} />}
   </section>;
 }

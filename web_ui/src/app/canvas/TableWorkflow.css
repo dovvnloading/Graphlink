@@ -3,23 +3,21 @@
   gap: 7px;
   align-content: start;
   min-width: 0;
-  font-size: 0.88em;
+  font-size: var(--gl-text-xs);
   cursor: default;
 }
 .note-node.table-source-node { width: 350px; max-width: none; }
-.table-workflow :is(input, textarea, select, button) {
+.table-workflow :is(input[type="file"], table input, table textarea) {
   box-sizing: border-box;
   color: inherit;
   font: inherit;
   background: var(--gl-surface-window);
   border: 1px solid var(--gl-surface-border);
-  border-radius: 4px;
+  border-radius: var(--gl-radius-xs);
   padding: 3px 6px;
 }
-.table-workflow button { cursor: pointer; }
-.table-workflow button:disabled { opacity: 0.55; cursor: default; }
 .table-workflow label { display: grid; gap: 3px; min-width: 0; }
-.table-workflow :is(input, textarea, select) { min-width: 0; max-width: 100%; }
+.table-workflow :is(input, textarea, .gl-select) { min-width: 0; max-width: 100%; }
 .table-workflow textarea[aria-label="CSV data"] { width: 100%; min-height: 110px; font-family: monospace; resize: vertical; }
 .table-workflow-scroll { overflow: auto; max-height: 220px; }
 .table-workflow table { width: 100%; border-collapse: collapse; text-align: start; font-variant-numeric: tabular-nums; }
@@ -35,6 +33,10 @@
 .table-workflow [role="alert"] { color: var(--gl-status-danger, currentColor); }
 .table-workflow p { margin: 0; }
 .table-output [data-state="stale"] { font-weight: 600; }
+.table-output-status { display: flex; gap: var(--gl-space-2); align-items: center; flex-wrap: wrap; }
+.table-workflow .gl-select { width: 100%; }
+.table-workflow .gl-select-trigger { width: 100%; }
+.table-workflow .gl-button { max-width: 100%; }
 .table-source-node .table-output { max-height: none; padding-inline: 0; }
 .table-version-comparison { display: grid; gap: 5px; }
 .table-version-comparison > button { justify-self: start; }
