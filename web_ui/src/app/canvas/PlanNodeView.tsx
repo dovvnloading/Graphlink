@@ -158,7 +158,7 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
   // An automatic disclosure must not add a second node-view commit when activity updates.
   const [activityChoice, setActivityChoice] = useState<{ runId: string; open: boolean } | null>(null);
   const activityOpen = activityChoice?.runId === data.builderRunId
-    ? activityChoice.open : running && data.builderActivity.length > 0;
+    ? activityChoice.open : false;
   const setActivityOpen = (open: boolean) => setActivityChoice({ runId: data.builderRunId, open });
   const activityListRef = useRef<HTMLDivElement>(null);
   const activityErrorCount = data.builderActivity.filter((row) => row.outcome !== "ok").length;
@@ -419,7 +419,7 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
       {data.builderActivity.length > 0 && (
         <Disclosure className="chat-node-tool-invocations plan-node-activity"
           open={activityOpen} onOpenChange={setActivityOpen}
-          {...{ title: `${data.builderActivity.length} activity ${data.builderActivity.length === 1 ? "entry" : "entries"}${activityErrorCount ? ` · ${activityErrorCount} errors` : ""}` }}>
+          {...{ title: `${data.builderActivity.length} activity ${data.builderActivity.length === 1 ? "entry" : "entries"}${activityErrorCount ? ` · ${activityErrorCount} ${activityErrorCount === 1 ? "error" : "errors"}` : ""}` }}>
           <div className="plan-node-activity-list nowheel nodrag" ref={activityListRef}>
             {data.builderActivity.map((row, index) => (
               <div key={index}

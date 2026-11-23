@@ -887,7 +887,7 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
       {data.harnessActivity.length > 0 && (
         <Disclosure className="chat-node-tool-invocations plan-node-activity"
           open={activityOpen} onOpenChange={setActivityOpen}
-          {...{ title: `${data.harnessActivity.length} activity ${data.harnessActivity.length === 1 ? "entry" : "entries"}${activityErrorCount ? ` · ${activityErrorCount} errors` : ""}` }}>
+          {...{ title: `${data.harnessActivity.length} activity ${data.harnessActivity.length === 1 ? "entry" : "entries"}${activityErrorCount ? ` · ${activityErrorCount} ${activityErrorCount === 1 ? "error" : "errors"}` : ""}` }}>
           <div className="plan-node-activity-list nowheel nodrag" ref={activityListRef}>
             {data.harnessActivity.map((row, index) => (
               <div key={index} className={`chat-node-tool-invocation${row.outcome === "error" ? " error" : ""}`}>

@@ -263,14 +263,13 @@ describe("PlanNodeView", () => {
       // summary's text is assembled from more than one node - matched on
       // the element's own textContent rather than with a single-node text
       // query, which no longer sees the whole string.
-      const summary = container.querySelector(".plan-node-activity summary")!;
+      const summary = container.querySelector(".plan-node-activity .gl-disclosure-trigger")!;
       expect(summary.textContent).toBe("2 activity entries · 1 error");
-      const details = summary.closest("details");
-      expect(details).not.toHaveAttribute("open");
+      expect(summary).toHaveAttribute("aria-expanded", "false");
       expect(screen.getAllByText("graph.create_node")).toHaveLength(2);
       expect(screen.getByText('{"kind":"note"}')).toBeInTheDocument();
       expect(screen.getByText(/was denied approval/)).toBeInTheDocument();
-      expect(screen.getByText("<1 s")).toBeInTheDocument();
+      expect(screen.getAllByText("<1 s").length).toBe(2);
     });
 
     it("tints an error row distinctly from an ok row", () => {
