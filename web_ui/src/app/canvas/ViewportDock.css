@@ -1,0 +1,26 @@
+.viewport-dock.react-flow__panel {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gl-space-0-5);
+  padding: var(--gl-space-1);
+  margin: var(--gl-chrome-inset);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-full);
+  background: var(--gl-surface-raised);
+  box-shadow: var(--gl-shadow-2);
+  z-index: var(--gl-z-canvas-hud);
+}
+.viewport-scale {
+  min-width: var(--gl-space-12);
+  height: var(--gl-space-8);
+  border: 0;
+  border-radius: var(--gl-radius-full);
+  background: transparent;
+  color: var(--gl-surface-text-primary);
+  font: var(--gl-weight-semibold) var(--gl-text-xs)/1 var(--gl-font-family);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.viewport-scale:hover { background: var(--gl-neutral-button-hover); }
+.viewport-scale:focus-visible { outline: 2px solid var(--gl-palette-selection); outline-offset: 1px; }
+.viewport-divider { width: 1px; height: var(--gl-space-5); background: var(--gl-surface-border); margin-inline: var(--gl-space-0-5); }
