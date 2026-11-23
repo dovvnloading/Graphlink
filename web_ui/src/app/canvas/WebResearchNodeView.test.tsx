@@ -119,7 +119,7 @@ describe("WebResearchNodeView", () => {
 
   it("renders the retain-to-knowledge checkbox with the app's drawn checkbox class", () => {
     renderWebResearchNode();
-    expect(screen.getByRole("checkbox")).toHaveClass("gl-checkbox");
+    expect(screen.getByRole("checkbox").closest(".gl-checkbox")).toBeInTheDocument();
   });
 
   it("renders the query in the input and the header label", () => {

@@ -56,7 +56,7 @@ describe("ThinkingNodeView", () => {
     expect(screen.getByText("several")).toBeInTheDocument(); // bold text still renders as text
   });
 
-  it("right-click opens a menu with real Copy Content/Dock to Parent Node/Hide Other Branches/Delete Node", async () => {
+  it("right-click opens a menu with real Copy content/Dock to parent node/Hide other branches/Delete node", async () => {
     const user = userEvent.setup();
     const { onDock, onDelete } = renderThinkingNode();
 
@@ -70,10 +70,10 @@ describe("ThinkingNodeView", () => {
     fireEvent.contextMenu(label);
     expect(screen.getByRole("menu")).toBeInTheDocument();
 
-    const copyItem = screen.getByRole("menuitem", { name: "Copy Content" });
-    const dockItem = screen.getByRole("menuitem", { name: "Dock to Parent Node" });
-    const hideBranches = screen.getByRole("menuitem", { name: "Hide Other Branches" });
-    const deleteItem = screen.getByRole("menuitem", { name: "Delete Node" });
+    const copyItem = screen.getByRole("menuitem", { name: "Copy content" });
+    const dockItem = screen.getByRole("menuitem", { name: "Dock to parent node" });
+    const hideBranches = screen.getByRole("menuitem", { name: "Hide other branches" });
+    const deleteItem = screen.getByRole("menuitem", { name: "Delete node" });
     expect(copyItem).toBeEnabled();
     expect(dockItem).toBeEnabled();
     expect(deleteItem).toBeEnabled();
@@ -83,20 +83,20 @@ describe("ThinkingNodeView", () => {
     expect(writeText).toHaveBeenCalledWith("Considering **several** approaches before answering.");
 
     fireEvent.contextMenu(label);
-    await user.click(screen.getByRole("menuitem", { name: "Dock to Parent Node" }));
+    await user.click(screen.getByRole("menuitem", { name: "Dock to parent node" }));
     expect(onDock).toHaveBeenCalledOnce();
 
     fireEvent.contextMenu(label);
-    await user.click(screen.getByRole("menuitem", { name: "Delete Node" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete node" }));
     expect(onDelete).toHaveBeenCalledOnce();
   });
 
-  // ADR-011 stage 11.1 (D11): Copy Content's clipboard write previously had
+  // ADR-011 stage 11.1 (D11): Copy content's clipboard write previously had
   // no `.catch()` - a rejected promise (permission denied, no Clipboard API,
   // insecure context) would surface as an unhandled promise rejection. Now
   // it's caught and logged, matching ImageNodeView's own established pattern
   // for its own clipboard write.
-  it("does not throw/reject unhandled when Copy Content's clipboard write fails", async () => {
+  it("does not throw/reject unhandled when Copy content's clipboard write fails", async () => {
     const user = userEvent.setup();
     renderThinkingNode();
 
@@ -105,7 +105,7 @@ describe("ThinkingNodeView", () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
     fireEvent.contextMenu(screen.getByText("Thinking"));
-    await user.click(screen.getByRole("menuitem", { name: "Copy Content" }));
+    await user.click(screen.getByRole("menuitem", { name: "Copy content" }));
 
     await waitFor(() => expect(writeText).toHaveBeenCalled());
     await waitFor(() => expect(consoleError).toHaveBeenCalled());
@@ -114,27 +114,27 @@ describe("ThinkingNodeView", () => {
     consoleError.mockRestore();
   });
 
-  it("Hide Other Branches calls onToggleBranchFocus and closes the menu when branch focus is inactive", async () => {
+  it("Hide other branches calls onToggleBranchFocus and closes the menu when branch focus is inactive", async () => {
     const user = userEvent.setup();
     const { onToggleBranchFocus } = renderThinkingNode({ isBranchFocusActive: false });
     const label = screen.getByText("Thinking");
 
     fireEvent.contextMenu(label);
-    const hideBranches = screen.getByRole("menuitem", { name: "Hide Other Branches" });
+    const hideBranches = screen.getByRole("menuitem", { name: "Hide other branches" });
     await user.click(hideBranches);
 
     expect(onToggleBranchFocus).toHaveBeenCalledOnce();
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  it("labels the item Show All Branches and still calls onToggleBranchFocus when branch focus is active", async () => {
+  it("labels the item Show all branches and still calls onToggleBranchFocus when branch focus is active", async () => {
     const user = userEvent.setup();
     const { onToggleBranchFocus } = renderThinkingNode({ isBranchFocusActive: true });
     const label = screen.getByText("Thinking");
 
     fireEvent.contextMenu(label);
-    expect(screen.queryByRole("menuitem", { name: "Hide Other Branches" })).toBeNull();
-    const showBranches = screen.getByRole("menuitem", { name: "Show All Branches" });
+    expect(screen.queryByRole("menuitem", { name: "Hide other branches" })).toBeNull();
+    const showBranches = screen.getByRole("menuitem", { name: "Show all branches" });
     await user.click(showBranches);
 
     expect(onToggleBranchFocus).toHaveBeenCalledOnce();

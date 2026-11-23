@@ -1,0 +1,22 @@
+.group-color-picker { position: relative; display: inline-flex; }
+.group-color-swatch-trigger.gl-icon-button {
+  border: 1px solid var(--gl-surface-border);
+  color: var(--node-swatch-ink, var(--gl-surface-text-primary));
+}
+.group-color-swatch-trigger.gl-icon-button:hover { border-color: var(--gl-surface-border-strong); }
+.group-color-popover { width: 210px; max-height: 70vh; overflow-y: auto; }
+.group-color-option { position: relative; }
+.group-color-option::before {
+  content: "";
+  position: absolute;
+  left: var(--gl-space-2);
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-full);
+  background-color: var(--group-option-color);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.group-color-option .gl-menu-item { padding-left: var(--gl-space-10); }

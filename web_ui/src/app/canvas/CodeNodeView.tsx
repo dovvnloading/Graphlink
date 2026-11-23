@@ -7,6 +7,7 @@ import { NodeMenu } from "./NodeMenu";
 import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
+import { MenuItem, MenuGroup } from "../ui/Menu";
 
 /**
  * The code node (Qt-removal plan R3.5/R3.6) - a card holding a single code
@@ -128,70 +129,24 @@ function CodeNodeMenu({
 
   return (
     <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          // Best-effort clipboard write - a failure (missing Clipboard API,
-          // a denied permissions prompt, an insecure context) is swallowed
-          // rather than left as an unhandled rejection, matching
-          // ImageNodeView.tsx's own handleCopyImage: a menu action like this
-          // should never crash the node, it should just silently not have
-          // copied anything.
-          navigator.clipboard.writeText(code).catch((error) => {
-            console.error("[code-node] Copy Code failed:", error);
+      <MenuGroup label="Edit">
+        <MenuItem icon="copy" label="Copy code" onSelect={() => {
+          navigator.clipboard.writeText(code).catch((error: unknown) => {
+            console.error("[code-node] Copy code failed:", error);
           });
-          onClose();
-        }}
-      >
-        Copy Code
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          downloadTextFile(code, `code-${nodeId}.${codeFileExtension(language)}`);
-          onClose();
-        }}
-      >
-        Export
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onToggleBranchFocus();
-          onClose();
-        }}
-      >
-        {isBranchFocusActive ? "Show All Branches" : "Hide Other Branches"}
-      </button>
-      {parentChatNodeId && (
-        <button
-          type="button"
-          role="menuitem"
-          onClick={() => {
-            onRegenerate();
-            onClose();
-          }}
-        >
-          Regenerate Response
-        </button>
-      )}
-      <button
-        type="button"
-        role="menuitem"
-        className="chat-node-menu-danger"
-        onClick={() => {
-          onDelete();
-          onClose();
-        }}
-      >
-        Delete Code Block
-      </button>
+        }} />
+      </MenuGroup>
+      <MenuGroup label="Branch">
+        <MenuItem icon={isBranchFocusActive ? "eye" : "eye-off"}
+          label={isBranchFocusActive ? "Show all branches" : "Hide other branches"}
+          onSelect={onToggleBranchFocus} />
+        {parentChatNodeId && <MenuItem icon="rerun" label="Regenerate response" onSelect={onRegenerate} />}
+      </MenuGroup>
+      <MenuItem icon="download" label="Export…" 
+        onSelect={() => downloadTextFile(code, `code-${nodeId}.${codeFileExtension(language)}`)} />
+      <MenuItem label="Delete code block" destructive onSelect={onDelete} />
     </NodeMenu>
-  );
-}
+  );}
 
 /** ADR-011 stage 11.1: React.memo comparator - id (read into nodeId for the
  * card menu's Export filename), selected, and every CodeNodeData field this

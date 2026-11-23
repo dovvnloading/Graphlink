@@ -163,9 +163,9 @@ describe("Settings > Ollama", () => {
 
   it("shows reasoning levels, current model, server states and the start action", async () => {
     const { user, intents, update } = setup({ ollamaCurrentModel: "llama:latest", ollamaServerStatus: "installed" });
-    expect(screen.getByRole("status", { name: "Ollama server status" })).toHaveTextContent("Installed, not responding");
+    expect(screen.getByRole("status", { name: "Ollama server status" })).toHaveTextContent("Installed, not running");
     expect(screen.getByText("llama:latest")).toBeInTheDocument();
-    await user.click(screen.getByLabelText("Low"));
+    await user.click(screen.getByRole("radio", { name: "Low" }));
     expect(intents).toContainEqual(["app-settings", "setOllamaReasoningLevel", ["low"]]);
     await user.click(screen.getByRole("button", { name: "Start Ollama" }));
     expect(intents).toContainEqual(["app-settings", "startOllama", []]);
@@ -174,7 +174,7 @@ describe("Settings > Ollama", () => {
     expect(screen.getByText(/Starting Ollama and waiting/)).toHaveAttribute("role", "status");
     update({ ollamaServerStatus: "running", ollamaServerReachable: true, ollamaStartStatus: "idle" });
     expect(screen.queryByRole("button", { name: "Start Ollama" })).toBeNull();
-    expect(screen.getByRole("status", { name: "Ollama server status" })).toHaveTextContent("Connected");
+    expect(screen.getByRole("status", { name: "Ollama server status" })).toHaveTextContent("Running");
     await user.click(screen.getByRole("button", { name: "Check Ollama status" }));
     expect(intents).toContainEqual(["app-settings", "checkOllamaStatus", []]);
   });
@@ -189,7 +189,7 @@ describe("Settings > Ollama", () => {
         memoryBytes: 5 * 1024 ** 3, vramBytes: 3 * 1024 ** 3,
       })],
     });
-    const inventory = within(screen.getByRole("group", { name: "Local model inventory" }));
+    const inventory = within(screen.getByRole("region", { name: "Local model inventory" }));
     const card = within(inventory.getByRole("group", { name: "vision:latest" }));
     expect(card.getByText("vision:latest")).toBeInTheDocument();
     expect(card.getByText("Loaded")).toBeInTheDocument();
@@ -298,21 +298,21 @@ describe("Settings > Ollama", () => {
       ollamaInventory: modelNames.map((name) => inventoryModel(name)),
     });
     const tasks = [
-      ["Chat Model", "task_chat"],
-      ["Chat Naming Model", "task_title"],
-      ["Chart Generation Model", "task_chart"],
-      ["Web Content Validation Model", "task_web_validate"],
-      ["Web Content Summarization Model", "task_web_summarize"],
+      ["Chat model", "task_chat"],
+      ["Chat naming model", "task_title"],
+      ["Chart generation model", "task_chart"],
+      ["Web content validation model", "task_web_validate"],
+      ["Web content summarization model", "task_web_summarize"],
     ];
     for (const [label, task] of tasks) {
       await chooseOption(user, label, "beta:latest");
       expect(intents).toContainEqual(["app-settings", "setOllamaModelAssignment", [task, "beta:latest"]]);
     }
-    await chooseOption(user, "Chat Naming Model", "Use chat model");
+    await chooseOption(user, "Chat naming model", "Use chat model");
     expect(intents).toContainEqual(["app-settings", "setOllamaModelAssignment", ["task_title", "inherit"]]);
-    await chooseOption(user, "Chat Model", "Auto - choose a compatible installed model");
+    await chooseOption(user, "Chat model", "Auto — choose a compatible installed model");
     expect(intents).toContainEqual(["app-settings", "setOllamaModelAssignment", ["task_chat", "auto"]]);
-    await user.click(screen.getByRole("button", { name: "Chat Model" }));
+    await user.click(screen.getByRole("button", { name: "Chat model" }));
     expect(screen.queryByRole("option", { name: "Use chat model" })).toBeNull();
   });
 
@@ -322,10 +322,10 @@ describe("Settings > Ollama", () => {
       ollamaInventory: [inventoryModel("disk:latest", { source: "folder" })],
       ollamaScannedModels: ["disk:latest", "only-in-datalist:latest"],
     });
-    await user.click(screen.getByRole("button", { name: "Chat Model" }));
+    await user.click(screen.getByRole("button", { name: "Chat model" }));
     expect(screen.queryByRole("option", { name: "disk:latest" })).toBeNull();
     expect(screen.queryByRole("option", { name: "only-in-datalist:latest" })).toBeNull();
-    expect(screen.getByRole("option", { name: "Custom model ID..." })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Custom model ID…" })).toBeInTheDocument();
   });
 
   it("preserves unknown IDs via the custom option, with multi-character typing even without server echoes", async () => {
@@ -334,16 +334,16 @@ describe("Settings > Ollama", () => {
       ollamaInventory: [inventoryModel("alpha:latest")],
       ollamaModelAssignments: { task_chart: "private:tag" },
     });
-    expect(screen.getByRole("combobox", { name: "Chart Generation Model (custom model ID)" }))
+    expect(screen.getByRole("combobox", { name: "Chart generation model (custom model ID)" }))
       .toHaveValue("private:tag");
-    await chooseOption(user, "Chat Model", "Custom model ID...");
-    const input = screen.getByRole("combobox", { name: "Chat Model (custom model ID)" });
+    await chooseOption(user, "Chat model", "Custom model ID…");
+    const input = screen.getByRole("combobox", { name: "Chat model (custom model ID)" });
     await user.type(input, "my-model:latest");
     expect(input).toHaveValue("my-model:latest");
     expect(intents).not.toContainEqual([
       "app-settings", "setOllamaModelAssignment", ["task_chat", "my-model:latest"],
     ]);
-    await user.click(screen.getByRole("button", { name: "Save Chat Model ID" }));
+    await user.click(screen.getByRole("button", { name: "Save chat model ID" }));
     expect(intents.filter(([, action, args]) => action === "setOllamaModelAssignment" && args[0] === "task_chat"))
       .toEqual([["app-settings", "setOllamaModelAssignment", ["task_chat", "my-model:latest"]]]);
   });
@@ -353,17 +353,17 @@ describe("Settings > Ollama", () => {
       ollamaInventorySource: "server",
       ollamaInventory: [inventoryModel("alpha:latest"), inventoryModel("beta:latest")],
     });
-    const trigger = screen.getByRole("button", { name: "Chat Naming Model" });
+    const trigger = screen.getByRole("button", { name: "Chat naming model" });
     trigger.focus();
     await user.keyboard("{Enter}");
-    const listbox = screen.getByRole("listbox", { name: "Chat Naming Model" });
+    const listbox = screen.getByRole("listbox", { name: "Chat naming model" });
     expect(listbox).toHaveFocus();
-    expect(listbox).toHaveAttribute("aria-activedescendant", screen.getByRole("option", { name: "Auto - choose a compatible installed model" }).id);
+    expect(listbox).toHaveAttribute("aria-activedescendant", screen.getByRole("option", { name: "Auto — choose a compatible installed model" }).id);
     await user.keyboard("{ArrowDown}{Enter}");
     expect(intents).toContainEqual(["app-settings", "setOllamaModelAssignment", ["task_title", "alpha:latest"]]);
     expect(trigger).toHaveFocus();
     await user.keyboard("{Enter}{Escape}");
-    expect(screen.queryByRole("listbox", { name: "Chat Naming Model" })).toBeNull();
+    expect(screen.queryByRole("listbox", { name: "Chat naming model" })).toBeNull();
     expect(trigger).toHaveFocus();
   });
 
@@ -468,7 +468,7 @@ describe("Settings > Ollama", () => {
       ollamaPullCompleted: 500, ollamaPullTotal: 1000, ollamaPullMessage: "downloading",
     });
     expect(screen.getByRole("progressbar", { name: "Download progress for custom:tag" }))
-      .toHaveAttribute("value", "500");
+      .toHaveAttribute("aria-valuenow", "500");
     await user.click(screen.getByRole("button", { name: "Cancel download" }));
     expect(intents).toContainEqual(["app-settings", "cancelOllamaPull", []]);
     expect(screen.getByRole("button", { name: "Refresh installed models" })).toBeDisabled();
@@ -504,7 +504,7 @@ describe("Settings > Ollama", () => {
     const { user, intents, update } = setup({
       ollamaServerStatus: "not_found", ollamaServerReachable: false,
     });
-    expect(screen.getByRole("status", { name: "Ollama server status" })).toHaveTextContent("Not detected");
+    expect(screen.getByRole("status", { name: "Ollama server status" })).toHaveTextContent("Not installed");
     expect(screen.getByRole("link", { name: /Install Ollama/ }))
       .toHaveAttribute("href", "https://ollama.com/download");
     expect(screen.queryByRole("button", { name: "Start Ollama" })).not.toBeInTheDocument();
@@ -524,16 +524,16 @@ describe("Settings > Ollama", () => {
 
   it("reveals selected values and traverses the portaled task picker with a single Tab", async () => {
     const { user } = setup();
-    const field = screen.getByRole("button", { name: "Chat Model" });
-    expect(field).toHaveTextContent("Auto - choose a compatible installed model");
+    const field = screen.getByRole("button", { name: "Chat model" });
+    expect(field).toHaveTextContent("Auto — choose a compatible installed model");
     expect(field).not.toHaveAccessibleDescription(/Selected:/);
     field.focus();
     await user.keyboard("{Enter}");
-    expect(screen.getByRole("option", { name: "Auto - choose a compatible installed model" }))
+    expect(screen.getByRole("option", { name: "Auto — choose a compatible installed model" }))
       .toHaveAttribute("aria-selected", "true");
     await user.keyboard("{Tab}");
-    expect(screen.queryByRole("listbox", { name: "Chat Model" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Chat Naming Model" })).toHaveFocus();
+    expect(screen.queryByRole("listbox", { name: "Chat model" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Chat naming model" })).toHaveFocus();
   });
 
   it("filters known embedding-only models from text tasks and warns on an existing incompatible assignment", async () => {
@@ -547,7 +547,7 @@ describe("Settings > Ollama", () => {
       ollamaModelAssignments: { task_chat: "nomic-embed-text:latest" },
     });
     expect(screen.getByRole("alert")).toHaveTextContent(/embedding-only model and cannot generate text/);
-    await user.click(screen.getByRole("button", { name: "Chat Model" }));
+    await user.click(screen.getByRole("button", { name: "Chat model" }));
     expect(screen.queryByRole("option", { name: "nomic-embed-text:latest" })).not.toBeInTheDocument();
     expect(screen.getByRole("option", { name: "chat:latest" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "unverified:latest" })).toBeInTheDocument();
@@ -629,22 +629,25 @@ describe("Settings > Ollama", () => {
 
   it("saves custom model IDs only on explicit confirmation or Enter, not for each keystroke", async () => {
     const { user, intents } = setup();
-    await chooseOption(user, "Chat Model", "Custom model ID...");
-    const input = screen.getByRole("combobox", { name: "Chat Model (custom model ID)" });
+    await chooseOption(user, "Chat model", "Custom model ID…");
+    const input = screen.getByRole("combobox", { name: "Chat model (custom model ID)" });
     await user.type(input, "local:7b");
     expect(intents.some(([, action]) => action === "setOllamaModelAssignment")).toBe(false);
     await user.keyboard("{Enter}");
     expect(intents.filter(([, action]) => action === "setOllamaModelAssignment"))
       .toEqual([["app-settings", "setOllamaModelAssignment", ["task_chat", "local:7b"]]]);
-    expect(screen.getByRole("button", { name: "Save Chat Model ID" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save chat model ID" })).toBeEnabled();
   });
 
   it("announces downloading, cancellation and completion without implying a model was selected", () => {
     const { update, intents } = setup({ ollamaServerStatus: "running", ollamaServerReachable: true });
     update({ ollamaPullStatus: "running", ollamaPullModel: "qwen3:4b",
       ollamaPullMessage: "downloading", ollamaPullCompleted: 2, ollamaPullTotal: 10 });
-    expect(screen.getByRole("progressbar", { name: "Download progress for qwen3:4b" }))
-      .toHaveAttribute("value", "2");
+    expect(screen.getAllByRole("progressbar", { name: "Download progress for qwen3:4b" }))
+      .toEqual(expect.arrayContaining([expect.objectContaining({})]));
+    for (const progress of screen.getAllByRole("progressbar", { name: "Download progress for qwen3:4b" })) {
+      expect(progress).toHaveAttribute("aria-valuenow", "2");
+    }
     update({ ollamaPullStatus: "cancelled", ollamaPullModel: "qwen3:4b" });
     expect(screen.getByText("Download cancelled.")).toHaveAttribute("role", "status");
     update({ ollamaPullStatus: "done", ollamaPullModel: "qwen3:4b" });

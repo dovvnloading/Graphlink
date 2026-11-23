@@ -34,7 +34,8 @@ export function Switch({
           className="gl-switch-input"
           checked={selected}
           disabled={disabled}
-          aria-labelledby={labelId}
+          // An explicit aria-label (a longer, stable name) wins over the visible label.
+          aria-labelledby={inputProps["aria-label"] ? undefined : labelId}
           aria-checked={selected}
           aria-invalid={error ? true : inputProps["aria-invalid"]}
           aria-describedby={[extraDescription, descriptionId, errorId].filter(Boolean).join(" ") || undefined}
