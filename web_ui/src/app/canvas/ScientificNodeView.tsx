@@ -3,7 +3,7 @@ import type { Node, NodeProps } from "@xyflow/react";
 import { StatusPill } from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { Checkbox } from "../ui/Checkbox";
-import { Disclosure } from "../ui/Disclosure";
+import { CanvasDisclosure } from "./CanvasDisclosure";
 import { IconButton } from "../ui/IconButton";
 import { Select } from "../ui/Select";
 import { InlineAlert } from "../ui/InlineAlert";
@@ -62,7 +62,7 @@ function Plot({ plot, scatter }: { plot: SciencePlot; scatter: boolean }) {
         <circle key={i} cx={x.at(v)} cy={y.at(plot.y[i])} r="2.4" fill="currentColor"><title>{v}, {plot.y[i]}</title></circle>)}
     </svg>
     <span>{plot.xLabel} · {formatScienceRange(x.low, x.high)}</span>
-    <ScientificDataTable {...{ title: "Exact plot coordinates" }} columns={["Point", plot.xLabel, plot.yLabel]}
+    <ScientificDataTable heading="Exact plot coordinates" columns={["Point", plot.xLabel, plot.yLabel]}
       rows={() => plot.x.map((value, index) => [String(index + 1), exactScienceNumber(value), exactScienceNumber(plot.y[index])])} />
   </figure>;
 }
@@ -104,10 +104,10 @@ function ResultDisclosure({ label, children, className = "", onClose, defaultOpe
   label: string; children: ReactNode; className?: string; onClose?: () => void; defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  return <Disclosure {...{ title: label }} className={`science-result-disclosure ${className}`.trim()}
+  return <CanvasDisclosure label={label} className={`science-result-disclosure ${className}`.trim()}
     open={open} onOpenChange={(next) => { if (!next) onClose?.(); setOpen(next); }}>
     {open && children}
-  </Disclosure>;
+  </CanvasDisclosure>;
 }
 
 function Results({ result, title, headlineKey, scatter, freshness, exportJson, exportCsv, exportMethods, onChart, onRefresh, onDiscuss, charts }: {
@@ -179,7 +179,7 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
           <h5>{name} · {formatMeasurement(measured)}</h5>
           {measured.interval && <small>{Math.round((measured.coverageProbability ?? 0.95) * 100)}% {measured.method === "monte_carlo" ? "Monte Carlo quantile coverage interval" : "coverage interval"} [{numberCell(measured.interval[0])}, {numberCell(measured.interval[1])}]{measured.method === "monte_carlo" ? " · Gaussian input model" : ` · coverage factor k = ${numberCell(measured.coverageFactor)}`}</small>}
           {measured.budgetNote && <small>{measured.budgetNote}</small>}
-          <Disclosure {...{ title: "Stored measurement values" }}><dl className="science-result-values">
+          <CanvasDisclosure label={"Stored measurement values"}><dl className="science-result-values">
             <div><dt>Estimate</dt><dd>{exactScienceNumber(measured.value)} {measured.unit}</dd></div>
             <div><dt>Standard uncertainty</dt><dd>{exactScienceNumber(measured.standardUncertainty)} {measured.unit}</dd></div>
             {measured.interval && <div><dt>Coverage interval</dt><dd>{measured.interval.map(exactScienceNumber).join(" to ")} {measured.unit}</dd></div>}
@@ -187,7 +187,7 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
             {measured.method !== "monte_carlo" && <div><dt>Coverage factor</dt><dd>{exactScienceNumber(measured.coverageFactor)}</dd></div>}
             {measured.monteCarloMean !== undefined && <div><dt>Monte Carlo mean</dt><dd>{exactScienceNumber(measured.monteCarloMean)} {measured.unit}</dd></div>}
             {measured.monteCarloTrials !== undefined && <div><dt>Monte Carlo trials</dt><dd>{measured.monteCarloTrials}</dd></div>}
-          </dl></Disclosure>
+          </dl></CanvasDisclosure>
           {measured.budget && <table aria-label={`Uncertainty budget for ${name}`}>
             <thead><tr><th>Contributing input</th><th>Standard uncertainty</th><th>Sensitivity</th><th>Signed contribution</th><th>Variance / covariance</th></tr></thead>
             <tbody>{measured.budget.map((entry, index) => <tr key={index}>
@@ -225,12 +225,12 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
           </div>}
         </div>
       </ResultDisclosure>}
-      {provenance.inputUnits != null && <Disclosure className="science-result-disclosure" {...{ title: "Units used" }}>
+      {provenance.inputUnits != null && <CanvasDisclosure className="science-result-disclosure" label={"Units used"}>
       <pre>{JSON.stringify(provenance.inputUnits, null, 2)}</pre>
-    </Disclosure>}
-      <Disclosure className="science-result-disclosure" {...{ title: "Inputs and provenance" }}>
+    </CanvasDisclosure>}
+      <CanvasDisclosure className="science-result-disclosure" label={"Inputs and provenance"}>
       <pre>{JSON.stringify({ inputs: result.inputs, provenance }, null, 2)}</pre>
-    </Disclosure>
+    </CanvasDisclosure>
       <ResultDisclosure label="Actions & exports">
         <div className="science-actions">
       <Button size="sm" type="button" disabled={copying} onClick={async () => {
@@ -515,11 +515,11 @@ function TableEditor({ state, nodeId, pluginId, store, defaultOpen = false }: {
             <td>{col.unit || "—"}</td><td>{col.missingCount}</td>
           </tr>)}</tbody></table>
         </div>}
-        <Disclosure {...{ title: "Advanced column overrides" }}>
+        <CanvasDisclosure label={"Advanced column overrides"}>
           <label>Column type overrides (JSON)
             <textarea rows={2} aria-label="Column type overrides" value={overrides} onChange={(e) => setOverrides(e.target.value)} />
           </label>
-        </Disclosure>
+        </CanvasDisclosure>
         {validReview && <div className="science-table">
           <p role="status">{validReview.table.sourceName} · {validReview.table.rowCount} rows · {validReview.table.columnCount} columns.
             Showing the first {validReview.table.preview.length} rows and {validReview.table.previewColumns} columns.</p>
@@ -555,9 +555,9 @@ function TableEditor({ state, nodeId, pluginId, store, defaultOpen = false }: {
         } catch (e) { setError(e instanceof Error ? e.message : "CSV export failed."); }
         finally { setExporting(false); }
       }}>Export full table CSV</Button>
-      <Disclosure {...{ title: "Import receipt and parsing options" }}>
+      <CanvasDisclosure label={"Import receipt and parsing options"}>
         <pre>{JSON.stringify(table.provenance, null, 2)}</pre>
-      </Disclosure>
+      </CanvasDisclosure>
     </div></ResultDisclosure>}
   </section>;
 }
@@ -684,7 +684,7 @@ function OperationEditor({ onDraftChange, session, op, result, configured, revis
   return <form ref={formRef} className="science-operation-editor" onSubmit={submit}>
     <div className="science-operation-context">
       {op.description && <p className="science-operation-preview">{op.description}</p>}
-      {(op.description || op.methods || op.citations?.length) && <Disclosure className="science-methods" {...{ title: "About & methods" }}>
+      {(op.description || op.methods || op.citations?.length) && <CanvasDisclosure className="science-methods" label={"About & methods"}>
         <div className="science-methods-content">
           {op.description && <p>{op.description}</p>}
           {op.methods && <p>{op.methods}</p>}
@@ -694,7 +694,7 @@ function OperationEditor({ onDraftChange, session, op, result, configured, revis
             </li>)}
           </ul>}
         </div>
-      </Disclosure>}
+      </CanvasDisclosure>}
     </div>
     <fieldset disabled={busy}>
       <div className="science-inputs" role="group" aria-label="Inputs">
