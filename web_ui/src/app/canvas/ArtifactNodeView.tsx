@@ -7,6 +7,9 @@ import { downloadTextFile } from "./downloadTextFile";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { Button } from "../ui/Button";
+import { IconButton } from "../ui/IconButton";
+import { MenuItem } from "../ui/Menu";
 import { NodeHeading } from "./NodeHeading";
 import TableOutput, { type TableOutputBinding } from "./TableOutput";
 import { NodeShell } from "./NodeShell";
@@ -99,27 +102,10 @@ function ArtifactNodeMenu({
 
   return (
     <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onToggleCollapse();
-          onClose();
-        }}
-      >
-        {isCollapsed ? "Expand" : "Collapse"}
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="chat-node-menu-danger"
-        onClick={() => {
-          onDelete();
-          onClose();
-        }}
-      >
-        Delete Node
-      </button>
+      <MenuItem icon={isCollapsed ? "maximize" : "minimize"}
+        label={isCollapsed ? "Expand" : "Collapse"}
+        onSelect={() => { onToggleCollapse(); onClose(); }} />
+      <MenuItem label="Delete Node" destructive onSelect={() => { onDelete(); onClose(); }} />
     </NodeMenu>
   );
 }
@@ -354,9 +340,10 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
             AI revision ready for review — the saved document is unchanged.
           </p>
           {!activeReview && (
-            <button type="button" disabled={loadingReview} onClick={() => { void loadProposal(); }}>
+            <Button variant="secondary" size="sm" loading={loadingReview} disabled={loadingReview}
+              onClick={() => { void loadProposal(); }}>
               {loadingReview ? "Loading proposal…" : "Review AI revision"}
-            </button>
+            </Button>
           )}
           {reviewError && <p role="alert" className="artifact-node-edit-warning">{reviewError}</p>}
           {activeReview && proposedDiff && (
@@ -394,16 +381,14 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
                 <p>No document changes were proposed.</p>
               )}
               <div className="artifact-node-proposal-actions">
-                <button type="button" disabled={deciding || editing || busy || staleReview}
-                  onClick={() => decideProposal(true)}>
-                  {deciding ? "Processing…" : "Accept revision"}
-                </button>
-                <button type="button" disabled={deciding || busy}
-                  onClick={() => decideProposal(false)}>Discard revision</button>
-                <button type="button"
+                <Button variant="primary" size="sm" disabled={deciding || editing || busy || staleReview}
+                  onClick={() => decideProposal(true)}>{deciding ? "Processing…" : "Accept revision"}</Button>
+                <Button variant="secondary" size="sm" disabled={deciding || busy}
+                  onClick={() => decideProposal(false)}>Discard revision</Button>
+                <Button variant="ghost" size="sm" iconStart="download"
                   onClick={() => downloadTextFile(activeReview.proposal.content, "artifact-proposal.md")}>
                   Download proposed .md
-                </button>
+                </Button>
               </div>
             </>
           )}
@@ -413,25 +398,16 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
         <span className="artifact-node-word-count">{wordCount.toLocaleString()} words</span>
         {editing ? (
           <>
-            <button type="button" disabled={saving || busy || staleEdit} onClick={saveEdit}>
-              {saving ? "Saving…" : "Save changes"}
-            </button>
-            <button type="button" disabled={saving} onClick={() => setEditing(false)}>
-              Cancel edit
-            </button>
+            <IconButton icon="check" size="sm" disabled={saving || busy || staleEdit}
+              label={saving ? "Saving…" : "Save changes"} onClick={saveEdit} />
+            <IconButton icon="close" size="sm" disabled={saving} label="Cancel edit"
+              onClick={() => setEditing(false)} />
           </>
         ) : (
-          <button type="button" disabled={busy} onClick={beginEdit}>
-            Edit Markdown
-          </button>
+          <IconButton icon="edit" size="sm" disabled={busy} label="Edit Markdown" onClick={beginEdit} />
         )}
-        <button
-          type="button"
-          disabled={!displayedDocument}
-          onClick={() => downloadTextFile(displayedDocument, "artifact.md")}
-        >
-          Download .md
-        </button>
+        <IconButton icon="download" size="sm" disabled={!displayedDocument}
+          label="Download .md" onClick={() => downloadTextFile(displayedDocument, "artifact.md")} />
       </div>
       {staleEdit && (
         <p className="artifact-node-edit-warning" role="alert">
@@ -500,23 +476,12 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
           spellCheck
         />
         <div className="artifact-node-input-actions">
-          <button
-            type="button"
-            className="artifact-node-submit-btn"
+          <Button variant="primary" size="sm" iconStart="play"
             disabled={!draft.trim() || busy || editing || !!data.artifactProposalId}
-            onClick={submit}
-          >
-            {submitLabel}
-          </button>
+            onClick={submit}>{submitLabel}</Button>
           {busy && (
-            <button
-              type="button"
-              className="artifact-node-cancel-btn"
-              onClick={() => data.onCancel()}
-              title="Cancel response"
-            >
-              Cancel
-            </button>
+            <Button variant="secondary" size="sm" aria-label="Cancel response"
+              onClick={() => data.onCancel()}>Cancel</Button>
           )}
         </div>
       </div>
