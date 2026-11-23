@@ -21,6 +21,9 @@ class FakeLocator:
     async def get_attribute(self, key):
         return self.page.element_type if key == "type" else None
 
+    async def inner_text(self, **kwargs):
+        return "Visible control name"
+
     async def click(self, **kwargs):
         self.page.calls.append(("click", self.selector))
 
@@ -155,7 +158,7 @@ def test_browser_run_captures_evidence_redacts_fill_and_cleans_up():
         approvals.append(("host", host))
         return True
 
-    async def approve_action(kind, selector, url):
+    async def approve_action(kind, selector, url, detail):
         approvals.append((kind, selector))
         return True
 
@@ -200,7 +203,7 @@ def test_refused_interaction_prevents_action_and_closes_browser():
     async def approve_host(host, url):
         return True
 
-    async def deny(kind, selector, url):
+    async def deny(kind, selector, url, detail):
         seen.append(kind)
         return False
 
