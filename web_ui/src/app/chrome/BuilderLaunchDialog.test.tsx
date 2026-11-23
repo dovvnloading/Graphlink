@@ -109,7 +109,7 @@ describe("BuilderLaunchDialog", () => {
     ]);
 
     await pickRecipe(user, "Research and summarize");
-    await user.click(screen.getByRole("button", { name: "Start from recipe" }));
+    await user.click(screen.getByRole("button", { name: "Plan the build" }));
 
     expect(intents).toContainEqual([
       "builder", "start", ["", "copilot", 12, 150_000, 900, "Research and summarize"],
@@ -124,11 +124,11 @@ describe("BuilderLaunchDialog", () => {
   it("selecting autopilot surfaces the disclosure before launch", async () => {
     const { user } = await setup();
 
-    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
     await user.click(screen.getByRole("radio", { name: /autopilot/i }));
 
-    expect(screen.getByRole("note")).toHaveTextContent(/execute code without asking/i);
-    expect(screen.getByRole("note")).toHaveTextContent(/network access will still ask/i);
+    expect(screen.getByRole("status")).toHaveTextContent(/executes code without asking/i);
+    expect(screen.getByRole("status")).toHaveTextContent(/Network access still requires approval/i);
   });
 
   it("marks only the chosen oversight row selected (drives its highlight)", async () => {
@@ -136,13 +136,13 @@ describe("BuilderLaunchDialog", () => {
     const copilot = screen.getByRole("radio", { name: /co-pilot/i });
     const autopilot = screen.getByRole("radio", { name: /autopilot/i });
 
-    expect(copilot.closest("label")).toHaveClass("selected");
-    expect(autopilot.closest("label")).not.toHaveClass("selected");
+    expect(copilot.closest("label")).toHaveClass("gl-radio-selected");
+    expect(autopilot.closest("label")).not.toHaveClass("gl-radio-selected");
 
     await user.click(autopilot);
 
-    expect(autopilot.closest("label")).toHaveClass("selected");
-    expect(copilot.closest("label")).not.toHaveClass("selected");
+    expect(autopilot.closest("label")).toHaveClass("gl-radio-selected");
+    expect(copilot.closest("label")).not.toHaveClass("gl-radio-selected");
   });
 
   it("shows the selected recipe's own description and step list", async () => {
@@ -214,7 +214,7 @@ describe("BuilderLaunchDialog", () => {
 
     await user.click(screen.getByRole("button", { name: "Delete this recipe" }));
 
-    const deletingButton = await screen.findByRole("button", { name: "Deleting…" });
+    const deletingButton = await screen.findByRole("button", { name: "Delete this recipe" });
     expect(deletingButton).toBeDisabled();
 
     resolveDelete(true);
@@ -267,12 +267,12 @@ describe("BuilderLaunchDialog", () => {
   it("defaults to the Standard budget preset, and a preset click updates the submitted budgets", async () => {
     const { user, intents } = await setup();
 
-    expect(screen.getByRole("button", { name: "Standard" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("radio", { name: "Standard" })).toHaveAttribute("aria-checked", "true");
     expect(screen.getByText(/12 steps · 150k tokens · 15 min/)).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Quick" }));
-    expect(screen.getByRole("button", { name: "Quick" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "Standard" })).toHaveAttribute("aria-pressed", "false");
+    await user.click(screen.getByRole("radio", { name: "Quick" }));
+    expect(screen.getByRole("radio", { name: "Quick" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("radio", { name: "Standard" })).toHaveAttribute("aria-checked", "false");
     expect(screen.getByText(/6 steps · 50k tokens · 5 min/)).toBeInTheDocument();
 
     await user.type(screen.getByLabelText("Goal"), "goal");
@@ -292,12 +292,12 @@ describe("BuilderLaunchDialog", () => {
 
     // 30/150000/900 matches no preset combination - none should read active.
     for (const label of ["Quick", "Standard", "Extended"]) {
-      expect(screen.getByRole("button", { name: label })).toHaveAttribute("aria-pressed", "false");
+      expect(screen.getByRole("button", { name: label })).toHaveAttribute("aria-checked", "false");
     }
 
-    await user.click(screen.getByRole("button", { name: "Extended" }));
+    await user.click(screen.getByRole("radio", { name: "Extended" }));
 
-    expect(screen.getByRole("button", { name: "Extended" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("radio", { name: "Extended" })).toHaveAttribute("aria-checked", "true");
     expect(screen.getByLabelText("Max steps")).toHaveValue(25);
     expect(screen.getByLabelText("Max tokens")).toHaveValue(400_000);
     expect(screen.getByLabelText("Max seconds")).toHaveValue(1_800);
@@ -386,7 +386,7 @@ describe("BuilderLaunchDialog", () => {
       ]);
       await pickRecipe(user, "Research and summarize");
 
-      expect(screen.getByRole("button", { name: "Start from recipe" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Plan the build" })).toBeEnabled();
       expect(screen.queryByText("Describe a goal, or pick a recipe.")).toBeNull();
     });
   });
