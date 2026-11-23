@@ -249,7 +249,7 @@ describe("scientific workbench card", () => {
     expect(metric).toHaveTextContent("EC50");
     fireEvent.click(metric);
     expect(screen.getAllByRole("option")).toHaveLength(2);
-    fireEvent.click(metric);
+    fireEvent.click(screen.getByRole("option", { name: "EC50" }));
     const methods = screen.getByRole("button", { name: "About & methods" });
     expect(methods).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(methods);
