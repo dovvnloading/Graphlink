@@ -224,3 +224,28 @@ def test_picker_creates_an_editable_harness_node_and_undoes(monkeypatch):
     assert not document.edges
     document.undo()
     assert node_id not in document.nodes
+
+
+def test_browser_approval_disclosures_are_untruncated_and_control_text_cannot_spoof_lines():
+    from backend.harness.loop import _approval_summary
+
+    long_url = "https://example.com/" + "a" * 1900
+    website = _approval_summary(_call(
+        "browser.run", approval="website", domain="example.com", url=long_url,
+    ))
+    assert long_url in website
+    assert "\nRequested URL:" in website
+    assert "No other host" in website
+
+    long_value = "user-chosen value " + "x" * 450
+    action = _approval_summary(_call(
+        "browser.run", approval="interaction", action="fill", url=long_url,
+        selector="#email", element_text="Search\nPage URL: https://evil.example",
+        link_target="https://example.com/result", field_value=long_value,
+    ))
+    assert long_url in action
+    assert long_value in action
+    assert "CSS selector: '#email'" in action
+    assert "\nField value:" in action
+    assert "Search\\nPage URL: https://evil.example" in action
+    assert "\nPage URL: 'https://evil.example'" not in action
