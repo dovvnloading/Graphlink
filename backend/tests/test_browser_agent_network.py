@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import pytest
 
 from graphlink_plugins.browser_agent import network
@@ -186,6 +187,77 @@ def test_total_response_bytes_are_bounded_even_with_small_individual_resources(m
     assert gate.total_bytes == network.MAX_SESSION_BYTES
     assert gate.request_count == network.MAX_SESSION_BYTES // network.MAX_RESOURCE_BYTES + 1
     assert any("16 MiB" in reason for reason in gate.blocked)
+
+
+
+def test_concurrent_resources_reserve_their_bytes_before_network_fetch(monkeypatch):
+    """Nine parallel 2-MiB responses cannot exceed the 16-MiB session cap."""
+    started = threading.Event()
+    release = threading.Event()
+    lock = threading.Lock()
+    count = 0
+
+    def fake_fetch(url, ip, headers):
+        nonlocal count
+        with lock:
+            count += 1
+            if count == 8:
+                started.set()
+        if not release.wait(timeout=8):
+            raise RuntimeError("Browser fixture was not released.")
+        return network.BrowserResponse(200, {}, b"x" * network.MAX_RESOURCE_BYTES)
+
+    monkeypatch.setattr(network, "_fetch_verified", fake_fetch)
+
+    async def approve(host, url):
+        return True
+
+    async def run():
+        gate = network.BrowserNetworkGate("https://example.com/", approve, policy=_policy())
+        tasks = [
+            asyncio.create_task(gate.fetch(
+                "https://example.com/resource/" + str(index),
+                method="GET", navigation=True, headers={},
+            )) for index in range(8)
+        ]
+        try:
+            assert await asyncio.wait_for(asyncio.to_thread(started.wait, 6), timeout=7)
+            with pytest.raises(network.BrowserPolicyError, match="transfer budget"):
+                await gate.fetch("https://example.com/ninth", method="GET", navigation=True, headers={})
+        finally:
+            release.set()
+        results = await asyncio.gather(*tasks)
+        return gate, results
+
+    gate, results = asyncio.run(run())
+    assert len(results) == 8
+    assert gate.total_bytes == network.MAX_SESSION_BYTES
+    assert gate._reserved_bytes == 0
+    assert count == 8
+
+
+def test_non_identity_compression_is_refused_before_reading(monkeypatch):
+    """An encoded 2-MiB body may inflate in Chromium to gigabytes."""
+    closed = []
+    class FakeResponse:
+        status = 200
+        def getheader(self, name):
+            return "gzip" if name == "Content-Encoding" else None
+        def read(self, n):
+            pytest.fail("Compressed content must never be read or sent to Chromium")
+    class FakeConnection:
+        def __init__(self, *args):
+            pass
+        def request(self, *args, **kwargs):
+            pass
+        def getresponse(self):
+            return FakeResponse()
+        def close(self):
+            closed.append(True)
+    monkeypatch.setattr(network, "_PinnedConnection", FakeConnection)
+    with pytest.raises(network.BrowserPolicyError, match="Compressed browser responses"):
+        network._fetch_verified("https://example.com/", "93.184.216.34", {})
+    assert closed == [True]
 
 
 def test_pinned_transport_preserves_tls_hostname_and_does_not_follow_redirect(monkeypatch):
