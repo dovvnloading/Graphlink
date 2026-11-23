@@ -32,14 +32,12 @@ const snapshot = {
 // list covers all three call shapes.
 function makeTransport() {
   const intents: unknown[][] = [];
-  let listener: ((payload: Record<string, unknown>) => void) | null = null;
+  const listeners = new Map<string, (payload: Record<string, unknown>) => void>();
   const request = vi.fn<(topic: string, intent: string, args?: unknown[]) => Promise<unknown>>();
   const transport = {
-    subscribe: (_topic: string, l: (payload: Record<string, unknown>) => void) => {
-      listener = l;
-      return () => {
-        listener = null;
-      };
+    subscribe: (topic: string, l: (payload: Record<string, unknown>) => void) => {
+      listeners.set(topic, l);
+      return () => { listeners.delete(topic); };
     },
     intent: (topic: string, intent: string, args: unknown[]) => {
       intents.push([topic, intent, args]);
@@ -56,7 +54,7 @@ function makeTransport() {
     transport,
     intents,
     request,
-    push: (payload: Record<string, unknown>) => listener?.(payload),
+    push: (payload: Record<string, unknown>) => listeners.get("diagnostics")?.(payload),
   };
 }
 
@@ -85,7 +83,8 @@ async function setup() {
 
 describe("DiagnosticsDialog", () => {
   it("renders publish size/rate and session count from the live snapshot", async () => {
-    await setup();
+    const { user } = await setup();
+    await user.click(screen.getByRole("button", { name: "Advanced" }));
     expect(screen.getByText("3")).toBeInTheDocument(); // sessionCount
     expect(screen.getByText("42")).toBeInTheDocument(); // publishCount
     expect(screen.getByText("2.0 KB")).toBeInTheDocument(); // publishBytesTotal
@@ -93,18 +92,20 @@ describe("DiagnosticsDialog", () => {
   });
 
   it("renders recent runs newest-first with outcome and duration", async () => {
-    await setup();
+    const { user } = await setup();
+    await user.click(screen.getByRole("button", { name: "Advanced" }));
     const rows = screen.getAllByRole("row").slice(1); // drop the header row
     expect(rows).toHaveLength(2);
     expect(rows[0]).toHaveTextContent("n-2");
     expect(rows[0]).toHaveTextContent("running");
     expect(rows[1]).toHaveTextContent("n-1");
     expect(rows[1]).toHaveTextContent("completed");
-    expect(rows[1]).toHaveTextContent("1.50s");
+    expect(rows[1]).toHaveTextContent("2 s");
   });
 
   it("renders a real provider error, matching the ADR-016 16.3 exit criterion", async () => {
-    await setup();
+    const { user } = await setup();
+    await user.click(screen.getByRole("button", { name: "Advanced" }));
     expect(screen.getByText("ollama")).toBeInTheDocument();
     expect(screen.getByText("connection refused")).toBeInTheDocument();
   });
@@ -126,6 +127,7 @@ describe("DiagnosticsDialog", () => {
       }),
     );
     await user.click(screen.getByRole("button", { name: "open diagnostics" }));
+    await user.click(screen.getByRole("button", { name: "Advanced" }));
 
     expect(screen.getByText("No runs yet this session.")).toBeInTheDocument();
     expect(screen.getByText("No provider errors this session.")).toBeInTheDocument();

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { IconButton } from "../ui/IconButton";
 
 /**
  * Document View full redesign, stage 3 ("in-document search/find"). A
@@ -108,29 +109,9 @@ export function DocumentViewSearch({
       <span className="document-view-visually-hidden" aria-live="polite">
         {announcedText}
       </span>
-      <button
-        type="button"
-        className="document-view-search-nav"
-        onClick={onPrevious}
-        disabled={!hasMatches}
-        title="Previous match"
-        aria-label="Previous match"
-      >
-        ↑
-      </button>
-      <button
-        type="button"
-        className="document-view-search-nav"
-        onClick={onNext}
-        disabled={!hasMatches}
-        title="Next match"
-        aria-label="Next match"
-      >
-        ↓
-      </button>
-      <button type="button" className="document-view-search-close" onClick={onClose} title="Close search" aria-label="Close search">
-        ×
-      </button>
+      <IconButton icon="arrow-up" label="Previous match" size="sm" onClick={onPrevious} disabled={!hasMatches} />
+      <IconButton icon="arrow-down" label="Next match" size="sm" onClick={onNext} disabled={!hasMatches} />
+      <IconButton icon="close" label="Close search" size="sm" onClick={onClose} />
     </div>
   );
 }

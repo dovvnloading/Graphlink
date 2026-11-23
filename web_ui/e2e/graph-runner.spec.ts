@@ -6,7 +6,7 @@ async function openGraphRunner(page: Page) {
   const search = page.getByRole("searchbox", { name: /plugin/i });
   await search.fill("Graph Runner");
   await search.press("Enter");
-  const runner = page.getByRole("dialog", { name: "Graph Runner" });
+  const runner = page.getByRole("dialog", { name: "Graph runner" });
   await expect(runner).toBeVisible();
   return runner;
 }
@@ -17,8 +17,16 @@ test("runs a grouped table and both downstream outputs, then reopens their saved
   const sourceId = await source.getAttribute("data-id");
   expect(sourceId).toBeTruthy();
   const table = page.locator(`.react-flow__node-note[data-id="${sourceId}"]`);
-  await table.getByRole("combobox", { name: "Group by" }).selectOption({ label: "Team" });
-  await table.getByRole("combobox", { name: "Sum column" }).selectOption({ label: "Hours" });
+  const group = table.getByRole("button", { name: "Group by", exact: true });
+  await group.click();
+  await page.getByRole("listbox", { name: "Group by", exact: true })
+    .getByRole("option", { name: "Team", exact: true }).click();
+  await expect(group).toContainText("Team");
+  const sum = table.getByRole("button", { name: "Sum column", exact: true });
+  await sum.click();
+  await page.getByRole("listbox", { name: "Sum column", exact: true })
+    .getByRole("option", { name: "Hours", exact: true }).click();
+  await expect(sum).toContainText("Hours");
   await table.getByRole("button", { name: "Create grouped table" }).click();
   const grouped = page.locator(".react-flow__node-note").filter({
     has: page.getByRole("region", { name: "Table output" }),
@@ -36,7 +44,8 @@ test("runs a grouped table and both downstream outputs, then reopens their saved
   await expect(design.getByRole("cell", { name: "5", exact: true })).toBeAttached();
 
   const runner = await openGraphRunner(page);
-  await runner.getByRole("combobox", { name: "Run scope" }).selectOption({ label: "Whole graph" });
+  await runner.getByRole("button", { name: "Run scope" }).click();
+  await page.getByRole("option", { name: "Whole graph" }).click();
   await runner.getByRole("button", { name: "Preview run" }).click();
   const preview = runner.getByRole("region", { name: "Run preview" });
   await expect(preview.getByRole("listitem")).toHaveCount(3);
@@ -44,7 +53,7 @@ test("runs a grouped table and both downstream outputs, then reopens their saved
   await expect(design.getByRole("cell", { name: "5", exact: true })).toBeAttached();
   await runner.getByRole("button", { name: "Run graph" }).click();
   const latest = runner.getByRole("region", { name: "Latest run" });
-  await expect(latest.getByRole("status")).toHaveText("Completed");
+  await expect(latest.getByRole("status")).toContainText("Completed");
   await expect(design.getByRole("cell", { name: "10", exact: true })).toBeAttached();
   const image = testInfo.outputPath("graph-runner.png");
   await page.screenshot({ path: image });

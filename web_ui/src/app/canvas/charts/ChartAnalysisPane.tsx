@@ -3,6 +3,10 @@
  * Every committed annotation is expressed in original data units.
  */
 import { useId, useRef, useState, type PointerEvent, type RefObject, type KeyboardEvent, type WheelEvent } from "react";
+import { Button } from "../../ui/Button";
+import { IconButton } from "../../ui/IconButton";
+import { ToggleButton } from "../../ui/ToggleButton";
+import type { IconName } from "../../ui/icons/registry";
 import type { ChartDataRow } from "../../../lib/bridge-core/generated/scene-state";
 import {
   canonicalizeChartAnalysis, chartAnalysisOf, usesScientificMarks,
@@ -37,12 +41,16 @@ export interface ChartAnalysisPaneProps {
   theme: ChartTheme;
   wrapperRef: RefObject<HTMLDivElement>;
   onAnalysisChange?: (analysis: ChartAnalysis) => void | Promise<void>;
+  interactive: boolean;
+  onActivate: () => void;
 }
 
 export function ChartAnalysisPane({
-  chartType, chartData, width, height, theme, wrapperRef, onAnalysisChange,
+  chartType, chartData, width, height, theme, wrapperRef, onAnalysisChange, interactive, onActivate,
 }: ChartAnalysisPaneProps) {
-  const frame = chartFrame(chartData, chartType, width, height);
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const plotHeight = Math.max(80, height - (toolsOpen ? 200 : 32));
+  const frame = chartFrame(chartData, chartType, width, plotHeight);
   const persisted = chartAnalysisOf(chartData);
   // Optimistic edits are valid only for the exact scene snapshot they edit.
   // On save, reload or undo a new chartData object automatically wins, so
@@ -55,7 +63,6 @@ export function ChartAnalysisPane({
     y: analysis.lockY && analysis.yRange ? analysis.yRange : view?.y ?? frame.base.y,
   };
   const [mode, setMode] = useState<Mode>("pan");
-  const [toolsOpen, setToolsOpen] = useState(false);
   const [labelText, setLabelText] = useState("");
   const [cursor, setCursor] = useState<Pointer | null>(null);
   const [selection, setSelection] = useState<{ a: Pointer; b: Pointer } | null>(null);
@@ -171,7 +178,10 @@ export function ChartAnalysisPane({
   }
 
   function onWheel(event: WheelEvent<SVGSVGElement>): void {
+    if (!interactive && !event.ctrlKey) return;
     event.preventDefault();
+    event.stopPropagation();
+    if (!interactive) onActivate();
     const p = eventPoint(event);
     const factor = event.deltaY < 0 ? 1.15 : 1 / 1.15;
     setView({
@@ -264,19 +274,94 @@ export function ChartAnalysisPane({
   const y = scaleFor(current.y, [frame.top + frame.height, frame.top], frame.yKind);
   const center = cursor ?? pointAt(frame.left + frame.width / 2, frame.top + frame.height / 2);
   const second = pointAt(frame.left + frame.width * 0.7, frame.top + frame.height * 0.3);
-  const exact = (value: number, unit?: string | null) => String(value) + (unit ? " " + unit : "");
-  const annotationButtons: { mode: Mode; title: string }[] = [
-    { mode: "pan", title: "Pan" }, { mode: "zoom", title: "Box zoom" },
-    { mode: "label", title: "Text label" }, { mode: "arrow", title: "Arrow" },
-    { mode: "region-x", title: "Shade X" }, { mode: "region-y", title: "Shade Y" },
+  const exact = (value: number, unit?: string | null) => value.toLocaleString("en-US", { maximumSignificantDigits: 8 }) + (unit ? " " + unit : "");
+  const annotationButtons: { mode: Mode; title: string; icon: IconName }[] = [
+    { mode: "pan", title: "Pan", icon: "grip" },
+    { mode: "zoom", title: "Box zoom", icon: "zoom-in" },
+    { mode: "label", title: "Text label", icon: "edit" },
+    { mode: "arrow", title: "Arrow", icon: "arrow-right" },
+    { mode: "region-x", title: "Shade X", icon: "crosshair" },
+    { mode: "region-y", title: "Shade Y", icon: "filter" },
   ];
 
   return (
     <>
-      <svg className="chart-canvas-svg nodrag nowheel nopan"
+      <div className="chart-analysis-controls nodrag nowheel nopan">
+        <div className="chart-analysis-toolbar-row">
+          <IconButton icon="settings" size="sm" label="Chart tools" shortcut="Ctrl+Wheel"
+            aria-expanded={toolsOpen} aria-controls={toolsId} onClick={() => setToolsOpen(!toolsOpen)} />
+          <IconButton icon="fit-view" size="sm" label="Reset view" shortcut="Home" disabled={!view} onClick={() => setView(null)} />
+        </div>
+        {toolsOpen && (
+          <div id={toolsId} role="group" aria-label="Chart analysis tools" className="chart-analysis-tools-panel">
+            <div className="chart-analysis-tool-modes">
+              {annotationButtons.map((item) => (
+                <IconButton key={item.mode} size="sm" icon={item.icon} label={item.title}
+                  aria-pressed={mode === item.mode}
+                  onClick={() => { setMode(item.mode); setSelection(null); }} />
+              ))}
+            </div>
+            <div className="chart-analysis-tool-locks">
+              <ToggleButton size="sm" icon="lock" pressed={analysis.lockX}
+                label={analysis.lockX ? "Unlock X" : "Lock X range"} onPressedChange={() => toggleLock("x")} />
+              <ToggleButton size="sm" icon="lock" pressed={analysis.lockY}
+                label={analysis.lockY ? "Unlock Y" : "Lock Y range"} onPressedChange={() => toggleLock("y")} />
+              <Button size="sm" onClick={() => setView(null)}>Reset zoom</Button>
+            </div>
+            <form aria-label="Set exact visible axis ranges" onSubmit={(event) => {
+              event.preventDefault(); applyPreciseRanges(event.currentTarget);
+            }} className="chart-analysis-tool-form">
+              <label>X min <input aria-label="X minimum" name="xmin" type="number" step="any"
+                required defaultValue={current.x[0]} style={{ width: 84 }} /></label>
+              <label>X max <input aria-label="X maximum" name="xmax" type="number" step="any"
+                required defaultValue={current.x[1]} style={{ width: 84 }} /></label>
+              <label>Y min <input aria-label="Y minimum" name="ymin" type="number" step="any"
+                required defaultValue={current.y[0]} style={{ width: 84 }} /></label>
+              <label>Y max <input aria-label="Y maximum" name="ymax" type="number" step="any"
+                required defaultValue={current.y[1]} style={{ width: 84 }} /></label>
+              <Button size="sm" type="submit">Apply ranges</Button>
+            </form>
+            {mode === "label" && <label>Label text{" "}
+              <input aria-label="Annotation label" maxLength={160} value={labelText}
+                onChange={(event) => setLabelText(event.target.value)} />
+            </label>}
+            {mode !== "pan" && mode !== "zoom" && (
+              <form key={mode} aria-label="Precise annotation coordinates" onSubmit={(event) => {
+                event.preventDefault(); preciseAnnotation(event.currentTarget);
+              }} className="chart-analysis-tool-form">
+                {mode === "label" || mode === "arrow" ? <>
+                  <label>X <input type="number" step="any" name="x" aria-label="Annotation X" required
+                    defaultValue={center.x} style={{ width: 90 }} /></label>
+                  <label>Y <input type="number" step="any" name="y" aria-label="Annotation Y" required
+                    defaultValue={center.y} style={{ width: 90 }} /></label>
+                  {mode === "label" && <label>Text <input name="text" aria-label="Annotation text" required
+                    maxLength={160} defaultValue={labelText} /></label>}
+                  {mode === "arrow" && <>
+                    <label>To X <input type="number" step="any" name="x2" aria-label="Arrow end X" required
+                      defaultValue={second.x} style={{ width: 90 }} /></label>
+                    <label>To Y <input type="number" step="any" name="y2" aria-label="Arrow end Y" required
+                      defaultValue={second.y} style={{ width: 90 }} /></label>
+                  </>}
+                </> : <>
+                  <label>From <input type="number" step="any" name="from" required aria-label="Region start"
+                    defaultValue={mode === "region-x" ? current.x[0] : current.y[0]} style={{ width: 90 }} /></label>
+                  <label>To <input type="number" step="any" name="to" required aria-label="Region end"
+                    defaultValue={mode === "region-x" ? current.x[1] : current.y[1]} style={{ width: 90 }} /></label>
+                </>}
+                <Button size="sm" type="submit">Add annotation</Button>
+              </form>
+            )}
+            {analysis.annotations.length > 0 && <Button size="sm" type="button" onClick={() => {
+              commit({ ...analysis, annotations: analysis.annotations.slice(0, -1) });
+            }}>Remove last annotation</Button>}
+            {error && <div role="alert">{error}</div>}
+          </div>
+        )}
+      </div>
+      <svg className={`chart-canvas-svg nodrag nopan${interactive ? " nowheel" : ""}`}
         tabIndex={0} role="application"
         aria-label={"Interactive " + chartType + " chart. Arrow keys pan; Shift plus arrows move crosshair; plus and minus zoom; Home or zero resets. Chart tools provide keyboard annotation entry."}
-        width={width} height={height}
+        width={width} height={plotHeight}
         onPointerDown={onPointerDown} onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={() => { drag.current = null; setSelection(null); }}
@@ -285,16 +370,16 @@ export function ChartAnalysisPane({
         style={{ cursor: mode === "pan" ? "grab" : "crosshair" }}
       >
         {chartType === "line" && (usesScientificMarks(chartData, chartType)
-          ? <ScientificChartMarks chartType={chartType} chartData={chartData} theme={theme} width={width} height={height}
+          ? <ScientificChartMarks chartType={chartType} chartData={chartData} theme={theme} width={width} height={plotHeight}
               onHover={setHover} wrapperRef={wrapperRef} viewport={activeViewport} />
-          : <LineChartMarks chartData={chartData} theme={theme} width={width} height={height}
+          : <LineChartMarks chartData={chartData} theme={theme} width={width} height={plotHeight}
               onHover={setHover} wrapperRef={wrapperRef} viewport={activeViewport} />)}
         {chartType === "scatter" && <ScientificChartMarks chartType={chartType} chartData={chartData} theme={theme}
-          width={width} height={height} onHover={setHover} wrapperRef={wrapperRef} viewport={activeViewport} />}
+          width={width} height={plotHeight} onHover={setHover} wrapperRef={wrapperRef} viewport={activeViewport} />}
         {chartType === "histogram" && <HistogramChartMarks chartData={chartData} theme={theme}
-          width={width} height={height} onHover={setHover} wrapperRef={wrapperRef} viewport={activeViewport} />}
+          width={width} height={plotHeight} onHover={setHover} wrapperRef={wrapperRef} viewport={activeViewport} />}
         {chartType === "boxplot" && <BoxplotChartMarks chartData={chartData} theme={theme}
-          width={width} height={height} onHover={setHover} wrapperRef={wrapperRef} viewport={activeViewport} />}
+          width={width} height={plotHeight} onHover={setHover} wrapperRef={wrapperRef} viewport={activeViewport} />}
         <defs>
           <clipPath id={clipId}><rect x={frame.left} y={frame.top} width={frame.width} height={frame.height} /></clipPath>
           <marker id={arrowId} markerWidth={8} markerHeight={8} refX={7} refY={4} orient="auto">
@@ -318,7 +403,7 @@ export function ChartAnalysisPane({
                 stroke={theme.text} strokeWidth={1.8} markerEnd={"url(#" + arrowId + ")"} />;
             }
             return <text key={index} className="chart-analysis-label" x={x(item.x)} y={y(item.y)}
-              fill={theme.text} fontSize={12} fontWeight={600}>{item.text}</text>;
+              fill={theme.text} fontWeight={600}>{item.text}</text>;
           })}
           {selection && mode !== "pan" && (
             <rect x={Math.min(selection.a.px, selection.b.px)}
@@ -335,91 +420,10 @@ export function ChartAnalysisPane({
           </>}
         </g>
       </svg>
-      <div className="chart-analysis-status nodrag nowheel"
-        style={{ position: "absolute", bottom: 2, left: 6, fontSize: 10,
-          background: theme.tooltipBackground, color: theme.text, padding: "2px 4px", pointerEvents: "none" }}
-        role="status" aria-live="polite">
+      <div className="chart-analysis-status nodrag nowheel" role="status" aria-live="polite">
         {cursor
           ? "X: " + exact(cursor.x, chartData.xUnit) + " · Y: " + exact(cursor.y, chartData.yUnit)
           : "Chart: focus and use arrows, +/−, Home"}
-      </div>
-      <div className="chart-analysis-controls nodrag nowheel nopan"
-        style={{ position: "absolute", right: 6, top: 4, zIndex: 5,
-          maxWidth: "calc(100% - 12px)", color: theme.text, fontSize: 11 }}>
-        <button type="button" aria-expanded={toolsOpen} aria-controls={toolsId}
-          onClick={() => setToolsOpen(!toolsOpen)}>Chart tools</button>
-        {view && <button type="button" onClick={() => setView(null)}>Reset view</button>}
-        {toolsOpen && (
-          <div id={toolsId} role="group" aria-label="Chart analysis tools"
-            style={{ padding: 6, background: theme.tooltipBackground, border: "1px solid " + theme.tooltipBorder,
-              maxHeight: Math.max(120, height - 55), overflowY: "auto", maxWidth: 320 }}>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-              {annotationButtons.map((item) => (
-                <button type="button" key={item.mode}
-                  aria-pressed={mode === item.mode}
-                  onClick={() => { setMode(item.mode); setSelection(null); }}>
-                  {item.title}
-                </button>
-              ))}
-            </div>
-            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-              <button type="button" aria-pressed={analysis.lockX} onClick={() => toggleLock("x")}>
-                {analysis.lockX ? "Unlock X" : "Lock X range"}
-              </button>
-              <button type="button" aria-pressed={analysis.lockY} onClick={() => toggleLock("y")}>
-                {analysis.lockY ? "Unlock Y" : "Lock Y range"}
-              </button>
-              <button type="button" onClick={() => setView(null)}>Reset zoom</button>
-            </div>
-            <form aria-label="Set exact visible axis ranges" onSubmit={(event) => {
-              event.preventDefault(); applyPreciseRanges(event.currentTarget);
-            }} style={{ marginTop: 6 }}>
-              <label>X min <input aria-label="X minimum" name="xmin" type="number" step="any"
-                required defaultValue={current.x[0]} style={{ width: 84 }} /></label>
-              <label>X max <input aria-label="X maximum" name="xmax" type="number" step="any"
-                required defaultValue={current.x[1]} style={{ width: 84 }} /></label>
-              <label>Y min <input aria-label="Y minimum" name="ymin" type="number" step="any"
-                required defaultValue={current.y[0]} style={{ width: 84 }} /></label>
-              <label>Y max <input aria-label="Y maximum" name="ymax" type="number" step="any"
-                required defaultValue={current.y[1]} style={{ width: 84 }} /></label>
-              <button type="submit">Apply ranges</button>
-            </form>
-            {mode === "label" && <label>Label text{" "}
-              <input aria-label="Annotation label" maxLength={160} value={labelText}
-                onChange={(event) => setLabelText(event.target.value)} />
-            </label>}
-            {mode !== "pan" && mode !== "zoom" && (
-              <form key={mode} aria-label="Precise annotation coordinates" onSubmit={(event) => {
-                event.preventDefault(); preciseAnnotation(event.currentTarget);
-              }} style={{ marginTop: 6 }}>
-                {mode === "label" || mode === "arrow" ? <>
-                  <label>X <input type="number" step="any" name="x" aria-label="Annotation X" required
-                    defaultValue={center.x} style={{ width: 90 }} /></label>
-                  <label>Y <input type="number" step="any" name="y" aria-label="Annotation Y" required
-                    defaultValue={center.y} style={{ width: 90 }} /></label>
-                  {mode === "label" && <label>Text <input name="text" aria-label="Annotation text" required
-                    maxLength={160} defaultValue={labelText} /></label>}
-                  {mode === "arrow" && <>
-                    <label>To X <input type="number" step="any" name="x2" aria-label="Arrow end X" required
-                      defaultValue={second.x} style={{ width: 90 }} /></label>
-                    <label>To Y <input type="number" step="any" name="y2" aria-label="Arrow end Y" required
-                      defaultValue={second.y} style={{ width: 90 }} /></label>
-                  </>}
-                </> : <>
-                  <label>From <input type="number" step="any" name="from" required aria-label="Region start"
-                    defaultValue={mode === "region-x" ? current.x[0] : current.y[0]} style={{ width: 90 }} /></label>
-                  <label>To <input type="number" step="any" name="to" required aria-label="Region end"
-                    defaultValue={mode === "region-x" ? current.x[1] : current.y[1]} style={{ width: 90 }} /></label>
-                </>}
-                <button type="submit">Add annotation</button>
-              </form>
-            )}
-            {analysis.annotations.length > 0 && <button type="button" onClick={() => {
-              commit({ ...analysis, annotations: analysis.annotations.slice(0, -1) });
-            }}>Remove last annotation</button>}
-            {error && <div role="alert">{error}</div>}
-          </div>
-        )}
       </div>
       <ChartTooltip content={hover} theme={theme} />
     </>

@@ -111,7 +111,7 @@ export function BarChartMarks({ chartData, theme, width, height, onHover, wrappe
                 x={barX + barWidth / 2}
                 y={value >= 0 ? barY - 6 : barY + barHeight + 14}
                 textAnchor="middle"
-                fontSize={10}
+                fontSize={11}
                 fill={theme.text}
               >
                 {formatValue(value)}

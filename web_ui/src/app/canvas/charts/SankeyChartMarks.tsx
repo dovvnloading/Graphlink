@@ -109,7 +109,7 @@ export function SankeyChartMarks({ chartData, theme, width, height, onHover, wra
               y={node.y + node.height / 2}
               textAnchor={isLastColumn ? "end" : "start"}
               dominantBaseline="middle"
-              fontSize={10}
+              fontSize={11}
               fill={theme.text}
             >
               {lines.map((line, lineIndex) => (

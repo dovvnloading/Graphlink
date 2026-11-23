@@ -172,7 +172,7 @@ describe("OnboardingDialog (ADR-012 stage 12.6)", () => {
     await user.click(await screen.findByRole("button", { name: "Next" }));
     await user.click(await screen.findByRole("button", { name: "Next" }));
     await user.click(await screen.findByRole("button", { name: "Next" }));
-    await user.click(screen.getByRole("button", { name: "Done" }));
+    await user.click(screen.getByRole("button", { name: "Finish" }));
 
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(fixture.intents).toContainEqual({
@@ -192,7 +192,7 @@ describe("OnboardingDialog (ADR-012 stage 12.6)", () => {
     await user.click(await screen.findByRole("button", { name: "Next" })); // welcome -> provider check
 
     expect(screen.getByText(/isn't ready yet/)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Open Settings" }));
+    await user.click(screen.getByRole("button", { name: "Open settings" }));
 
     expect(fixture.intents).toContainEqual({
       topic: "app-settings",
@@ -226,7 +226,7 @@ describe("OnboardingDialog (ADR-012 stage 12.6)", () => {
     await user.click(await screen.findByRole("button", { name: "Next" }));
 
     expect(screen.getByText(/is ready/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Open Settings" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Open settings" })).toBeInTheDocument();
   });
 
   it("the sample-workspace step's button fires the scene-topic loadSampleWorkspace intent", async () => {
@@ -238,7 +238,7 @@ describe("OnboardingDialog (ADR-012 stage 12.6)", () => {
 
     await user.click(await screen.findByRole("button", { name: "Next" })); // welcome -> provider check
     await user.click(await screen.findByRole("button", { name: "Next" })); // provider check -> sample workspace
-    await user.click(screen.getByRole("button", { name: "Load Sample Workspace" }));
+    await user.click(screen.getByRole("button", { name: "Load sample workspace" }));
 
     expect(fixture.intents).toContainEqual({ topic: "scene", intent: "loadSampleWorkspace", args: [] });
   });

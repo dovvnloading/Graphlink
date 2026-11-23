@@ -46,12 +46,15 @@ export interface ZoomPane {
   reset: () => void;
 }
 
-export function useZoomPane(): ZoomPane {
+export function useZoomPane(interactive = true, activate: () => void = () => {}): ZoomPane {
   const [zoom, setZoom] = useState<ZoomState>(IDENTITY);
   const dragRef = useRef<DragState | null>(null);
 
   const onWheel = (event: ReactWheelEvent<SVGSVGElement>) => {
+    if (!interactive && !event.ctrlKey) return;
     event.preventDefault();
+    event.stopPropagation();
+    if (!interactive) activate();
     const rect = event.currentTarget.getBoundingClientRect();
     const pointerX = event.clientX - rect.left;
     const pointerY = event.clientY - rect.top;

@@ -54,7 +54,7 @@ test("discovers an authorized operation by keyboard and restores its draft acros
     await match.press("Enter");
     await expect(dialog).toBeVisible();
     await expect(node).toHaveCount(1);
-    await expect(dialog.getByLabel("Operation", { exact: true })).toHaveValue("plot_xy");
+    await expect(dialog.getByRole("button", { name: "Operation", exact: true })).toContainText(operation);
     await expect.poll(() => dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true);
     await expect(page.getByLabel(fieldName, { exact: true })).toHaveCount(1);
     await dialog.getByLabel(fieldName, { exact: true }).fill(draft);

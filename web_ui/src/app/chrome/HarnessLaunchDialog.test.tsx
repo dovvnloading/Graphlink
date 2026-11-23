@@ -61,7 +61,7 @@ describe("HarnessLaunchDialog", () => {
     const { user, intents } = await setup();
 
     await user.type(screen.getByLabelText(/what should the agent work on/i), "summarize the repo");
-    await user.click(screen.getByRole("button", { name: "Start the agent" }));
+    await user.click(screen.getByRole("button", { name: "Start agent" }));
 
     expect(intents).toContainEqual(["harness", "start", ["summarize the repo", 16, "", "host"]]);
   });
@@ -73,7 +73,7 @@ describe("HarnessLaunchDialog", () => {
     await user.click(screen.getByRole("button", { name: "Choose folder…" }));
     expect(await screen.findByText("C:\\projects\\thing")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Start the agent" }));
+    await user.click(screen.getByRole("button", { name: "Start agent" }));
 
     expect(intents).toContainEqual([
       "harness", "start", ["fix the failing test", 16, "C:\\projects\\thing", "host"],
@@ -88,7 +88,7 @@ describe("HarnessLaunchDialog", () => {
     // Still scratch: a dismissed picker chose nothing, so nothing changed.
     expect(screen.getByText("Private scratch folder")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Start the agent" }));
+    await user.click(screen.getByRole("button", { name: "Start agent" }));
     expect(intents).toContainEqual(["harness", "start", ["look around", 16, "", "host"]]);
   });
 
@@ -108,20 +108,22 @@ describe("HarnessLaunchDialog", () => {
 
   it("launches the first task as Isolated when Podman is detected", async () => {
     const { user, intents } = await setup(undefined, "podman");
-    expect(await screen.findByText(/Podman detected on the backend/)).toBeInTheDocument();
-    await user.selectOptions(screen.getByRole("combobox", { name: "Execution profile for new agent" }), "isolated");
+    expect(await screen.findByText(/Podman detected/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Execution profile" }));
+    await user.click(screen.getByRole("option", { name: /Isolated \(Docker \/ Podman\)/ }));
     await user.type(screen.getByLabelText(/what should the agent work on/i), "analyze files");
-    await user.click(screen.getByRole("button", { name: "Start the agent" }));
+    await user.click(screen.getByRole("button", { name: "Start agent" }));
 
     expect(intents).toContainEqual(["harness", "start", ["analyze files", 16, "", "isolated"]]);
   });
 
   it("does not offer Isolated without Docker or Podman", async () => {
-    await setup(undefined, null);
-    expect(await screen.findByText(/Docker or Podman is unavailable/)).toBeInTheDocument();
+    const { user } = await setup(undefined, null);
+    expect(await screen.findByText(/Docker or Podman isn't available/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Execution profile" }));
     const isolated = screen.getByRole("option", { name: /Isolated \(Docker \/ Podman\)/ });
     expect(isolated).toBeDisabled();
-    expect(screen.getByRole("combobox", { name: "Execution profile for new agent" })).toHaveValue("host");
+    expect(screen.getByRole("button", { name: "Execution profile" })).toHaveTextContent("Host (default)");
   });
 
   // Regression #767: a temporary transport failure is not proof that the
@@ -134,21 +136,24 @@ describe("HarnessLaunchDialog", () => {
       undefined, "docker", makeStore("docker", getHarnessIsolationEngine),
     );
 
-    expect(await screen.findByText(/Could not check Docker or Podman availability/)).toBeInTheDocument();
+    expect(await screen.findByText(/The connection check failed/)).toBeInTheDocument();
     expect(getHarnessIsolationEngine).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "Execution profile" }));
     expect(screen.getByRole("option", { name: /Isolated/ })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Execution profile" }));
 
-    await user.click(screen.getByRole("button", { name: "Recheck Docker / Podman" }));
-    expect(await screen.findByText(/Docker detected on the backend/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Check again" }));
+    expect(await screen.findByText(/Docker detected/)).toBeInTheDocument();
     expect(getHarnessIsolationEngine).toHaveBeenCalledTimes(2);
     await user.click(screen.getByRole("button", { name: "Close Agent" }));
     await user.click(screen.getByRole("button", { name: "open agent" }));
-    expect(await screen.findByText(/Docker detected on the backend/)).toBeInTheDocument();
+    expect(await screen.findByText(/Docker detected/)).toBeInTheDocument();
     expect(getHarnessIsolationEngine).toHaveBeenCalledTimes(3);
 
-    await user.selectOptions(screen.getByRole("combobox", { name: "Execution profile for new agent" }), "isolated");
+    await user.click(screen.getByRole("button", { name: "Execution profile" }));
+    await user.click(screen.getByRole("option", { name: /Isolated \(Docker \/ Podman\)/ }));
     await user.type(screen.getByLabelText(/what should the agent work on/i), "inspect files");
-    await user.click(screen.getByRole("button", { name: "Start the agent" }));
+    await user.click(screen.getByRole("button", { name: "Start agent" }));
     expect(intents).toContainEqual(["harness", "start", ["inspect files", 16, "", "isolated"]]);
   });
 
@@ -160,11 +165,14 @@ describe("HarnessLaunchDialog", () => {
       undefined, "docker", makeStore("docker", getHarnessIsolationEngine),
     );
 
-    expect(await screen.findByText(/Docker or Podman is unavailable/)).toBeInTheDocument();
+    expect(await screen.findByText(/Docker or Podman isn't available/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Execution profile" }));
     expect(screen.getByRole("option", { name: /Isolated/ })).toBeDisabled();
-    await user.click(screen.getByRole("button", { name: "Recheck Docker / Podman" }));
-    expect(await screen.findByText(/Podman detected on the backend/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Execution profile" }));
+    await user.click(screen.getByRole("button", { name: "Check again" }));
+    expect(await screen.findByText(/Podman detected/)).toBeInTheDocument();
     expect(getHarnessIsolationEngine).toHaveBeenCalledTimes(2);
+    await user.click(screen.getByRole("button", { name: "Execution profile" }));
     expect(screen.getByRole("option", { name: /Isolated/ })).toBeEnabled();
   });
 
@@ -173,7 +181,7 @@ describe("HarnessLaunchDialog", () => {
     const draft = screen.getByLabelText(/what should the agent work on/i);
     const tooLong = "x".repeat(20_000) + "FINAL_INSTRUCTION";
     fireEvent.change(draft, { target: { value: tooLong } });
-    await user.click(screen.getByRole("button", { name: "Start the agent" }));
+    await user.click(screen.getByRole("button", { name: "Start agent" }));
 
     expect(screen.getByRole("alert")).toHaveTextContent("20,000 characters");
     expect(draft).toHaveValue(tooLong);
@@ -189,7 +197,7 @@ describe("HarnessLaunchDialog", () => {
       target: { value: text },
     });
 
-    await user.click(screen.getByRole("button", { name: "Start the agent" }));
+    await user.click(screen.getByRole("button", { name: "Start agent" }));
     expect(intents).toContainEqual(["harness", "start", [text, 16, "", "host"]]);
   });
 
@@ -201,6 +209,6 @@ describe("HarnessLaunchDialog", () => {
     await setup();
     const hint = screen.getByText(/reads and writes files/i);
     expect(hint).toHaveTextContent(/shell and Python/i);
-    expect(hint).toHaveTextContent(/asks before anything that changes your machine/i);
+    expect(hint).toHaveTextContent(/asks before changing your machine/i);
   });
 });

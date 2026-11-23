@@ -1,55 +1,31 @@
-.graph-runner-dialog { width: min(540px, calc(100vw - 32px)); min-width: 0; max-width: calc(100vw - 32px); }
-.graph-runner-dialog .overlay-dialog-body { color: var(--gl-surface-text-secondary); font-size: 12px; line-height: 1.5; }
+.graph-runner-dialog .overlay-dialog-body { color: var(--gl-surface-text-secondary); font-size: var(--gl-text-sm); line-height: var(--gl-leading-sm); display: flex; flex-direction: column; gap: var(--gl-space-4); }
 .graph-runner-dialog p { margin: 0; }
-.graph-runner-dialog .runner-intro { margin-bottom: 14px; }
-.runner-controls, .runner-commit, .runner-section-header, .runner-step-heading {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
-}
-.runner-controls { align-items: end; }
-.runner-controls label { display: grid; gap: 3px; flex: 1; color: var(--gl-surface-text-primary); }
-.runner-controls select {
-  height: 32px; padding: 0 8px; border: 1px solid var(--gl-surface-border);
-  border-radius: 4px; color: inherit; background: var(--gl-surface-window); font: inherit;
-}
-.graph-runner-dialog select:focus-visible, .runner-disclosure:focus-visible {
-  outline: 2px solid var(--gl-focus-ring); outline-offset: 2px;
-}
-.graph-runner-dialog section { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--gl-surface-border); }
-.runner-section-header h2 { margin: 0; font-size: 14px; color: var(--gl-surface-text-primary); }
-.runner-steps { margin: 8px 0; padding-inline-start: 26px; }
-.runner-steps li { padding: 7px 0 7px 2px; overflow-wrap: anywhere; }
+.runner-controls, .runner-commit, .runner-section-header, .runner-step-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--gl-space-2); }
+.runner-controls { align-items: flex-end; }
+.runner-controls > * { flex: 1; min-width: 0; }
+.graph-runner-dialog section { padding-top: var(--gl-space-3); border-top: 1px solid var(--gl-surface-border); }
+.runner-section-header h2 { margin: 0; font-size: var(--gl-text-base); color: var(--gl-surface-text-primary); }
+.runner-steps { margin: var(--gl-space-2) 0; padding-inline-start: var(--gl-space-6); }
+.runner-steps li { padding: var(--gl-space-2) 0; overflow-wrap: anywhere; }
 .runner-steps li + li { border-top: 1px solid var(--gl-surface-border); }
 .runner-steps strong { color: var(--gl-surface-text-primary); }
-.runner-steps [data-status], .runner-section-header [data-status] { font-weight: 600; }
+.runner-steps [data-status], .runner-section-header [data-status] { font-weight: var(--gl-weight-semibold); display: inline-flex; align-items: center; gap: var(--gl-space-2); }
 .graph-runner-dialog [data-status="completed"] { color: var(--gl-semantic-status-success); }
 .graph-runner-dialog :is([data-status="blocked"], [data-status="partial"], [data-status="interrupted"]) { color: var(--gl-semantic-status-warning); }
 .graph-runner-dialog [data-status="failed"], .runner-error [role="alert"] { color: var(--gl-semantic-status-error); }
-.graph-runner-dialog .runner-note, .runner-steps p { margin: 4px 0 0; }
-.runner-commit { margin-top: 10px; }
+.graph-runner-dialog .runner-note, .runner-steps p { margin: var(--gl-space-1) 0 0; }
+.runner-commit { margin-top: var(--gl-space-2-5); }
 .runner-commit p { flex: 1; }
-.runner-history, .runner-error { margin-top: 12px; }
-.runner-history > div, .runner-fingerprints div { padding-inline-start: 12px; }
-.runner-disclosure {
-  cursor: pointer; background: transparent; border: 0; color: inherit; font: inherit;
-  padding: 2px 0; text-align: start;
-}
-.runner-disclosure:hover { color: var(--gl-surface-text-primary); }
-.runner-fingerprints { margin-top: 4px; font-size: 11px; }
+.runner-history, .runner-error, .runner-inspector { margin-top: var(--gl-space-3); }
+.runner-history > div, .runner-fingerprints div { padding-inline-start: var(--gl-space-3); }
+.runner-fingerprints { margin-top: var(--gl-space-1); font-size: var(--gl-text-xs); }
 .runner-fingerprints code { overflow-wrap: anywhere; }
-
-/* Saved-run inspector extends the dialog's existing disclosure and step list. */
-.runner-inspector { margin-top: 10px; }
-.runner-inspector > div { padding-inline-start: 8px; }
-.runner-timeline { list-style: none; border-inline-start: 2px solid var(--gl-surface-border); padding-inline-start: 16px; }
+.runner-inspector > div { padding-inline-start: var(--gl-space-2); }
+.runner-timeline { list-style: none; border-inline-start: 2px solid var(--gl-surface-border); padding-inline-start: var(--gl-space-4); }
 .runner-timeline > li { position: relative; }
-.runner-timeline > li::before {
-  content: ""; position: absolute; inset-inline-start: -22px; top: 14px;
-  width: 8px; height: 8px; border: 2px solid var(--gl-surface-border);
-  border-radius: 50%; background: var(--gl-surface-window);
-}
-.runner-trace-entry > .runner-disclosure { color: var(--gl-surface-text-primary); font-weight: 600; }
-.runner-trace-entry > div { padding-inline-start: 12px; }
-.runner-trace-entry .runner-fingerprints { margin-block: 8px; }
-.runner-attempts { margin-top: 8px; }
-.runner-attempts ol { padding-inline-start: 20px; margin: 2px 0; }
+.runner-timeline > li::before { content: ""; position: absolute; inset-inline-start: calc(-1 * var(--gl-space-5)); top: var(--gl-space-3); width: var(--gl-space-2); height: var(--gl-space-2); border: 2px solid var(--gl-surface-border); border-radius: 50%; background: var(--gl-surface-window); }
+.runner-trace-entry > div { padding-inline-start: var(--gl-space-3); }
+.runner-trace-entry .runner-fingerprints { margin-block: var(--gl-space-2); }
+.runner-attempts { margin-top: var(--gl-space-2); }
+.runner-attempts ol { padding-inline-start: var(--gl-space-5); margin: var(--gl-space-1) 0; }
 .runner-attempts li { overflow-wrap: anywhere; }
