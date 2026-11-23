@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "platform": "linux/amd64",
+  "base": "docker.io/library/python@sha256:3c3ba8ad4c85eb63b7568f806434f14e33370056985da7fdf2673621cb1d7e93",
+  "lean": {
+    "version": "4.36.0",
+    "revision": "611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9",
+    "archive": "https://github.com/leanprover/lean4/releases/download/v4.36.0/lean-4.36.0-linux.zip",
+    "sha256": "92a996be487b48e1c2f2985be6b150490475c94d02f5a5e26665a9dab780902a"
+  },
+  "mathlib": {
+    "url": "https://github.com/leanprover-community/mathlib4",
+    "revision": "fc4f59e577feb1a4956671bc04ac18aaaf8cd842",
+    "manifest_sha256": "11887e45895bc6c521059db7957e78e9fd7aec1884e8c931db4a42be6c1af9b5",
+    "module": "Mathlib.Data.Nat.Basic"
+  }
+}

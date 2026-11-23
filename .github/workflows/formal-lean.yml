@@ -1,0 +1,51 @@
+name: Formal Lean toolchain spike
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/formal-lean.yml"
+      - "tests/formal_lean_spike/**"
+      - "docs/FORMAL_LEAN_TOOLCHAIN_LOCK.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: formal-lean-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  fixtures:
+    name: Replay fixed Lean fixtures on Linux x86-64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test fixture runner contracts
+        run: python3 -m unittest discover -s tests/formal_lean_spike
+      - name: Provision the pinned fixture image
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/formal-lean"
+          docker version > "$RUNNER_TEMP/formal-lean/docker-version.txt"
+          DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --progress=plain \
+            --iidfile "$RUNNER_TEMP/formal-lean/image-id.txt" \
+            -f tests/formal_lean_spike/image/Dockerfile tests/formal_lean_spike \
+            2>&1 | tee "$RUNNER_TEMP/formal-lean/build.log"
+      - name: Run fixtures against the local immutable image
+        run: |
+          python3 tests/formal_lean_spike/run_spike.py \
+            --image-id "$(cat "$RUNNER_TEMP/formal-lean/image-id.txt")" \
+            --report "$RUNNER_TEMP/formal-lean/results.json"
+      - name: Retain build and replay evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: formal-lean-spike-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/formal-lean/
+          if-no-files-found: warn
+          retention-days: 14
