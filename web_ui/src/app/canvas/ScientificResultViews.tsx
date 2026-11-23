@@ -1,6 +1,6 @@
 import { useId, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { ScientificDataTable } from "./ScientificDataTable";
-import { Disclosure } from "../ui/Disclosure";
+import { CanvasDisclosure } from "./CanvasDisclosure";
 import { GROUP_NAMED_COLORS } from "./GroupColorPicker";
 import { formatCount } from "../ui/format";
 import { exactScienceNumber, formatScienceNumber } from "./scientificWorkbench";
@@ -137,7 +137,7 @@ function SurvivalCurve({ view }: { view: ScienceSurvivalCurveView }) {
         </svg>
         {group.label} · {formatCount(group.censored?.length ?? 0)} censor times
       </li>)}</ul>
-    <ScientificDataTable {...{ title: "Survival curve data" }} columns={["Group", view.xLabel, "Survival probability", "Censor time"]}
+    <ScientificDataTable heading="Survival curve data" columns={["Group", view.xLabel, "Survival probability", "Censor time"]}
       rows={() => view.groups.flatMap(group => {
         const censored = new Set(group.censored);
         return group.times.map((time, i) => [group.label, exactScienceNumber(time),
@@ -212,7 +212,7 @@ function VolcanoPlot({ view }: { view: ScienceVolcanoPlotView }) {
       </li>)}
     </ul>
     <small>Dashed lines: q ≤ {formatScienceNumber(view.fdrThreshold)} and |log2FC| ≥ {formatScienceNumber(view.log2FoldChangeThreshold)}. Untested genes are excluded.</small>
-    <ScientificDataTable {...{ title: "Volcano feature data" }} columns={["Feature", "Log2 fold change", "BH q", "Classification"]}
+    <ScientificDataTable heading="Volcano feature data" columns={["Feature", "Log2 fold change", "BH q", "Classification"]}
       rows={() => points.map(point => [point.gene, exactScienceNumber(point.log2FoldChange),
         exactScienceNumber(point.qValue), { up: "Up in B", down: "Down in B", other: "Other tested" }[category(point)]])} />
     {floorUsed && <small>Underflowed q=0 plotted at 1e−300 (capped at −log10(q)=300).</small>}
@@ -300,7 +300,7 @@ function ForestPlot({ view }: { view: ScienceForestPlotView }) {
         </text>
       </svg>
     </div>
-    <Disclosure className="science-view-data" {...{ title: "Exact estimates and confidence intervals" }}>
+    <CanvasDisclosure className="science-view-data" label={"Exact estimates and confidence intervals"}>
       <div className="science-view-data-scroll">
         <table aria-label={view.title + " estimate data"}>
           <thead><tr><th scope="col">Study</th><th scope="col">Estimate</th><th scope="col">Lower</th><th scope="col">Upper</th><th scope="col">Weight</th></tr></thead>
@@ -314,7 +314,7 @@ function ForestPlot({ view }: { view: ScienceForestPlotView }) {
           </tbody>
         </table>
       </div>
-    </Disclosure>
+    </CanvasDisclosure>
   </figure>;
 }
 
@@ -437,7 +437,7 @@ function PhylogeneticTree({ view }: { view: SciencePhylogeneticTreeView }) {
     <div className="science-phylogeny-scroll">
       {view.layout === "rectangular" ? rectangular() : circular()}
     </div>
-    <Disclosure className="science-view-data" {...{ title: `Branch lengths and support labels (${all.length - 1} branches)` }}>
+    <CanvasDisclosure className="science-view-data" label={`Branch lengths and support labels (${all.length - 1} branches)`}>
       <div className="science-view-data-scroll">
         <table aria-label={view.title + " branch data"}>
           <thead><tr><th scope="col">Node/taxon</th><th scope="col">Length</th><th scope="col">Support</th></tr></thead>
@@ -448,7 +448,7 @@ function PhylogeneticTree({ view }: { view: SciencePhylogeneticTreeView }) {
             </tr>)}</tbody>
         </table>
       </div>
-    </Disclosure>
+    </CanvasDisclosure>
   </figure>;
 }
 
