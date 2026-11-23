@@ -533,6 +533,7 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
   const confirmGenerate = async () => {
     if (!currentQuote?.id || busy || uploadBusy) return;
     const approvedQuote = currentQuote;
+    const approvedQuoteId = currentQuote.id;
     const accepted = await requestApproval({
       title: "Generate media?",
       body: "This request is billable on Fal.ai. Estimates are historical averages, not spending limits. Actual cost depends on the output. This approves one request.",
@@ -544,7 +545,7 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
       setLocalError("Cost review expired. Refresh the estimate before generating.");
       return;
     }
-    data.onGenerate(approvedQuote.id);
+    data.onGenerate(approvedQuoteId);
   };
   const showQueue = ["submitting", "queued", "running", "cancelling", "stalled"].includes(media.status);
   const deleteNode = async () => {
