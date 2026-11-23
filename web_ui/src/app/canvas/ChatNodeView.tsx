@@ -1046,7 +1046,7 @@ export const ChatNodeView = memo(function ChatNodeView({
             </Tooltip>
           )}
           {data.modelReason && (
-            <ModelReasonDisclosure model={data.model} reason={data.modelReason}
+            <ModelReasonDisclosure model={data.model ?? ""} reason={data.modelReason}
               onOpenNodePinMenu={setMenuPosition} onOpenModelSettings={data.onOpenModelSettings} />
           )}
           {data.overrideModelId && (

@@ -910,6 +910,7 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
           <InlineAlert variant="warning"
             {...{ title: `The agent wants to run: ${data.harnessApprovalToolName}` }}
             body={<>
+              {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable summary must be keyboard-reachable */}
               <pre className="plan-node-approval-summary nowheel nodrag" tabIndex={0}
                 role="region" aria-label="Proposed tool call">
                 {renderApprovalSummary(data.harnessApprovalSummary, data.harnessApprovalToolName)}

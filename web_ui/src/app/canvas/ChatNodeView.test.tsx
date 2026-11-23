@@ -722,7 +722,7 @@ describe("ChatNodeView Discuss in chat result card", () => {
     const { rerenderWithData } = renderChatNode({
       isUser: true, content: snapshot, scienceReference: { ...reference, headlineKey: "", headlineValueJson: "" },
     });
-    expect(screen.queryByText("R squared").toBeNull();
+    expect(screen.queryByText("R squared")).toBeNull();
     expect(screen.getByRole("region", { name: /Scientific result/ })).toHaveTextContent("2 of 2 unknowns quantified");
     rerenderWithData({ isUser: true, content: "Hello **world**", scienceReference: null });
     expect(screen.queryByRole("region", { name: /Scientific result/ })).toBeNull();
