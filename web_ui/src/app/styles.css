@@ -5598,16 +5598,6 @@ mark.document-view-search-match-current {
   border-color: var(--gl-surface-border-strong);
 }
 
-/* R8a: the code-execution approval prompt is a BLOCKING security decision, so
-   it outranks ordinary dialogs. It used to render inline inside the node,
-   where its `position: fixed; inset: 0` scrim resolved against the node's own
-   transformed box - so it dimmed (and blocked) only the node card, leaving the
-   rest of the app clickable while it waited for a yes/no. It is portaled to
-   <body> now, which is what makes this z-index meaningful at all. */
-.code-exec-approval-scrim {
-  z-index: var(--gl-z-approval);
-}
-
 .group-color-popover {
   /* R8a: NodeMenu portals this and sets `position: fixed` + left/top inline
      from the trigger's rect. The old `position: absolute; top; right` anchored
