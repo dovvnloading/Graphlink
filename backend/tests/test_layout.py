@@ -19,6 +19,7 @@ from backend.domain.layout import (
     KIND_FALLBACK_FOOTPRINTS,
     NODE_GAP_X,
     NODE_GAP_Y,
+    SCIENTIFIC_WORKBENCH_MIN_FOOTPRINT,
 )
 from backend.domain.model import (
     GROUP_COLLAPSED_HEIGHT,
@@ -68,7 +69,8 @@ def test_footprint_falls_back_per_kind_then_to_the_generic_default():
 
 def test_plugin_kinds_fall_back_to_their_local_kind_name():
     doc = SceneDocument()
-    assert doc.kind_fallback_footprint("science_core.workbench") == KIND_FALLBACK_FOOTPRINTS["workbench"]
+    assert doc.kind_fallback_footprint("science_core.workbench") == SCIENTIFIC_WORKBENCH_MIN_FOOTPRINT
+    assert doc.kind_fallback_footprint("other_plugin.workbench") == KIND_FALLBACK_FOOTPRINTS["workbench"]
     assert doc.kind_fallback_footprint("some_plugin.unknown") == DEFAULT_FALLBACK_FOOTPRINT
 
 
