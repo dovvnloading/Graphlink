@@ -3,6 +3,16 @@ import type { WsTransport } from "../../lib/ws/transport";
 import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
 import type { DiagnosticsState } from "../../lib/bridge-core/generated/diagnostics-state";
 import { Dialog } from "../overlays/overlays";
+import { validateAppAboutState } from "../../lib/bridge-core/generated/app-about-state";
+import { validateAppComposerState, type AppComposerRoute } from "../../lib/bridge-core/generated/app-composer-state";
+import type { ConnectionStatus } from "../../lib/ws/transport";
+import { Button } from "../ui/Button";
+import { Card } from "../ui/Card";
+import { Disclosure } from "../ui/Disclosure";
+import { InlineAlert } from "../ui/InlineAlert";
+import { StatusPill } from "../ui/Badge";
+import { formatBytes, formatCount, formatDuration, formatRelativeTime } from "../ui/format";
+import "./DiagnosticsDialog.css";
 
 /**
  * ADR-016 stage 16.3: the in-app diagnostics dialog - recent run outcomes,
@@ -35,16 +45,6 @@ const initialState: DiagnosticsState = {
   providerErrors: [],
 };
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatTimestamp(epochSeconds: number): string {
-  return new Date(epochSeconds * 1000).toLocaleTimeString();
-}
-
 /** ADR-016 stage 16.4: the shape `exportDiagnosticBundle` replies with -
  * `bundle` is intentionally untyped here (a free-form redacted snapshot of
  * appVersion/os/nodeCounts/the diagnostics topic's own fields) since it
@@ -61,6 +61,35 @@ export function DiagnosticsDialog({ transport }: { transport: WsTransport }) {
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [version, setVersion] = useState("");
+  const [connection, setConnection] = useState<ConnectionStatus>(
+    typeof transport.getStatus === "function" ? transport.getStatus() : "connecting");
+  const [route, setRoute] = useState<AppComposerRoute | null>(null);
+  const [storage, setStorage] = useState<{ usage: number; quota: number } | null>(null);
+
+  useEffect(() => {
+    const offAbout = transport.subscribe("app-about", (payload) => {
+      const checked = validateAppAboutState(payload);
+      if (checked.ok) setVersion(checked.value.appVersion);
+    });
+    const offComposer = transport.subscribe("app-composer", (payload) => {
+      const checked = validateAppComposerState(payload);
+      if (checked.ok) setRoute(checked.value.route);
+    });
+    const offStatus = typeof transport.onStatus === "function"
+      ? transport.onStatus(setConnection) : () => {};
+    return () => { offAbout(); offComposer(); offStatus(); };
+  }, [transport]);
+
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !navigator.storage?.estimate) return;
+    let active = true;
+    void navigator.storage.estimate().then(({ usage, quota }) => {
+      if (active && typeof usage === "number" && typeof quota === "number") setStorage({ usage, quota });
+    }).catch(() => { /* Browser storage telemetry is optional. */ });
+    return () => { active = false; };
+  }, []);
+
 
   useEffect(() => {
     return transport.subscribe("diagnostics", (payload) => {
@@ -115,106 +144,64 @@ export function DiagnosticsDialog({ transport }: { transport: WsTransport }) {
   }
 
   return (
-    <Dialog name="diagnostics" title="Diagnostics" className="diagnostics-dialog">
-      <div className="diagnostics-stats">
-        <div className="diagnostics-stat">
-          <span className="diagnostics-stat-label">Sessions</span>
-          <span className="diagnostics-stat-value">{state.sessionCount ?? "—"}</span>
+    <Dialog name="diagnostics" title="Diagnostics" size="md" className="diagnostics-dialog">
+      <Card title="Health" status={connection === "open" ? "Done" : connection === "connecting" || connection === "reconnecting" ? "Running" : "Failed"}>
+        <dl className="diagnostics-health-grid">
+          <div><dt>App version</dt><dd>{version || "Not reported"}</dd></div>
+          <div><dt>Connection</dt><dd>{connection === "open" ? "Connected" : connection}</dd></div>
+          <div><dt>Active provider</dt><dd>{route?.provider || "Not configured"}</dd></div>
+          <div><dt>Model status</dt><dd>{route
+            ? <><StatusPill status={route.available ? "Done" : "Failed"} /> {route.modelLabel || route.modelId || "No model selected"}</>
+            : "Checking…"}</dd></div>
+          <div><dt>Data folder</dt><dd><code>~/.graphlink</code> (default)</dd></div>
+          <div><dt>Browser storage</dt><dd>{storage
+            ? `${formatBytes(storage.usage)} of ${formatBytes(storage.quota)} estimated`
+            : "Not available"}</dd></div>
+        </dl>
+        <div className="diagnostics-actions">
+          <Button variant="secondary" iconStart="folder" onClick={openLogFolder}>Open log folder</Button>
+          <Button variant="primary" iconStart="download" onClick={exportDiagnosticBundle}
+            loading={exporting} disabled={exporting}>Export diagnostic bundle</Button>
         </div>
-        <div className="diagnostics-stat">
-          <span className="diagnostics-stat-label">Publishes</span>
-          <span className="diagnostics-stat-value">{state.publishCount}</span>
-        </div>
-        <div className="diagnostics-stat">
-          <span className="diagnostics-stat-label">Total published</span>
-          <span className="diagnostics-stat-value">{formatBytes(state.publishBytesTotal)}</span>
-        </div>
-        <div className="diagnostics-stat">
-          <span className="diagnostics-stat-label">Publish rate</span>
-          <span className="diagnostics-stat-value">{formatBytes(state.publishBytesPerSecond)}/s</span>
-        </div>
-        <div className="diagnostics-stat">
-          <span className="diagnostics-stat-label">Last publish</span>
-          <span className="diagnostics-stat-value">
-            {state.lastPublishTopic != null
-              ? `${state.lastPublishTopic} · ${formatBytes(state.lastPublishBytes ?? 0)}`
-              : "—"}
-          </span>
-        </div>
-      </div>
-
-      <h2 className="diagnostics-section-title">Recent runs</h2>
-      {state.recentRuns.length === 0 ? (
-        <p className="diagnostics-empty">No runs yet this session.</p>
-      ) : (
-        <table className="diagnostics-table">
-          <thead>
-            <tr>
-              <th>Kind</th>
-              <th>Node</th>
-              <th>Outcome</th>
-              <th>Duration</th>
-            </tr>
-          </thead>
-          <tbody>
-            {state.recentRuns.map((run) => (
-              <tr key={run.runId}>
-                <td>{run.kind}</td>
-                <td>{run.nodeId ?? "—"}</td>
-                <td className={`diagnostics-outcome diagnostics-outcome-${run.outcome}`}>{run.outcome}</td>
-                <td>{run.durationSeconds != null ? `${run.durationSeconds.toFixed(2)}s` : "—"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-
-      <h2 className="diagnostics-section-title">Provider errors</h2>
-      {state.providerErrors.length === 0 ? (
-        <p className="diagnostics-empty">No provider errors this session.</p>
-      ) : (
-        <ul className="diagnostics-error-list">
-          {state.providerErrors.map((err, index) => (
-            <li key={`${err.at}-${index}`} className="diagnostics-error-item">
-              <span className="diagnostics-error-provider">{err.provider}</span>
-              <span className="diagnostics-error-time">{formatTimestamp(err.at)}</span>
-              <span className="diagnostics-error-message">{err.message}</span>
+      </Card>
+      {exportError && <InlineAlert variant="error" title="Couldn't export diagnostics" body={exportError} />}
+      {exportResult && <div className="diagnostics-bundle-preview-wrap">
+        <Button size="sm" variant="secondary" iconStart="copy" onClick={copyBundleToClipboard}>
+          {copied ? "Copied" : "Copy to clipboard"}
+        </Button>
+        <pre className="diagnostics-bundle-preview">{JSON.stringify(exportResult.bundle, null, 2)}</pre>
+        <p className="diagnostics-bundle-path">Also written to {exportResult.path}</p>
+      </div>}
+      <Disclosure title="Advanced" className="diagnostics-advanced">
+        <h3 className="diagnostics-section-title">Publishing metrics</h3>
+        <dl className="diagnostics-stats">
+          <div><dt>Sessions</dt><dd>{state.sessionCount == null ? "—" : formatCount(state.sessionCount)}</dd></div>
+          <div><dt>Publishes</dt><dd>{formatCount(state.publishCount)}</dd></div>
+          <div><dt>Total published</dt><dd>{formatBytes(state.publishBytesTotal)}</dd></div>
+          <div><dt>Publish rate</dt><dd>{formatBytes(state.publishBytesPerSecond)}/s</dd></div>
+          <div><dt>Last publish</dt><dd>{state.lastPublishTopic != null
+            ? `${state.lastPublishTopic} · ${formatBytes(state.lastPublishBytes ?? 0)}` : "—"}</dd></div>
+        </dl>
+        <h3 className="diagnostics-section-title">Recent runs</h3>
+        {state.recentRuns.length === 0 ? <p className="diagnostics-empty">No runs yet this session.</p> :
+          <div className="diagnostics-table-wrap"><table className="diagnostics-table">
+            <thead><tr><th>Kind</th><th>Node</th><th>Outcome</th><th>Duration</th></tr></thead>
+            <tbody>{state.recentRuns.map((run) => <tr key={run.runId}>
+              <td>{run.kind}</td><td>{run.nodeId ?? "—"}</td>
+              <td>{run.outcome}</td>
+              <td>{run.durationSeconds == null ? "—" : formatDuration(run.durationSeconds)}</td>
+            </tr>)}</tbody>
+          </table></div>}
+        <h3 className="diagnostics-section-title">Provider errors</h3>
+        {state.providerErrors.length === 0 ? <p className="diagnostics-empty">No provider errors this session.</p> :
+          <ul className="diagnostics-error-list">{state.providerErrors.map((entry, index) => (
+            <li key={`${entry.at}-${index}`} className="diagnostics-error-item">
+              <strong>{entry.provider}</strong>
+              <span>{formatRelativeTime(entry.at * 1000)}</span>
+              <p>{entry.message}</p>
             </li>
-          ))}
-        </ul>
-      )}
-
-      <div className="diagnostics-actions">
-        <button type="button" className="diagnostics-action-button" onClick={openLogFolder}>
-          Open log folder
-        </button>
-        <button
-          type="button"
-          className="diagnostics-action-button"
-          onClick={exportDiagnosticBundle}
-          disabled={exporting}
-        >
-          {exporting ? "Exporting…" : "Export diagnostic bundle"}
-        </button>
-      </div>
-
-      {exportError && (
-        <p className="diagnostics-empty" role="alert">
-          {exportError}
-        </p>
-      )}
-
-      {exportResult && (
-        <div className="diagnostics-bundle-preview-wrap">
-          <div className="diagnostics-actions">
-            <button type="button" className="diagnostics-action-button" onClick={copyBundleToClipboard}>
-              {copied ? "Copied" : "Copy to clipboard"}
-            </button>
-          </div>
-          <pre className="diagnostics-bundle-preview">{JSON.stringify(exportResult.bundle, null, 2)}</pre>
-          <p className="diagnostics-bundle-path">Also written to {exportResult.path}</p>
-        </div>
-      )}
+          ))}</ul>}
+      </Disclosure>
     </Dialog>
   );
 }
