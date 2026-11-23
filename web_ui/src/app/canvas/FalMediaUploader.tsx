@@ -1,5 +1,11 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { authHeaders } from "../../lib/auth/token";
+import { Button } from "../ui/Button";
+import { ProgressBar } from "../ui/ProgressBar";
+import { TextField } from "../ui/TextField";
+import { useConfirm } from "../ui/ConfirmDialog";
+import { formatBytes } from "../ui/format";
+import "./FalMediaUploader.css";
 import { editJsonValue, type MediaMode } from "./falMediaStudioModel";
 
 /** User-approved file → Fal CDN URL. Raw bytes never enter canvas state/WS. */
@@ -15,6 +21,7 @@ export function FalMediaUploader({
   onBusyChange: (uploading: boolean) => void;
 }) {
   const urlFieldListId = useId();
+  const requestApproval = useConfirm();
   const initialField = useMemo(() =>
     mode === "all" ? fields[0] || "" :
       operation === "image-to-image" || operation === "image-to-video" ? "image_url" :
@@ -38,7 +45,7 @@ export function FalMediaUploader({
     setProgress(null);
     setMessage("");
   };
-  const upload = () => {
+  const upload = async () => {
     if (!file || disabled || uploading) return;
     if (file.size === 0 || file.size > 512 * 1024 * 1024) {
       setMessage("Select a non-empty media file no larger than 512 MiB.");
@@ -48,9 +55,13 @@ export function FalMediaUploader({
       setMessage("Enter a valid model parameter name, such as image_url.");
       return;
     }
-    if (!window.confirm(
-      `Send "${file.name}" (${(file.size / (1024 * 1024)).toFixed(2)} MiB) to the Fal.ai CDN? This transfers the file outside Graphlink. Do not upload private or sensitive data without consent.`
-    )) return;
+    const approved = await requestApproval({
+      title: "Upload reference to Fal.ai?",
+      body: "Send \"" + file.name + "\" (" + formatBytes(file.size) +
+        ") to the Fal.ai CDN? This transfers the file outside Graphlink. Do not upload private or sensitive data without consent.",
+      confirmLabel: "Upload reference",
+    });
+    if (!approved) return;
 
     const xhr = new XMLHttpRequest();
     xhrRef.current = xhr;
@@ -115,7 +126,7 @@ export function FalMediaUploader({
   return (
     <div className="fal-studio-uploader" aria-label="Reference media upload">
       <div className="fal-studio-uploader-heading">
-        <span className="fal-studio-kicker">REFERENCE MEDIA</span>
+        <span className="fal-studio-kicker">Reference media</span>
         <strong>Bring your own source</strong>
       </div>
       <p className="fal-studio-quiet">
@@ -124,36 +135,30 @@ export function FalMediaUploader({
       <div className="fal-studio-uploader-grid">
         <label className="fal-studio-field">
           <span>Source file</span>
-          <input type="file" accept={mode === "all" ? "image/*,audio/*,video/*,.glb,.gltf,.obj,.ply,.stl,.fbx,.usdz,.pdf,.zip,.csv,.srt,.vtt" : "image/*,audio/*,video/*"} disabled={disabled || uploading}
-            onChange={(event) => selection(event.target.files?.[0])}
+          <input type="file" accept={mode === "all" ?
+            "image/*,audio/*,video/*,.glb,.gltf,.obj,.ply,.stl,.fbx,.usdz,.pdf,.zip,.csv,.srt,.vtt" :
+            "image/*,audio/*,video/*"} disabled={disabled || uploading}
+            onChange={(event) => selection(event.currentTarget.files?.[0])}
             className="fal-studio-file-input nodrag nopan" />
         </label>
-        <label className="fal-studio-field">
-          <span>Fal input field</span>
-          <input className="fal-studio-control nodrag nopan" disabled={disabled || uploading}
-            list={urlFieldListId} value={field}
-            aria-label="Media URL parameter"
-            onChange={(event) => setFieldOverride({ scope, field: event.target.value })}
-            placeholder="image_url" />
-          <datalist id={urlFieldListId}>
-            {[...new Set(["image_url", "video_url", "audio_url", ...fields])].map((name) => <option key={name} value={name} />)}
-          </datalist>
-        </label>
+        <TextField label="Fal input field" aria-label="Media URL parameter" type="text" size="sm"
+          className="nodrag nopan" disabled={disabled || uploading} list={urlFieldListId}
+          value={field} onValueChange={(next) => setFieldOverride({ scope, field: next })}
+          placeholder="image_url" />
+        <datalist id={urlFieldListId}>
+          {[...new Set(["image_url", "video_url", "audio_url", ...fields])].map((name) =>
+            <option key={name} value={name} />)}
+        </datalist>
       </div>
       <div className="fal-studio-action-row">
-        <button type="button" className="fal-studio-button-secondary"
+        <Button variant="secondary" size="sm" iconStart="upload" loading={uploading}
           disabled={disabled || !file || uploading} onClick={upload}>
-          {uploading ? "Sending to Fal…" : "Upload reference ↗"}
-        </button>
-        {uploading && <button type="button" className="fal-studio-button-outline"
-          onClick={() => xhrRef.current?.abort()}>Stop upload</button>}
+          {uploading ? "Sending to Fal…" : "Upload reference"}
+        </Button>
+        {uploading && <Button size="sm" variant="ghost" onClick={() => xhrRef.current?.abort()}>Stop upload</Button>}
       </div>
-      {uploading && <div className="fal-studio-upload-progress" role="progressbar"
-        aria-valuemin={0} aria-valuemax={100}
-        aria-valuenow={progress ?? undefined} aria-label="Media upload progress">
-        <div style={{width: `${progress ?? 4}%`}} />
-      </div>}
-      {!!message && <p className="fal-studio-inline-warning" role="status">{message}</p>}
+      {uploading && <ProgressBar label="Media upload progress" value={progress ?? 0} />}
+      {message && <p className="fal-studio-inline-warning" role="status">{message}</p>}
       <small className="fal-studio-uploader-fineprint">
         Maximum 512 MiB. Requires the optional <code>fal-client</code> package for CDN upload.
         Some models require specific formats or file sizes.
