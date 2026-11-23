@@ -146,6 +146,24 @@
 }
 .composer-dock .composer-menu-button:hover:not(:disabled) { background: var(--gl-neutral-button-hover); }
 .composer-dock .composer-menu-button:focus-visible { outline: 2px solid var(--gl-focus-ring); outline-offset: 2px; }
+.composer-dock .composer-disabled-control,
+.composer-dock .composer-knowledge-control {
+  display: inline-flex;
+  align-items: center;
+}
+.composer-dock .composer-disabled-control:focus-visible,
+.composer-dock .composer-knowledge-control:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--gl-radius-sm);
+}
+.composer-dock .composer-comparison-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--gl-space-2);
+}
 .composer-dock .composer-send-button.composer-send-button {
   flex: none;
   border-radius: var(--gl-radius-full);
