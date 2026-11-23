@@ -364,7 +364,7 @@ async function captureTheme(page, theme, capture, interrupted) {
     // Also dismiss onboarding if it reappears after the reload.
     await dismissDialogs(page);
     await toolbarButton(page, "Library").click();
-    const library = page.getByRole("dialog", { name: "Chat Library" });
+    const library = page.getByRole("dialog", { name: "Chat library" });
     await library.waitFor({ state: "visible" });
     const openChat = library.getByRole("button", { name: /^Open chat "Events API p99 regression"/ }).first();
     // Library rows populate asynchronously after the dialog becomes visible.
