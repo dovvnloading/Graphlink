@@ -1,7 +1,8 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ReactFlowProvider } from "@xyflow/react";
-import { NodeShell } from "./NodeShell";
+import { NodeSearchState, NodeShell } from "./NodeShell";
+import { CanvasSearchProvider, useSetCanvasSearchMatchIds, useSetCanvasSearchQuery } from "./CanvasSearchContext";
 
 function renderShell(props: Partial<React.ComponentProps<typeof NodeShell>> = {}) {
   return render(
@@ -31,18 +32,19 @@ describe("NodeShell (ADR-012 stage 12.5)", () => {
           header={<div>Widget</div>} bodyClassName="widget-node-content" staleness="upstream_changed" />
       </ReactFlowProvider>,
     );
-    expect(screen.getByRole("status")).toHaveTextContent("Upstream changed");
+    expect(screen.getByRole("status")).toHaveTextContent("Out of date");
   });
 
-  it("announces why a reply is out of date versus why a derived node changed", () => {
-    const { rerender } = renderShell({ staleness: "out_of_date" });
-    const replyBadge = screen.getByRole("status", { name: /Out of date.*earlier upstream content/ });
-    expect(replyBadge).toHaveAttribute("title", "This reply used earlier upstream content or settings.");
+  it("shows the kit status and provides both explanations without title attributes", () => {
+    const { rerender, container } = renderShell({ staleness: "out_of_date" });
+    expect(screen.getByRole("status", { name: "Out of date" })).toBeInTheDocument();
+    expect(screen.getByText(/earlier upstream content/)).toBeInTheDocument();
     rerender(<ReactFlowProvider><NodeShell kindClassName="widget-node"
       selected={false} collapsed={false} header={<div>Widget</div>}
       bodyClassName="widget-node-content" staleness="upstream_changed" /></ReactFlowProvider>);
-    const derivedBadge = screen.getByRole("status", { name: /Upstream changed.*before its upstream inputs changed/ });
-    expect(derivedBadge).toHaveAttribute("title", "This node was created before its upstream inputs changed.");
+    expect(screen.getByRole("status", { name: "Out of date" })).toBeInTheDocument();
+    expect(screen.getByText(/Upstream inputs have changed/)).toBeInTheDocument();
+    expect(container.querySelector("[title]")).toBeNull();
   });
 
   it("suppresses stale markers for Thinking nodes while keeping real derived warnings", () => {
@@ -54,7 +56,7 @@ describe("NodeShell (ADR-012 stage 12.5)", () => {
           header={<div>Widget</div>} bodyClassName="widget-node-content" staleness="upstream_changed" />
       </ReactFlowProvider>,
     );
-    expect(screen.getByRole("status")).toHaveTextContent("Upstream changed");
+    expect(screen.getByRole("status")).toHaveTextContent("Out of date");
   });
 
   it("does not show an alert on current and legacy nodes", () => {
@@ -176,4 +178,40 @@ describe("NodeShell (ADR-012 stage 12.5)", () => {
     fireEvent.doubleClick(container.querySelector(".scene-node-body")!);
     expect(onBodyDoubleClick).toHaveBeenCalledOnce();
   });
+  it("keeps the LOD title out of document text while retaining its CSS label", () => {
+    const { container } = renderShell({ kindClassName: "document-node" });
+    const overview = container.querySelector(".node-lod-title");
+    expect(overview).toHaveAttribute("data-title", "Widget");
+    expect(screen.getAllByText("Widget")).toHaveLength(1);
+    expect(container.querySelector(".node-card-kind-icon")).not.toBeNull();
+  });
+
+  it("isolates query and match subscriptions to the small search marker", () => {
+    function SearchControls() {
+      const setQuery = useSetCanvasSearchQuery();
+      const setMatches = useSetCanvasSearchMatchIds();
+      return <div>
+        <button type="button" onClick={() => setQuery("needle")}>Search</button>
+        <button type="button" onClick={() => setMatches(["n1"])}>Set matches</button>
+        <button type="button" onClick={() => setQuery("")}>Clear</button>
+      </div>;
+    }
+    const { container } = render(<CanvasSearchProvider>
+      <SearchControls />
+      <NodeSearchState nodeId="n1" />
+      <NodeSearchState nodeId="n2" />
+    </CanvasSearchProvider>);
+    const markers = container.querySelectorAll(".node-search-state");
+    expect(markers[0]).toHaveAttribute("data-search", "off");
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    expect(markers[0]).toHaveAttribute("data-search", "dim");
+    expect(markers[1]).toHaveAttribute("data-search", "dim");
+    fireEvent.click(screen.getByRole("button", { name: "Set matches" }));
+    expect(markers[0]).toHaveAttribute("data-search", "match");
+    expect(markers[1]).toHaveAttribute("data-search", "dim");
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(markers[0]).toHaveAttribute("data-search", "off");
+    expect(markers[1]).toHaveAttribute("data-search", "off");
+  });
+
 });
