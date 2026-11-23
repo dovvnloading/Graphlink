@@ -115,7 +115,7 @@ export function OnboardingDialog({ transport, store }: { transport: WsTransport;
   return (
     isOpen ? (
       <Suspense fallback={
-        <Dialog name="onboarding" title="Welcome to Graphlink" className="onboarding-dialog">
+        <Dialog name="onboarding" {...{ title: "Welcome to Graphlink" }} className="onboarding-dialog">
           <p role="status">Loading onboarding…</p>
         </Dialog>
       }>
