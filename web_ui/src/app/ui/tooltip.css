@@ -1,0 +1,21 @@
+.gl-tooltip {
+  position: fixed;
+  z-index: var(--gl-z-tooltip);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gl-space-2);
+  max-width: min(320px, calc(100vw - 16px));
+  padding: var(--gl-space-1-5) var(--gl-space-2);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  background-color: var(--gl-surface-overlay);
+  color: var(--gl-surface-text-primary);
+  box-shadow: var(--gl-shadow-popover);
+  font-size: var(--gl-text-xs);
+  line-height: var(--gl-leading-xs);
+  pointer-events: none;
+  white-space: normal;
+  animation: gl-tooltip-in var(--gl-motion-fast) var(--gl-ease-enter) both;
+}
+@keyframes gl-tooltip-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .gl-tooltip { animation: none; } }

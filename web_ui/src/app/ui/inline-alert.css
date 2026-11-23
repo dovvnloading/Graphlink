@@ -1,0 +1,16 @@
+.gl-inline-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--gl-space-2);
+  padding: var(--gl-space-3);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-md);
+  background: var(--gl-surface-inset);
+  color: var(--gl-surface-text-primary);
+  font-size: var(--gl-text-sm);
+}
+.gl-inline-alert-content { display: grid; gap: var(--gl-space-1-5); min-width: 0; }
+.gl-inline-alert-title { font-weight: var(--gl-weight-semibold); }
+.gl-inline-alert-body { color: var(--gl-surface-text-secondary); }
+.gl-inline-alert--error .gl-inline-alert-title,
+.gl-inline-alert--warning .gl-inline-alert-title { font-weight: var(--gl-weight-semibold); }

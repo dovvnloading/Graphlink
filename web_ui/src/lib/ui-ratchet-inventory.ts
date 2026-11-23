@@ -355,8 +355,6 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/chrome/ModelPricingSettings.css", rule: "R14", count: 6 },
 
-  { file: "app/chrome/NotificationBanner.tsx", rule: "R1", count: 1 },
-
   { file: "app/chrome/OllamaSettingsPage.tsx", rule: "R6", count: 1 },
 
   { file: "app/chrome/OllamaSettingsPage.tsx", rule: "R8", count: 2 },
