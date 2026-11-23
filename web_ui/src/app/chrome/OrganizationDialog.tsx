@@ -227,7 +227,7 @@ export function OrganizationDialog({ store }: { store: SceneStore }) {
   }
 
   return (
-    <Dialog name="organize" title="Organize graph" size="md" className="organization-dialog"
+    <Dialog name="organize" {...{ title: "Organize graph" }} size="md" className="organization-dialog"
       status={!preview ? "Preview the layout before you apply it." : "Applying revalidates the plan and creates one undoable change."}
       footer={<>
         <Button variant="secondary" disabled={busy} loading={busy && !preview} onClick={() => void onPreview()}>
