@@ -68,16 +68,9 @@ export function SearchOverlay({ store }: { store: SceneStore }) {
     if (!isOpen) return;
     setMatchIds(matches.map((node) => node.id));
     const normalized = query.trim();
-    if (normalized === lastQueried.current) {
-      setCurrentIndex((old) => matches.length === 0 ? -1 : Math.min(old, matches.length - 1));
-      return;
-    }
+    if (normalized === lastQueried.current) return;
     lastQueried.current = normalized;
-    if (matches.length === 0) {
-      setCurrentIndex(-1);
-      return;
-    }
-    setCurrentIndex(0);
+    if (matches.length === 0) return;
     const match = matches[0];
     flow.setNodes?.((nodes) => nodes.map((node) =>
       Boolean(node.selected) === (node.id === match.id) ? node : { ...node, selected: node.id === match.id }));
@@ -93,13 +86,12 @@ export function SearchOverlay({ store }: { store: SceneStore }) {
     setQuery("");
     lastQueried.current = "";
     setMatchIds([]);
-    setCurrentIndex(-1);
     previousFocus.current?.focus();
     previousFocus.current = null;
   }, [isOpen, setQuery, setMatchIds]);
 
   if (!isOpen) return null;
-  const current = currentIndex < 0 ? 0 : currentIndex + 1;
+  const current = matches.length === 0 ? 0 : Math.min(Math.max(0, currentIndex), matches.length - 1) + 1;
   return (
     <div className="search-overlay-shell" ref={shellRef} role="search" aria-label="Canvas find toolbar">
       <TextField label="Search the canvas" size="sm" type="search" className="search-overlay-field"
