@@ -96,69 +96,30 @@
    shared-token convention already established across sibling node views -
    applied here under this node kind's own class name for every plain
    text/select/textarea input in the Setup tab. */
-.gitlink-node-input,
-.gitlink-node-select {
-  box-sizing: border-box;
-  width: 100%;
-  font-family: inherit;
-  font-size: var(--gl-text-xs);
-  padding: var(--gl-space-2) var(--gl-space-2-5);
-  color: var(--gl-surface-text-primary);
-  background-color: var(--gl-surface-inset, var(--gl-surface-window));
-  border: 1px solid var(--gl-surface-border);
-  border-radius: var(--gl-radius-sm);
-}
-
+.gitlink-node-input { width: 100%; min-width: 0; }
+.gitlink-node-input .gl-field-control { width: 100%; }
 .gitlink-node-task-prompt {
   resize: vertical;
   line-height: 1.4;
 }
 
 .gitlink-node-input:focus,
-.gitlink-node-select:focus {
-  outline: none;
-  border-color: var(--gl-surface-text-muted);
-}
 
-.gitlink-node-inline-row button {
-  font-size: var(--gl-text-2xs);
-  font-weight: 600;
-  font-family: inherit;
-  padding: var(--gl-space-1) var(--gl-space-3);
-  color: var(--gl-surface-text-primary);
-  background-color: var(--gl-neutral-button-background);
-  border: 1px solid var(--gl-neutral-button-border);
-  border-radius: var(--gl-radius-sm);
-  cursor: pointer;
-}
 
-.gitlink-node-inline-row button:hover:enabled {
-  background-color: var(--gl-neutral-button-hover);
-}
+
+
+
 
 /* The one filled control in the Setup tab - same treatment
    .code-sandbox-node-run carries, so "the action that moves you forward"
    looks the same on every card that has one. */
-.gitlink-node-inline-row button.gitlink-node-primary-btn {
-  color: var(--gl-surface-text-bright);
-  background-color: var(--gl-neutral-button-hover);
-  border-color: var(--gl-neutral-button-border);
-}
 
-.gitlink-node-inline-row button.gitlink-node-primary-btn:hover:enabled {
-  background-color: var(--gl-surface-border-strong);
-}
 
-.gitlink-node-inline-row button.gitlink-node-primary-btn:disabled {
-  color: var(--gl-surface-text-muted);
-  background-color: transparent;
-  border-color: var(--gl-surface-border);
-}
 
-.gitlink-node-inline-row button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
+
+
+
+
 
 .gitlink-node-repo-options {
   list-style: none;
@@ -170,22 +131,9 @@
   border-radius: var(--gl-radius-sm);
 }
 
-.gitlink-node-repo-options button {
-  display: block;
-  width: 100%;
-  text-align: left;
-  font-family: inherit;
-  font-size: var(--gl-text-2xs);
-  padding: var(--gl-space-1-5) var(--gl-space-2);
-  color: var(--gl-surface-text-primary);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-}
 
-.gitlink-node-repo-options button:hover {
-  background-color: var(--gl-neutral-button-hover);
-}
+
+
 
 .gitlink-node-file-tree {
   display: flex;
@@ -299,20 +247,9 @@
   color: var(--gl-surface-text-muted);
 }
 
-.gitlink-node-review-selection-bar button {
-  padding: var(--gl-space-1) var(--gl-space-2);
-  font: inherit;
-  color: var(--gl-surface-text-primary);
-  background: var(--gl-neutral-button-background);
-  border: 1px solid var(--gl-neutral-button-border);
-  border-radius: var(--gl-radius-sm);
-  cursor: pointer;
-}
 
-.gitlink-node-review-selection-bar button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
+
+
 
 .gitlink-node-review-selection-bar button:focus-visible,
 .gitlink-node-review-file input:focus-visible {
@@ -407,26 +344,11 @@
   justify-content: flex-end;
 }
 
-.gitlink-node-apply-btn {
-  font-size: var(--gl-text-2xs);
-  font-weight: 600;
-  font-family: inherit;
-  padding: var(--gl-space-1) var(--gl-space-3);
-  color: var(--gl-surface-window);
-  background-color: var(--gl-surface-text-muted);
-  border: none;
-  border-radius: var(--gl-radius-sm);
-  cursor: pointer;
-}
 
-.gitlink-node-apply-btn:hover:enabled {
-  filter: brightness(1.1);
-}
 
-.gitlink-node-apply-btn:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
+
+
+
 
 .gitlink-node-apply-dialog {
   max-width: min(460px, calc(100vw - 64px));
@@ -449,40 +371,33 @@
   margin-top: var(--gl-space-1);
 }
 
-.gitlink-node-apply-dialog-actions button {
-  font-size: var(--gl-text-2xs);
-  font-weight: 600;
-  font-family: inherit;
-  padding: var(--gl-space-1) var(--gl-space-3);
-  border-radius: var(--gl-radius-sm);
-  cursor: pointer;
-}
 
-.gitlink-node-apply-dialog-actions button:last-child {
-  color: var(--gl-surface-window);
-  background-color: var(--gl-surface-text-muted);
-  border: none;
-}
 
-.gitlink-node-apply-dialog-actions button:first-child {
-  color: var(--gl-surface-text-primary);
-  background-color: var(--gl-neutral-button-background);
-  border: 1px solid var(--gl-neutral-button-border);
-}
+
+
+
 
 /* R8a (UI/UX issue list finding #23): neither of these two buttons had any
    hover at all. Same brightening as .code-exec-approval-approve-btn's
    identical recipe (both wrap AI-generated-code apply/execute prompts). */
-.gitlink-node-apply-dialog-actions button:last-child:hover:enabled {
-  filter: brightness(1.1);
-}
 
-.gitlink-node-apply-dialog-actions button:first-child:hover:enabled {
-  background-color: var(--gl-neutral-button-hover);
-}
 
-.gitlink-node-apply-dialog-actions button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
 
+
+
+
+
+/* Kit Checkbox label text is not duplicated alongside a review-file button. */
+.gitlink-node-review-file .gl-checkbox-label { 
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.gitlink-node-review-file .gl-checkbox { flex-shrink: 0; }
+.gitlink-node-review-file > button { min-width: 0; }
+
+/* Let the kit own approval button colors, hover and disabled states. */
+.gitlink-node-apply-dialog-actions .gl-button { min-width: var(--gl-control-h-sm); }

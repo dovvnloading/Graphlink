@@ -28,23 +28,7 @@
   gap: var(--gl-space-1-5);
 }
 
-.web-research-node-query-input {
-  box-sizing: border-box;
-  width: 100%;
-  font-family: inherit;
-  font-size: var(--gl-text-xs);
-  padding: var(--gl-space-2) var(--gl-space-2-5);
-  color: var(--gl-surface-text-primary);
-  background-color: var(--gl-surface-inset, var(--gl-surface-window));
-  border: 1px solid var(--gl-surface-border);
-  border-radius: var(--gl-radius-sm);
-}
-
-.web-research-node-query-input:focus {
-  outline: none;
-  border-color: var(--gl-surface-text-muted);
-}
-
+.web-research-node-query-input { width: 100%; min-width: 0; }
 .web-research-node-query-actions {
   display: flex;
   justify-content: flex-end;
@@ -62,7 +46,7 @@
   color: var(--gl-surface-text-muted);
   cursor: pointer;
 }
-.web-research-node-retain input { cursor: pointer; }
+
 .web-research-node-retain input:disabled,
 .web-research-node-retain:has(input:disabled) {
   cursor: default;
@@ -74,42 +58,20 @@
    establish across sibling node views) rather than duplicating the two
    declarations under a new name. */
 .web-research-node-run-btn,
-.web-research-node-cancel-btn {
-  font-size: var(--gl-text-2xs);
-  font-weight: 600;
-  font-family: inherit;
-  padding: var(--gl-space-1) var(--gl-space-3);
-  border-radius: var(--gl-radius-sm);
-  cursor: pointer;
-}
 
-.web-research-node-run-btn {
-  color: var(--gl-surface-window);
-  background-color: var(--gl-surface-text-muted);
-  border: none;
-}
 
-.web-research-node-run-btn:hover:enabled {
-  filter: brightness(1.1);
-}
+
+
+
 
 .web-research-node-run-btn:disabled,
-.web-research-node-cancel-btn:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
 
-.web-research-node-cancel-btn {
-  color: var(--gl-surface-text-primary);
-  background-color: var(--gl-neutral-button-background);
-  border: 1px solid var(--gl-neutral-button-border);
-}
+
+
 
 /* R8a (UI/UX issue list finding #23): see .conversation-node-cancel-btn's
    identical comment above - same shape, same gap, same fix. */
-.web-research-node-cancel-btn:hover:enabled {
-  background-color: var(--gl-neutral-button-hover);
-}
+
 
 /* Stage stepper - pending/active/done, one pill per STAGE_STEPS entry. */
 .web-research-node-stepper {

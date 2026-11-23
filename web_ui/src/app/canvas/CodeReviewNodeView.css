@@ -86,60 +86,10 @@
   gap: var(--gl-space-1-5);
 }
 
-.code-review-node-input {
-  box-sizing: border-box;
-  width: 100%;
-  font-family: inherit;
-  font-size: var(--gl-text-xs);
-  padding: var(--gl-space-2) var(--gl-space-2-5);
-  color: var(--gl-surface-text-primary);
-  background-color: var(--gl-surface-inset, var(--gl-surface-window));
-  border: 1px solid var(--gl-surface-border);
-  border-radius: var(--gl-radius-sm);
-}
-
-.code-review-node-input:focus {
-  outline: none;
-  border-color: var(--gl-surface-text-muted);
-}
-
-.code-review-node-inline-row button {
-  font-size: var(--gl-text-2xs);
-  font-weight: 600;
-  font-family: inherit;
-  padding: var(--gl-space-1) var(--gl-space-3);
-  color: var(--gl-surface-text-primary);
-  background-color: var(--gl-neutral-button-background);
-  border: 1px solid var(--gl-neutral-button-border);
-  border-radius: var(--gl-radius-sm);
-  cursor: pointer;
-}
-
-.code-review-node-inline-row button:hover:enabled {
-  background-color: var(--gl-neutral-button-hover);
-}
-
-.code-review-node-inline-row button.code-review-node-primary-btn {
-  color: var(--gl-surface-text-bright);
-  background-color: var(--gl-neutral-button-hover);
-  border-color: var(--gl-neutral-button-border);
-}
-
-.code-review-node-inline-row button.code-review-node-primary-btn:hover:enabled {
-  background-color: var(--gl-surface-border-strong);
-}
-
-.code-review-node-inline-row button.code-review-node-primary-btn:disabled {
-  color: var(--gl-surface-text-muted);
-  background-color: transparent;
-  border-color: var(--gl-surface-border);
-}
-
-.code-review-node-inline-row button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
+.code-review-node-input { width: 100%; min-width: 0; }
+.code-review-node-file-path { display: inline-flex; gap: var(--gl-space-1); align-items: center; }
+.code-review-node-walkthrough-paths { display: flex; flex-wrap: wrap; gap: var(--gl-space-1-5); }
+.code-review-node-finding-actions { gap: var(--gl-space-0-5); }
 .code-review-node-identity {
   display: flex;
   flex-direction: column;
@@ -478,17 +428,7 @@
   gap: var(--gl-space-2);
 }
 
-.code-review-node-comment-actions button {
-  padding: var(--gl-space-2) var(--gl-space-3);
-  border: 1px solid var(--gl-neutral-button-border);
-  border-radius: var(--gl-radius-sm);
-  color: var(--gl-surface-text-primary);
-  background: var(--gl-neutral-button-background);
-  cursor: pointer;
-}
 
-.code-review-node-comment-actions button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
+
+
 

@@ -98,25 +98,11 @@
   gap: var(--gl-space-1-5);
 }
 
-.artifact-node-proposal button {
-  font-size: var(--gl-text-2xs);
-  font-family: inherit;
-  color: var(--gl-surface-text-primary);
-  background: var(--gl-neutral-button-background);
-  border: 1px solid var(--gl-neutral-button-border);
-  border-radius: var(--gl-radius-sm);
-  padding: var(--gl-space-1) var(--gl-space-2);
-  cursor: pointer;
-}
 
-.artifact-node-proposal button:hover:enabled {
-  background: var(--gl-neutral-button-hover);
-}
 
-.artifact-node-proposal button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
+
+
+
 
 .artifact-node-toolbar {
   display: flex;
@@ -132,26 +118,11 @@
   font-variant-numeric: tabular-nums;
 }
 
-.artifact-node-toolbar button {
-  padding: var(--gl-space-1) var(--gl-space-2);
-  font-size: var(--gl-text-2xs);
-  font-weight: 600;
-  font-family: inherit;
-  color: var(--gl-surface-text-primary);
-  background: var(--gl-neutral-button-background);
-  border: 1px solid var(--gl-neutral-button-border);
-  border-radius: var(--gl-radius-sm);
-  cursor: pointer;
-}
 
-.artifact-node-toolbar button:hover:enabled {
-  background: var(--gl-neutral-button-hover);
-}
 
-.artifact-node-toolbar button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
+
+
+
 
 .artifact-node-editor {
   box-sizing: border-box;
@@ -276,40 +247,18 @@
    node views) rather than duplicating the two declarations under a new
    name. */
 .artifact-node-submit-btn,
-.artifact-node-cancel-btn {
-  font-size: var(--gl-text-2xs);
-  font-weight: 600;
-  font-family: inherit;
-  padding: var(--gl-space-1) var(--gl-space-3);
-  border-radius: var(--gl-radius-sm);
-  cursor: pointer;
-}
 
-.artifact-node-submit-btn {
-  color: var(--gl-surface-window);
-  background-color: var(--gl-surface-text-muted);
-  border: none;
-}
 
-.artifact-node-submit-btn:hover:enabled {
-  filter: brightness(1.1);
-}
+
+
+
 
 .artifact-node-submit-btn:disabled,
-.artifact-node-cancel-btn:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
 
-.artifact-node-cancel-btn {
-  color: var(--gl-surface-text-primary);
-  background-color: var(--gl-neutral-button-background);
-  border: 1px solid var(--gl-neutral-button-border);
-}
+
+
 
 /* R8a (UI/UX issue list finding #23): see .conversation-node-cancel-btn's
    identical comment above - same shape, same gap, same fix. */
-.artifact-node-cancel-btn:hover:enabled {
-  background-color: var(--gl-neutral-button-hover);
-}
+
 
