@@ -585,6 +585,9 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
   const activityErrorCount = data.harnessActivity.filter((row) => row.outcome === "error").length;
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
   const [settingsPosition, setSettingsPosition] = useState<MenuPosition | null>(null);
+  // A nested Select's exit updates overlays; keep the close callback stable
+  // so the settings effect does not restore focus to its opener mid-edit.
+  const closeSettings = useCallback(() => setSettingsPosition(null), []);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
   const shellApproval = data.harnessApprovalToolName === "shell.exec";
   // Every human consent prompt carries a unique ID, not just Python, Web
@@ -761,7 +764,7 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
             onGetIsolationEngine={data.onGetIsolationEngine}
             onGetHooks={data.onGetHooks}
             onSetHooks={data.onSetHooks}
-            onClose={() => setSettingsPosition(null)}
+            onClose={closeSettings}
             triggerRef={settingsTriggerRef}
           />
         )}
