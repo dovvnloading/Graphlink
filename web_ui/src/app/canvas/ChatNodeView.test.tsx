@@ -531,7 +531,7 @@ describe("ChatNodeView", () => {
 
   it("hides the docked-count badge when dockedChildren is empty (the default)", () => {
     renderChatNode();
-    expect(screen.queryByTitle("Docked items")).toBeNull();
+    expect(screen.queryByLabelText("Docked items")).toBeNull();
   });
 
   it("shows the docked-count badge with the correct count when dockedChildren has entries", () => {
@@ -541,7 +541,7 @@ describe("ChatNodeView", () => {
         { id: "t2", label: "Thinking" },
       ],
     });
-    expect(screen.getByTitle("Docked items")).toHaveTextContent("2");
+    expect(screen.getByLabelText("Docked items")).toHaveTextContent("2");
   });
 
   it("omits the 'Reveal Docked Items' menu section entirely when dockedChildren is empty", () => {
@@ -2054,7 +2054,7 @@ describe("ChatNodeView re-run from here", () => {
 
     const deleteItem = screen.getByRole("menuitem", { name: "Delete node" });
     expect(labels[labels.length - 1]).toBe("Delete node");
-    expect(deleteItem).toHaveClass("gl-menu-item--destructive");
+    expect(deleteItem).toHaveAttribute("data-destructive", "true");
     const separator = menu.querySelector('[role="separator"]');
     expect(separator).not.toBeNull();
     expect(deleteItem.closest('[aria-label="Destructive actions"]')).not.toBeNull();
