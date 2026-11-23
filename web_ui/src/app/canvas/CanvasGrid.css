@@ -1,0 +1,4 @@
+/* Only the default grid ink is adjusted; custom colors and opacity stay user-controlled. */
+.react-flow {
+  --gl-grid-default-ink: var(--gl-surface-handle-hover);
+}
