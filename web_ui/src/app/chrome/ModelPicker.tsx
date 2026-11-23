@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 import { Popover, useOverlays } from "../overlays/overlays";
-import { Button } from "../ui/Button";
 import { Icon } from "../ui/icons/Icon";
 import { MenuButton, MenuGroup, MenuItem, MenuSeparator } from "../ui/Menu";
 import type { ComposerStore, PickerModel } from "./composerStore";
@@ -198,6 +197,7 @@ export function ComposerModelMenu({ store, disabled = false }: { store: Composer
   } | null>(null);
   const [query, setQuery] = useState("");
   const input = useRef<HTMLInputElement>(null);
+  const [openEpoch, setOpenEpoch] = useState(0);
   useEffect(() => {
     let current = true;
     void store.loadPickerModels().then((models) => {
@@ -211,14 +211,23 @@ export function ComposerModelMenu({ store, disabled = false }: { store: Composer
     return () => { current = false; };
   }, [store, retry]);
 
-  // The kit menu's typeahead is intended for menuitems. When a large catalog
-  // mounts a real search field, don't let its document-level typeahead
-  // swallow editable keystrokes; ArrowDown still moves into the first match.
+  // Focus search after MenuSurface's layout effect initially focuses its first item.
+  useEffect(() => { if (openEpoch > 0) input.current?.focus(); }, [openEpoch, result]);
+
+  // Menu's capture-phase typeahead precedes input handlers. Search owns its
+  // printable edits while focused; paste and screen-reader input still use
+  // the ordinary onChange path below.
   useEffect(() => {
     const handleInput = (event: globalThis.KeyboardEvent) => {
-      if (document.activeElement !== input.current) return;
-      if (event.key.length === 1 || event.key === "Backspace" || event.key === "Delete") {
+      if (document.activeElement !== input.current || event.ctrlKey || event.altKey || event.metaKey) return;
+      if (event.key.length === 1) {
+        event.preventDefault();
         event.stopImmediatePropagation();
+        setQuery((value) => value + event.key);
+      } else if (event.key === "Backspace") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        setQuery((value) => value.slice(0, -1));
       }
     };
     document.addEventListener("keydown", handleInput, true);
@@ -240,7 +249,7 @@ export function ComposerModelMenu({ store, disabled = false }: { store: Composer
       <MenuButton label={modelLabel} aria-label={`${composer.route.provider} model: ${modelLabel}`}
         className="composer-menu-button" data-overlay-trigger="model"
         disabled={disabled} menuLabel="Choose a model"
-        onClick={() => setQuery("")}>
+        onClick={() => { setQuery(""); setOpenEpoch((n) => n + 1); }}>
         {models.length > 8 && (
           <input ref={input} autoFocus type="search" className="model-picker-search"
             placeholder="Search local and cloud models…" aria-label="Search models"
