@@ -186,13 +186,13 @@ function highlightedSnippet(text: string, term: string): ReactNode {
 }
 
 function KnowledgeResultCard({
-  result, query, onOpenCitation, onOpenDocument,
+  result, query, onOpenCitation,
 }: {
   result: KnowledgeSearchResult;
   query: string;
   onOpenCitation?: (source: KnowledgeCitationSource) => void;
-  onOpenDocument: () => void;
 }) {
+  const [showPassage, setShowPassage] = useState(false);
   const sourceLabel = knowledgeSourceLabel(result.sourceFile ?? result.sourceUri, result.documentTitle);
   const canOpenCitation = Boolean(onOpenCitation && /^kb:[0-9a-f]{20}$/.test(result.citationId ?? "") &&
     Number.isSafeInteger(result.documentId) && Number.isSafeInteger(result.chunkId) &&
@@ -206,7 +206,7 @@ function KnowledgeResultCard({
         section: result.section ?? "Unsectioned", offsetStart: result.offsetStart,
         offsetEnd: result.offsetEnd, excerpt: result.text, cited: true,
       });
-    } else onOpenDocument();
+    }
   }
   return (
     <li className="knowledge-result-item">
@@ -216,8 +216,19 @@ function KnowledgeResultCard({
         {sourceLabel !== result.documentTitle && <span className="knowledge-result-source">{sourceLabel}</span>}
       </div>
       <p className="knowledge-result-excerpt">{highlightedSnippet(result.text, query)}</p>
+      <Button size="sm" variant="ghost" aria-expanded={showPassage}
+        onClick={() => setShowPassage((visible) => !visible)}>
+        {showPassage ? "Hide cited passage" : "Show cited passage"}
+      </Button>
+      {showPassage && (
+        <div role="region" aria-label={"Cited passage for " + result.documentTitle}>
+          <p>{result.text}</p>
+          <p>Offset {result.offsetStart}–{result.offsetEnd}</p>
+        </div>
+      )}
       <div className="knowledge-result-footer">
-        <Button size="sm" iconStart="document-text" onClick={open}>Open in Document View</Button>
+        {canOpenCitation &&
+          <Button size="sm" iconStart="document-text" onClick={open}>Open in Document View</Button>}
         {isHttpUrl(result.sourceUri) && (
           <a className="knowledge-result-open-link" href={result.sourceUri} target="_blank" rel="noreferrer">
             Open source
@@ -495,9 +506,14 @@ export function KnowledgeSearchDialog({
   // elsewhere for the same reason (e.g. WsTransport's own per-request id
   // correlation).
   const latestRequestId = useRef(0);
+  const lastSentTerm = useRef<string | null>(null);
 
   const runSearch = useCallback((term: string) => {
     const trimmed = term.trim();
+    // Enter and the live debounce may both submit the same query; never start
+    // a duplicate, but allow a different typed query to supersede an in-flight one.
+    if (trimmed && lastSentTerm.current === trimmed) return;
+    lastSentTerm.current = trimmed || null;
     const requestId = ++latestRequestId.current;
     if (!trimmed) {
       setResults(null);
@@ -565,6 +581,7 @@ export function KnowledgeSearchDialog({
             value={query}
             onValueChange={(value) => {
               ++latestRequestId.current;
+              lastSentTerm.current = null;
               setQuery(value);
               setResults(null);
               setSearching(false);
@@ -590,8 +607,7 @@ export function KnowledgeSearchDialog({
                     onOpenCitation={onOpenDocumentView ? (source) => {
                       onOpenDocumentView("", source.documentTitle, source);
                       overlays.close();
-                    } : undefined}
-                    onOpenDocument={() => { void documentIntent(result.documentId, "openDocument"); }} />
+                    } : undefined} />
                 ))}
               </ul>
             )}
