@@ -102,7 +102,7 @@ export function HarnessLaunchDialog({ transport, store }: { transport: WsTranspo
   }
 
   return (
-    <Dialog name="harness-launch" title="Agent" size="md" className="builder-launch-dialog"
+    <Dialog name="harness-launch" {...{ title: "Agent" }} size="md" className="builder-launch-dialog"
       status={!task.trim() ? "Describe a task to start." : "Actions that change your machine require approval."}
       footer={<Button variant="primary" disabled={starting || !task.trim()} loading={starting}
         onClick={startAgent}>Start agent</Button>}>
@@ -116,7 +116,7 @@ export function HarnessLaunchDialog({ transport, store }: { transport: WsTranspo
           }
         }}
         description="The agent reads and writes workspace files, runs shell and Python, and searches your knowledge. It asks before changing your machine." />
-      <FieldGroup title="Workspace" description="Choose a folder to grant access, or use a private scratch folder.">
+      <FieldGroup {...{ title: "Workspace" }} description="Choose a folder to grant access, or use a private scratch folder.">
         <div className="harness-launch-workspace">
           <span className="harness-launch-workspace-dir">{workspace || "Private scratch folder"}</span>
           <Button size="sm" onClick={pickWorkspace} disabled={picking || starting} loading={picking}>
@@ -127,15 +127,15 @@ export function HarnessLaunchDialog({ transport, store }: { transport: WsTranspo
           </Button>}
         </div>
       </FieldGroup>
-      <FieldGroup title="First task execution">
+      <FieldGroup {...{ title: "First task execution" }}>
         <HarnessExecutionProfileSelect store={store} value={executionProfile}
           onChange={setExecutionProfile} disabled={starting} />
       </FieldGroup>
-      <FieldGroup title="Budget" description="Hard limit — the run stops when it is reached.">
+      <FieldGroup {...{ title: "Budget" }} description="Hard limit — the run stops when it is reached.">
         <NumberField label="Max turns" min={MIN_TURNS} max={MAX_TURNS}
           value={maxTurns} onValueChange={(value) => setMaxTurns(value === "" ? DEFAULT_MAX_TURNS : value)} />
       </FieldGroup>
-      {error && <InlineAlert variant="error" title="Couldn't start the agent" body={error} />}
+      {error && <InlineAlert variant="error" {...{ title: "Couldn't start the agent" }} body={error} />}
     </Dialog>
   );
 }
