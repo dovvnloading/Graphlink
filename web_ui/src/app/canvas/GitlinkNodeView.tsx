@@ -520,7 +520,7 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                   ))}
                 </ul>
                 {filteredPaths.length > 4 && (
-                  <Disclosure {...{ title: `Show ${filteredPaths.length - 4} more files` }}
+                  <Disclosure title={`Show ${filteredPaths.length - 4} more files`}
                     className="gitlink-node-extra-files">
                     <ul className="gitlink-node-file-list">
                       {filteredPaths.slice(4).map((path) => (

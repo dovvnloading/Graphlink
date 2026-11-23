@@ -895,7 +895,7 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
       {data.harnessActivity.length > 0 && (
         <Disclosure className="chat-node-tool-invocations plan-node-activity"
           open={activityOpen} onOpenChange={setActivityOpen}
-          {...{ title: `${data.harnessActivity.length} activity ${data.harnessActivity.length === 1 ? "entry" : "entries"}${activityErrorCount ? ` · ${activityErrorCount} ${activityErrorCount === 1 ? "error" : "errors"}` : ""}` }}>
+          title={`${data.harnessActivity.length} activity ${data.harnessActivity.length === 1 ? "entry" : "entries"}${activityErrorCount ? ` · ${activityErrorCount} ${activityErrorCount === 1 ? "error" : "errors"}` : ""}`}>
           <div className="plan-node-activity-list nowheel nodrag" ref={activityListRef}>
             {data.harnessActivity.map((row, index) => (
               <div key={index} className={`chat-node-tool-invocation${row.outcome === "error" ? " error" : ""}`}>
@@ -916,7 +916,7 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
       {data.harnessAwaitingApproval && (
         <div className="plan-node-approval" role="group" aria-label="Agent tool approval">
           <InlineAlert variant="warning"
-            {...{ title: `The agent wants to run: ${data.harnessApprovalToolName}` }}
+            title={`The agent wants to run: ${data.harnessApprovalToolName}`}
             body={<>
               {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable summary must be keyboard-reachable */}
               <pre className="plan-node-approval-summary nowheel nodrag" tabIndex={0}

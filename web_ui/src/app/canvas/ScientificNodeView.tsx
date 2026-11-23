@@ -62,7 +62,7 @@ function Plot({ plot, scatter }: { plot: SciencePlot; scatter: boolean }) {
         <circle key={i} cx={x.at(v)} cy={y.at(plot.y[i])} r="2.4" fill="currentColor"><title>{v}, {plot.y[i]}</title></circle>)}
     </svg>
     <span>{plot.xLabel} · {formatScienceRange(x.low, x.high)}</span>
-    <ScientificDataTable {...{ title: "Exact plot coordinates" }} columns={["Point", plot.xLabel, plot.yLabel]}
+    <ScientificDataTable title="Exact plot coordinates" columns={["Point", plot.xLabel, plot.yLabel]}
       rows={() => plot.x.map((value, index) => [String(index + 1), exactScienceNumber(value), exactScienceNumber(plot.y[index])])} />
   </figure>;
 }
@@ -104,7 +104,7 @@ function ResultDisclosure({ label, children, className = "", onClose, defaultOpe
   label: string; children: ReactNode; className?: string; onClose?: () => void; defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  return <Disclosure {...{ title: label }} className={`science-result-disclosure ${className}`.trim()}
+  return <Disclosure title={label} className={`science-result-disclosure ${className}`.trim()}
     open={open} onOpenChange={(next) => { if (!next) onClose?.(); setOpen(next); }}>
     {open && children}
   </Disclosure>;
@@ -179,7 +179,7 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
           <h5>{name} · {formatMeasurement(measured)}</h5>
           {measured.interval && <small>{Math.round((measured.coverageProbability ?? 0.95) * 100)}% {measured.method === "monte_carlo" ? "Monte Carlo quantile coverage interval" : "coverage interval"} [{numberCell(measured.interval[0])}, {numberCell(measured.interval[1])}]{measured.method === "monte_carlo" ? " · Gaussian input model" : ` · coverage factor k = ${numberCell(measured.coverageFactor)}`}</small>}
           {measured.budgetNote && <small>{measured.budgetNote}</small>}
-          <Disclosure {...{ title: "Stored measurement values" }}><dl className="science-result-values">
+          <Disclosure title="Stored measurement values"><dl className="science-result-values">
             <div><dt>Estimate</dt><dd>{exactScienceNumber(measured.value)} {measured.unit}</dd></div>
             <div><dt>Standard uncertainty</dt><dd>{exactScienceNumber(measured.standardUncertainty)} {measured.unit}</dd></div>
             {measured.interval && <div><dt>Coverage interval</dt><dd>{measured.interval.map(exactScienceNumber).join(" to ")} {measured.unit}</dd></div>}
@@ -225,10 +225,10 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
           </div>}
         </div>
       </ResultDisclosure>}
-      {provenance.inputUnits != null && <Disclosure className="science-result-disclosure" {...{ title: "Units used" }}>
+      {provenance.inputUnits != null && <Disclosure className="science-result-disclosure" title="Units used">
       <pre>{JSON.stringify(provenance.inputUnits, null, 2)}</pre>
     </Disclosure>}
-      <Disclosure className="science-result-disclosure" {...{ title: "Inputs and provenance" }}>
+      <Disclosure className="science-result-disclosure" title="Inputs and provenance">
       <pre>{JSON.stringify({ inputs: result.inputs, provenance }, null, 2)}</pre>
     </Disclosure>
       <ResultDisclosure label="Actions & exports">
@@ -298,7 +298,7 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
         <Button size="sm" type="button" disabled={!chart.stale} onClick={() => onRefresh(chart)}>Refresh chart</Button>
       </div>)}
     </section>}
-        {error && <InlineAlert variant="error" {...{ title: "Scientific result action failed" }} body={error} />}
+        {error && <InlineAlert variant="error" title="Scientific result action failed" body={error} />}
       </ResultDisclosure>
     </div>
   </section>;
@@ -515,7 +515,7 @@ function TableEditor({ state, nodeId, pluginId, store, defaultOpen = false }: {
             <td>{col.unit || "—"}</td><td>{col.missingCount}</td>
           </tr>)}</tbody></table>
         </div>}
-        <Disclosure {...{ title: "Advanced column overrides" }}>
+        <Disclosure title="Advanced column overrides">
           <label>Column type overrides (JSON)
             <textarea rows={2} aria-label="Column type overrides" value={overrides} onChange={(e) => setOverrides(e.target.value)} />
           </label>
@@ -555,7 +555,7 @@ function TableEditor({ state, nodeId, pluginId, store, defaultOpen = false }: {
         } catch (e) { setError(e instanceof Error ? e.message : "CSV export failed."); }
         finally { setExporting(false); }
       }}>Export full table CSV</Button>
-      <Disclosure {...{ title: "Import receipt and parsing options" }}>
+      <Disclosure title="Import receipt and parsing options">
         <pre>{JSON.stringify(table.provenance, null, 2)}</pre>
       </Disclosure>
     </div></ResultDisclosure>}
@@ -684,7 +684,7 @@ function OperationEditor({ onDraftChange, session, op, result, configured, revis
   return <form ref={formRef} className="science-operation-editor" onSubmit={submit}>
     <div className="science-operation-context">
       {op.description && <p className="science-operation-preview">{op.description}</p>}
-      {(op.description || op.methods || op.citations?.length) && <Disclosure className="science-methods" {...{ title: "About & methods" }}>
+      {(op.description || op.methods || op.citations?.length) && <Disclosure className="science-methods" title="About & methods">
         <div className="science-methods-content">
           {op.description && <p>{op.description}</p>}
           {op.methods && <p>{op.methods}</p>}
@@ -804,7 +804,7 @@ function OperationEditor({ onDraftChange, session, op, result, configured, revis
         : "Changes not saved to Graph Runner."}</small>}
     </fieldset>
     {submission?.phase === "checking" ? <p role="status">Checking run status…</p>
-      : activeAttempt ? <AttemptProgress attempt={activeAttempt} {...{ title: attemptTitle ?? activeAttempt.operationId }} />
+      : activeAttempt ? <AttemptProgress attempt={activeAttempt} title={attemptTitle ?? activeAttempt.operationId} />
       : busy && <p role="status">{running || submission?.phase === "submitting" ? "Running calculation…" : configuring ? "Saving Graph Runner configuration…" : "Loading selected table column…"}</p>}
     {/* Outside the disabled fieldset; only real calculations can be cancelled, not table-column imports. */}
     {attemptProtocol && (running || activeAttempt || (submission && submission.phase !== "finished")) && <div className="science-actions">
@@ -870,7 +870,7 @@ function Workbench({ requestedOperation, session, state, options, run, configure
     {state.latest && <Results key={revision} result={state.latest} exportJson={exportJson} exportCsv={exportCsv} exportMethods={exportMethods}
       charts={charts} onChart={onChart} onRefresh={onRefresh} onDiscuss={onDiscuss}
       freshness={freshness} scatter={latestOperation?.plotMark === "scatter"}
-      {...{ title: latestOperation?.title ?? state.latest.operationId }} headlineKey={latestOperation?.headline} />}
+      title={latestOperation?.title ?? state.latest.operationId} headlineKey={latestOperation?.headline} />}
   </>;
 }
 

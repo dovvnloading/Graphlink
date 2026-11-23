@@ -995,7 +995,7 @@ export const ChatNodeView = memo(function ChatNodeView({
       )}
       {visibleToolInvocations.length > 0 && (
         <Disclosure className="chat-node-tool-invocations"
-          {...{ title: visibleToolInvocations.length === 1 ? "1 tool call" : `${visibleToolInvocations.length} tool calls` }}>
+          title={visibleToolInvocations.length === 1 ? "1 tool call" : `${visibleToolInvocations.length} tool calls`}>
           {visibleToolInvocations.map((invocation, index) => (
             <div key={invocation.id || index}
               className={`chat-node-tool-invocation${invocation.isError ? " error" : ""}`}>
