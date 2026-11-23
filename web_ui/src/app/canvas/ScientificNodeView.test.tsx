@@ -184,7 +184,7 @@ describe("scientific workbench card", () => {
     expect(latest.querySelector(".science-result-summary")).toHaveClass("science-result-summary--clamped");
     expandResult("Read full summary");
     const fullSummary = within(latest).getByRole("region", { name: "Read full summary" });
-    expect(within(fullSummary).getByText(long)).toBeVisible();
+    expect(within(fullSummary).getByText(long.trim())).toBeVisible();
     expect(within(latest).queryByRole("table")).not.toBeInTheDocument();
   });
 

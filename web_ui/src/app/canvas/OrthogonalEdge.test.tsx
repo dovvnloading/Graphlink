@@ -44,6 +44,16 @@ describe("OrthogonalEdge", () => {
     expect(path.getAttribute("d")).toBe("M 0,0 L 0,200 L 40,200 L 40,400");
   });
 
+  it("matches live edge weights and selected accent in export capture", () => {
+    const resting = renderEdge();
+    expect(resting.style.strokeWidth).toBe("1.5");
+    expect(resting.style.stroke).toBe("var(--gl-connection-line)");
+
+    const selected = renderEdge({ selected: true });
+    expect(selected.style.strokeWidth).toBe("2");
+    expect(selected.style.stroke).toBe("var(--gl-accent)");
+  });
+
   it("forwards the style prop, so it composes with faded connections' opacity override", () => {
     const path = renderEdge({ style: { opacity: 0.08 } });
     expect(path.style.opacity).toBe("0.08");

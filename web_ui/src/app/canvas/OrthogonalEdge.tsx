@@ -25,8 +25,8 @@ function ExportEdge({ orthogonal, ...props }: EdgeProps & { orthogonal: boolean 
       style={{
         // html-to-image deep-clones SVG subtrees without inlining classes.
         fill: "none",
-        stroke: "var(--gl-connection-line)",
-        strokeWidth: 1.5,
+        stroke: props.selected ? "var(--gl-accent)" : "var(--gl-connection-line)",
+        strokeWidth: props.selected ? 2 : 1.5,
         strokeDasharray: connectionDashes(data?.role as ConnectionRole, 1).join(" ") || undefined,
         strokeLinecap: "round",
         strokeLinejoin: "round",

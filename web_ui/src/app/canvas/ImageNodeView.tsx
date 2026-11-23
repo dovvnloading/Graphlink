@@ -1,9 +1,12 @@
+import "./ImageNodeView.css";
 import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useState } from "react";
 import { withAuthToken } from "../../lib/auth/token";
 import { downloadBlob } from "./downloadTextFile";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMenu } from "./NodeMenu";
+import { Button } from "../ui/Button";
+import { MenuItem, MenuSeparator } from "../ui/Menu";
 import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
@@ -145,62 +148,20 @@ function ImageNodeMenu({
 
   return (
     <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
-      {/* Legacy order: Copy Image, Export Image, separator, Hide Other
-          Branches, Regenerate Image, Delete Image. */}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          void handleCopyImage(imageAssetId);
-          onClose();
-        }}
-      >
-        Copy Image
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          void handleExportImage(imageAssetId, filename);
-          onClose();
-        }}
-      >
-        Export Image
-      </button>
-      <div className="chat-node-menu-separator" role="separator" />
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onToggleBranchFocus();
-          onClose();
-        }}
-      >
-        {isBranchFocusActive ? "Show All Branches" : "Hide Other Branches"}
-      </button>
-      {prompt.trim() && (
-        <button
-          type="button"
-          role="menuitem"
-          onClick={() => {
-            onRegenerate();
-            onClose();
-          }}
-        >
-          Regenerate Image
-        </button>
-      )}
-      <button
-        type="button"
-        role="menuitem"
-        className="chat-node-menu-danger"
-        onClick={() => {
-          onDelete();
-          onClose();
-        }}
-      >
-        Delete Image
-      </button>
+      <MenuItem icon="copy" label="Copy Image" onSelect={() => {
+        void handleCopyImage(imageAssetId);
+        onClose();
+      }} />
+      <MenuItem icon="download" label="Export Image" onSelect={() => {
+        void handleExportImage(imageAssetId, filename);
+        onClose();
+      }} />
+      <MenuSeparator />
+      <MenuItem icon="eye" label={isBranchFocusActive ? "Show All Branches" : "Hide Other Branches"}
+        onSelect={() => { onToggleBranchFocus(); onClose(); }} />
+      {prompt.trim() && <MenuItem icon="rerun" label="Regenerate Image"
+        onSelect={() => { onRegenerate(); onClose(); }} />}
+      <MenuItem label="Delete Image" destructive onSelect={() => { onDelete(); onClose(); }} />
     </NodeMenu>
   );
 }
@@ -245,9 +206,8 @@ function ImageNodeViewImpl({ id, data, selected }: NodeProps<ImageFlowNode>) {
       {imageFailed ? (
         <div className="image-node-placeholder">
           <span>Image unavailable</span>
-          <button type="button" onClick={() => setFailedAssetId(null)}>
-            Retry Image
-          </button>
+          <Button variant="secondary" size="sm" iconStart="refresh"
+            onClick={() => setFailedAssetId(null)}>Retry Image</Button>
         </div>
       ) : (
         <img
