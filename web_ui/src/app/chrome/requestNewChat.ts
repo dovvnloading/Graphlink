@@ -4,21 +4,22 @@ import type { ConfirmOptions } from "../ui/ConfirmDialog";
 export type NewChatConfirm = (options: ConfirmOptions) => Promise<boolean>;
 
 /**
- * The global shortcut and command palette are synchronous callers. They share
- * the app-level confirmation provided by the eagerly mounted quick switcher.
- * An absent provider fails closed for a nonempty/saved scene, never silently
- * discarding work. Tests may inject a confirm explicitly.
+ * Global command/keyboard callers cannot use hooks. The mounted composer
+ * provides a kit confirm function through useKnowledgeFileImport; lazy dialogs
+ * may also register while open. The most recently mounted provider wins, and
+ * unmounting it restores an earlier provider. Without one we fail closed.
  */
-let appConfirm: NewChatConfirm | null = null;
+const providers: NewChatConfirm[] = [];
 
 export function registerNewChatConfirm(confirm: NewChatConfirm): () => void {
-  appConfirm = confirm;
+  providers.push(confirm);
   return () => {
-    if (appConfirm === confirm) appConfirm = null;
+    const index = providers.lastIndexOf(confirm);
+    if (index >= 0) providers.splice(index, 1);
   };
 }
 
-export async function requestNewChat(store: SceneStore, confirmFn: NewChatConfirm | null = appConfirm): Promise<void> {
+export async function requestNewChat(store: SceneStore, confirmFn: NewChatConfirm | null = providers.at(-1) ?? null): Promise<void> {
   const scene = store.getScene();
   const nothingToLose = scene.nodes.length === 0 && !scene.hasSavedChat;
   if (!nothingToLose) {
