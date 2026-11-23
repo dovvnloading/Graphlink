@@ -13,7 +13,7 @@ import { RadioGroup } from "../ui/RadioGroup";
 import { SegmentedControl } from "../ui/SegmentedControl";
 import { Select } from "../ui/Select";
 import { TextArea } from "../ui/TextArea";
-import { formatCount } from "../ui/format";
+import { formatCount, formatTokens } from "../ui/format";
 import "./BuilderLaunchDialog.css";
 
 /**
@@ -83,7 +83,7 @@ const BUDGET_PRESETS = [
 
 function formatBudgetLine(steps: number, tokens: number, seconds: number): string {
   const minutes = Math.max(1, Math.round(seconds / 60));
-  return `${formatCount(steps)} step${steps === 1 ? "" : "s"} · ${formatCount(tokens)} tokens · ${minutes} min`;
+  return `${formatCount(steps)} step${steps === 1 ? "" : "s"} · ${formatTokens(tokens)} tokens · ${minutes} min`;
 }
 
 interface RecipeRow {
