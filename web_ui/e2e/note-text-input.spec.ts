@@ -34,9 +34,11 @@ async function addPair(page: Page) {
 
 test("runs a word count on demand and reconnects it when the saved graph reopens", async ({ page }) => {
   const { source, target, sourceId } = await addPair(page);
-  await target.getByRole("button", { name: "Text input", exact: true }).click();
-  await target.getByRole("combobox", { name: "Text source" }).selectOption(sourceId);
-  await target.getByRole("combobox", { name: "Operation", exact: true }).selectOption("word_count");
+  await target.getByRole("button", { name: "Add text input", exact: true }).click();
+  await target.getByRole("button", { name: "Text source", exact: true }).click();
+  await page.getByRole("option", { name: new RegExp(sourceId) }).click();
+  await target.getByRole("button", { name: "Operation", exact: true }).click();
+  await page.getByRole("option", { name: "Word count", exact: true }).click();
   await target.getByRole("button", { name: "Connect", exact: true }).click();
   const output = target.locator(".note-node-markdown");
   await expect(output).toHaveText("Add note...");

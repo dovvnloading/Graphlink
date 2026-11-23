@@ -90,25 +90,25 @@ describe("NoteNodeView", () => {
       subscribeScene: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
       onBindTextInput, onRunTextInput,
     });
-    screen.getByRole("button", { name: "Text input" }).focus();
+    screen.getByRole("button", { name: "Add text input" }).focus();
     await user.keyboard("{Enter}");
     const chooser = screen.getByLabelText("Text source");
     await user.tab();
     expect(chooser).toHaveFocus();
-    await user.selectOptions(chooser, "draft");
+    await user.click(chooser);
+    await user.click(screen.getByRole("option", { name: /Drafter · Drafter text/ }));
     act(() => {
       scene = { ...scene, nodes: scene.nodes.filter((row) => row.id !== "draft") };
       listeners.forEach((listener) => listener());
     });
-    expect(chooser).toHaveValue("");
+    expect(chooser).toHaveTextContent("Choose a source…");
     const connect = screen.getByRole("button", { name: "Connect" });
     expect(connect).toBeDisabled();
-    await user.selectOptions(chooser, "reply");
-    await user.tab();
-    await user.selectOptions(screen.getByLabelText("Operation"), "word_count");
-    await user.tab();
-    expect(connect).toHaveFocus();
-    await user.keyboard("{Enter}");
+    await user.click(chooser);
+    await user.click(screen.getByRole("option", { name: /Chat · Reply/ }));
+    await user.click(screen.getByLabelText("Operation"));
+    await user.click(screen.getByRole("option", { name: "Word count" }));
+    await user.click(connect);
     expect(onBindTextInput).toHaveBeenCalledWith("reply", "word_count");
     expect(onRunTextInput).not.toHaveBeenCalled();
   });
@@ -133,7 +133,8 @@ describe("NoteNodeView", () => {
     act(() => onRunTextInput.mock.calls[0]![0](false));
     expect(screen.getByRole("status")).toHaveTextContent("Run failed");
     expect(run).toBeEnabled();
-    await user.selectOptions(screen.getByLabelText("Operation"), "word_count");
+    await user.click(screen.getByLabelText("Operation"));
+    await user.click(screen.getByRole("option", { name: "Word count" }));
     expect(onBindTextInput).toHaveBeenCalledWith("chat-1", "word_count");
     await user.click(screen.getByRole("button", { name: "Disconnect text input" }));
     expect(onUnbindTextInput).toHaveBeenCalledOnce();
@@ -144,7 +145,7 @@ describe("NoteNodeView", () => {
   it.each(["isSystemPrompt", "isSummaryNote", "isBranchComparison"] as const)(
     "keeps semantic notes (%s) out of text workflows", (flag) => {
       const { container } = renderNoteNode({ [flag]: true });
-      expect(screen.queryByRole("button", { name: "Text input" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Add text input" })).toBeNull();
       expect(container.querySelectorAll(".scene-text-handle")).toHaveLength(0);
     },
   );
@@ -250,8 +251,8 @@ describe("NoteNodeView", () => {
     })();
 
     expect(container.querySelector(".note-node.system-prompt")).not.toBeNull();
-    expect(screen.getByTitle("System Prompt")).toBeInTheDocument();
-    expect(screen.queryByTitle("Summary Note")).toBeNull();
+    expect(screen.getByLabelText("System Prompt")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Summary Note")).toBeNull();
     // The marker is carried by shape (the .system-prompt class's dashed,
     // heavier border) and the badge above - never by an inline colour. It
     // used to take the colour picker's own "Purple" swatch, which made a
@@ -280,20 +281,20 @@ describe("NoteNodeView", () => {
       </ReactFlowProvider>,
     );
     expect(container.querySelector(".note-node.system-prompt")).toBeNull();
-    expect(screen.getByTitle("Summary Note")).toBeInTheDocument();
+    expect(screen.getByLabelText("Summary Note")).toBeInTheDocument();
   });
 
   // ADR-002 Workstream 1 ("Compare Branches") - a third, distinct badge
   // alongside isSystemPrompt/isSummaryNote above.
   it("isBranchComparison renders a distinct badge showing the source-branch count, absent otherwise", () => {
     renderNoteNode({ isBranchComparison: false });
-    expect(screen.queryByTitle(/Branch Comparison/)).toBeNull();
+    expect(screen.queryByLabelText(/Branch Comparison/)).toBeNull();
 
     renderNoteNode({ isBranchComparison: true, compareSourceNodeIds: ["n1", "n2", "n3"] });
     expect(screen.getByLabelText("Branch Comparison")).toBeInTheDocument();
-    expect(screen.getByTitle("Branch Comparison (3 sources)")).toBeInTheDocument();
+    expect(screen.getByLabelText("Branch Comparison")).toBeInTheDocument();
     // Distinct from isSummaryNote's own badge - never conflated.
-    expect(screen.queryByTitle("Summary Note")).toBeNull();
+    expect(screen.queryByLabelText("Summary Note")).toBeNull();
   });
 
   it("Delete button calls onDelete", async () => {

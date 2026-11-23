@@ -4,10 +4,12 @@ import { describe, expect, it, vi } from "vitest";
 import { StalenessBadge } from "./StalenessBadge";
 
 describe("StalenessBadge", () => {
-  it("uses an outlined warning shape and explicit text for manual re-run", () => {
+  it("uses the kit's Out of date status pill and no title attribute", () => {
     const { container } = render(<StalenessBadge status="upstream_changed" />);
-    expect(screen.getByRole("status")).toHaveTextContent("Upstream changed - re-run manually");
+    expect(screen.getByRole("status", { name: "Out of date" })).toHaveTextContent("Out of date");
     expect(container.querySelector(".node-staleness-badge svg")).not.toBeNull();
+    expect(container.querySelector("[title]")).toBeNull();
+    expect(screen.getByText(/Upstream inputs have changed/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Run bound nodes" })).toBeNull();
   });
 
@@ -23,17 +25,17 @@ describe("StalenessBadge", () => {
     expect(runBound).toHaveBeenCalledTimes(2);
   });
 
-  it("never badges a Thinking trace as a manual step, even with legacy stale statuses", () => {
+  it("never badges a Thinking trace as a manual step", () => {
     const { rerender } = render(<StalenessBadge nodeKind="thinking" status="upstream_changed" />);
     expect(screen.queryByRole("status")).toBeNull();
     rerender(<StalenessBadge nodeKind="thinking" status="out_of_date" manualRerun />);
     expect(screen.queryByRole("status")).toBeNull();
   });
 
-  it("requires manual re-run for an outdated tool reply, without a bound action", () => {
-    const { container } = render(<StalenessBadge status="out_of_date" manualRerun />);
-    expect(screen.getByRole("status")).toHaveTextContent("Upstream changed - re-run manually");
-    expect(container.querySelector(".node-staleness-badge svg")).not.toBeNull();
+  it("keeps manual re-run explanation for outdated replies without a bound action", () => {
+    render(<StalenessBadge status="out_of_date" manualRerun />);
+    expect(screen.getByRole("status", { name: "Out of date" })).toBeInTheDocument();
+    expect(screen.getByText(/re-run manually/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Run bound nodes" })).toBeNull();
   });
 });

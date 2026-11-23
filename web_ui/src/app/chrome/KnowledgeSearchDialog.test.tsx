@@ -550,7 +550,7 @@ describe("KnowledgeSearchDialog kit library", () => {
     await user.click(screen.getByRole("tab", { name: "Watched folders (1)" }));
     expect(await screen.findByText(folder.path)).toBeInTheDocument();
     expect(screen.getByText(/7 indexed · Last sync:/)).toBeInTheDocument();
-    expect(screen.getByText(new Date(folder.lastSyncAt).toLocaleString())).toBeInTheDocument();
+    expect(screen.getByText(/7 indexed · Last sync:/)).toHaveTextContent(new Date(folder.lastSyncAt).toLocaleString());
     expect(screen.getByText(/8\/8 scanned · 2 added · 1 updated · 0 removed · 1 failed/)).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("2 files skipped");
   });
@@ -673,7 +673,7 @@ describe("KnowledgeSearchDialog kit library", () => {
     await within(library).findByText("doc-1.md");
     expect(within(library).getAllByRole("listitem")).toHaveLength(50);
     expect(within(library).queryByText("doc-51.md")).toBeNull();
-    expect(within(library).getByRole("status")).toHaveTextContent("Showing 1–50 of 5000");
+    expect(within(within(library).getByRole("navigation", { name: "Document pages" })).getByRole("status")).toHaveTextContent("Showing 1–50 of 5000");
     const next = within(library).getByRole("button", { name: "Next documents" });
     next.focus();
     await user.keyboard("{Enter}");
