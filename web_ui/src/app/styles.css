@@ -258,90 +258,6 @@ body {
   background-color: var(--gl-surface-window);
 }
 
-.scene-node {
-  min-width: 160px;
-  background-color: var(--gl-surface-node-body);
-  border: 1px solid var(--gl-surface-border);
-  border-radius: 8px;
-  overflow: hidden;
-  font-size: 12px;
-  /* R8a (UI/UX issue list finding #11): the View popover's FONT section -
-     family/size/color, --gl-node-font-* set on .scene-canvas by
-     SceneCanvas.tsx - used to round-trip into scene state with nothing
-     consuming it. Applied here, the shared base every node kind renders
-     through, rather than per-kind content rules (markdown headers, code
-     blocks) so headings/monospace keep their own intentional typography;
-     this is the node's title bar and any plain body text that doesn't set
-     its own font-size. Falls back to the pre-existing literal when unset
-     (e.g. in tests that render a node outside SceneCanvas). */
-  font-family: var(--gl-node-font-family, inherit);
-  /* Node redesign, stage 3 ("card chrome"): every node kind was a
-     perfectly flat rectangle - no elevation at all, and "selected" was
-     only a marginally lighter border color, easy to miss in a dense graph.
-     Mirrors .group-node's own established elevation/selected-ring
-     convention (styles.css, R6.1 frame/container) exactly, rather than
-     inventing a second, different depth system for a different node
-     category - a 3-tier ladder (rest/hover/selected), shadow tokens that
-     already existed and were completely unused by node cards. */
-  box-shadow: var(--gl-shadow-1);
-  transition:
-    border-color var(--gl-motion-fast) var(--gl-motion-ease),
-    box-shadow var(--gl-motion-base) var(--gl-motion-ease);
-}
-
-.scene-node:hover {
-  border-color: var(--gl-surface-border-strong, var(--gl-surface-text-muted));
-  box-shadow: var(--gl-shadow-2);
-}
-
-.scene-node.selected {
-  border-color: var(--gl-surface-border-strong, var(--gl-surface-text-muted));
-  box-shadow: 0 0 0 1px var(--gl-surface-border-strong), var(--gl-shadow-3);
-}
-
-/* UI-perf fix: while a node is actively being dragged, React Flow's
-   controlled-node round-trip lag can put the cursor outside the card's
-   true rendered rect for a frame, toggling hover on/off and replaying
-   the border-color/box-shadow transition above as visible flicker. Pin
-   hover back to the resting appearance for the drag's duration. */
-.react-flow__node.dragging .scene-node:hover {
-  border-color: var(--gl-surface-border);
-  box-shadow: var(--gl-shadow-1);
-}
-
-/* ADR-012 stage 12.3: the actually-tabbable element for a node is React
-   Flow's OWN wrapper div (.react-flow__node, one level up from .scene-node -
-   see NodeMenu.tsx's own stage-12.3 doc for why), not .scene-node itself, so
-   this targets that wrapper rather than the card. A real `outline` (not a
-   box-shadow) at a dedicated --gl-focus-ring token, offset so it never
-   overlaps .selected's own border/box-shadow treatment above - the two are
-   deliberately independent CSS properties on independent elements, so a
-   node that is BOTH keyboard-focused AND selected shows both rings clearly
-   layered rather than one silently winning a specificity fight. */
-.react-flow__node:focus-visible {
-  outline: 2px solid var(--gl-focus-ring);
-  outline-offset: 3px;
-}
-
-.scene-node-title {
-  padding: 6px 10px;
-  font-weight: 600;
-  font-size: var(--gl-node-font-size, inherit);
-  color: var(--gl-node-font-color, var(--gl-surface-text-primary));
-  background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
-  border-bottom: 1px solid var(--gl-surface-border);
-}
-
-.scene-node.collapsed .scene-node-title {
-  border-bottom: none;
-}
-
-.scene-node-body {
-  padding: 8px 10px;
-  color: var(--gl-node-font-color, var(--gl-surface-text-muted));
-  font-size: var(--gl-node-font-size, 11px);
-}
-
 .scene-canvas .react-flow__edge-path {
   stroke: var(--gl-surface-border-strong, var(--gl-surface-text-muted));
   stroke-width: 1.5;
@@ -349,17 +265,6 @@ body {
 
 .scene-canvas .react-flow__edge.selected .react-flow__edge-path {
   stroke: var(--gl-surface-text-primary);
-}
-
-.scene-node-handle {
-  width: 8px;
-  height: 8px;
-  background-color: var(--gl-neutral-button-background);
-  border: 1px solid var(--gl-surface-text-muted);
-}
-
-.scene-node-handle:hover {
-  background-color: var(--gl-neutral-button-hover);
 }
 
 /* R2.4/R6.3 fix: navigation pins had no on-canvas marker at all - see
@@ -421,22 +326,6 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-}
-
-.chat-node-collapse-btn {
-  font-size: 10px;
-  line-height: 1;
-  padding: 2px 6px;
-  color: var(--gl-surface-text-muted);
-  background: transparent;
-  border: none;
-  border-radius: 5px;
-  cursor: pointer;
-}
-
-.chat-node-collapse-btn:hover {
-  color: var(--gl-surface-text-primary);
-  background-color: var(--gl-neutral-button-hover);
 }
 
 /* Markdown body inside a chat bubble - the same rule set as the document
