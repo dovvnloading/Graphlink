@@ -1021,7 +1021,7 @@ describe("Composer", () => {
     await user.click(screen.getByText("Off"));
     await user.click(screen.getByText("High"));
     expect(setReasoningLevel).toHaveBeenCalledWith("high");
-    expect(screen.getByRole("button", { name: "Reasoning: High" })).toBeInTheDocument();
+    expect(screen.queryByRole("menu", { name: "Choose a reasoning level" })).toBeNull();
   });
 
   it("hides the Reasoning chip when the provider and model expose no reasoning selection", () => {
