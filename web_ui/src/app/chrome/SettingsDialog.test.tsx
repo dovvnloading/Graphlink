@@ -631,7 +631,7 @@ describe("SettingsDialog", () => {
     const { user, push, intents } = setup();
     await goToLlamaCpp(user, push);
 
-    await user.click(screen.getByLabelText("Low"));
+    await user.click(screen.getByRole("radio", { name: "Low" }));
 
     expect(intents).toContainEqual(["app-settings", "setLlamaCppReasoningLevel", ["low"]]);
   });
