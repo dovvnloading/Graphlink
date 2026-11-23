@@ -63,9 +63,7 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/chrome/KnowledgeSettingsPage.tsx", rule: "R13", count: 1 },
 
-  { file: "app/chrome/OrganizationDialog.tsx", rule: "R2", count: 1 },
 
-  { file: "app/chrome/PluginPicker.tsx", rule: "R1", count: 1 },
 
   { file: "app/styles.css", rule: "R9", count: 259 },
 
