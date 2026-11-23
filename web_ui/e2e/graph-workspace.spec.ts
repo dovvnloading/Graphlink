@@ -101,6 +101,8 @@ test("starts a graph and navigates it using the canvas controls", async ({ page 
     });
   }
 
+  // The draft persists in the shared E2E session; leave the composer empty for later specs.
+  await input.fill("");
   await page.getByRole("button", { name: "Collapse minimap" }).click();
   await expect(page.getByRole("button", { name: "Expand minimap" })).toHaveAttribute("aria-expanded", "false");
 });

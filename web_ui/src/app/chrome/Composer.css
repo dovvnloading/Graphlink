@@ -24,7 +24,7 @@
   min-width: 0;
   width: 100%;
   min-height: 42px;
-  max-height: 200px;
+  max-height: 160px;
   padding: var(--gl-space-2);
   field-sizing: content;
   overflow-y: auto;
