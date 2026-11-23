@@ -29,7 +29,7 @@
   font-family: var(--gl-font-mono);
   text-transform: uppercase;
 }
-.node-md-code-block pre, .document-view-code-block pre {
+.chat-node-content .node-md-code-block pre, .chat-node-content .document-view-code-block pre {
   margin: 0;
   border: 0;
   border-radius: 0;
@@ -49,7 +49,8 @@
   border: 1px solid var(--gl-surface-border);
   padding: var(--gl-space-1-5) var(--gl-space-2);
 }
-.node-md-table-wrapper thead tr, .document-view-table-wrapper thead tr { background: var(--gl-surface-inset); }
+.node-md-table-wrapper thead tr, .document-view-table-wrapper thead tr,
+.chat-node-content .node-md-table-wrapper th, .chat-node-content .document-view-table-wrapper th { background: var(--gl-surface-inset); }
 .node-md-table-wrapper tbody tr:nth-child(even),
 .document-view-table-wrapper tbody tr:nth-child(even) { background: var(--gl-surface-inset); }
 .chat-node-content :not(pre) > code {
