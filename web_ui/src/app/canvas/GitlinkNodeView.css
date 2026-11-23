@@ -145,8 +145,7 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 160px;
-  overflow-y: auto;
+  overflow: visible;
   border: 1px solid var(--gl-surface-border);
   border-radius: var(--gl-radius-sm);
 }
@@ -401,3 +400,5 @@
 
 /* Let the kit own approval button colors, hover and disabled states. */
 .gitlink-node-apply-dialog-actions .gl-button { min-width: var(--gl-control-h-sm); }
+
+.gitlink-node-extra-files .gl-disclosure-content { max-height: none; }

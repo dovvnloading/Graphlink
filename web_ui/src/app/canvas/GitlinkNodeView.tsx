@@ -4,6 +4,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import { Select, type SelectOption } from "../ui/Select";
 import { Button } from "../ui/Button";
 import { Checkbox } from "../ui/Checkbox";
+import { Disclosure } from "../ui/Disclosure";
 import { MenuItem } from "../ui/Menu";
 import { TextField } from "../ui/TextField";
 import { TextArea } from "../ui/TextArea";
@@ -511,15 +512,26 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                 <ul className="gitlink-node-file-list">
                   {filteredPaths.length === 0 ? (
                     <li className="gitlink-node-empty">No files loaded yet.</li>
-                  ) : (
-                    filteredPaths.map((path) => (
-                      <li key={path}>
-                        <div className="gitlink-node-file-row"><Checkbox label={displayGitlinkPath(path)}
-                          checked={selectedPaths.includes(path)} onChange={() => togglePath(path)} /></div>
-                      </li>
-                    ))
-                  )}
+                  ) : filteredPaths.slice(0, 4).map((path) => (
+                    <li key={path}><div className="gitlink-node-file-row">
+                      <Checkbox label={displayGitlinkPath(path)} checked={selectedPaths.includes(path)}
+                        onChange={() => togglePath(path)} />
+                    </div></li>
+                  ))}
                 </ul>
+                {filteredPaths.length > 4 && (
+                  <Disclosure title={`Show ${filteredPaths.length - 4} more files`}
+                    className="gitlink-node-extra-files">
+                    <ul className="gitlink-node-file-list">
+                      {filteredPaths.slice(4).map((path) => (
+                        <li key={path}><div className="gitlink-node-file-row">
+                          <Checkbox label={displayGitlinkPath(path)} checked={selectedPaths.includes(path)}
+                            onChange={() => togglePath(path)} />
+                        </div></li>
+                      ))}
+                    </ul>
+                  </Disclosure>
+                )}
                 <p className="gitlink-node-file-count">{selectedPaths.length} selected</p>
               </div>
 
