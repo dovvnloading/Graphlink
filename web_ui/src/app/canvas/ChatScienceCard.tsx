@@ -67,7 +67,7 @@ export function ChatScienceCard({ reference, content }: { reference: ScienceRefe
       {excerpted && <p className="chat-science-card-excerpt" role="note">
         Only excerpts were sent to the model. Inspect or export the source Workbench result for every row, value and plot.
       </p>}
-      <Disclosure title="Data sent to the model" className="chat-science-card-sent">
+      <Disclosure {...{ title: "Data sent to the model" }} className="chat-science-card-sent">
         <pre className="nowheel nodrag">{content}</pre>
       </Disclosure>
     </section>

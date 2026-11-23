@@ -395,7 +395,7 @@ export const CodeSandboxNodeView = memo(function CodeSandboxNodeView({
             <span>Dependencies</span>
             <Badge className="code-sandbox-node-deps-count">{dependenciesCount}</Badge>
           </div>
-          <Disclosure title="Edit dependencies" className="code-sandbox-node-deps">
+          <Disclosure {...{ title: "Edit dependencies" }} className="code-sandbox-node-deps">
             <TextArea label="Requirements" minRows={2} maxRows={5}
               className="code-sandbox-node-requirements"
               value={requirementsDraft} onValueChange={setRequirementsDraft}
@@ -432,7 +432,7 @@ export const CodeSandboxNodeView = memo(function CodeSandboxNodeView({
                 Download .py
               </Button>
             </div>
-            <InlineAlert variant="info" title="Code execution"
+            <InlineAlert variant="info" {...{ title: "Code execution" }}
               body="Executed Python runs with your user-account permissions. Review and approve every run." />
             {staleCode && <p role="alert" className="code-sandbox-node-banner-error">
               The saved script changed during this edit. Download your draft before reopening the latest version.

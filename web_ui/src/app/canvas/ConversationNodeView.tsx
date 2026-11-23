@@ -10,7 +10,6 @@ import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 import { useStreamBuffer } from "./useStreamBuffer";
 import { MenuItem, MenuSeparator } from "../ui/Menu";
-import { Icon } from "../ui/icons/Icon";
 import { IconButton } from "../ui/IconButton";
 import { TextArea } from "../ui/TextArea";
 import { Button } from "../ui/Button";

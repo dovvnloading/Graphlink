@@ -415,7 +415,7 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
       {data.builderActivity.length > 0 && (
         <Disclosure className="chat-node-tool-invocations plan-node-activity"
           open={activityOpen} onOpenChange={setActivityOpen}
-          title={`${data.builderActivity.length} activity ${data.builderActivity.length === 1 ? "entry" : "entries"}${activityErrorCount ? ` · ${activityErrorCount} errors` : ""}`}>
+          {...{ title: `${data.builderActivity.length} activity ${data.builderActivity.length === 1 ? "entry" : "entries"}${activityErrorCount ? ` · ${activityErrorCount} errors` : ""}` }}>
           <div className="plan-node-activity-list nowheel nodrag" ref={activityListRef}>
             {data.builderActivity.map((row, index) => (
               <div key={index}
@@ -432,7 +432,7 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
 
       {data.builderAwaitingToolApproval && (
         <div className="plan-node-approval" role="group" aria-label="Builder tool approval">
-          <InlineAlert variant="warning" title={`The Builder wants to run: ${data.builderApprovalToolName}`}
+          <InlineAlert variant="warning" {...{ title: `The Builder wants to run: ${data.builderApprovalToolName}` }}
             body={<pre className="plan-node-approval-summary">{data.builderApprovalSummary}</pre>} />
           <div className="plan-node-approval-actions">
             <Button size="sm" variant="secondary" onClick={data.onApproveTool}>Approve</Button>

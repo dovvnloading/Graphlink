@@ -188,7 +188,7 @@ export function ChatRerunDialog({
   }
 
   return (
-    <Dialog name={DIALOG} title="Re-run from here" size="md" className="chat-rerun-dialog">
+    <Dialog name={DIALOG} {...{ title: "Re-run from here" }} size="md" className="chat-rerun-dialog">
       <p>Only ordinary tool-free chat replies are re-run automatically. Workspace agents, Builder,
         code sandboxes, tool-executing replies, plugin actions and data-bound outputs are skipped.
         Skipped nodes and their downstream replies require manual review. Thinking traces

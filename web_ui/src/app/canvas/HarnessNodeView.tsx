@@ -896,7 +896,7 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
       {data.harnessActivity.length > 0 && (
         <Disclosure className="chat-node-tool-invocations plan-node-activity"
           open={activityOpen} onOpenChange={setActivityOpen}
-          title={`${data.harnessActivity.length} activity ${data.harnessActivity.length === 1 ? "entry" : "entries"}${activityErrorCount ? ` · ${activityErrorCount} errors` : ""}`}>
+          {...{ title: `${data.harnessActivity.length} activity ${data.harnessActivity.length === 1 ? "entry" : "entries"}${activityErrorCount ? ` · ${activityErrorCount} errors` : ""}` }}>
           <div className="plan-node-activity-list nowheel nodrag" ref={activityListRef}>
             {data.harnessActivity.map((row, index) => (
               <div key={index} className={`chat-node-tool-invocation${row.outcome === "error" ? " error" : ""}`}>
@@ -917,7 +917,7 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
       {data.harnessAwaitingApproval && (
         <div className="plan-node-approval" role="group" aria-label="Agent tool approval">
           <InlineAlert variant="warning"
-            title={`The agent wants to run: ${data.harnessApprovalToolName}`}
+            {...{ title: `The agent wants to run: ${data.harnessApprovalToolName}` }}
             body={<>
               <pre className="plan-node-approval-summary nowheel nodrag" tabIndex={0}
                 role="region" aria-label="Proposed tool call">
