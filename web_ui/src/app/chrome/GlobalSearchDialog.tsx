@@ -282,7 +282,7 @@ export function GlobalSearchDialog({ transport }: { transport: WsTransport }) {
   }
 
   return (
-    <Dialog name="global-search" title="Global search" size="md" className="global-search-dialog">
+    <Dialog name="global-search" {...{ title: "Global search" }} size="md" className="global-search-dialog">
       <div className="global-search-row">
         <input type="search" className="global-search-input"
           aria-label="Search every workspace"
@@ -320,7 +320,7 @@ export function GlobalSearchDialog({ transport }: { transport: WsTransport }) {
           }}>{item}</Button>
         ))}</div>
       </section>}
-      {error && <InlineAlert variant="error" title="Search unavailable" body={error} />}
+      {error && <InlineAlert variant="error" {...{ title: "Search unavailable" }} body={error} />}
       {results && !error && <div id="global-search-results" role="region" aria-label="Search results">
         <p className="global-search-section-title" role="status">
           {visible.length === 0 ? "No results found" : `${visible.length} result${visible.length === 1 ? "" : "s"} found`}
