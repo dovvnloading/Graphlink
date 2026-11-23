@@ -37,6 +37,7 @@ describe("kit menu structure and focus", () => {
     expect(trigger).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("group", { name: "Edit" })).toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Ctrl+C" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Copy link" })).toHaveAccessibleDescription("Copy the link");
     const disabled = screen.getByRole("menuitem", { name: "Unavailable" });
     expect(disabled).toBeDisabled();
     expect(disabled).toHaveAccessibleDescription("Requires an active workspace");
