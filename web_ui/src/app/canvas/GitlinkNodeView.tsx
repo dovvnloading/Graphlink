@@ -6,6 +6,7 @@ import { Button } from "../ui/Button";
 import { Checkbox } from "../ui/Checkbox";
 import { MenuItem } from "../ui/Menu";
 import { TextField } from "../ui/TextField";
+import { TextArea } from "../ui/TextArea";
 import { Dialog, useOverlays } from "../overlays/overlays";
 import { CollapseToggleButton } from "./CollapseToggleButton";
 import type { MenuPosition } from "./menuPosition";
@@ -406,12 +407,10 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                 {/* Labelled, not placeholder-only. Two of this tab's four
                     fields already carried a real label; these two announced
                     themselves only until you typed into them. */}
-                <span className="gitlink-node-field-label">Repository</span>
-                <input
-                  type="text"
+                <TextField label="Repository" size="sm"
                   className="gitlink-node-input"
                   value={repoDraft}
-                  onChange={(event) => setRepoDraft(event.target.value)}
+                  onValueChange={setRepoDraft}
                   onKeyDown={(event) => {
                     if (event.key === "Enter") {
                       event.preventDefault();
@@ -419,14 +418,11 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                     }
                   }}
                   placeholder="owner/repo"
-                  aria-label="Repository"
                 />
-                <span className="gitlink-node-field-label">Branch</span>
-                <input
-                  type="text"
+                <TextField label="Branch" size="sm"
                   className="gitlink-node-input"
                   value={branchDraft}
-                  onChange={(event) => setBranchDraft(event.target.value)}
+                  onValueChange={setBranchDraft}
                   onKeyDown={(event) => {
                     if (event.key === "Enter") {
                       event.preventDefault();
@@ -434,7 +430,6 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                     }
                   }}
                   placeholder="branch"
-                  aria-label="Branch"
                 />
                 <div className="gitlink-node-inline-row">
                   <Button variant="secondary" size="sm" disabled={busy} loading={repoOptionsLoading} onClick={listRepos}>
@@ -460,23 +455,20 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
               </div>
 
               <div className="gitlink-node-field-row">
-                <span className="gitlink-node-field-label">Context scope</span>
                 <Select
                   value={scopeMode}
                   options={GITLINK_SCOPE_OPTIONS}
                   onChange={setScopeMode}
-                  ariaLabel="Context scope"
+                  label="Context scope"
                 />
               </div>
 
               <div className="gitlink-node-field-row">
-                <label className="gitlink-node-field-row">
-                  <span className="gitlink-node-field-label">Local root</span>
-                  <input
-                    type="text"
+                <div className="gitlink-node-field-row">
+                  <TextField label="Local root" size="sm"
                     className="gitlink-node-input"
                     value={localRootDraft}
-                    onChange={(event) => setLocalRootDraft(event.target.value)}
+                    onValueChange={setLocalRootDraft}
                     onFocus={() => {
                       localRootFocusedRef.current = true;
                     }}
@@ -496,9 +488,8 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                       }
                     }}
                     placeholder="C:\path\to\local\checkout"
-                    aria-label="Local root"
                   />
-                </label>
+                </div>
                 <div className="gitlink-node-inline-row">
                   <Button variant="secondary" size="sm" onClick={data.onBrowseLocalRoot} disabled={busy}>Browse…</Button>
                 </div>
@@ -510,14 +501,9 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
               </div>
 
               <div className="gitlink-node-file-tree">
-                <input
-                  type="text"
-                  className="gitlink-node-input"
-                  value={fileFilter}
-                  onChange={(event) => setFileFilter(event.target.value)}
-                  placeholder="Filter files…"
-                  aria-label="Filter files"
-                />
+                <TextField label="Filter files" size="sm" className="gitlink-node-input"
+                  value={fileFilter} onValueChange={setFileFilter}
+                  placeholder="Filter files…" />
                 <div className="gitlink-node-inline-row">
                   <Button size="sm" variant="ghost" onClick={selectVisible} disabled={filteredPaths.length === 0}>Select Visible</Button>
                   <Button size="sm" variant="ghost" onClick={clearSelection} disabled={selectedPaths.length === 0}>Clear Selection</Button>
@@ -543,15 +529,10 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
               </div>
 
               <div className="gitlink-node-field-row">
-                <textarea
-                  className="gitlink-node-input gitlink-node-task-prompt"
-                  value={taskPromptDraft}
-                  onChange={(event) => setTaskPromptDraft(event.target.value)}
-                  placeholder="Describe the change to make…"
-                  aria-label="Task prompt"
-                  rows={2}
-                  spellCheck
-                />
+                <TextArea label="Task prompt" minRows={2} maxRows={4}
+                  className="gitlink-node-task-prompt" value={taskPromptDraft}
+                  onValueChange={setTaskPromptDraft}
+                  placeholder="Describe the change to make…" spellCheck />
                 <div className="gitlink-node-inline-row">
                   <Button variant="primary" size="sm" iconStart="sparkle" disabled={busy || !taskPromptDraft.trim()}
                     onClick={runChangeSet}>Generate Change Set</Button>
