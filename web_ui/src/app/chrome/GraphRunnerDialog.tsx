@@ -456,7 +456,7 @@ export function GraphRunnerDialog({ store }: { store: SceneStore }) {
     if (wasOpen.current && !isOpen) store.clearGraphRunnerRequestedIds();
     wasOpen.current = isOpen;
   }, [overlays, store]);
-  return <Dialog name="graph-runner" title="Graph runner" size="lg" className="graph-runner-dialog">
+  return <Dialog name="graph-runner" {...{ title: "Graph runner" }} size="lg" className="graph-runner-dialog">
     <Runner store={store} />
   </Dialog>;
 }
