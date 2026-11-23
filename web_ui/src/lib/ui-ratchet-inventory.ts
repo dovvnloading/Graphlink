@@ -104,27 +104,16 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/canvas/DocumentViewToc.tsx", rule: "R8", count: 1 },
 
-  { file: "app/canvas/FalMediaNodeView.css", rule: "R9", count: 65 },
 
-  { file: "app/canvas/FalMediaNodeView.css", rule: "R10", count: 28 },
 
-  { file: "app/canvas/FalMediaNodeView.css", rule: "R14", count: 132 },
 
-  { file: "app/canvas/FalMediaNodeView.tsx", rule: "R1", count: 23 },
 
-  { file: "app/canvas/FalMediaNodeView.tsx", rule: "R3", count: 3 },
 
-  { file: "app/canvas/FalMediaNodeView.tsx", rule: "R4", count: 2 },
 
-  { file: "app/canvas/FalMediaNodeView.tsx", rule: "R5", count: 2 },
 
-  { file: "app/canvas/FalMediaNodeView.tsx", rule: "R6", count: 1 },
 
-  { file: "app/canvas/FalMediaNodeView.tsx", rule: "R8", count: 6 },
 
-  { file: "app/canvas/FalMediaUploader.tsx", rule: "R1", count: 1 },
 
-  { file: "app/canvas/FalMediaUploader.tsx", rule: "R3", count: 1 },
 
   { file: "app/canvas/GitlinkNodeView.tsx", rule: "R6", count: 2 },
 
