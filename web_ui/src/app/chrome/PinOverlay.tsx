@@ -84,10 +84,10 @@ export function PinOverlay({ store }: { store: SceneStore }) {
       ) : (
         <ul className="pins-list">
           {filtered.map((pin) => editingId === pin.id ? (
-            <li key={pin.id} ref={editRowRef} className="pins-edit-row" onKeyDown={onEditKeyDown}>
+            <li key={pin.id} ref={editRowRef} className="pins-edit-row">
               <TextField label="Pin title" size="sm" value={draftTitle}
-                maxLength={MAX_PIN_TITLE_LENGTH + 1} onValueChange={setDraftTitle} error={draftError ?? undefined} />
-              <TextArea label="Pin note" value={draftNote} onValueChange={setDraftNote} minRows={2} maxRows={4} />
+                maxLength={MAX_PIN_TITLE_LENGTH + 1} onValueChange={setDraftTitle} onKeyDown={onEditKeyDown} error={draftError ?? undefined} />
+              <TextArea label="Pin note" value={draftNote} onValueChange={setDraftNote} onKeyDown={onEditKeyDown} minRows={2} maxRows={4} />
               <div className="pins-edit-actions">
                 <Button variant="ghost" size="sm" onClick={cancelEditing}>Cancel</Button>
                 <Button variant="primary" size="sm" onClick={saveEditing}>Save</Button>
