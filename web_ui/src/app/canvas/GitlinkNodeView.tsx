@@ -1,7 +1,11 @@
 import "./GitlinkNodeView.css";
 import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useEffect, useRef, useState } from "react";
-import { CustomSelect, type CustomSelectOption } from "../chrome/CustomSelect";
+import { Select, type SelectOption } from "../ui/Select";
+import { Button } from "../ui/Button";
+import { Checkbox } from "../ui/Checkbox";
+import { MenuItem } from "../ui/Menu";
+import { TextField } from "../ui/TextField";
 import { Dialog, useOverlays } from "../overlays/overlays";
 import { CollapseToggleButton } from "./CollapseToggleButton";
 import type { MenuPosition } from "./menuPosition";
@@ -72,9 +76,9 @@ export interface GitlinkPendingChangeRow {
   content?: string | null;
 }
 
-const GITLINK_SCOPE_OPTIONS: CustomSelectOption[] = [
-  { id: "selected", label: "Selected files" },
-  { id: "full", label: "Full repo" },
+const GITLINK_SCOPE_OPTIONS: SelectOption[] = [
+  { value: "selected", label: "Selected files" },
+  { value: "full", label: "Full repo" },
 ];
 
 export interface GitlinkNodeData extends Record<string, unknown> {
@@ -137,27 +141,9 @@ function GitlinkNodeMenu({
 
   return (
     <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onToggleCollapse();
-          onClose();
-        }}
-      >
-        {isCollapsed ? "Expand" : "Collapse"}
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="chat-node-menu-danger"
-        onClick={() => {
-          onDelete();
-          onClose();
-        }}
-      >
-        Delete Node
-      </button>
+      <MenuItem icon={isCollapsed ? "maximize" : "minimize"} label={isCollapsed ? "Expand" : "Collapse"}
+        onSelect={() => { onToggleCollapse(); onClose(); }} />
+      <MenuItem label="Delete Node" destructive onSelect={() => { onDelete(); onClose(); }} />
     </NodeMenu>
   );
 }
@@ -451,46 +437,31 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                   aria-label="Branch"
                 />
                 <div className="gitlink-node-inline-row">
-                  <button type="button" disabled={busy} onClick={listRepos}>
+                  <Button variant="secondary" size="sm" disabled={busy} loading={repoOptionsLoading} onClick={listRepos}>
                     {repoOptionsLoading ? "Loading…" : "List My Repos"}
-                  </button>
+                  </Button>
                   {/* The tab's one primary. Setup had four buttons at equal
                       weight, so nothing said which one moves you forward -
                       the same one-primary language the launchers, the plan
                       card and the sandbox card already use. */}
-                  <button
-                    type="button"
-                    className="gitlink-node-primary-btn"
-                    disabled={busy || !repoDraft.trim()}
-                    onClick={loadTree}
-                  >
-                    Load Repo Tree
-                  </button>
+                  <Button variant="primary" size="sm" disabled={busy || !repoDraft.trim()}
+                    onClick={loadTree}>Load Repo Tree</Button>
                 </div>
                 {repoOptionsError && <p className="gitlink-node-banner-error">{repoOptionsError}</p>}
                 {repoOptions && repoOptions.length > 0 && (
                   <ul className="gitlink-node-repo-options">
                     {repoOptions.map((name) => (
                       <li key={name}>
-                        <button type="button" onClick={() => setRepoDraft(name)}>
-                          {name}
-                        </button>
+                        <Button variant="ghost" size="sm" onClick={() => setRepoDraft(name)}>{name}</Button>
                       </li>
                     ))}
                   </ul>
                 )}
               </div>
 
-              {/* The app's own dropdown, not a native <select>. CustomSelect
-                  is what Settings, Builder, Chat Library and the View
-                  popover all render; this card was the last raw <select>
-                  left, and an OS dropdown inside a canvas card reads as a
-                  foreign control. It portals to the body and positions off
-                  getBoundingClientRect, so React Flow's viewport transform
-                  does not affect it. */}
               <div className="gitlink-node-field-row">
                 <span className="gitlink-node-field-label">Context scope</span>
-                <CustomSelect
+                <Select
                   value={scopeMode}
                   options={GITLINK_SCOPE_OPTIONS}
                   onChange={setScopeMode}
@@ -529,20 +500,13 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                   />
                 </label>
                 <div className="gitlink-node-inline-row">
-                  <button type="button" disabled={busy} onClick={data.onBrowseLocalRoot}>
-                    Browse…
-                  </button>
+                  <Button variant="secondary" size="sm" onClick={data.onBrowseLocalRoot} disabled={busy}>Browse…</Button>
                 </div>
               </div>
 
               <div className="gitlink-node-inline-row">
-                <button
-                  type="button"
-                  disabled={busy || !repoDraft.trim()}
-                  onClick={() => data.onImportSnapshot(repoDraft.trim(), branchDraft.trim())}
-                >
-                  Import Repo Snapshot
-                </button>
+                <Button variant="secondary" size="sm" disabled={busy || !repoDraft.trim()}
+                  onClick={() => data.onImportSnapshot(repoDraft.trim(), branchDraft.trim())}>Import Repo Snapshot</Button>
               </div>
 
               <div className="gitlink-node-file-tree">
@@ -555,12 +519,8 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                   aria-label="Filter files"
                 />
                 <div className="gitlink-node-inline-row">
-                  <button type="button" onClick={selectVisible} disabled={filteredPaths.length === 0}>
-                    Select Visible
-                  </button>
-                  <button type="button" onClick={clearSelection} disabled={selectedPaths.length === 0}>
-                    Clear Selection
-                  </button>
+                  <Button size="sm" variant="ghost" onClick={selectVisible} disabled={filteredPaths.length === 0}>Select Visible</Button>
+                  <Button size="sm" variant="ghost" onClick={clearSelection} disabled={selectedPaths.length === 0}>Clear Selection</Button>
                 </div>
                 <ul className="gitlink-node-file-list">
                   {filteredPaths.length === 0 ? (
@@ -568,15 +528,8 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                   ) : (
                     filteredPaths.map((path) => (
                       <li key={path}>
-                        <label className="gitlink-node-file-row">
-                          <input
-                            type="checkbox"
-                            className="gl-checkbox"
-                            checked={selectedPaths.includes(path)}
-                            onChange={() => togglePath(path)}
-                          />
-                          {displayGitlinkPath(path)}
-                        </label>
+                        <div className="gitlink-node-file-row"><Checkbox label={displayGitlinkPath(path)}
+                          checked={selectedPaths.includes(path)} onChange={() => togglePath(path)} /></div>
                       </li>
                     ))
                   )}
@@ -585,9 +538,8 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
               </div>
 
               <div className="gitlink-node-inline-row">
-                <button type="button" disabled={busy} onClick={() => data.onBuildContext(scopeMode, selectedPaths)}>
-                  Build Context
-                </button>
+                <Button variant="primary" size="sm" disabled={busy}
+                  onClick={() => data.onBuildContext(scopeMode, selectedPaths)}>Build Context</Button>
               </div>
 
               <div className="gitlink-node-field-row">
@@ -601,13 +553,11 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                   spellCheck
                 />
                 <div className="gitlink-node-inline-row">
-                  <button type="button" disabled={busy || !taskPromptDraft.trim()} onClick={runChangeSet}>
-                    Generate Change Set
-                  </button>
+                  <Button variant="primary" size="sm" iconStart="sparkle" disabled={busy || !taskPromptDraft.trim()}
+                    onClick={runChangeSet}>Generate Change Set</Button>
                   {data.pendingRequestId && (
-                    <button type="button" onClick={() => data.onCancel()} title="Cancel Gitlink request">
-                      Cancel
-                    </button>
+                    <Button variant="secondary" size="sm" aria-label="Cancel Gitlink request"
+                      onClick={() => data.onCancel()}>Cancel</Button>
                   )}
                 </div>
               </div>
@@ -663,20 +613,10 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                   <p className="gitlink-node-field-label">Review and select proposed file changes</p>
                   <div className="gitlink-node-review-selection-bar">
                     <span role="status">{approvedChanges.length} of {data.gitlinkPendingChanges.length} selected for Apply</span>
-                    <button
-                      type="button"
-                      disabled={applying || skippedCount === 0}
-                      onClick={() => setApprovedPaths(data.gitlinkPendingChanges.map((change) => change.path))}
-                    >
-                      Select all
-                    </button>
-                    <button
-                      type="button"
-                      disabled={applying || approvedChanges.length === 0}
-                      onClick={() => setApprovedPaths([])}
-                    >
-                      Select none
-                    </button>
+                    <Button size="sm" variant="ghost" disabled={applying || skippedCount === 0}
+                      onClick={() => setApprovedPaths(data.gitlinkPendingChanges.map((change) => change.path))}>Select all</Button>
+                    <Button size="sm" variant="ghost" disabled={applying || approvedChanges.length === 0}
+                      onClick={() => setApprovedPaths([])}>Select none</Button>
                   </div>
                   <div className="gitlink-node-review-files" aria-label="Select and review Gitlink files">
                     <button
@@ -689,17 +629,13 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                     </button>
                     {data.gitlinkPendingChanges.map((change, index) => (
                       <div className="gitlink-node-review-file" key={change.path + ":" + index}>
-                        <input
-                          type="checkbox"
-                          aria-label={"Include " + displayGitlinkPath(change.path) + " in Apply"}
-                          checked={approvedSet.has(change.path)}
-                          disabled={applying}
+                        <Checkbox label={"Include " + displayGitlinkPath(change.path) + " in Apply"}
+                          checked={approvedSet.has(change.path)} disabled={applying}
                           onChange={(event) => {
-                            setApprovedPaths((current) => event.target.checked
+                            setApprovedPaths((current) => event.currentTarget.checked
                               ? [...current, change.path]
                               : current.filter((path) => path !== change.path));
-                          }}
-                        />
+                          }} />
                         <button
                           type="button"
                           aria-label={"Review " + change.operation + " " + displayGitlinkPath(change.path)}
@@ -751,17 +687,11 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
               )}
 
               <div className="gitlink-node-apply-row">
-                <button
-                  type="button"
-                  className="gitlink-node-apply-btn"
-                  disabled={!canApply || applying}
+                <Button size="sm" variant="primary" disabled={!canApply || applying}
                   onClick={() => {
                     setConfirmationFingerprint(data.gitlinkChangeFingerprint);
                     overlays.open(applyOverlayName, "dialog");
-                  }}
-                >
-                  Apply selected ({approvedChanges.length})
-                </button>
+                  }}>Apply selected ({approvedChanges.length})</Button>
               </div>
 
               <Dialog name={applyOverlayName} title="Apply Selected Changes?" className="gitlink-node-apply-dialog">
@@ -789,11 +719,8 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                   ))}
                 </ul>
                 <div className="gitlink-node-apply-dialog-actions">
-                  <button type="button" onClick={() => overlays.close()}>
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
+                  <Button size="sm" variant="secondary" onClick={() => overlays.close()}>Cancel</Button>
+                  <Button variant="primary" size="sm"
                     disabled={applying || !canApply || confirmationFingerprint !== data.gitlinkChangeFingerprint}
                     onClick={() => {
                       if (
@@ -807,10 +734,7 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                         );
                       }
                       overlays.close();
-                    }}
-                  >
-                    Yes
-                  </button>
+                    }}>Yes</Button>
                 </div>
               </Dialog>
             </div>
