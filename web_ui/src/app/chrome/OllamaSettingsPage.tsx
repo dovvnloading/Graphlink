@@ -178,7 +178,7 @@ function OllamaModelCard({
   const headingId = useId();
   const [confirming, setConfirming] = useState(false);
   useEffect(() => {
-    if (confirming) document.querySelector<HTMLButtonElement>(`[aria-label="Confirm remove ${CSS.escape(model.name)}"]`)?.focus();
+    if (confirming) [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.getAttribute("aria-label") === `Confirm remove ${model.name}`)?.focus();
   }, [confirming]);
 
   const onConfirmKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
@@ -186,7 +186,7 @@ function OllamaModelCard({
     event.preventDefault();
     event.stopPropagation();
     setConfirming(false);
-    document.querySelector<HTMLButtonElement>(`[aria-label="Remove ${CSS.escape(model.name)}"]`)?.focus();
+    [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.getAttribute("aria-label") === `Remove ${model.name}`)?.focus();
   };
 
   // Never trust folder-only metadata to unlock >8k windows. The server
@@ -532,7 +532,7 @@ export function OllamaSettingsPage({ state, transport }: { state: AppSettingsSta
         )}
 
 
-      </fieldset>
+      </FieldGroup>
 
       <datalist id={OLLAMA_MODELS_DATALIST_ID}>
         {state.ollamaScannedModels.map((model) => (
