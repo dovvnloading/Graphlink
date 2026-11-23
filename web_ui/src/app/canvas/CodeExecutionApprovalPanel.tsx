@@ -3,6 +3,9 @@ import { createPortal } from "react-dom";
 import { useFocusEscapeBackstop } from "../overlays/overlays";
 import { useExecutionLimits } from "./ExecutionLimitsContext";
 import { NodeMarkdown } from "./NodeMarkdown";
+import { InlineAlert } from "../ui/InlineAlert";
+import { Checkbox } from "../ui/Checkbox";
+import { Button } from "../ui/Button";
 
 /**
  * The mandatory human-approval gate (Qt-removal plan R5.4, corrected in the
@@ -252,7 +255,6 @@ export function CodeExecutionApprovalPanel({
   onDeny,
 }: CodeExecutionApprovalPanelProps) {
   const panelRef = useRef<HTMLDivElement | null>(null);
-  const denyButtonRef = useRef<HTMLButtonElement | null>(null);
   const executionLimits = useExecutionLimits();
 
   // Focus the Deny button the instant the panel appears - the safe default a
@@ -262,7 +264,7 @@ export function CodeExecutionApprovalPanel({
   // this panel focuses a SPECIFIC button deliberately rather than generically
   // walking the DOM for one.
   useEffect(() => {
-    if (awaitingApproval) denyButtonRef.current?.focus();
+    if (awaitingApproval) document.getElementById("code-exec-approval-deny")?.focus();
   }, [awaitingApproval]);
 
   // Tab focus trap scoped to this panel's own focusable stops (the
@@ -345,7 +347,8 @@ export function CodeExecutionApprovalPanel({
           <span className="overlay-dialog-title">{DIALOG_TITLE[kind]}</span>
         </header>
         <div className="overlay-dialog-body">
-          <p className="code-exec-approval-warning">{WARNING_TEXT[kind]}</p>
+          <InlineAlert variant="warning" className="code-exec-approval-warning"
+            title="Approval required" body={WARNING_TEXT[kind]} />
           {!!resourceLimitsText && (
             <p className="code-exec-approval-resource-limits">{resourceLimitsText}</p>
           )}
@@ -356,16 +359,10 @@ export function CodeExecutionApprovalPanel({
             </div>
           )}
           {showAllowSourceBuildsCheckbox && (
-            <label className="settings-checkbox-row code-exec-approval-source-builds-row">
-              <input
-                type="checkbox"
-                checked={!!allowSourceBuilds}
-                disabled={busy}
-                onChange={(event) => onToggleAllowSourceBuilds?.(event.target.checked)}
-              />
-              Allow building packages from source if no pre-built version is available
-              (this can run arbitrary code during installation)
-            </label>
+            <Checkbox className="code-exec-approval-source-builds-row"
+              label="Allow building packages from source if no pre-built version is available (this can run arbitrary code during installation)"
+              checked={!!allowSourceBuilds} disabled={busy}
+              onChange={(event) => onToggleAllowSourceBuilds?.(event.target.checked)} />
           )}
           <div
             className="chat-node-content code-exec-approval-code"
@@ -377,23 +374,12 @@ export function CodeExecutionApprovalPanel({
             <NodeMarkdown content={toPythonFence(code)} />
           </div>
           <div className="code-exec-approval-actions">
-            <button
-              ref={denyButtonRef}
-              type="button"
+            <Button id="code-exec-approval-deny" size="sm" variant="secondary"
               className="code-exec-approval-deny-btn"
-              disabled={busy}
-              onClick={() => onDeny()}
-            >
-              Deny
-            </button>
-            <button
-              type="button"
+              disabled={busy} onClick={() => onDeny()}>Deny</Button>
+            <Button size="sm" variant="primary"
               className="code-exec-approval-approve-btn"
-              disabled={busy}
-              onClick={() => onApprove()}
-            >
-              Approve
-            </button>
+              disabled={busy} onClick={() => onApprove()}>Approve and run</Button>
           </div>
         </div>
       </div>
