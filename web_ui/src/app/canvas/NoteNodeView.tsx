@@ -2,6 +2,10 @@ import { type Node, type NodeProps } from "@xyflow/react";
 import { memo, useEffect, useRef, useState } from "react";
 import { resolveShortcut } from "../chrome/shortcuts";
 import { GroupColorPicker } from "./GroupColorPicker";
+import { Icon } from "../ui/icons/Icon";
+import { IconButton } from "../ui/IconButton";
+import { Tooltip } from "../ui/Tooltip";
+import "./NoteNodeView.css";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeHeading } from "./NodeHeading";
 import { swatchStyle } from "./nodeSwatch";
@@ -152,30 +156,21 @@ function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
           <span className="note-node-badges">
             <span>{data.tableOutput ? "Grouped table" : data.tableStore ? "Data table" : "Note"}</span>
             {data.isSystemPrompt && (
-              <span className="note-node-badge" title="System Prompt" aria-label="System Prompt">
-                ⚙
-              </span>
+              <Tooltip label="System Prompt"><span className="note-node-badge" aria-label="System Prompt"><Icon name="settings" size="xs" /></span></Tooltip>
             )}
             {data.isSummaryNote && (
-              <span className="note-node-badge" title="Summary Note" aria-label="Summary Note">
-                ⧉
-              </span>
+              <Tooltip label="Summary Note"><span className="note-node-badge" aria-label="Summary Note"><Icon name="layers" size="xs" /></span></Tooltip>
             )}
             {data.isBranchComparison && (
-              <span
-                className="note-node-badge"
-                title={`Branch Comparison (${data.compareSourceNodeIds.length} sources)`}
-                aria-label="Branch Comparison"
-              >
-                ⇄
-              </span>
+              <Tooltip label={`Branch comparison (${data.compareSourceNodeIds.length} sources)`}>
+                <span className="note-node-badge" aria-label="Branch Comparison"><Icon name="compare" size="xs" /></span>
+              </Tooltip>
             )}
           </span>
           <div className="note-node-controls">
             <GroupColorPicker color={data.color} headerColor={data.headerColor} onSelect={data.onSetColor} />
-            <button type="button" className="note-node-delete-btn nodrag" aria-label="Delete note" onClick={data.onDelete}>
-              ×
-            </button>
+            <IconButton icon="trash" size="sm" className="note-node-delete-btn nodrag"
+              label="Delete note" onClick={data.onDelete} />
           </div>
         </NodeHeading>
       }
