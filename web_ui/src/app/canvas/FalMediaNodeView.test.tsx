@@ -4,6 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FalMediaNodeView, type FalMediaFlowNode } from "./FalMediaNodeView";
+import { OverlayProvider } from "../overlays/overlays";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 
 const catalog = {
   status: "ready", mode: "image", operation: "text-to-image", query: "",
@@ -49,7 +51,10 @@ function setup({
   } as unknown as NodeProps<FalMediaFlowNode>;
   const user = userEvent.setup();
   const rendered = render(
-    <ReactFlowProvider><FalMediaNodeView {...props}/></ReactFlowProvider>,
+    <OverlayProvider>
+      <ConfirmDialog />
+      <ReactFlowProvider><FalMediaNodeView {...props}/></ReactFlowProvider>
+    </OverlayProvider>,
   );
   return { ...rendered, props, funcs, user };
 }
@@ -159,7 +164,12 @@ describe("Fal Media Studio node", () => {
     });
     expect(screen.getByText("Historical one-call estimate")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Confirm & generate/ }));
-    expect(funcs.onGenerate).toHaveBeenCalledOnce();
+    const billingDialog = await screen.findByRole("dialog", { name: "Generate media?" });
+    expect(within(billingDialog).getByText(/This request is billable on Fal.ai/)).toBeVisible();
+    expect(within(billingDialog).getByText("Estimated cost: $0.02")).toBeVisible();
+    expect(funcs.onGenerate).not.toHaveBeenCalled();
+    await user.click(within(billingDialog).getByRole("button", { name: "Generate media" }));
+    await waitFor(() => expect(funcs.onGenerate).toHaveBeenCalledOnce());
     expect(funcs.onGenerate).toHaveBeenCalledWith("server-approved-nonce");
     expect(funcs.onPrepare).not.toHaveBeenCalled();
   });
@@ -220,12 +230,14 @@ describe("Fal Media Studio node", () => {
     expect(screen.getByText("Submission outcome unknown")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Open Fal dashboard/ })).toHaveAttribute("href", "https://fal.ai/dashboard");
     expect(screen.queryByRole("button", { name: /Review cost & generate/ })).not.toBeInTheDocument();
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     await user.click(screen.getByRole("button", { name: /I've checked/ }));
+    let dialog = await screen.findByRole("dialog", { name: "Unlock studio?" });
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(funcs.onAcknowledge).not.toHaveBeenCalled();
-    confirm.mockReturnValue(true);
     await user.click(screen.getByRole("button", { name: /I've checked/ }));
-    expect(funcs.onAcknowledge).toHaveBeenCalledOnce();
+    dialog = await screen.findByRole("dialog", { name: "Unlock studio?" });
+    await user.click(within(dialog).getByRole("button", { name: "Unlock studio" }));
+    await waitFor(() => expect(funcs.onAcknowledge).toHaveBeenCalledOnce());
     expect(funcs.onGenerate).not.toHaveBeenCalled();
   });
 
@@ -248,15 +260,46 @@ describe("Fal Media Studio node", () => {
     expect(screen.getAllByRole("link", { name: /Open generated/ })).toHaveLength(3);
   });
 
+  it("requires an explicit confirmation before cancelling a running paid request", async () => {
+    const { user, funcs } = setup({ mediaOverride: {
+      status: "running", requestId: "running-job",
+    } });
+    await user.click(screen.getByRole("button", { name: "Cancel request" }));
+    let dialog = await screen.findByRole("dialog", { name: "Cancel Fal request?" });
+    expect(within(dialog).getByRole("button", { name: "Cancel request" })).toHaveAttribute("data-destructive", "true");
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(funcs.onCancel).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Cancel request" }));
+    dialog = await screen.findByRole("dialog", { name: "Cancel Fal request?" });
+    await user.click(within(dialog).getByRole("button", { name: "Cancel request" }));
+    await waitFor(() => expect(funcs.onCancel).toHaveBeenCalledOnce());
+  });
+
+  it("does not generate a paid request if billing confirmation is declined", async () => {
+    const { user, funcs } = setup({ mediaOverride: {
+      modelId: "fal-ai/model-economy", modelName: "Economy Model", prompt: "Moonrise",
+      quote: {status: "ready", id: "one-use-token", modelId: "fal-ai/model-economy",
+        expiresAt: Math.floor(Date.now() / 1000) + 200, estimate: .02, currency: "USD"},
+    } });
+    await user.click(screen.getByRole("button", { name: "Confirm & generate" }));
+    const dialog = await screen.findByRole("dialog", { name: "Generate media?" });
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(funcs.onGenerate).not.toHaveBeenCalled();
+    expect(funcs.onPrepare).not.toHaveBeenCalled();
+  });
+
   it("safe delete requires confirmation when remote work is running", async () => {
     const { user, funcs } = setup({mediaOverride: {
       status: "running", requestId: "764cabcf-b745-4b3e-ae38-1200304cf45b",
     }});
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     await user.click(screen.getByRole("button", { name: "Delete Fal Media Studio node" }));
+    let dialog = await screen.findByRole("dialog", { name: "Delete Fal Media Studio node?" });
+    expect(within(dialog).getByRole("button", { name: "Delete node" })).toHaveAttribute("data-destructive", "true");
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(funcs.onDelete).not.toHaveBeenCalled();
-    confirm.mockReturnValue(true);
     await user.click(screen.getByRole("button", { name: "Delete Fal Media Studio node" }));
-    expect(funcs.onDelete).toHaveBeenCalledOnce();
+    dialog = await screen.findByRole("dialog", { name: "Delete Fal Media Studio node?" });
+    await user.click(within(dialog).getByRole("button", { name: "Delete node" }));
+    await waitFor(() => expect(funcs.onDelete).toHaveBeenCalledOnce());
   });
 });
