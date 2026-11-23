@@ -85,7 +85,9 @@ function isGraphHit(
   return result.sourceNodeId != null && result.graphId != null;
 }
 
-function GlobalSearchResultCard({ transport, result }: { transport: WsTransport; result: GlobalSearchResult }) {
+function GlobalSearchResultCard({ transport, result, selected }: {
+  transport: WsTransport; result: GlobalSearchResult; selected: boolean;
+}) {
   const [expanded, setExpanded] = useState(false);
   const [jumping, setJumping] = useState(false);
   const [jumpError, setJumpError] = useState<string | null>(null);
@@ -117,11 +119,12 @@ function GlobalSearchResultCard({ transport, result }: { transport: WsTransport;
   }
 
   return (
-    <li className="global-search-result-item">
-      <button
-        type="button"
+    <li className="global-search-result-item" role="option" aria-selected={selected}
+      id={`global-search-result-${result.chunkId}`}>
+      <Button
+        variant="ghost"
+        iconStart={graphHit ? "workspace" : "knowledge"}
         className="global-search-result-header"
-        id={`global-search-result-${result.chunkId}`}
         aria-expanded={expanded}
         onClick={() => setExpanded((value) => !value)}
       >
@@ -130,7 +133,7 @@ function GlobalSearchResultCard({ transport, result }: { transport: WsTransport;
         {sourceLabel !== result.documentTitle && (
           <span className="global-search-result-source">{sourceLabel}</span>
         )}
-      </button>
+      </Button>
       {expanded && (
         <div className="global-search-result-body">
           <p className="global-search-result-excerpt">{result.text}</p>
@@ -139,14 +142,12 @@ function GlobalSearchResultCard({ transport, result }: { transport: WsTransport;
               Offset {result.offsetStart}–{result.offsetEnd}
             </span>
             {graphHit ? (
-              <button
-                type="button"
+              <Button variant="ghost" size="sm" iconStart="arrow-right"
                 className="global-search-result-open-link"
-                onClick={jumpToNode}
-                disabled={jumping}
+                onClick={jumpToNode} loading={jumping}
               >
                 {jumping ? "Jumping…" : "Jump to node"}
-              </button>
+              </Button>
             ) : (
               isHttpUrl(result.sourceUri) && (
                 <a
@@ -155,7 +156,7 @@ function GlobalSearchResultCard({ transport, result }: { transport: WsTransport;
                   target="_blank"
                   rel="noreferrer"
                 >
-                  Open source
+                  Open source <Icon name="external-link" size="xs" />
                 </a>
               )
             )}
@@ -334,7 +335,8 @@ export function GlobalSearchDialog({ transport }: { transport: WsTransport }) {
           </h3>
           <ul className="global-search-result-list" role="listbox" aria-label={group.label + " results"}>
             {group.items.map((result) => (
-              <GlobalSearchResultCard key={result.chunkId} transport={transport} result={result} />
+              <GlobalSearchResultCard key={result.chunkId} transport={transport} result={result}
+                selected={selected?.chunkId === result.chunkId} />
             ))}
           </ul>
         </section>)}
