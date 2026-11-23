@@ -435,15 +435,15 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/context/ContextInspectorLauncher.tsx", rule: "R8", count: 1 },
 
-  { file: "app/styles.css", rule: "R9", count: 388 },
+  { file: "app/styles.css", rule: "R9", count: 386 },
 
-  { file: "app/styles.css", rule: "R10", count: 213 },
+  { file: "app/styles.css", rule: "R10", count: 211 },
 
   { file: "app/styles.css", rule: "R11", count: 3 },
 
-  { file: "app/styles.css", rule: "R12", count: 10752 },
+  { file: "app/styles.css", rule: "R12", count: 10663 },
 
-  { file: "app/styles.css", rule: "R14", count: 867 },
+  { file: "app/styles.css", rule: "R14", count: 850 },
 
 ];
 
