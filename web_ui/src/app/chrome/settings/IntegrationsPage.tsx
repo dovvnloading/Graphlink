@@ -14,7 +14,7 @@ export function IntegrationsPage({ state, transport }: { state: AppSettingsState
       <p className="settings-page-description">
         Configure optional external services. Gitlink can load public GitHub repositories without a token.
       </p>
-      <FieldGroup title="GitHub">
+      <FieldGroup {...{ title: "GitHub" }}>
         <TextField label="GitHub personal access token" type="password" suffix={{ type: "password" }}
           autoComplete="new-password" mono placeholder="Paste a token"
           value={draftToken} onValueChange={setDraftToken} />
@@ -32,7 +32,7 @@ export function IntegrationsPage({ state, transport }: { state: AppSettingsState
           }}>Save integration</Button>
         </div>
       </FieldGroup>
-      {!state.secretsEncryptedAtRest && <InlineAlert variant="warning" title="Secrets are not encrypted"
+      {!state.secretsEncryptedAtRest && <InlineAlert variant="warning" {...{ title: "Secrets are not encrypted" }}
         body="GitHub tokens saved here cannot be encrypted at rest on this system." />}
     </div>
   );
