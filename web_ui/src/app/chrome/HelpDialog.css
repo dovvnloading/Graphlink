@@ -1,3 +1,4 @@
+@layer surfaces {
 /* -- Help dialog (R2.5b) -------------------------------------------------- */
 
 .help-dialog {
@@ -232,4 +233,4 @@
   border-bottom-width: 2px;
   border-radius: var(--gl-radius-sm);
 }
-
+}

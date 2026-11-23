@@ -1,3 +1,4 @@
+@layer surfaces {
 /* Settings is a self-contained surface. All dimensions and colors use the kit tokens. */
 .settings-dialog {
   width: min(960px, calc(100vw - 64px));
@@ -214,4 +215,5 @@
   overflow-wrap: anywhere;
   white-space: pre-wrap;
   color: var(--gl-surface-text-primary);
+}
 }

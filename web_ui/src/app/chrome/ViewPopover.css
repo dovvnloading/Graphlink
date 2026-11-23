@@ -1,3 +1,4 @@
+@layer surfaces {
 .view-popover {
   width: 328px;
   max-height: min(76vh, 760px);
@@ -121,4 +122,5 @@
   padding: var(--gl-space-2) var(--gl-space-3);
   border-top: 1px solid var(--gl-surface-border);
   background: var(--gl-surface-raised);
+}
 }

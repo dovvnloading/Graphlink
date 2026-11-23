@@ -1,3 +1,4 @@
+@layer surfaces {
 .onboarding-dialog { height: min(540px, calc(100dvh - 2 * var(--gl-space-12))); }
 .onboarding-dialog .overlay-dialog-body { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: var(--gl-space-5); overflow-y: auto; }
 .onboarding-stepper { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--gl-space-1); margin: 0; padding: 0; list-style: none; }
@@ -9,3 +10,4 @@
 .onboarding-step h3 { margin: 0; font-size: var(--gl-text-xl); line-height: var(--gl-leading-xl); }
 .onboarding-step p { margin: 0; color: var(--gl-surface-text-secondary); }
 .onboarding-model-actions { display: flex; flex-wrap: wrap; gap: var(--gl-space-2); margin-top: var(--gl-space-3); }
+}
