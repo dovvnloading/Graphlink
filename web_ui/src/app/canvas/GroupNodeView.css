@@ -128,7 +128,7 @@
     border-color var(--gl-motion-fast) var(--gl-motion-ease);
 }
 
- .group-node:hover .group-node-label-chip {
+.group-node:hover .group-node-label-chip {
   color: var(--gl-surface-text-secondary);
   border-color: var(--gl-surface-border-strong);
 }
@@ -176,10 +176,13 @@
   background-color: var(--gl-surface-border);
 }
 
-.group-node.has-header-color .group-node-label-chip,
+.group-node.has-header-color .group-node-label-chip {
+  color: var(--node-swatch-ink, var(--gl-surface-text-primary));
+  border-color: var(--gl-surface-border-strong);
+}
 .group-node.has-header-color .group-node-controls-chip {
-  color: var(--gl-surface-text-bright);
-  border-color: color-mix(in srgb, var(--gl-surface-inset-deep) 65%, transparent);
+  color: var(--gl-surface-text-primary);
+  border-color: var(--gl-surface-border-strong);
 }
 
 /* The one control that stays discoverable without hovering first - see
