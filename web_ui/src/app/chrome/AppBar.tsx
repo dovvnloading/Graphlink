@@ -43,12 +43,12 @@ export function AppBar({ store }: { store: SceneStore }) {
   const requestPngExport = () => {
     void exportPng().catch((error: unknown) => console.error("[export-png]", error));
   };
-  const toggleOverflow = () => {
+  const toggleOverflow = (button: HTMLButtonElement) => {
     if (overflowPosition) {
       setOverflowPosition(null);
       return;
     }
-    const rect = overflowTrigger.current?.getBoundingClientRect();
+    const rect = button.getBoundingClientRect();
     if (rect) setOverflowPosition({ x: rect.left, y: rect.bottom + 6 });
   };
 
@@ -93,9 +93,13 @@ export function AppBar({ store }: { store: SceneStore }) {
 
       <span className="appbar-spacer" aria-hidden="true" />
 
-      <IconButton ref={overflowTrigger} icon="more-horizontal" label="More toolbar actions"
+      <IconButton icon="more-horizontal" label="More toolbar actions"
         size="md" className="appbar-overflow-trigger" aria-haspopup="menu"
-        aria-expanded={overflowPosition !== null} onClick={toggleOverflow} />
+        aria-expanded={overflowPosition !== null}
+        onClick={(event) => {
+          overflowTrigger.current = event.currentTarget;
+          toggleOverflow(event.currentTarget);
+        }} />
       {overflowPosition && (
         <Suspense fallback={<span role="status">Loading toolbar actions…</span>}>
           <LazyAppBarOverflowMenu store={store} position={overflowPosition}

@@ -4,7 +4,7 @@
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   height: 44px;
-  padding: 0 var(--gl-space-2-5);
+  padding: 0 var(--gl-space-2);
   background-color: var(--gl-surface-node-body);
   border-bottom: 1px solid var(--gl-surface-border);
 }
