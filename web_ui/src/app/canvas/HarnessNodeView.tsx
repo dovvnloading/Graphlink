@@ -15,6 +15,20 @@ import { useLodVisibility } from "./useLodVisibility";
 import { HarnessWorkspaceFiles } from "./AgentWorkspaceBrowser";
 import type { HarnessWorkspaceListing } from "./harnessWorkspaceFiles";
 import { MAX_HARNESS_TASK_LENGTH, exceedsHarnessTaskLimit } from "../../lib/harnessTaskLimit";
+import { Icon } from "../ui/icons/Icon";
+import { IconButton } from "../ui/IconButton";
+import { Button } from "../ui/Button";
+import { MenuItem } from "../ui/Menu";
+import { Select } from "../ui/Select";
+import { Checkbox } from "../ui/Checkbox";
+import { TextField } from "../ui/TextField";
+import { TextArea } from "../ui/TextArea";
+import { Tooltip } from "../ui/Tooltip";
+import { Badge, StatusPill } from "../ui/Badge";
+import { InlineAlert } from "../ui/InlineAlert";
+import { Disclosure } from "../ui/Disclosure";
+import { Spinner } from "../ui/Spinner";
+import { formatDuration, formatTokens } from "../ui/format";
 
 /**
  * PLAN-2026-08-24 H1: the workspace agent node. Everything rendered here
@@ -148,30 +162,10 @@ function HarnessNodeMenu({
 }) {
   return (
     <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onToggleCollapse();
-          onClose();
-        }}
-      >
-        {isCollapsed ? "Expand" : "Collapse"}
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="chat-node-menu-danger"
-        onClick={() => {
-          onDelete();
-          onClose();
-        }}
-      >
-        Delete Node
-      </button>
+      <MenuItem icon="minimize" label={isCollapsed ? "Expand" : "Collapse"} onSelect={onToggleCollapse} />
+      <MenuItem label="Delete node" destructive onSelect={onDelete} />
     </NodeMenu>
-  );
-}
+  );}
 
 /** Node settings are portaled to the document, not rendered inside the
  * transformed React Flow node. Otherwise fixed coordinates drift with zoom. */
@@ -257,10 +251,10 @@ function AgentSettingsPopover({
   }, [position.x, position.y, engine, hooks]);
 
   useEffect(() => {
-    panelRef.current?.querySelector<HTMLElement>("select:not([disabled])")?.focus();
+    panelRef.current?.querySelector<HTMLElement>(".gl-select-trigger:not([disabled])")?.focus();
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as HTMLElement;
-      if (panelRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
+      if (panelRef.current?.contains(target) || triggerRef.current?.contains(target) || target.closest(".gl-select-panel")) return;
       onClose();
     };
     const onKeyDown = (event: KeyboardEvent) => {
@@ -309,69 +303,38 @@ function AgentSettingsPopover({
     >
       <div className="harness-node-settings-heading">
         <strong>Agent settings</strong>
-        <button type="button" aria-label="Close agent settings" onClick={onClose}>×</button>
+        <IconButton size="sm" icon="close" label="Close agent settings" onClick={onClose} />
       </div>
-      <label className="harness-node-settings-field">
-        <span>Shell</span>
-        <select
-          className="nodrag nowheel"
-          aria-label="Shell"
-          value={selected}
-          disabled={!windows}
-          onChange={(event) => onSetShell(event.target.value)}
-        >
-          {windows ? (
-            <>
-              <option value="powershell">PowerShell (default)</option>
-              <option value="cmd">Command Prompt (cmd)</option>
-              <option value="git-bash">Git Bash</option>
-            </>
-          ) : (
-            <option value="bash">Bash (default)</option>
-          )}
-        </select>
-      </label>
-      <label className="harness-node-settings-field">
-        <span>Execution profile</span>
-        <select
-          className="nodrag nowheel"
-          aria-label="Execution profile"
+      <div className="harness-node-settings-field">
+        <Select label="Shell" className="nodrag nowheel" value={selected} disabled={!windows}
+          onChange={onSetShell} options={windows ? [
+            { value: "powershell", label: "PowerShell (default)" },
+            { value: "cmd", label: "Command Prompt (cmd)" },
+            { value: "git-bash", label: "Git Bash" },
+          ] : [{ value: "bash", label: "Bash (default)" }]} />
+      </div>
+      <div className="harness-node-settings-field">
+        <Select label="Execution profile" className="nodrag nowheel"
           value={profile === "isolated" ? "isolated" : "host"}
-          onChange={(event) => onSetExecutionProfile(event.target.value)}
-        >
-          <option value="host">Host (default)</option>
-          <option value="isolated" disabled={engine === null}>Isolated (Docker / Podman)</option>
-        </select>
-      </label>
-      <label className="harness-node-settings-field">
-        <span>Permission mode</span>
-        <select
-          className="nodrag nowheel"
-          aria-label="Permission mode"
-          value={permissionMode}
-          onChange={(event) => onSetPermissionMode(event.target.value)}
-        >
-          <option value="ask">Ask — approve each action</option>
-          <option value="auto_edit">Auto-edit — workspace file writes</option>
-          <option value="autonomous" disabled={profile !== "isolated"}>
-            Autonomous — Isolated only
-          </option>
-        </select>
-      </label>
+          onChange={onSetExecutionProfile} options={[
+            { value: "host", label: "Host (default)" },
+            { value: "isolated", label: "Isolated (Docker / Podman)", disabled: engine === null },
+          ]} />
+      </div>
+      <div className="harness-node-settings-field">
+        <Select label="Permission mode" className="nodrag nowheel" value={permissionMode}
+          onChange={onSetPermissionMode} options={[
+            { value: "ask", label: "Ask — approve each action" },
+            { value: "auto_edit", label: "Auto-edit — workspace file writes" },
+            { value: "autonomous", label: "Autonomous — Isolated only", disabled: profile !== "isolated" },
+          ]} />
+      </div>
       <p>Scripts, Python execution, dangerous commands, outside-workspace paths and network requests still ask. A looser mode takes effect on the next task. Reopening a graph resets permissions to Ask.</p>
-      <label className="harness-node-settings-field">
-        <span>
-          <input
-            type="checkbox"
-            className="nodrag"
-            aria-label="Allow network for every task"
-            checked={allowNetwork && permissionMode !== "autonomous"}
-            disabled={profile !== "isolated" || permissionMode === "autonomous"}
-            onChange={(event) => onSetNetworkAlways(event.target.checked)}
-          />
-          {" "}Allow network for every task
-        </span>
-      </label>
+      <Checkbox className="harness-node-settings-field nodrag"
+        label="Allow network for every task"
+        checked={allowNetwork && permissionMode !== "autonomous"}
+        disabled={profile !== "isolated" || permissionMode === "autonomous"}
+        onChange={(event) => onSetNetworkAlways(event.target.checked)} />
       {engine === undefined ? (
         <p role="status">Checking Docker / Podman availability…</p>
       ) : engine === null ? (
@@ -395,7 +358,7 @@ function AgentSettingsPopover({
               return (
                 <li key={rule}>
                   <span className="harness-node-allow-rule-text">
-                    <code title={command}>{command}</code>
+                    <Tooltip label={command}><code>{command}</code></Tooltip>
                     <small>{ruleShell} · {context}</small>
                   </span>
                   <button
@@ -432,41 +395,21 @@ function AgentSettingsPopover({
             <ul aria-label="Agent hooks">
               {hooks.map((hook, index) => (
                 <li key={index} className="harness-node-hook-row">
-                  <label className="harness-node-hook-enabled">
-                    <input
-                      type="checkbox"
-                      className="nodrag"
-                      aria-label={"Enable hook " + (index + 1)}
-                      checked={hook.enabled}
-                      onChange={(event) => changeHook(index, { enabled: event.target.checked })}
-                    />
-                    Enabled
-                  </label>
-                  <label className="harness-node-settings-field">
-                    <span>When</span>
-                    <select
-                      className="nodrag nowheel"
-                      aria-label={"Hook phase " + (index + 1)}
-                      value={hook.phase}
-                      onChange={(event) => changeHook(index, { phase: event.target.value as HarnessHook["phase"] })}
-                    >
-                      <option value="before_tool">Before tool (can block)</option>
-                      <option value="after_tool">After tool (adds note)</option>
-                      <option value="end_run">End of run</option>
-                    </select>
-                  </label>
-                  <label className="harness-node-settings-field">
-                    <span>Command</span>
-                    <input
-                      className="nodrag nowheel"
-                      type="text"
-                      maxLength={4000}
-                      aria-label={"Hook command " + (index + 1)}
-                      value={hook.command}
-                      onChange={(event) => changeHook(index, { command: event.target.value })}
-                      placeholder="Command to run in workspace"
-                    />
-                  </label>
+                  <Checkbox className="harness-node-hook-enabled nodrag"
+                    label={`Enable hook ${index + 1}`} checked={hook.enabled}
+                    onChange={(event) => changeHook(index, { enabled: event.target.checked })} />
+                  <Select className="harness-node-settings-field nodrag nowheel"
+                    label={`Hook phase ${index + 1}`} value={hook.phase}
+                    onChange={(value) => changeHook(index, { phase: value as HarnessHook["phase"] })}
+                    options={[
+                      { value: "before_tool", label: "Before tool (can block)" },
+                      { value: "after_tool", label: "After tool (adds note)" },
+                      { value: "end_run", label: "End of run" },
+                    ]} />
+                  <TextField className="harness-node-settings-field nodrag nowheel"
+                    label={`Hook command ${index + 1}`} maxLength={4000}
+                    value={hook.command} onValueChange={(value) => changeHook(index, { command: value })}
+                    placeholder="Command to run in workspace" />
                   <button
                     type="button"
                     className="harness-node-hook-remove nodrag"
@@ -610,11 +553,10 @@ function AgentModelTrigger({ store, name }: { store: ComposerStore; name: string
       aria-haspopup="dialog"
       aria-expanded={overlays.isOpen(name)}
       disabled={!composer.request.canSend}
-      title="Choose the model for the next Agent task"
       onClick={() => overlays.toggle(name, "popover")}
     >
       <span>{composer.route.modelLabel || composer.route.modelId || "Choose model"}</span>
-      <span aria-hidden="true">⌄</span>
+      <Icon name="chevron-down" size="sm" />
     </button>
   );
 }
@@ -784,29 +726,18 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
       }}
       header={
         <NodeHeading className="plan-node-title">
-          <span className="plan-node-badge">Agent</span>
+          <Badge className="plan-node-badge">Agent</Badge>
           <span className="plan-node-goal">{data.harnessGoal || "Untitled task"}</span>
           {modelStore && <AgentModelTrigger store={modelStore} name={modelPickerName} />}
-          <button
-            ref={settingsTriggerRef}
-            type="button"
+          <button ref={settingsTriggerRef} type="button"
             className="harness-node-settings-trigger nodrag"
-            aria-label="Agent settings"
-            title="Agent settings"
-            aria-haspopup="dialog"
-            aria-expanded={Boolean(settingsPosition)}
+            aria-label="Agent settings" aria-haspopup="dialog" aria-expanded={Boolean(settingsPosition)}
             onClick={(event) => {
               const rect = event.currentTarget.getBoundingClientRect();
               setMenuPosition(null);
               setSettingsPosition((current) => current ? null : { x: rect.left, y: rect.bottom + 4 });
-            }}
-          >
-            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-              strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M10 2h4l.6 2.4 2.1.9 2.2-1.2 2.8 2.8-1.2 2.2.9 2.1L24 12l-2.6.8-.9 2.1 1.2 2.2-2.8 2.8-2.2-1.2-2.1.9L14 22h-4l-.6-2.4-2.1-.9-2.2 1.2-2.8-2.8 1.2-2.2-.9-2.1L0 12l2.6-.8.9-2.1-1.2-2.2 2.8-2.8 2.2 1.2 2.1-.9z"
-                transform="translate(2 2) scale(.83)" />
-            </svg>
+            }}>
+            <Icon name="settings" size="sm" />
           </button>
           <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
         </NodeHeading>
@@ -851,7 +782,13 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
         </>
       }
     >
-      <div className={`plan-node-status ${statusClass(data)}`}>{statusLabel(data)}</div>
+      <div className={`plan-node-status ${statusClass(data)}`}>
+        {data.harnessStatus === "running" ? <StatusPill status="Running" /> 
+          : data.harnessStatus === "done" ? <StatusPill status="Done" />
+          : data.harnessStatus === "failed" ? <StatusPill status="Failed" />
+          : data.harnessAwaitingApproval ? <StatusPill status="Waiting for approval" />
+          : <Badge>{statusLabel(data)}</Badge>}
+      </div>
       {!running && !data.pendingRequestId && modelCapabilities?.tools === false && (
         <p className="harness-node-model-warning" role="status">
           {modelCapabilities.modelId} does not support tool calling.{" "}
@@ -877,42 +814,33 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
           means no run has bound this node since the folder was picked -
           nothing has been refused yet, so nothing is warned about. */}
       <div className="harness-node-workspace">
+        <Icon name="folder" size="sm" />
         {data.harnessWorkspacePath ? (
           <>
-            <span
-              className="harness-node-workspace-dir"
-              title={data.harnessWorkspacePath}
-            >
-              📁 {data.harnessWorkspacePath}
-              {!running &&
-                data.harnessWorkspaceActive !== "" &&
-                data.harnessWorkspaceActive !== data.harnessWorkspacePath &&
-                " (not trusted on this machine — using scratch)"}
-            </span>
-            <button
-              type="button"
-              className="plan-node-button nodrag"
-              onClick={data.onUseScratch}
-              disabled={running}
-              title={running ? WORKSPACE_LOCKED_HINT : undefined}
-            >
-              Use scratch
-            </button>
+            <Tooltip label={data.harnessWorkspacePath}>
+              <code className="harness-node-workspace-dir">
+                {data.harnessWorkspacePath}
+                {!running && data.harnessWorkspaceActive !== "" &&
+                  data.harnessWorkspaceActive !== data.harnessWorkspacePath &&
+                  " (not trusted on this machine — using scratch)"}
+              </code>
+            </Tooltip>
+            <Tooltip label={running ? WORKSPACE_LOCKED_HINT : "Use scratch workspace"}>
+              <Button size="sm" variant="ghost" className="nodrag"
+                onClick={data.onUseScratch} disabled={running}>Use scratch</Button>
+            </Tooltip>
           </>
         ) : (
           <>
-            <span className="harness-node-workspace-dir">Scratch workspace</span>
-            <button
-              type="button"
-              className="plan-node-button nodrag"
-              onClick={data.onPickWorkspace}
-              disabled={running}
-              title={running ? WORKSPACE_LOCKED_HINT : undefined}
-            >
-              Choose folder…
-            </button>
+            <code className="harness-node-workspace-dir">Scratch workspace</code>
+            <Tooltip label={running ? WORKSPACE_LOCKED_HINT : "Choose a workspace folder"}>
+              <Button size="sm" className="nodrag" onClick={data.onPickWorkspace}
+                disabled={running}>Choose folder…</Button>
+            </Tooltip>
           </>
         )}
+        <IconButton size="sm" icon="folder-open" className="nodrag"
+          label="Open workspace" onClick={data.onRevealWorkspace} />
       </div>
       <HarnessWorkspaceFiles
         key={data.harnessWorkspacePath}
@@ -933,18 +861,16 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
           Turns {data.harnessSpentTurns}
           {data.harnessMaxTurns > 0 ? ` (max ${data.harnessMaxTurns}/task)` : ""}
         </span>
-        <span>Tokens {data.harnessSpentTokens.toLocaleString()}</span>
+        <span>Tokens {formatTokens(data.harnessSpentTokens)}</span>
         {data.harnessMaxContextTokens > 0 && (
-          <span
-            title={
-              data.harnessCompactions > 0
-                ? `History summarized ${data.harnessCompactions} time${data.harnessCompactions === 1 ? "" : "s"} to stay within the context budget`
-                : "System prompt, tool schemas and retained history within the model's served context window"
-            }
-          >
-            Context {Math.min(100, Math.round((data.harnessContextTokens / data.harnessMaxContextTokens) * 100))}%
-            {data.harnessCompactions > 0 && ` · compacted ${data.harnessCompactions}×`}
-          </span>
+          <Tooltip label={data.harnessCompactions > 0
+            ? `History summarized ${data.harnessCompactions} times to stay within the context budget`
+            : "System prompt, tool schemas and retained history within the model’s served context window"}>
+            <span>
+              Context {Math.min(100, Math.round((data.harnessContextTokens / data.harnessMaxContextTokens) * 100))}%
+              {data.harnessCompactions > 0 && ` · compacted ${data.harnessCompactions}×`}
+            </span>
+          </Tooltip>
         )}
       </div>
 
@@ -961,7 +887,7 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
               className={`harness-node-plan-step harness-node-plan-step-${step.status}`}
             >
               <span className="harness-node-plan-marker" aria-hidden="true">
-                {step.status === "done" ? "✓" : step.status === "active" ? "▸" : "○"}
+                {step.status === "active" ? <Spinner size={12} decorative /> : <Icon size="sm" name={step.status === "done" ? "status-success" : "status-pending"} />}
               </span>
               <span className="harness-node-plan-text">{step.text}</span>
             </div>
