@@ -1072,6 +1072,42 @@ describe("Composer", () => {
     expect(screen.queryByRole("menu", { name: "Choose a reasoning level" })).toBeNull();
   });
 
+  it("closes the empty model menu with Escape right after choosing a reasoning level", async () => {
+    const user = userEvent.setup();
+    const { store, loadPickerModels } = makeStore({
+      composer: {
+        route: {
+          ...initialComposerState.route,
+          reasoning: {
+            level: "off", label: "Off",
+            options: [
+              { id: "off", label: "Off", description: "No extended reasoning." },
+              { id: "high", label: "High", description: "Thorough reasoning." },
+            ],
+          },
+        },
+        capabilities: { ...initialComposerState.capabilities, reasoningSelection: true },
+        request: { ...initialComposerState.request, canSend: true },
+      },
+    });
+    loadPickerModels.mockResolvedValue([]);
+    const { container } = render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    await user.click(container.querySelector('[data-overlay-trigger="reasoning"]') as HTMLElement);
+    await user.click(screen.getAllByRole("menuitemradio")[0]);
+    expect(screen.queryByRole("menu", { name: "Choose a reasoning level" })).toBeNull();
+    await user.click(container.querySelector('[data-overlay-trigger="model"]') as HTMLElement);
+    const menu = await screen.findByRole("menu", { name: "Choose a model" });
+    await screen.findByText("No models available. Configure a model in Settings.");
+    expect(menu.contains(document.activeElement)).toBe(true);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "Choose a model" })).toBeNull();
+  });
+
   it("hides the Reasoning chip when the provider and model expose no reasoning selection", () => {
     // An always-disabled chip was clutter; the model picker still names the
     // provider, so nothing is lost by leaving the control out.

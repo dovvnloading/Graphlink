@@ -89,7 +89,19 @@ test("starts a graph and navigates it using the canvas controls", async ({ page 
           } else {
             await expect(picker.getByRole("status")).toContainText(/No models available|No matching models/);
             await expect(picker.getByRole("menuitem", { name: "Manage models…" })).toBeVisible();
+            // TEMP-DIAG (removed before merge)
+            await page.evaluate(() => {
+              const log: string[] = [];
+              (window as unknown as { __diag: string[] }).__diag = log;
+              const note = (phase: string) => (e: KeyboardEvent) => log.push(phase + ":" + e.key + ":prevented=" + e.defaultPrevented + ":target=" + (e.target as HTMLElement)?.outerHTML?.slice(0, 90));
+              window.addEventListener("keydown", note("win-capture"), true);
+              window.addEventListener("keydown", note("win-bubble"));
+              log.push("before:active=" + document.activeElement?.outerHTML.slice(0, 120) + " tooltips=" + document.querySelectorAll("[role=tooltip]").length + " dialogs=" + document.querySelectorAll("[role=dialog]").length);
+            });
             await page.keyboard.press("Escape");
+            await page.waitForTimeout(300);
+            console.log("DIAG2", JSON.stringify(await page.evaluate(() => [...(window as unknown as { __diag: string[] }).__diag,
+              "after:menus=" + document.querySelectorAll("[role=menu]").length + " active=" + document.activeElement?.outerHTML.slice(0, 120)])));
           }
         } else {
           await picker.getByRole("menuitemradio").first().click();
