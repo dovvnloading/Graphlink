@@ -84,7 +84,7 @@ async function setup(startResult: unknown = "n42", recipes: unknown[] = [], node
 
 async function pickRecipe(user: ReturnType<typeof userEvent.setup>, name: string) {
   await user.click(screen.getByRole("button", { name: "Recipe" }));
-  await user.click(screen.getByRole("button", { name: new RegExp("^" + name) }));
+  await user.click(screen.getByRole("option", { name: new RegExp("^" + name) }));
 }
 
 describe("BuilderLaunchDialog", () => {

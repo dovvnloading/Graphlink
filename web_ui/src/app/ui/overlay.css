@@ -1,0 +1,145 @@
+/* Shared light and modal surfaces. Variants in app/styles.css override the
+   zero-specificity base without relying on import order. */
+:where(.overlay-popover) {
+  background-color: var(--gl-surface-overlay);
+  color: var(--gl-surface-text-primary);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-md);
+  padding: var(--gl-space-3) var(--gl-space-3-5, 14px);
+  min-width: 230px;
+  max-width: 320px;
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
+  box-shadow: var(--gl-shadow-popover);
+  animation: gl-overlay-popover-in var(--gl-motion-base) var(--gl-ease-enter) both;
+}
+.overlay-popover-anchored {
+  position: fixed;
+  z-index: var(--gl-z-popover);
+}
+.overlay-popover[data-nested] {
+  z-index: var(--gl-z-dialog-popover);
+}
+.overlay-popover[data-state="closing"] {
+  pointer-events: none;
+  animation: gl-overlay-fade-out var(--gl-motion-fast) var(--gl-ease-exit) both;
+}
+.overlay-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--gl-z-scrim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--gl-scrim);
+  animation: gl-overlay-fade-in var(--gl-motion-slow) var(--gl-ease-enter) both;
+}
+.overlay-scrim[data-nested] { z-index: var(--gl-z-dialog-popover); }
+.overlay-scrim[data-state="closing"] {
+  pointer-events: none;
+  animation: gl-overlay-fade-out var(--gl-motion-fast) var(--gl-ease-exit) both;
+}
+.overlay-dialog {
+  box-sizing: border-box;
+  width: min(560px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  max-height: 85vh;
+  min-height: 0;
+  z-index: var(--gl-z-dialog);
+  display: flex;
+  flex-direction: column;
+  background-color: var(--gl-surface-overlay);
+  color: var(--gl-surface-text-primary);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-lg);
+  box-shadow: var(--gl-shadow-dialog);
+  outline: none;
+  animation: gl-overlay-dialog-in var(--gl-motion-slow) var(--gl-ease-enter) both;
+}
+.overlay-dialog[data-size="sm"] { width: min(420px, calc(100vw - 32px)); }
+.overlay-dialog[data-size="lg"] { width: min(760px, calc(100vw - 32px)); }
+.overlay-dialog[data-size="xl"] { width: min(960px, calc(100vw - 32px)); }
+.overlay-dialog[data-state="closing"] {
+  animation: gl-overlay-fade-out var(--gl-motion-fast) var(--gl-ease-exit) both;
+}
+.overlay-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--gl-space-3);
+  flex: none;
+  padding: var(--gl-space-4) var(--gl-space-5);
+  border-bottom: 1px solid var(--gl-surface-border);
+}
+.overlay-dialog-heading { display: grid; gap: var(--gl-space-1); min-width: 0; }
+.overlay-dialog-title {
+  font-size: var(--gl-text-lg);
+  line-height: var(--gl-line-lg, 22px);
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+  outline: none;
+}
+.overlay-dialog-description {
+  margin: 0;
+  font-size: var(--gl-text-sm);
+  color: var(--gl-surface-text-muted);
+}
+.overlay-dialog-close {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: var(--gl-control-h-md);
+  height: var(--gl-control-h-md);
+  padding: 0;
+  color: var(--gl-surface-text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--gl-radius-sm);
+  cursor: pointer;
+}
+.overlay-dialog-close:hover { background-color: var(--gl-neutral-button-hover); color: var(--gl-surface-text-primary); }
+.overlay-dialog-close:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 2px;
+}
+.overlay-dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--gl-space-5);
+  font-size: var(--gl-text-base);
+}
+.overlay-dialog-footer {
+  position: sticky;
+  bottom: 0;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gl-space-3);
+  padding: var(--gl-space-3) var(--gl-space-5);
+  border-top: 1px solid var(--gl-surface-border);
+  background-color: var(--gl-surface-overlay);
+}
+.overlay-dialog-status { color: var(--gl-surface-text-muted); font-size: var(--gl-text-xs); }
+.overlay-dialog-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--gl-space-2); }
+.overlay-dialog-loading {
+  min-width: 200px;
+  padding: var(--gl-space-5) var(--gl-space-6);
+  color: var(--gl-surface-text-muted);
+  font-size: var(--gl-text-sm);
+  text-align: center;
+}
+@keyframes gl-overlay-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes gl-overlay-fade-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes gl-overlay-popover-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes gl-overlay-dialog-in {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .overlay-popover, .overlay-scrim, .overlay-dialog { animation: none !important; transform: none !important; }
+}

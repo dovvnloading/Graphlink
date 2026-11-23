@@ -403,7 +403,7 @@ describe("GitlinkNodeView", () => {
     // followed by a click on the portaled option button - the same idiom
     // SettingsDialog.test.tsx's own chooseCustomOption helper uses.
     await user.click(screen.getByRole("button", { name: "Context scope" }));
-    await user.click(await screen.findByRole("button", { name: "Full repo" }));
+    await user.click(await screen.findByRole("option", { name: "Full repo" }));
     expect(data.onBuildContext).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: "Build Context" }));

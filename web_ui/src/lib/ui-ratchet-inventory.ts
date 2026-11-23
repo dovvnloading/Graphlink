@@ -317,10 +317,6 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/chrome/Composer.tsx", rule: "R8", count: 9 },
 
-  { file: "app/chrome/CustomSelect.tsx", rule: "R2", count: 1 },
-
-  { file: "app/chrome/CustomSelect.tsx", rule: "R13", count: 1 },
-
   { file: "app/chrome/DiagnosticsDialog.tsx", rule: "R8", count: 1 },
 
   { file: "app/chrome/GlobalSearchDialog.tsx", rule: "R8", count: 1 },
@@ -439,17 +435,15 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/context/ContextInspectorLauncher.tsx", rule: "R8", count: 1 },
 
-  { file: "app/overlays/overlays.tsx", rule: "R1", count: 1 },
+  { file: "app/styles.css", rule: "R9", count: 388 },
 
-  { file: "app/styles.css", rule: "R9", count: 392 },
-
-  { file: "app/styles.css", rule: "R10", count: 217 },
+  { file: "app/styles.css", rule: "R10", count: 213 },
 
   { file: "app/styles.css", rule: "R11", count: 3 },
 
-  { file: "app/styles.css", rule: "R12", count: 10916 },
+  { file: "app/styles.css", rule: "R12", count: 10752 },
 
-  { file: "app/styles.css", rule: "R14", count: 879 },
+  { file: "app/styles.css", rule: "R14", count: 867 },
 
 ];
 
