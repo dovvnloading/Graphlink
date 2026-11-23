@@ -76,7 +76,7 @@ describe("Graph Runner", () => {
       .mockResolvedValueOnce({ previewToken: "review-only", steps: [step] });
     store.requestGraphRunnerNodes(["bound-model", "bound-model"]);
     await user.click(screen.getByRole("button", { name: "Open runner" }));
-    expect(await screen.findByRole("combobox", { name: "Run scope" })).toHaveTextContent("Selected nodes");
+    expect(await screen.findByRole("button", { name: "Run scope" })).toHaveTextContent("Selected nodes");
     await user.click(screen.getByRole("button", { name: "Preview run" }));
     expect(request).toHaveBeenCalledWith("scene", "previewGraphRun", [["bound-model"]]);
     expect(await screen.findByRole("region", { name: "Run preview" })).toBeInTheDocument();
