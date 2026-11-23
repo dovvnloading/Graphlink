@@ -426,7 +426,7 @@ function OutputGallery({ media, id }: { media: MediaState; id: string }) {
 
 function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode>) {
   const lodCollapsed = useLodVisibility();
-  const confirm = useConfirm();
+  const requestApproval = useConfirm();
   const media = useMemo(() => parseMediaState(data.mediaJson), [data.mediaJson]);
   const catalog = useMemo(() => parseMediaCatalog(data.catalogJson), [data.catalogJson]);
   const schema = useMemo(() => parseMediaSchema(data.schemaJson), [data.schemaJson]);
@@ -525,7 +525,7 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
   const confirmGenerate = async () => {
     if (!currentQuote?.id || busy || uploadBusy) return;
     const approvedQuote = currentQuote;
-    const accepted = await confirm({
+    const accepted = await requestApproval({
       title: "Generate media?",
       body: "This request is billable on Fal.ai. Estimates are historical averages, not spending limits. Actual cost depends on the output. This approves one request.",
       confirmLabel: "Generate media",
@@ -540,21 +540,21 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
   };
   const showQueue = ["submitting", "queued", "running", "cancelling", "stalled"].includes(media.status);
   const deleteNode = async () => {
-    if (!showQueue || await confirm({
+    if (!showQueue || await requestApproval({
       title: "Delete Fal Media Studio node?",
       body: "This job may continue on Fal after the node is removed.",
       confirmLabel: "Delete node", destructive: true,
     })) data.onDelete();
   };
   const acknowledge = async () => {
-    if (await confirm({
+    if (await requestApproval({
       title: "Unlock studio?",
       body: "Have you checked the Fal dashboard and verified the previous submission's outcome? This will not cancel a remote job or refund charges.",
       confirmLabel: "Unlock studio",
     })) data.onAcknowledge();
   };
   const cancelRequest = async () => {
-    if (await confirm({
+    if (await requestApproval({
       title: "Cancel Fal request?",
       body: "Ask Fal to cancel this request? Jobs already running may still incur charges.",
       confirmLabel: "Cancel request", destructive: true,
