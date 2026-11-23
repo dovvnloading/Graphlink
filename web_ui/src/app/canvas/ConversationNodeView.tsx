@@ -233,7 +233,7 @@ function ConversationBubble({
         </span>
         <span className="chat-node-quick-actions">
           <IconButton size="sm" className="chat-node-quick-action nodrag"
-            icon={copied ? "check" : "copy"} label={`Copy message ${index + 1}`}
+            icon={copied ? "check" : "copy"} label={`${copied ? "Copied" : "Copy"} message ${index + 1}`}
             onClick={onQuickCopy} />
           <IconButton size="sm" className="chat-node-quick-action nodrag"
             icon="trash" label={`Delete message ${index + 1} from history`}
