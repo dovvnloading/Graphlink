@@ -14,7 +14,8 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useS
 import { createPortal } from "react-dom";
 import type { SceneEdgeRow, SceneNodeRow, SceneState } from "../../lib/bridge-core/generated/scene-state";
 import type { StreamListener } from "../../lib/ws/transport";
-import { BridgeErrorState } from "../../lib/ui/BridgeErrorState";
+import { Icon } from "../ui/icons/Icon";
+import { Tooltip } from "../ui/Tooltip";
 import { OverlayProviderIfMissing, useOverlays } from "../overlays/overlays";
 import { ChatRerunDialog } from "./ChatRerunDialog";
 import { RunBoundNodesContext } from "./RunBoundNodesContext";
@@ -2607,20 +2608,22 @@ export function toFlowEdges(scene: SceneState, hoveredEdgeId: string | null): Ed
       !dockedNodeIds.has(e.target) && !dockedNodeIds.has(e.source)
       && !collapsedHiddenIds.has(e.target) && !collapsedHiddenIds.has(e.source)
     )
-    .map((e) => ({
-      id: e.id,
-      source: e.source,
-      target: e.target,
-      ...(e.role ? { data: { role: e.role } } : {}),
-      type:
-        scene.orthogonalRouting &&
-        isOrthogonalEligible(nodesById.get(e.source)?.kind, nodesById.get(e.target)?.kind)
-          ? "orthogonal"
-          : undefined,
-      ...(scene.fadeConnectionsEnabled && e.id !== hoveredEdgeId
-        ? { style: { opacity: FADED_CONNECTION_OPACITY } }
-        : {}),
-    }));
+    .map((e) => {
+      const edge: Edge<{ role: ConnectionRole }> = {
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        type:
+          scene.orthogonalRouting &&
+          isOrthogonalEligible(nodesById.get(e.source)?.kind, nodesById.get(e.target)?.kind)
+            ? "orthogonal"
+            : undefined,
+      };
+      if (e.role) edge.data = { role: e.role };
+      if (scene.fadeConnectionsEnabled && e.id !== hoveredEdgeId)
+        edge.style = { opacity: FADED_CONNECTION_OPACITY };
+      return edge;
+    });
   for (const target of scene.nodes) {
     const model = target.kind === "model";
     const table = !!target.tableInputSourceId;
@@ -3355,20 +3358,17 @@ function CanvasInner({
         {scene.pins.length > 0 && (
           <ViewportPortal>
             {scene.pins.map((pin) => (
-              <button
-                key={pin.id}
-                type="button"
-                className="scene-pin-marker"
-                style={{ position: "absolute", left: pin.x, top: pin.y }}
-                title={pin.note || pin.title}
-                aria-label={`Jump to pin ${pin.title}`}
-                onClick={() => onJumpToPin(pin)}
-              >
-                <svg aria-hidden="true" viewBox="0 0 24 24" className="scene-pin-marker-icon">
-                  <path d="M9 4h6l-1 6 3 3H7l3-3Z" />
-                  <path d="M12 13v7" />
-                </svg>
-              </button>
+              <Tooltip key={pin.id} label={pin.note || pin.title}>
+                <button
+                  type="button"
+                  className="scene-pin-marker"
+                  style={{ position: "absolute", left: pin.x, top: pin.y }}
+                  aria-label={`Jump to pin ${pin.title}`}
+                  onClick={() => onJumpToPin(pin)}
+                >
+                  <Icon name="pin" className="scene-pin-marker-icon" />
+                </button>
+              </Tooltip>
             ))}
           </ViewportPortal>
         )}
@@ -3421,7 +3421,20 @@ export function SceneCanvas({
   const versionRejection = useSyncExternalStore(store.subscribe, store.getSceneBlockingRejection);
   if (versionRejection) {
     return (
-      <BridgeErrorState title="Canvas unavailable" rejection={versionRejection} className="scene-bridge-error" />
+      <div className="scene-bridge-error" role="alert" aria-live="assertive">
+        <div className="bridge-error-title">Canvas unavailable</div>
+        <p className="bridge-error-reason">{versionRejection.reason}</p>
+        {versionRejection.details.length > 0 && (
+          <ul className="bridge-error-details">
+            {versionRejection.details.map((detail) => <li key={detail}>{detail}</li>)}
+          </ul>
+        )}
+        <p className="bridge-error-hint">
+          {versionRejection.kind === "version"
+            ? "Rebuilding the app's interface assets usually resolves this."
+            : "This is a bug - the desktop app and this interface disagree about the message format."}
+        </p>
+      </div>
     );
   }
   return (
