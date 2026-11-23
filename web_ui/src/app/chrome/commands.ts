@@ -5,6 +5,7 @@ import { GRAPH_FIT_OPTIONS } from "../canvas/canvasConstants";
 import type { SceneStore } from "../canvas/sceneStore";
 import type { OverlayContextValue } from "../overlays/overlays";
 import { motionDuration } from "../reducedMotion";
+import type { IconName } from "../ui/icons/registry";
 
 /**
  * The command registry (Qt-removal plan R2.4) - command-palette's SPA
@@ -17,7 +18,52 @@ import { motionDuration } from "../reducedMotion";
  * disabled Save/provider-select.
  */
 
+export type CommandCategory = "Canvas" | "Graph" | "Navigate" | "App";
+type CommandMeta = { icon: IconName; category: CommandCategory; shortcut?: string };
+
+const COMMAND_META: Readonly<Record<string, CommandMeta>> = {
+  "fit-all": { icon: "fit-view", category: "Canvas" },
+  "reset-view": { icon: "refresh", category: "Canvas" },
+  "export-canvas-png": { icon: "download", category: "Canvas" },
+  "zoom-in": { icon: "zoom-in", category: "Canvas" },
+  "zoom-out": { icon: "zoom-out", category: "Canvas" },
+  "organize-nodes": { icon: "organize", category: "Canvas" },
+  "graph-runner": { icon: "play", category: "Graph" },
+  "select-all": { icon: "check", category: "Canvas" },
+  "delete-selected": { icon: "trash", category: "Canvas" },
+  "compare-branches": { icon: "compare", category: "Graph", shortcut: "Ctrl+Shift+C" },
+  "synthesize-branches": { icon: "merge", category: "Graph", shortcut: "Ctrl+Shift+M" },
+  "add-pin": { icon: "pin", category: "Canvas" },
+  "open-library": { icon: "folder", category: "Navigate", shortcut: "Ctrl+L" },
+  "open-settings": { icon: "settings", category: "App" },
+  "open-view": { icon: "gauge", category: "Navigate" },
+  "open-pins": { icon: "pin", category: "Navigate" },
+  "open-help": { icon: "help", category: "App" },
+  "open-about": { icon: "info", category: "App" },
+  "open-agent": { icon: "agent", category: "App" },
+  "open-plugins": { icon: "puzzle", category: "App" },
+  "open-quick-switcher": { icon: "search", category: "Navigate", shortcut: "Ctrl+P" },
+  "open-global-search": { icon: "search", category: "Navigate" },
+  "add-note": { icon: "document-text", category: "Canvas" },
+  "add-table": { icon: "file-table", category: "Canvas" },
+  "new-chat": { icon: "chat-plus", category: "Graph", shortcut: "Ctrl+T" },
+  "save-chat": { icon: "download", category: "Graph", shortcut: "Ctrl+S" },
+  "focus-selection": { icon: "fit-view", category: "Canvas" },
+  "create-frame": { icon: "layers", category: "Canvas", shortcut: "Ctrl+G" },
+  "create-container": { icon: "workspace", category: "Canvas", shortcut: "Ctrl+Shift+G" },
+  "collapse-all-nodes": { icon: "chevron-up", category: "Canvas" },
+  "expand-all-nodes": { icon: "chevron-down", category: "Canvas" },
+};
+
+function sentenceCase(label: string): string {
+  return label.replace(/\b[A-Z][a-z]+\b/g, (word, offset: number) =>
+    offset === 0 ? word : word.toLowerCase());
+}
+
 export interface PaletteCommand {
+  icon: IconName;
+  category: CommandCategory;
+  shortcut?: string;
   id: string;
   name: string;
   aliases: string[];
@@ -49,7 +95,7 @@ export function buildCommands(
   const hasCollapsibleNodes = () =>
     store.getScene().nodes.some((n) => n.kind === "chat" || n.kind === "conversation" || n.kind === "html");
 
-  return [
+  const commands = [
     {
       id: "fit-all",
       name: "Fit All to View",
@@ -324,4 +370,9 @@ export function buildCommands(
       enabled: hasCollapsibleNodes,
     },
   ];
+  return commands.map((command) => ({
+    ...command,
+    name: sentenceCase(command.name),
+    ...COMMAND_META[command.id],
+  }));
 }
