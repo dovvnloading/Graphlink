@@ -47,6 +47,6 @@ describe("source rows for a computed group", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("result changed");
     await act(async () => { finishFirst(page("A", 0, 1)); });
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
-    expect(screen.getByRole("combobox")).toHaveValue("B");
+    expect(screen.getByRole("button", { name: "Inspect group" })).toHaveTextContent("B");
   });
 });
