@@ -76,7 +76,8 @@ def test_registration_is_tied_to_loaded_plugin(monkeypatch):
     assert registry.scopes_for("browser.run") == frozenset({NET_FETCH})
     assert registry.scopes_for("browser.publish") == frozenset({GRAPH_MUTATE})
     assert registry.approval_for("browser.run") == "auto"
-    assert registry.approval_for("browser.publish") == "once"
+    assert registry.approval_for("browser.publish") == "always"
+    assert not registry.allows_session_grant("browser.publish")
     assert not registry.parallel_safe_for("browser.run")
 
 
@@ -156,6 +157,13 @@ def test_publishing_capture_produces_source_linked_undoable_nodes(monkeypatch):
     assert document.command_log[-1].run_id == "run-123"
     assert document.command_log[-1].provenance == "agent"
     assert "capture-test" not in tools_browser._captures(ctx)
+    # A consumed capture cannot be published twice or consume more consent.
+    approval_count = len(approvals)
+    repeated = asyncio.run(registry.invoke(
+        _call("browser.publish", capture_id="capture-test"), ctx,
+    ))
+    assert repeated.is_error and "not found" in repeated.content
+    assert len(approvals) == approval_count
     assert approvals[0][0] == "browser.publish"
 
     agent.pending_request_id = None
