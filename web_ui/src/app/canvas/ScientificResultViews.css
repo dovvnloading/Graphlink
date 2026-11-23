@@ -32,7 +32,7 @@
 .science-forest-axis, .science-tree-annotation { font: var(--gl-text-2xs) var(--gl-font-family); fill: currentColor; }
 .science-tree-annotation { opacity: .85; }
 .science-tree-branch { stroke: var(--gl-semantic-status-info, currentColor); stroke-width: 1.6; fill: none; }
-.science-view-data summary { font-size: var(--gl-text-2xs); cursor: pointer; }
+.science-view-data > .gl-disclosure-trigger { font-size: var(--gl-text-2xs); cursor: pointer; }
 .science-view-data table { width: 100%; border-collapse: collapse; font-size: var(--gl-text-2xs); font-variant-numeric: tabular-nums; }
 .science-view-data th, .science-view-data td { border-bottom: 1px solid var(--gl-surface-border); padding: var(--gl-space-1) var(--gl-space-1-5); text-align: left; }
 .science-view-data th { font-weight: 600; }

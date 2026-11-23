@@ -39,8 +39,6 @@
   stroke: var(--gl-surface-text-primary);
 }
 
-
-
 .app-topbar {
   height: 44px;
   flex: none;
@@ -327,6 +325,6 @@
 }
 
 /* A selected group remains underneath the cards contained in it. */
-.scene-canvas .react-flow__node-frame.selected { z-index: -1 !important; }
-.scene-canvas .react-flow__node-container.selected { z-index: -2 !important; }
+.scene-canvas .react-flow__node-frame.selected { z-index: -1; }
+.scene-canvas .react-flow__node-container.selected { z-index: -2; }
 }

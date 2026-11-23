@@ -1,17 +1,17 @@
 @layer nodes {
 .chat-citations {
-  margin: 10px 0 4px;
-  padding: 8px 10px 0;
+  margin: var(--gl-space-2-5) 0 var(--gl-space-1);
+  padding: var(--gl-space-2) var(--gl-space-2-5) 0;
   border-top: 1px solid var(--gl-surface-border);
-  font-size: 12px;
+  font-size: var(--gl-text-xs);
 }
-.chat-citations-heading { font-weight: 600; margin-bottom: 6px; }
+.chat-citations-heading { font-weight: 600; margin-bottom: var(--gl-space-1-5); }
 .chat-citations-list { margin: 0; padding: 0; list-style: none; }
-.chat-citations-list li { margin: 5px 0 8px; }
+.chat-citations-list li { margin: var(--gl-space-1) 0 var(--gl-space-2); }
 .chat-citation-source {
-  display: inline-flex; align-items: baseline; gap: 7px; max-width: 100%;
+  display: inline-flex; align-items: baseline; gap: var(--gl-space-1-5); max-width: 100%;
   font: inherit; text-align: left; color: var(--gl-surface-text-primary);
-  background: transparent; border: 0; padding: 2px 0; cursor: pointer;
+  background: transparent; border: 0; padding: var(--gl-space-0-5) 0; cursor: pointer;
   overflow-wrap: anywhere;
 }
 .chat-citation-source:hover { text-decoration: underline; }
@@ -20,15 +20,15 @@
 }
 .chat-citation-number { font-weight: 700; white-space: nowrap; }
 .chat-citation-origin, .chat-citations-trust { color: var(--gl-surface-text-muted); overflow-wrap: anywhere; }
-.chat-citation-origin { margin-left: 25px; font-size: 11px; }
-.chat-citations-trust { margin: 6px 0 0; font-size: 11px; }
+.chat-citation-origin { margin-left: var(--gl-space-6); font-size: var(--gl-text-2xs); }
+.chat-citations-trust { margin: var(--gl-space-1-5) 0 0; font-size: var(--gl-text-2xs); }
 .chat-citation-inline {
-  display: inline; margin: 0 2px; padding: 0 4px;
-  border: 1px solid var(--gl-surface-border-strong); border-radius: 5px;
-  font: inherit; font-size: .82em; line-height: inherit;
+  display: inline; margin: 0 var(--gl-space-0-5); padding: 0 var(--gl-space-1);
+  border: 1px solid var(--gl-surface-border-strong); border-radius: var(--gl-radius-sm);
+  font: inherit; font-size: var(--gl-text-2xs); line-height: inherit;
   color: var(--gl-surface-text-primary); background: var(--gl-surface-inset);
   cursor: pointer; vertical-align: baseline;
 }
 .chat-citation-inline:hover { text-decoration: underline; }
-.chat-citation-unverified { font-size: .85em; color: var(--gl-surface-text-muted); }
+.chat-citation-unverified { font-size: var(--gl-text-2xs); color: var(--gl-surface-text-muted); }
 }
