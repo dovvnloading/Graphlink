@@ -121,6 +121,9 @@ export function AppBar({ store }: { store: SceneStore }) {
         <IconButton icon="agent" label="Agent" size="md"
           data-overlay-trigger="harness-launch" aria-pressed={overlays.isOpen("harness-launch")}
           onClick={() => overlays.toggle("harness-launch", "dialog")} />
+      </div>
+
+      <div className="appbar-group appbar-tier">
         <MenuButton label="Help" aria-label="Help and diagnostics"
           menuLabel="Help and diagnostics" className="appbar-menu-button">
           <MenuItem label="Help" icon="help"
