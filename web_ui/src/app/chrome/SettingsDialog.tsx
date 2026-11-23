@@ -5,6 +5,7 @@ import type { AppPluginsState } from "../../lib/bridge-core/generated/app-plugin
 import type { AppSettingsState } from "../../lib/bridge-core/generated/app-settings-state";
 import { Dialog, useOverlays } from "../overlays/overlays";
 import { InlineAlert } from "../ui/InlineAlert";
+import { Button } from "../ui/Button";
 import { Icon } from "../ui/icons/Icon";
 import "./settings/settings.css";
 import { CloudProviderSettings } from "./CloudProviderSettings";
@@ -275,7 +276,7 @@ export function SettingsDialog({ transport }: { transport: WsTransport }) {
             <div className="settings-rail-group" key={group.label || "general"}>
               {group.label && <span className="settings-rail-overline">{group.label}</span>}
               {group.items.map(({ section, label, icon }) => (
-                <button key={section} type="button"
+                <Button key={section} variant="ghost"
                   className={"settings-rail-button" + (section === activeSection ? " active" : "")}
                   aria-label={section}
                   aria-current={section === activeSection ? "page" : undefined}
@@ -284,7 +285,7 @@ export function SettingsDialog({ transport }: { transport: WsTransport }) {
                   onKeyDown={(event) => onRailKeyDown(event, section)}>
                   <Icon name={icon} size="md" />
                   <span>{label}</span>
-                </button>
+                </Button>
               ))}
             </div>
           ))}
