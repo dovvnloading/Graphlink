@@ -27,7 +27,8 @@ import { AppBar } from "./chrome/AppBar";
 import { Composer } from "./chrome/Composer";
 import { ComposerStore } from "./chrome/composerStore";
 import { ModelCapabilityProvider } from "./context/ModelCapabilityContext";
-import { NotificationBanner } from "./chrome/NotificationBanner";
+import { NotificationToaster } from "./chrome/NotificationBanner";
+import { ConfirmDialog } from "./ui/ConfirmDialog";
 import { OnboardingDialog } from "./chrome/OnboardingDialog";
 import { OverlayProvider, useOverlays } from "./overlays/overlays";
 
@@ -468,9 +469,8 @@ function AppShell() {
                     <LazySurface overlayName="plugins" fallback={null}>
                       <PluginPicker transport={transport} store={sceneStore} />
                     </LazySurface>
-                    <div className="app-notification-layer">
-                      <NotificationBanner store={composerStore} />
-                    </div>
+                    <NotificationToaster store={composerStore} />
+                    <ConfirmDialog />
                   </div>
                   {/* The canvas HUD slot sits beside the composer footer, not
                       inside its landmark, and overlays the same row. */}

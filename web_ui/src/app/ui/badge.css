@@ -1,0 +1,25 @@
+.gl-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--gl-space-4);
+  padding: 0 var(--gl-space-1-5);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-xs);
+  background: var(--gl-surface-inset);
+  color: var(--gl-surface-text-secondary);
+  font-weight: var(--gl-weight-medium);
+  font-size: var(--gl-text-2xs);
+  line-height: var(--gl-leading-xs);
+  white-space: nowrap;
+}
+.gl-badge--xs { font-size: var(--gl-text-xs); }
+.gl-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gl-space-1);
+  color: var(--gl-surface-text-secondary);
+  font-size: var(--gl-text-xs);
+  font-weight: var(--gl-weight-medium);
+  white-space: nowrap;
+}
