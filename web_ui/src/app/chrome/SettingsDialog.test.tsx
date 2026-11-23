@@ -1213,8 +1213,8 @@ describe("SettingsDialog", () => {
       expect(screen.getByText("Counter Node")).toBeInTheDocument();
       expect(screen.getByText("graph.mutate, graph.read")).toBeInTheDocument();
 
-      expect(screen.getByRole("switch", { name: "Hello Node" })).not.toBeChecked();
-      expect(screen.getByRole("switch", { name: "Counter Node" })).toBeChecked();
+      expect(screen.getByRole("switch", { name: "Granted: Hello Node" })).not.toBeChecked();
+      expect(screen.getByRole("switch", { name: "Granted: Counter Node" })).toBeChecked();
     });
 
     it("a plugin with no declared scopes shows a 'No declared scopes' placeholder, not an empty string", async () => {
@@ -1230,7 +1230,7 @@ describe("SettingsDialog", () => {
       await goToPlugins(user, push);
       pushGrants(pushPlugins, [helloGrant]);
 
-      await user.click(screen.getByRole("switch", { name: "Hello Node" }));
+      await user.click(screen.getByRole("switch", { name: "Granted: Hello Node" }));
 
       expect(intents).toContainEqual(["app-plugins", "setPluginGrant", ["hello_node", true]]);
     });
@@ -1240,7 +1240,7 @@ describe("SettingsDialog", () => {
       await goToPlugins(user, push);
       pushGrants(pushPlugins, [counterGrant]);
 
-      await user.click(screen.getByRole("switch", { name: "Counter Node" }));
+      await user.click(screen.getByRole("switch", { name: "Granted: Counter Node" }));
 
       expect(intents).toContainEqual(["app-plugins", "setPluginGrant", ["counter_node", false]]);
     });

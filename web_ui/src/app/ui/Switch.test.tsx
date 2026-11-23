@@ -34,4 +34,8 @@ describe("Switch", () => {
     await user.click(toggle);
     expect(toggle).toBeChecked();
   });
+  it("lets an explicit aria-label name the switch instead of its visible label", () => {
+    render(<Switch label="Scientific Core" aria-label="Granted: Scientific Core" />);
+    expect(screen.getByRole("switch", { name: "Granted: Scientific Core" })).toBeInTheDocument();
+  });
 });
