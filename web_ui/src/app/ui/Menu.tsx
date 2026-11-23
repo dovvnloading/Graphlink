@@ -140,6 +140,7 @@ export function MenuItem({
 }: MenuItemProps) {
   const menu = useContext(MenuContext);
   const reasonId = useId();
+  const descriptionId = useId();
   const itemRole = role ?? (kind === "radio" ? "menuitemradio" : checked === undefined ? "menuitem" : "menuitemcheckbox");
   const isChoice = itemRole === "menuitemcheckbox" || itemRole === "menuitemradio";
   return (
@@ -154,7 +155,10 @@ export function MenuItem({
         className={["gl-menu-item", className].filter(Boolean).join(" ")}
         tabIndex={-1}
         disabled={disabled}
-        aria-describedby={disabled && disabledReason ? reasonId : undefined}
+        aria-describedby={[
+          description ? descriptionId : undefined,
+          disabled && disabledReason ? reasonId : undefined,
+        ].filter(Boolean).join(" ") || undefined}
         onClick={(event) => {
           if (disabled) return;
           onClick?.(event);
@@ -170,7 +174,7 @@ export function MenuItem({
         </span>
         <span className="gl-menu-item-body">
           <span className="gl-menu-item-label">{label}</span>
-          {description && <span className="gl-menu-item-description">{description}</span>}
+          {description && <span id={descriptionId} className="gl-menu-item-description">{description}</span>}
         </span>
         {shortcut && <Kbd shortcut={shortcut} className="gl-menu-item-shortcut" />}
       </button>
