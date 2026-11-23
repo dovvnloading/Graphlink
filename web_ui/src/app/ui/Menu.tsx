@@ -21,6 +21,7 @@ const ITEM_SELECTOR = [
 
 type MenuContextValue = {
   dismiss: () => void;
+  nested: boolean;
   submenuPanels: RefObject<Set<HTMLElement>>;
   submenuClosers: RefObject<Array<() => void>>;
 };
@@ -236,9 +237,7 @@ function MenuSurface({
   const panelRef = useRef<HTMLDivElement | null>(null);
   const submenuPanels = useRef(new Set<HTMLElement>());
   const submenuClosers = useRef<Array<() => void>>([]);
-  const focusOrigin = useRef<HTMLElement | null>(
-    restoreFocusRef?.current ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null),
-  );
+  const focusOrigin = useRef<HTMLElement | null>(null);
   const [placement, setPlacement] = useState(position);
   const closeTop = useCallback(() => {
     const last = submenuClosers.current[submenuClosers.current.length - 1];
@@ -246,8 +245,8 @@ function MenuSurface({
     else onClose();
   }, [onClose]);
   const context = useMemo<MenuContextValue>(() => ({
-    dismiss: onClose, submenuPanels, submenuClosers,
-  }), [onClose]);
+    dismiss: onClose, nested: overlays.isNested(layerName), submenuPanels, submenuClosers,
+  }), [onClose, overlays, layerName]);
   const { regular, destructive } = partitionItems(children);
 
   useMenuKeyboard(panelRef, true, closeTop);
@@ -255,16 +254,18 @@ function MenuSurface({
   useLayoutEffect(() => {
     const panel = panelRef.current;
     if (!panel) return;
-    const next = clampMenuPosition(position, panel.getBoundingClientRect());
+    const next = clampMenuPosition({ x: position.x, y: position.y }, panel.getBoundingClientRect());
     setPlacement((prev) => prev.x === next.x && prev.y === next.y ? prev : next);
   }, [position.x, position.y]);
 
   useEffect(() => {
+    const trigger = restoreFocusRef?.current ??
+      (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    focusOrigin.current = trigger;
     const first = panelRef.current && enabledItems(panelRef.current)[0];
     first?.focus();
-    const trigger = focusOrigin.current;
     return () => { if (trigger?.isConnected) trigger.focus(); };
-  }, []);
+  }, [restoreFocusRef]);
 
   useEffect(() => {
     overlays.openNested(layerName, "popover", focusOrigin.current);
@@ -411,7 +412,7 @@ export function SubMenu({ label, children, icon, disabled = false, className }: 
         <MenuContext.Provider value={parent}>
           <div ref={panelRef} id={id} role="menu" aria-label={label}
             className="gl-menu gl-menu--submenu" tabIndex={-1}
-            data-nested={document.querySelector('.gl-menu[data-nested]') ? "" : undefined}
+            data-nested={parent?.nested ? "" : undefined}
             onMouseEnter={cancelIntent} onMouseLeave={scheduleClose}
             style={{ position: "fixed", left: placement.x, top: placement.y }}>
             {regular}
@@ -467,7 +468,7 @@ export function MenuButton({ label, children, menuLabel, className, disabled, on
         {label}<Icon name="chevron-down" size="sm" />
       </button>
       {position && <Menu id={id} position={position} onClose={() => setPosition(null)}
-        restoreFocusRef={triggerRef} ariaLabel={menuLabel ?? label}>{children}</Menu>}
+        restoreFocusRef={triggerRef} ignoreRef={triggerRef} ariaLabel={menuLabel ?? label}>{children}</Menu>}
     </>
   );
 }
