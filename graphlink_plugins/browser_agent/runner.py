@@ -150,7 +150,7 @@ async def run_browser(
     url: str,
     steps: list[dict[str, Any]],
     approve_host: Callable[[str, str], Awaitable[bool]],
-    approve_action: Callable[[str, str, str], Awaitable[bool]],
+    approve_action: Callable[[str, str, str, dict[str, str]], Awaitable[bool]],
     *,
     allowed_hosts: tuple[str, ...] = (),
     screenshot: bool = False,
@@ -243,8 +243,17 @@ async def run_browser(
                         element_type = (await locator.get_attribute("type") or "").lower()
                         if element_type in {"password", "file", "hidden"}:
                             raise BrowserPolicyError("Password, file and hidden inputs are not supported.")
-                        if not await approve_action(kind, selector, page.url):
+                        href = (await locator.get_attribute("href") or "")[:2048]
+                        label = (await locator.get_attribute("aria-label") or await locator.inner_text(
+                            timeout=1500
+                        ) or "")[:240]
+                        detail = {"href": href, "label": label}
+                        if kind in {"fill", "select"}:
+                            detail["value"] = step["value"]
+                        if not await approve_action(kind, selector, page.url, detail):
                             raise BrowserPolicyError(f"Browser {kind} action was denied.")
+                        if await locator.count() != 1 or (await locator.get_attribute("href") or "")[:2048] != href:
+                            raise BrowserPolicyError("Browser target changed during approval; retry after inspection.")
                         if kind == "click":
                             await locator.click(timeout=ACTION_TIMEOUT_MS, no_wait_after=True)
                         elif kind == "fill":
@@ -261,6 +270,7 @@ async def run_browser(
                         trace.append({"kind": kind, "milliseconds": step["milliseconds"]})
                 if _cancelled(cancel):
                     raise BrowserPolicyError("Browser task was cancelled.")
+                canonical_public_url(page.url)
                 data = await page.evaluate(_DOM_EXTRACTOR)
                 if not isinstance(data, dict):
                     raise BrowserPolicyError("Browser could not extract document content.")
