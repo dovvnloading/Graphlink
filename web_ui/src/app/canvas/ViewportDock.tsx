@@ -1,7 +1,9 @@
 import { Panel, useReactFlow, useStore } from "@xyflow/react";
-import { AppBarIcon } from "../chrome/AppBarIcon";
+import { IconButton } from "../ui/IconButton";
+import { Tooltip } from "../ui/Tooltip";
 import { motionDuration } from "../reducedMotion";
 import { GRAPH_FIT_OPTIONS } from "./canvasConstants";
+import "./ViewportDock.css";
 
 export function ViewportDock({ hasNodes }: { hasNodes: boolean }) {
   const flow = useReactFlow();
@@ -11,23 +13,21 @@ export function ViewportDock({ hasNodes }: { hasNodes: boolean }) {
 
   return (
     <Panel position="bottom-left" className="viewport-dock" role="group" aria-label="Canvas navigation">
-      <button type="button" title="Zoom Out" aria-label="Zoom Out" disabled={atMinimum}
-        onClick={() => flow.zoomOut({ duration: motionDuration(150) })}>
-        <svg aria-hidden="true" className="icon" viewBox="0 0 24 24"><path d="M5 12h14" /></svg>
-      </button>
-      <button type="button" className="viewport-scale" title="Reset zoom to 100%" aria-label="Reset zoom to 100%"
-        onClick={() => flow.zoomTo(1, { duration: motionDuration(200) })}>
-        {percentage}%
-      </button>
-      <button type="button" title="Zoom In" aria-label="Zoom In" disabled={atMaximum}
-        onClick={() => flow.zoomIn({ duration: motionDuration(150) })}>
-        <svg aria-hidden="true" className="icon" viewBox="0 0 24 24"><path d="M5 12h14m-7-7v14" /></svg>
-      </button>
+      <IconButton icon="minus" label="Zoom Out" shortcut="-" size="md"
+        disabled={atMinimum} onClick={() => flow.zoomOut({ duration: motionDuration(150) })} />
+      <Tooltip label="Reset zoom to 100%" shortcut="0">
+        <button type="button" className="viewport-scale" aria-label="Reset zoom to 100%"
+          aria-keyshortcuts="0"
+          onClick={() => flow.zoomTo(1, { duration: motionDuration(200) })}>
+          {percentage}%
+        </button>
+      </Tooltip>
+      <IconButton icon="plus" label="Zoom In" shortcut="+" size="md"
+        disabled={atMaximum} onClick={() => flow.zoomIn({ duration: motionDuration(150) })} />
       <span className="viewport-divider" aria-hidden="true" />
-      <button type="button" title="Fit All" aria-label="Fit All" disabled={!hasNodes}
-        onClick={() => flow.fitView({ ...GRAPH_FIT_OPTIONS, duration: motionDuration(200) })}>
-        <AppBarIcon name="fit" />
-      </button>
+      <IconButton icon="fit-view" label="Fit All" shortcut="Shift+1" size="md"
+        disabled={!hasNodes}
+        onClick={() => flow.fitView({ ...GRAPH_FIT_OPTIONS, duration: motionDuration(200) })} />
     </Panel>
   );
 }
