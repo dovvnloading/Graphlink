@@ -1,0 +1,666 @@
+/* -- Document view panel (R8a follow-up) ------------------------------------
+   Docked flush-left, border-right only - restores legacy's
+   DocumentViewerPanel chrome (a permanent embedded QWidget, corner_radius=0,
+   .setFixedWidth(500)) instead of the floating-card look every centered
+   Dialog uses, PLUS a real slide transition and a drag-to-resize handle
+   legacy never had. See DocumentViewPanel.tsx's own doc comment for why the
+   outer element's width animates while the inner content stays fixed-width. */
+
+.document-view-panel {
+  position: relative;
+  flex-shrink: 0;
+  width: 0;
+  height: 100%;
+  box-sizing: border-box;
+  background-color: var(--gl-surface-node-body);
+  border-right: 1px solid transparent;
+  overflow: hidden;
+  transition:
+    width 220ms ease,
+    border-color 220ms ease;
+}
+
+.document-view-panel-open {
+  border-right-color: var(--gl-surface-border);
+}
+
+.document-view-panel-resizing {
+  transition: none;
+}
+
+/* Stage 4 ("drawer UX polish"): applied to BOTH the outer aside and the
+   inner content div (same class, same declared width) when the Expand
+   toggle is on - the outer aside's own existing width transition (above)
+   still applies, so expanding/collapsing slides exactly like opening/
+   closing does. Only takes effect at all because DocumentViewPanel.tsx
+   omits the competing inline `style={{width}}` while expanded, rather than
+   this needing `!important` to win against it. */
+.document-view-panel-expanded {
+  width: min(1400px, 92vw);
+}
+
+.document-view-panel-inner {
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+}
+
+.document-view-panel-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.document-view-panel-heading {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.document-view-panel-title {
+  font-size: var(--gl-text-base);
+  font-weight: 700;
+  /* Defensive, matching the subtitle's own existing truncation just below -
+     harmless at any width this row already comfortably fits, and a cheap
+     safeguard against the row ever overflowing rather than forcing it to. */
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.document-view-panel-subtitle {
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.document-view-panel-copy,
+.document-view-panel-close {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  font-size: var(--gl-text-xs);
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: var(--gl-radius-xs);
+  cursor: pointer;
+}
+
+.document-view-panel-copy:hover:enabled,
+.document-view-panel-close:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.document-view-panel-copy:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.document-view-panel-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  max-height: none;
+  padding: 8px 12px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+}
+
+.document-view-panel-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.document-view-panel-resize-handle:hover,
+.document-view-panel-resizing .document-view-panel-resize-handle {
+  background-color: var(--gl-palette-selection);
+  opacity: 0.5;
+}
+
+/* Document View full redesign, stage 1 ("content rendering upgrades") -
+   DocumentViewMarkdown.tsx's own component overrides/plugin output. Scoped
+   here rather than folded into .chat-node-content's shared markdown-body
+   rules (styles.css:349+) since only Document View uses these classes
+   today - see that component's own doc comment for why this isn't a
+   shared, app-wide markdown-renderer change. */
+
+.document-view-heading-anchor {
+  margin-left: 6px;
+  text-decoration: none;
+  color: var(--gl-surface-text-muted);
+  font-weight: 400;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+h1:hover > .document-view-heading-anchor,
+h2:hover > .document-view-heading-anchor,
+h3:hover > .document-view-heading-anchor,
+h4:hover > .document-view-heading-anchor,
+h5:hover > .document-view-heading-anchor,
+h6:hover > .document-view-heading-anchor {
+  opacity: 1;
+}
+
+.document-view-code-block {
+  margin: 8px 0;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  overflow: hidden;
+}
+
+.document-view-code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border-bottom: 1px solid var(--gl-surface-border);
+  font-size: var(--gl-text-2xs);
+}
+
+.document-view-code-block-language {
+  color: var(--gl-surface-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.document-view-code-block-copy {
+  padding: 2px 8px;
+  font-size: var(--gl-text-2xs);
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: var(--gl-radius-xs);
+  cursor: pointer;
+}
+
+.document-view-code-block-copy:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+/* The header bar above already provides the block chrome (border/corners) -
+   the inner <pre> (rendered by .chat-node-content's own shared rule at
+   styles.css:349+) must not double it up. */
+.document-view-code-block pre {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+}
+
+.document-view-table-wrapper {
+  overflow-x: auto;
+  margin: 8px 0;
+}
+
+/* Node redesign, stage 1 ("shared node markdown renderer") -
+   NodeMarkdown.tsx's own component overrides, shared by every text-bearing
+   node kind. Deliberately parallel to .document-view-code-block/
+   .document-view-table-wrapper just above (same shape, same reasoning -
+   the header bar supplies the block's own chrome, so the inner <pre>
+   rendered by .chat-node-content's shared rule must not double it up) but
+   NOT the same selector: two independent class families sharing one base
+   class (chat-node-content) is the established pattern here, not a
+   duplication to collapse - Document View has no per-user font-size lever,
+   nodes do (--gl-node-font-size), so this version's own chrome text sizes
+   in `em` to track it, where Document View's own uses a fixed px. */
+.node-md-code-block {
+  margin: 8px 0;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  overflow: hidden;
+}
+
+.node-md-code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border-bottom: 1px solid var(--gl-surface-border);
+  font-size: var(--gl-text-sm);
+}
+
+.node-md-code-block-language {
+  color: var(--gl-surface-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.node-md-code-block-copy {
+  padding: 2px 8px;
+  font-size: var(--gl-text-sm);
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: var(--gl-radius-xs);
+  cursor: pointer;
+}
+
+.node-md-code-block-copy:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.node-md-code-block pre {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+}
+
+.node-md-table-wrapper {
+  overflow-x: auto;
+  margin: 8px 0;
+}
+
+/* Node redesign, stage 4: LaTeX math (rehype-katex's own output, not a
+   custom component override - KaTeX's default color is unset/inherited
+   currentColor, so it already picks up .chat-node-content's own text
+   color/em-relative sizing correctly with no extra rule needed here).
+   A wide block equation gets the SAME horizontal-scroll treatment
+   .node-md-table-wrapper above already applies to a wide table, since
+   node cards have a fixed width and no other escape hatch exists;
+   KaTeX's own margin (1em) is trimmed to this file's 8px vertical rhythm
+   to match every other block element's own spacing. */
+.katex-display {
+  overflow-x: auto;
+  margin: 8px 0;
+}
+
+/* GitHub-style callouts (remark-github-blockquote-alert's own output shape:
+   a <div class="markdown-alert markdown-alert-{type}"> wrapping a
+   <p class="markdown-alert-title"> + the rest of the blockquote content) -
+   styled with this app's own tokens rather than importing the package's
+   own alert.css, which hard-codes GitHub's own color variables, not this
+   app's theme system. Only 4 semantic-status tokens exist
+   (error/info/success/warning) for GitHub's 5 alert types - "important"
+   reuses --gl-palette-selection (an accent color, not a status color, but
+   visually distinct from the other 4) rather than inventing a new token
+   for one alert type. */
+.markdown-alert {
+  margin: 8px 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-xs);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+}
+
+.markdown-alert > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-alert-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--gl-text-xs);
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.markdown-alert-title .octicon {
+  fill: currentColor;
+  flex-shrink: 0;
+}
+
+.markdown-alert-note {
+  border-left-color: var(--gl-semantic-status-info);
+}
+.markdown-alert-note .markdown-alert-title {
+  color: var(--gl-semantic-status-info);
+}
+
+.markdown-alert-tip {
+  border-left-color: var(--gl-semantic-status-success);
+}
+.markdown-alert-tip .markdown-alert-title {
+  color: var(--gl-semantic-status-success);
+}
+
+.markdown-alert-important {
+  border-left-color: var(--gl-palette-selection);
+}
+.markdown-alert-important .markdown-alert-title {
+  color: var(--gl-palette-selection);
+}
+
+.markdown-alert-warning {
+  border-left-color: var(--gl-semantic-status-warning);
+}
+.markdown-alert-warning .markdown-alert-title {
+  color: var(--gl-semantic-status-warning);
+}
+
+.markdown-alert-caution {
+  border-left-color: var(--gl-semantic-status-error);
+}
+.markdown-alert-caution .markdown-alert-title {
+  color: var(--gl-semantic-status-error);
+}
+
+/* Document View full redesign, stage 2 ("table of contents + reading
+   progress") - DocumentViewToc.tsx's own toggle + dropdown, and
+   DocumentViewPanel.tsx's reading-progress bar. */
+
+.document-view-toc {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.document-view-toc-toggle {
+  padding: 6px 14px;
+  font-size: var(--gl-text-xs);
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: var(--gl-radius-xs);
+  cursor: pointer;
+}
+
+.document-view-toc-toggle:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.document-view-toc-toggle[aria-expanded="true"] {
+  background-color: var(--gl-neutral-button-hover);
+  border-color: var(--gl-palette-selection);
+}
+
+/* z-index matches --gl-z-app-layer's own documented tier ("app-bar
+   popovers, plugin picker, pin overlay") - this dropdown is the same kind
+   of small, anchored, non-portaled popover, just scoped to Document
+   View's own chrome instead of the app bar. */
+.document-view-toc-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: var(--gl-z-app-layer);
+  min-width: 220px;
+  max-width: 320px;
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background-color: var(--gl-surface-window);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  /* Same box-shadow as .overlay-popover's shared chrome (and every other
+     floating/popover surface in this file) - reused verbatim rather than
+     an ad-hoc value, matching this stylesheet's own no-raw-colors policy
+     (see the file's own top-of-file comment) which pins a small, shared
+     set of raw-color exceptions rather than tolerating a new one per
+     component. */
+  box-shadow: var(--gl-shadow-popover);
+}
+
+.document-view-toc-item {
+  text-align: left;
+  padding: 5px 8px;
+  font-size: var(--gl-text-xs);
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: transparent;
+  border: none;
+  border-radius: var(--gl-radius-xs);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.document-view-toc-item:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.document-view-toc-item.active {
+  color: var(--gl-palette-selection);
+  font-weight: 600;
+}
+
+.document-view-toc-depth-2 {
+  padding-left: 20px;
+}
+
+.document-view-toc-depth-3 {
+  padding-left: 32px;
+}
+
+.document-view-panel-progress {
+  flex-shrink: 0;
+  height: 2px;
+  background-color: var(--gl-surface-border);
+}
+
+.document-view-panel-progress-fill {
+  height: 100%;
+  background-color: var(--gl-palette-selection);
+  transition: width 80ms linear;
+}
+
+/* Document View full redesign, stage 3 ("in-document search/find") -
+   DocumentViewSearch.tsx's search bar, the header's "Find" toggle, and the
+   <mark> elements rehypeHighlightSearchMatches produces. */
+
+.document-view-panel-search-toggle {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  font-size: var(--gl-text-xs);
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: var(--gl-radius-xs);
+  cursor: pointer;
+}
+
+.document-view-panel-search-toggle:hover:enabled {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.document-view-panel-search-toggle:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.document-view-panel-search-toggle[aria-expanded="true"] {
+  background-color: var(--gl-neutral-button-hover);
+  border-color: var(--gl-palette-selection);
+}
+
+.document-view-search {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+}
+
+.document-view-search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  font-size: var(--gl-text-xs);
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-xs);
+}
+
+.document-view-search-count {
+  flex-shrink: 0;
+  min-width: 56px;
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-muted);
+  text-align: right;
+}
+
+.document-view-search-nav,
+.document-view-search-close {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  font-size: var(--gl-text-xs);
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: var(--gl-radius-xs);
+  cursor: pointer;
+}
+
+.document-view-search-nav:hover:enabled,
+.document-view-search-close:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.document-view-search-nav:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Neither literal is a new raw-color exception: color-mix() references an
+   existing token rather than introducing a hex/rgba value, so it falls
+   outside no-raw-colors.test.ts's scan by construction (that scanner only
+   matches #hex and rgba()/rgb() literals). --gl-semantic-search-highlight
+   is a token this design system already defines specifically for this
+   purpose (gl-vars-dev.css) but had never been referenced anywhere until
+   now - using it here instead of overloading --gl-palette-selection (the
+   generic "this one is selected/active" accent used elsewhere in this
+   file) is both more semantically correct and gives a wider contrast
+   margin for the current-match text below. The current match (the one
+   Next/Previous navigates to) gets the token solid, with
+   --gl-surface-inset-deep (an existing, even-darker-than-window token,
+   already used elsewhere in this file as a text-on-accent color - see
+   styles.css around line 5235) as the contrasting text color, falling back
+   to --gl-surface-window if that token is ever absent. */
+mark.document-view-search-match {
+  background-color: color-mix(in srgb, var(--gl-semantic-search-highlight) 35%, transparent);
+  color: inherit;
+  border-radius: var(--gl-radius-xs);
+}
+
+mark.document-view-search-match-current {
+  background-color: var(--gl-semantic-search-highlight);
+  color: var(--gl-surface-inset-deep, var(--gl-surface-window));
+}
+
+/* Cited knowledge reuses the Document View reader, with a persistent
+   passage highlight independent of the user's optional Find query. */
+.document-view-panel-scroll .document-view-cited-passage {
+  background-color: color-mix(in srgb, var(--gl-semantic-search-highlight) 25%, transparent);
+  outline: 1px solid var(--gl-semantic-search-highlight);
+  outline-offset: 2px;
+  scroll-margin-top: 12px;
+}
+.document-view-citation-notice {
+  margin: 0;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--gl-surface-border);
+  color: var(--gl-surface-text-muted);
+  font-size: var(--gl-text-2xs);
+}
+
+/* Standard visually-hidden technique (content present for assistive tech,
+   removed from visual layout and the tab order isn't affected since this
+   is never itself focusable) - same shape as the pre-existing
+   .library-visually-hidden elsewhere in this file, scoped to Document
+   View's own naming convention rather than reusing that one across an
+   unrelated feature. Used by DocumentViewSearch.tsx's debounced,
+   screen-reader-only match-count announcement. */
+.document-view-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Document View full redesign, stage 4 ("drawer UX polish") - a small
+   toolbar row (font-size stepper + Expand/Collapse), separate from the
+   main header - see DocumentViewPanel.tsx's own inline comment for why
+   these don't live in the header alongside Outline/Find/Copy/Close. */
+
+.document-view-panel-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.document-view-panel-font-stepper {
+  flex-shrink: 0;
+  display: flex;
+  gap: 2px;
+}
+
+.document-view-panel-font-step {
+  padding: 6px 8px;
+  font-size: var(--gl-text-xs);
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  cursor: pointer;
+}
+
+.document-view-panel-font-step:first-child {
+  border-radius: var(--gl-radius-xs) 0 0 var(--gl-radius-xs);
+}
+
+.document-view-panel-font-step:last-child {
+  border-radius: 0 var(--gl-radius-xs) var(--gl-radius-xs) 0;
+  margin-left: -1px;
+}
+
+.document-view-panel-font-step:hover:enabled {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.document-view-panel-font-step:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.document-view-panel-expand-toggle {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  font-size: var(--gl-text-xs);
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: var(--gl-radius-xs);
+  cursor: pointer;
+}
+
+.document-view-panel-expand-toggle:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.document-view-panel-expand-toggle[aria-pressed="true"] {
+  background-color: var(--gl-neutral-button-hover);
+  border-color: var(--gl-palette-selection);
+}
+
