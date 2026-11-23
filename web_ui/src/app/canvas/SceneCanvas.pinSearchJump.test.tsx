@@ -273,7 +273,7 @@ describe("pin/search jump navigates to an off-viewport target with onlyRenderVis
     await user.type(screen.getByLabelText("Search the canvas"), "UniqueSearchTarget");
     // Ignore SceneCanvas's initial node-reveal pan; verify the search jump.
     const callsBeforeJump = setCenterCalls.length;
-    await user.click(screen.getByLabelText("Next match (Enter)"));
+    await user.click(screen.getByRole("button", { name: "Next match" }));
 
     expect(setCenterCalls.slice(callsBeforeJump)).toHaveLength(1);
     const [x, y, options] = setCenterCalls[callsBeforeJump];

@@ -1,7 +1,7 @@
-.gl-field { display: grid; gap: var(--gl-space-1-5); min-width: 0; }
+.gl-field { display: grid; align-content: start; gap: var(--gl-space-1-5); min-width: 0; }
 .gl-field-label { color: var(--gl-surface-text-primary); font-size: var(--gl-text-sm); font-weight: var(--gl-weight-medium); line-height: var(--gl-leading-sm); }
 .gl-field-required { color: var(--gl-surface-text-secondary); }
-.gl-field-body { display: grid; gap: var(--gl-space-1-5); min-width: 0; }
+.gl-field-body { display: grid; align-content: start; gap: var(--gl-space-1-5); min-width: 0; }
 .gl-field-description { color: var(--gl-surface-text-muted); font-size: var(--gl-text-xs); line-height: var(--gl-leading-xs); }
 .gl-field-error { display: flex; align-items: center; gap: var(--gl-space-1); color: var(--gl-surface-text-primary); font-size: var(--gl-text-xs); line-height: var(--gl-leading-xs); }
 .gl-field-error :where(.gl-icon) { color: var(--gl-semantic-status-error); }
