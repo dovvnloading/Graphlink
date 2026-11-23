@@ -17,49 +17,27 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
   readonly rule: RatchetRule;
   readonly count: number;
 }> = [
-  { file: "app/canvas/ChatCitationChips.css", rule: "R9", count: 5 },
 
-  { file: "app/canvas/ChatCitationChips.css", rule: "R10", count: 1 },
 
-  { file: "app/canvas/ChatCitationChips.css", rule: "R14", count: 13 },
 
-  { file: "app/canvas/ChatRerunDialog.css", rule: "R9", count: 2 },
 
-  { file: "app/canvas/ChatRerunDialog.css", rule: "R10", count: 4 },
 
-  { file: "app/canvas/CodeReviewNodeView.tsx", rule: "R8", count: 1 },
 
-  { file: "app/canvas/GitlinkNodeView.tsx", rule: "R8", count: 1 },
 
-  { file: "app/canvas/NodeCards.css", rule: "R9", count: 12 },
 
-  { file: "app/canvas/NodeCards.css", rule: "R10", count: 19 },
 
-  { file: "app/canvas/NodeCards.css", rule: "R14", count: 71 },
 
-  { file: "app/canvas/SceneCanvas.tsx", rule: "R2", count: 1 },
 
-  { file: "app/canvas/SceneCanvas.tsx", rule: "R8", count: 2 },
 
-  { file: "app/canvas/SceneCanvas.tsx", rule: "R13", count: 1 },
 
-  { file: "app/canvas/ScienceArrayInput.tsx", rule: "R1", count: 1 },
 
-  { file: "app/canvas/ScienceArrayInput.tsx", rule: "R5", count: 1 },
 
-  { file: "app/canvas/ScienceColumnBinding.tsx", rule: "R4", count: 3 },
 
-  { file: "app/canvas/ScienceColumnBinding.tsx", rule: "R5", count: 1 },
 
-  { file: "app/canvas/ScienceTableSource.tsx", rule: "R4", count: 1 },
 
-  { file: "app/canvas/ScientificDataTable.tsx", rule: "R5", count: 1 },
 
-  { file: "app/canvas/ScientificNodeView.tsx", rule: "R2", count: 1 },
 
-  { file: "app/canvas/ScientificWorkspace.tsx", rule: "R8", count: 1 },
 
-  { file: "app/canvas/workspace.css", rule: "R11", count: 2 },
 
   { file: "app/chrome/ChatLibraryDialog.tsx", rule: "R2", count: 10 },
 
