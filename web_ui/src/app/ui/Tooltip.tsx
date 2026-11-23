@@ -67,8 +67,13 @@ export function Tooltip({ label, shortcut, children, placement = "bottom" }: Too
     const onPointerDown = () => { pointerFocus.current = true; hide(); };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && (visible || timeout.current !== null)) {
-        event.preventDefault();
-        event.stopPropagation();
+        // Only a visible tooltip claims Escape, and not while a menu is
+        // open: then one Escape hides the tip AND closes the menu. A merely
+        // pending tooltip must never swallow the key meant for the surface.
+        if (visible && !document.querySelector('[role="menu"]')) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
         hide();
       } else {
         pointerFocus.current = false;
