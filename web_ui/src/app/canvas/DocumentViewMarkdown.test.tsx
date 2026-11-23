@@ -115,7 +115,7 @@ describe("DocumentViewMarkdown", () => {
       // preserving it exactly (not trimming) is the correct copy-paste
       // behavior, matching what selecting the block's own text would give.
       expect(writeText).toHaveBeenCalledWith("print('hi')\n");
-      expect(await screen.findByText("Copied")).toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
     });
   });
 
