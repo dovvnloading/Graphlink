@@ -772,7 +772,10 @@ export function KnowledgeSearchDialog({
         {
           id: "embeddings", label: "Embeddings",
           content: <KnowledgeEmbeddingStatus transport={transport} open={knowledgeOpen}
-            onSetUpEmbeddings={() => overlays.open("settings", "dialog")} />,
+            onSetUpEmbeddings={() => {
+              transport.fireIntent("app-settings", "setActiveSection", ["knowledge"], undefined, true);
+              overlays.open("settings", "dialog");
+            }} />,
         },
       ]} />
     </Dialog>
