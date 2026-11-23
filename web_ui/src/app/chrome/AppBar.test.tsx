@@ -70,7 +70,8 @@ describe("AppBar (UI-14 kit migration)", () => {
     const undo = screen.getByRole("button", { name: "Undo" });
     expect(undo).toHaveAttribute("aria-keyshortcuts", "Ctrl+Z");
     fireEvent.focus(undo);
-    expect(screen.getByRole("tooltip")).toHaveTextContent("Ctrl+Z");
+    // The shortcut renders as separate Kbd caps ("Ctrl", "Z").
+    expect(screen.getByRole("tooltip")).toHaveTextContent(/Undo.*Ctrl.*Z/);
     expect(screen.getByRole("toolbar").querySelector("[title]")).toBeNull();
   });
 

@@ -59,16 +59,13 @@ describe("intent error toasts (UI-13b)", () => {
   });
 
   it("forwards every correlated error, and unsubscribe removes the listener", async () => {
-    const socket: {
-      send: ReturnType<typeof vi.fn>;
-      close: ReturnType<typeof vi.fn>;
-      onopen: null | (() => void);
-      onclose: null | (() => void);
-      onerror: null | (() => void);
-      onmessage: null | ((event: { data: string }) => void);
-    } = {
-      send: vi.fn(), close: vi.fn(),
-      onopen: null, onclose: null, onerror: null, onmessage: null,
+    const socket = {
+      send: vi.fn<(data: string) => void>(),
+      close: vi.fn<() => void>(),
+      onopen: null as null | (() => void),
+      onclose: null as null | (() => void),
+      onerror: null as null | (() => void),
+      onmessage: null as null | ((event: { data: string }) => void),
     };
     const transport = new WsTransport("ws://localhost/test", { webSocketFactory: () => socket });
     const show = vi.spyOn(toast, "show").mockReturnValue("toast-test");
