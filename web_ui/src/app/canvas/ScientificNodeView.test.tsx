@@ -833,11 +833,14 @@ describe("typed table import and numeric selections", () => {
     if (!snapshot.ok) throw new Error(snapshot.errors.join(", "));
     vi.spyOn(store, "getScene").mockReturnValue(snapshot.value);
     render(<ScienceTableSource store={store} packTitle="Mathematics" targetId="target" renderImporter={() => null} />);
-    expect(screen.getByLabelText("Source workbench")).toHaveValue("source");
+    const sourceChoice = screen.getByRole("button", { name: "Source workbench" });
+    expect(sourceChoice).toHaveTextContent("Measurement source");
+    fireEvent.click(sourceChoice);
     expect(screen.getAllByRole("option")).toHaveLength(1);
+    fireEvent.click(sourceChoice);
     fireEvent.click(screen.getByRole("button", { name: "Connect selected source" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("connection was not confirmed");
-    expect(screen.getByLabelText("Source workbench")).toHaveValue("source");
+    expect(screen.getByRole("button", { name: "Source workbench" })).toHaveTextContent("Measurement source");
     fireEvent.click(screen.getByRole("button", { name: "Connect selected source" }));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
     expect(request).toHaveBeenCalledTimes(2);
@@ -1011,11 +1014,11 @@ describe("typed table import and numeric selections", () => {
     const raw = JSON.stringify({ ...state, operations: [paired] });
     const { request, remount } = mount(raw, [upstream]);
     fireEvent.click(screen.getByText("Bind table columns"));
-    fireEvent.change(await screen.findByLabelText("Column for Samples"), { target: { value: "0" } });
-    fireEvent.change(screen.getByLabelText("Column for Other"), { target: { value: "1" } });
+    chooseKit("Column for Samples", "A (mm)");
+    chooseKit("Column for Other", "B");
     fireEvent.change(screen.getByLabelText("Source unit assumption for Other"), { target: { value: "mm" } });
     fireEvent.change(screen.getByLabelText("First data row"), { target: { value: "2" } });
-    fireEvent.change(screen.getByLabelText("Missing observations"), { target: { value: "complete" } });
+    chooseKit("Missing observations", "Use complete rows for paired fields");
     const choices = [0, 1].map((idx) => ({
       nodeId: "parent", sourceKey: "d".repeat(32), resultHash: table.asset_ref,
       receiptHash: table.provenance.receiptHash, selector: ["table_column", idx, "drop", 1, 3],
