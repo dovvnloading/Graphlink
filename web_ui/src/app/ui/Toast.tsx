@@ -110,7 +110,7 @@ export function Toast({ title, variant, details, action, onDismiss, className }:
   return (
     <div role={variant === "error" ? "alert" : "status"}
       className={["gl-toast", "gl-toast--" + variant, className].filter(Boolean).join(" ")}
-      data-state={closing ? "closing" : "open"}
+      data-state={closing ? "closing" : "open"} aria-hidden={closing || undefined}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onFocusCapture={() => setFocused(true)}
@@ -144,7 +144,7 @@ export type BackendToast = {
 
 export function Toaster({ backendNotification }: { backendNotification?: BackendToast | null }) {
   const client = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  const [expanded, setExpanded] = useState(false);
+  const [expandedSignature, setExpandedSignature] = useState<string | null>(null);
   const all: ToastItem[] = [
     ...(backendNotification ? [{
       id: backendNotification.id, title: backendNotification.message,
@@ -153,10 +153,13 @@ export function Toaster({ backendNotification }: { backendNotification?: Backend
     ...client,
   ];
   const hidden = Math.max(0, all.length - 3);
+  const signature = all.map((item) => item.id).join("|");
+  // A new notification collapses the stack again even after an earlier expansion.
+  const expanded = hidden > 0 && expandedSignature === signature;
   const visible = expanded ? all : all.slice(0, 3);
 
   return createPortal(
-    <div className="gl-toaster" aria-label="Notifications">
+    <div className="gl-toaster" role="region" aria-label="Notifications">
       {visible.map((item) => (
         <Toast key={item.id} title={item.title} variant={item.variant}
           details={item.details} action={item.action}
@@ -164,7 +167,7 @@ export function Toaster({ backendNotification }: { backendNotification?: Backend
       ))}
       {hidden > 0 && (
         <button type="button" className="gl-toaster-more" aria-expanded={expanded}
-          onClick={() => setExpanded((current) => !current)}>
+          onClick={() => setExpandedSignature(expanded ? null : signature)}>
           {expanded ? "Show fewer" : "+" + formatCount(hidden) + " more"}
         </button>
       )}

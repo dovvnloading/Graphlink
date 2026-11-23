@@ -64,3 +64,8 @@
 @keyframes gl-toast-enter { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes gl-toast-exit { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-4px); } }
 @media (prefers-reduced-motion: reduce) { .gl-toast { animation: none !important; } }
+
+/* Keep the centered canvas-search strip unobstructed on narrower desktops. */
+@media (max-width: 1200px) {
+  .gl-toaster { top: calc(44px + var(--gl-space-12) + var(--gl-space-4)); }
+}

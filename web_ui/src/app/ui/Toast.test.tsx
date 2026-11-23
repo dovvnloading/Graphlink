@@ -98,6 +98,7 @@ describe("Toast and Toaster", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Backend failed");
     fireEvent.click(screen.getByRole("button", { name: "Dismiss notification" }));
     act(() => vi.advanceTimersByTime(120));
-    expect(fireIntent).toHaveBeenCalledExactlyOnceWith("notification", "dismiss", []);
+    expect(fireIntent).toHaveBeenCalledOnce();
+    expect(fireIntent).toHaveBeenCalledWith("notification", "dismiss", []);
   });
 });
