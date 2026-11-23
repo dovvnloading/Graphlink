@@ -1040,7 +1040,7 @@ export const ChatNodeView = memo(function ChatNodeView({
           {hasUsage && (
             <Tooltip label={`Prompt: ${data.promptTokens ?? "?"} · Completion: ${data.completionTokens ?? "?"}`}>
               <span className="chat-node-usage-badge">
-                {`${data.promptTokens == null ? "?" : formatTokens(data.promptTokens)}→${data.completionTokens == null ? "?" : formatTokens(data.completionTokens)}${data.estimatedCostUsd != null ? ` · ${data.estimatedCostUsd.toFixed(4)}` : ""}`}
+                {`${data.promptTokens == null ? "?" : formatTokens(data.promptTokens)}→${data.completionTokens == null ? "?" : formatTokens(data.completionTokens)}${data.estimatedCostUsd != null ? ` · $${data.estimatedCostUsd.toFixed(4)}` : ""}`}
               </span>
             </Tooltip>
           )}
