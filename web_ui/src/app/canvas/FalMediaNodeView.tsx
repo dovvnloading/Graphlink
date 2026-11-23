@@ -160,6 +160,7 @@ function ModelLibrary({
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [sortOrder, setSortOrder] = useState<PriceSort>("economy");
   const [showLibrary, setShowLibrary] = useState(true);
+  const [showExtraModels, setShowExtraModels] = useState(false);
   useEffect(() => {
     const timer = window.setTimeout(() => onSearch(draft.mode, draft.operation, query), query.trim() ? 450 : 180);
     return () => window.clearTimeout(timer);
@@ -229,8 +230,9 @@ function ModelLibrary({
               body={favoritesOnly ? "Star a model to save it across sessions." :
                 "Try another search or generation category."} />}
           {visible.length > 4 && <StudioDisclosure className="fal-studio-extra-models"
-            label={"More models (" + formatCount(visible.length - 4) + ")"}>
-            {renderModels(visible.slice(4))}
+            label={"More models (" + formatCount(visible.length - 4) + ")"}
+            open={showExtraModels} onOpenChange={setShowExtraModels}>
+            {showExtraModels && renderModels(visible.slice(4))}
           </StudioDisclosure>}
           <div className="fal-studio-pagination">
             {loaded && draft.mode === "all" && !!catalog.currentCursor && !favoritesOnly &&
@@ -260,6 +262,7 @@ function ModelInputs({
   onInspect: () => void;
 }) {
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showExtraFields, setShowExtraFields] = useState(false);
   let parsedInputs: Record<string, unknown> = {};
   let jsonError = "";
   try {
@@ -343,8 +346,9 @@ function ModelInputs({
         {fields.slice(0, 4).map(renderField)}
       </div>}
       {fields.length > 4 &&
-        <StudioDisclosure label={"More model inputs (" + formatCount(fields.length - 4) + ")"}>
-          <div className="fal-studio-schema-grid">{fields.slice(4).map(renderField)}</div>
+        <StudioDisclosure label={"More model inputs (" + formatCount(fields.length - 4) + ")"}
+          open={showExtraFields} onOpenChange={setShowExtraFields}>
+          {showExtraFields && <div className="fal-studio-schema-grid">{fields.slice(4).map(renderField)}</div>}
         </StudioDisclosure>}
       <StudioDisclosure label="Reference media">
         <FalMediaUploader key={draft.modelId} mode={draft.mode} operation={draft.operation}
@@ -367,6 +371,7 @@ function ModelInputs({
 
 function OutputGallery({ media, id }: { media: MediaState; id: string }) {
   const jobs = media.history || [];
+  const [showOlderJobs, setShowOlderJobs] = useState(false);
   const renderJob = (job: MediaJob, index: number) => (
     <div className="fal-studio-job" key={job.requestId || String(index)}>
       <div className="fal-studio-job-heading">
@@ -416,8 +421,11 @@ function OutputGallery({ media, id }: { media: MediaState; id: string }) {
           body="Completed jobs appear here with their output files or model response." />
       ) : <>
         <div className="fal-studio-gallery-list">{jobs.slice(0, 2).map(renderJob)}</div>
-        {jobs.length > 2 && <StudioDisclosure label={"Previous outputs (" + formatCount(jobs.length - 2) + ")"}>
-          <div className="fal-studio-gallery-list">{jobs.slice(2).map((job, index) => renderJob(job, index + 2))}</div>
+        {jobs.length > 2 && <StudioDisclosure label={"Previous outputs (" + formatCount(jobs.length - 2) + ")"}
+          open={showOlderJobs} onOpenChange={setShowOlderJobs}>
+          {showOlderJobs && <div className="fal-studio-gallery-list">
+            {jobs.slice(2).map((job, index) => renderJob(job, index + 2))}
+          </div>}
         </StudioDisclosure>}
       </>}
     </section>
