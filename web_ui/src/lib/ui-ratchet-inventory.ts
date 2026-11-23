@@ -131,14 +131,6 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/chrome/ChatLibraryDialog.tsx", rule: "R13", count: 1 },
 
-  { file: "app/chrome/CloudProviderSettings.css", rule: "R9", count: 11 },
-
-  { file: "app/chrome/CloudProviderSettings.css", rule: "R10", count: 3 },
-
-  { file: "app/chrome/CloudProviderSettings.css", rule: "R14", count: 41 },
-
-  { file: "app/chrome/CloudProviderSettings.tsx", rule: "R2", count: 1 },
-
   { file: "app/chrome/Composer.tsx", rule: "R1", count: 3 },
 
   { file: "app/chrome/Composer.tsx", rule: "R2", count: 1 },
@@ -167,27 +159,13 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/chrome/KnowledgeSearchDialog.tsx", rule: "R8", count: 7 },
 
-  { file: "app/chrome/KnowledgeSettingsPage.tsx", rule: "R4", count: 1 },
-
-  { file: "app/chrome/KnowledgeSettingsPage.tsx", rule: "R6", count: 1 },
-
-  { file: "app/chrome/KnowledgeSettingsPage.tsx", rule: "R13", count: 3 },
+  { file: "app/chrome/KnowledgeSettingsPage.tsx", rule: "R13", count: 1 },
 
   { file: "app/chrome/ModelComparisonPicker.tsx", rule: "R1", count: 1 },
 
   { file: "app/chrome/ModelPicker.tsx", rule: "R1", count: 1 },
 
   { file: "app/chrome/ModelPicker.tsx", rule: "R8", count: 1 },
-
-  { file: "app/chrome/ModelPricingSettings.css", rule: "R9", count: 1 },
-
-  { file: "app/chrome/ModelPricingSettings.css", rule: "R14", count: 6 },
-
-  { file: "app/chrome/OllamaSettingsPage.tsx", rule: "R6", count: 1 },
-
-  { file: "app/chrome/OllamaSettingsPage.tsx", rule: "R8", count: 2 },
-
-  { file: "app/chrome/OllamaSettingsPage.tsx", rule: "R13", count: 5 },
 
   { file: "app/chrome/OnboardingDialog.tsx", rule: "R8", count: 1 },
 
@@ -214,32 +192,6 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
   { file: "app/chrome/RunnerDisclosure.tsx", rule: "R1", count: 2 },
 
   { file: "app/chrome/SearchIcon.tsx", rule: "R2", count: 1 },
-
-  { file: "app/chrome/SettingsDialog.tsx", rule: "R8", count: 1 },
-
-  { file: "app/chrome/settings/FalAiPage.tsx", rule: "R3", count: 4 },
-
-  { file: "app/chrome/settings/FalAiPage.tsx", rule: "R4", count: 1 },
-
-  { file: "app/chrome/settings/FalAiPage.tsx", rule: "R5", count: 4 },
-
-  { file: "app/chrome/settings/FalAiPage.tsx", rule: "R13", count: 2 },
-
-  { file: "app/chrome/settings/GeneralPage.tsx", rule: "R6", count: 3 },
-
-  { file: "app/chrome/settings/IntegrationsPage.tsx", rule: "R13", count: 1 },
-
-  { file: "app/chrome/settings/LlamaCppPage.tsx", rule: "R6", count: 1 },
-
-  { file: "app/chrome/settings/LlamaCppPage.tsx", rule: "R13", count: 6 },
-
-  { file: "app/chrome/settings/McpServersPage.tsx", rule: "R6", count: 1 },
-
-  { file: "app/chrome/settings/McpServersPage.tsx", rule: "R13", count: 2 },
-
-  { file: "app/chrome/settings/PluginsPage.tsx", rule: "R6", count: 1 },
-
-  { file: "app/chrome/settings/WorkspaceAgentPage.tsx", rule: "R8", count: 1 },
 
   { file: "app/context/ContextInspector.css", rule: "R9", count: 1 },
 
