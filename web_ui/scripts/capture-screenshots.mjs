@@ -84,7 +84,7 @@ async function captureNodeDetails(page) {
   // controls and minimap. Search jumps to the result at exactly 100%
   // without dragging the cards or the frame containing them.
   await page.keyboard.press("Control+f");
-  const search = page.getByRole("textbox", { name: "Search the canvas" });
+  const search = page.getByRole("searchbox", { name: "Search the canvas" });
   await search.fill(excerpts[2]);
   await search.press("Enter");
   await page.getByRole("button", { name: "Reset zoom to 100%" }).filter({ hasText: /^100%$/ }).waitFor();
