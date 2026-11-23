@@ -242,7 +242,7 @@ export function KnowledgeSearchDialog({
   onOpenDocumentView?: (content: string, sourceLabel: string, citation?: KnowledgeCitationSource) => void;
 }) {
   const overlays = useOverlays();
-  const confirm = useConfirm();
+  const askConfirm = useConfirm();
   const [documents, setDocuments] = useState<KnowledgeLibraryDocument[]>([]);
   const [documentPage, setDocumentPage] = useState(0);
   const documentPageCount = Math.max(1, Math.ceil(documents.length / DOCUMENT_PAGE_SIZE));
@@ -533,7 +533,7 @@ export function KnowledgeSearchDialog({
   }, [knowledgeOpen, query, runSearch]);
 
   async function removeDocument(doc: KnowledgeLibraryDocument) {
-    const accepted = await confirm({
+    const accepted = await askConfirm({
       title: "Remove document?",
       body: "Remove “" + doc.title + "” from the current workspace?",
       confirmLabel: "Remove document",
@@ -543,7 +543,7 @@ export function KnowledgeSearchDialog({
   }
 
   async function removeWatchedFolder(folder: WatchedFolder) {
-    const accepted = await confirm({
+    const accepted = await askConfirm({
       title: "Stop watching folder?",
       body: "Stop syncing “" + knowledgeSourceLabel(folder.path, folder.path) + "”? Indexed documents will be kept.",
       confirmLabel: "Remove watched folder",
@@ -556,7 +556,7 @@ export function KnowledgeSearchDialog({
   const documentActionsBusy = documentAction !== null || importJobs.some(isActive) || uploadProgress !== null;
 
   return (
-    <Dialog name="knowledge" title="Knowledge library" size="xl" className="knowledge-search-dialog">
+    <Dialog {...{ title: "Knowledge library" }} name="knowledge" size="xl" className="knowledge-search-dialog">
       <section className="knowledge-search-heading" aria-label="Search indexed sources">
         <div className="knowledge-search-row">
           <TextField
@@ -630,7 +630,7 @@ export function KnowledgeSearchDialog({
                     <div className="knowledge-drop-overlay-content"><Icon name="upload" /> Drop files to index</div>
                   </div>
                 ) : documents.length === 0 && !loadingDocuments ? (
-                  <EmptyState icon="upload" title="No documents yet"
+                  <EmptyState icon="upload" {...{ title: "No documents yet" }}
                     body="Drag files here or choose Add files to index sources in this workspace." />
                 ) : (
                   <div className="knowledge-drop-placeholder">Drop files here to add them to this workspace.</div>
@@ -732,7 +732,7 @@ export function KnowledgeSearchDialog({
               {watchError && <p role="alert" className="knowledge-library-error">{watchError}</p>}
               {loadingWatches ? <p role="status" className="knowledge-library-muted">Loading watched folders…</p> :
                 watchedFolders.length === 0 ? (
-                  <EmptyState icon="folder" title="No watched folders yet"
+                  <EmptyState icon="folder" {...{ title: "No watched folders yet" }}
                     body="Add a watched folder to keep local files indexed automatically." />
                 ) : (
                   <ul className="knowledge-library-list">
