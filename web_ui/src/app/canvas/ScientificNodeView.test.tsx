@@ -54,7 +54,7 @@ function openImporter() {
 
 function expandResult(label: string | RegExp) {
   const latest = screen.getByRole("region", { name: "Latest result" });
-  fireEvent.click(within(latest).getByText(label));
+  fireEvent.click(within(latest).getByRole("button", { name: label }));
 }
 
 describe("scientific workbench card", () => {
@@ -152,7 +152,7 @@ describe("scientific workbench card", () => {
     expandResult("Plots & views");
     expect(within(latest).getByRole("img")).toBeVisible();
     expandResult("Units used");
-    const unitDetails = within(latest).getByText("Units used").closest("details")!;
+    const unitDetails = within(latest).getByRole("region", { name: "Units used" });
     expect(within(unitDetails).getByText(/"mm"/)).toBeVisible();
     expandResult("Inputs and provenance");
     expect(within(latest).getByText(/"resultHash": "abc"/)).toBeVisible();
@@ -183,8 +183,8 @@ describe("scientific workbench card", () => {
     expect(latest.querySelector(".science-result-highlight")).toHaveTextContent("3 rows");
     expect(latest.querySelector(".science-result-summary")).toHaveClass("science-result-summary--clamped");
     expandResult("Read full summary");
-    const fullSummary = within(latest).getByText("Read full summary").closest("details");
-    expect(fullSummary?.querySelector("p")?.textContent).toBe(long);
+    const fullSummary = within(latest).getByRole("region", { name: "Read full summary" });
+    expect(within(fullSummary).getByText(long)).toBeVisible();
     expect(within(latest).queryByRole("table")).not.toBeInTheDocument();
   });
 
@@ -278,9 +278,10 @@ describe("scientific workbench card", () => {
     chooseKit("Chart type", "Heatmap");
     fireEvent.click(screen.getByRole("button", { name: "Chart this" }));
     expect(generateChart).toHaveBeenCalledWith("target", "heatmap", "abc");
-    expect(screen.getByText("Source changed · refresh to update")).toBeVisible();
-    expect(screen.getByText(/Receipt bbbbbbbbbbbb/)).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Refresh chart" }));
+    const linked = screen.getByRole("region", { name: "Linked charts" });
+    expect(within(linked).getByText(/Source changed · refresh to update/)).toBeVisible();
+    expect(within(linked).getByText(/Receipt bbbbbbbbbbbb/)).toBeVisible();
+    fireEvent.click(within(linked).getByRole("button", { name: "Refresh chart" }));
     expect(generateChart).toHaveBeenCalledWith("child-chart", "scatter", "abc");
   });
 
@@ -491,11 +492,11 @@ describe("scientific workbench card", () => {
     fireEvent.change(field, { target: { value: "[4,5]" } });
     refresh(JSON.stringify({ ...state, latest: result, runToken: "b" }));
     expect(field).toHaveValue("[4,5]");
-    expect(screen.getByText("Run calculation")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Run calculation" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Keep my inputs" }));
-    fireEvent.click(screen.getByText("Run calculation"));
+    fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
     expect(request.mock.lastCall?.[2]?.[2]).toMatchObject({ expected_run: "b", inputs: { samples: [4, 5] } });
-    await waitFor(() => expect(screen.getByText("Run calculation")).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Run calculation" })).toBeEnabled());
     fireEvent.change(field, { target: { value: "[7]" } });
     refresh(JSON.stringify({ ...state, latest: result, runToken: "c" }));
     fireEvent.click(screen.getByRole("button", { name: "Load saved inputs" }));
@@ -525,11 +526,11 @@ describe("scientific workbench card", () => {
     const { request, refresh } = mount(JSON.stringify({ ...state, latest: {
       ...result, provenance: { ...result.provenance, sources },
     } }), [parent]);
-    expect(screen.getByText("Run calculation")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Run calculation" })).toBeDisabled();
     const field = screen.getByRole("textbox", { name: "Samples (m)" });
     expect(field).toHaveAccessibleDescription(/Result changed or disconnected/);
     fireEvent.change(field, { target: { value: "[4,5]" } });
-    expect(screen.getByText("Run calculation")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Run calculation" })).toBeEnabled();
     refresh("");
     expect(screen.queryByText("Run calculation")).toBeNull();
     expect(screen.getByRole("status")).toHaveTextContent("Enable Mathematics");
@@ -682,8 +683,10 @@ describe("scientific workbench card", () => {
     const map = screen.getByRole("table", { name: "96-well plate map" });
     expect(within(map).getAllByRole("row")).toHaveLength(9);
     expect(within(map).getByRole("cell", { name: "A1: control" })).toHaveTextContent("co");
-    expect(within(map).getByRole("cell", { name: "A2: 0 RFU" })).toHaveTextContent("●");
-    expect(within(map).getByRole("cell", { name: "A3: empty" })).toHaveTextContent("·");
+    const zero = within(map).getByRole("cell", { name: "A2: 0 RFU" });
+    expect(within(zero).getByRole("button", { name: "A2: 0 RFU" })).toBeInTheDocument();
+    expect(zero.querySelector(".science-well-value-number")).toBeInTheDocument();
+    expect(within(map).getByRole("cell", { name: "A3: empty" })).toHaveTextContent("—");
     expect(within(map).getByRole("cell", { name: "H12: 12.4 RFU" })).toBeInTheDocument();
     expect(screen.getByText(/Numeric scale: 0 – 12.4 RFU/)).toBeVisible();
 
@@ -722,7 +725,9 @@ describe("scientific workbench card", () => {
       /H.*V/.test(path.getAttribute("d") ?? ""))).toBe(true);
     expect(svg.querySelectorAll("line[stroke-width='2']")).toHaveLength(2);
     expect(screen.getByText("C · 0 censor times")).toBeVisible();
-    const keys = [...document.querySelectorAll(".science-survival-key line")];
+    const legend = screen.getByRole("list", { name: "Survival curve legend" });
+    expect(within(legend).getAllByRole("listitem")).toHaveLength(3);
+    const keys = [...legend.querySelectorAll(".science-survival-key line")];
     expect(keys.map(key => key.getAttribute("stroke-dasharray")))
       .toEqual([...svg.querySelectorAll("g path")].map(curve => curve.getAttribute("stroke-dasharray")));
     fireEvent.click(screen.getByText("Survival curve data"));
@@ -1103,9 +1108,9 @@ describe("unit-aware scientific node inputs and receipts", () => {
         ...result.provenance, inputUnits: { samples: ["mm", "cm", "m"] },
       },
     } }), []);
-    fireEvent.click(screen.getByText("Units used"));
-    const unitsUsed = screen.getByText("Units used").closest("details");
-    expect(within(unitsUsed!).getByText(/"mm"/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Units used" }));
+    const unitsUsed = screen.getByRole("region", { name: "Units used" });
+    expect(within(unitsUsed).getByText(/"mm"/)).toBeVisible();
     const input = screen.getByRole("textbox", { name: "Samples (m)" });
     fireEvent.change(input, { target: { value: '["25 mm", "2 cm", 3]' } });
     fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));

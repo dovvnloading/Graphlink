@@ -129,9 +129,12 @@ function SurvivalCurve({ view }: { view: ScienceSurvivalCurveView }) {
       <text x="342" y="177" textAnchor="end" className="science-survival-axis">{formatScienceNumber(latest)}</text>
       <text x="190" y="194" textAnchor="middle" className="science-survival-axis">{view.xLabel}</text>
     </svg>
-    <ul className="science-survival-legend">{view.groups.map((group, index) =>
-      <li key={group.label}><span className="science-survival-key" aria-hidden="true"
-          style={{ background: COLORS[index % COLORS.length] }} />
+    <ul className="science-survival-legend" aria-label="Survival curve legend">{view.groups.map((group, index) =>
+      <li key={group.label}>
+        <svg className="science-survival-key" viewBox="0 0 32 10" aria-hidden="true" focusable="false">
+          <line x1="1" y1="5" x2="31" y2="5" stroke={COLORS[index % COLORS.length]}
+            strokeWidth="2.5" strokeDasharray={DASHES[index % DASHES.length]} />
+        </svg>
         {group.label} · {formatCount(group.censored?.length ?? 0)} censor times
       </li>)}</ul>
     <ScientificDataTable {...{ title: "Survival curve data" }} columns={["Group", view.xLabel, "Survival probability", "Censor time"]}

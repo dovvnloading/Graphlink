@@ -55,7 +55,7 @@
 .science-plate-map .science-well-button[tabindex="0"] { outline: 2px solid currentColor; outline-offset: -2px; }
 .science-plate-map .science-well-button:focus-visible { outline: 2px solid var(--gl-semantic-status-info); outline-offset: 1px; }
 .science-well-readout { overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-.science-survival-legend .science-survival-key { width: 32px; height: 2px; flex: none; border-radius: var(--gl-radius-xs); }
+.science-survival-legend .science-survival-key { width: 32px; height: 10px; flex: none; }
 
 .science-plate-map .science-well-value-number::after {
   content: ""; display: block; width: 7px; height: 7px; margin: auto;
