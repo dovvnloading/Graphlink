@@ -1,0 +1,322 @@
+/* -- R5.4 code_sandbox node ------------------------------------------------
+
+   Rebuilt from the straight port, which had two structural defects and a
+   pile of visual ones.
+
+   THE SQUEEZE. The body is a max-height flex column with overflow, and a
+   flex container under height pressure SHRINKS its children below their
+   content size unless told not to - so every textarea and section on the
+   card was being compressed until it clipped its own text mid-glyph: a
+   two-line requirements box showing 1.6 lines, a prompt cut through its
+   descenders, a terminal showing half a row. The scroll container was
+   there to scroll, and instead it crushed. `flex-shrink: 0` on every child
+   is the actual fix; everything else here is proportion.
+
+   SCROLLBAR SOUP. Requirements, prompt, code and terminal each carried
+   their own scroll region inside the scrolling body - up to five nested
+   scrollbars on one card. Now: the two INPUTS auto-size to their content
+   (field-sizing, capped), and only the two OUTPUTS (code, terminal) scroll
+   independently, because output is unbounded and input is not. */
+
+.code-sandbox-node {
+  width: 420px;
+  /* No shell max-height - see the chat-node comment. The body below is the
+     one bounded, scrolling region, so the card ends with its own border and
+     a scrollbar rather than an amputated pane. */
+  min-height: 110px;
+}
+
+.code-sandbox-node.collapsed {
+  width: 290px;
+  min-height: 58px;
+}
+
+.code-sandbox-node-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-2-5);
+  /* Scrolls only in the uncommon everything-at-once state (analysis on top
+     of code and terminal); the common state fits - see .code-sandbox-node. */
+  max-height: 440px;
+  overflow-y: auto;
+}
+
+/* The squeeze fix - see the block comment above. */
+.code-sandbox-node-content > * {
+  flex-shrink: 0;
+}
+
+/* -- Inputs ----------------------------------------------------------------
+
+   Both auto-size to their content and neither scrolls: an input the user is
+   typing into should never hide what was just typed. field-sizing is
+   Chromium-native (this app ships on WebView2 only); the min-heights are
+   the graceful floor if it is ever absent. No resize handles - a control
+   that fits its content has nothing to resize. */
+
+.code-sandbox-node-input,
+.code-sandbox-node-requirements {
+  box-sizing: border-box;
+  width: 100%;
+  resize: none;
+  field-sizing: content;
+  font-size: var(--gl-text-xs);
+  line-height: 1.5;
+  padding: var(--gl-space-1-5) var(--gl-space-2);
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-field, var(--gl-surface-inset));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+}
+
+.code-sandbox-node-input {
+  font-family: inherit;
+  min-height: 52px;
+  max-height: 140px;
+}
+
+.code-sandbox-node-requirements {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: var(--gl-text-2xs);
+  min-height: 44px;
+  max-height: 160px;
+}
+
+.code-sandbox-node-input::placeholder,
+.code-sandbox-node-requirements::placeholder {
+  color: var(--gl-surface-text-muted);
+}
+
+.code-sandbox-node-input:focus,
+.code-sandbox-node-requirements:focus {
+  outline: none;
+  border-color: var(--gl-surface-text-muted);
+}
+
+/* -- Run row ---------------------------------------------------------------
+
+   One primary action per card. Run was a neutral chip identical to Cancel;
+   it is the filled control now, the same one-primary language the Builder
+   launcher and the plan card use. */
+
+.code-sandbox-node-run-row {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-1-5);
+}
+
+.code-sandbox-node-run-row button {
+  height: 27px;
+  font-size: var(--gl-text-2xs);
+  font-weight: 600;
+  font-family: inherit;
+  padding: 0 var(--gl-space-3);
+  border-radius: var(--gl-radius-sm);
+  cursor: pointer;
+  transition:
+    background-color var(--gl-motion-fast) var(--gl-motion-ease),
+    color var(--gl-motion-fast) var(--gl-motion-ease);
+}
+
+.code-sandbox-node-run {
+  color: var(--gl-surface-text-bright);
+  background-color: var(--gl-neutral-button-hover);
+  border: 1px solid var(--gl-neutral-button-border);
+}
+
+.code-sandbox-node-run:hover:enabled {
+  background-color: var(--gl-surface-border-strong);
+}
+
+.code-sandbox-node-run:disabled {
+  color: var(--gl-surface-text-muted);
+  background-color: transparent;
+  border-color: var(--gl-surface-border);
+  cursor: default;
+}
+
+.code-sandbox-node-cancel {
+  color: var(--gl-surface-text-secondary);
+  background: transparent;
+  border: 1px solid var(--gl-surface-border);
+}
+
+.code-sandbox-node-cancel:hover {
+  color: var(--gl-semantic-status-error, var(--gl-surface-text-primary));
+  border-color: var(--gl-semantic-status-error, var(--gl-surface-border-strong));
+}
+
+/* -- Dependencies disclosure ----------------------------------------------
+
+   A manifest is written once and then mostly never read - it does not earn
+   a permanently open textarea at the top of the card. Folded, the summary
+   row carries the package count; open, the textarea auto-sizes like the
+   prompt. Same caret treatment as the launchers' own disclosure. */
+
+.code-sandbox-node-deps summary {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-1-5);
+  width: fit-content;
+  list-style: none;
+  cursor: pointer;
+  font-size: var(--gl-text-2xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--gl-surface-text-muted);
+}
+
+.code-sandbox-node-deps summary::-webkit-details-marker {
+  display: none;
+}
+
+.code-sandbox-node-deps summary::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+  transition: transform var(--gl-motion-fast) var(--gl-motion-ease);
+}
+
+.code-sandbox-node-deps[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.code-sandbox-node-deps summary:hover {
+  color: var(--gl-surface-text-primary);
+}
+
+.code-sandbox-node-deps[open] summary {
+  margin-bottom: var(--gl-space-1-5);
+}
+
+.code-sandbox-node-deps-count {
+  padding: 0 var(--gl-space-1-5);
+  font-size: var(--gl-text-2xs);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-full);
+}
+
+.code-sandbox-node-banner-error {
+  padding: var(--gl-space-2) var(--gl-space-2-5);
+  font-size: var(--gl-text-2xs);
+  line-height: 1.5;
+  color: var(--gl-semantic-status-error, currentColor);
+  border: 1px solid var(--gl-semantic-status-error, currentColor);
+  border-radius: var(--gl-radius-md);
+}
+
+/* -- Outputs ---------------------------------------------------------------
+
+   Code and terminal are the unbounded panes, so they are the only two that
+   scroll themselves. */
+
+.code-sandbox-node-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-1);
+}
+
+.code-sandbox-node-section-label {
+  font-size: var(--gl-text-2xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--gl-surface-text-muted);
+}
+
+/* Reuses .chat-node-content's full markdown-body rule set verbatim - same
+   shared-class convention .artifact-node-document-content/
+   .gitlink-node-proposal-markdown already establish for this pipeline.
+   Bounded and self-scrolling: with both output panes uncapped inside one
+   scroller, a script of any length pushed the terminal out of the visible
+   area entirely, and the card hit its ceiling showing nothing but source. */
+/* User-authored Python remains reviewable source, never auto-executed. */
+.code-sandbox-node-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gl-space-1-5);
+}
+
+.code-sandbox-node-editor-actions button {
+  padding: var(--gl-space-1) var(--gl-space-2);
+  font-family: inherit;
+  font-size: var(--gl-text-2xs);
+  font-weight: 600;
+  border-radius: var(--gl-radius-sm);
+  border: 1px solid var(--gl-neutral-button-border);
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-neutral-button-background);
+  cursor: pointer;
+}
+
+.code-sandbox-node-editor-actions button:hover:enabled {
+  background: var(--gl-neutral-button-hover);
+}
+
+.code-sandbox-node-editor-actions button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.code-sandbox-node-source-editor {
+  width: 100%;
+  min-height: 180px;
+  max-height: 320px;
+  overflow: auto;
+  box-sizing: border-box;
+  resize: vertical;
+  font-size: var(--gl-text-2xs);
+  line-height: 1.5;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  padding: var(--gl-space-2) var(--gl-space-2-5);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-surface-inset, var(--gl-surface-window));
+}
+
+.code-sandbox-node-editor-notice {
+  color: var(--gl-surface-text-muted);
+  font-size: var(--gl-text-2xs);
+  margin: 0;
+}
+
+.code-sandbox-node-code,
+.code-sandbox-node-analysis {
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+/* The live terminal / static output fallback - plain preformatted text, NOT
+   the markdown pipeline (see CodeSandboxNodeView's own module doc for why:
+   raw subprocess stdout/stderr is machine output, not prose or code-to-be-
+   colorized - same posture .gitlink-node-context-xml already takes for its
+   own machine-generated XML body). The deep inset is what makes it read as
+   a terminal rather than as another form field. */
+.code-sandbox-node-terminal {
+  margin: 0;
+  padding: var(--gl-space-2) var(--gl-space-2-5);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: var(--gl-text-2xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 130px;
+  overflow: auto;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset-deep, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+}
+
+.code-sandbox-node-deps-summary { display:flex; align-items:center; gap:var(--gl-space-1-5); font-size:var(--gl-text-xs); color:var(--gl-surface-text-muted); }
+.code-sandbox-node-code-header { display:flex; justify-content:space-between; align-items:center; padding:var(--gl-space-1) var(--gl-space-2); background:var(--gl-surface-inset); font-size:var(--gl-text-xs); font-family:var(--gl-font-mono); }
+.code-sandbox-node-code-header > span, .code-sandbox-node-section-label { display:inline-flex; align-items:center; gap:var(--gl-space-1); }

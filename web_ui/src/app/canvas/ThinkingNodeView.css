@@ -1,0 +1,34 @@
+/* -- R3.13/R3.14 thinking node + docked-child badge ------------------------ */
+
+.thinking-node {
+  width: 420px;
+  /* No shell max-height: the shell is overflow-hidden, so a cap here
+     amputates the card bottom whenever header chrome plus the capped
+     content region outgrow it. Height is bounded by the content
+     region's own cap instead, so the bottom border always renders. */
+  min-height: 110px;
+}
+
+.thinking-node.collapsed {
+  width: 290px;
+  min-height: 58px;
+}
+
+.thinking-node-label {
+  font-style: italic;
+  color: var(--gl-surface-text-muted);
+}
+
+.thinking-node-content {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.thinking-node-content > :first-child {
+  margin-top: 0;
+}
+
+.thinking-node-content > :last-child {
+  margin-bottom: 0;
+}
+

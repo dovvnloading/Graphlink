@@ -1,0 +1,230 @@
+/* -- R3.25/R3.26 conversation node ------------------------------------------ */
+
+.conversation-node {
+  width: 420px;
+  /* No shell max-height: the shell is overflow-hidden, so a cap here
+     amputates the card bottom whenever header chrome plus the capped
+     content region outgrow it. Height is bounded by the content
+     region's own cap instead, so the bottom border always renders. */
+  min-height: 110px;
+}
+
+.conversation-node.collapsed {
+  width: 290px;
+  min-height: 58px;
+}
+
+.conversation-node-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-2);
+  max-height: 300px;
+}
+
+/* The scrollable message list - only this scrolls, not the input row below
+   it (unlike every scalar-content sibling's single `-content` block, this
+   node's body is two stacked regions: a growing list, then a fixed input
+   row that must stay put). */
+/* Keep long conversations responsive: only recent bubbles are mounted by
+   default, but all saved turns remain available via Show earlier and export. */
+.conversation-node-history-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gl-space-1-5);
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-muted);
+}
+
+.conversation-node-history-controls button {
+  padding: var(--gl-space-0-5) var(--gl-space-1-5);
+  font-size: var(--gl-text-2xs);
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: var(--gl-radius-sm);
+  cursor: pointer;
+}
+
+.conversation-node-send-error {
+  margin: 0;
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-semantic-status-error, var(--gl-surface-text-primary));
+}
+
+.conversation-node-messages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-2);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Per-message bubble - the role modifier reuses ChatNodeView's own
+   `.chat-node.user` token (var(--gl-neutral-button-hover)), applied here per
+   bubble instead of per node: ConversationNode is the only R3 kind shaped
+   like a message list rather than one flat text block. */
+.conversation-node-bubble {
+  padding: var(--gl-space-2) var(--gl-space-2-5);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-md);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+}
+
+.conversation-node-bubble.user {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+/* Per-bubble chrome (extends node redesign stage 3's ChatNodeView treatment
+   here): avatar+role-label group on the left, hover-revealed quick actions
+   on the right - the same space-between layout .chat-node-role uses (and
+   the same 2-top-level-children requirement - see
+   .conversation-node-bubble-role-group's own comment below). */
+.conversation-node-bubble-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--gl-space-1);
+}
+
+/* Groups the avatar with its visible role label, mirroring
+   .chat-node-role-group's own reasoning exactly: a 3rd top-level flex
+   child (the role label, added alongside the avatar) would otherwise get
+   pushed to the CENTER of .conversation-node-bubble-header's space-between
+   layout instead of sitting on the left with the avatar. */
+.conversation-node-bubble-role-group {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-1-5);
+}
+
+/* Accessibility fix (adversarial review): the avatar chip is aria-hidden,
+   so a real, visible role label is required for it to be safe to hide -
+   ChatNodeView's own "You"/"Assistant" span played this role there; this
+   bubble had nothing equivalent until now. Small/muted since a bubble's
+   header has far less vertical room than a full node's title bar. */
+.conversation-node-bubble-role {
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-muted);
+}
+
+/* ADR-006 stage 6.4 (partial-output preservation): marks a history message
+   whose text was committed from a killed stream (incomplete on the wire
+   row) - same small pill scale as .chat-node-model-badge, warning-colored
+   like .chat-node-incomplete-banner. */
+.conversation-node-incomplete-badge {
+  font-size: var(--gl-text-2xs);
+  line-height: 1;
+  padding: var(--gl-space-0-5) var(--gl-space-1);
+  color: var(--gl-semantic-status-warning, currentColor);
+  border: 1px solid var(--gl-semantic-status-warning, currentColor);
+  border-radius: var(--gl-radius-sm);
+  white-space: nowrap;
+}
+
+/* ADR-006 stage 6.4: the pre-first-delta placeholder - same muted posture
+   as the live terminal's own "Waiting for output…" line in
+   CodeSandboxNodeView. Shared by the conversation node's streaming bubble
+   and (review fix) the chat node's own regenerate-streaming window, which
+   otherwise rendered an empty markdown body as a blank card. */
+.conversation-node-streaming-placeholder,
+.chat-node-streaming-placeholder {
+  font-size: var(--gl-text-2xs);
+  font-style: italic;
+  color: var(--gl-surface-text-muted);
+}
+
+/* Reuses .chat-node-content's full markdown-body rule set (headings, lists,
+   code, tables, hljs) verbatim rather than duplicating it - the same
+   shared-class convention .chat-node-menu already establishes across every
+   sibling node's context menu, applied here to markdown styling instead.
+   Only overrides the max-height/overflow-y a single bubble should never
+   take on its own - the message LIST scrolls (.conversation-node-messages
+   above), not each bubble individually. */
+.conversation-node-bubble-content {
+  max-height: none;
+  overflow: visible;
+}
+
+.conversation-node-input-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-1-5);
+}
+
+.conversation-node-input {
+  box-sizing: border-box;
+  width: 100%;
+  resize: none;
+  /* Native auto-size, the same posture .composer-input and
+     .code-sandbox-node-input already take. Without it a rows=1 textarea
+     with no height of its own stays one line forever: you type a
+     paragraph into this card and can see the last line only. Chromium
+     makes textareas border-box, so these bounds are real pixel bounds. */
+  field-sizing: content;
+  min-height: 34px;
+  max-height: 140px;
+  overflow-y: auto;
+  font-family: inherit;
+  font-size: var(--gl-text-xs);
+  line-height: 1.4;
+  padding: var(--gl-space-2) var(--gl-space-2-5);
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+}
+
+.conversation-node-input:focus {
+  outline: none;
+  border-color: var(--gl-surface-text-muted);
+}
+
+.conversation-node-input-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--gl-space-1-5);
+}
+
+.conversation-node-send-btn,
+.conversation-node-cancel-btn {
+  font-size: var(--gl-text-2xs);
+  font-weight: 600;
+  font-family: inherit;
+  padding: var(--gl-space-1) var(--gl-space-3);
+  border-radius: var(--gl-radius-sm);
+  cursor: pointer;
+}
+
+.conversation-node-send-btn {
+  color: var(--gl-surface-window);
+  background-color: var(--gl-surface-text-muted);
+  border: none;
+}
+
+.conversation-node-send-btn:hover:enabled {
+  filter: brightness(1.1);
+}
+
+.conversation-node-send-btn:disabled,
+.conversation-node-cancel-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.conversation-node-cancel-btn {
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+}
+
+/* R8a (UI/UX issue list finding #23): only its solid-fill sibling (send-btn
+   above) had a hover - this bordered-neutral shape had none. Shared with
+   every other node kind's identically-reciped Cancel button below. */
+.conversation-node-cancel-btn:hover:enabled {
+  background-color: var(--gl-neutral-button-hover);
+}
+

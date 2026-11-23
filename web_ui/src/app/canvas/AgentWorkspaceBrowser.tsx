@@ -1,4 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Icon } from "../ui/icons/Icon";
+import { Button } from "../ui/Button";
+import { IconButton } from "../ui/IconButton";
+import { Tooltip } from "../ui/Tooltip";
+import { Spinner } from "../ui/Spinner";
 import type { HarnessWorkspaceListing } from "./harnessWorkspaceFiles";
 import type { StateListener } from "../../lib/ws/transport";
 import { KnowledgeFileImportStatus, useKnowledgeFileImport } from "../knowledgeFileImport";
@@ -117,33 +122,25 @@ export function HarnessWorkspaceFiles({
   return (
     <div className="harness-workspace-files">
       <div className="harness-workspace-files-actions">
-        <button
-          type="button"
-          className="plan-node-button nodrag"
+        <Button size="sm" className="nodrag"
           aria-expanded={expanded}
           onClick={toggle}
         >
           {expanded ? "Hide files" : "Browse files"}
-        </button>
-        <button type="button" className="plan-node-button nodrag" onClick={onReveal}>
-          Reveal in file manager
-        </button>
+        </Button>
+        <Button size="sm" variant="ghost" className="nodrag" onClick={onReveal}>Reveal in file manager</Button>
       </div>
       {expanded && (
         <section className="harness-files-browser nodrag nowheel" aria-label="Workspace files" aria-busy={loading}>
           <div className="harness-files-toolbar">
-            <button type="button" className="plan-node-button nodrag" disabled={!path || loading}
-              onClick={() => loadFolder(parent)} aria-label="Up one folder">
-              Up
-            </button>
-            <span className="harness-files-current" title={path || "/"}>{path || "/"}</span>
-            <button type="button" className="plan-node-button nodrag"
-              onClick={() => loadFolder(path)} aria-label="Refresh workspace files">
-              Refresh
-            </button>
+            <IconButton size="sm" className="nodrag" icon="arrow-up" label="Up one folder"
+              disabled={!path || loading} onClick={() => loadFolder(parent)} />
+            <Tooltip label={path || "/"}><span className="harness-files-current">{path || "/"}</span></Tooltip>
+            <IconButton size="sm" className="nodrag" icon="refresh" label="Refresh workspace files"
+              onClick={() => loadFolder(path)} />
           </div>
           {listing && (
-            <div className="harness-files-root" title={listing.root}>
+            <div className="harness-files-root">
               {listing.isScratch ? "Scratch" : "Bound folder"}: {listing.root}
             </div>
           )}
@@ -166,15 +163,13 @@ export function HarnessWorkspaceFiles({
                       if (entry.isDir) loadFolder(entry.path);
                       else void openFile(entry.path);
                     }}
-                    title={entry.path}
                   >
-                    <span aria-hidden="true">{entry.isDir ? "📁" : "📄"}</span>
+                    <Icon name={entry.isDir ? "folder" : "file"} size="sm" />
                     <span className="harness-files-name">{entry.name}</span>
-                    {opening === entry.path && <span aria-hidden="true">…</span>}
+                    {opening === entry.path && <Spinner size={12} decorative />}
                   </button>
                   {!entry.isDir && onAddToKnowledge && (
-                    <button
-                      type="button"
+                    <Button size="sm" variant="ghost"
                       className="harness-files-add-knowledge nodrag"
                       aria-label={`Add ${entry.name} to knowledge`}
                       disabled={knowledgeImport.busy}
@@ -183,7 +178,7 @@ export function HarnessWorkspaceFiles({
                       )}
                     >
                       Add to knowledge
-                    </button>
+                    </Button>
                   )}
                 </li>
               ))}
@@ -191,18 +186,18 @@ export function HarnessWorkspaceFiles({
           )}
           {listing && (previousCursors.length > 0 || listing.nextCursor) && (
             <div className="harness-files-pagination">
-              <button type="button" className="plan-node-button nodrag"
+              <Button size="sm" className="nodrag"
                 disabled={loading || previousCursors.length === 0}
                 onClick={() => loadFolder(path, previousCursors[previousCursors.length - 1] ?? null,
                   previousCursors.slice(0, -1))}>
                 Previous page
-              </button>
+              </Button>
               <span>Page {previousCursors.length + 1}</span>
-              <button type="button" className="plan-node-button nodrag"
+              <Button size="sm" className="nodrag"
                 disabled={loading || !listing.nextCursor}
                 onClick={() => loadFolder(path, listing.nextCursor ?? null, [...previousCursors, cursor])}>
                 Next page
-              </button>
+              </Button>
             </div>
           )}
           {listing?.nextCursor && (
