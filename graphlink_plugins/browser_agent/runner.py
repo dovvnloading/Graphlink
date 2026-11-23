@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import html
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 from urllib.parse import urlsplit
@@ -33,7 +33,44 @@ _DOM_EXTRACTOR = """
     .map(table => Array.from(table.querySelectorAll('tr')).slice(0, 25)
       .map(row => Array.from(row.querySelectorAll('th, td')).slice(0, 10)
         .map(cell => clip(cell.innerText, 200))));
-  return {title: clip(document.title, 200), text, links, tables};
+  const stableSelector = el => {
+    if (el.id) {
+      const candidate = '#' + CSS.escape(el.id);
+      if (candidate.length <= 240 && document.querySelectorAll(candidate).length === 1) return candidate;
+    }
+    const parts = [];
+    for (let current = el, depth = 0; current && current.nodeType === 1 && depth < 8;
+         current = current.parentElement, depth++) {
+      const tag = current.tagName.toLowerCase();
+      let position = 1;
+      for (let sibling = current.previousElementSibling; sibling; sibling = sibling.previousElementSibling) {
+        if (sibling.tagName === current.tagName) position++;
+      }
+      parts.unshift(tag + ':nth-of-type(' + position + ')');
+      const candidate = parts.join(' > ');
+      if (candidate.length > 240) return '';
+      if (document.querySelectorAll(candidate).length === 1) return candidate;
+    }
+    return '';
+  };
+  const controls = Array.from(document.querySelectorAll(
+    'button,input,select,textarea,a[href],[role="button"],[role="link"]'
+  )).slice(0, 160).flatMap(el => {
+    const type = clip(el.getAttribute('type'), 40).toLowerCase();
+    if (['password', 'file', 'hidden'].includes(type) ||
+        !el.getClientRects().length || getComputedStyle(el).visibility !== 'visible') return [];
+    const selector = stableSelector(el);
+    if (!selector) return [];
+    const tag = el.tagName.toLowerCase();
+    const name = clip(el.getAttribute('aria-label') || el.getAttribute('placeholder') ||
+       el.innerText || el.getAttribute('name'), 120);
+    const control = {selector, tag, type, name, disabled: Boolean(el.disabled)};
+    if (tag === 'a') control.href = clip(el.href, 2048);
+    if (tag === 'select') control.options = Array.from(el.options).slice(0, 12)
+      .map(option => ({value: clip(option.value, 120), label: clip(option.label, 120)}));
+    return [control];
+  }).slice(0, 40);
+  return {title: clip(document.title, 200), text, links, tables, controls};
 }
 """
 
@@ -51,6 +88,7 @@ class BrowserCapture:
     blocked: list[str]
     truncated: bool
     screenshot: bytes | None = None
+    controls: list[dict[str, Any]] = field(default_factory=list)
 
     def report(self) -> dict[str, Any]:
         return {
@@ -60,6 +98,7 @@ class BrowserCapture:
             "text": self.text,
             "links": self.links,
             "tables": self.tables,
+            "controls": self.controls,
             "actions": self.actions,
             "request_count": self.request_count,
             "blocked_requests": self.blocked,
@@ -133,6 +172,11 @@ def capture_markdown(capture: BrowserCapture) -> str:
         lines.append("")
     if capture.tables:
         lines += ["## Tables (JSON)", "", "~~~json", json.dumps(capture.tables, ensure_ascii=False), "~~~", ""]
+    if capture.controls:
+        lines += [
+            "## Interactive controls (observed selectors)", "", "~~~json",
+            json.dumps(capture.controls, ensure_ascii=False), "~~~", "",
+        ]
     lines += ["## Browser provenance", "", "~~~json", json.dumps({
         "request_count": capture.request_count,
         "blocked_requests": capture.blocked,
@@ -271,7 +315,7 @@ async def run_browser(
                 if _cancelled(cancel):
                     raise BrowserPolicyError("Browser task was cancelled.")
                 canonical_public_url(page.url)
-                data = await page.evaluate(_DOM_EXTRACTOR)
+                data = await asyncio.wait_for(page.evaluate(_DOM_EXTRACTOR), timeout=8)
                 if not isinstance(data, dict):
                     raise BrowserPolicyError("Browser could not extract document content.")
                 text = str(data.get("text") or "")
@@ -286,6 +330,7 @@ async def run_browser(
                     text=text[:MAX_TEXT],
                     links=list(data.get("links") or [])[:60],
                     tables=list(data.get("tables") or [])[:4],
+                    controls=list(data.get("controls") or [])[:40],
                     actions=trace,
                     request_count=gate.request_count,
                     blocked=gate.blocked,
