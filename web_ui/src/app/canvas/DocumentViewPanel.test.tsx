@@ -122,7 +122,7 @@ describe("DocumentViewPanel", () => {
     const onClose = vi.fn();
     renderPanel({ onClose });
 
-    await user.click(screen.getByRole("button", { name: "Close" }));
+    await user.click(screen.getByRole("button", { name: "Close document view" }));
     expect(onClose).toHaveBeenCalledOnce();
   });
 
@@ -283,13 +283,13 @@ describe("DocumentViewPanel", () => {
       // Headings come from a dynamically imported parser, so they land a
       // microtask after mount rather than during it.
       expect(
-        await screen.findByRole("button", { name: "Outline" }, LAZY_BODY_TIMEOUT),
+        await screen.findByRole("button", { name: "Table of contents" }, LAZY_BODY_TIMEOUT),
       ).toBeInTheDocument();
     });
 
     it("shows no Outline toggle when the content has fewer than 2 headings", () => {
       renderPanel({ content: "just a paragraph, no headings" });
-      expect(screen.queryByRole("button", { name: "Outline" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Table of contents" })).toBeNull();
     });
 
     it("renders a reading-progress bar starting at 0", () => {
@@ -457,8 +457,8 @@ describe("DocumentViewPanel", () => {
       renderPanel({ content: "# One\n\n## Two\n\nthe cat sat" });
 
       await user.click(screen.getByRole("button", { name: "Find in document" }));
-      await user.click(screen.getByRole("button", { name: "Outline" }));
-      expect(screen.getByRole("menu", { name: "Table of contents" })).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Table of contents" }));
+      expect(screen.getByRole("navigation", { name: "Table of contents" })).toBeInTheDocument();
       expect(screen.getByRole("search")).toBeInTheDocument();
 
       const searchInput = screen.getByRole("textbox", { name: "Search query" });
@@ -466,7 +466,7 @@ describe("DocumentViewPanel", () => {
       await user.keyboard("{Escape}");
 
       expect(screen.queryByRole("search")).toBeNull();
-      expect(screen.getByRole("menu", { name: "Table of contents" })).toBeInTheDocument();
+      expect(screen.getByRole("navigation", { name: "Table of contents" })).toBeInTheDocument();
     });
   });
 
@@ -549,15 +549,15 @@ describe("DocumentViewPanel", () => {
       renderPanel({ onClose, content: "# One\n\n## Two\n\nthe cat sat" });
 
       await user.click(screen.getByRole("button", { name: "Find in document" }));
-      await user.click(screen.getByRole("button", { name: "Outline" }));
+      await user.click(screen.getByRole("button", { name: "Table of contents" }));
       expect(screen.getByRole("search")).toBeInTheDocument();
-      expect(screen.getByRole("menu", { name: "Table of contents" })).toBeInTheDocument();
+      expect(screen.getByRole("navigation", { name: "Table of contents" })).toBeInTheDocument();
 
       await user.keyboard("{Escape}");
 
       expect(onClose).not.toHaveBeenCalled();
       const searchStillOpen = screen.queryByRole("search") !== null;
-      const tocStillOpen = screen.queryByRole("menu") !== null;
+      const tocStillOpen = screen.queryByRole("navigation") !== null;
       expect(searchStillOpen).not.toBe(tocStillOpen);
     });
 
@@ -566,13 +566,13 @@ describe("DocumentViewPanel", () => {
       const onClose = vi.fn();
       renderPanel({ onClose, content: "# One\n\n## Two" });
 
-      await user.click(await screen.findByRole("button", { name: "Outline" }, LAZY_BODY_TIMEOUT));
-      expect(screen.getByRole("menu", { name: "Table of contents" })).toBeInTheDocument();
+      await user.click(await screen.findByRole("button", { name: "Table of contents" }, LAZY_BODY_TIMEOUT));
+      expect(screen.getByRole("navigation", { name: "Table of contents" })).toBeInTheDocument();
 
       await user.keyboard("{Escape}");
 
       expect(onClose).not.toHaveBeenCalled();
-      expect(screen.queryByRole("menu")).toBeNull();
+      expect(screen.queryByRole("navigation")).toBeNull();
     });
 
     it("does not listen for Escape while closed", async () => {
@@ -637,11 +637,11 @@ describe("DocumentViewPanel", () => {
         const panel = container.querySelector(".document-view-panel") as HTMLElement;
         expect(panel.style.width).toBe("500px");
 
-        fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+        fireEvent.click(screen.getByRole("button", { name: "Maximize document view" }));
 
         expect(panel).toHaveClass("document-view-panel-expanded");
         expect(panel.style.width).toBe("");
-        expect(screen.getByRole("button", { name: "Collapse" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Minimize document view" })).toBeInTheDocument();
       });
 
       it("collapsing restores the exact width from before expanding", () => {
@@ -654,9 +654,9 @@ describe("DocumentViewPanel", () => {
         fireEvent.pointerUp(handle, { clientX: 650, pointerId: 1 });
         expect(panel.style.width).toBe("650px");
 
-        fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+        fireEvent.click(screen.getByRole("button", { name: "Maximize document view" }));
         expect(panel).not.toHaveClass("document-view-panel-resizing");
-        fireEvent.click(screen.getByRole("button", { name: "Collapse" }));
+        fireEvent.click(screen.getByRole("button", { name: "Minimize document view" }));
 
         expect(panel).not.toHaveClass("document-view-panel-expanded");
         expect(panel.style.width).toBe("650px");
@@ -667,7 +667,7 @@ describe("DocumentViewPanel", () => {
         const panel = container.querySelector(".document-view-panel") as HTMLElement;
         const handle = screen.getByRole("separator", { name: "Resize Document View panel. Press Enter to reset to the default width." });
 
-        fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+        fireEvent.click(screen.getByRole("button", { name: "Maximize document view" }));
         expect(panel).toHaveClass("document-view-panel-expanded");
 
         fireEvent.pointerDown(handle, { clientX: 500, pointerId: 1 });
