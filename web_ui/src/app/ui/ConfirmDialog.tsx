@@ -56,7 +56,7 @@ function settle(id: string, accepted: boolean) {
 
 /** Use in any descendant of the app shell; mount one ConfirmDialog in the overlay provider. */
 export function useConfirm() {
-  return useCallback(requestConfirm, []);
+  return useCallback((options: ConfirmOptions) => requestConfirm(options), []);
 }
 
 export function ConfirmDialog() {

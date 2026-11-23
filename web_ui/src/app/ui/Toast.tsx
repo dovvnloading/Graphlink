@@ -69,53 +69,79 @@ export const toast = {
   },
 };
 
-export type ToastProps = Omit<ToastItem, "id"> & { className?: string };
+export type ToastProps = Omit<ToastItem, "id"> & {
+  className?: string;
+  /** Backend notifications must dispatch their dismiss intent on click. */
+  dismissImmediately?: boolean;
+};
 
-export function Toast({ title, variant, details, action, onDismiss, className }: ToastProps) {
-  const [hovered, setHovered] = useState(false);
-  const [focused, setFocused] = useState(false);
+export function Toast({
+  title, variant, details, action, onDismiss, className, dismissImmediately = false,
+}: ToastProps) {
   const [closing, setClosing] = useState(false);
   const closingRef = useRef(false);
   const exitTimer = useRef<number | null>(null);
-  const remaining = useRef(TRANSIENT_NOTIFICATION_MS - EXIT_MS);
+  const timer = useRef<number | null>(null);
+  const startedAt = useRef(0);
+  const remaining = useRef(TRANSIENT_NOTIFICATION_MS - (dismissImmediately ? 0 : EXIT_MS));
+  const pointerInside = useRef(false);
+  const focusInside = useRef(false);
 
   const close = useCallback(() => {
     if (closingRef.current) return;
     closingRef.current = true;
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
     setClosing(true);
-    if (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) {
+    if (dismissImmediately || window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) {
       onDismiss?.();
     } else {
       exitTimer.current = window.setTimeout(() => onDismiss?.(), EXIT_MS);
     }
-  }, [onDismiss]);
+  }, [dismissImmediately, onDismiss]);
+
+  const pause = useCallback(() => {
+    if (timer.current === null) return;
+    window.clearTimeout(timer.current);
+    timer.current = null;
+    remaining.current = Math.max(0, remaining.current - (Date.now() - startedAt.current));
+  }, []);
+
+  const resume = useCallback(() => {
+    if ((variant !== "info" && variant !== "success") || pointerInside.current ||
+        focusInside.current || closingRef.current || timer.current !== null) return;
+    startedAt.current = Date.now();
+    timer.current = window.setTimeout(() => {
+      timer.current = null;
+      close();
+    }, Math.max(0, remaining.current));
+  }, [variant, close]);
 
   useEffect(() => () => {
     if (exitTimer.current !== null) window.clearTimeout(exitTimer.current);
   }, []);
 
-  // Each visible transient toast owns its clock. Pause while the pointer is
-  // inside or keyboard focus is within any of its controls.
+  // Focus and pointer events pause the *same* clock immediately. In particular,
+  // an imperative .focus() must clear it before Vitest advances fake timers.
   useEffect(() => {
-    if (variant !== "info" && variant !== "success") return;
-    if (hovered || focused || closingRef.current) return;
-    const started = Date.now();
-    const timer = window.setTimeout(close, Math.max(0, remaining.current));
-    return () => {
-      window.clearTimeout(timer);
-      remaining.current = Math.max(0, remaining.current - (Date.now() - started));
-    };
-  }, [variant, hovered, focused, close]);
+    resume();
+    return pause;
+  }, [resume, pause]);
 
   return (
     <div role={variant === "error" ? "alert" : "status"}
       className={["gl-toast", "gl-toast--" + variant, className].filter(Boolean).join(" ")}
       data-state={closing ? "closing" : "open"} aria-hidden={closing || undefined}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      onFocusCapture={() => setFocused(true)}
+      onMouseEnter={() => { pointerInside.current = true; pause(); }}
+      onMouseLeave={() => { pointerInside.current = false; resume(); }}
+      onFocusCapture={() => { focusInside.current = true; pause(); }}
       onBlurCapture={(event) => {
-        if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setFocused(false);
+        if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) {
+          focusInside.current = false;
+          resume();
+        }
       }}>
       <Icon name={"status-" + variant as "status-info" | "status-success" | "status-warning" | "status-error"} size="lg" />
       <div className="gl-toast-main">
@@ -163,6 +189,7 @@ export function Toaster({ backendNotification }: { backendNotification?: Backend
       {visible.map((item) => (
         <Toast key={item.id} title={item.title} variant={item.variant}
           details={item.details} action={item.action}
+          dismissImmediately={backendNotification?.id === item.id}
           onDismiss={item.onDismiss ?? (() => toast.dismiss(item.id))} />
       ))}
       {hidden > 0 && (

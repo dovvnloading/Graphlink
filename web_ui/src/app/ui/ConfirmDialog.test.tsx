@@ -37,7 +37,7 @@ describe("ConfirmDialog and useConfirm", () => {
     expect(screen.getByRole("dialog", { name: "Settings" })).toBeInTheDocument();
     expect(nested.closest("[data-nested]")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
-    expect(within(nested).getByRole("button", { name: "Delete note", exact: true })).toHaveAttribute("data-destructive", "true");
+    expect(within(nested).getByRole("button", { name: "Delete note" })).toHaveAttribute("data-destructive", "true");
     fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() => expect(screen.getByRole("status", { name: "Confirmation result" })).toHaveTextContent("Cancelled"));
     expect(screen.getByRole("dialog", { name: "Settings" })).toBeInTheDocument();
@@ -52,7 +52,7 @@ describe("ConfirmDialog and useConfirm", () => {
     expect(await screen.findByText("Estimated cost: $1.50")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Details" }));
     expect(screen.getByText("The note will be removed.")).toBeVisible();
-    await user.click(within(screen.getByRole("dialog", { name: "Delete note?" })).getByRole("button", { name: "Delete note", exact: true }));
+    await user.click(within(screen.getByRole("dialog", { name: "Delete note?" })).getByRole("button", { name: "Delete note" }));
     await waitFor(() => expect(screen.getByRole("status", { name: "Confirmation result" })).toHaveTextContent("Accepted"));
   });
 

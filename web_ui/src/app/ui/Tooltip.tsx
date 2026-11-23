@@ -2,7 +2,7 @@ import {
   Children, cloneElement, useCallback, useEffect, useId, useLayoutEffect, useRef, useState,
   type FocusEvent, type MouseEvent, type ReactElement,
 } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { Kbd } from "./Kbd";
 import "./tooltip.css";
 
@@ -96,37 +96,47 @@ export function Tooltip({ label, shortcut, children, placement = "bottom" }: Too
     };
   }, [visible, placement]);
 
+  // cloneElement is evaluated during render. Keep ref access in deferred
+  // event callbacks rather than in handlers constructed inside that call.
+  const handleMouseEnter = useCallback((event: MouseEvent<HTMLElement>) => {
+    child.props.onMouseEnter?.(event);
+    trigger.current = event.currentTarget;
+    cancelDelay();
+    timeout.current = window.setTimeout(() => {
+      timeout.current = null;
+      setVisible(true);
+    }, HOVER_DELAY_MS);
+  }, [child, cancelDelay]);
+
+  const handleMouseLeave = useCallback((event: MouseEvent<HTMLElement>) => {
+    child.props.onMouseLeave?.(event);
+    hide();
+  }, [child, hide]);
+
+  const handleFocus = useCallback((event: FocusEvent<HTMLElement>) => {
+    child.props.onFocus?.(event);
+    trigger.current = event.currentTarget;
+    if (pointerFocus.current) return;
+    cancelDelay();
+    // Native .focus() must expose the portaled tooltip in the same event.
+    flushSync(() => setVisible(true));
+  }, [child, cancelDelay]);
+
+  const handleBlur = useCallback((event: FocusEvent<HTMLElement>) => {
+    child.props.onBlur?.(event);
+    hide();
+  }, [child, hide]);
+
   const describedBy = visible ? [child.props["aria-describedby"], id].filter(Boolean).join(" ") : child.props["aria-describedby"];
 
   return (
     <>
       {cloneElement(child, {
         "aria-describedby": describedBy,
-        onMouseEnter: (event: MouseEvent<HTMLElement>) => {
-          child.props.onMouseEnter?.(event);
-          trigger.current = event.currentTarget;
-          cancelDelay();
-          timeout.current = window.setTimeout(() => {
-            timeout.current = null;
-            setVisible(true);
-          }, HOVER_DELAY_MS);
-        },
-        onMouseLeave: (event: MouseEvent<HTMLElement>) => {
-          child.props.onMouseLeave?.(event);
-          hide();
-        },
-        onFocus: (event: FocusEvent<HTMLElement>) => {
-          child.props.onFocus?.(event);
-          trigger.current = event.currentTarget;
-          if (!pointerFocus.current) {
-            cancelDelay();
-            setVisible(true);
-          }
-        },
-        onBlur: (event: FocusEvent<HTMLElement>) => {
-          child.props.onBlur?.(event);
-          hide();
-        },
+        onMouseEnter: handleMouseEnter,
+        onMouseLeave: handleMouseLeave,
+        onFocus: handleFocus,
+        onBlur: handleBlur,
       })}
       {visible && createPortal(
         <div ref={tip} id={id} role="tooltip" className="gl-tooltip" style={position}>
