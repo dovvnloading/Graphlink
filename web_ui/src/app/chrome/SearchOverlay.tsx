@@ -41,14 +41,10 @@ export function SearchOverlay({ store }: { store: SceneStore }) {
     // Selection is kept in React Flow's transient state, not persisted to the scene.
     flow.setNodes?.((nodes) => nodes.map((node) =>
       Boolean(node.selected) === (node.id === match.id) ? node : { ...node, selected: node.id === match.id }));
-    const internal = flow.getInternalNode?.(match.id);
-    if (internal && flow.getNodesBounds) {
-      const bounds = flow.getNodesBounds([match.id]);
-      flow.setCenter(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2,
-        { zoom: flow.getZoom?.() ?? 1, duration: motionDuration(300) });
-    } else {
-      flow.setCenter(match.x, match.y, { zoom: 1, duration: motionDuration(300) });
-    }
+    // Pan to the match's own scene coordinates at 100% (ADR-011 stage 11.2 contract,
+    // pinned by SceneCanvas.pinSearchJump.test.tsx): never a DOM-measured position,
+    // which is missing for off-viewport nodes under onlyRenderVisibleElements.
+    flow.setCenter(match.x, match.y, { zoom: 1, duration: motionDuration(300) });
   }
 
   function move(direction: number) {

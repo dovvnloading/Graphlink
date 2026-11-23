@@ -250,7 +250,8 @@ describe("ViewPopover font color (theme-following default)", () => {
   it("shows Auto (not an empty hex) when the color is unset, and marks the Auto swatch active", () => {
     const { store } = makeStore();
     renderOpen(store);
-    expect(screen.getByText("Auto")).toBeInTheDocument();
+    // "Auto" appears as the swatch label and as the field value; neither is an empty hex.
+    expect(screen.getAllByText("Auto").length).toBeGreaterThan(0);
     const auto = screen.getByRole("button", { name: "Font color, Follow the theme" });
     expect(auto).toHaveAttribute("aria-pressed", "true");
   });
