@@ -163,6 +163,31 @@ def test_request_budget_caps_network_load(monkeypatch):
     assert gate.request_count == network.MAX_REQUESTS
 
 
+
+def test_total_response_bytes_are_bounded_even_with_small_individual_resources(monkeypatch):
+    block = b"x" * network.MAX_RESOURCE_BYTES
+    monkeypatch.setattr(
+        network, "_fetch_verified",
+        lambda *args: network.BrowserResponse(200, {"content-type": "text/plain"}, block),
+    )
+
+    async def approve(host, url):
+        return True
+
+    async def run():
+        gate = network.BrowserNetworkGate("https://example.com/", approve, policy=_policy())
+        for _ in range(network.MAX_SESSION_BYTES // network.MAX_RESOURCE_BYTES):
+            await gate.fetch("https://example.com/", method="GET", navigation=True, headers={})
+        with pytest.raises(network.BrowserPolicyError, match="transfer budget"):
+            await gate.fetch("https://example.com/", method="GET", navigation=True, headers={})
+        return gate
+
+    gate = asyncio.run(run())
+    assert gate.total_bytes == network.MAX_SESSION_BYTES
+    assert gate.request_count == network.MAX_SESSION_BYTES // network.MAX_RESOURCE_BYTES + 1
+    assert any("16 MiB" in reason for reason in gate.blocked)
+
+
 def test_pinned_transport_preserves_tls_hostname_and_does_not_follow_redirect(monkeypatch):
     sent = []
 
