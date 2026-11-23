@@ -3,10 +3,11 @@ import type { Node, NodeProps } from "@xyflow/react";
 import { StatusPill } from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { Checkbox } from "../ui/Checkbox";
-import { Disclosure } from "../ui/Disclosure";
+import { CanvasDisclosure } from "./CanvasDisclosure";
 import { IconButton } from "../ui/IconButton";
 import { Select } from "../ui/Select";
-import { InlineAlert } from "../ui/InlineAlert";
+import { Icon } from "../ui/icons/Icon";
+import "../ui/inline-alert.css";
 import { formatCount, formatDuration } from "../ui/format";
 import { OverlayProviderIfMissing, useOverlays } from "../overlays/overlays";
 import { scientificFocusName } from "./scientificFocus";
@@ -17,14 +18,13 @@ import { useLodVisibility } from "./useLodVisibility";
 import type { SceneStore, ScienceEditorSession } from "./sceneStore";
 import { downloadBlob } from "./downloadTextFile";
 import { writeTableCsv } from "./tableCsv";
-import { createLinearScale } from "./charts/chartScales";
 import { ScienceTableSource } from "./ScienceTableSource";
 import { ScienceArrayInput } from "./ScienceArrayInput";
 import { ScienceColumnBinding, type FetchTableColumn } from "./ScienceColumnBinding";
 import { ScientificDataTable } from "./ScientificDataTable";
-import { ScientificResultViews } from "./ScientificResultViews";
+import { ScientificMiniPlot, ScientificResultViews } from "./ScientificResultViews";
 import {
-  isResult, exactScienceNumber, isImportedTable, type ScientificImportedTable, chartableScienceTypes, columnChoices, compatibleOptions, connectedInputText, currentSource, draftInputs, FieldError, fieldText, formatMeasurement, formatScienceNumber, formatScienceRange, formatScienceSummary, formatScienceValue, matchesSource, parseInputs, readableScienceKey, readScienceState, resultMeasurement, sourceOptions,
+  isResult, exactScienceNumber, isImportedTable, type ScientificImportedTable, chartableScienceTypes, columnChoices, compatibleOptions, connectedInputText, currentSource, draftInputs, FieldError, fieldText, formatMeasurement, formatScienceNumber, formatScienceSummary, formatScienceValue, matchesSource, parseInputs, readableScienceKey, readScienceState, resultMeasurement, sourceOptions,
   type EditorDraft, type ScienceAttempt, type ScienceField, type ScienceLimits, type ScienceOperation, type ScienceParent, type SciencePlot, type ScienceResult,
   type ScienceChartLink, type ScienceChartType, type ScienceState, type ScienceRunnerConfiguration, type ScientificColumnType, type Sources, type SourceOption, type SourceReference,
 } from "./scientificWorkbench";
@@ -39,30 +39,11 @@ function numberCell(value: number | undefined): string {
   return value === undefined ? "—" : formatScienceNumber(value);
 }
 
-function scienceScale(values: number[], from: number, to: number) {
-  const low = values.reduce((a, b) => Math.min(a, b)), high = values.reduce((a, b) => Math.max(a, b));
-  // Dividing by two avoids overflow when the finite bounds have opposite signs near 1e308.
-  const divisor = Number.isFinite(high - low) ? 1 : 2;
-  const position = createLinearScale([low / divisor, high / divisor], [from, to]);
-  return { low, high, at: (n: number) => position(n / divisor) };
-}
-
 function Plot({ plot, scatter }: { plot: SciencePlot; scatter: boolean }) {
-  const x = scienceScale(plot.x, 10, 310);
-  const y = scienceScale(plot.y, 98, 8);
-  const points = plot.x.map((v, i) => `${x.at(v)},${y.at(plot.y[i])}`).join(" ");
-
   return <figure className="science-plot">
     <figcaption>{plot.title}</figcaption>
-    <span>{plot.yLabel} · {formatScienceRange(y.low, y.high)}</span>
-    <svg viewBox="0 0 320 110" role="img" aria-label={`${plot.title}. ${plot.yLabel} versus ${plot.xLabel}, ${plot.x.length} points.`}>
-      <path d="M10 8V98H310" fill="none" stroke="currentColor" opacity=".4" />
-      {!scatter && <polyline points={points} fill="none" stroke="currentColor" strokeWidth="1.8" />}
-      {(scatter || plot.x.length <= 48) && plot.x.map((v, i) =>
-        <circle key={i} cx={x.at(v)} cy={y.at(plot.y[i])} r="2.4" fill="currentColor"><title>{v}, {plot.y[i]}</title></circle>)}
-    </svg>
-    <span>{plot.xLabel} · {formatScienceRange(x.low, x.high)}</span>
-    <ScientificDataTable {...{ title: "Exact plot coordinates" }} columns={["Point", plot.xLabel, plot.yLabel]}
+    <ScientificMiniPlot plot={plot} scatter={scatter} />
+    <ScientificDataTable heading="Exact plot coordinates" columns={["Point", plot.xLabel, plot.yLabel]}
       rows={() => plot.x.map((value, index) => [String(index + 1), exactScienceNumber(value), exactScienceNumber(plot.y[index])])} />
   </figure>;
 }
@@ -104,14 +85,14 @@ function ResultDisclosure({ label, children, className = "", onClose, defaultOpe
   label: string; children: ReactNode; className?: string; onClose?: () => void; defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  return <Disclosure {...{ title: label }} className={`science-result-disclosure ${className}`.trim()}
+  return <CanvasDisclosure label={label} className={`science-result-disclosure ${className}`.trim()}
     open={open} onOpenChange={(next) => { if (!next) onClose?.(); setOpen(next); }}>
     {open && children}
-  </Disclosure>;
+  </CanvasDisclosure>;
 }
 
-function Results({ result, title, headlineKey, scatter, freshness, exportJson, exportCsv, exportMethods, onChart, onRefresh, onDiscuss, charts }: {
-  result: ScienceResult; title: string; headlineKey?: string; scatter: boolean; freshness: string; exportJson: () => Promise<string>; exportCsv: () => Promise<Blob>;
+function Results({ result, heading, headlineKey, scatter, freshness, exportJson, exportCsv, exportMethods, onChart, onRefresh, onDiscuss, charts }: {
+  result: ScienceResult; heading: string; headlineKey?: string; scatter: boolean; freshness: string; exportJson: () => Promise<string>; exportCsv: () => Promise<Blob>;
   exportMethods: () => Promise<string>;
   onChart: (type: ScienceChartType) => void; onRefresh: (chart: ScienceChartLink) => void;
   onDiscuss: (result: ScienceResult) => void; charts: ScienceChartLink[];
@@ -137,7 +118,7 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
   const tableRows = tableAsset?.rowCount ?? table?.rows.length ?? 0;
   return <section className="science-results" aria-label="Latest result">
     <div className="science-result-head">
-      <h4>Last successful run · {title}</h4>
+      <h4>Last successful run · {heading}</h4>
       <div className="science-result-status">
           <span aria-hidden="true"><StatusPill status={freshness ? "Out of date" : "Done"} /></span>
           {freshness && <p role="note" className="science-result-notice">{freshness}</p>}
@@ -179,7 +160,7 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
           <h5>{name} · {formatMeasurement(measured)}</h5>
           {measured.interval && <small>{Math.round((measured.coverageProbability ?? 0.95) * 100)}% {measured.method === "monte_carlo" ? "Monte Carlo quantile coverage interval" : "coverage interval"} [{numberCell(measured.interval[0])}, {numberCell(measured.interval[1])}]{measured.method === "monte_carlo" ? " · Gaussian input model" : ` · coverage factor k = ${numberCell(measured.coverageFactor)}`}</small>}
           {measured.budgetNote && <small>{measured.budgetNote}</small>}
-          <Disclosure {...{ title: "Stored measurement values" }}><dl className="science-result-values">
+          <CanvasDisclosure label={"Stored measurement values"}><dl className="science-result-values">
             <div><dt>Estimate</dt><dd>{exactScienceNumber(measured.value)} {measured.unit}</dd></div>
             <div><dt>Standard uncertainty</dt><dd>{exactScienceNumber(measured.standardUncertainty)} {measured.unit}</dd></div>
             {measured.interval && <div><dt>Coverage interval</dt><dd>{measured.interval.map(exactScienceNumber).join(" to ")} {measured.unit}</dd></div>}
@@ -187,7 +168,7 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
             {measured.method !== "monte_carlo" && <div><dt>Coverage factor</dt><dd>{exactScienceNumber(measured.coverageFactor)}</dd></div>}
             {measured.monteCarloMean !== undefined && <div><dt>Monte Carlo mean</dt><dd>{exactScienceNumber(measured.monteCarloMean)} {measured.unit}</dd></div>}
             {measured.monteCarloTrials !== undefined && <div><dt>Monte Carlo trials</dt><dd>{measured.monteCarloTrials}</dd></div>}
-          </dl></Disclosure>
+          </dl></CanvasDisclosure>
           {measured.budget && <table aria-label={`Uncertainty budget for ${name}`}>
             <thead><tr><th>Contributing input</th><th>Standard uncertainty</th><th>Sensitivity</th><th>Signed contribution</th><th>Variance / covariance</th></tr></thead>
             <tbody>{measured.budget.map((entry, index) => <tr key={index}>
@@ -225,12 +206,12 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
           </div>}
         </div>
       </ResultDisclosure>}
-      {provenance.inputUnits != null && <Disclosure className="science-result-disclosure" {...{ title: "Units used" }}>
+      {provenance.inputUnits != null && <CanvasDisclosure className="science-result-disclosure" label={"Units used"}>
       <pre>{JSON.stringify(provenance.inputUnits, null, 2)}</pre>
-    </Disclosure>}
-      <Disclosure className="science-result-disclosure" {...{ title: "Inputs and provenance" }}>
+    </CanvasDisclosure>}
+      <CanvasDisclosure className="science-result-disclosure" label={"Inputs and provenance"}>
       <pre>{JSON.stringify({ inputs: result.inputs, provenance }, null, 2)}</pre>
-    </Disclosure>
+    </CanvasDisclosure>
       <ResultDisclosure label="Actions & exports">
         <div className="science-actions">
       <Button size="sm" type="button" disabled={copying} onClick={async () => {
@@ -298,7 +279,13 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
         <Button size="sm" type="button" disabled={!chart.stale} onClick={() => onRefresh(chart)}>Refresh chart</Button>
       </div>)}
     </section>}
-        {error && <InlineAlert variant="error" {...{ title: "Scientific result action failed" }} body={error} />}
+        {error && <div role="alert" className="gl-inline-alert gl-inline-alert--error">
+          <Icon name="status-error" size="lg" />
+          <div className="gl-inline-alert-content">
+            <strong className="gl-inline-alert-title">Scientific result action failed</strong>
+            <div className="gl-inline-alert-body">{error}</div>
+          </div>
+        </div>}
       </ResultDisclosure>
     </div>
   </section>;
@@ -515,11 +502,11 @@ function TableEditor({ state, nodeId, pluginId, store, defaultOpen = false }: {
             <td>{col.unit || "—"}</td><td>{col.missingCount}</td>
           </tr>)}</tbody></table>
         </div>}
-        <Disclosure {...{ title: "Advanced column overrides" }}>
+        <CanvasDisclosure label={"Advanced column overrides"}>
           <label>Column type overrides (JSON)
             <textarea rows={2} aria-label="Column type overrides" value={overrides} onChange={(e) => setOverrides(e.target.value)} />
           </label>
-        </Disclosure>
+        </CanvasDisclosure>
         {validReview && <div className="science-table">
           <p role="status">{validReview.table.sourceName} · {validReview.table.rowCount} rows · {validReview.table.columnCount} columns.
             Showing the first {validReview.table.preview.length} rows and {validReview.table.previewColumns} columns.</p>
@@ -555,9 +542,9 @@ function TableEditor({ state, nodeId, pluginId, store, defaultOpen = false }: {
         } catch (e) { setError(e instanceof Error ? e.message : "CSV export failed."); }
         finally { setExporting(false); }
       }}>Export full table CSV</Button>
-      <Disclosure {...{ title: "Import receipt and parsing options" }}>
+      <CanvasDisclosure label={"Import receipt and parsing options"}>
         <pre>{JSON.stringify(table.provenance, null, 2)}</pre>
-      </Disclosure>
+      </CanvasDisclosure>
     </div></ResultDisclosure>}
   </section>;
 }
@@ -583,14 +570,14 @@ function restoreDraft(op: ScienceOperation, result: ScienceResult | null, revisi
   return { values, sources, method, revision, dirty: false };
 }
 
-function AttemptProgress({ attempt, title }: { attempt: ScienceAttempt; title: string }) {
+function AttemptProgress({ attempt, heading }: { attempt: ScienceAttempt; heading: string }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
   return <div className="science-attempt-progress"><StatusPill status="Running" />
-    <span>{attempt.status === "cancelling" ? "Stopping" : "Running"} {title}…</span>
+    <span>{attempt.status === "cancelling" ? "Stopping" : "Running"} {heading}…</span>
     <span aria-label="Elapsed time">{formatDuration(Math.max(0, (now - attempt.startedAtMs) / 1000))}</span>
   </div>;
 }
@@ -684,7 +671,7 @@ function OperationEditor({ onDraftChange, session, op, result, configured, revis
   return <form ref={formRef} className="science-operation-editor" onSubmit={submit}>
     <div className="science-operation-context">
       {op.description && <p className="science-operation-preview">{op.description}</p>}
-      {(op.description || op.methods || op.citations?.length) && <Disclosure className="science-methods" {...{ title: "About & methods" }}>
+      {(op.description || op.methods || op.citations?.length) && <CanvasDisclosure className="science-methods" label={"About & methods"}>
         <div className="science-methods-content">
           {op.description && <p>{op.description}</p>}
           {op.methods && <p>{op.methods}</p>}
@@ -694,7 +681,7 @@ function OperationEditor({ onDraftChange, session, op, result, configured, revis
             </li>)}
           </ul>}
         </div>
-      </Disclosure>}
+      </CanvasDisclosure>}
     </div>
     <fieldset disabled={busy}>
       <div className="science-inputs" role="group" aria-label="Inputs">
@@ -804,7 +791,7 @@ function OperationEditor({ onDraftChange, session, op, result, configured, revis
         : "Changes not saved to Graph Runner."}</small>}
     </fieldset>
     {submission?.phase === "checking" ? <p role="status">Checking run status…</p>
-      : activeAttempt ? <AttemptProgress attempt={activeAttempt} {...{ title: attemptTitle ?? activeAttempt.operationId }} />
+      : activeAttempt ? <AttemptProgress attempt={activeAttempt} heading={attemptTitle ?? activeAttempt.operationId} />
       : busy && <p role="status">{running || submission?.phase === "submitting" ? "Running calculation…" : configuring ? "Saving Graph Runner configuration…" : "Loading selected table column…"}</p>}
     {/* Outside the disabled fieldset; only real calculations can be cancelled, not table-column imports. */}
     {attemptProtocol && (running || activeAttempt || (submission && submission.phase !== "finished")) && <div className="science-actions">
@@ -870,7 +857,7 @@ function Workbench({ requestedOperation, session, state, options, run, configure
     {state.latest && <Results key={revision} result={state.latest} exportJson={exportJson} exportCsv={exportCsv} exportMethods={exportMethods}
       charts={charts} onChart={onChart} onRefresh={onRefresh} onDiscuss={onDiscuss}
       freshness={freshness} scatter={latestOperation?.plotMark === "scatter"}
-      {...{ title: latestOperation?.title ?? state.latest.operationId }} headlineKey={latestOperation?.headline} />}
+      heading={latestOperation?.title ?? state.latest.operationId} headlineKey={latestOperation?.headline} />}
   </>;
 }
 

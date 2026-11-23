@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { CanvasDisclosure } from "./CanvasDisclosure";
 import { pastedArray } from "./scientificArrayPaste";
 import { parseInputs, type ScienceField, type ScienceLimits } from "./scientificWorkbench";
 
@@ -20,8 +21,8 @@ export function ScienceArrayInput({ value, field, limits, onEdit }: {
   const [paste, setPaste] = useState("");
   const [error, setError] = useState("");
   const cells = open ? preview(value, field, limits) : null;
-  return <details className="science-array-editor" onToggle={(event) => setOpen(event.currentTarget.open)}>
-    <summary>Paste or inspect {field.label}</summary>
+  return <CanvasDisclosure className="science-array-editor" label={`Paste or inspect ${field.label}`}
+    open={open} onOpenChange={setOpen}>
     {open && <>
       <label>Spreadsheet cells for {field.label}
         <textarea value={paste} rows={3} spellCheck={false} onChange={(event) => { setPaste(event.target.value); setError(""); }} />
@@ -33,10 +34,10 @@ export function ScienceArrayInput({ value, field, limits, onEdit }: {
       }}>Apply pasted cells</button>
       {error && <p role="alert">{error}</p>}
       {cells && <div className="science-table">
-        <table aria-label={`${field.label} input preview`}><caption>{cells.length} rows × {cells[0].length} columns. Preview shows the first {Math.min(8, cells.length)} rows and {Math.min(8, cells[0].length)} columns.</caption>
+        <table aria-label={`${field.label} input preview`}><caption>{cells.length} rows by {cells[0].length} columns. Preview shows the first {Math.min(8, cells.length)} rows and {Math.min(8, cells[0].length)} columns.</caption>
           <tbody>{cells.slice(0, 8).map((row, r) => <tr key={r}><th scope="row">{r + 1}</th>{row.slice(0, 8).map((cell, c) => <td key={c}>{cell}</td>)}</tr>)}</tbody>
         </table>
       </div>}
     </>}
-  </details>;
+  </CanvasDisclosure>;
 }
