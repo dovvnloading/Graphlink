@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { AppChatLibraryState } from "../../lib/bridge-core/generated/app-chat-library-state";
 import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
 import type { WsTransport } from "../../lib/ws/transport";
@@ -17,7 +17,7 @@ const initialState: AppChatLibraryState = { schemaVersion: 0, revision: 0, rows:
 /** The eagerly-mounted switcher owns the same live topic as the lazy library. */
 export function QuickSwitcherDialog({ transport }: { transport: WsTransport }) {
   const overlays = useOverlays();
-  const confirm = useConfirm();
+  const askConfirm = useConfirm();
   const [state, setState] = useState<AppChatLibraryState>(initialState);
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -26,7 +26,7 @@ export function QuickSwitcherDialog({ transport }: { transport: WsTransport }) {
 
   // Global palette/shortcut callers cannot use hooks. They obtain the same
   // nested kit confirmation from this always-mounted component.
-  useEffect(() => registerNewChatConfirm(confirm), [confirm]);
+  useEffect(() => registerNewChatConfirm(askConfirm), [askConfirm]);
 
   useEffect(() => {
     const unsubscribe = transport.subscribe("app-chat-library", (payload) => {
@@ -65,7 +65,7 @@ export function QuickSwitcherDialog({ transport }: { transport: WsTransport }) {
     try {
       const outcome = await transport.request("app-chat-library", "loadChat", [id]);
       if (outcome === "discard-required") {
-        const accepted = await confirm({
+        const accepted = await askConfirm({
           title: "Discard incomplete chat?",
           body: "This graph contains missing or unreadable plugin nodes. Changes to the incomplete on-screen copy will not be saved. The original saved graph remains unchanged.",
           confirmLabel: "Discard and switch",
@@ -81,7 +81,7 @@ export function QuickSwitcherDialog({ transport }: { transport: WsTransport }) {
     }
   }
 
-  function onKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+  function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === "ArrowDown") {
       event.preventDefault();
       setSelectedIndex((index) => Math.min(index + 1, Math.max(filtered.length - 1, 0)));
@@ -96,7 +96,7 @@ export function QuickSwitcherDialog({ transport }: { transport: WsTransport }) {
   }
 
   return (
-    <Dialog name="quick-switcher" title="Quick switcher" size="md" className="quick-switcher-dialog">
+    <Dialog {...{ title: "Quick switcher" }} name="quick-switcher" size="md" className="quick-switcher-dialog">
       <TextField
         label="Search graphs by title"
         type="search"
@@ -114,7 +114,7 @@ export function QuickSwitcherDialog({ transport }: { transport: WsTransport }) {
         spellCheck={false}
       />
       {filtered.length === 0 ? (
-        <EmptyState icon="search" title="No matching graphs" body="Try a different title or open the chat library." />
+        <EmptyState icon="search" {...{ title: "No matching graphs" }} body="Try a different title or open the chat library." />
       ) : (
         <ul id="quick-switcher-results" className="quick-switcher-results" role="listbox" aria-label="Graphs" ref={resultsRef}>
           {filtered.map((row, index) => {
@@ -145,7 +145,7 @@ export function QuickSwitcherDialog({ transport }: { transport: WsTransport }) {
         </ul>
       )}
       <div className="quick-switcher-shortcuts">
-        <span>Navigate <Kbd shortcut="↑" /> <Kbd shortcut="↓" /></span>
+        <span>Navigate <Kbd shortcut="Up" /> <Kbd shortcut="Down" /></span>
         <span>Open <Kbd shortcut="Enter" /></span>
         <span>Close <Kbd shortcut="Esc" /></span>
       </div>
