@@ -1,62 +1,39 @@
 import { useState } from "react";
 import type { WsTransport } from "../../../lib/ws/transport";
 import type { AppSettingsState } from "../../../lib/bridge-core/generated/app-settings-state";
+import { FieldGroup } from "../../ui/Field";
+import { TextField } from "../../ui/TextField";
+import { Button } from "../../ui/Button";
+import { InlineAlert } from "../../ui/InlineAlert";
 
-export function IntegrationsPage({
-  state,
-  transport,
-}: {
-  state: AppSettingsState;
-  transport: WsTransport;
-}) {
+export function IntegrationsPage({ state, transport }: { state: AppSettingsState; transport: WsTransport }) {
   const [draftToken, setDraftToken] = useState("");
-
   return (
     <div className="settings-general-page">
-      <p className="settings-integrations-intro">
-        Store optional external-service tokens used by specialized plugins. The Gitlink plugin uses a GitHub
-        personal access token to load your private repositories - if you leave this empty, it still works with
-        public repositories.
+      <h2 className="settings-page-title">Integrations</h2>
+      <p className="settings-page-description">
+        Configure optional external services. Gitlink can load public GitHub repositories without a token.
       </p>
-
-      <label className="settings-field">
-        <span className="settings-field-label">GitHub Personal Access Token</span>
-        <input
-          type="password"
-          className="settings-select"
-          placeholder="ghp_... or fine-grained token"
-          value={draftToken}
-          onChange={(event) => setDraftToken(event.target.value)}
-        />
-      </label>
-
-      <p className="settings-update-status">
-        {state.githubTokenConfigured ? "A GitHub token is currently configured." : "No GitHub token configured."}
-      </p>
-
-      <div className="settings-button-row">
-        <button
-          type="button"
-          className="settings-button"
-          onClick={() => {
+      <FieldGroup title="GitHub">
+        <TextField label="GitHub personal access token" type="password" suffix={{ type: "password" }}
+          autoComplete="new-password" mono placeholder="Paste a token"
+          value={draftToken} onValueChange={setDraftToken} />
+        <p className="settings-update-status">
+          {state.githubTokenConfigured ? "A GitHub token is configured." : "No GitHub token configured."}
+        </p>
+        <div className="settings-button-row">
+          <Button onClick={() => {
             transport.fireIntent("app-settings", "clearGithubToken", []);
             setDraftToken("");
-          }}
-        >
-          Clear Token
-        </button>
-        <button
-          type="button"
-          className="settings-button settings-button-primary"
-          disabled={draftToken.trim().length === 0}
-          onClick={() => {
+          }}>Clear token</Button>
+          <Button variant="primary" disabled={!draftToken.trim()} onClick={() => {
             transport.fireIntent("app-settings", "setGithubToken", [draftToken]);
             setDraftToken("");
-          }}
-        >
-          Save Integrations
-        </button>
-      </div>
+          }}>Save integration</Button>
+        </div>
+      </FieldGroup>
+      {!state.secretsEncryptedAtRest && <InlineAlert variant="warning" title="Secrets are not encrypted"
+        body="GitHub tokens saved here cannot be encrypted at rest on this system." />}
     </div>
   );
 }
