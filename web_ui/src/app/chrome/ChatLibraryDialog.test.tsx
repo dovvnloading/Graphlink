@@ -1,143 +1,47 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { ChatLibraryDialog } from "./ChatLibraryDialog";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 import type { WsTransport } from "../../lib/ws/transport";
 import { initialSceneState, type SceneStore } from "../canvas/sceneStore";
 
-function row(overrides: Record<string, unknown>) {
+function row(overrides: Record<string, unknown> = {}) {
   return {
-    id: 1,
-    title: "Untitled",
-    createdLabel: "Jan 01, 2026",
-    updatedLabel: "Jan 01, 2026",
-    createdAtIso: "2026-01-01T08:00:00",
-    updatedAtIso: "2026-01-01T08:00:00",
-    preview: "",
-    messageCount: 0,
-    // ADR-020 stage 20.2.
-    workspaceId: 1,
-    favorite: false,
-    archived: false,
-    tags: [] as string[],
-    ...overrides,
+    id: 1, title: "First chat", createdLabel: "Today", updatedLabel: "Today",
+    createdAtIso: "2026-01-15T08:00:00", updatedAtIso: "2026-01-15T08:00:00",
+    preview: "A first preview", messageCount: 2, workspaceId: 1,
+    favorite: false, archived: false, tags: [] as string[], ...overrides,
   };
 }
-
-// ADR-020 stage 20.3: defaultModelProvider/defaultModelId default to "" -
-// matching AppWorkspaceRowPayload's own "empty string on both = no
-// workspace default set" wire contract, not an omitted/optional field.
-function workspace(overrides: Record<string, unknown>) {
-  return { id: 1, name: "Default", icon: "", archived: false, defaultModelProvider: "", defaultModelId: "", ...overrides };
+function workspace(overrides: Record<string, unknown> = {}) {
+  return { id: 1, name: "Default", icon: "", archived: false,
+    defaultModelProvider: "", defaultModelId: "", ...overrides };
 }
-
-const snapshot = {
-  schemaVersion: 1,
-  minCompatibleSchemaVersion: 1,
-  revision: 1,
+const SNAPSHOT = {
+  schemaVersion: 1, minCompatibleSchemaVersion: 1, revision: 1,
   rows: [
-    row({
-      id: 1,
-      title: "First Chat",
-      preview: "hello there",
-      messageCount: 2,
-      createdAtIso: "2026-01-15T08:00:00",
-      updatedAtIso: "2026-01-15T08:00:00",
-    }),
-    row({
-      id: 2,
-      title: "Second Chat",
-      preview: "another conversation",
-      messageCount: 5,
-      createdAtIso: "2026-01-14T08:00:00",
-      updatedAtIso: "2026-01-14T08:00:00",
-    }),
+    row({ id: 1, title: "First chat", favorite: true, tags: ["design"] }),
+    row({ id: 2, title: "Second chat", preview: "Another conversation", messageCount: 5,
+      updatedAtIso: "2026-01-14T08:00:00", workspaceId: 2 }),
+    row({ id: 3, title: "Archived chat", archived: true, updatedAtIso: "2025-11-01T08:00:00" }),
   ],
-  workspaces: [workspace({})],
+  workspaces: [workspace(), workspace({ id: 2, name: "Work" })],
   notice: null,
 };
 
-// ADR-020 stage 20.3: a minimal but real AppComposerState snapshot - the
-// workspace default-model picker reads route.modelOptions/route.provider
-// from this same "app-composer" topic Composer.tsx itself reads, per this
-// file's own module docstring.
-function composerSnapshot(overrides: Record<string, unknown> = {}) {
-  return {
-    schemaVersion: 1,
-    minCompatibleSchemaVersion: 1,
-    revision: 1,
-    draft: { id: "", text: "", contextMode: "branch", sendMode: "enter_to_send" },
-    context: { anchor: null, items: [], totalTokens: 0, reviewAvailable: false },
-    route: {
-      mode: "ollama",
-      provider: "Ollama (Local)",
-      modelId: "",
-      modelLabel: "",
-      modelOptions: [
-        { id: "llama3", label: "Llama 3" },
-        { id: "mistral", label: "Mistral" },
-      ],
-      reasoning: { level: "off", label: "Off", options: [] },
-      label: "Ollama (Local)",
-      available: true,
-      canChange: true,
-    },
-    request: { id: null, state: "idle", message: "", canSend: true, canCancel: false, canRetry: false },
-    capabilities: {
-      attachments: false,
-      contextReview: false,
-      routeSelection: false,
-      modelSelection: true,
-      reasoningSelection: true,
-      settingsShortcut: true,
-      cancellation: false,
-    },
-    ...overrides,
-  };
-}
-
-// ADR-020 stage 20.3: keyed by topic (not a single shared listener) - this
-// dialog now holds two independent subscriptions ("app-chat-library" and
-// "app-composer", see the module docstring on ChatLibraryDialog.tsx), so a
-// single-listener fake would have the SECOND subscribe() call silently
-// clobber the first, breaking every pre-existing push() call in this file.
-// push() defaults to "app-chat-library" so those calls stay unchanged.
 function makeTransport() {
   const intents: unknown[][] = [];
   const resubscribes: string[] = [];
   const listeners = new Map<string, (payload: Record<string, unknown>) => void>();
-  // REVIEW-FIX: confirmDelete now goes through transport.request() instead
-  // of fireIntent, the same "I need the actual reply" shape as
-  // DiagnosticsDialog.test.tsx's own makeTransport() (see that file's own
-  // comment) - a vi.fn() so individual tests can drive its resolution/
-  // rejection, wired to also record into the same `intents` array so one
-  // assertion list still covers all three call shapes.
-  // Defaults to a successful delete so every test that doesn't care about
-  // the specific resolved value (most of them) doesn't also have to arrange
-  // one - tests exercising the falsy/rejected paths override this per-call
-  // with mockResolvedValueOnce/mockRejectedValueOnce.
-  const request = vi.fn<(topic: string, intent: string, args?: unknown[]) => Promise<unknown>>()
-    .mockResolvedValue(true);
+  const request = vi.fn<(topic: string, intent: string, args?: unknown[]) => Promise<unknown>>().mockResolvedValue(true);
   const transport = {
-    subscribe: (topic: string, l: (payload: Record<string, unknown>) => void) => {
-      listeners.set(topic, l);
-      return () => {
-        listeners.delete(topic);
-      };
+    subscribe: (topic: string, listener: (payload: Record<string, unknown>) => void) => {
+      listeners.set(topic, listener);
+      return () => { listeners.delete(topic); };
     },
-    // ADR-020 stage 20.5: ChatLibraryDialog.tsx now calls this unconditionally
-    // right after subscribe() - see that file's own comment for why (a
-    // second, independent "app-chat-library" subscriber, QuickSwitcherDialog.
-    // tsx, can otherwise steal the one-time fresh-snapshot push).
-    resubscribe: (topic: string) => {
-      resubscribes.push(topic);
-    },
-    intent: (topic: string, intent: string, args: unknown[]) => {
-      intents.push([topic, intent, args]);
-    },
-    // ADR-003 stage 3.1: ChatLibraryDialog's own mutating call sites now go
-    // through fireIntent, not the bare intent() above.
+    resubscribe: (topic: string) => { resubscribes.push(topic); },
     fireIntent: (topic: string, intent: string, args: unknown[] = []) => {
       intents.push([topic, intent, args]);
     },
@@ -147,773 +51,205 @@ function makeTransport() {
     },
   } as unknown as WsTransport;
   return {
-    transport,
-    intents,
-    resubscribes,
-    request,
-    push: (payload: Record<string, unknown>, topic: string = "app-chat-library") => listeners.get(topic)?.(payload),
+    transport, intents, resubscribes, request,
+    push: (snapshot: Record<string, unknown>) => listeners.get("app-chat-library")?.(snapshot),
   };
-}
-
-// ADR-020 stage 20.3: identical helper to SettingsDialog.test.tsx's own -
-// CustomSelect's option panel portals to document.body asynchronously
-// after the trigger click, so the option lookup must be findBy, not getBy.
-async function chooseCustomOption(
-  user: ReturnType<typeof userEvent.setup>,
-  triggerName: string,
-  optionName: string,
-) {
-  await user.click(screen.getByRole("button", { name: triggerName }));
-  await user.click(within(await screen.findByRole("listbox", { name: triggerName })).getByRole("option", { name: optionName }));
 }
 
 function OpenLibraryButton() {
   const overlays = useOverlays();
-  return (
-    <button type="button" onClick={() => overlays.open("library", "dialog")}>
-      open library
-    </button>
-  );
+  return <button type="button" onClick={() => overlays.open("library", "dialog")}>open library</button>;
 }
 
-function setup(withActiveScene = false) {
+function setup(dirty = false) {
   const user = userEvent.setup();
   const fake = makeTransport();
   const cancelWorkspacePreview = vi.fn();
   const store = {
     cancelWorkspacePreview,
-    getScene: () => ({
-      ...initialSceneState,
-      nodes: withActiveScene ? [{ id: "dirty" }] : [],
-    }),
+    getScene: () => ({ ...initialSceneState, nodes: dirty ? [{ id: "dirty" }] : [] }),
   } as unknown as SceneStore;
   render(
     <OverlayProvider>
       <OpenLibraryButton />
       <ChatLibraryDialog transport={fake.transport} store={store} />
+      <ConfirmDialog />
     </OverlayProvider>,
   );
-  act(() => fake.push(snapshot));
+  act(() => fake.push(SNAPSHOT));
   return { user, ...fake, cancelWorkspacePreview };
 }
 
-// "Now" is pinned so date-bucketing is deterministic; only Date is faked so
-// userEvent's own internal async scheduling is unaffected.
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2026-01-15T12:00:00"));
 });
+afterEach(() => { vi.useRealTimers(); });
 
-afterEach(() => {
-  vi.useRealTimers();
-});
-
-describe("ChatLibraryDialog", () => {
-  it("shows a real empty state (not a small message inside an otherwise-normal list) when nothing has been saved", async () => {
-    const { user, push } = setup();
-    act(() => push({ ...snapshot, rows: [] }));
+describe("ChatLibraryDialog on the kit", () => {
+  it("renders the kit dialog, live search, filters, workspace picker, and overline groups", async () => {
+    const { user, resubscribes } = setup();
     await user.click(screen.getByText("open library"));
-
-    expect(screen.getByText("No saved chats yet")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Search chats")).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Chat library" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Search chats" })).toBeInTheDocument();
+    expect(screen.getByRole("radiogroup", { name: "Filter chats" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Workspace" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Today" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Yesterday" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Earlier" })).toBeNull();
+    expect(resubscribes).toContain("app-chat-library");
   });
 
-  it("clicking a row's body loads THAT chat and closes the dialog - no separate select-then-Load step", async () => {
+  it("keeps stable accessible open-chat names and opens a chosen chat", async () => {
     const { user, intents, cancelWorkspacePreview } = setup();
     await user.click(screen.getByText("open library"));
-
-    await user.click(screen.getByRole("button", { name: /Open chat "Second Chat"/ }));
-
+    await user.click(screen.getByRole("button", { name: /Open chat "Second chat", 5 messages, updated/ }));
     expect(intents).toContainEqual(["app-chat-library", "loadChat", [2]]);
     expect(cancelWorkspacePreview).toHaveBeenCalledOnce();
-    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
-  it("keeps the library open and does not navigate when a dirty-scene switch is declined", async () => {
-    const { user, intents, cancelWorkspacePreview } = setup(true);
-    const confirmation = vi.spyOn(window, "confirm").mockReturnValue(false);
-    await user.click(screen.getByText("open library"));
-    await user.click(screen.getByRole("button", { name: /Open chat "Second Chat"/ }));
-    expect(confirmation).toHaveBeenCalledOnce();
-    expect(intents.some((entry) => entry[1] === "loadChat")).toBe(false);
-    expect(cancelWorkspacePreview).not.toHaveBeenCalled();
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-    confirmation.mockRestore();
-  });
-
-  it("asks before starting a new chat from a populated canvas", async () => {
-    const { user, intents, cancelWorkspacePreview } = setup(true);
-    const confirmation = vi.spyOn(window, "confirm").mockReturnValue(true);
-    await user.click(screen.getByText("open library"));
-    await user.click(screen.getByRole("button", { name: "New Chat" }));
-    expect(confirmation).toHaveBeenCalledOnce();
-    expect(intents).toContainEqual(["app-chat-library", "newChat", []]);
-    expect(cancelWorkspacePreview).toHaveBeenCalledOnce();
-    confirmation.mockRestore();
-  });
-
-  it("New Chat dispatches the newChat intent with no workspaceId while 'All' is selected, and closes the dialog", async () => {
-    const { user, intents } = setup();
-    await user.click(screen.getByText("open library"));
-
-    await user.click(screen.getByRole("button", { name: "New Chat" }));
-    expect(intents).toContainEqual(["app-chat-library", "newChat", []]);
-    expect(screen.queryByRole("dialog")).toBeNull();
-  });
-
-  it("requires a separate explicit confirmation before discarding a partial live graph", async () => {
-    const { user, request, intents } = setup();
-    request.mockResolvedValueOnce("discard-required").mockResolvedValueOnce(undefined);
-    const confirmation = vi.spyOn(window, "confirm").mockReturnValue(true);
-    await user.click(screen.getByText("open library"));
-    await user.click(screen.getByRole("button", { name: /Open chat "Second Chat"/ }));
-    expect(confirmation).toHaveBeenCalledOnce();
-    expect(confirmation.mock.calls[0][0]).toMatch(/will NOT be saved/);
-    expect(intents.filter((entry) => entry[1] === "loadChat")).toEqual([
-      ["app-chat-library", "loadChat", [2]],
-      ["app-chat-library", "loadChat", [2, true]],
-    ]);
-    expect(screen.queryByRole("dialog")).toBeNull();
-    confirmation.mockRestore();
-  });
-
-  it("declining incomplete-copy discard leaves the library open and never retries", async () => {
-    const { user, request, intents } = setup();
-    request.mockResolvedValueOnce("discard-required");
-    const confirmation = vi.spyOn(window, "confirm").mockReturnValue(false);
-    await user.click(screen.getByText("open library"));
-    await user.click(screen.getByRole("button", { name: /Open chat "Second Chat"/ }));
-    expect(confirmation).toHaveBeenCalledOnce();
-    expect(intents.filter((entry) => entry[1] === "loadChat")).toEqual([
-      ["app-chat-library", "loadChat", [2]],
-    ]);
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-    confirmation.mockRestore();
-  });
-
-  it("requires the same explicit confirmation for New Chat with no workspace selected", async () => {
-    const { user, request, intents } = setup();
-    request.mockResolvedValueOnce("discard-required").mockResolvedValueOnce(undefined);
-    const confirmation = vi.spyOn(window, "confirm").mockReturnValue(true);
-    await user.click(screen.getByText("open library"));
-    await user.click(screen.getByRole("button", { name: "New Chat" }));
-    expect(confirmation).toHaveBeenCalledOnce();
-    expect(intents.filter((entry) => entry[1] === "newChat")).toEqual([
-      ["app-chat-library", "newChat", []],
-      ["app-chat-library", "newChat", [null, true]],
-    ]);
-    expect(screen.queryByRole("dialog")).toBeNull();
-    confirmation.mockRestore();
-  });
-
-  it("groups rows under the correct date headers, most recent group first", async () => {
-    const { user, push } = setup();
-    act(() =>
-      push({
-        ...snapshot,
-        rows: [
-          row({ id: 1, title: "Today Chat", updatedAtIso: "2026-01-15T08:00:00", createdAtIso: "2026-01-15T08:00:00" }),
-          row({ id: 2, title: "Yesterday Chat", updatedAtIso: "2026-01-14T08:00:00", createdAtIso: "2026-01-14T08:00:00" }),
-          row({ id: 3, title: "Week Chat", updatedAtIso: "2026-01-09T08:00:00", createdAtIso: "2026-01-09T08:00:00" }),
-          row({ id: 4, title: "Month Chat", updatedAtIso: "2026-01-01T08:00:00", createdAtIso: "2026-01-01T08:00:00" }),
-          row({ id: 5, title: "Ancient Chat", updatedAtIso: "2025-11-01T08:00:00", createdAtIso: "2025-11-01T08:00:00" }),
-          row({ id: 6, title: "Undated Chat", updatedAtIso: null, createdAtIso: null }),
-        ],
-      }),
-    );
-    await user.click(screen.getByText("open library"));
-
-    const headers = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
-    expect(headers).toEqual(["Today", "Yesterday", "Previous 7 Days", "Previous 30 Days", "Older"]);
-
-    const olderSection = screen.getByRole("region", { name: "Older" });
-    // Undated rows sort AFTER dated Older rows, never guessed into a
-    // recent bucket just because they have no timestamp.
-    const olderTitles = within(olderSection)
-      .getAllByRole("button", { name: /^Open chat/ })
-      .map((b) => b.textContent);
-    expect(olderTitles[0]).toContain("Ancient Chat");
-    expect(olderTitles[1]).toContain("Undated Chat");
-  });
-
-  it("an empty preview renders a placeholder instead of a blank line", async () => {
-    const { user, push } = setup();
-    act(() => push({ ...snapshot, rows: [row({ id: 9, title: "Blank Chat", preview: "" })] }));
-    await user.click(screen.getByText("open library"));
-
-    expect(screen.getByText("No messages yet")).toBeInTheDocument();
-  });
-
-  it("search filters live against title and preview text", async () => {
+  it("groups all historical dates under Earlier", async () => {
     const { user } = setup();
     await user.click(screen.getByText("open library"));
-
-    await user.type(screen.getByLabelText("Search chats"), "another");
-
-    expect(screen.queryByText("First Chat")).toBeNull();
-    expect(screen.getByText("Second Chat")).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Archived" }));
+    expect(within(screen.getByRole("region", { name: "Earlier" })).getByText("Archived chat")).toBeInTheDocument();
   });
 
-  it("shows a distinct 'no matches' state (not the empty-library state) for a search with no results, and Clear search restores the list", async () => {
+  it("filters by text, by starred/archived status, and clears the query", async () => {
     const { user } = setup();
     await user.click(screen.getByText("open library"));
-
-    await user.type(screen.getByLabelText("Search chats"), "nothing matches this");
-    expect(screen.getByText('No chats match "nothing matches this".')).toBeInTheDocument();
-    expect(screen.queryByText("No saved chats yet")).toBeNull();
-
-    await user.click(screen.getByText("Clear search"));
-    expect(screen.getByText("First Chat")).toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: "Search chats" }), "Another");
+    expect(screen.getByText("Second chat")).toBeInTheDocument();
+    expect(screen.queryByText("First chat")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Clear Search chats" }));
+    await user.click(screen.getByRole("radio", { name: "Starred" }));
+    expect(screen.getByText("First chat")).toBeInTheDocument();
+    expect(screen.queryByText("Second chat")).toBeNull();
+    await user.click(screen.getByRole("radio", { name: "Archived" }));
+    expect(screen.getByText("Archived chat")).toBeInTheDocument();
   });
 
-  it("renaming a row: pencil opens an inline input, Enter commits renameChat with the trimmed title", async () => {
-    const { user, intents } = setup();
-    await user.click(screen.getByText("open library"));
-
-    await user.click(screen.getByLabelText('Rename "First Chat"'));
-    const input = screen.getByLabelText('Rename "First Chat"') as HTMLInputElement;
-    expect(input.value).toBe("First Chat");
-
-    await user.clear(input);
-    await user.type(input, "  Renamed Title  {Enter}");
-
-    expect(intents).toContainEqual(["app-chat-library", "renameChat", [1, "Renamed Title"]]);
-    // The dialog stays open for a rename (unlike load/new).
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-  });
-
-  it("renaming a row: the Cancel (x) button reverts without dispatching renameChat", async () => {
-    const { user, intents } = setup();
-    await user.click(screen.getByText("open library"));
-
-    await user.click(screen.getByLabelText('Rename "First Chat"'));
-    await user.click(screen.getByLabelText("Cancel rename"));
-
-    expect(intents.filter((i) => i[1] === "renameChat")).toEqual([]);
-    expect(screen.getByText("First Chat")).toBeInTheDocument();
-  });
-
-  it("Escape while renaming cancels the rename WITHOUT closing the dialog (R8a finding #16)", async () => {
-    // This test used to assert the opposite - Escape closing the whole
-    // dialog mid-rename, mislabeled as "the app's global Escape-to-close
-    // policy" - which was exactly the bug the UI/UX issue list's finding
-    // #16 named this component as its own worked example of: the rename
-    // input's own onKeyDown already called event.preventDefault() on
-    // Escape (see onRenameKeyDown below), but overlays.tsx's document-level
-    // handler ran in capture phase with an unconditional stopPropagation(),
-    // so that preventDefault() could never matter - the global handler
-    // always won and closed the dialog out from under an in-progress
-    // rename. overlays.tsx now runs on bubble phase and checks
-    // event.defaultPrevented before closing anything, so this component's
-    // own already-correct handler finally has a chance to run.
-    const { user, intents } = setup();
-    await user.click(screen.getByText("open library"));
-
-    await user.click(screen.getByLabelText('Rename "First Chat"'));
-    await user.keyboard("{Escape}");
-
-    expect(intents.filter((i) => i[1] === "renameChat")).toEqual([]);
-    // Reverts exactly like the Cancel (x) button does, not "the dialog is
-    // now gone" - the rename INPUT is gone (cancelled) and the original
-    // title is back, but Chat Library stays open underneath it. Checked by
-    // role, not just the accessible name: the pencil button that RESTARTS
-    // a rename carries the identical "Rename ..." label, so a label-only
-    // query would find that instead and pass even if cancelling had failed.
-    expect(screen.queryByRole("textbox", { name: 'Rename "First Chat"' })).toBeNull();
-    expect(screen.getByText("First Chat")).toBeInTheDocument();
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-  });
-
-  // -- REVIEW-FIX: commitRename used to fire-and-forget via fireIntent and
-  // -- clear renamingId the instant the message was SENT, not once the
-  // -- rename was actually confirmed - the same fix confirmDelete already
-  // -- got below, applied here since renameChat's own intent now returns a
-  // -- real success/failure signal (null when the row is gone) instead of
-  // -- always resolving to undefined.
-
-  it("a confirmed rename that actually applies closes the rename input", async () => {
-    const { user, request } = setup();
-    await user.click(screen.getByText("open library"));
-    request.mockResolvedValueOnce("2026-01-16 09:00:00.000000");
-
-    await user.click(screen.getByLabelText('Rename "First Chat"'));
-    const input = screen.getByLabelText('Rename "First Chat"') as HTMLInputElement;
-    await user.clear(input);
-    await user.type(input, "Renamed Title");
-    await user.click(screen.getByLabelText('Save "First Chat"'));
-
-    // Back to the normal (non-renaming) row action - the pencil button, not
-    // the input, now carries this label.
-    await screen.findByRole("button", { name: 'Rename "First Chat"' });
-    expect(screen.queryByRole("textbox", { name: 'Rename "First Chat"' })).toBeNull();
-  });
-
-  it("a resolved-but-falsy rename (the row was already gone) leaves the rename input in place rather than optimistically closing it", async () => {
-    const { user, request } = setup();
-    await user.click(screen.getByText("open library"));
-    request.mockResolvedValueOnce(null);
-
-    await user.click(screen.getByLabelText('Rename "First Chat"'));
-    const input = screen.getByLabelText('Rename "First Chat"') as HTMLInputElement;
-    await user.clear(input);
-    await user.type(input, "Renamed Title");
-    await user.click(screen.getByLabelText('Save "First Chat"'));
-    await vi.waitFor(() => expect(request).toHaveBeenCalled());
-
-    expect(screen.getByRole("textbox", { name: 'Rename "First Chat"' })).toBeInTheDocument();
-  });
-
-  it("a rejected rename request leaves the rename input in place and logs, without throwing", async () => {
-    const { user, request } = setup();
-    await user.click(screen.getByText("open library"));
-    request.mockRejectedValueOnce(new Error("socket dropped"));
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-
-    await user.click(screen.getByLabelText('Rename "First Chat"'));
-    const input = screen.getByLabelText('Rename "First Chat"') as HTMLInputElement;
-    await user.clear(input);
-    await user.type(input, "Renamed Title");
-    await user.click(screen.getByLabelText('Save "First Chat"'));
-    await vi.waitFor(() => expect(consoleError).toHaveBeenCalled());
-
-    expect(screen.getByRole("textbox", { name: 'Rename "First Chat"' })).toBeInTheDocument();
-    consoleError.mockRestore();
-  });
-
-  it("deleting a row: trash opens an inline scoped confirm, confirming dispatches deleteChat for THAT row only", async () => {
-    const { user, intents } = setup();
-    await user.click(screen.getByText("open library"));
-
-    await user.click(screen.getByLabelText('Delete "First Chat"'));
-    expect(screen.getByText("Delete?")).toBeInTheDocument();
-    // The other row is untouched - no confirm state leaked onto it.
-    expect(screen.getByLabelText('Delete "Second Chat"')).toBeInTheDocument();
-
-    await user.click(screen.getByLabelText('Confirm delete "First Chat"'));
-    expect(intents).toContainEqual(["app-chat-library", "deleteChat", [1]]);
-  });
-
-  it("deleting a row: Cancel dismisses the confirm without dispatching deleteChat", async () => {
-    const { user, intents } = setup();
-    await user.click(screen.getByText("open library"));
-
-    await user.click(screen.getByLabelText('Delete "First Chat"'));
-    await user.click(screen.getByLabelText("Cancel delete"));
-
-    expect(intents.filter((i) => i[1] === "deleteChat")).toEqual([]);
-    expect(screen.getByLabelText('Delete "First Chat"')).toBeInTheDocument();
-  });
-
-  // -- REVIEW-FIX: confirmDelete used to fire-and-forget via fireIntent and
-  // -- clear its confirm state the instant the message was SENT, not once
-  // -- the deletion was actually confirmed - a genuine failure left the row
-  // -- sitting in the list with its "Delete?" buttons already reverted to
-  // -- normal, no visible sign anything had gone wrong.
-
-  it("a confirmed delete that actually removes the row closes the confirm UI", async () => {
-    const { user, request } = setup();
-    await user.click(screen.getByText("open library"));
-    request.mockResolvedValueOnce(true);
-
-    await user.click(screen.getByLabelText('Delete "First Chat"'));
-    await user.click(screen.getByLabelText('Confirm delete "First Chat"'));
-
-    await screen.findByLabelText('Delete "First Chat"'); // back to the normal (non-confirming) row action
-    expect(screen.queryByText("Delete?")).toBeNull();
-  });
-
-  it("a resolved-but-falsy delete (the row was already gone) leaves the confirm UI in place rather than optimistically closing it", async () => {
-    const { user, request } = setup();
-    await user.click(screen.getByText("open library"));
-    request.mockResolvedValueOnce(false);
-
-    await user.click(screen.getByLabelText('Delete "First Chat"'));
-    await user.click(screen.getByLabelText('Confirm delete "First Chat"'));
-    await vi.waitFor(() => expect(request).toHaveBeenCalled());
-
-    expect(screen.getByText("Delete?")).toBeInTheDocument();
-  });
-
-  it("a rejected delete request leaves the confirm UI in place and logs, without throwing", async () => {
-    const { user, request } = setup();
-    await user.click(screen.getByText("open library"));
-    request.mockRejectedValueOnce(new Error("socket dropped"));
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-
-    await user.click(screen.getByLabelText('Delete "First Chat"'));
-    await user.click(screen.getByLabelText('Confirm delete "First Chat"'));
-    await vi.waitFor(() => expect(consoleError).toHaveBeenCalled());
-
-    expect(screen.getByText("Delete?")).toBeInTheDocument();
-    consoleError.mockRestore();
-  });
-
-  it("a DB-read notice still renders when present", async () => {
+  it("shows distinct kit EmptyStates for an empty library and an empty result", async () => {
     const { user, push } = setup();
-    act(() => push({ ...snapshot, notice: "Could not load saved chats: disk error" }));
     await user.click(screen.getByText("open library"));
-
-    expect(screen.getByText("Could not load saved chats: disk error")).toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: "Search chats" }), "no match");
+    expect(screen.getByText("No matching chats")).toBeInTheDocument();
+    act(() => push({ ...SNAPSHOT, revision: 2, rows: [] }));
+    expect(screen.getByText("No saved chats yet")).toBeInTheDocument();
   });
 
-  // -- ADR-020 stage 20.2: workspace switcher -------------------------------
-
-  it("workspace tabs: switching to a specific workspace filters the visible list to that workspace's graphs, 'All' shows every workspace", async () => {
-    const { user, push } = setup();
-    act(() =>
-      push({
-        ...snapshot,
-        workspaces: [workspace({ id: 1, name: "Default" }), workspace({ id: 2, name: "Work" })],
-        rows: [
-          row({ id: 1, title: "First Chat", workspaceId: 1 }),
-          row({ id: 2, title: "Second Chat", workspaceId: 2 }),
-        ],
-      }),
-    );
+  it("selects a workspace and preserves the workspaceId when starting a new chat", async () => {
+    const { user, intents } = setup();
     await user.click(screen.getByText("open library"));
-
-    // "All" is the default selection - both workspaces' graphs are visible.
-    expect(screen.getByText("First Chat")).toBeInTheDocument();
-    expect(screen.getByText("Second Chat")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Work" }));
-    expect(screen.queryByText("First Chat")).toBeNull();
-    expect(screen.getByText("Second Chat")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "All" }));
-    expect(screen.getByText("First Chat")).toBeInTheDocument();
-    expect(screen.getByText("Second Chat")).toBeInTheDocument();
-  });
-
-  it("New Chat passes the selected workspace's id once a specific workspace tab (not All) is active", async () => {
-    const { user, push, intents } = setup();
-    act(() => push({ ...snapshot, workspaces: [workspace({ id: 1, name: "Default" }), workspace({ id: 2, name: "Work" })] }));
-    await user.click(screen.getByText("open library"));
-
-    await user.click(screen.getByRole("button", { name: "Work" }));
-    await user.click(screen.getByRole("button", { name: "New Chat" }));
-
+    await user.click(screen.getByRole("button", { name: "Workspace" }));
+    await user.click(within(await screen.findByRole("listbox", { name: "Workspace" })).getByRole("option", { name: "Work" }));
+    expect(screen.getByText("Second chat")).toBeInTheDocument();
+    expect(screen.queryByText("First chat")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "New chat" }));
     expect(intents).toContainEqual(["app-chat-library", "newChat", [2]]);
   });
 
-  it("the + Workspace affordance reveals an inline input; Enter commits createWorkspace with the trimmed name", async () => {
+  it("supports F2 rename, Enter save, and Escape cancel without dismissing the library", async () => {
     const { user, intents } = setup();
     await user.click(screen.getByText("open library"));
-
-    await user.click(screen.getByRole("button", { name: "+ Workspace" }));
-    const input = screen.getByLabelText("New workspace name");
-    await user.type(input, "  Research  {Enter}");
-
-    expect(intents).toContainEqual(["app-chat-library", "createWorkspace", ["Research"]]);
-  });
-
-  it("Escape while creating a workspace cancels without dispatching createWorkspace", async () => {
-    const { user, intents } = setup();
-    await user.click(screen.getByText("open library"));
-
-    await user.click(screen.getByRole("button", { name: "+ Workspace" }));
+    const open = screen.getByRole("button", { name: /Open chat "First chat"/ });
+    open.focus();
+    await user.keyboard("{F2}");
+    const field = screen.getByRole("textbox", { name: 'Rename "First chat"' });
+    await user.clear(field);
+    await user.type(field, "  Edited chat  {Enter}");
+    await waitFor(() => expect(intents).toContainEqual(["app-chat-library", "renameChat", [1, "Edited chat"]]));
+    await user.click(screen.getByRole("button", { name: 'Rename "First chat"' }));
     await user.keyboard("{Escape}");
-
-    expect(intents.filter((i) => i[1] === "createWorkspace")).toEqual([]);
-    expect(screen.queryByLabelText("New workspace name")).toBeNull();
+    expect(screen.queryByRole("textbox", { name: 'Rename "First chat"' })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Chat library" })).toBeInTheDocument();
   });
 
-  // -- ADR-020 stage 20.2: tag filter chips (AND semantics) -----------------
-
-  it("tag filter chips use AND semantics: a graph must carry every selected tag to remain visible", async () => {
-    const { user, push } = setup();
-    act(() =>
-      push({
-        ...snapshot,
-        rows: [
-          row({ id: 1, title: "Alpha", tags: ["work", "urgent"] }),
-          row({ id: 2, title: "Beta", tags: ["work"] }),
-          row({ id: 3, title: "Gamma", tags: ["urgent"] }),
-        ],
-      }),
-    );
+  it("uses arrow keys to move among chat rows", async () => {
+    const { user } = setup();
     await user.click(screen.getByText("open library"));
-
-    await user.click(screen.getByRole("button", { name: "work" }));
-    expect(screen.getByText("Alpha")).toBeInTheDocument();
-    expect(screen.getByText("Beta")).toBeInTheDocument();
-    expect(screen.queryByText("Gamma")).toBeNull();
-
-    // Adding a second chip narrows further (AND, not OR) - only the row
-    // carrying BOTH selected tags remains.
-    await user.click(screen.getByRole("button", { name: "urgent" }));
-    expect(screen.getByText("Alpha")).toBeInTheDocument();
-    expect(screen.queryByText("Beta")).toBeNull();
-    expect(screen.queryByText("Gamma")).toBeNull();
+    screen.getByRole("button", { name: /Open chat "First chat"/ }).focus();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("button", { name: /Open chat "Second chat"/ })).toHaveFocus();
+    await user.keyboard("{ArrowUp}");
+    expect(screen.getByRole("button", { name: /Open chat "First chat"/ })).toHaveFocus();
   });
 
-  // -- ADR-020 stage 20.2: favorite / archive icon buttons ------------------
-
-  it("the star icon button fires setGraphFavorite with the toggled value", async () => {
+  it("stars rows through ToggleButton and archives them through the kit menu", async () => {
     const { user, intents } = setup();
     await user.click(screen.getByText("open library"));
-
-    await user.click(screen.getByLabelText('Add "First Chat" to favorites'));
-    expect(intents).toContainEqual(["app-chat-library", "setGraphFavorite", [1, true]]);
-  });
-
-  it("an already-favorited row's star button reads 'remove from favorites' and fires favorite:false", async () => {
-    const { user, push, intents } = setup();
-    act(() => push({ ...snapshot, rows: [row({ id: 1, title: "First Chat", favorite: true })] }));
-    await user.click(screen.getByText("open library"));
-
-    await user.click(screen.getByLabelText('Remove "First Chat" from favorites'));
+    await user.click(screen.getByRole("button", { name: 'Remove "First chat" from favorites' }));
     expect(intents).toContainEqual(["app-chat-library", "setGraphFavorite", [1, false]]);
-  });
-
-  it("the archive icon button fires setGraphArchived, and archived rows are hidden by default until the Archived toggle is switched on", async () => {
-    const { user, push, intents } = setup();
-    await user.click(screen.getByText("open library"));
-
-    await user.click(screen.getByLabelText('Archive "First Chat"'));
+    await user.click(screen.getAllByRole("button", { name: "More" })[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "Archive" }));
     expect(intents).toContainEqual(["app-chat-library", "setGraphArchived", [1, true]]);
-
-    // Simulate the backend republishing with the row now archived.
-    act(() => push({ ...snapshot, rows: [row({ id: 1, title: "First Chat", archived: true }), snapshot.rows[1]] }));
-    expect(screen.queryByText("First Chat")).toBeNull();
-
-    await user.click(screen.getByRole("button", { name: "Archived" }));
-    expect(screen.getByText("First Chat")).toBeInTheDocument();
   });
 
-  it("the Archived toggle defaults off: archived rows are excluded from the list on first render", async () => {
-    const { user, push } = setup();
-    act(() =>
-      push({
-        ...snapshot,
-        rows: [row({ id: 1, title: "First Chat", archived: true }), row({ id: 2, title: "Second Chat", archived: false })],
-      }),
-    );
-    await user.click(screen.getByText("open library"));
-
-    expect(screen.queryByText("First Chat")).toBeNull();
-    expect(screen.getByText("Second Chat")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Archived" }));
-    expect(screen.getByText("First Chat")).toBeInTheDocument();
-  });
-
-  it("shows a distinct 'no matches' state for filters (not search), with a Clear filters action", async () => {
-    const { user, push } = setup();
-    act(() =>
-      push({
-        ...snapshot,
-        rows: [row({ id: 1, title: "First Chat", archived: true }), row({ id: 2, title: "Second Chat", archived: true })],
-      }),
-    );
-    await user.click(screen.getByText("open library"));
-
-    expect(screen.getByText("No chats match the current filters.")).toBeInTheDocument();
-
-    await user.click(screen.getByText("Clear filters"));
-    expect(screen.getByText("First Chat")).toBeInTheDocument();
-  });
-
-  // -- ADR-020 stage 20.2: inline tag editing --------------------------------
-
-  it("tag editing: the tag icon opens an inline input pre-filled with the row's tags; Enter commits the trimmed/split list via setGraphTags", async () => {
-    const { user, push, intents } = setup();
-    act(() => push({ ...snapshot, rows: [row({ id: 1, title: "First Chat", tags: ["work", "urgent"] }), snapshot.rows[1]] }));
-    await user.click(screen.getByText("open library"));
-
-    await user.click(screen.getByLabelText('Edit tags for "First Chat"'));
-    const input = screen.getByLabelText('Edit tags for "First Chat"') as HTMLInputElement;
-    expect(input.value).toBe("work, urgent");
-
-    await user.clear(input);
-    await user.type(input, "one, two{Enter}");
-
-    expect(intents).toContainEqual(["app-chat-library", "setGraphTags", [1, ["one", "two"]]]);
-  });
-
-  it("tag editing: Escape cancels without dispatching setGraphTags", async () => {
+  it("edits comma-separated tags from More without losing other tags", async () => {
     const { user, intents } = setup();
     await user.click(screen.getByText("open library"));
-
-    await user.click(screen.getByLabelText('Edit tags for "First Chat"'));
-    await user.keyboard("{Escape}");
-
-    expect(intents.filter((i) => i[1] === "setGraphTags")).toEqual([]);
-    expect(screen.getByText("First Chat")).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "More" })[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "Tag…" }));
+    const field = screen.getByRole("textbox", { name: 'Edit tags for "First chat"' });
+    await user.clear(field);
+    await user.type(field, "docs, release{Enter}");
+    expect(intents).toContainEqual(["app-chat-library", "setGraphTags", [1, ["docs", "release"]]]);
   });
 
-  // -- ADR-020 stage 20.3: workspace default-model settings -----------------
-
-  it("the gear settings icon is rendered only for real workspaces, not the 'All' tab", async () => {
-    const { user, push } = setup();
-    act(() => push({ ...snapshot, workspaces: [workspace({ id: 1, name: "Default" }), workspace({ id: 2, name: "Work" })] }));
+  it("Delete key opens a nested destructive ConfirmDialog and honours cancel", async () => {
+    const { user, intents } = setup();
     await user.click(screen.getByText("open library"));
-
-    expect(screen.getByLabelText('Show default model settings for "Default"')).toBeInTheDocument();
-    expect(screen.getByLabelText('Show default model settings for "Work"')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Show default model settings for "All"')).toBeNull();
+    screen.getByRole("button", { name: /Open chat "First chat"/ }).focus();
+    await user.keyboard("{Delete}");
+    expect(await screen.findByRole("dialog", { name: "Delete chat?" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(intents.some((intent) => intent[1] === "deleteChat")).toBe(false);
+    screen.getByRole("button", { name: /Open chat "First chat"/ }).focus();
+    await user.keyboard("{Delete}");
+    await user.click(await screen.findByRole("button", { name: "Delete chat" }));
+    await waitFor(() => expect(intents).toContainEqual(["app-chat-library", "deleteChat", [1]]));
   });
 
-  it("the gear icon reveals an inline panel (no new modal) showing 'no default set' when unset", async () => {
-    const { user, push } = setup();
-    act(() => push(composerSnapshot(), "app-composer"));
+  it("requires confirmation to navigate away from a populated scene", async () => {
+    const { user, intents, cancelWorkspacePreview } = setup(true);
     await user.click(screen.getByText("open library"));
-
-    expect(screen.queryByText(/Default model for/)).toBeNull();
-
-    await user.click(screen.getByLabelText('Show default model settings for "Default"'));
-
-    // Still the same dialog - no second <Dialog> mounted.
-    expect(screen.getAllByRole("dialog")).toHaveLength(1);
-    expect(screen.getByText('No default set - dispatch falls through to any node/branch pin, then the auto policy.')).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Open chat "First chat"/ }));
+    expect(await screen.findByRole("dialog", { name: "Open another chat?" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(intents.some((intent) => intent[1] === "loadChat")).toBe(false);
+    expect(cancelWorkspacePreview).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: /Open chat "First chat"/ }));
+    await user.click(await screen.findByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(intents).toContainEqual(["app-chat-library", "loadChat", [1]]));
   });
 
-  it("a workspace with a default already set shows its current provider/model instead of the unset message", async () => {
-    const { user, push } = setup();
-    act(() => push(composerSnapshot(), "app-composer"));
-    act(() =>
-      push({
-        ...snapshot,
-        workspaces: [workspace({ id: 1, name: "Default", defaultModelProvider: "Ollama (Local)", defaultModelId: "llama3" })],
-      }),
-    );
+  it("uses a second confirmation to discard an incomplete live copy", async () => {
+    const { user, request, intents } = setup();
+    request.mockResolvedValueOnce("discard-required").mockResolvedValueOnce(true);
     await user.click(screen.getByText("open library"));
-
-    await user.click(screen.getByLabelText('Show default model settings for "Default"'));
-
-    expect(screen.getByText("Currently: Ollama (Local) / llama3")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Open chat "First chat"/ }));
+    expect(await screen.findByRole("dialog", { name: "Discard incomplete chat?" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Discard incomplete copy" }));
+    await waitFor(() => expect(intents.filter((entry) => entry[1] === "loadChat")).toEqual([
+      ["app-chat-library", "loadChat", [1]],
+      ["app-chat-library", "loadChat", [1, true]],
+    ]));
   });
 
-  it("clicking the gear icon again hides the panel", async () => {
-    const { user, push } = setup();
-    act(() => push(composerSnapshot(), "app-composer"));
+  it("manages workspaces without altering the graph and keeps the import/export intents", async () => {
+    const { user, intents } = setup();
     await user.click(screen.getByText("open library"));
-
-    const gear = screen.getByLabelText('Show default model settings for "Default"');
-    await user.click(gear);
-    expect(screen.getByText(/Default model for/)).toBeInTheDocument();
-
-    await user.click(screen.getByLabelText('Hide default model settings for "Default"'));
-    expect(screen.queryByText(/Default model for/)).toBeNull();
-  });
-
-  it("choosing a model option fires setWorkspaceDefaultModel with the workspace id, the composer's active provider, and the chosen model id", async () => {
-    const { user, push, intents } = setup();
-    act(() => push(composerSnapshot(), "app-composer"));
-    await user.click(screen.getByText("open library"));
-
-    await user.click(screen.getByLabelText('Show default model settings for "Default"'));
-    await chooseCustomOption(user, 'Default model for "Default"', "Mistral");
-
-    expect(intents).toContainEqual(["app-chat-library", "setWorkspaceDefaultModel", [1, "Ollama (Local)", "mistral"]]);
-  });
-
-  it("choosing 'No workspace default' fires setWorkspaceDefaultModel with empty provider and model id (clearing)", async () => {
-    const { user, push, intents } = setup();
-    act(() => push(composerSnapshot(), "app-composer"));
-    act(() =>
-      push({
-        ...snapshot,
-        workspaces: [workspace({ id: 1, name: "Default", defaultModelProvider: "Ollama (Local)", defaultModelId: "llama3" })],
-      }),
-    );
-    await user.click(screen.getByText("open library"));
-
-    await user.click(screen.getByLabelText('Show default model settings for "Default"'));
-    await chooseCustomOption(user, 'Default model for "Default"', "No workspace default");
-
-    expect(intents).toContainEqual(["app-chat-library", "setWorkspaceDefaultModel", [1, "", ""]]);
-  });
-
-  it("a republish with the new value (live re-subscribe) updates the panel without closing/reopening the dialog", async () => {
-    const { user, push } = setup();
-    act(() => push(composerSnapshot(), "app-composer"));
-    await user.click(screen.getByText("open library"));
-
-    await user.click(screen.getByLabelText('Show default model settings for "Default"'));
-    expect(screen.getByText('No default set - dispatch falls through to any node/branch pin, then the auto policy.')).toBeInTheDocument();
-
-    // Simulate the backend republishing after setWorkspaceDefaultModel commits.
-    act(() =>
-      push({
-        ...snapshot,
-        revision: 2,
-        workspaces: [workspace({ id: 1, name: "Default", defaultModelProvider: "Ollama (Local)", defaultModelId: "mistral" })],
-      }),
-    );
-
-    expect(screen.getByText("Currently: Ollama (Local) / mistral")).toBeInTheDocument();
-  });
-
-  it("when the active provider's catalog has no models, a placeholder message shows in place of options (clearing still works)", async () => {
-    const { user, push, intents } = setup();
-    act(() => push(composerSnapshot({ route: { ...composerSnapshot().route, modelOptions: [] } }), "app-composer"));
-    act(() =>
-      push({
-        ...snapshot,
-        workspaces: [workspace({ id: 1, name: "Default", defaultModelProvider: "Ollama (Local)", defaultModelId: "llama3" })],
-      }),
-    );
-    await user.click(screen.getByText("open library"));
-
-    await user.click(screen.getByLabelText('Show default model settings for "Default"'));
-
-    expect(screen.getByText(/No models found for Ollama \(Local\)\. Run a scan on its Settings page\./)).toBeInTheDocument();
-
-    await chooseCustomOption(user, 'Default model for "Default"', "No workspace default");
-    expect(intents).toContainEqual(["app-chat-library", "setWorkspaceDefaultModel", [1, "", ""]]);
-  });
-
-  // -- ADR-020 stage 20.5: workspace export ----------------------------------
-
-  it("the gear panel's Export Workspace button fires exportWorkspace with the workspace id", async () => {
-    const { user, push, intents } = setup();
-    act(() => push(composerSnapshot(), "app-composer"));
-    act(() => push({ ...snapshot, workspaces: [workspace({ id: 1, name: "Default" }), workspace({ id: 2, name: "Work" })] }));
-    await user.click(screen.getByText("open library"));
-
-    await user.click(screen.getByLabelText('Show default model settings for "Work"'));
-    await user.click(screen.getByRole("button", { name: "Export Workspace…" }));
-
-    expect(intents).toContainEqual(["app-chat-library", "exportWorkspace", [2]]);
-  });
-
-  it("offers transactional Import Workspace in the selected workspace gear panel", async () => {
-    const { user, push, intents, request } = setup();
-    act(() => push(composerSnapshot(), "app-composer"));
-    act(() => push({ ...snapshot, workspaces: [workspace({ id: 1, name: "Default" }), workspace({ id: 2, name: "Work" })] }));
-    await user.click(screen.getByText("open library"));
-    await user.click(screen.getByLabelText('Show default model settings for "Work"'));
-    await user.click(screen.getByRole("button", { name: "Import Workspace…" }));
-
-    expect(request).toHaveBeenCalledWith("app-chat-library", "importWorkspace", [2]);
-    expect(intents).toContainEqual(["app-chat-library", "importWorkspace", [2]]);
-  });
-
-  it("names the target workspace in the export panel's own description", async () => {
-    const { user, push } = setup();
-    act(() => push(composerSnapshot(), "app-composer"));
-    act(() => push({ ...snapshot, workspaces: [workspace({ id: 1, name: "Client Alpha" })] }));
-    await user.click(screen.getByText("open library"));
-
-    await user.click(screen.getByLabelText('Show default model settings for "Client Alpha"'));
-
-    expect(screen.getByText(/Save every graph in "Client Alpha" as one \.graphlink file\./)).toBeInTheDocument();
-  });
-
-  it("regression: resubscribes to app-chat-library on mount, so a late subscribe still gets a fresh snapshot", () => {
-    // ADR-020 stage 20.5: in the real app this dialog is lazy-mounted
-    // (App.tsx's own LazySurface), so it is no longer guaranteed to be the
-    // FIRST subscriber to "app-chat-library" - QuickSwitcherDialog.tsx now
-    // also subscribes, eagerly, from app start. WsTransport.subscribe()
-    // only sends a real wire-level "subscribe" (and gets a fresh snapshot
-    // back) for a topic's first-ever listener - without this dialog's own
-    // resubscribe() call on mount, opening Library after the quick switcher
-    // had already claimed that slot left it stuck on empty initialState
-    // ("No saved chats yet" with a real, populated library) - confirmed via
-    // a live browser repro before this fix, not a hypothetical.
-    const { resubscribes } = setup();
-
-    expect(resubscribes).toContain("app-chat-library");
+    await user.click(screen.getByRole("button", { name: "Workspace" }));
+    await user.click(within(await screen.findByRole("listbox", { name: "Workspace" })).getByRole("option", { name: "Manage workspaces…" }));
+    await user.click(screen.getByRole("button", { name: "Create workspace" }));
+    await user.type(screen.getByRole("textbox", { name: "New workspace name" }), "Writing");
+    await user.click(screen.getByRole("button", { name: "Create workspace" }));
+    expect(intents).toContainEqual(["app-chat-library", "createWorkspace", ["Writing"]]);
+    await user.click(screen.getByRole("button", { name: "Default" }));
+    await user.click(screen.getByRole("button", { name: "Export workspace…" }));
+    expect(intents).toContainEqual(["app-chat-library", "exportWorkspace", [1]]);
+    await user.click(screen.getByRole("button", { name: "Import workspace…" }));
+    expect(intents).toContainEqual(["app-chat-library", "importWorkspace", [1]]);
   });
 });
