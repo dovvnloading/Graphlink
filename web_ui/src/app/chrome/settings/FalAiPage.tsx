@@ -144,10 +144,10 @@ export function FalAiPage({
             onClick={() => {
               transport.fireIntent("app-settings", "setFalApiKey", [keyDraft]);
               setKeyDraft("");
-            }}>Save API Key</Button>
+            }}>Save API key</Button>
           <Button variant="secondary" disabled={state.falBusy}
             onClick={() => { transport.fireIntent("app-settings", "clearFalApiKey", []); setKeyDraft(""); }}>
-            Clear Stored Key
+            Clear stored key
           </Button>
         </div>
       </FieldGroup>
@@ -167,14 +167,14 @@ export function FalAiPage({
         <div className="settings-button-row">
           <Button variant="primary" disabled={state.falBusy}
             onClick={() => transport.fireIntent("app-settings", "searchFalModels",
-              [modelSearch.trim(), modelCategory.trim(), 20, ""])}>Search Catalog</Button>
+              [modelSearch.trim(), modelCategory.trim(), 20, ""])}>Search catalog</Button>
           <Button variant="secondary" disabled={state.falBusy || !modelId.trim()}
             onClick={() => transport.fireIntent("app-settings", "inspectFalModel", [modelId.trim()])}>
-            Inspect Selected Model / Schema
+            Inspect selected model / schema
           </Button>
           <Button variant="secondary" disabled={state.falBusy || !modelId.trim()}
             onClick={() => transport.fireIntent("app-settings", "getFalModelPricing", [modelId.trim()])}>
-            Check Current Pricing
+            Check current pricing
           </Button>
         </div>
         {!!discovered?.models && (
@@ -186,14 +186,14 @@ export function FalAiPage({
                 <span className="settings-field-hint">{m.endpoint_id} — {m.metadata?.category || "unknown category"}</span>
                 {!!m.metadata?.description && <p className="settings-field-hint">{m.metadata.description}</p>}
                 <Button variant="secondary"
-                  onClick={() => setModelId(m.endpoint_id)}>Use This Model</Button>
+                  onClick={() => setModelId(m.endpoint_id)}>Use this model</Button>
               </div>
             ))}
             {discovered.has_more && typeof discovered.next_cursor === "string" && (
               <Button variant="secondary" disabled={state.falBusy}
                 onClick={() => transport.fireIntent("app-settings", "searchFalModels",
                   [modelSearch.trim(), modelCategory.trim(), 20, discovered.next_cursor])}>
-                Next Catalog Page
+                Next catalog page
               </Button>
             )}
           </div>
@@ -214,7 +214,7 @@ export function FalAiPage({
           <Button variant="secondary" disabled={state.falBusy || !modelId.trim() ||
             !Number.isInteger(estimateQuantity) || estimateQuantity < 1 || estimateQuantity > 1000000}
             onClick={() => transport.fireIntent("app-settings", "estimateFalModelCost",
-              [modelId.trim(), estimateQuantity, estimateBasis])}>Estimate Cost</Button>
+              [modelId.trim(), estimateQuantity, estimateBasis])}>Estimate cost</Button>
         </div>
         {!!discovery && discovery.kind !== "models" && (
           <Disclosure {...{ title: discovery.kind === "details" ? "Model metadata / OpenAPI schema" :
@@ -232,18 +232,10 @@ export function FalAiPage({
       <FieldGroup {...{ title: "Model inference" }}>
         <TextField label="Model endpoint ID (including optional nested path)" value={modelId}
           mono spellCheck={false} onValueChange={setModelId} placeholder="fal-ai/flux/schnell" />
-        <label className="settings-field">
-          <span className="settings-field-label">Model-specific input (JSON)</span>
-          <textarea className="settings-select" spellCheck={false} rows={8} value={argumentsJson}
-            onChange={(event) => setArgumentsJson(event.target.value)}
-            aria-label="Fal model arguments JSON" />
-        </label>
-        <label className="settings-field">
-          <span className="settings-field-label">Request options (JSON)</span>
-          <textarea className="settings-select" spellCheck={false} rows={3} value={optionsJson}
-            onChange={(event) => setOptionsJson(event.target.value)}
-            aria-label="Fal request options JSON" />
-        </label>
+        <TextArea label="Fal model arguments JSON" minRows={8} maxRows={12}
+          spellCheck={false} value={argumentsJson} onValueChange={setArgumentsJson} />
+        <TextArea label="Fal request options JSON" minRows={3} maxRows={6}
+          spellCheck={false} value={optionsJson} onValueChange={setOptionsJson} />
         <p className="settings-field-hint">
           Available options include priority, start_timeout, runner_hint, no_retry,
           store_io, object_lifecycle, retry_config, webhook_url (queue only),
@@ -258,7 +250,7 @@ export function FalAiPage({
               })) {
                 transport.fireIntent("app-settings", "submitFalJob", [modelId.trim(), argumentsJson, optionsJson]);
               }
-            }}>Submit to Queue</Button>
+            }}>Submit to queue</Button>
           <Button variant="secondary" disabled={state.falBusy}
             onClick={async () => {
               if (prepareRequest() && await askConfirm({
@@ -267,7 +259,7 @@ export function FalAiPage({
               })) {
                 transport.fireIntent("app-settings", "runFalSync", [modelId.trim(), argumentsJson, optionsJson]);
               }
-            }}>Run Synchronously</Button>
+            }}>Run synchronously</Button>
         </div>
       </FieldGroup>
 
@@ -295,7 +287,7 @@ export function FalAiPage({
               })) {
                 transport.fireIntent("app-settings", "uploadFalFile", [localPath.trim()]);
               }
-            }}>Upload File to Fal CDN</Button>
+            }}>Upload file to Fal CDN</Button>
         </div>
         {!!state.falUploadUrl && (
           <p className="settings-update-status">
@@ -333,7 +325,7 @@ export function FalAiPage({
             <div className="settings-button-row">
               <Button variant="secondary" disabled={state.falBusy}
                 onClick={() => transport.fireIntent("app-settings", "refreshFalJob",
-                  [job.modelId, job.requestId, true])}>Refresh / Fetch Result</Button>
+                  [job.modelId, job.requestId, true])}>Refresh / fetch result</Button>
               <Button variant="secondary" disabled={state.falBusy}
                 onClick={async () => {
                   if (await askConfirm({
@@ -342,7 +334,7 @@ export function FalAiPage({
                   })) {
                     transport.fireIntent("app-settings", "cancelFalJob", [job.modelId, job.requestId]);
                   }
-                }}>Cancel Job</Button>
+                }}>Cancel job</Button>
             </div>
             {(job.mediaUrls || []).filter((url) => url.startsWith("https://")).map((url, i) => (
               <p key={url} className="settings-update-status">
