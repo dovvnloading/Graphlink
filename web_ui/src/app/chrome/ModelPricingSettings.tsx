@@ -1,8 +1,13 @@
-import { useRef, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import type {
   AppSettingsState, EffectiveModelPrice, ModelPricingOverride,
 } from "../../lib/bridge-core/generated/app-settings-state";
 import type { WsTransport } from "../../lib/ws/transport";
+import { TextField } from "../ui/TextField";
+import { NumberField } from "../ui/NumberField";
+import { Button } from "../ui/Button";
+import { FieldGroup } from "../ui/Field";
+import { InlineAlert } from "../ui/InlineAlert";
 import "./ModelPricingSettings.css";
 
 type Prices = Record<string, { input: number; output: number }>;
@@ -38,7 +43,6 @@ export function ModelPricingSettings({ state, transport }: {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const modelInput = useRef<HTMLInputElement>(null);
 
   function clear() {
     setEditing(null);
@@ -55,7 +59,7 @@ export function ModelPricingSettings({ state, transport }: {
     setOutputDraft(row.outputPerMillion == null ? "" : String(row.outputPerMillion));
     setError("");
     setNotice("");
-    modelInput.current?.focus();
+    document.getElementById("model-pricing-id")?.focus();
   }
 
   async function save(event: FormEvent<HTMLFormElement>) {
@@ -110,13 +114,13 @@ export function ModelPricingSettings({ state, transport }: {
 
   return (
     <div className="settings-general-page settings-model-pricing">
-      <p className="settings-integrations-intro">
+      <h2 className="settings-page-title">Model pricing</h2>
+      <p className="settings-page-description">
         Prices are in USD per million input and output tokens. Estimates are not bills.
         Ollama and llama.cpp models run locally and always have $0 token cost.
         Overrides match the model ID exactly (case-insensitive); built-in pricing is used otherwise.
       </p>
-      <fieldset className="settings-fieldset">
-        <legend>Effective model prices</legend>
+      <FieldGroup title="Effective model prices">
         {rows.length === 0 && (
           <p className="settings-update-status">
             No configured or recently used models yet. Add an override using a model ID below.
@@ -140,15 +144,15 @@ export function ModelPricingSettings({ state, transport }: {
                 {(row.source !== "local" || overridden) && (
                   <div className="settings-button-row settings-model-pricing-actions">
                     {row.source !== "local" && (
-                      <button type="button" className="settings-button" disabled={saving}
+                      <Button variant="secondary" disabled={saving}
                         aria-label={`Edit pricing for ${rowLabel}`} onClick={() => edit(row)}>
                         Edit
-                      </button>
+                      </Button>
                     )}
                     {overridden && (
-                      <button type="button" className="settings-button" disabled={saving}
+                      <Button variant="secondary" disabled={saving}
                         aria-label={`Remove override for ${rowLabel}`}
-                        onClick={() => { void remove(row.modelId); }}>Remove</button>
+                        onClick={() => { void remove(row.modelId); }}>Remove</Button>
                     )}
                   </div>
                 )}
@@ -156,36 +160,29 @@ export function ModelPricingSettings({ state, transport }: {
             );
           })}
         </ul>
-      </fieldset>
+      </FieldGroup>
 
       <form className="settings-fieldset settings-model-pricing-form" onSubmit={(event) => { void save(event); }} noValidate>
-        <fieldset className="settings-model-pricing-inputs" disabled={saving}>
-          <legend>{editing ? "Edit model override" : "Add or update model override"}</legend>
-          <label className="settings-field">
-            <span className="settings-field-label">Model ID</span>
-            <input ref={modelInput} className="settings-select" type="text" value={modelId}
-              readOnly={editing !== null} autoComplete="off" required
-              onChange={(event) => setModelId(event.target.value)}
-              placeholder="e.g. gpt-4o-mini" />
-          </label>
-          <label className="settings-field">
-            <span className="settings-field-label">Input (USD / million tokens)</span>
-            <input className="settings-select" type="number" min="0" step="any" required
-              value={inputDraft} onChange={(event) => setInputDraft(event.target.value)} />
-          </label>
-          <label className="settings-field">
-            <span className="settings-field-label">Output (USD / million tokens)</span>
-            <input className="settings-select" type="number" min="0" step="any" required
-              value={outputDraft} onChange={(event) => setOutputDraft(event.target.value)} />
-          </label>
+        <div className="settings-model-pricing-inputs" aria-label={editing ? "Edit model override" : "Add or update model override"}>
+          <TextField id="model-pricing-id" label="Model ID" type="text" value={modelId}
+            readOnly={editing !== null} autoComplete="off" required disabled={saving} mono
+            onValueChange={setModelId} placeholder="e.g. gpt-4o-mini" />
+          <NumberField label="Input (USD / million tokens)" min={undefined} step={0.01} disabled={saving} required
+            value={inputDraft.trim() === "" ? "" : Number(inputDraft)}
+            onChange={(event) => setInputDraft(event.currentTarget.value)}
+            onValueChange={(value) => setInputDraft(String(value))} />
+          <NumberField label="Output (USD / million tokens)" min={undefined} step={0.01} disabled={saving} required
+            value={outputDraft.trim() === "" ? "" : Number(outputDraft)}
+            onChange={(event) => setOutputDraft(event.currentTarget.value)}
+            onValueChange={(value) => setOutputDraft(String(value))} />
           <div className="settings-button-row">
-            <button type="submit" className="settings-button">{saving ? "Saving…" : "Save override"}</button>
-            <button type="button" className="settings-button" onClick={() => { clear(); setError(""); setNotice(""); }}>
+            <Button variant="primary" type="submit">{saving ? "Saving…" : "Save override"}</Button>
+            <Button variant="secondary" onClick={() => { clear(); setError(""); setNotice(""); }}>
               Cancel edit
-            </button>
+            </Button>
           </div>
-        </fieldset>
-        {error && <p className="settings-model-pricing-error" role="alert">{error}</p>}
+        </div>
+        {error && <InlineAlert variant="error" title="Could not update model pricing" body={error} />}
         {notice && <p className="settings-update-status" role="status">{notice}</p>}
       </form>
     </div>
