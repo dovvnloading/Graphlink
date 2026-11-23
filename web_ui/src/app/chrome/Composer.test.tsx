@@ -145,7 +145,7 @@ function makeSceneStore(
     getSynthesizeTargetNodeIds: () => synthesizeTargetNodeIds,
   };
   return { sceneStore, sendMessage, sendComposerAgentMessage, getHarnessIsolationEngine,
-    setReplyTargetNodeId, setSynthesizeTargetNodeIds, getChatKnowledgePreference, setChatUseKnowledge,
+    setReplyTargetNodeId, setSelectedNodeId, setSynthesizeTargetNodeIds, getChatKnowledgePreference, setChatUseKnowledge,
     emitScene, emitLibraryRevision };
 }
 
@@ -355,7 +355,9 @@ describe("Composer", () => {
     </OverlayProvider>);
 
     const toggle = screen.getByRole("button", { name: "Use knowledge" });
-    await waitFor(() => expect(toggle).toHaveAttribute("title", "Could not check workspace knowledge"));
+    await waitFor(() => expect(toggle).toBeDisabled());
+    fireEvent.focus(toggle.parentElement!);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Could not check workspace knowledge");
     expect(toggle).toBeDisabled();
     act(() => emitScene({ revision: 0 }));
     await waitFor(() => expect(getChatKnowledgePreference).toHaveBeenCalledTimes(2));
@@ -744,7 +746,7 @@ describe("Composer", () => {
     expect(trigger).toBeEnabled();
     await user.click(trigger);
     expect(await screen.findByRole("menuitem", { name: "Manage models…" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Set up a local model" }));
+    await user.click(screen.getByRole("menuitem", { name: "Manage models…" }));
     expect(openOllamaSettings).toHaveBeenCalledOnce();
   });
 
