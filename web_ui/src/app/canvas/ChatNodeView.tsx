@@ -1,5 +1,5 @@
 import type { Node, NodeProps } from "@xyflow/react";
-import { memo, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { memo, useEffect, useRef, useState, type RefObject } from "react";
 import type { StreamListener } from "../../lib/ws/transport";
 import { CHAT_SCROLL_REPORT_DEBOUNCE_MS } from "./canvasConstants";
 import { CollapseToggleButton } from "./CollapseToggleButton";
@@ -14,6 +14,13 @@ import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 import { useStreamBuffer } from "./useStreamBuffer";
 import { MenuItem, MenuGroup, SubMenu } from "../ui/Menu";
+import { Icon } from "../ui/icons/Icon";
+import { IconButton } from "../ui/IconButton";
+import { Button } from "../ui/Button";
+import { Badge } from "../ui/Badge";
+import { Tooltip } from "../ui/Tooltip";
+import { Disclosure } from "../ui/Disclosure";
+import { formatTokens } from "../ui/format";
 
 /**
  * The chat node (Qt-removal plan R3.1/R3.2) - ChatNode's React successor:
@@ -406,47 +413,6 @@ export function makeDebouncedScrollReport(
   };
 }
 
-// Node redesign, stage 3 ("card chrome"): hand-authored stroke icons for
-// the header's hover-revealed quick-action row, matching the SAME
-// convention this codebase already established twice (GroupNodeView.tsx's
-// own GroupIcon, Composer.tsx's own Icon) rather than a fourth, different
-// icon approach - fill:none/stroke:currentColor, one small file-local
-// component per file that needs icons, not a shared icon library.
-type ChatNodeIconName = "copy" | "check" | "branch" | "document";
-
-const CHAT_NODE_ICON_PATHS: Record<ChatNodeIconName, ReactNode> = {
-  copy: (
-    <>
-      <rect x="2.5" y="2.5" width="8" height="8" rx="1.2" />
-      <rect x="5.5" y="5.5" width="8" height="8" rx="1.2" />
-    </>
-  ),
-  check: <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />,
-  branch: (
-    <>
-      <circle cx="4.5" cy="3.5" r="1.4" />
-      <circle cx="4.5" cy="12.5" r="1.4" />
-      <circle cx="11.5" cy="8" r="1.4" />
-      <path d="M4.5 4.9V11.1" />
-      <path d="M4.5 8H7a3 3 0 0 0 3-3" />
-    </>
-  ),
-  document: (
-    <>
-      <path d="M4 2h5l3 3v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1Z" />
-      <path d="M9 2v3h3" />
-    </>
-  ),
-};
-
-function ChatNodeIcon({ name }: { name: ChatNodeIconName }) {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16" className="chat-node-icon">
-      {CHAT_NODE_ICON_PATHS[name]}
-    </svg>
-  );
-}
-
 // Node redesign, stage 3's own deferred sub-item ("content fade + Show more,
 // replacing the hard 300px cutoff"), implemented now: must match
 // .chat-node-content's own max-height in styles.css exactly, or the fade/
@@ -617,7 +583,7 @@ function ModelReasonDisclosure({
         aria-label={`Why this model: ${model}`}
         aria-haspopup="menu" aria-expanded={anchor !== null}
         onClick={toggle}
-      >Why this model</button>
+      ><Icon name="info" size="sm" /> Why this model</button>
       {anchor && (
         <NodeMenu
           position={anchor} onClose={() => setAnchor(null)}
@@ -626,12 +592,10 @@ function ModelReasonDisclosure({
         >
           <p className="chat-node-model-reason-description">{describeModelReason(reason)}</p>
           <p className="chat-node-model-reason-hint">Changes affect future replies, not this recorded answer.</p>
-          <button type="button" role="menuitem" className="chat-node-model-reason-action"
-            onClick={() => { onOpenNodePinMenu(anchor); setAnchor(null); }}>Change node pin</button>
-          <button type="button" role="menuitem" className="chat-node-model-reason-action"
-            onClick={() => { setAnchor(null); onOpenModelSettings(); }}>
-            {reason.startsWith("auto: ") ? "Change automatic selection policy" : "Change task model setting"}
-          </button>
+          <MenuItem icon="pin" label="Change node pin" onSelect={() => onOpenNodePinMenu(anchor)} />
+          <MenuItem icon="settings"
+            label={reason.startsWith("auto: ") ? "Change automatic selection policy" : "Change task model setting"}
+            onSelect={onOpenModelSettings} />
         </NodeMenu>
       )}
     </span>
@@ -819,32 +783,7 @@ export const ChatNodeView = memo(function ChatNodeView({
       ? `${scienceReference.operationTitle}: ${scienceReference.summary}`
       : data.pendingRequestId ? streamedContent : data.content).slice(0, 160).trim()
     : "";
-  const headerDetail = overview ? (
-    <span className="node-overview-excerpt">{overview}</span>
-  ) : hasMetadata && (
-    <div className="chat-node-metadata">
-      {data.model && (
-        <>
-          <span className="chat-node-model-badge" title={data.provider ?? undefined}>{data.model}</span>
-          {data.modelReason && (
-            <ModelReasonDisclosure model={data.model} reason={data.modelReason}
-              onOpenNodePinMenu={setMenuPosition} onOpenModelSettings={data.onOpenModelSettings} />
-          )}
-        </>
-      )}
-      {data.overrideModelId && (
-        <span className="chat-node-model-override-badge"
-          title={`Pinned to ${data.overrideProvider} - ${data.overrideModelId}`}>📌 {data.overrideModelId}</span>
-      )}
-      {hasUsage && (
-        <span className="chat-node-usage-badge"
-          title={`Prompt: ${data.promptTokens ?? "?"} · Completion: ${data.completionTokens ?? "?"}`}>
-          {`${data.promptTokens ?? "?"}→${data.completionTokens ?? "?"}`}
-          {data.estimatedCostUsd != null && ` · $${data.estimatedCostUsd.toFixed(4)}`}
-        </span>
-      )}
-    </div>
-  );
+  const headerDetail = overview ? <span className="node-overview-excerpt">{overview}</span> : undefined;
 
   return (
     <NodeShell
@@ -866,77 +805,71 @@ export const ChatNodeView = memo(function ChatNodeView({
             <span>{data.isUser ? "You" : "Assistant"}</span>
             {data.versionCount > 1 && (
               <span className="chat-node-version-switcher nodrag" role="group" aria-label="Message versions">
-                <button type="button" className="chat-node-version-button nodrag"
-                  aria-label="Previous version" title="Previous version"
-                  disabled={data.versionIndex <= 0 || !!data.pendingRequestId}
-                  onClick={() => data.onSelectVersion(data.versionIndex - 1)}>‹</button>
+                <IconButton size="sm" className="chat-node-version-button nodrag" icon="chevron-left"
+                  label="Previous version" disabled={data.versionIndex <= 0 || !!data.pendingRequestId}
+                  onClick={() => data.onSelectVersion(data.versionIndex - 1)} />
                 <span>
-                  <span aria-hidden="true">{data.versionIndex + 1}/{data.versionCount}</span>
+                  <span aria-hidden="true">{data.versionIndex + 1} of {data.versionCount}</span>
                   <span className="visually-hidden" role="status" aria-live="polite">
                     Version {data.versionIndex + 1} of {data.versionCount} selected
                   </span>
                 </span>
-                <button type="button" className="chat-node-version-button nodrag"
-                  aria-label="Next version" title="Next version"
-                  disabled={data.versionIndex >= data.versionCount - 1 || !!data.pendingRequestId}
-                  onClick={() => data.onSelectVersion(data.versionIndex + 1)}>›</button>
-                <button type="button" className="chat-node-version-compare-button nodrag"
-                  aria-label="Compare message versions" title="Compare message versions"
-                  disabled={!!data.pendingRequestId} onClick={data.onCompareVersions}>Compare</button>
+                <IconButton size="sm" className="chat-node-version-button nodrag" icon="chevron-right"
+                  label="Next version" disabled={data.versionIndex >= data.versionCount - 1 || !!data.pendingRequestId}
+                  onClick={() => data.onSelectVersion(data.versionIndex + 1)} />
+                <Button size="sm" variant="ghost" iconStart="compare"
+                  className="chat-node-version-compare-button nodrag"
+                  aria-label="Compare message versions" disabled={!!data.pendingRequestId}
+                  onClick={data.onCompareVersions}>Compare</Button>
               </span>
             )}
             {data.branchStatus && data.branchStatus !== "active" && (
-              <span className="chat-node-status-badge" role="status" data-status={data.branchStatus}
-                title={`Branch status: ${data.branchStatus}`}
-                aria-label={`Branch status: ${data.branchStatus}`}>
-                {data.branchStatus.charAt(0).toUpperCase() + data.branchStatus.slice(1)}
-              </span>
+              <Tooltip label={`Branch status: ${data.branchStatus}`}>
+                <span className="chat-node-status-badge" role="status" data-status={data.branchStatus}
+                  aria-label={`Branch status: ${data.branchStatus}`}>
+                  <Icon size="sm" name={data.branchStatus === "rejected" ? "status-rejected"
+                    : data.branchStatus === "superseded" ? "history" : "status-success"} />
+                  {data.branchStatus.charAt(0).toUpperCase() + data.branchStatus.slice(1)}
+                </span>
+              </Tooltip>
             )}
             {data.dockedChildren.length > 0 && (
-              <span className="chat-node-docked-badge" title="Docked items">{data.dockedChildren.length}</span>
+              <Tooltip label="Docked items">
+                <span className="chat-node-docked-badge"><Icon name="folder" size="sm" />{data.dockedChildren.length}</span>
+              </Tooltip>
             )}
             {data.isBranchSynthesis && (
-              <span className="chat-node-synthesis-badge"
-                title={`Branch Synthesis (${data.synthesisSourceNodeIds.length} sources): ${data.synthesisInstructions}`}
-                aria-label="Branch Synthesis">⇄</span>
+              <Tooltip label={`Branch synthesis (${data.synthesisSourceNodeIds.length} sources): ${data.synthesisInstructions}`}>
+                <span className="chat-node-synthesis-badge" aria-label="Branch Synthesis">
+                  <Icon name="merge" size="sm" /><span>Synthesis</span>
+                </span>
+              </Tooltip>
             )}
             {data.isFinalDeliverable && (
-              <span className="chat-node-final-badge" title="Final Deliverable" aria-label="Final Deliverable">★</span>
+              <span className="chat-node-final-badge" aria-label="Final Deliverable">
+                <Icon name="flag" size="sm" /><span>Final deliverable</span>
+              </span>
             )}
             {data.indexIntoKnowledge && (
-              <span className="chat-node-knowledge-badge" role="status"
-                aria-label="Indexed in Knowledge Library" title="Indexed in Knowledge Library">
-                <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M3 2.5h7l3 3v8H3z" strokeLinejoin="round" />
-                  <path d="M10 2.5v3h3M5.5 8h5M5.5 10.5h5" strokeLinecap="round" />
-                </svg>
-                In Knowledge Library
+              <span className="chat-node-knowledge-badge" role="status" aria-label="Indexed in Knowledge Library">
+                <Icon name="knowledge" size="sm" />In Knowledge Library
               </span>
             )}
           </span>
           <span className="chat-node-title-actions">
             {!collapsed && (
               <span className="chat-node-quick-actions">
-                <button type="button" className="chat-node-quick-action nodrag" onClick={onQuickCopy}
-                  title="Copy text" aria-label="Copy text">
-                  <ChatNodeIcon name={copied ? "check" : "copy"} />
-                </button>
-                <button type="button" className="chat-node-quick-action nodrag" onClick={data.onBranchFromHere}
-                  title="Branch from here" aria-label="Branch from here">
-                  <ChatNodeIcon name="branch" />
-                </button>
+                <IconButton size="sm" className="chat-node-quick-action nodrag"
+                  icon={copied ? "check" : "copy"} label="Copy text" onClick={onQuickCopy} />
+                <IconButton size="sm" className="chat-node-quick-action nodrag"
+                  icon="branch" label="Branch from here" onClick={data.onBranchFromHere} />
                 {canRerunFromHere && data.onRerunFromHere && (
-                  <button type="button" className="chat-node-quick-action nodrag"
-                    id={"chat-rerun-trigger-" + id}
-                    disabled={!!data.pendingRequestId} onClick={data.onRerunFromHere}
-                    title="Re-run from here" aria-label="Re-run from here">
-                    ↻
-                  </button>
+                  <IconButton size="sm" className="chat-node-quick-action nodrag"
+                    id={"chat-rerun-trigger-" + id} icon="rerun" label="Re-run from here"
+                    disabled={!!data.pendingRequestId} onClick={data.onRerunFromHere} />
                 )}
-                <button type="button" className="chat-node-quick-action nodrag" onClick={data.onOpenDocumentView}
-                  title="Open Document View" aria-label="Open Document View">
-                  <ChatNodeIcon name="document" />
-                </button>
+                <IconButton size="sm" className="chat-node-quick-action nodrag"
+                  icon="document-text" label="Open Document View" onClick={data.onOpenDocumentView} />
               </span>
             )}
             <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
@@ -1126,6 +1059,31 @@ export const ChatNodeView = memo(function ChatNodeView({
             >
               Regenerate
             </button>
+          )}
+        </div>
+      )}
+      {hasMetadata && !collapsed && (
+        <div className="chat-node-footer-meta">
+          {data.model && <span className="chat-node-model-badge">{data.model}</span>}
+          {data.model && hasUsage && <span aria-hidden="true">·</span>}
+          {hasUsage && (
+            <Tooltip label={`Prompt: ${data.promptTokens ?? "?"} · Completion: ${data.completionTokens ?? "?"}`}>
+              <span className="chat-node-usage-badge">
+                {data.estimatedCostUsd != null ? `$${data.estimatedCostUsd.toFixed(4)}`
+                  : `${formatTokens(data.promptTokens ?? 0)} / ${formatTokens(data.completionTokens ?? 0)} tokens`}
+              </span>
+            </Tooltip>
+          )}
+          {data.modelReason && (
+            <ModelReasonDisclosure model={data.model} reason={data.modelReason}
+              onOpenNodePinMenu={setMenuPosition} onOpenModelSettings={data.onOpenModelSettings} />
+          )}
+          {data.overrideModelId && (
+            <Tooltip label={`Pinned to ${data.overrideProvider} — ${data.overrideModelId}`}>
+              <Badge className="chat-node-model-override-badge">
+                <Icon name="pin" size="sm" /> {data.overrideModelId}
+              </Badge>
+            </Tooltip>
           )}
         </div>
       )}
