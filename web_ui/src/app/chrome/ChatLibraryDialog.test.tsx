@@ -592,4 +592,232 @@ describe("ChatLibraryDialog on the kit", () => {
     expect(intents.some((entry) => entry[1] === "createWorkspace")).toBe(false);
   });
 
+
+  it("tag chips require every selected tag to be present (AND filtering)", async () => {
+    const { user, push } = setup();
+    act(() => push({ ...SNAPSHOT, revision: 2, rows: [
+      row({ id: 11, title: "Both tags", tags: ["alpha", "beta"] }),
+      row({ id: 12, title: "Alpha only", tags: ["alpha"] }),
+      row({ id: 13, title: "Beta only", tags: ["beta"] }),
+    ] }));
+    await user.click(screen.getByText("open library"));
+    await user.click(within(screen.getByRole("group", { name: "Filter by tag" })).getByRole("button", { name: "alpha" }));
+    expect(screen.getByText("Alpha only")).toBeInTheDocument();
+    expect(screen.queryByText("Beta only")).toBeNull();
+    await user.click(within(screen.getByRole("group", { name: "Filter by tag" })).getByRole("button", { name: "beta" }));
+    expect(screen.getByText("Both tags")).toBeInTheDocument();
+    expect(screen.queryByText("Alpha only")).toBeNull();
+    expect(screen.queryByText("Beta only")).toBeNull();
+  });
+
+  it("star toggles on an unfavorited row with the chosen id", async () => {
+    const { user, intents } = setup();
+    await user.click(screen.getByText("open library"));
+    await user.click(screen.getByRole("button", { name: 'Add "Second chat" to favorites' }));
+    expect(intents).toContainEqual(["app-chat-library", "setGraphFavorite", [2, true]]);
+  });
+
+  it("the already-favorited star offers Remove and dispatches false", async () => {
+    const { user, intents } = setup();
+    await user.click(screen.getByText("open library"));
+    await user.click(screen.getByRole("button", { name: 'Remove "First chat" from favorites' }));
+    expect(intents).toContainEqual(["app-chat-library", "setGraphFavorite", [1, false]]);
+  });
+
+  it("archived chats are excluded on first render without selecting Archived", async () => {
+    const { user } = setup();
+    await user.click(screen.getByText("open library"));
+    expect(screen.getByRole("radio", { name: "All" })).toBeChecked();
+    expect(screen.queryByText("Archived chat")).toBeNull();
+    expect(screen.getByText("First chat")).toBeInTheDocument();
+  });
+
+  it("archiving sends setGraphArchived and hides that row until Archived is selected", async () => {
+    const { user, intents, push } = setup();
+    await user.click(screen.getByText("open library"));
+    await chooseRowAction(user, "Second chat", "Archive");
+    expect(intents).toContainEqual(["app-chat-library", "setGraphArchived", [2, true]]);
+    act(() => push({ ...SNAPSHOT, revision: 2, rows: SNAPSHOT.rows.map((item) =>
+      item.id === 2 ? { ...item, archived: true } : item) }));
+    expect(screen.queryByText("Second chat")).toBeNull();
+    await user.click(screen.getByRole("radio", { name: "Archived" }));
+    expect(screen.getByText("Second chat")).toBeInTheDocument();
+    await chooseRowAction(user, "Second chat", "Unarchive");
+    expect(intents).toContainEqual(["app-chat-library", "setGraphArchived", [2, false]]);
+  });
+
+  it("filter-only no matches uses Clear filters, not the library empty state", async () => {
+    const { user } = setup();
+    await user.click(screen.getByText("open library"));
+    await user.click(screen.getByRole("radio", { name: "Starred" }));
+    await user.click(within(screen.getByRole("group", { name: "Filter by tag" }))
+      .getByRole("button", { name: "design" }));
+    expect(screen.getByText("First chat")).toBeInTheDocument();
+    await chooseWorkspace(user, "Work");
+    await user.click(screen.getByRole("radio", { name: "Starred" }));
+    expect(screen.getByText("No matching chats")).toBeInTheDocument();
+    expect(screen.queryByText("No saved chats yet")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(screen.getByText("First chat")).toBeInTheDocument();
+  });
+
+  it("tag editing starts with existing tags and commits trimmed comma-separated tags", async () => {
+    const { user, intents } = setup();
+    await user.click(screen.getByText("open library"));
+    await chooseRowAction(user, "First chat", "Tag…");
+    const field = screen.getByRole("textbox", { name: 'Edit tags for "First chat"' });
+    expect(field).toHaveValue("design");
+    await user.clear(field);
+    await user.type(field, "  alpha , beta, , gamma  {Enter}");
+    expect(intents).toContainEqual(["app-chat-library", "setGraphTags", [1, ["alpha", "beta", "gamma"]]]);
+  });
+
+  it("Escape cancels tag editing without sending setGraphTags or closing the dialog", async () => {
+    const { user, intents } = setup();
+    await user.click(screen.getByText("open library"));
+    await chooseRowAction(user, "First chat", "Tag…");
+    await user.type(screen.getByRole("textbox", { name: 'Edit tags for "First chat"' }), "{Escape}");
+    expect(screen.queryByRole("textbox", { name: 'Edit tags for "First chat"' })).toBeNull();
+    expect(intents.some((entry) => entry[1] === "setGraphTags")).toBe(false);
+    expect(screen.getByRole("dialog", { name: "Chat library" })).toBeInTheDocument();
+  });
+
+  it("only concrete workspaces, never All, have settings controls", async () => {
+    const { user } = setup();
+    await user.click(screen.getByText("open library"));
+    await openWorkspaceManager(user);
+    expect(screen.getByRole("button", { name: "Default" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: "Work" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "All workspaces" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "All" })).toBeNull();
+  });
+
+  it("workspace settings open inline with a distinct No default set message", async () => {
+    const { user } = setup();
+    await user.click(screen.getByText("open library"));
+    await openWorkspaceManager(user);
+    await user.click(screen.getByRole("button", { name: "Default" }));
+    expect(screen.getByText("No default set")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Default model for Default" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Chat library" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: /Workspace settings/ })).toBeNull();
+  });
+
+  it("preconfigured workspace default displays the provider and friendly model name", async () => {
+    const { user, push } = setup();
+    act(() => {
+      push({ ...SNAPSHOT, revision: 2, workspaces: [
+        workspace({ defaultModelProvider: "Ollama (Local)", defaultModelId: "mistral" }),
+        workspace({ id: 2, name: "Work" }),
+      ] });
+      push(composerSnapshot(), "app-composer");
+    });
+    await user.click(screen.getByText("open library"));
+    await openWorkspaceManager(user);
+    await user.click(screen.getByRole("button", { name: "Default" }));
+    expect(screen.getByText("Current default: Ollama (Local) / Mistral")).toBeInTheDocument();
+    expect(screen.queryByText("No default set")).toBeNull();
+  });
+
+  it("reclicking workspace settings hides the inline panel", async () => {
+    const { user } = setup();
+    await user.click(screen.getByText("open library"));
+    await openWorkspaceManager(user);
+    await user.click(screen.getByRole("button", { name: "Default" }));
+    expect(screen.getByRole("button", { name: "Default model for Default" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Default" }));
+    expect(screen.queryByRole("button", { name: "Default model for Default" })).toBeNull();
+  });
+
+  it("workspace model selection sends the active composer provider and chosen id", async () => {
+    const { user, intents, push } = setup();
+    act(() => push(composerSnapshot(), "app-composer"));
+    await user.click(screen.getByText("open library"));
+    await openWorkspaceManager(user);
+    await user.click(screen.getByRole("button", { name: "Default" }));
+    await user.click(screen.getByRole("button", { name: "Default model for Default" }));
+    await user.click(within(await screen.findByRole("listbox", { name: "Default model for Default" }))
+      .getByRole("option", { name: "Llama 3" }));
+    expect(intents).toContainEqual(["app-chat-library", "setWorkspaceDefaultModel", [1, "Ollama (Local)", "llama3"]]);
+  });
+
+  it("No workspace default clears BOTH provider and model id", async () => {
+    const { user, intents, push } = setup();
+    act(() => {
+      push({ ...SNAPSHOT, revision: 2, workspaces: [
+        workspace({ defaultModelProvider: "Ollama (Local)", defaultModelId: "llama3" }),
+      ] });
+      push(composerSnapshot(), "app-composer");
+    });
+    await user.click(screen.getByText("open library"));
+    await openWorkspaceManager(user);
+    await user.click(screen.getByRole("button", { name: "Default" }));
+    await user.click(screen.getByRole("button", { name: "Default model for Default" }));
+    await user.click(within(await screen.findByRole("listbox", { name: "Default model for Default" }))
+      .getByRole("option", { name: "No workspace default" }));
+    expect(intents).toContainEqual(["app-chat-library", "setWorkspaceDefaultModel", [1, "", ""]]);
+  });
+
+  it("a newer workspace snapshot updates an already-open settings panel live", async () => {
+    const { user, push } = setup();
+    act(() => push(composerSnapshot(), "app-composer"));
+    await user.click(screen.getByText("open library"));
+    await openWorkspaceManager(user);
+    await user.click(screen.getByRole("button", { name: "Default" }));
+    expect(screen.getByText("No default set")).toBeInTheDocument();
+    act(() => push({ ...SNAPSHOT, revision: 3, workspaces: [
+      workspace({ defaultModelProvider: "Ollama (Local)", defaultModelId: "llama3" }),
+      workspace({ id: 2, name: "Work" }),
+    ] }));
+    expect(screen.getByText("Current default: Ollama (Local) / Llama 3")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Default model for Default" })).toBeInTheDocument();
+  });
+
+  it("empty active-provider catalog shows a placeholder but allows clearing a default", async () => {
+    const { user, push, intents } = setup();
+    const composer = composerSnapshot();
+    act(() => {
+      push({ ...composer, route: { ...composer.route, modelOptions: [] } }, "app-composer");
+      push({ ...SNAPSHOT, revision: 2, workspaces: [
+        workspace({ defaultModelProvider: "Ollama (Local)", defaultModelId: "llama3" }),
+      ] });
+    });
+    await user.click(screen.getByText("open library"));
+    await openWorkspaceManager(user);
+    await user.click(screen.getByRole("button", { name: "Default" }));
+    expect(screen.getByText("No models available for Ollama (Local).")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Default model for Default" }));
+    const listbox = await screen.findByRole("listbox", { name: "Default model for Default" });
+    expect(within(listbox).queryByRole("option", { name: "Llama 3" })).toBeNull();
+    await user.click(within(listbox).getByRole("option", { name: "No workspace default" }));
+    expect(intents).toContainEqual(["app-chat-library", "setWorkspaceDefaultModel", [1, "", ""]]);
+  });
+
+  it("workspace export and import use the selected workspace id and describe the target", async () => {
+    const { user, intents } = setup();
+    await user.click(screen.getByText("open library"));
+    await openWorkspaceManager(user);
+    await user.click(screen.getByRole("button", { name: "Work" }));
+    expect(screen.getByText("Workspace settings for Work. Export or import this workspace.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Export workspace…" }));
+    expect(intents).toContainEqual(["app-chat-library", "exportWorkspace", [2]]);
+    await user.click(screen.getByRole("button", { name: "Import workspace…" }));
+    await waitFor(() => expect(intents).toContainEqual(["app-chat-library", "importWorkspace", [2]]));
+  });
+
+  it("workspace import is transactional and refuses a concurrent second import", async () => {
+    const { user, request, intents } = setup();
+    let finish!: (value: unknown) => void;
+    request.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    await user.click(screen.getByText("open library"));
+    await openWorkspaceManager(user);
+    await user.click(screen.getByRole("button", { name: "Default" }));
+    await user.click(screen.getByRole("button", { name: "Import workspace…" }));
+    expect(intents.filter((item) => item[1] === "importWorkspace")).toHaveLength(1);
+    const button = screen.getByRole("button", { name: "Import workspace…" });
+    expect(button).toBeDisabled();
+    await act(async () => { finish({ imported: true }); });
+    await waitFor(() => expect(button).toBeEnabled());
+  });
+
 });
