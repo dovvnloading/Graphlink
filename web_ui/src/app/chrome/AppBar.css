@@ -1,3 +1,4 @@
+@layer surfaces {
 /* UI-14: shell-specific geometry; control visuals, menus and icons belong to the kit. */
 .app-topbar {
   display: grid;
@@ -89,4 +90,5 @@
 @container appbar (max-width: 820px) {
   .appbar-overflow-trigger { display: inline-flex; }
   .appbar-tier { display: none; }
+}
 }

@@ -1,3 +1,4 @@
+@layer surfaces {
 .cloud-settings { gap: var(--gl-space-4); line-height: var(--gl-leading-sm); }
 .cloud-route, .cloud-section-heading, .cloud-fixed-endpoint {
   display: flex;
@@ -70,4 +71,5 @@
   .settings-dialog .settings-rail-overline { display: none; }
   .settings-dialog .settings-rail-button { width: auto; flex: none; white-space: nowrap; }
   .settings-dialog .settings-page { min-height: 0; padding: var(--gl-space-3); }
+}
 }

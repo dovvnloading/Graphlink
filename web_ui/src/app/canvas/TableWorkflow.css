@@ -1,3 +1,4 @@
+@layer nodes {
 .table-workflow {
   display: grid;
   gap: var(--gl-space-2);
@@ -46,3 +47,4 @@
 .table-workflow .gl-button, .table-workflow .gl-select-trigger,
 .table-workflow .gl-text-area { font-size: var(--gl-text-sm); }
 .table-workflow .gl-select { min-width: 0; }
+}

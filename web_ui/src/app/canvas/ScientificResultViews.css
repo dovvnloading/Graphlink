@@ -1,3 +1,4 @@
+@layer nodes {
 /* Typed results remain legible inside the scrollable, 390px workbench card. */
 .science-result-views, .science-typed-view { display: grid; gap: var(--gl-space-2); min-width: 0; }
 .science-result-views { padding-top: var(--gl-space-1-5); }
@@ -62,3 +63,4 @@
   border-radius: var(--gl-radius-full); background: currentColor;
 }
 .science-volcano-key { flex: none; border-radius: var(--gl-radius-full); }
+}

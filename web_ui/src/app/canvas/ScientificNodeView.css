@@ -1,3 +1,4 @@
+@layer nodes {
 .scientific-node { width: 390px; max-width: none; }
 .scientific-node .science-body {
   display: grid;
@@ -244,3 +245,4 @@
 .science-table th, .science-uncertainty-budget th { background: var(--gl-surface-inset); font-weight: 600; }
 .science-table tr:hover td { background: var(--gl-surface-field); }
 .science-table th, .science-table td { border-bottom: 1px solid var(--gl-surface-border); }
+}

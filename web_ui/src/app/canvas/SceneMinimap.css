@@ -1,3 +1,4 @@
+@layer nodes {
 .scene-minimap-panel.react-flow__panel {
   margin: var(--gl-chrome-inset);
   z-index: var(--gl-z-canvas-hud);
@@ -85,4 +86,5 @@
 .scene-minimap-node.selected {
   stroke: var(--gl-graph-selection);
   stroke-width: 2;
+}
 }

@@ -1,3 +1,4 @@
+@layer surfaces {
 /* UI-15: token-only composer kit surface. Doubled shell specificity overrides
    pre-migration canvas layout rules without altering that shared stylesheet. */
 .composer-dock.composer-dock {
@@ -242,4 +243,5 @@
 @media (max-width: 560px) {
   .composer-dock .composer-rail-end { width: 100%; justify-content: flex-end; }
   .composer-dock .composer-menu-button { max-width: 148px; }
+}
 }

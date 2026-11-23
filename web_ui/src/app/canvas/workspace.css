@@ -10,6 +10,7 @@
 @import "./HarnessNodeView.css";
 @import "./ChatVersionCompareDialog.css";
 
+@layer nodes {
 /* Factor-scaled panning is handled by the wrapper (React Flow's own pan is
    disabled), so the wrapper also owns the grab cursors the library would
    otherwise apply. */
@@ -328,3 +329,4 @@
 /* A selected group remains underneath the cards contained in it. */
 .scene-canvas .react-flow__node-frame.selected { z-index: -1 !important; }
 .scene-canvas .react-flow__node-container.selected { z-index: -2 !important; }
+}
