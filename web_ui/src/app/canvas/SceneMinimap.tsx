@@ -3,6 +3,8 @@ import type { CSSProperties, MouseEvent } from "react";
 import { MiniMap, Panel, useReactFlow, useStore, type MiniMapNodeProps, type ReactFlowState } from "@xyflow/react";
 import type { SceneNodeRow } from "../../lib/bridge-core/generated/scene-state";
 import { motionDuration } from "../reducedMotion";
+import { IconButton } from "../ui/IconButton";
+import { Button } from "../ui/Button";
 import { hiddenGroupMemberIds } from "./collapsedGroups";
 import { minimapMeta, type MinimapNodeMeta } from "./minimapNodeMeta";
 import type { SceneStore } from "./sceneStore";
@@ -147,7 +149,7 @@ export function SceneMinimap({ store }: { store: SceneStore }) {
         style={{ "--map-width": `${size.width}px` } as CSSProperties}
       >
         <div id={mapId} hidden={collapsed} className="scene-minimap-map"
-          title="Click a node to select it. Drag to pan or scroll to zoom.">
+          aria-label="Click a node to select it. Drag to pan or scroll to zoom.">
           {!collapsed && (
             <MiniMap
               pannable zoomable
@@ -162,29 +164,18 @@ export function SceneMinimap({ store }: { store: SceneStore }) {
           )}
         </div>
         <div className="scene-minimap-footer">
-          <button
-            type="button"
-            className="scene-minimap-toggle"
-            aria-label={collapsed ? "Expand minimap" : "Collapse minimap"}
-            aria-expanded={!collapsed}
-            aria-controls={mapId}
-            title={collapsed ? "Expand minimap" : "Collapse minimap"}
+          <span className="scene-minimap-count">{entries.size} {entries.size === 1 ? "node" : "nodes"}</span>
+          <IconButton
+            icon={collapsed ? "chevron-up" : "chevron-down"}
+            label={collapsed ? "Expand minimap" : "Collapse minimap"}
+            size="sm" aria-expanded={!collapsed} aria-controls={mapId}
             onClick={toggleCollapsed}
-          >
-            <span className="scene-minimap-count">{entries.size} {entries.size === 1 ? "node" : "nodes"}</span>
-            <svg aria-hidden="true" viewBox="0 0 16 16" className="scene-minimap-chevron">
-              <path d={collapsed ? "m4 10 4-4 4 4" : "m4 6 4 4 4-4"} />
-            </svg>
-          </button>
+          />
           {waiting.length > 0 && (
-            <button
-              type="button"
-              className="scene-minimap-waiting"
-              title="Go to the first node waiting on you"
-              onClick={() => selectAndCenter(waiting[0].id, waiting[0])}
-            >
+            <Button variant="ghost" size="sm" className="scene-minimap-waiting"
+              onClick={() => selectAndCenter(waiting[0].id, waiting[0])}>
               {waiting.length} waiting
-            </button>
+            </Button>
           )}
         </div>
       </Panel>
