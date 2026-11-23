@@ -1,9 +1,22 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
 import { Dialog, useOverlays } from "../overlays/overlays";
 import type { KnowledgeCitationSource } from "../canvas/ChatCitationChips";
 import { KnowledgeEmbeddingStatus } from "./KnowledgeEmbeddingStatus";
 import { knowledgeSourceLabel } from "../knowledgeSourceLabel";
+import { Button } from "../ui/Button";
+import { EmptyState } from "../ui/EmptyState";
+import { MenuButton, MenuItem } from "../ui/Menu";
+import { TextField } from "../ui/TextField";
+import { Tabs } from "../ui/Tabs";
+import { Badge, StatusPill } from "../ui/Badge";
+import { ProgressBar } from "../ui/ProgressBar";
+import { Spinner } from "../ui/Spinner";
+import { Icon } from "../ui/icons/Icon";
+import type { IconName } from "../ui/icons/registry";
+import { useConfirm } from "../ui/ConfirmDialog";
+import { formatBytes, formatCount } from "../ui/format";
+import "./knowledge-library.css";
 
 /**
  * ADR-017 stage 17.5: the "Knowledge" search panel - a human-driven,
@@ -50,7 +63,7 @@ interface KnowledgeLibraryDocument {
   sizeBytes: number | null;
   chunks: number;
   addedAt: string;
-  status: "indexed";
+  status: "indexed" | "embedding" | "failed";
   canReindex: boolean;
 }
 
@@ -91,9 +104,7 @@ const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_JOB_BYTES = 500 * 1024 * 1024;
 
 function formatSize(value: number | null): string {
-  if (value == null) return "—";
-  if (value < 1024) return `${value} B`;
-  return `${(value / (value < 1024 * 1024 ? 1024 : 1024 * 1024)).toFixed(1)} ${value < 1024 * 1024 ? "KiB" : "MiB"}`;
+  return value === null ? "—" : formatBytes(value);
 }
 
 function formatAdded(value: string): string {
@@ -148,82 +159,77 @@ function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
 }
 
+function knowledgeFileIcon(name: string, type = ""): IconName {
+  const value = (name + " " + type).toLocaleLowerCase();
+  if (/\.(ts|tsx|js|jsx|py|html|css|json|rs|go|sh|yml|yaml|xml)\b/.test(value)) return "file-code";
+  if (/\.(csv|tsv|xls|xlsx|ods)\b/.test(value) || type.includes("spreadsheet")) return "file-table";
+  if (/\.(png|jpe?g|gif|svg|webp|bmp)\b/.test(value) || type.includes("image")) return "file-image";
+  return "document-text";
+}
+
+/** Render literal text, never search-result HTML, so highlighting cannot inject markup. */
+function highlightedSnippet(text: string, term: string): ReactNode {
+  const query = term.trim().toLocaleLowerCase();
+  if (!query) return text;
+  const parts: ReactNode[] = [];
+  const lower = text.toLocaleLowerCase();
+  let from = 0;
+  let index = lower.indexOf(query, from);
+  while (index >= 0) {
+    if (index > from) parts.push(text.slice(from, index));
+    parts.push(<mark key={index}>{text.slice(index, index + query.length)}</mark>);
+    from = index + query.length;
+    index = lower.indexOf(query, from);
+  }
+  if (from < text.length) parts.push(text.slice(from));
+  return parts;
+}
+
 function KnowledgeResultCard({
-  result, onOpenCitation,
+  result, query, onOpenCitation, onOpenDocument,
 }: {
   result: KnowledgeSearchResult;
+  query: string;
   onOpenCitation?: (source: KnowledgeCitationSource) => void;
+  onOpenDocument: () => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const sourceLabel = knowledgeSourceLabel(result.sourceFile ?? result.sourceUri, result.documentTitle);
   const canOpenCitation = Boolean(onOpenCitation && /^kb:[0-9a-f]{20}$/.test(result.citationId ?? "") &&
     Number.isSafeInteger(result.documentId) && Number.isSafeInteger(result.chunkId) &&
     result.offsetStart >= 0 && result.offsetEnd >= result.offsetStart);
-
+  function open() {
+    if (canOpenCitation) {
+      onOpenCitation?.({
+        citationId: result.citationId ?? "", documentId: result.documentId,
+        chunkId: result.chunkId, documentTitle: result.documentTitle,
+        sourceUri: result.sourceUri, sourceFile: result.sourceFile ?? result.sourceUri,
+        section: result.section ?? "Unsectioned", offsetStart: result.offsetStart,
+        offsetEnd: result.offsetEnd, excerpt: result.text, cited: true,
+      });
+    } else onOpenDocument();
+  }
   return (
     <li className="knowledge-result-item">
-      <button
-        type="button"
-        className="knowledge-result-header"
-        aria-expanded={expanded}
-        aria-controls={expanded ? `knowledge-result-body-${result.chunkId}` : undefined}
-        onClick={() => setExpanded((value) => !value)}
-      >
+      <div className="knowledge-result-heading">
+        <Icon name={knowledgeFileIcon(result.documentTitle)} size="md" />
         <span className="knowledge-result-title">{result.documentTitle}</span>
-        {sourceLabel !== result.documentTitle && (
-          <span className="knowledge-result-source">{sourceLabel}</span>
+        {sourceLabel !== result.documentTitle && <span className="knowledge-result-source">{sourceLabel}</span>}
+      </div>
+      <p className="knowledge-result-excerpt">{highlightedSnippet(result.text, query)}</p>
+      <div className="knowledge-result-footer">
+        <Button size="sm" iconStart="document-text" onClick={open}>Open in Document View</Button>
+        {isHttpUrl(result.sourceUri) && (
+          <a className="knowledge-result-open-link" href={result.sourceUri} target="_blank" rel="noreferrer">
+            Open source
+          </a>
         )}
         {(typeof result.rankSignals?.fts5 === "number" || typeof result.rankSignals?.vector === "number") && (
           <span className="knowledge-result-signals" role="group" aria-label="Match signals">
-            {typeof result.rankSignals?.fts5 === "number" && (
-              <span className="knowledge-result-signal" title="FTS5 keyword match rank">
-                Keyword #{result.rankSignals.fts5}
-              </span>
-            )}
-            {typeof result.rankSignals?.vector === "number" && (
-              <span className="knowledge-result-signal" title="Vector semantic match rank">
-                Semantic #{result.rankSignals.vector}
-              </span>
-            )}
+            {typeof result.rankSignals?.fts5 === "number" && <Badge>Keyword #{result.rankSignals.fts5}</Badge>}
+            {typeof result.rankSignals?.vector === "number" && <Badge>Semantic #{result.rankSignals.vector}</Badge>}
           </span>
         )}
-      </button>
-      {expanded && (
-        <div id={`knowledge-result-body-${result.chunkId}`} className="knowledge-result-body">
-          <p className="knowledge-result-excerpt">{result.text}</p>
-          <div className="knowledge-result-footer">
-            <span className="knowledge-result-offset">
-              Offset {result.offsetStart}–{result.offsetEnd}
-            </span>
-            {canOpenCitation && (
-              <button
-                type="button"
-                className="knowledge-search-button"
-                onClick={() => onOpenCitation?.({
-                  citationId: result.citationId ?? "", documentId: result.documentId,
-                  chunkId: result.chunkId, documentTitle: result.documentTitle,
-                  sourceUri: result.sourceUri,
-                  sourceFile: result.sourceFile ?? result.sourceUri,
-                  section: result.section ?? "Unsectioned", offsetStart: result.offsetStart,
-                  offsetEnd: result.offsetEnd, excerpt: result.text, cited: true,
-                })}
-              >
-                Open in Document View
-              </button>
-            )}
-            {isHttpUrl(result.sourceUri) && (
-              <a
-                className="knowledge-result-open-link"
-                href={result.sourceUri}
-                target="_blank"
-                rel="noreferrer"
-              >
-                Open source
-              </a>
-            )}
-          </div>
-        </div>
-      )}
+      </div>
     </li>
   );
 }
@@ -236,6 +242,7 @@ export function KnowledgeSearchDialog({
   onOpenDocumentView?: (content: string, sourceLabel: string, citation?: KnowledgeCitationSource) => void;
 }) {
   const overlays = useOverlays();
+  const confirm = useConfirm();
   const [documents, setDocuments] = useState<KnowledgeLibraryDocument[]>([]);
   const [documentPage, setDocumentPage] = useState(0);
   const documentPageCount = Math.max(1, Math.ceil(documents.length / DOCUMENT_PAGE_SIZE));
@@ -245,16 +252,11 @@ export function KnowledgeSearchDialog({
   const [loadingDocuments, setLoadingDocuments] = useState(true);
   const [libraryError, setLibraryError] = useState<string | null>(null);
   const [documentAction, setDocumentAction] = useState<number | null>(null);
-  const [confirmRemove, setConfirmRemove] = useState<number | null>(null);
-  const confirmRemoveRef = useRef<HTMLButtonElement>(null);
-  const restoreRemoveRef = useRef<number | null>(null);
-  const refreshButtonRef = useRef<HTMLButtonElement>(null);
   const [documentStatus, setDocumentStatus] = useState<string | null>(null);
   const [watchedFolders, setWatchedFolders] = useState<WatchedFolder[]>([]);
   const [loadingWatches, setLoadingWatches] = useState(true);
   const [watchError, setWatchError] = useState<string | null>(null);
   const [watchAction, setWatchAction] = useState<string | null>(null);
-  const [confirmRemoveWatch, setConfirmRemoveWatch] = useState<number | null>(null);
   const latestWatchRequest = useRef(0);
   const [dragging, setDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{ sent: number; total: number } | null>(null);
@@ -262,18 +264,6 @@ export function KnowledgeSearchDialog({
   const abortUploadRef = useRef(false);
   const latestLibraryRequest = useRef(0);
   const completedJobsRef = useRef(new Set<string>());
-
-  // The Remove button unmounts when confirmation appears. Keep keyboard focus
-  // in the same row rather than dropping it on the document body.
-  useEffect(() => {
-    if (confirmRemove !== null) {
-      confirmRemoveRef.current?.focus();
-    } else if (restoreRemoveRef.current !== null) {
-      const id = restoreRemoveRef.current;
-      restoreRemoveRef.current = null;
-      document.querySelector<HTMLButtonElement>(`[data-knowledge-remove="${id}"]`)?.focus();
-    }
-  }, [confirmRemove]);
 
   const refreshDocuments = useCallback(() => {
     const requestId = ++latestLibraryRequest.current;
@@ -354,7 +344,6 @@ export function KnowledgeSearchDialog({
         "knowledge", action, folderId === undefined ? [] : [folderId],
         action === "addWatchedFolder" ? 5 * 60_000 : undefined,
       ) as { cancelled?: boolean };
-      if (action === "removeWatchedFolder") setConfirmRemoveWatch(null);
       if (!result?.cancelled) await refreshWatchedFolders();
     } catch (cause) {
       setWatchError(cause instanceof Error ? cause.message : "Watched folder action failed.");
@@ -378,10 +367,8 @@ export function KnowledgeSearchDialog({
         onOpenDocumentView(result.content ?? "", result.title ?? "Knowledge document");
         overlays.close();
       } else if (action === "removeDocument") {
-        setConfirmRemove(null);
         await refreshDocuments();
         setDocumentStatus("Document removed from this workspace.");
-        refreshButtonRef.current?.focus();
       } else {
         setDocumentStatus("Re-indexing queued.");
       }
@@ -509,342 +496,285 @@ export function KnowledgeSearchDialog({
   // correlation).
   const latestRequestId = useRef(0);
 
-  function runSearch() {
-    const trimmed = query.trim();
-    if (!trimmed || searching) return;
+  const runSearch = useCallback((term: string) => {
+    const trimmed = term.trim();
     const requestId = ++latestRequestId.current;
+    if (!trimmed) {
+      setResults(null);
+      setError(null);
+      setSearching(false);
+      return;
+    }
     setSearching(true);
     setResults(null);
     setError(null);
-    transport
-      .request("knowledge", "search", [trimmed, 10])
+    transport.request("knowledge", "search", [trimmed, 10])
       .then((value) => {
-        if (requestId !== latestRequestId.current) return; // a newer search has since been sent
-        const payload = value as { results: KnowledgeSearchResult[] };
-        setResults(payload.results);
-      })
-      .catch(() => {
         if (requestId !== latestRequestId.current) return;
-        setError("Search failed - see graphlink.log for details.");
+        const payload = value as { results: KnowledgeSearchResult[] };
+        setResults(Array.isArray(payload?.results) ? payload.results : []);
+      })
+      .catch((cause: unknown) => {
+        if (requestId !== latestRequestId.current) return;
+        console.error("[knowledge] Search failed:", cause);
+        setError("Search failed. See graphlink.log for details.");
       })
       .finally(() => {
         if (requestId === latestRequestId.current) setSearching(false);
       });
+  }, [transport]);
+
+  // A short debounce also works for semantic searches whose response can
+  // arrive after the user has already changed the query.
+  useEffect(() => {
+    if (!knowledgeOpen) return;
+    const timeout = window.setTimeout(() => runSearch(query), 250);
+    return () => window.clearTimeout(timeout);
+  }, [knowledgeOpen, query, runSearch]);
+
+  async function removeDocument(doc: KnowledgeLibraryDocument) {
+    const accepted = await confirm({
+      title: "Remove document?",
+      body: "Remove “" + doc.title + "” from the current workspace?",
+      confirmLabel: "Remove document",
+      destructive: true,
+    });
+    if (accepted) await documentIntent(doc.documentId, "removeDocument");
   }
 
+  async function removeWatchedFolder(folder: WatchedFolder) {
+    const accepted = await confirm({
+      title: "Stop watching folder?",
+      body: "Stop syncing “" + knowledgeSourceLabel(folder.path, folder.path) + "”? Indexed documents will be kept.",
+      confirmLabel: "Remove watched folder",
+      destructive: true,
+    });
+    if (accepted) await watchedFolderIntent("removeWatchedFolder", folder.id);
+  }
+
+  const importBusy = picking !== null || uploadProgress !== null || importJobs.some(isActive);
+  const documentActionsBusy = documentAction !== null || importJobs.some(isActive) || uploadProgress !== null;
+
   return (
-    <Dialog name="knowledge" title="Knowledge Library" className="knowledge-search-dialog">
-      <p className="knowledge-library-intro">Documents indexed for the current workspace</p>
-      <div className="knowledge-import-row">
-        <button
-          type="button"
-          className="knowledge-search-button"
-          disabled={picking !== null || uploadProgress !== null || importJobs.some(isActive) || watchAction === "addWatchedFolder:all"}
-          onClick={() => beginImport("files")}
-        >
-          {picking === "files" ? "Choosing files…" : "Add files"}
-        </button>
-        <button
-          type="button"
-          className="knowledge-search-button"
-          disabled={picking !== null || uploadProgress !== null || importJobs.some(isActive) || watchAction === "addWatchedFolder:all"}
-          onClick={() => beginImport("folder")}
-        >
-          {picking === "folder" ? "Choosing folder…" : "Add folder"}
-        </button>
-        <span className="knowledge-import-hint">
-          PDF, DOCX, XLSX, Markdown, text, CSV, JSON, HTML, code ·
-          25 MiB/file; 500 MiB or 10,000 files/job
-        </span>
-      </div>
-      <div
-        className={"knowledge-drop-zone" + (dragging ? " knowledge-drop-active" : "")}
-        role="region"
-        aria-label="Drop files to index"
-        onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
-        onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragging(false); }}
-        onDrop={(event) => {
-          event.preventDefault();
-          setDragging(false);
-          void uploadFiles(Array.from(event.dataTransfer.files));
-        }}
-      >
-        Drag and drop files here to index them in this workspace
-      </div>
-      {uploadProgress && (
-        <div className="knowledge-import-job" aria-label="File upload progress">
-          <div className="knowledge-import-head">
-            <span>Uploading files · {formatSize(uploadProgress.sent)} / {formatSize(uploadProgress.total)}</span>
-            <button type="button" className="knowledge-search-button" onClick={cancelUpload}>Cancel upload</button>
-          </div>
-          <progress aria-label="Bytes uploaded" className="knowledge-import-progress"
-            max={Math.max(uploadProgress.total, 1)} value={uploadProgress.sent} />
+    <Dialog name="knowledge" title="Knowledge library" size="xl" className="knowledge-search-dialog">
+      <section className="knowledge-search-heading" aria-label="Search indexed sources">
+        <div className="knowledge-search-row">
+          <TextField
+            type="search" label="Search the knowledge base" prefixIcon="search" suffix={{ type: "clear" }}
+            placeholder="Search your ingested knowledge base…"
+            value={query}
+            onValueChange={(value) => {
+              ++latestRequestId.current;
+              setQuery(value);
+              setResults(null);
+              setSearching(false);
+              setError(null);
+            }}
+            onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); runSearch(query); } }}
+            autoComplete="off"
+          />
+          <Button iconStart="search" onClick={() => runSearch(query)} disabled={!query.trim()}
+            loading={searching}>Search</Button>
         </div>
-      )}
-      {importError && <p className="knowledge-empty" role="alert">{importError}</p>}
-      {importJobs.map((job) => (
-        <div key={job.jobId} className="knowledge-import-job" aria-label="Knowledge import progress">
-          <div className="knowledge-import-head">
-            <span>
-              {job.kind === "folder" ? "Folder" : "Files"} import: {job.status}
-              {job.cancelRequested && isActive(job) ? " (cancelling…)" : ""}
-            </span>
-            {isActive(job) && (
-              <button
-                type="button"
-                className="knowledge-search-button"
-                onClick={() => cancelImport(job.jobId)}
-                disabled={job.cancelRequested}
-              >
-                Cancel import
-              </button>
+        {searching && <p role="status" className="knowledge-library-muted"><Spinner size={14} decorative /> Searching indexed sources…</p>}
+        {error && <p role="alert" className="knowledge-library-error">{error}</p>}
+        {results !== null && !error && (
+          <div className="knowledge-search-results-wrap">
+            <p role="status" aria-live="polite" className="knowledge-library-status">
+              {results.length === 0 ? "No search results" : formatCount(results.length) + " search result" + (results.length === 1 ? "" : "s")}
+            </p>
+            {results.length > 0 && (
+              <ul className="knowledge-search-results">
+                {results.map((result) => (
+                  <KnowledgeResultCard key={result.chunkId} result={result} query={query}
+                    onOpenCitation={onOpenDocumentView ? (source) => {
+                      onOpenDocumentView("", source.documentTitle, source);
+                      overlays.close();
+                    } : undefined}
+                    onOpenDocument={() => { void documentIntent(result.documentId, "openDocument"); }} />
+                ))}
+              </ul>
             )}
           </div>
-          <progress
-            className="knowledge-import-progress"
-            max={Math.max(job.filesTotal, 1)}
-            value={job.filesProcessed}
-            aria-label="Files processed"
-          />
-          <p className="knowledge-import-stats">
-            {job.filesProcessed}/{job.filesTotal} files · {job.added} added · {job.updated} updated ·{" "}
-            {job.duplicates + job.unchanged} deduplicated · {job.skipped} skipped ·{" "}
-            {job.failedFiles} failed
-          </p>
-          {job.lastFile && <p className="knowledge-import-stats">Last: {job.lastFile}</p>}
-          {job.error && <p className="knowledge-empty" role="alert">{job.error}</p>}
-          {job.warnings.length > 0 && <p className="knowledge-import-stats">{job.warnings[0]}</p>}
-        </div>
-      ))}
-      <KnowledgeEmbeddingStatus transport={transport} open={knowledgeOpen} />
-      <section aria-label="Workspace documents" className="knowledge-library-section">
-        <div className="knowledge-library-heading">
-          <h2 className="knowledge-section-title">Documents ({documents.length})</h2>
-          <button ref={refreshButtonRef} type="button" className="knowledge-search-button"
-            onClick={() => void refreshDocuments()}>Refresh</button>
-        </div>
-        {libraryError && <p role="alert" className="knowledge-empty">{libraryError}</p>}
-        {documentStatus && <p role="status" className="knowledge-empty">{documentStatus}</p>}
-        {loadingDocuments ? <p role="status" className="knowledge-empty">Loading documents…</p> : documents.length === 0 ? (
-          <p className="knowledge-empty">No documents yet. Add files or a folder to start indexing.</p>
-        ) : (
-          <>
-          <div className="knowledge-library-table-scroll">
-            <table className="knowledge-library-table">
-              <thead><tr>
-                <th scope="col">Title</th><th scope="col">Type</th><th scope="col">Size</th>
-                <th scope="col">Chunks</th><th scope="col">Added</th>
-                <th scope="col">Status</th><th scope="col">Actions</th>
-              </tr></thead>
-              <tbody>
-                {visibleDocuments.map((doc) => (
-                  <tr key={doc.documentId}>
-                    <td className="knowledge-library-title" title={knowledgeSourceLabel(doc.sourceUri, doc.title)}>{doc.title}</td>
-                    <td>{formatType(doc)}</td><td>{formatSize(doc.sizeBytes)}</td>
-                    <td>{doc.chunks}</td><td>{formatAdded(doc.addedAt)}</td>
-                    <td>{doc.status === "indexed" ? "Indexed" : doc.status}</td>
-                    <td>
-                      <div className="knowledge-library-actions">
-                        <button type="button" className="knowledge-search-button"
-                          disabled={documentAction !== null}
-                          aria-label={`Open ${doc.title} in Document View`}
-                          onClick={() => void documentIntent(doc.documentId, "openDocument")}>Open</button>
-                        <button type="button" className="knowledge-search-button"
-                          disabled={!doc.canReindex || documentAction !== null || importJobs.some(isActive) || uploadProgress !== null}
-                          title={doc.canReindex ? "Re-read the indexed source files" : "No local file source available"}
-                          aria-label={`Re-index ${doc.title}`}
-                          onClick={() => void documentIntent(doc.documentId, "reindexDocument")}>Re-index</button>
-                        {confirmRemove === doc.documentId ? (
-                          <>
-                            <button ref={confirmRemoveRef} type="button" className="knowledge-search-button"
-                              disabled={documentAction !== null || importJobs.some(isActive)}
-                              aria-label={`Confirm remove ${doc.title}`}
-                              onClick={() => void documentIntent(doc.documentId, "removeDocument")}>
-                              Confirm remove
-                            </button>
-                            <button type="button" className="knowledge-search-button"
-                              aria-label={`Keep ${doc.title}`}
-                              onClick={() => { restoreRemoveRef.current = doc.documentId; setConfirmRemove(null); }}>
-                              Keep
-                            </button>
-                          </>
-                        ) : (
-                          <button type="button" className="knowledge-search-button"
-                            disabled={documentAction !== null || importJobs.some(isActive) || uploadProgress !== null}
-                            aria-label={`Remove ${doc.title}`}
-                            data-knowledge-remove={doc.documentId}
-                            onClick={() => setConfirmRemove(doc.documentId)}>Remove</button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {documents.length > DOCUMENT_PAGE_SIZE && (
-            <nav aria-label="Document pages" className="knowledge-library-pages">
-              <button type="button" className="knowledge-search-button"
-                disabled={currentDocumentPage === 0}
-                onClick={() => setDocumentPage(currentDocumentPage - 1)}>Previous documents</button>
-              <span className="knowledge-library-page-count" role="status" aria-live="polite" aria-atomic="true">
-                Showing {firstDocument + 1}–{Math.min(firstDocument + DOCUMENT_PAGE_SIZE, documents.length)} of {documents.length}
-                {" "}· Page {currentDocumentPage + 1} of {documentPageCount}
-              </span>
-              <button type="button" className="knowledge-search-button"
-                disabled={currentDocumentPage >= documentPageCount - 1}
-                onClick={() => setDocumentPage(currentDocumentPage + 1)}>Next documents</button>
-            </nav>
-          )}
-          </>
         )}
       </section>
-      <section aria-label="Watched folders" className="knowledge-library-section">
-        <div className="knowledge-library-heading">
-          <h2 className="knowledge-section-title">Watched folders ({watchedFolders.length})</h2>
-          <div className="knowledge-library-actions">
-            <button type="button" className="knowledge-search-button"
-              disabled={watchAction !== null || picking !== null || uploadProgress !== null}
-              onClick={() => void watchedFolderIntent("addWatchedFolder")}>
-              {watchAction === "addWatchedFolder:all" ? "Choosing watched folder…" : "Add watched folder"}
-            </button>
-            <button type="button" className="knowledge-search-button"
-              disabled={watchAction !== null || watchedFolders.length === 0 || watchedFolders.every(isWatchSyncing)}
-              onClick={() => void watchedFolderIntent("syncWatchedFolders")}>Sync all now</button>
-            <button type="button" className="knowledge-search-button"
-              onClick={() => void refreshWatchedFolders()}>Refresh watched folders</button>
-          </div>
-        </div>
-        <p className="knowledge-library-intro">
-          Watched folders sync automatically about every 10 minutes. Removing a watch keeps indexed documents.
-        </p>
-        {watchError && <p role="alert" className="knowledge-watch-error">{watchError}</p>}
-        {loadingWatches ? <p role="status" className="knowledge-empty">Loading watched folders…</p> :
-          watchedFolders.length === 0 ? (
-            <p className="knowledge-empty">No watched folders yet. Add one to keep its files indexed.</p>
-          ) : (
-            <div className="knowledge-library-table-scroll">
-              <table className="knowledge-library-table">
-                <thead><tr>
-                  <th scope="col">Folder</th><th scope="col">Files</th>
-                  <th scope="col">Last successful sync</th><th scope="col">Status</th>
-                  <th scope="col">Actions</th>
-                </tr></thead>
-                <tbody>
-                  {watchedFolders.map((folder) => (
-                    <tr key={folder.id}>
-                      <td className="knowledge-library-title knowledge-watch-path" title={folder.path}>
-                        {folder.path}
-                      </td>
-                      <td>
-                        {folder.fileCount} indexed
-                        {folder.lastJob && (
-                          <p className="knowledge-import-stats">
-                            {folder.lastJob.filesProcessed}/{folder.lastJob.filesTotal} scanned ·{" "}
-                            {folder.lastJob.added} added · {folder.lastJob.updated} updated ·{" "}
-                            {folder.lastJob.removed} removed · {folder.lastJob.skipped} skipped ·{" "}
-                            {folder.lastJob.failedFiles} failed
-                          </p>
-                        )}
-                      </td>
-                      <td>{folder.lastSyncAt ? (
-                        <time dateTime={folder.lastSyncAt}>{formatLastSync(folder.lastSyncAt)}</time>
-                      ) : "Never"}</td>
-                      <td>
-                        {folder.syncStatus === "idle" ? "Idle" :
-                          folder.syncStatus.charAt(0).toUpperCase() + folder.syncStatus.slice(1)}
-                        {(folder.lastError || (folder.syncStatus === "failed" && folder.lastJob?.error)) && (
-                          <p role="alert" className="knowledge-watch-error">
-                            Last error: {folder.lastError || folder.lastJob?.error}
-                          </p>
-                        )}
-                      </td>
-                      <td>
-                        <div className="knowledge-library-actions">
-                          <button type="button" className="knowledge-search-button"
-                            aria-label={`Sync ${folder.path} now`}
-                            disabled={watchAction !== null || isWatchSyncing(folder)}
-                            onClick={() => void watchedFolderIntent("syncWatchedFolders", folder.id)}>
-                            Sync now
-                          </button>
-                          {confirmRemoveWatch === folder.id ? (
-                            <>
-                              <button type="button" className="knowledge-search-button"
-                                aria-label={`Confirm remove watched folder ${folder.path}`}
-                                disabled={watchAction !== null}
-                                onClick={() => void watchedFolderIntent("removeWatchedFolder", folder.id)}>
-                                Confirm remove
-                              </button>
-                              <button type="button" className="knowledge-search-button"
-                                aria-label={`Keep watching ${folder.path}`}
-                                disabled={watchAction !== null}
-                                onClick={() => setConfirmRemoveWatch(null)}>Keep</button>
-                            </>
-                          ) : (
-                            <button type="button" className="knowledge-search-button"
-                              aria-label={`Remove watched folder ${folder.path}`}
-                              title="Stop syncing this folder without removing indexed documents"
-                              disabled={watchAction !== null}
-                              onClick={() => setConfirmRemoveWatch(folder.id)}>Remove</button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-      </section>
-      <h2 className="knowledge-section-title">Search indexed sources</h2>
-      <div className="knowledge-search-row">
-        <input
-          type="text"
-          className="knowledge-search-input"
-          aria-label="Search the knowledge base"
-          placeholder="Search your ingested knowledge base…"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") runSearch();
-          }}
-        />
-        <button
-          type="button"
-          className="knowledge-search-button"
-          onClick={runSearch}
-          disabled={searching || !query.trim()}
-        >
-          {searching ? "Searching…" : "Search"}
-        </button>
-      </div>
-
-      {searching && <p className="knowledge-empty" role="status">Searching indexed sources…</p>}
-
-      {error && (
-        <p className="knowledge-empty" role="alert">
-          {error}
-        </p>
-      )}
-
-      {results != null && !error && (
-        <>
-          <div role="status" aria-live="polite" aria-atomic="true">
-            <h2 className="knowledge-section-title">
-              {results.length === 0 ? "No search results" : `${results.length} search result${results.length === 1 ? "" : "s"}`}
-            </h2>
-          </div>
-          <ul className="knowledge-result-list">
-            {results.map((result) => (
-              <KnowledgeResultCard key={result.chunkId} result={result}
-                onOpenCitation={onOpenDocumentView ? (source) => {
-                  onOpenDocumentView("", source.documentTitle, source);
-                  overlays.close();
-                } : undefined} />
-            ))}
-          </ul>
-        </>
-      )}
+      <Tabs label="Knowledge library sections" defaultValue="documents" items={[
+        {
+          id: "documents", label: "Documents (" + documents.length + ")",
+          content: (
+            <section className="knowledge-library-panel" aria-label="Workspace documents">
+              <div className="knowledge-library-toolbar">
+                <Button variant="primary" iconStart="plus"
+                  disabled={importBusy || watchAction === "addWatchedFolder:all"}
+                  loading={picking === "files"} onClick={() => beginImport("files")}>Add files</Button>
+                <Button iconStart="folder" disabled={importBusy || watchAction === "addWatchedFolder:all"}
+                  loading={picking === "folder"} onClick={() => beginImport("folder")}>Add folder</Button>
+                <Button iconStart="refresh" size="sm" onClick={() => void refreshDocuments()}>Refresh</Button>
+              </div>
+              <p className="knowledge-import-hint">
+                PDF, DOCX, XLSX, Markdown, text, CSV, JSON, HTML and code · 25 MB per file, 500 MB per job
+              </p>
+              <div className={"knowledge-drop-zone" + (dragging ? " knowledge-drop-zone-active" : "")}
+                role="region" aria-label="Drop files to index"
+                onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+                onDragLeave={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragging(false);
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  setDragging(false);
+                  void uploadFiles(Array.from(event.dataTransfer.files));
+                }}>
+                {dragging ? (
+                  <div className="knowledge-drop-overlay">
+                    <div className="knowledge-drop-overlay-content"><Icon name="upload" /> Drop files to index</div>
+                  </div>
+                ) : documents.length === 0 && !loadingDocuments ? (
+                  <EmptyState icon="upload" title="No documents yet"
+                    body="Drag files here or choose Add files to index sources in this workspace." />
+                ) : (
+                  <div className="knowledge-drop-placeholder">Drop files here to add them to this workspace.</div>
+                )}
+              </div>
+              {uploadProgress && (
+                <div className="knowledge-import-job" aria-label="File upload progress">
+                  <div className="knowledge-import-head">
+                    <span>Uploading files · {formatSize(uploadProgress.sent)} / {formatSize(uploadProgress.total)}</span>
+                    <Button size="sm" onClick={cancelUpload}>Cancel upload</Button>
+                  </div>
+                  <ProgressBar label="Bytes uploaded" max={Math.max(uploadProgress.total, 1)} value={uploadProgress.sent} />
+                </div>
+              )}
+              {importError && <p role="alert" className="knowledge-library-error">{importError}</p>}
+              {importJobs.map((job) => (
+                <div key={job.jobId} className="knowledge-import-job" aria-label="Knowledge import progress">
+                  <div className="knowledge-import-head">
+                    <span>{job.kind === "folder" ? "Folder" : "Files"} import: {job.status}{job.cancelRequested && isActive(job) ? " (cancelling…)" : ""}</span>
+                    {isActive(job) && <Button size="sm" disabled={job.cancelRequested}
+                      onClick={() => cancelImport(job.jobId)}>Cancel import</Button>}
+                  </div>
+                  <ProgressBar label="Files processed" max={Math.max(job.filesTotal, 1)} value={job.filesProcessed} />
+                  <p className="knowledge-import-stats">
+                    {job.filesProcessed}/{job.filesTotal} files · {job.added} added · {job.updated} updated ·
+                    {" "}{job.duplicates + job.unchanged} deduplicated · {job.skipped} skipped · {job.failedFiles} failed
+                  </p>
+                  {job.lastFile && <p className="knowledge-import-stats">Last: {knowledgeSourceLabel(job.lastFile)}</p>}
+                  {job.error && <p role="alert" className="knowledge-library-error">{job.error}</p>}
+                  {job.warnings.length > 0 && <p className="knowledge-import-stats">{job.warnings[0]}</p>}
+                </div>
+              ))}
+              {libraryError && <p role="alert" className="knowledge-library-error">{libraryError}</p>}
+              {documentStatus && <p role="status" className="knowledge-library-status">{documentStatus}</p>}
+              {loadingDocuments ? <p role="status" className="knowledge-library-muted">Loading documents…</p> :
+                documents.length > 0 && (
+                <>
+                  <ul className="knowledge-library-list">
+                    {visibleDocuments.map((doc) => (
+                      <li key={doc.documentId} className="knowledge-library-row">
+                        <Icon name={knowledgeFileIcon(doc.title, doc.type)} size="lg" />
+                        <span className="knowledge-library-copy">
+                          <span className="knowledge-library-title">{doc.title}</span>
+                          <span className="knowledge-library-subtitle">
+                            {formatType(doc)} · {formatSize(doc.sizeBytes)} · {formatCount(doc.chunks)} chunks · Added {formatAdded(doc.addedAt)}
+                          </span>
+                        </span>
+                        <span className="knowledge-library-row-actions">
+                          <StatusPill status={doc.status === "indexed" ? "Done" : doc.status === "embedding" ? "Running" : "Failed"} />
+                          <span className="knowledge-library-status">
+                            {doc.status === "indexed" ? "Indexed" : doc.status === "embedding" ? "Embedding" : "Failed"}
+                          </span>
+                          <MenuButton label="Actions" menuLabel={"Actions for " + doc.title}
+                            disabled={documentAction !== null}>
+                            <MenuItem icon="document-text" label="Open in Document View"
+                              onSelect={() => void documentIntent(doc.documentId, "openDocument")} />
+                            <MenuItem icon="refresh" label="Re-index"
+                              disabled={!doc.canReindex || documentActionsBusy}
+                              onSelect={() => void documentIntent(doc.documentId, "reindexDocument")} />
+                            <MenuItem label="Remove…" destructive disabled={documentActionsBusy}
+                              onSelect={() => { void removeDocument(doc); }} />
+                          </MenuButton>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  {documents.length > DOCUMENT_PAGE_SIZE && (
+                    <nav aria-label="Document pages" className="knowledge-library-pages">
+                      <Button size="sm" disabled={currentDocumentPage === 0}
+                        onClick={() => setDocumentPage(currentDocumentPage - 1)}>Previous documents</Button>
+                      <span role="status" className="knowledge-library-muted">
+                        Showing {firstDocument + 1}–{Math.min(firstDocument + DOCUMENT_PAGE_SIZE, documents.length)} of {documents.length}
+                        {" "}· Page {currentDocumentPage + 1} of {documentPageCount}
+                      </span>
+                      <Button size="sm" disabled={currentDocumentPage >= documentPageCount - 1}
+                        onClick={() => setDocumentPage(currentDocumentPage + 1)}>Next documents</Button>
+                    </nav>
+                  )}
+                </>
+              )}
+            </section>
+          ),
+        },
+        {
+          id: "watches", label: "Watched folders (" + watchedFolders.length + ")",
+          content: (
+            <section className="knowledge-library-panel" aria-label="Watched folders">
+              <div className="knowledge-library-toolbar">
+                <Button variant="primary" iconStart="folder" disabled={watchAction !== null || importBusy}
+                  onClick={() => void watchedFolderIntent("addWatchedFolder")}>Add watched folder</Button>
+                <Button iconStart="refresh"
+                  disabled={watchAction !== null || watchedFolders.length === 0 || watchedFolders.every(isWatchSyncing)}
+                  onClick={() => void watchedFolderIntent("syncWatchedFolders")}>Sync all now</Button>
+                <Button size="sm" onClick={() => void refreshWatchedFolders()}>Refresh watched folders</Button>
+              </div>
+              <p className="knowledge-library-muted">
+                Watched folders sync automatically about every 10 minutes. Removing a watch keeps indexed documents.
+              </p>
+              {watchError && <p role="alert" className="knowledge-library-error">{watchError}</p>}
+              {loadingWatches ? <p role="status" className="knowledge-library-muted">Loading watched folders…</p> :
+                watchedFolders.length === 0 ? (
+                  <EmptyState icon="folder" title="No watched folders yet"
+                    body="Add a watched folder to keep local files indexed automatically." />
+                ) : (
+                  <ul className="knowledge-library-list">
+                    {watchedFolders.map((folder) => (
+                      <li key={folder.id} className="knowledge-library-row">
+                        <Icon name="folder" size="lg" />
+                        <span className="knowledge-library-copy">
+                          <span className="knowledge-library-title">{folder.path}</span>
+                          <span className="knowledge-library-subtitle">
+                            {formatCount(folder.fileCount)} indexed · Last sync: {formatLastSync(folder.lastSyncAt)}
+                          </span>
+                          {folder.lastJob && <span className="knowledge-import-stats">
+                            {folder.lastJob.filesProcessed}/{folder.lastJob.filesTotal} scanned · {folder.lastJob.added} added ·
+                            {" "}{folder.lastJob.updated} updated · {folder.lastJob.removed} removed · {folder.lastJob.failedFiles} failed
+                          </span>}
+                          {(folder.lastError || folder.lastJob?.error) &&
+                            <span role="alert" className="knowledge-library-error">
+                              {folder.lastError || folder.lastJob?.error}
+                            </span>}
+                        </span>
+                        <span className="knowledge-library-row-actions">
+                          <StatusPill status={isWatchSyncing(folder) ? "Running" : folder.syncStatus === "failed" ? "Failed" : "Done"} />
+                          <MenuButton label="Actions" menuLabel={"Actions for " + folder.path} disabled={watchAction !== null}>
+                            <MenuItem label="Sync now" icon="refresh" disabled={isWatchSyncing(folder)}
+                              onSelect={() => { void watchedFolderIntent("syncWatchedFolders", folder.id); }} />
+                            <MenuItem label="Remove watched folder…" destructive
+                              onSelect={() => { void removeWatchedFolder(folder); }} />
+                          </MenuButton>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+            </section>
+          ),
+        },
+        {
+          id: "embeddings", label: "Embeddings",
+          content: <KnowledgeEmbeddingStatus transport={transport} open={knowledgeOpen}
+            onSetUpEmbeddings={() => overlays.open("settings", "dialog")} />,
+        },
+      ]} />
     </Dialog>
   );
 }
