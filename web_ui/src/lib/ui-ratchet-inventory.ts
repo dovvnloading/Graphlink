@@ -17,10 +17,6 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
   readonly rule: RatchetRule;
   readonly count: number;
 }> = [
-  { file: "app/App.tsx", rule: "R2", count: 1 },
-
-  { file: "app/App.tsx", rule: "R8", count: 1 },
-
   { file: "app/canvas/AgentWorkspaceBrowser.tsx", rule: "R1", count: 2 },
 
   { file: "app/canvas/AgentWorkspaceBrowser.tsx", rule: "R8", count: 3 },
@@ -284,10 +280,6 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
   { file: "app/canvas/workspace.css", rule: "R14", count: 31 },
 
   { file: "app/chrome/AboutDialog.tsx", rule: "R8", count: 1 },
-
-  { file: "app/chrome/AppBar.tsx", rule: "R8", count: 3 },
-
-  { file: "app/chrome/AppBarIcon.tsx", rule: "R2", count: 18 },
 
   { file: "app/chrome/BuilderLaunchDialog.tsx", rule: "R5", count: 1 },
 

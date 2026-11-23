@@ -30,7 +30,7 @@
   pointer-events: none;
   animation: gl-toast-exit var(--gl-motion-fast) var(--gl-ease-exit) both;
 }
-.gl-toast-main { display: grid; gap: var(--gl-space-2); flex: 1; min-width: 0; }
+.gl-toast-main { display: grid; justify-items: start; gap: var(--gl-space-2); flex: 1; min-width: 0; }
 .gl-toast-title { overflow-wrap: anywhere; font-weight: var(--gl-weight-semibold); }
 .gl-toast-details { display: flex; gap: var(--gl-space-2); align-items: flex-start; }
 .gl-toast-details pre {
