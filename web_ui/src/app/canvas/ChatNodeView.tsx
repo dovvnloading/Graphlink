@@ -860,7 +860,7 @@ export const ChatNodeView = memo(function ChatNodeView({
             {!collapsed && (
               <span className="chat-node-quick-actions">
                 <IconButton size="sm" className="chat-node-quick-action nodrag"
-                  icon={copied ? "check" : "copy"} label="Copy text" onClick={onQuickCopy} />
+                  icon={copied ? "check" : "copy"} label={copied ? "Copied" : "Copy text"} onClick={onQuickCopy} />
                 <IconButton size="sm" className="chat-node-quick-action nodrag"
                   icon="branch" label="Branch from here" onClick={data.onBranchFromHere} />
                 {canRerunFromHere && data.onRerunFromHere && (
@@ -869,7 +869,7 @@ export const ChatNodeView = memo(function ChatNodeView({
                     disabled={!!data.pendingRequestId} onClick={data.onRerunFromHere} />
                 )}
                 <IconButton size="sm" className="chat-node-quick-action nodrag"
-                  icon="document-text" label="Open Document View" onClick={data.onOpenDocumentView} />
+                  icon="document-text" label="Open in Document View" onClick={data.onOpenDocumentView} />
               </span>
             )}
             <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
@@ -1040,8 +1040,7 @@ export const ChatNodeView = memo(function ChatNodeView({
           {hasUsage && (
             <Tooltip label={`Prompt: ${data.promptTokens ?? "?"} · Completion: ${data.completionTokens ?? "?"}`}>
               <span className="chat-node-usage-badge">
-                {data.estimatedCostUsd != null ? `$${data.estimatedCostUsd.toFixed(4)}`
-                  : `${formatTokens(data.promptTokens ?? 0)} / ${formatTokens(data.completionTokens ?? 0)} tokens`}
+                {`${data.promptTokens == null ? "?" : formatTokens(data.promptTokens)}→${data.completionTokens == null ? "?" : formatTokens(data.completionTokens)}${data.estimatedCostUsd != null ? ` · ${data.estimatedCostUsd.toFixed(4)}` : ""}`}
               </span>
             </Tooltip>
           )}
