@@ -781,8 +781,7 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
               ? <Icon name="status-approval" size="sm" /> : <Spinner size={12} decorative />}
             <span>{statusLabel(data)}</span>
           </span>
-        ) 
-          : data.harnessStatus === "done" ? <StatusPill status="Done" />
+        ) : data.harnessStatus === "done" ? <StatusPill status="Done" />
           : data.harnessStatus === "failed" ? <StatusPill status="Failed" />
           : data.harnessAwaitingApproval ? <StatusPill status="Waiting for approval" />
           : <Badge>{statusLabel(data)}</Badge>}
