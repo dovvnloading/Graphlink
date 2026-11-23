@@ -91,7 +91,7 @@ describe("analysis interactions on numerical charts", () => {
     expect(screen.getByRole("button", { name: "Reset view" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Reset view" }));
     expect(svg.querySelector(".chart-scientific-point circle")?.getAttribute("cx")).toBe(initialX);
-    expect(screen.queryByRole("button", { name: "Reset view" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Reset view" })).toBeDisabled();
   });
 
   it("supports keyboard pan, zoom, reset, and cursor movement without a mouse", () => {
@@ -103,7 +103,7 @@ describe("analysis interactions on numerical charts", () => {
     fireEvent.keyDown(svg, { key: "ArrowUp", shiftKey: true });
     expect(screen.getByRole("status")).toHaveTextContent("mg/L");
     fireEvent.keyDown(svg, { key: "Home" });
-    expect(screen.queryByRole("button", { name: "Reset view" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Reset view" })).toBeDisabled();
   });
 
   it("saves a label, an arrow and shaded x/y regions using keyboard-accessible forms", async () => {

@@ -290,7 +290,7 @@ export function ChartAnalysisPane({
         <div className="chart-analysis-toolbar-row">
           <IconButton icon="settings" size="sm" label="Chart tools" shortcut="Ctrl+Wheel"
             aria-expanded={toolsOpen} aria-controls={toolsId} onClick={() => setToolsOpen(!toolsOpen)} />
-          {view && <IconButton icon="fit-view" size="sm" label="Reset view" shortcut="Home" onClick={() => setView(null)} />}
+          <IconButton icon="fit-view" size="sm" label="Reset view" shortcut="Home" disabled={!view} onClick={() => setView(null)} />
         </div>
         {toolsOpen && (
           <div id={toolsId} role="group" aria-label="Chart analysis tools" className="chart-analysis-tools-panel">
