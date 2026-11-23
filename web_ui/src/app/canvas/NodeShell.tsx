@@ -45,7 +45,7 @@ const NODE_KIND_ICONS: readonly [string, IconName][] = [
   ["frame-node", "node-frame"],
 ];
 
-export function nodeKindIcon(kindClassName: string): IconName {
+function nodeKindIcon(kindClassName: string): IconName {
   return NODE_KIND_ICONS.find(([className]) => kindClassName.startsWith(className))?.[1] ?? "node-placeholder";
 }
 
