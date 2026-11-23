@@ -55,11 +55,11 @@ NODE_GAP_Y = 70.0
 # than the in-tree gaps so separate conversations read as separate islands.
 COMPONENT_GAP = 200.0
 
-# Fallback footprints per kind, used only until the frontend reports the
-# node's real rendered size (reportNodeSizes -> measured_sizes). Widths
-# track the fixed CSS widths where one exists (.chat-node is 420px, etc.);
-# heights are typical-render estimates - placement only needs them to be
-# in the right ballpark, and the next report replaces them with truth.
+# Fallback footprints per kind, used until the frontend reports the rendered
+# size (reportNodeSizes -> measured_sizes). Widths track fixed CSS widths
+# where one exists (.chat-node is 420px, etc.); heights are estimates.
+# Scientific workbenches are an exception: their fallback remains a lower
+# bound because their scrolling result body can expand after measurement.
 KIND_FALLBACK_FOOTPRINTS: dict[str, tuple[float, float]] = {
     "chat": (422.0, 360.0),
     "conversation": (440.0, 420.0),
@@ -78,10 +78,13 @@ KIND_FALLBACK_FOOTPRINTS: dict[str, tuple[float, float]] = {
     "harness": (440.0, 420.0),
     "chart": (600.0, 440.0),
     "placeholder": (220.0, 120.0),
-    # Scientific Workbench packs register "<pack plugin>.workbench"; the card
-    # is 390px wide (ScientificNodeView.css) with a 550px scrolling body.
+    # A non-scientific plugin may also register a local "workbench" kind.
+    # Preserve its original fallback; only science_* workbenches use 640px.
     "workbench": (392.0, 612.0),
 }
+# ScientificNodeView.css: 390px card, scrolling body capped at 550px,
+# plus header and padding. Leave headroom for borders and font scaling.
+SCIENTIFIC_WORKBENCH_MIN_FOOTPRINT = (392.0, 640.0)
 DEFAULT_FALLBACK_FOOTPRINT = (360.0, 240.0)
 
 
@@ -125,7 +128,8 @@ class LayoutOps(SceneDocumentParts):
     def node_footprint(self, node: SceneNode) -> tuple[float, float]:
         """One node's (width, height) for placement purposes: measured ->
         intrinsic -> per-kind fallback. Non-positive values from any source
-        fall through, same posture as groups.py's _member_footprint."""
+        fall through. Scientific workbenches keep a full-card minimum so
+        a stale compact measurement cannot permit a new-node overlap."""
         if node.kind in ("frame", "container"):
             if node.is_collapsed:
                 # A stale expanded measurement must not enlarge a pill.
@@ -156,11 +160,21 @@ class LayoutOps(SceneDocumentParts):
                 fw = 350.0  # Fixed card width in TableWorkflow.css, until measured.
             width = width if (width and width > 0) else fw
             height = height if (height and height > 0) else fh
+        if node.kind.startswith("science_") and node.kind.endswith(".workbench"):
+            # A run can grow the result table after the last (debounced)
+            # DOM measurement. Fit All/LOD and the focused editor can also
+            # report a compact body that later expands. Reserve the CSS-
+            # bounded full card for future spawns, while retaining any
+            # measured dimension that is larger than that minimum.
+            fw, fh = SCIENTIFIC_WORKBENCH_MIN_FOOTPRINT
+            width, height = max(width, fw), max(height, fh)
         return float(width), float(height)
 
     def kind_fallback_footprint(self, kind: str) -> tuple[float, float]:
         """The pre-creation footprint estimate for a node that does not
         exist yet (place_child sizes the child before add_*_node runs)."""
+        if kind.startswith("science_") and kind.endswith(".workbench"):
+            return SCIENTIFIC_WORKBENCH_MIN_FOOTPRINT
         return _kind_fallback(kind)
 
     def _placement_obstacles(

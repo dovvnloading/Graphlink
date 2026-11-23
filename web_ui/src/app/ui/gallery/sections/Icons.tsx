@@ -9,6 +9,7 @@ const sizes: readonly { size: IconSize; pixels: number }[] = [
   { size: "lg", pixels: 20 },
   { size: "2xl", pixels: 32 },
 ];
+const defaultSizes = sizes.filter(({ size }) => size === "md");
 
 const confusableGroups: readonly (readonly IconName[])[] = [
   ["refresh", "rerun", "history"],
@@ -32,6 +33,7 @@ function Keylines() {
 
 function Icons() {
   const [showKeylines, setShowKeylines] = useState(false);
+  const [showAllSizes, setShowAllSizes] = useState(false);
 
   return (
     <div className="gl-icon-gallery">
@@ -44,8 +46,17 @@ function Icons() {
         >
           {showKeylines ? "Hide keylines" : "Show keylines"}
         </button>
+        <button
+          type="button"
+          className={["gl-icon-gallery-toggle", showAllSizes && "gl-icon-gallery-toggle-active"].filter(Boolean).join(" ")}
+          aria-pressed={showAllSizes}
+          onClick={() => setShowAllSizes((current) => !current)}
+        >
+          {showAllSizes ? "Hide extra sizes" : "Show all sizes"}
+        </button>
         <p className="gl-icon-gallery-note">
-          Review each glyph at 12, 16, 20 and 32 px. Keylines appear behind the 64 px previews.
+          Review each glyph at 16 px and in a 64 px preview. Show all sizes to compare 12, 16, 20 and 32 px.
+          Keylines appear behind the 64 px previews.
         </p>
       </div>
 
@@ -58,7 +69,7 @@ function Icons() {
               <Icon name={name} size="2xl" className="gl-icon-gallery-large" />
             </div>
             <div className="gl-icon-gallery-sizes">
-              {sizes.map(({ size, pixels }) => (
+              {(showAllSizes ? sizes : defaultSizes).map(({ size, pixels }) => (
                 <div className="gl-icon-gallery-size" key={size}>
                   <Icon name={name} size={size} />
                   <span className="gl-icon-gallery-size-label">{pixels} px</span>
