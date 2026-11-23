@@ -91,7 +91,7 @@ describe("ChatLibraryDialog on the kit", () => {
     const { user, resubscribes } = setup();
     await user.click(screen.getByText("open library"));
     expect(screen.getByRole("dialog", { name: "Chat library" })).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "Search chats" })).toBeInTheDocument();
+    expect(screen.getByRole("searchbox", { name: "Search chats" })).toBeInTheDocument();
     expect(screen.getByRole("radiogroup", { name: "Filter chats" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Workspace" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Today" })).toBeInTheDocument();
@@ -119,7 +119,7 @@ describe("ChatLibraryDialog on the kit", () => {
   it("filters by text, by starred/archived status, and clears the query", async () => {
     const { user } = setup();
     await user.click(screen.getByText("open library"));
-    await user.type(screen.getByRole("textbox", { name: "Search chats" }), "Another");
+    await user.type(screen.getByRole("searchbox", { name: "Search chats" }), "Another");
     expect(screen.getByText("Second chat")).toBeInTheDocument();
     expect(screen.queryByText("First chat")).toBeNull();
     await user.click(screen.getByRole("button", { name: "Clear Search chats" }));
@@ -133,7 +133,7 @@ describe("ChatLibraryDialog on the kit", () => {
   it("shows distinct kit EmptyStates for an empty library and an empty result", async () => {
     const { user, push } = setup();
     await user.click(screen.getByText("open library"));
-    await user.type(screen.getByRole("textbox", { name: "Search chats" }), "no match");
+    await user.type(screen.getByRole("searchbox", { name: "Search chats" }), "no match");
     expect(screen.getByText("No matching chats")).toBeInTheDocument();
     act(() => push({ ...SNAPSHOT, revision: 2, rows: [] }));
     expect(screen.getByText("No saved chats yet")).toBeInTheDocument();
