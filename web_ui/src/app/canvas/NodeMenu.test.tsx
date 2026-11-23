@@ -124,9 +124,9 @@ describe("NodeMenu keyboard completeness (ADR-012 stage 12.3)", () => {
   });
 });
 
-describe("Portaled menu keyboard focus styling", () => {
+describe("Portaled kit menu keyboard focus styling", () => {
   it("uses a visible token outline rather than relying on hover color", () => {
-    const css = readFileSync(join(REPO_SRC, "app/styles.css"), "utf-8");
+    const css = readFileSync(join(REPO_SRC, "app/ui/menu.css"), "utf-8");
     expect(css).toMatch(
       /\.chat-node-menu button:focus-visible\s*\{\s*outline: 2px solid var\(--gl-focus-ring\)/,
     );
@@ -163,9 +163,9 @@ describe("NodeMenu disabled and nested action keyboard navigation", () => {
   });
 });
 
-describe("Chat node menu destructive action styling", () => {
+describe("Migrated chat node menu destructive action styling", () => {
   it("separates Delete Node and colors it with graphlink tokens", () => {
-    const css = readFileSync(join(REPO_SRC, "app/styles.css"), "utf-8");
+    const css = readFileSync(join(REPO_SRC, "app/ui/menu.css"), "utf-8");
     const separatorStart = css.indexOf(".chat-node-menu-separator {");
     expect(separatorStart).toBeGreaterThanOrEqual(0);
     const separatorRule = css.slice(separatorStart, css.indexOf("}", separatorStart));
