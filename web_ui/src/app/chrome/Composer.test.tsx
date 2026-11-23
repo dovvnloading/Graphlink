@@ -1452,6 +1452,31 @@ describe("UI-15 composer context and disabled explanations", () => {
     expect(setSelectedNodeId).toHaveBeenCalledWith(null);
   });
 
+  it("asks for the knowledge preference only for a chat reply target", async () => {
+    const { store } = makeStore();
+    const table = makeSceneStore({
+      selectedNodeId: "t1",
+      scene: { nodes: [{ id: "t1", kind: "table", title: "Data table", content: "" }] },
+    });
+    const { unmount } = render(<OverlayProvider>
+      {/* @ts-expect-error - fixture store */}
+      <Composer store={store} sceneStore={table.sceneStore} />
+    </OverlayProvider>);
+    await waitFor(() => expect(table.getChatKnowledgePreference).toHaveBeenCalled());
+    expect(table.getChatKnowledgePreference).toHaveBeenLastCalledWith(null);
+    unmount();
+
+    const chat = makeSceneStore({
+      selectedNodeId: "c1",
+      scene: { nodes: [{ id: "c1", kind: "chat", title: "Reply", content: "An answer" }] },
+    });
+    render(<OverlayProvider>
+      {/* @ts-expect-error - fixture store */}
+      <Composer store={store} sceneStore={chat.sceneStore} />
+    </OverlayProvider>);
+    await waitFor(() => expect(chat.getChatKnowledgePreference).toHaveBeenLastCalledWith("c1"));
+  });
+
   it("keeps the reply placeholder on one line for multi-line node content", () => {
     const { store } = makeStore();
     const { sceneStore } = makeSceneStore({

@@ -111,6 +111,8 @@ async function glide(page, x, y, ms = 520) {
 
 async function centreOf(locator) {
   await locator.waitFor({ state: "visible" });
+  // Node bodies scroll; bring the control into its card's visible area first.
+  await locator.evaluate((el) => el.scrollIntoView({ block: "nearest", inline: "nearest" }));
   const box = await locator.boundingBox();
   if (!box) throw new Error("target has no box");
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
@@ -120,11 +122,13 @@ async function click(page, locator, pause = 450) {
   const { x, y } = await centreOf(locator);
   // A target under the composer or clipped by a scrolling card would take the
   // click somewhere else and record a silent no-op. Fail instead.
-  const hit = await locator.evaluate((el, [px, py]) => {
+  const cover = await locator.evaluate((el, [px, py]) => {
     const top = globalThis.document.elementFromPoint(px, py);
-    return !!top && (el === top || el.contains(top));
+    if (top && (el === top || el.contains(top))) return null;
+    const describe = (node) => node ? `<${node.tagName.toLowerCase()} class="${node.className}">${(node.textContent ?? "").trim().slice(0, 60)}` : "nothing";
+    return `${describe(top)} covers ${describe(el)}`;
   }, [x, y]);
-  if (!hit) throw new Error(`click target is covered at ${Math.round(x)},${Math.round(y)}`);
+  if (cover) throw new Error(`click target is covered at ${Math.round(x)},${Math.round(y)}: ${cover}`);
   await glide(page, x, y);
   await sleep(140);
   await page.mouse.down();
@@ -133,11 +137,19 @@ async function click(page, locator, pause = 450) {
   await sleep(pause);
 }
 
-async function choose(page, locator, value, pause = 500) {
-  const { x, y } = await centreOf(locator);
-  await glide(page, x, y);
-  await sleep(200);
-  await locator.selectOption(value);
+/** Pick an option in a native <select> (by value) or a kit Select (by visible label). */
+async function choose(page, locator, option, pause = 500) {
+  const native = await locator.evaluate((el) => el.tagName === "SELECT");
+  if (native) {
+    const { x, y } = await centreOf(locator);
+    await glide(page, x, y);
+    await sleep(200);
+    await locator.selectOption(option);
+  } else {
+    await click(page, locator, 250);
+    const listbox = page.getByRole("listbox").last();
+    await click(page, listbox.getByRole("option", { name: option }).first(), 200);
+  }
   await sleep(pause);
 }
 
@@ -181,6 +193,14 @@ async function record(page, name, flow) {
   try {
     await flow();
     await sleep(1600); // Hold the final state before the loop restarts.
+    // A README GIF must never show a failure. Surface the first error toast's
+    // details instead of publishing a recording of it.
+    const errors = page.locator(".gl-toast--error");
+    if (await errors.count()) {
+      const first = errors.first();
+      await first.getByRole("button", { name: /Details/ }).click().catch(() => {});
+      throw new Error(`${name}: error toast during recording: ${(await first.innerText()).replace(/\s+/g, " ").slice(0, 400)}`);
+    }
   } finally {
     const end = Date.now() / 1000;
     await cdp.send("Page.stopScreencast");
@@ -299,7 +319,7 @@ async function canvasFlow(page) {
   await sleep(700);
   await pan(page, { x: 640, y: 170 }, { x: 520, y: 260 });
   await page.keyboard.press("Control+f");
-  const search = page.getByRole("textbox", { name: "Search the canvas" });
+  const search = page.getByRole("searchbox", { name: "Search the canvas" });
   await type(page, search, "Start at the database", 300);
   await search.press("Enter");
   await sleep(1300);
@@ -320,7 +340,7 @@ async function canvasFlow(page) {
 async function rerunFlow(page) {
   await sleep(600);
   await page.keyboard.press("Control+f");
-  const search = page.getByRole("textbox", { name: "Search the canvas" });
+  const search = page.getByRole("searchbox", { name: "Search the canvas" });
   await type(page, search, "jumped from 180ms", 300);
   await search.press("Enter");
   await sleep(1300);
@@ -341,7 +361,8 @@ async function rerunFlow(page) {
   await click(page, question.getByRole("button", { name: "Next version" }), 1000);
   await click(page, question.getByRole("button", { name: "Re-run from here" }), 1600);
   const dialog = page.getByRole("dialog", { name: "Re-run from here" });
-  await click(page, dialog.getByRole("radio", { name: "All branches below" }), 2200);
+  // Click the visible option label; the kit radio input sits under its drawn dot.
+  await click(page, dialog.locator(".gl-radio-label").filter({ hasText: /^All branches below/ }), 2200);
   const skipped = dialog.getByRole("region", { name: "Skipped nodes" });
   if (await skipped.isVisible().catch(() => false)) {
     await skipped.scrollIntoViewIfNeeded();
@@ -360,8 +381,8 @@ async function tableFlow(page) {
   const box = await table.boundingBox();
   const empty = { x: box.x + box.width + 60, y: Math.max(80, box.y - 120) };
   await pan(page, empty, { x: empty.x - (box.x - 160), y: empty.y - (box.y - 110) }, 1000);
-  await choose(page, table.getByLabel("Group by"), "Team");
-  await choose(page, table.getByLabel("Sum column"), "Hours");
+  await choose(page, table.getByRole("button", { name: /^Group by/ }), /^Team$/);
+  await choose(page, table.getByRole("button", { name: /^Sum column/ }), /^Hours$/);
   await click(page, table.getByRole("button", { name: "Create chart" }), 900);
   await click(page, table.getByRole("button", { name: "Create report" }), 900);
   await fitAll(page, 1200);
@@ -374,7 +395,7 @@ async function tableFlow(page) {
 async function runnerFlow(page) {
   await openPlugin(page, "graph runner", "Graph Runner");
   const dialog = page.getByRole("dialog", { name: "Graph Runner" });
-  await choose(page, dialog.getByLabel("Run scope"), "all");
+  await choose(page, dialog.getByRole("button", { name: /^Run scope/ }), /^Whole graph/);
   await click(page, dialog.getByRole("button", { name: "Preview run" }), 1600);
   await click(page, dialog.getByRole("button", { name: "Run graph" }), 2200);
   await page.keyboard.press("Escape");
@@ -412,7 +433,7 @@ async function openWorkbench(page, category, pack) {
 /** A Chemistry node converts a transmission scan, then charts it. */
 async function scienceFlow(page) {
   const card = await openWorkbench(page, "Scientific Workbench", "Chemistry");
-  await choose(page, card.getByRole("combobox", { name: "Operation", exact: true }), "transmission_spectrum", 700);
+  await choose(page, card.getByRole("button", { name: /^Operation/ }), /transmission to absorbance/i, 700);
   await click(page, card.getByRole("button", { name: "Load example" }), 600);
   await click(page, card.getByRole("button", { name: "Run calculation" }), 1300);
   const latest = card.getByRole("region", { name: "Latest result" });
@@ -432,8 +453,8 @@ async function scienceFlow(page) {
  * verified result in chat (workflow 1 of docs/BIOLOGY_WORKBENCH.md). */
 async function biologyFlow(page) {
   const card = await openWorkbench(page, "Biology Workbench", "Plate Assays");
-  await choose(page, card.getByRole("combobox", { name: "Operation", exact: true }), "standard_curve", 700);
-  await choose(page, card.getByRole("combobox", { name: "Calibration model", exact: true }), "4pl", 600);
+  await choose(page, card.getByRole("button", { name: /^Operation/ }), /standard curve/i, 700);
+  await choose(page, card.getByRole("button", { name: /^Calibration model/ }), /^4pl$/i, 600);
   const fields = [
     [/^Known standard concentrations/, "[15.6, 31.25, 62.5, 125, 250, 500, 1000]"],
     [/^Corresponding standard signals/, "[0.2449, 0.4566, 0.8186, 1.305, 1.7821, 2.1256, 2.3216]"],

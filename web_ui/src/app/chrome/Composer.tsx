@@ -124,7 +124,10 @@ export function Composer({
     if (typeof payload.revision === "number") setKnowledgeLibraryRevision(payload.revision);
   }), [sceneStore]);
 
-  const knowledgeTargetNodeId = effectiveReplyTarget?.id ?? null;
+  // The knowledge preference belongs to a chat branch. Replying to a table,
+  // note or workbench starts from the workspace default, so only a chat
+  // target is sent (the backend rejects any other kind).
+  const knowledgeTargetNodeId = effectiveReplyTarget?.kind === "chat" ? effectiveReplyTarget.id : null;
   const [knowledgeResult, setKnowledgeResult] = useState<{
     store: SceneStore;
     targetNodeId: string | null;
