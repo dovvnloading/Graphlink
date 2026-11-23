@@ -49,7 +49,8 @@ test("imports measurements, analyzes a connected column, and reopens the reprodu
   await source.locator(".node-heading-row").click();
   const statistics = await launchPack(page, "Statistics");
   await statistics.getByRole("button", { name: "Import Observations from a connected result" }).click();
-  await page.getByRole("option", { name: "Scientific Core · Temperature (C)" }).click();
+  await page.getByRole("listbox", { name: "Import Observations from a connected result", exact: true })
+    .getByRole("option", { name: "Scientific Core · Temperature (C)", exact: true }).click();
   await expect(statistics.getByRole("textbox", { name: "Observations", exact: true })).toHaveValue("[8,10,18]");
   await statistics.getByRole("button", { name: "Run calculation" }).click();
   const latest = statistics.getByRole("region", { name: "Latest result" });
@@ -103,7 +104,9 @@ test("reviews concurrent edits in two views and enforces grant changes on a conn
   await source.locator(".node-heading-row").click();
   const stats = await launchPack(page, "Statistics");
   await stats.getByRole("button", { name: "Import Observations from a connected result" }).click();
-  await page.getByRole("option", { name: "Scientific Core · Reading" }).click();
+  await page.getByRole("listbox", { name: "Import Observations from a connected result", exact: true })
+    .getByRole("option", { name: "Scientific Core · Reading", exact: true }).click();
+  await expect(stats.getByRole("textbox", { name: "Observations", exact: true })).toHaveValue("[1,3]");
   await stats.getByRole("button", { name: "Run calculation" }).click();
   const mean = stats.locator(".science-result-highlight strong");
   await expect(mean).toHaveText("2");

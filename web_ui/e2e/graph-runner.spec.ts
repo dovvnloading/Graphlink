@@ -17,10 +17,16 @@ test("runs a grouped table and both downstream outputs, then reopens their saved
   const sourceId = await source.getAttribute("data-id");
   expect(sourceId).toBeTruthy();
   const table = page.locator(`.react-flow__node-note[data-id="${sourceId}"]`);
-  await table.getByRole("button", { name: "Group by" }).click();
-  await page.getByRole("option", { name: "Team" }).click();
-  await table.getByRole("button", { name: "Sum column" }).click();
-  await page.getByRole("option", { name: "Hours" }).click();
+  const group = table.getByRole("button", { name: "Group by", exact: true });
+  await group.click();
+  await page.getByRole("listbox", { name: "Group by", exact: true })
+    .getByRole("option", { name: "Team", exact: true }).click();
+  await expect(group).toContainText("Team");
+  const sum = table.getByRole("button", { name: "Sum column", exact: true });
+  await sum.click();
+  await page.getByRole("listbox", { name: "Sum column", exact: true })
+    .getByRole("option", { name: "Hours", exact: true }).click();
+  await expect(sum).toContainText("Hours");
   await table.getByRole("button", { name: "Create grouped table" }).click();
   const grouped = page.locator(".react-flow__node-note").filter({
     has: page.getByRole("region", { name: "Table output" }),

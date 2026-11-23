@@ -28,10 +28,16 @@ test("a chart and a Drafter keep independent versions of a grouped table after r
   const source = await openTable(page);
   const chart = page.locator(".react-flow__node-chart");
   const report = page.locator(".react-flow__node-artifact");
-  await source.getByRole("button", { name: "Group by", exact: true }).click();
-  await page.getByRole("option", { name: "Team" }).click();
-  await source.getByRole("button", { name: "Sum column", exact: true }).click();
-  await page.getByRole("option", { name: "Hours" }).click();
+  const group = source.getByRole("button", { name: "Group by", exact: true });
+  await group.click();
+  await page.getByRole("listbox", { name: "Group by", exact: true })
+    .getByRole("option", { name: "Team", exact: true }).click();
+  await expect(group).toContainText("Team");
+  const sum = source.getByRole("button", { name: "Sum column", exact: true });
+  await sum.click();
+  await page.getByRole("listbox", { name: "Sum column", exact: true })
+    .getByRole("option", { name: "Hours", exact: true }).click();
+  await expect(sum).toContainText("Hours");
   await source.getByRole("button", { name: "Create chart", exact: true }).click();
   await expect(page.getByRole("group", { name: "Canvas overview, 2 nodes" })).toBeVisible();
   await page.getByRole("button", { name: "Fit All" }).click();
@@ -87,10 +93,14 @@ test("refreshes only outputs that use the edited column and preserves authored r
   await expect(source.getByRole("cell", { name: "Design, UX", exact: true })).toHaveCount(2);
   const sum = source.getByRole("button", { name: "Sum column", exact: true });
   await sum.click();
-  await page.getByRole("option", { name: "Hours" }).click();
+  await page.getByRole("listbox", { name: "Sum column", exact: true })
+    .getByRole("option", { name: "Hours", exact: true }).click();
+  await expect(sum).toContainText("Hours");
   await source.getByRole("button", { name: "Create chart", exact: true }).click();
   await sum.click();
-  await page.getByRole("option", { name: "Cost" }).click();
+  await page.getByRole("listbox", { name: "Sum column", exact: true })
+    .getByRole("option", { name: "Cost", exact: true }).click();
+  await expect(sum).toContainText("Cost");
   await source.getByRole("button", { name: "Create report", exact: true }).click();
   const chart = page.locator(".react-flow__node-chart");
   const report = page.locator(".react-flow__node-artifact");
@@ -106,8 +116,11 @@ test("refreshes only outputs that use the edited column and preserves authored r
   await report.getByRole("button", { name: "Inspect source rows" }).click();
   const contributors = report.getByRole("table", { name: "Source rows for Design, UX" });
   await expect(contributors.getByRole("row").nth(1).getByRole("cell")).toHaveText(["1", "12"]);
-  await report.getByRole("button", { name: "Inspect group" }).click();
-  await page.getByRole("option", { name: "Engineering" }).click();
+  const inspectedGroup = report.getByRole("button", { name: "Inspect group", exact: true });
+  await inspectedGroup.click();
+  await page.getByRole("listbox", { name: "Inspect group", exact: true })
+    .getByRole("option", { name: "Engineering", exact: true }).click();
+  await expect(inspectedGroup).toContainText("Engineering");
   await expect(report.getByRole("table", { name: "Source rows for Engineering" }).getByRole("row").nth(1).getByRole("cell"))
     .toHaveText(["3", "40"]);
 
