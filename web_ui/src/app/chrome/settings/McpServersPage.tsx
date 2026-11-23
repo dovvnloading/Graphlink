@@ -126,10 +126,11 @@ export function McpServersPage({ state, transport }: { state: AppSettingsState; 
                 checked={server.enabled} onCheckedChange={(enabled) =>
                   updateServers(state.mcpServers.map((entry, i) => i === index ? { ...entry, enabled } : entry))} />
               <span className="settings-server-meta">
-                Approval: <span className={server.approval === "auto" ? "settings-mcp-server-approval-auto" : undefined}>
-                  {APPROVAL_LABELS[server.approval] ?? server.approval}
+                <span className={server.approval === "auto" ? "settings-mcp-server-approval-auto" : undefined}>
+                  Approval: {APPROVAL_LABELS[server.approval] ?? server.approval}
                 </span>
-                {" · "}Scopes: {server.scopes.length ? server.scopes.join(", ") : "No declared scopes"}
+                {" · "}
+                <span>Scopes: {server.scopes.length ? server.scopes.join(", ") : "No declared scopes"}</span>
               </span>
               {server.envKeys.length > 0 && <span className="settings-server-meta">
                 Environment keys: {[...server.envKeys].sort().join(", ")}
