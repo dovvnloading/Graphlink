@@ -11,9 +11,9 @@ export function PluginsPage({ grants, transport }: { grants: AppPluginGrant[]; t
       <p className="settings-page-description">
         Grant third-party plugins permission to create nodes and run actions. Grants are not per-tool sandboxes.
       </p>
-      <FieldGroup title="Discovered plugins">
+      <FieldGroup {...{ title: "Discovered plugins" }}>
         {grants.length === 0 ? (
-          <EmptyState icon="puzzle" title="No grants needed"
+          <EmptyState icon="puzzle" {...{ title: "No grants needed" }}
             body="No discovered plugins need a grant right now." />
         ) : grants.map((grant) => (
           <div className="settings-server-row" key={grant.pluginId}>
