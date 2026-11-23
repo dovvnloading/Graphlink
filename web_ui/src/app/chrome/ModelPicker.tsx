@@ -250,7 +250,7 @@ export function ComposerModelMenu({ store, disabled = false }: { store: Composer
         disabled={disabled} menuLabel="Choose a model"
         onClick={() => { setQuery(""); setOpenEpoch((n) => n + 1); }}>
         {models.length > 8 && (
-          <input ref={input} autoFocus type="search" className="model-picker-search"
+          <input ref={input} type="search" className="model-picker-search"
             placeholder="Search local and cloud models…" aria-label="Search models"
             value={query} onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
@@ -263,12 +263,13 @@ export function ComposerModelMenu({ store, disabled = false }: { store: Composer
               if (e.key === "Enter" && !e.nativeEvent.isComposing) {
                 const options = matches.filter(canChat);
                 if (options.length === 1) {
-                  store.selectPickerModel(options[0].provider, options[0].modelId);
-                  // The open menu normally dismisses via MenuItem; when Enter
-                  // selects from search, request a trigger click to close it.
-                  (e.currentTarget.closest('[role="menu"]') as HTMLElement | null)?.dispatchEvent(
-                    new globalThis.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-                  );
+                  e.preventDefault();
+                  // Activate the lone visible model item itself: the normal
+                  // MenuItem path selects it AND closes the menu (a synthetic
+                  // Escape never reached the menu's keyboard handler).
+                  e.currentTarget.closest('[role="menu"]')
+                    ?.querySelector<HTMLElement>('[role="menuitemradio"]:not(:disabled):not([aria-disabled="true"])')
+                    ?.click();
                 }
               }
             }} />

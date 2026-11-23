@@ -382,13 +382,16 @@ describe("Composer", () => {
     </OverlayProvider>);
 
     const toggle = screen.getByRole("button", { name: "Use knowledge" });
-    await waitFor(() => expect(toggle).not.toBeDisabled());
+    // Nothing is indexed yet: the toggle is disabled with a reason (UI-15 spec).
+    await waitFor(() => expect(toggle).toBeDisabled());
     expect(toggle).toHaveAttribute("aria-pressed", "false");
 
     act(() => emitLibraryRevision(1)); // an import completed
     await waitFor(() => expect(toggle).toHaveAttribute("aria-pressed", "true"));
+    expect(toggle).not.toBeDisabled();
     act(() => emitLibraryRevision(2)); // the last document was removed
     await waitFor(() => expect(toggle).toHaveAttribute("aria-pressed", "false"));
+    await waitFor(() => expect(toggle).toBeDisabled());
     expect(getChatKnowledgePreference).toHaveBeenCalledTimes(3);
     expect(getChatKnowledgePreference).toHaveBeenCalledWith(null);
   });
@@ -400,7 +403,7 @@ describe("Composer", () => {
       request: { ...initialComposerState.request, canSend: true },
     } });
     const { sceneStore, sendMessage, getChatKnowledgePreference, emitLibraryRevision } =
-      makeSceneStore();
+      makeSceneStore({ knowledgePreference: { nodeId: null, hasDocuments: true, enabled: false, override: null } });
     render(<OverlayProvider>
       {/* @ts-expect-error - minimal test store */}
       <Composer store={store} sceneStore={sceneStore} />

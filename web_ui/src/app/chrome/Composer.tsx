@@ -506,6 +506,7 @@ export function Composer({
               }} />
           ) : sendDisabled ? (
             <Tooltip label={sendDisabledReason} placement="top">
+              {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- focusable wrapper so keyboard users can reach the disabled control's reason tooltip */}
               <span className="composer-disabled-control" tabIndex={0}>
                 <IconButton icon="arrow-up" label="Send message" size="lg"
                   variant="ghost" className="composer-send-button" disabled />
@@ -562,6 +563,7 @@ function Reasoning({ store }: { store: ComposerStore }) {
       <Icon name="gauge" size="sm" />
       {composer.request.canSend ? trigger : (
         <Tooltip label="Wait for the current response to finish" placement="top">
+          {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- focusable wrapper so keyboard users can reach the disabled control's reason tooltip */}
           <span className="composer-disabled-control" tabIndex={0}>{trigger}</span>
         </Tooltip>
       )}

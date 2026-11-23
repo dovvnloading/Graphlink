@@ -96,6 +96,7 @@ function ContextInspectorSurface({
     <div className="context-inspector-launcher">
       {nodeId ? toggle : (
         <Tooltip label="Add a chat message to inspect its context">
+          {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- focusable wrapper so keyboard users can reach the disabled control's reason tooltip */}
           <span className="context-inspector-disabled-trigger" tabIndex={0}>{toggle}</span>
         </Tooltip>
       )}
