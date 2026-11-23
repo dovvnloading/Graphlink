@@ -1,265 +1,87 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { WsTransport } from "../../lib/ws/transport";
-import type { SceneStore } from "../canvas/sceneStore";
-import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
+import { useEffect, useMemo, useState } from "react";
 import type { AppChatLibraryRow, AppChatLibraryState, AppWorkspaceRow } from "../../lib/bridge-core/generated/app-chat-library-state";
 import type { AppComposerState } from "../../lib/bridge-core/generated/app-composer-state";
+import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
+import type { WsTransport } from "../../lib/ws/transport";
+import type { SceneStore } from "../canvas/sceneStore";
 import { Dialog, useOverlays } from "../overlays/overlays";
-import { CustomSelect } from "./CustomSelect";
-import { SearchIcon } from "./SearchIcon";
+import { Button } from "../ui/Button";
+import { Card } from "../ui/Card";
+import { EmptyState } from "../ui/EmptyState";
+import { IconButton } from "../ui/IconButton";
+import { Icon } from "../ui/icons/Icon";
+import { MenuButton, MenuItem } from "../ui/Menu";
+import { SegmentedControl } from "../ui/SegmentedControl";
+import { Select } from "../ui/Select";
+import { TextField } from "../ui/TextField";
+import { ToggleButton } from "../ui/ToggleButton";
+import { Badge } from "../ui/Badge";
+import { useConfirm } from "../ui/ConfirmDialog";
+import { formatCount, formatRelativeTime } from "../ui/format";
 import { initialComposerState } from "./composerStore";
-
-/**
- * The chat library dialog (Qt-removal plan R2.5e + R6.4 + R6.5, R8a full
- * redesign). List/search/rename/delete/load/new are all real (backend/
- * chat_library.py reads/writes the same ~/.graphlink/chats.db the legacy
- * app uses).
- *
- * R8a replaced the old select-a-row-then-click-a-shared-toolbar-button
- * model (which is what made this "the worst UI element" - a permanently
- * boxed flat list, no content preview, four buttons that mutated based on
- * "whichever row is currently selected") with a real chat-history list:
- * date-grouped rows (Today/Yesterday/Previous 7 Days/Previous 30 Days/
- * Older), a one-line preview of each chat's last message, and per-row
- * rename/delete that act on THAT row, never a shared selection. Clicking a
- * row's body IS Load Chat now - there is no separate select step. Reuses
- * the composer island's exact "flat/borderless until interaction, one
- * filled accent element" language rather than inventing a new visual
- * system - see styles.css's own comment on the .library-* rules.
- *
- * ADR-020 stage 20.2 adds the real Chat Library UI on top of stage 20.1's
- * workspaces/graphs schema: a workspace switcher (tabs mirroring
- * ViewPopover.tsx's single-select preset-button idiom), tag filter chips
- * (mirroring ViewPopover's multi-select toggle-chip filter section),
- * favorite/archive icon buttons (added to the existing always-visible
- * .library-row-actions row), and inline tag editing (the exact rename
- * input-swap interaction pattern, applied to a different field). All
- * filtering (workspace/tags/archived/search) is client-side, layered on
- * top of the existing search-filter pipeline - the backend always sends
- * every non-deleted graph across every workspace in one payload (see
- * backend/chat_library.py's get_all_chats).
- *
- * ADR-020 stage 20.3 adds a small settings affordance per REAL workspace
- * tab (never "All", which isn't a real workspace row) - a gear icon that
- * reveals an inline expansion below the tabs strip showing that
- * workspace's current default model and a control to change it
- * (workspace.defaultModelProvider/defaultModelId, "" on both meaning "no
- * default set" - see contracts/graphlink_app_chat_library_payload.py's own
- * docstring on AppWorkspaceRowPayload). The reveal itself follows this
- * file's own established inline-expansion idiom (the same "click an icon,
- * a panel opens in place, no new modal" shape as inline rename/tag-edit
- * above), but the WIDGET inside it is CustomSelect.tsx (Settings' own
- * "pick one value from a small catalog" control), not Composer.tsx's
- * Popover-based ModelPicker - deliberately: CustomSelect's own module
- * docstring documents exactly why it stays outside the useOverlays()
- * registry (a Popover opening would flip the registry's openSurface away
- * from "library", which THIS dialog's own <Dialog name="library"> would
- * read as "I'm not open anymore" and unmount - the identical class of bug
- * that docstring already names for Settings). The model catalog itself is
- * NOT a second data-fetching path - this dialog adds a second, independent
- * subscription to the existing "app-composer" topic (same dual-subscription
- * shape SettingsDialog.tsx already uses for app-settings + app-plugins) and
- * reads route.modelOptions/route.provider, the exact same fields Composer's
- * own model picker renders from. Since this app has exactly one ACTIVE
- * provider at a time (see SettingsDialog.tsx's own ProviderModeSwitch), a
- * workspace default is "pick a model from the currently active provider's
- * catalog" - the chosen option's id becomes defaultModelId and the
- * currently active route.provider tags along as defaultModelProvider,
- * mirroring how Composer's own selectModel(modelId) never takes a separate
- * provider argument either.
- */
+import "./chat-library.css";
 
 const initialState: AppChatLibraryState = {
-  schemaVersion: 1,
-  minCompatibleSchemaVersion: 1,
-  revision: 0,
-  rows: [],
-  workspaces: [],
-  notice: null,
+  schemaVersion: 1, minCompatibleSchemaVersion: 1, revision: 0,
+  rows: [], workspaces: [], notice: null,
 };
-
-type BucketKey = "Today" | "Yesterday" | "Previous 7 Days" | "Previous 30 Days" | "Older";
-const BUCKET_ORDER: BucketKey[] = ["Today", "Yesterday", "Previous 7 Days", "Previous 30 Days", "Older"];
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-// ADR-020 stage 20.5: matches sceneStore.ts's/composerStore.ts's own
-// NATIVE_DIALOG_TIMEOUT_MS - exportWorkspace opens a native OS SAVE dialog
-// server-side and waits on the user, not the network.
 const NATIVE_DIALOG_TIMEOUT_MS = 5 * 60_000;
+type BucketKey = "Today" | "Yesterday" | "Earlier";
+const BUCKETS: BucketKey[] = ["Today", "Yesterday", "Earlier"];
 
-function startOfLocalDay(date: Date): number {
+function localDayStart(date: Date): number {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
 }
 
-function effectiveIso(row: AppChatLibraryRow): string | null {
-  return row.updatedAtIso ?? row.createdAtIso ?? null;
-}
-
-// Rows with no usable timestamp (an old pre-migration row, or a corrupt
-// one) always land in Older, sorted after every dated Older row - never
-// guessed into Today/Yesterday just because they're undated.
-function bucketFor(row: AppChatLibraryRow, todayStart: number): BucketKey {
-  const iso = effectiveIso(row);
-  if (!iso) return "Older";
-  const parsed = new Date(iso);
-  if (Number.isNaN(parsed.getTime())) return "Older";
-  const diffDays = Math.round((todayStart - startOfLocalDay(parsed)) / DAY_MS);
-  if (diffDays <= 0) return "Today";
-  if (diffDays === 1) return "Yesterday";
-  if (diffDays <= 7) return "Previous 7 Days";
-  if (diffDays <= 30) return "Previous 30 Days";
-  return "Older";
-}
-
-function sortWithinBucket(rows: AppChatLibraryRow[]): AppChatLibraryRow[] {
-  return [...rows].sort((a, b) => {
-    const aIso = effectiveIso(a);
-    const bIso = effectiveIso(b);
-    if (aIso && bIso) return aIso < bIso ? 1 : aIso > bIso ? -1 : 0;
-    if (aIso) return -1;
-    if (bIso) return 1;
-    return b.id - a.id;
-  });
+function rowTime(row: AppChatLibraryRow): number | null {
+  const iso = row.updatedAtIso ?? row.createdAtIso;
+  if (!iso) return null;
+  const value = Date.parse(iso);
+  return Number.isFinite(value) ? value : null;
 }
 
 function groupRows(rows: AppChatLibraryRow[]): Array<{ key: BucketKey; rows: AppChatLibraryRow[] }> {
-  const todayStart = startOfLocalDay(new Date());
+  const today = localDayStart(new Date());
   const buckets = new Map<BucketKey, AppChatLibraryRow[]>();
   for (const row of rows) {
-    const key = bucketFor(row, todayStart);
-    const bucket = buckets.get(key);
-    if (bucket) bucket.push(row);
-    else buckets.set(key, [row]);
+    const time = rowTime(row);
+    const day = time === null ? -Infinity : localDayStart(new Date(time));
+    const key: BucketKey = day >= today ? "Today" : day >= localDayStart(new Date(today - 86400000)) ? "Yesterday" : "Earlier";
+    const group = buckets.get(key) ?? [];
+    group.push(row);
+    buckets.set(key, group);
   }
-  return BUCKET_ORDER.filter((key) => buckets.has(key)).map((key) => ({
+  return BUCKETS.filter((key) => buckets.has(key)).map((key) => ({
     key,
-    rows: sortWithinBucket(buckets.get(key) as AppChatLibraryRow[]),
+    rows: (buckets.get(key) ?? []).sort((a, b) => (rowTime(b) ?? -Infinity) - (rowTime(a) ?? -Infinity) || b.id - a.id),
   }));
 }
 
-function Icon({
-  name,
-}: {
-  name: "search" | "pencil" | "trash" | "check" | "x" | "chat" | "star" | "star-filled" | "archive" | "tag" | "gear";
-}) {
-  switch (name) {
-    case "search":
-      return <SearchIcon />;
-    case "pencil":
-      return (
-        <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
-          <path d="M14.5 4.5 19.5 9.5 8 21H3v-5Z" />
-        </svg>
-      );
-    case "trash":
-      return (
-        <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
-          <path d="M4 7h16" />
-          <path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" />
-          <path d="M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13" />
-        </svg>
-      );
-    case "check":
-      return (
-        <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
-          <path d="m5 13 5 5 9-11" />
-        </svg>
-      );
-    case "x":
-      return (
-        <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
-          <path d="M6 6l12 12M18 6 6 18" />
-        </svg>
-      );
-    case "chat":
-      return (
-        <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
-          <path d="M4 5h16v11H8l-4 4Z" />
-        </svg>
-      );
-    // ADR-020 stage 20.2: same 10-point star polygon for both the outline
-    // and filled states (an un-favorited row shows the outline, a
-    // favorited one the filled variant) - only the `fill` differs, so the
-    // two always read as the exact same glyph, never a visually distinct
-    // "different icon" swap.
-    case "star":
-      return (
-        <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
-          <path d="M12 2.5 14.18 9.01 21.04 9.06 15.52 13.14 17.58 19.69 12 15.7 6.42 19.69 8.48 13.14 2.96 9.06 9.82 9.01Z" />
-        </svg>
-      );
-    case "star-filled":
-      return (
-        <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
-          <path
-            d="M12 2.5 14.18 9.01 21.04 9.06 15.52 13.14 17.58 19.69 12 15.7 6.42 19.69 8.48 13.14 2.96 9.06 9.82 9.01Z"
-            fill="currentColor"
-          />
-        </svg>
-      );
-    case "archive":
-      return (
-        <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
-          <path d="M3 4.5h18v4H3Z" />
-          <path d="M4.5 8.5v10a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5v-10" />
-          <path d="M9.5 12.5h5" />
-        </svg>
-      );
-    case "tag":
-      return (
-        <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
-          <path d="M20 13.5 12.5 21a1.5 1.5 0 0 1-2.12 0L3 13.6V5a1.5 1.5 0 0 1 1.5-1.5h8.6a1.5 1.5 0 0 1 1.06.44L20 10.4a1.5 1.5 0 0 1 0 2.12Z" />
-          <circle cx="8" cy="8.5" r="1.4" />
-        </svg>
-      );
-    // ADR-020 stage 20.3: a plain 8-spoke gear/settings glyph, same
-    // stroke-only construction (circle + straight paths) as every other
-    // icon in this component - not a filled Material-style cog.
-    case "gear":
-      return (
-        <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
-          <circle cx="12" cy="12" r="3.2" />
-          <path d="M12 3v3.2M12 17.8V21M21 12h-3.2M6.2 12H3M18.36 5.64l-2.26 2.26M7.9 16.1l-2.26 2.26M18.36 18.36l-2.26-2.26M7.9 7.9 5.64 5.64" />
-        </svg>
-      );
-  }
+function chatMeta(row: AppChatLibraryRow): string {
+  const timestamp = rowTime(row);
+  return formatCount(row.messageCount) + " nodes · " +
+    (timestamp === null ? row.updatedLabel : formatRelativeTime(timestamp));
 }
 
 export function ChatLibraryDialog({ transport, store }: { transport: WsTransport; store: SceneStore }) {
   const overlays = useOverlays();
+  const confirm = useConfirm();
   const [state, setState] = useState<AppChatLibraryState>(initialState);
+  const [composerState, setComposerState] = useState<AppComposerState>(initialComposerState);
   const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState("all");
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<number | null>(null);
+  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
+  const [managingWorkspaces, setManagingWorkspaces] = useState(false);
+  const [workspaceSettingsId, setWorkspaceSettingsId] = useState<number | null>(null);
+  const [creatingWorkspace, setCreatingWorkspace] = useState(false);
+  const [newWorkspaceDraft, setNewWorkspaceDraft] = useState("");
+  const [importingWorkspaceId, setImportingWorkspaceId] = useState<number | null>(null);
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
-  const [confirmingDeleteId, setConfirmingDeleteId] = useState<number | null>(null);
-  // ADR-020 stage 20.2: workspace switcher / tag filter / archived-toggle /
-  // inline tag-edit local UI state - none of this is scene state or
-  // persisted anywhere; it lives exactly like `query` above, dialog-local
-  // and reset whenever the dialog closes and reopens (a fresh mount).
-  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<number | null>(null);
-  const [importingWorkspaceId, setImportingWorkspaceId] = useState<number | null>(null);
-  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
-  const [showArchived, setShowArchived] = useState(false);
-  const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
-  const [newWorkspaceDraft, setNewWorkspaceDraft] = useState("");
   const [editingTagsId, setEditingTagsId] = useState<number | null>(null);
   const [tagsDraft, setTagsDraft] = useState("");
-  // ADR-020 stage 20.3: which real workspace's gear-icon settings panel is
-  // currently expanded - dialog-local, same "not scene state, reset on
-  // remount" posture as every other piece of local UI state above.
-  const [workspaceSettingsId, setWorkspaceSettingsId] = useState<number | null>(null);
-  // ADR-020 stage 20.3: a second, independent subscription to "app-composer"
-  // (the same topic Composer.tsx/composerStore.ts already read) - this
-  // dialog reads route.modelOptions/route.provider from it for the
-  // workspace default-model picker, rather than opening a second
-  // data-fetching path. Mirrors SettingsDialog.tsx's own dual "app-settings"
-  // + "app-plugins" subscription shape.
-  const [composerState, setComposerState] = useState<AppComposerState>(initialComposerState);
-  const renameRef = useRef<HTMLInputElement>(null);
-  const deleteCancelRef = useRef<HTMLButtonElement>(null);
-  const newWorkspaceRef = useRef<HTMLInputElement>(null);
-  const tagsEditRef = useRef<HTMLInputElement>(null);
-  const lastTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     const unsubscribe = transport.subscribe("app-chat-library", (payload) => {
@@ -267,803 +89,351 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
       if (validated.ok) setState(validated.value as AppChatLibraryState);
       else console.error("[app-chat-library] rejected snapshot:", validated.errors);
     });
-    // ADR-020 stage 20.5: WsTransport.subscribe() only sends a real wire-
-    // level "subscribe" (and so only gets a fresh snapshot back) for the
-    // TOPIC's first-ever listener - a second, independent subscriber (this
-    // dialog is lazy-mounted, per App.tsx's own LazySurface, so it now
-    // often loses that race to QuickSwitcherDialog.tsx's own eager,
-    // always-mounted "app-chat-library" subscription) would otherwise sit
-    // on initialState - "No saved chats yet" even with a real, populated
-    // library - until some unrelated future mutation happens to republish
-    // the topic. resubscribe() forces that fresh snapshot unconditionally,
-    // the same recovery primitive sceneStore.ts's own "scene" topic
-    // handling already relies on for an analogous re-sync need.
+    // Another eager subscriber may already own the topic. Always request a
+    // fresh snapshot when this lazy dialog mounts.
     transport.resubscribe("app-chat-library");
     return unsubscribe;
   }, [transport]);
 
-  // ADR-020 stage 20.3: see this file's own module docstring for why this
-  // second subscription reuses "app-composer" rather than opening a new
-  // data-fetching path.
-  useEffect(() => {
-    return transport.subscribe("app-composer", (payload) => {
-      const validated = TOPIC_VALIDATORS["app-composer"](payload);
-      if (validated.ok) setComposerState(validated.value as AppComposerState);
-      else console.error("[app-composer] rejected snapshot:", validated.errors);
-    });
-  }, [transport]);
+  useEffect(() => transport.subscribe("app-composer", (payload) => {
+    const validated = TOPIC_VALIDATORS["app-composer"](payload);
+    if (validated.ok) setComposerState(validated.value as AppComposerState);
+  }), [transport]);
 
   useEffect(() => {
-    if (renamingId !== null) {
-      renameRef.current?.focus();
-      renameRef.current?.select();
+    const input = document.querySelector<HTMLInputElement>(renamingId !== null ? "#chat-library-rename" : editingTagsId !== null ? "#chat-library-tags" : "#chat-library-workspace-name");
+    if (renamingId !== null || editingTagsId !== null || creatingWorkspace) {
+      input?.focus();
+      input?.select();
     }
-  }, [renamingId]);
+  }, [renamingId, editingTagsId, creatingWorkspace]);
 
   useEffect(() => {
-    if (confirmingDeleteId !== null) deleteCancelRef.current?.focus();
-  }, [confirmingDeleteId]);
-
-  useEffect(() => {
-    if (isCreatingWorkspace) newWorkspaceRef.current?.focus();
-  }, [isCreatingWorkspace]);
-
-  useEffect(() => {
-    if (editingTagsId !== null) {
-      tagsEditRef.current?.focus();
-      tagsEditRef.current?.select();
-    }
-  }, [editingTagsId]);
-
-  // A republish after delete/rename elsewhere can drop the row a pending
-  // confirm/rename/tag-edit targeted - reset-during-render on a revision
-  // change, same pattern CommandPalette uses for its own wasOpen tracking.
-  // ADR-020 stage 20.2: also resets selectedWorkspaceId if the workspace it
-  // pointed at just got archived (archiveWorkspace publishes this same
-  // topic) - staying selected on a now-hidden tab would otherwise strand
-  // the view on a permanently empty list with no visible way back.
-  const visibleWorkspaceIds = new Set(state.workspaces.filter((w) => !w.archived).map((w) => w.id));
-  const [seenRevision, setSeenRevision] = useState(state.revision);
-  if (seenRevision !== state.revision) {
-    setSeenRevision(state.revision);
-    setConfirmingDeleteId(null);
-    setRenamingId(null);
-    setEditingTagsId(null);
-    if (selectedWorkspaceId !== null && !visibleWorkspaceIds.has(selectedWorkspaceId)) {
+    if (selectedWorkspaceId !== null && !state.workspaces.some((row) => row.id === selectedWorkspaceId && !row.archived)) {
       setSelectedWorkspaceId(null);
     }
-    // ADR-020 stage 20.3: same "don't strand the panel on a now-hidden tab"
-    // guard selectedWorkspaceId already gets above - an archived workspace
-    // loses its own settings panel too, not just its selected-tab status.
-    if (workspaceSettingsId !== null && !visibleWorkspaceIds.has(workspaceSettingsId)) {
+    if (workspaceSettingsId !== null && !state.workspaces.some((row) => row.id === workspaceSettingsId && !row.archived)) {
       setWorkspaceSettingsId(null);
     }
-  }
+  }, [state.revision, state.workspaces, selectedWorkspaceId, workspaceSettingsId]);
 
-  // ADR-020 stage 20.2: workspace -> archived -> tags -> search, each stage
-  // narrowing the previous one - "empty selection means no filter" at every
-  // stage, matching sceneStore's own filterKinds/filterStatuses convention
-  // (see ViewPopover.tsx's FILTER section comment).
-  const workspaceRows = useMemo(() => {
-    if (selectedWorkspaceId === null) return state.rows;
-    return state.rows.filter((row) => row.workspaceId === selectedWorkspaceId);
-  }, [state.rows, selectedWorkspaceId]);
-
-  // Tag chips are scoped to the CURRENTLY VISIBLE workspace's graphs (not
-  // narrowed further by the archived toggle or the tag selection itself -
-  // narrowing by the very filter being rendered would make chips disappear
-  // as you select them).
-  const availableTags = useMemo(() => {
-    const names = new Set<string>();
-    for (const row of workspaceRows) for (const tag of row.tags) names.add(tag);
-    return [...names].sort((a, b) => a.localeCompare(b));
-  }, [workspaceRows]);
-
-  const archivedRows = useMemo(() => {
-    if (showArchived) return workspaceRows;
-    return workspaceRows.filter((row) => !row.archived);
-  }, [workspaceRows, showArchived]);
-
-  // AND semantics: a graph must carry EVERY selected tag, not just one of
-  // them. Chosen over OR because these chips read as successive narrowing
-  // facets of a single "tags" filter (click more chips -> fewer, more
-  // specific results) rather than a "match any of these labels" broadening
-  // filter - the opposite of what most users expect when they add a second
-  // active chip to an already-filtered list.
-  const tagRows = useMemo(() => {
-    if (selectedTags.size === 0) return archivedRows;
-    const required = [...selectedTags];
-    return archivedRows.filter((row) => required.every((tag) => row.tags.includes(tag)));
-  }, [archivedRows, selectedTags]);
-
+  const workspaces = state.workspaces.filter((workspace) => !workspace.archived);
+  const workspaceRows = useMemo(() =>
+    selectedWorkspaceId === null ? state.rows : state.rows.filter((row) => row.workspaceId === selectedWorkspaceId),
+    [state.rows, selectedWorkspaceId],
+  );
+  const availableTags = useMemo(() =>
+    Array.from(new Set(workspaceRows.flatMap((row) => row.tags))).sort((a, b) => a.localeCompare(b)),
+    [workspaceRows],
+  );
   const filtered = useMemo(() => {
-    const term = query.trim().toLowerCase();
-    if (!term) return tagRows;
-    return tagRows.filter((row) => `${row.title} ${row.preview}`.toLowerCase().includes(term));
-  }, [query, tagRows]);
-
+    const term = query.trim().toLocaleLowerCase();
+    return workspaceRows.filter((row) => {
+      if (filter === "all" && row.archived) return false;
+      if (filter === "starred" && (!row.favorite || row.archived)) return false;
+      if (filter === "archived" && !row.archived) return false;
+      if (selectedTags.size && ![...selectedTags].every((tag) => row.tags.includes(tag))) return false;
+      return !term || (row.title + " " + row.preview).toLocaleLowerCase().includes(term);
+    });
+  }, [workspaceRows, query, filter, selectedTags]);
   const groups = useMemo(() => groupRows(filtered), [filtered]);
+  const activeWorkspace = workspaces.find((workspace) => workspace.id === workspaceSettingsId);
 
-  function confirmNavigation(message: string): boolean {
+  async function confirmNavigation(title: string): Promise<boolean> {
     const scene = store.getScene();
-    // The backend also saves dirty state before switching. This UI check is
-    // deliberate confirmation, shared by Load and New Chat in this dialog.
     if (scene.nodes.length === 0 && !scene.hasSavedChat) return true;
-    return window.confirm(message);
+    return confirm({ title, body: "Your current edits will be saved before switching.", confirmLabel: "Continue" });
   }
 
-  // #561: on a partially restored graph the backend refuses to save or
-  // navigate. It returns an explicit recovery signal rather than silently
-  // overwriting the original graph. A second request is only sent after the
-  // user has explicitly agreed to discard the *incomplete live copy*.
-  // Never infer consent from the ordinary "save before switching" prompt.
-  const discardIncompletePrompt =
-    "This graph contains missing or unreadable plugin nodes. Discard the incomplete ON-SCREEN copy and switch? " +
-    "Your changes to the incomplete live copy will NOT be saved. " +
-    "The original saved graph (including missing plugin nodes) will remain unchanged.";
+  async function confirmDiscard(): Promise<boolean> {
+    return confirm({
+      title: "Discard incomplete chat?",
+      body: "Some plugin nodes could not be restored. Discarding the incomplete on-screen copy will not save its changes. The original saved chat, including its missing plugin nodes, remains unchanged.",
+      confirmLabel: "Discard incomplete copy",
+      destructive: true,
+    });
+  }
 
   async function loadChat(id: number) {
-    if (!confirmNavigation("Open another chat? Current edits will be saved before switching.")) return;
+    if (!(await confirmNavigation("Open another chat?"))) return;
     store.cancelWorkspacePreview();
     try {
       const outcome = await transport.request("app-chat-library", "loadChat", [id]);
       if (outcome === "discard-required") {
-        if (!window.confirm(discardIncompletePrompt)) return;
+        if (!(await confirmDiscard())) return;
         const retry = await transport.request("app-chat-library", "loadChat", [id, true]);
         if (retry === "discard-required") return;
       }
       overlays.close();
-    } catch (error) {
-      console.error("[chat-library] Could not switch graphs:", error);
+    } catch (cause) {
+      console.error("[chat-library] Could not open chat:", cause);
+      setActionError("Couldn't open this chat. Details were written to the log.");
     }
   }
 
   async function newChat() {
-    if (!confirmNavigation("Start a new chat? Your current edits will be saved before switching.")) return;
+    if (!(await confirmNavigation("Start a new chat?"))) return;
     store.cancelWorkspacePreview();
-    // ADR-020 stage 20.2: workspaceId is optional; for a recovery retry,
-    // pass null explicitly so the final boolean is never confused for an id.
     const args = selectedWorkspaceId === null ? [] : [selectedWorkspaceId];
     try {
       const outcome = await transport.request("app-chat-library", "newChat", args);
       if (outcome === "discard-required") {
-        if (!window.confirm(discardIncompletePrompt)) return;
-        const retry = await transport.request(
-          "app-chat-library", "newChat", [selectedWorkspaceId, true],
-        );
+        if (!(await confirmDiscard())) return;
+        const retry = await transport.request("app-chat-library", "newChat", [selectedWorkspaceId, true]);
         if (retry === "discard-required") return;
       }
       overlays.close();
-    } catch (error) {
-      console.error("[chat-library] Could not start a new graph:", error);
-    }
-  }
-
-  function selectWorkspace(workspaceId: number | null) {
-    setSelectedWorkspaceId(workspaceId);
-    // Tags are scoped to the workspace they were chosen from - carrying a
-    // stale selection into a workspace that doesn't have that tag at all
-    // would silently filter to zero rows with no visible chip explaining
-    // why.
-    setSelectedTags(new Set());
-  }
-
-  function toggleTag(tag: string) {
-    setSelectedTags((prev) => {
-      const next = new Set(prev);
-      if (next.has(tag)) next.delete(tag);
-      else next.add(tag);
-      return next;
-    });
-  }
-
-  // ADR-020 stage 20.3: toggles the SAME workspace's panel closed (matching
-  // startRename/startTagEdit's own "click again to close" absence - those
-  // two don't have a re-click-to-close affordance because Save/Cancel
-  // already close them, but a settings panel has no commit step, so the
-  // gear icon itself is the only open/close control it has).
-  function toggleWorkspaceSettings(workspaceId: number) {
-    setWorkspaceSettingsId((prev) => (prev === workspaceId ? null : workspaceId));
-  }
-
-  // ADR-020 stage 20.3: modelId === "" clears the workspace default (both
-  // wire fields go back to "", matching AppWorkspaceRowPayload's own "empty
-  // string on BOTH means unset" contract) - otherwise the CURRENTLY ACTIVE
-  // provider tags along with the chosen model id, the same implicit-
-  // provider posture Composer's own selectModel(modelId) already has (see
-  // this file's own module docstring).
-  function setWorkspaceDefaultModel(workspaceId: number, modelId: string) {
-    const provider = modelId === "" ? "" : composerState.route.provider;
-    transport.fireIntent("app-chat-library", "setWorkspaceDefaultModel", [workspaceId, provider, modelId], undefined, true);
-  }
-
-  // ADR-020 stage 20.5: fire-and-forget from this component's own
-  // perspective (the native SAVE dialog + a success/cancelled/error
-  // notification is the entire feedback loop - see register_chat_library's
-  // own export_workspace closure) - NOT queueable (unlike setWorkspaceDefault
-  // Model above): a save dialog waiting on the user has nothing sensible to
-  // replay after a reconnect, the same "native-dialog intents don't queue"
-  // posture attachFile/pickGitlinkLocalRoot already established.
-  function exportWorkspace(workspaceId: number) {
-    transport.fireIntent("app-chat-library", "exportWorkspace", [workspaceId], NATIVE_DIALOG_TIMEOUT_MS);
-  }
-
-  async function importWorkspace(workspaceId: number) {
-    if (importingWorkspaceId !== null) return;
-    setImportingWorkspaceId(workspaceId);
-    try {
-      await transport.request("app-chat-library", "importWorkspace", [workspaceId], NATIVE_DIALOG_TIMEOUT_MS);
-    } catch (error) {
-      // The backend also publishes a detailed notification on import failure.
-      console.error("[chat-library] Workspace import failed:", error);
-    } finally {
-      setImportingWorkspaceId(null);
-    }
-  }
-
-  function startCreateWorkspace() {
-    setIsCreatingWorkspace(true);
-    setNewWorkspaceDraft("");
-  }
-
-  function commitCreateWorkspace() {
-    const name = newWorkspaceDraft.trim();
-    if (!name) return;
-    transport.fireIntent("app-chat-library", "createWorkspace", [name]);
-    setIsCreatingWorkspace(false);
-  }
-
-  function cancelCreateWorkspace() {
-    setIsCreatingWorkspace(false);
-  }
-
-  function onNewWorkspaceKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      commitCreateWorkspace();
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      cancelCreateWorkspace();
+    } catch (cause) {
+      console.error("[chat-library] Could not start chat:", cause);
+      setActionError("Couldn't start a new chat. Details were written to the log.");
     }
   }
 
   function toggleFavorite(row: AppChatLibraryRow) {
     transport.fireIntent("app-chat-library", "setGraphFavorite", [row.id, !row.favorite]);
   }
-
   function toggleArchived(row: AppChatLibraryRow) {
     transport.fireIntent("app-chat-library", "setGraphArchived", [row.id, !row.archived]);
   }
-
-  function startRename(row: AppChatLibraryRow, trigger: HTMLButtonElement) {
-    lastTriggerRef.current = trigger;
+  function startRename(row: AppChatLibraryRow) {
+    setActionError(null);
+    setEditingTagsId(null);
     setRenamingId(row.id);
     setRenameDraft(row.title);
-    setConfirmingDeleteId(null);
-    setEditingTagsId(null);
   }
-
-  // REVIEW-FIX: this used to fire-and-forget via transport.fireIntent and
-  // clear renamingId the instant the message was SENT, not once the rename
-  // was actually confirmed - backend's renameChat intent already signals a
-  // no-op (the row was deleted elsewhere, or a lost optimistic-concurrency
-  // race) by resolving to `null`, but nothing here ever looked at it, so the
-  // rename input closed itself over a rename that silently never happened.
-  // Same transport.request()-then-check shape as confirmDelete just below.
-  function commitRename() {
+  async function commitRename() {
     const title = renameDraft.trim();
     if (renamingId === null || !title) return;
-    const chatId = renamingId;
-    transport
-      .request("app-chat-library", "renameChat", [chatId, title])
-      .then((newUpdatedAt) => {
-        if (!newUpdatedAt) return;
-        setRenamingId((current) => (current === chatId ? null : current));
-        lastTriggerRef.current?.focus();
-      })
-      .catch((error) => {
-        console.error("[chat-library] Rename failed:", error);
-      });
-  }
-
-  function cancelRename() {
-    setRenamingId(null);
-    lastTriggerRef.current?.focus();
-  }
-
-  function onRenameKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      commitRename();
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      cancelRename();
+    const id = renamingId;
+    try {
+      const updated = await transport.request("app-chat-library", "renameChat", [id, title]);
+      if (updated) setRenamingId((current) => current === id ? null : current);
+      else setActionError("Couldn't rename this chat. It may have changed elsewhere.");
+    } catch (cause) {
+      console.error("[chat-library] Rename failed:", cause);
+      setActionError("Couldn't rename this chat. Details were written to the log.");
     }
   }
-
-  // ADR-020 stage 20.2: the exact startRename/commitRename/cancelRename/
-  // onRenameKeyDown shape immediately above, applied to `tags` instead of
-  // `title` - same input-swaps-the-row-primary-slot idiom, same Enter-
-  // commits/Escape-cancels contract. Draft is a plain comma-separated
-  // string (pre-filled from row.tags.join(", ")); commit splits on comma,
-  // trims each piece, and drops empties before firing setGraphTags - the
-  // server independently trims/dedupes/case-collapses too (see
-  // backend/chat_library.py's _normalize_tags), so this is a UX nicety for
-  // immediate feedback, not the only place that normalization happens.
-  function startTagEdit(row: AppChatLibraryRow, trigger: HTMLButtonElement) {
-    lastTriggerRef.current = trigger;
+  function startTagEdit(row: AppChatLibraryRow) {
+    setRenamingId(null);
     setEditingTagsId(row.id);
     setTagsDraft(row.tags.join(", "));
-    setConfirmingDeleteId(null);
-    setRenamingId(null);
   }
-
-  function commitTagEdit() {
+  function commitTags() {
     if (editingTagsId === null) return;
-    const tags = tagsDraft
-      .split(",")
-      .map((tag) => tag.trim())
-      .filter((tag) => tag.length > 0);
+    const tags = tagsDraft.split(",").map((value) => value.trim()).filter(Boolean);
     transport.fireIntent("app-chat-library", "setGraphTags", [editingTagsId, tags], undefined, true);
     setEditingTagsId(null);
-    lastTriggerRef.current?.focus();
   }
-
-  function cancelTagEdit() {
-    setEditingTagsId(null);
-    lastTriggerRef.current?.focus();
-  }
-
-  function onTagEditKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      commitTagEdit();
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      cancelTagEdit();
+  async function deleteChat(row: AppChatLibraryRow) {
+    const accepted = await confirm({
+      title: "Delete chat?",
+      body: "Delete “" + row.title + "”? This removes the saved chat from the library.",
+      confirmLabel: "Delete chat",
+      destructive: true,
+    });
+    if (!accepted) return;
+    try {
+      const deleted = await transport.request("app-chat-library", "deleteChat", [row.id]);
+      if (!deleted) setActionError("Couldn't delete this chat. It may have changed elsewhere.");
+    } catch (cause) {
+      console.error("[chat-library] Delete failed:", cause);
+      setActionError("Couldn't delete this chat. Details were written to the log.");
     }
   }
-
-  function startDelete(row: AppChatLibraryRow, trigger: HTMLButtonElement) {
-    lastTriggerRef.current = trigger;
-    setConfirmingDeleteId(row.id);
-    setRenamingId(null);
-    setEditingTagsId(null);
-  }
-
-  // REVIEW-FIX: this used to fire-and-forget via transport.fireIntent and
-  // clear confirmingDeleteId the instant the message was SENT, not once the
-  // deletion was actually confirmed - a genuine failure (a raised exception
-  // server-side, the socket dropping mid-request) left the row sitting in
-  // the list with its "Delete?" confirm buttons already reverted to a
-  // normal row, no visible sign anything had gone wrong. transport.request()
-  // is the real request/response primitive for that (same "I need the
-  // actual outcome, not just to have sent something" reasoning as
-  // BuilderLaunchDialog.tsx's own deleteSelectedRecipe). A rejected promise
-  // - the genuine-failure case - deliberately leaves confirmingDeleteId in
-  // place: the confirm buttons staying up IS the failure signal here, and
-  // the user can just try again. A resolved `false` (the row was already
-  // gone - a double-click, or another tab/session beat this one to it) is
-  // NOT a rejection, but it means nothing was actually removed just now
-  // either, so it is treated the same as a failure rather than optimistically
-  // closing the confirm UI over a delete that didn't happen.
-  function confirmDelete() {
-    if (confirmingDeleteId === null) return;
-    const chatId = confirmingDeleteId;
-    transport
-      .request("app-chat-library", "deleteChat", [chatId])
-      .then((deleted) => {
-        if (!deleted) return;
-        setConfirmingDeleteId((current) => (current === chatId ? null : current));
-      })
-      .catch((error) => {
-        console.error("[chat-library] Delete failed:", error);
-      });
-  }
-
-  function cancelDelete() {
-    setConfirmingDeleteId(null);
-    lastTriggerRef.current?.focus();
-  }
-
-  // Escape-to-cancel while either delete-confirm button has focus. Attached
-  // to the buttons themselves (both are native, already-focusable elements)
-  // rather than the wrapping div, so no synthetic tabIndex/role interactivity
-  // is needed just to catch the key.
-  function onDeleteConfirmKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      cancelDelete();
+  function selectWorkspace(value: string) {
+    if (value === "manage") {
+      setManagingWorkspaces(true);
+      return;
     }
-  }
-
-  function clearFilters() {
+    setSelectedWorkspaceId(value === "all" ? null : Number(value));
     setSelectedTags(new Set());
-    setShowArchived(true);
+  }
+  function saveWorkspace() {
+    const name = newWorkspaceDraft.trim();
+    if (!name) return;
+    transport.fireIntent("app-chat-library", "createWorkspace", [name]);
+    setCreatingWorkspace(false);
+    setNewWorkspaceDraft("");
+  }
+  function setWorkspaceDefaultModel(workspace: AppWorkspaceRow, modelId: string) {
+    const provider = modelId ? composerState.route.provider : "";
+    transport.fireIntent("app-chat-library", "setWorkspaceDefaultModel", [workspace.id, provider, modelId], undefined, true);
+  }
+  function exportWorkspace(workspace: AppWorkspaceRow) {
+    transport.fireIntent("app-chat-library", "exportWorkspace", [workspace.id], NATIVE_DIALOG_TIMEOUT_MS);
+  }
+  async function importWorkspace(workspace: AppWorkspaceRow) {
+    if (importingWorkspaceId !== null) return;
+    setImportingWorkspaceId(workspace.id);
+    try {
+      await transport.request("app-chat-library", "importWorkspace", [workspace.id], NATIVE_DIALOG_TIMEOUT_MS);
+    } catch (cause) {
+      console.error("[chat-library] Workspace import failed:", cause);
+      setActionError("Couldn't import workspace. Details were written to the log.");
+    } finally {
+      setImportingWorkspaceId(null);
+    }
   }
 
-  const total = state.rows.length;
-  const resultsAnnouncement =
-    total === 0 ? "" : filtered.length === 0 ? "No chats match" : `${filtered.length} results`;
-  const visibleWorkspaces = state.workspaces.filter((w) => !w.archived);
-  // ADR-020 stage 20.3.
-  const expandedWorkspace = visibleWorkspaces.find((w) => w.id === workspaceSettingsId) ?? null;
-  const modelCatalogOptions = composerState.route.modelOptions;
+  function rowKeys(event: React.KeyboardEvent<HTMLDivElement>) {
+    const target = event.target;
+    if (!(target instanceof HTMLElement) || !target.matches(".chat-library-row-primary")) return;
+    const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>(".chat-library-row-primary"));
+    const index = buttons.indexOf(target as HTMLButtonElement);
+    if (index < 0) return;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      buttons[Math.max(0, Math.min(buttons.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)))]?.focus();
+    } else if (event.key === "F2" || event.key === "Delete") {
+      event.preventDefault();
+      const row = filtered.find((item) => String(item.id) === target.dataset.chatId);
+      if (row) {
+        if (event.key === "F2") startRename(row);
+        else void deleteChat(row);
+      }
+    }
+    // Enter activates the native row button.
+  }
 
   return (
-    <Dialog name="library" title="Chat Library" className="library-dialog">
-      <div className="library-shell">
-        {visibleWorkspaces.length > 0 && (
-          <div className="library-workspace-tabs" role="group" aria-label="Workspaces">
-            <button
-              type="button"
-              className={"view-chip" + (selectedWorkspaceId === null ? " active" : "")}
-              onClick={() => selectWorkspace(null)}
-            >
-              All
-            </button>
-            {visibleWorkspaces.map((workspace: AppWorkspaceRow) => (
-              // ADR-020 stage 20.3: wraps the tab + its gear icon so the two
-              // stay visually paired if .library-workspace-tabs's own
-              // flex-wrap ever breaks the row across lines.
-              <div key={workspace.id} className="library-workspace-tab-group">
-                <button
-                  type="button"
-                  className={"view-chip" + (selectedWorkspaceId === workspace.id ? " active" : "")}
-                  onClick={() => selectWorkspace(workspace.id)}
-                >
-                  {workspace.name}
-                </button>
-                <button
-                  type="button"
-                  className="library-icon-button library-workspace-settings-button"
-                  aria-label={`${workspaceSettingsId === workspace.id ? "Hide" : "Show"} default model settings for "${workspace.name}"`}
-                  aria-expanded={workspaceSettingsId === workspace.id}
-                  onClick={() => toggleWorkspaceSettings(workspace.id)}
-                >
-                  <Icon name="gear" />
-                </button>
-              </div>
-            ))}
-            {isCreatingWorkspace ? (
-              <div className="library-workspace-new-input-wrap">
-                <input
-                  ref={newWorkspaceRef}
-                  className="library-row-rename-input"
-                  type="text"
-                  value={newWorkspaceDraft}
-                  onChange={(event) => setNewWorkspaceDraft(event.target.value)}
-                  onKeyDown={onNewWorkspaceKeyDown}
-                  placeholder="Workspace name"
-                  aria-label="New workspace name"
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-              </div>
-            ) : (
-              <button type="button" className="library-new-chat-button" onClick={startCreateWorkspace}>
-                + Workspace
-              </button>
-            )}
-          </div>
-        )}
-
-        {expandedWorkspace && (
-          // ADR-020 stage 20.3: the inline-reveal itself - a plain block
-          // below the tabs strip, not a popover/modal (see this file's own
-          // module docstring for why CustomSelect, not Composer's Popover-
-          // based ModelPicker, is the widget inside it).
-          <div
-            className="library-workspace-settings-panel"
-            role="region"
-            aria-label={`Default model for "${expandedWorkspace.name}"`}
-          >
-            <div className="settings-field">
-              <span className="settings-field-label">Default model for &quot;{expandedWorkspace.name}&quot;</span>
-              <p className="settings-update-status">
-                {expandedWorkspace.defaultModelProvider && expandedWorkspace.defaultModelId
-                  ? `Currently: ${expandedWorkspace.defaultModelProvider} / ${expandedWorkspace.defaultModelId}`
-                  : "No default set - dispatch falls through to any node/branch pin, then the auto policy."}
-              </p>
-              {modelCatalogOptions.length === 0 ? (
-                <p className="settings-update-status">
-                  No models found for {composerState.route.provider}. Run a scan on its Settings page.
-                </p>
-              ) : null}
-              <CustomSelect
-                ariaLabel={`Default model for "${expandedWorkspace.name}"`}
-                value={expandedWorkspace.defaultModelId}
-                options={[
-                  { id: "", label: "No workspace default" },
-                  ...modelCatalogOptions.map((option) => ({ id: option.id, label: option.label })),
-                ]}
-                onChange={(modelId) => setWorkspaceDefaultModel(expandedWorkspace.id, modelId)}
-              />
-            </div>
-            <div className="settings-field">
-              <span className="settings-field-label">Export</span>
-              <p className="settings-update-status">
-                Save every graph in &quot;{expandedWorkspace.name}&quot; as one .graphlink file.
-              </p>
-              <button
-                type="button"
-                className="library-new-chat-button"
-                onClick={() => exportWorkspace(expandedWorkspace.id)}
-              >
-                Export Workspace…
-              </button>
-            </div>
-            <div className="settings-field">
-              <span className="settings-field-label">Import</span>
-              <p className="settings-update-status">
-                Restore graphs from a .graphlink archive into &quot;{expandedWorkspace.name}&quot; without overwriting existing graphs.
-              </p>
-              <button
-                type="button"
-                className="library-new-chat-button"
-                disabled={importingWorkspaceId !== null}
-                onClick={() => { void importWorkspace(expandedWorkspace.id); }}
-              >
-                {importingWorkspaceId === expandedWorkspace.id ? "Importing…" : "Import Workspace…"}
-              </button>
-            </div>
-          </div>
-        )}
-
-        <div className="library-header">
-          {total > 0 && (
-            <div className="library-search-wrap">
-              <Icon name="search" />
-              <input
-                className="library-search-input"
-                type="text"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search chats..."
-                aria-label="Search chats"
-                autoComplete="off"
-                spellCheck={false}
-              />
-            </div>
-          )}
-          {total > 0 && (
-            <button
-              type="button"
-              className={"view-chip library-archived-toggle" + (showArchived ? " active" : "")}
-              aria-pressed={showArchived}
-              onClick={() => setShowArchived((prev) => !prev)}
-            >
-              Archived
-            </button>
-          )}
-          <button type="button" className="library-new-chat-button" onClick={newChat}>
-            New Chat
-          </button>
+    <Dialog name="library" title="Chat library" size="lg" className="chat-library-dialog">
+      <div className="chat-library-layout">
+        <div className="chat-library-heading">
+          <p>Find and manage your conversations.</p>
+          <Button variant="primary" iconStart="chat-plus" onClick={() => { void newChat(); }}>New chat</Button>
         </div>
-
+        <div className="chat-library-toolbar">
+          <TextField label="Search chats" type="search" size="sm" prefixIcon="search" suffix={{ type: "clear" }}
+            placeholder="Search chats…" value={query} onValueChange={setQuery} autoComplete="off" />
+          <SegmentedControl label="Filter chats" size="sm" value={filter} onChange={setFilter}
+            options={[{ value: "all", label: "All" }, { value: "starred", label: "Starred" }, { value: "archived", label: "Archived" }]} />
+          <Select ariaLabel="Workspace" value={selectedWorkspaceId === null ? "all" : String(selectedWorkspaceId)}
+            onChange={selectWorkspace}
+            options={[
+              { value: "all", label: "All workspaces", icon: "workspace" },
+              ...workspaces.map((workspace) => ({ value: String(workspace.id), label: workspace.name, icon: "workspace" as const })),
+              { value: "manage", label: "Manage workspaces…", icon: "settings" },
+            ]} />
+        </div>
         {availableTags.length > 0 && (
-          <div className="library-tag-filter-row">
-            <div className="view-row" role="group" aria-label="Filter by tag">
-              {availableTags.map((tag) => (
-                <button
-                  key={tag}
-                  type="button"
-                  className={"view-chip" + (selectedTags.has(tag) ? " active" : "")}
-                  aria-pressed={selectedTags.has(tag)}
-                  onClick={() => toggleTag(tag)}
-                >
-                  {tag}
-                </button>
+          <div className="chat-library-tag-filters" role="group" aria-label="Filter by tag">
+            <Icon name="tag" size="sm" />
+            {availableTags.map((tag) => (
+              <ToggleButton key={tag} size="sm" label={tag} pressed={selectedTags.has(tag)}
+                onPressedChange={() => setSelectedTags((previous) => {
+                  const next = new Set(previous);
+                  if (next.has(tag)) next.delete(tag); else next.add(tag);
+                  return next;
+                })} />
+            ))}
+          </div>
+        )}
+        {managingWorkspaces && (
+          <Card title="Manage workspaces" actions={<IconButton icon="close" label="Close workspace manager" onClick={() => setManagingWorkspaces(false)} />}>
+            <div className="chat-library-workspaces">
+              {creatingWorkspace ? (
+                <div className="chat-library-workspace-create">
+                  <TextField id="chat-library-workspace-name" label="New workspace name" value={newWorkspaceDraft} onValueChange={setNewWorkspaceDraft}
+                    onKeyDown={(event) => { if (event.key === "Enter") saveWorkspace(); if (event.key === "Escape") { event.preventDefault(); setCreatingWorkspace(false); } }} />
+                  <Button onClick={saveWorkspace} disabled={!newWorkspaceDraft.trim()}>Create workspace</Button>
+                  <Button variant="ghost" onClick={() => setCreatingWorkspace(false)}>Cancel</Button>
+                </div>
+              ) : <Button iconStart="plus" onClick={() => setCreatingWorkspace(true)}>Create workspace</Button>}
+              {workspaces.map((workspace) => (
+                <div className="chat-library-workspace" key={workspace.id}>
+                  <Button variant="ghost" onClick={() => setWorkspaceSettingsId(workspaceSettingsId === workspace.id ? null : workspace.id)}
+                    iconStart="workspace" aria-expanded={workspaceSettingsId === workspace.id}>
+                    {workspace.name}
+                  </Button>
+                  {activeWorkspace?.id === workspace.id && (
+                    <div className="chat-library-workspace-details">
+                      <Select label={"Default model for " + workspace.name} value={workspace.defaultModelId}
+                        onChange={(value) => setWorkspaceDefaultModel(workspace, value)}
+                        options={[
+                          { value: "", label: "No workspace default" },
+                          ...composerState.route.modelOptions.map((model) => ({ value: model.id, label: model.label })),
+                        ]} />
+                      <Button iconStart="download" onClick={() => exportWorkspace(workspace)}>Export workspace…</Button>
+                      <Button iconStart="upload" loading={importingWorkspaceId === workspace.id}
+                        onClick={() => { void importWorkspace(workspace); }}>Import workspace…</Button>
+                    </div>
+                  )}
+                </div>
               ))}
             </div>
-          </div>
+          </Card>
         )}
-
-        <div className="library-visually-hidden" role="status" aria-live="polite">
-          {resultsAnnouncement}
-        </div>
-
-        {state.notice && (
-          <p className="library-notice" role="status">
-            {state.notice}
-          </p>
-        )}
-
-        {total === 0 ? (
-          <div className="library-empty-state">
-            <Icon name="chat" />
-            <p className="library-empty-state-title">No saved chats yet</p>
-            <p className="library-empty-state-sub">Start a new chat to begin building your library.</p>
-            <button type="button" className="library-new-chat-button" onClick={newChat}>
-              New Chat
-            </button>
-          </div>
+        {state.notice && <p className="chat-library-notice" role="status">{state.notice}</p>}
+        {actionError && <p className="chat-library-error" role="alert">{actionError}</p>}
+        <span className="chat-library-visually-hidden" aria-live="polite" role="status">
+          {state.rows.length ? formatCount(filtered.length) + " results" : ""}
+        </span>
+        {state.rows.length === 0 ? (
+          <EmptyState icon="chat" title="No saved chats yet" body="Start a new chat to build your library."
+            actions={<Button iconStart="chat-plus" onClick={() => { void newChat(); }}>New chat</Button>} />
         ) : filtered.length === 0 ? (
-          query.trim() ? (
-            <div className="library-search-empty">
-              <p>No chats match &quot;{query}&quot;.</p>
-              <button type="button" className="library-search-empty-clear" onClick={() => setQuery("")}>
-                Clear search
-              </button>
-            </div>
-          ) : (
-            <div className="library-search-empty">
-              <p>No chats match the current filters.</p>
-              <button type="button" className="library-search-empty-clear" onClick={clearFilters}>
-                Clear filters
-              </button>
-            </div>
-          )
+          <EmptyState icon="search" title="No matching chats" body="Try another search or change the filters."
+            actions={<Button onClick={() => { setQuery(""); setFilter("all"); setSelectedTags(new Set()); setSelectedWorkspaceId(null); }}>Clear filters</Button>} />
         ) : (
-          <div className="library-groups">
+          <div className="chat-library-groups" onKeyDown={rowKeys}>
             {groups.map((group) => (
-              <section key={group.key} className="library-group" aria-label={group.key}>
-                <h3 className="library-group-header">{group.key}</h3>
-                <ul className="library-group-rows">
+              <section className="chat-library-group" key={group.key} aria-label={group.key}>
+                <h3 className="chat-library-overline">{group.key}</h3>
+                <ul className="chat-library-list">
                   {group.rows.map((row) => {
-                    const isRenaming = renamingId === row.id;
-                    const isConfirmingDelete = confirmingDeleteId === row.id;
-                    const isEditingTags = editingTagsId === row.id;
-                    const messageWord = row.messageCount === 1 ? "message" : "messages";
+                    const editingTitle = renamingId === row.id;
+                    const editingTags = editingTagsId === row.id;
+                    const word = row.messageCount === 1 ? "message" : "messages";
                     return (
-                      <li key={row.id} className="library-row">
-                        {isRenaming ? (
-                          <div className="library-row-primary">
-                            <input
-                              ref={renameRef}
-                              className="library-row-rename-input"
-                              type="text"
-                              value={renameDraft}
-                              onChange={(event) => setRenameDraft(event.target.value)}
-                              onKeyDown={onRenameKeyDown}
-                              aria-label={`Rename "${row.title}"`}
-                              autoComplete="off"
-                              spellCheck={false}
-                            />
-                            <p className="library-row-preview hint">Enter to save · Esc to cancel</p>
+                      <li className="chat-library-row" key={row.id}>
+                        <Icon name="chat" size="md" className="chat-library-chat-icon" />
+                        {editingTitle ? (
+                          <div className="chat-library-inline-editor">
+                            <TextField id="chat-library-rename" label={'Rename "' + row.title + '"'} value={renameDraft}
+                              onValueChange={setRenameDraft} onKeyDown={(event) => {
+                                if (event.key === "Enter") { event.preventDefault(); void commitRename(); }
+                                if (event.key === "Escape") { event.preventDefault(); setRenamingId(null); }
+                              }} />
+                            <Button size="sm" onClick={() => { void commitRename(); }} disabled={!renameDraft.trim()}>Save</Button>
+                            <IconButton icon="close" label="Cancel rename" onClick={() => setRenamingId(null)} />
                           </div>
-                        ) : isEditingTags ? (
-                          <div className="library-row-primary">
-                            <input
-                              ref={tagsEditRef}
-                              className="library-row-rename-input"
-                              type="text"
-                              value={tagsDraft}
-                              onChange={(event) => setTagsDraft(event.target.value)}
-                              onKeyDown={onTagEditKeyDown}
-                              placeholder="tag-one, tag-two"
-                              aria-label={`Edit tags for "${row.title}"`}
-                              autoComplete="off"
-                              spellCheck={false}
-                            />
-                            <p className="library-row-preview hint">Comma-separated · Enter to save · Esc to cancel</p>
+                        ) : editingTags ? (
+                          <div className="chat-library-inline-editor">
+                            <TextField id="chat-library-tags" label={'Edit tags for "' + row.title + '"'} value={tagsDraft}
+                              onValueChange={setTagsDraft} placeholder="Comma-separated tags"
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") { event.preventDefault(); commitTags(); }
+                                if (event.key === "Escape") { event.preventDefault(); setEditingTagsId(null); }
+                              }} />
+                            <Button size="sm" onClick={commitTags}>Save tags</Button>
+                            <IconButton icon="close" label="Cancel tag edit" onClick={() => setEditingTagsId(null)} />
                           </div>
                         ) : (
-                          <button
-                            type="button"
-                            className="library-row-primary"
-                            aria-label={`Open chat "${row.title}", ${row.messageCount} ${messageWord}, updated ${row.updatedLabel}`}
-                            onClick={() => loadChat(row.id)}
-                          >
-                            <span className="library-row-title" title={row.title}>
-                              {row.title}
-                            </span>
-                            {row.preview ? (
-                              <span className="library-row-preview">{row.preview}</span>
-                            ) : (
-                              <span className="library-row-preview placeholder">No messages yet</span>
-                            )}
+                          <button type="button" className="chat-library-row-primary" data-chat-id={row.id}
+                            aria-label={'Open chat "' + row.title + '", ' + row.messageCount + ' ' + word + ', updated ' + row.updatedLabel}
+                            onClick={() => { void loadChat(row.id); }}>
+                            <span className="chat-library-row-title">{row.title}</span>
+                            <span className="chat-library-row-preview">{row.preview || "No messages yet"}</span>
+                            <span className="chat-library-row-meta">{chatMeta(row)}</span>
                           </button>
                         )}
-
-                        {!isRenaming && !isConfirmingDelete && !isEditingTags && row.messageCount > 0 && (
-                          <span className="library-row-count">{row.messageCount}</span>
+                        {row.tags.length > 0 && !editingTitle && !editingTags && (
+                          <div className="chat-library-row-tags" aria-label="Tags">{row.tags.slice(0, 2).map((tag) => <Badge key={tag}>{tag}</Badge>)}</div>
                         )}
-
-                        {isRenaming ? (
-                          <div className="library-row-actions">
-                            <button
-                              type="button"
-                              className="library-icon-button"
-                              aria-label={`Save "${row.title}"`}
-                              onClick={commitRename}
-                              disabled={renameDraft.trim().length === 0}
-                            >
-                              <Icon name="check" />
-                            </button>
-                            <button
-                              type="button"
-                              className="library-icon-button"
-                              aria-label="Cancel rename"
-                              onClick={cancelRename}
-                            >
-                              <Icon name="x" />
-                            </button>
-                          </div>
-                        ) : isEditingTags ? (
-                          <div className="library-row-actions">
-                            <button
-                              type="button"
-                              className="library-icon-button"
-                              aria-label={`Save tags for "${row.title}"`}
-                              onClick={commitTagEdit}
-                            >
-                              <Icon name="check" />
-                            </button>
-                            <button
-                              type="button"
-                              className="library-icon-button"
-                              aria-label="Cancel tag edit"
-                              onClick={cancelTagEdit}
-                            >
-                              <Icon name="x" />
-                            </button>
-                          </div>
-                        ) : isConfirmingDelete ? (
-                          <div className="library-row-confirm">
-                            <span className="library-row-confirm-label">Delete?</span>
-                            <button
-                              type="button"
-                              className="library-icon-button library-icon-button-confirm-delete"
-                              aria-label={`Confirm delete "${row.title}"`}
-                              onClick={confirmDelete}
-                              onKeyDown={onDeleteConfirmKeyDown}
-                            >
-                              <Icon name="check" />
-                            </button>
-                            <button
-                              ref={deleteCancelRef}
-                              type="button"
-                              className="library-icon-button"
-                              aria-label="Cancel delete"
-                              onClick={cancelDelete}
-                              onKeyDown={onDeleteConfirmKeyDown}
-                            >
-                              <Icon name="x" />
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="library-row-actions">
-                            <button
-                              type="button"
-                              className="library-icon-button"
-                              aria-label={row.favorite ? `Remove "${row.title}" from favorites` : `Add "${row.title}" to favorites`}
-                              onClick={() => toggleFavorite(row)}
-                            >
-                              <Icon name={row.favorite ? "star-filled" : "star"} />
-                            </button>
-                            <button
-                              type="button"
-                              className="library-icon-button"
-                              aria-label={row.archived ? `Unarchive "${row.title}"` : `Archive "${row.title}"`}
-                              onClick={() => toggleArchived(row)}
-                            >
-                              <Icon name="archive" />
-                            </button>
-                            <button
-                              type="button"
-                              className="library-icon-button"
-                              aria-label={`Edit tags for "${row.title}"`}
-                              onClick={(event) => startTagEdit(row, event.currentTarget)}
-                            >
-                              <Icon name="tag" />
-                            </button>
-                            <button
-                              type="button"
-                              className="library-icon-button"
-                              aria-label={`Rename "${row.title}"`}
-                              onClick={(event) => startRename(row, event.currentTarget)}
-                            >
-                              <Icon name="pencil" />
-                            </button>
-                            <button
-                              type="button"
-                              className="library-icon-button library-icon-button-delete"
-                              aria-label={`Delete "${row.title}"`}
-                              onClick={(event) => startDelete(row, event.currentTarget)}
-                            >
-                              <Icon name="trash" />
-                            </button>
+                        {!editingTitle && !editingTags && (
+                          <div className="chat-library-row-actions">
+                            <ToggleButton icon="star" size="sm" pressed={row.favorite}
+                              className={"chat-library-star" + (row.favorite ? " is-starred" : "")}
+                              aria-label={row.favorite ? 'Remove "' + row.title + '" from favorites' : 'Add "' + row.title + '" to favorites'}
+                              onPressedChange={() => toggleFavorite(row)} />
+                            <IconButton icon="edit" label={'Rename "' + row.title + '"'} size="sm"
+                              className="chat-library-hover-action" onClick={() => startRename(row)} />
+                            <MenuButton label="More" menuLabel={'More actions for "' + row.title + '"'} className="chat-library-hover-action">
+                              <MenuItem icon="tag" label="Tag…" onSelect={() => startTagEdit(row)} />
+                              <MenuItem icon="archive" label={row.archived ? "Unarchive" : "Archive"} onSelect={() => toggleArchived(row)} />
+                              <MenuItem destructive label="Delete…" onSelect={() => { void deleteChat(row); }} />
+                            </MenuButton>
                           </div>
                         )}
                       </li>
