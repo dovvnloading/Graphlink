@@ -104,7 +104,10 @@ export function Composer({
   const selectedNode = scene.nodes.find((n) => n.id === selectedNodeId);
   const effectiveReplyTarget = replyTargetNode ?? selectedNode;
   const replyPreview = effectiveReplyTarget
+    // One line: the placeholder sizes the auto-growing input (field-sizing),
+    // so raw newlines from table or note content would make it tall.
     ? (effectiveReplyTarget.content?.trim() || effectiveReplyTarget.title?.trim() || "(empty message)")
+      .replace(/\s+/g, " ")
     : "";
   const clearReplyTarget = () => {
     if (replyTargetNode) sceneStore.setReplyTargetNodeId(null);

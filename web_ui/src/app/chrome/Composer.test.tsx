@@ -1392,6 +1392,20 @@ describe("UI-15 composer context and disabled explanations", () => {
     expect(setSelectedNodeId).toHaveBeenCalledWith(null);
   });
 
+  it("keeps the reply placeholder on one line for multi-line node content", () => {
+    const { store } = makeStore();
+    const { sceneStore } = makeSceneStore({
+      selectedNodeId: "n1",
+      scene: { nodes: [{ id: "n1", kind: "note", title: "", content: "Team,Hours\r\nDesign,7\nOps,4" }] },
+    });
+    render(<OverlayProvider>
+      {/* @ts-expect-error - fixture store */}
+      <Composer store={store} sceneStore={sceneStore} />
+    </OverlayProvider>);
+    expect(screen.getByLabelText("Message composer"))
+      .toHaveAttribute("placeholder", "Reply to “Team,Hours Design,7 Ops,4”…");
+  });
+
   it("uses the graph prompt for an existing scene without a reply target", () => {
     const { store } = makeStore();
     const { sceneStore } = makeSceneStore({
