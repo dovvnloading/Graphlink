@@ -282,7 +282,8 @@ describe("HarnessNodeView", () => {
     expect(await within(dialog).findByRole("list", { name: "Agent hooks" })).toBeInTheDocument();
     expect(within(dialog).getByText(/run local commands with your workspace access/)).toBeInTheDocument();
     expect(within(dialog).getByRole("textbox", { name: "Hook command 1" })).toHaveValue("echo check");
-    await user.selectOptions(within(dialog).getByRole("combobox", { name: "Hook phase 1" }), "after_tool");
+    await user.click(within(dialog).getByRole("button", { name: "Hook phase 1" }));
+    await user.click(screen.getByRole("option", { name: "After tool (adds note)" }));
     await user.clear(within(dialog).getByRole("textbox", { name: "Hook command 1" }));
     await user.type(within(dialog).getByRole("textbox", { name: "Hook command 1" }), "echo result");
     await user.click(within(dialog).getByRole("checkbox", { name: "Enable hook 1" }));
@@ -350,8 +351,8 @@ describe("HarnessNodeView", () => {
       await user.click(screen.getByRole("button", { name: "Agent settings" }));
       const dialog = screen.getByRole("dialog", { name: "Agent settings" });
       expect(dialog).toBeInTheDocument();
-      const shell = screen.getByRole("combobox", { name: "Shell" });
-      expect(shell).toHaveValue("bash");
+      const shell = screen.getByRole("button", { name: "Shell" });
+      expect(shell).toHaveTextContent("Bash (default)");
       expect(shell).toBeDisabled();
       expect(dialog).toHaveTextContent("Live changes apply from the next task.");
       await user.keyboard("{Escape}");
@@ -366,10 +367,11 @@ describe("HarnessNodeView", () => {
     const data = makeData({ harnessPermissionMode: "ask" });
     renderHarness(data);
     await user.click(screen.getByRole("button", { name: "Agent settings" }));
-    const select = screen.getByRole("combobox", { name: "Permission mode" });
-    expect(select).toHaveValue("ask");
+    const select = screen.getByRole("button", { name: "Permission mode" });
+    expect(select).toHaveTextContent("Ask — approve each action");
+    await user.click(select);
     expect(screen.getByRole("option", { name: /Autonomous/ })).toBeDisabled();
-    await user.selectOptions(select, "auto_edit");
+    await user.click(screen.getByRole("option", { name: /Auto-edit/ }));
     expect(data.onSetPermissionMode).toHaveBeenCalledExactlyOnceWith("auto_edit");
   });
 
@@ -383,9 +385,10 @@ describe("HarnessNodeView", () => {
     renderHarness(data);
     expect(screen.getByText("Task permission: Ask")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Agent settings" }));
-    const select = screen.getByRole("combobox", { name: "Permission mode" });
+    const select = screen.getByRole("button", { name: "Permission mode" });
+    await user.click(select);
     expect(screen.getByRole("option", { name: /Autonomous/ })).not.toBeDisabled();
-    await user.selectOptions(select, "autonomous");
+    await user.click(screen.getByRole("option", { name: /Autonomous/ }));
     expect(data.onSetPermissionMode).toHaveBeenCalledExactlyOnceWith("autonomous");
     expect(screen.getByText("Task permission: Ask")).toBeInTheDocument();
   });
@@ -415,13 +418,15 @@ describe("HarnessNodeView", () => {
     try {
       renderHarness(agent);
       await user.click(screen.getByRole("button", { name: "Agent settings" }));
-      const select = screen.getByRole("combobox", { name: "Shell" });
-      expect(select).toHaveValue("powershell");
-      expect(Array.from((select as HTMLSelectElement).options).map((option) => option.value))
-        .toEqual(["powershell", "cmd", "git-bash"]);
-      await user.selectOptions(select, "cmd");
+      const select = screen.getByRole("button", { name: "Shell" });
+      expect(select).toHaveTextContent("PowerShell (default)");
+      await user.click(select);
+      expect(screen.getAllByRole("option").map((option) => option.textContent?.trim()))
+        .toEqual(["PowerShell (default)", "Command Prompt (cmd)", "Git Bash"]);
+      await user.click(screen.getByRole("option", { name: "Command Prompt (cmd)" }));
       expect(agent.onSetShell).toHaveBeenCalledWith("cmd");
-      await user.selectOptions(select, "git-bash");
+      await user.click(select);
+      await user.click(screen.getByRole("option", { name: "Git Bash" }));
       expect(agent.onSetShell).toHaveBeenCalledWith("git-bash");
       fireEvent.pointerDown(document.body);
       expect(screen.queryByRole("dialog", { name: "Agent settings" })).not.toBeInTheDocument();
@@ -436,9 +441,10 @@ describe("HarnessNodeView", () => {
     renderHarness(data);
     await user.click(screen.getByRole("button", { name: "Agent settings" }));
     expect(await screen.findByText(/Podman detected/)).toBeInTheDocument();
-    const select = screen.getByRole("combobox", { name: "Execution profile" });
-    expect(select).toHaveValue("host");
-    await user.selectOptions(select, "isolated");
+    const select = screen.getByRole("button", { name: "Execution profile" });
+    expect(select).toHaveTextContent("Host (default)");
+    await user.click(select);
+    await user.click(screen.getByRole("option", { name: /Isolated/ }));
     expect(data.onSetExecutionProfile).toHaveBeenCalledWith("isolated");
   });
 
@@ -453,10 +459,11 @@ describe("HarnessNodeView", () => {
     expect(await screen.findByText(/No container engine found/)).toHaveTextContent("Docker");
     expect(screen.getByText(/No container engine found/)).toHaveTextContent("Podman");
     expect(screen.getByText(/No container engine found/)).toHaveTextContent("never fall back to Host");
-    const profileSelect = screen.getByRole("combobox", { name: "Execution profile" });
-    expect(profileSelect).toHaveValue("isolated");
-    expect(within(profileSelect).getByRole("option", { name: /Isolated/ })).toBeDisabled();
-    await user.selectOptions(profileSelect, "host");
+    const profileSelect = screen.getByRole("button", { name: "Execution profile" });
+    expect(profileSelect).toHaveTextContent("Isolated (Docker / Podman)");
+    await user.click(profileSelect);
+    expect(screen.getByRole("option", { name: /Isolated/ })).toBeDisabled();
+    await user.click(screen.getByRole("option", { name: /Host/ }));
     expect(data.onSetExecutionProfile).toHaveBeenCalledWith("host");
   });
 
@@ -927,7 +934,7 @@ describe("HarnessNodeView", () => {
     }));
     expect(screen.getByText("2 activity entries")).toBeInTheDocument();
     expect(screen.getByText("Running · <1 s")).toBeInTheDocument();
-    expect(screen.getByText("Stopped · 220ms")).toBeInTheDocument();
+    expect(screen.getByText("Stopped · <1 s")).toBeInTheDocument();
     expect(screen.getByText(/first line/)).toBeInTheDocument();
     expect(screen.getByText(/previous output/)).toBeInTheDocument();
     expect(screen.getAllByText(/Output:/).length).toBe(2);
