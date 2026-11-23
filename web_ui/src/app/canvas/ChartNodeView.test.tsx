@@ -68,10 +68,10 @@ describe("ChartNodeView", () => {
     expect(screen.queryByLabelText("Chart generation warning")).toBeNull();
   });
 
-  it("shows an inline warning badge carrying chartError as its title, WITHOUT hiding the chart canvas", async () => {
+  it("shows an accessible warning icon without native title, without hiding the chart canvas", async () => {
     const { container } = renderChartNode({ chartError: "used a placeholder - generation failed" });
     const badge = screen.getByLabelText("Chart generation warning");
-    expect(badge).toHaveAttribute("title", "used a placeholder - generation failed");
+    expect(badge).not.toHaveAttribute("title");
     // The chart canvas still renders - a chart_error never blocks the card.
     await waitFor(() => expect(container.querySelector(".chart-canvas-wrapper")).not.toBeNull());
   });
@@ -108,10 +108,15 @@ describe("chart publication export controls", () => {
     renderChartNode({}, "chart-export");
     fireEvent.click(screen.getByRole("button", { name: "Publication export…" }));
     expect(screen.getByRole("group", { name: "Publication export settings" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Publication format" }));
     expect(screen.getByRole("option", { name: "PDF (vector)" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "SVG (vector)" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Publication format" }));
+    fireEvent.click(screen.getByRole("button", { name: "Publication size" }));
     expect(screen.getByRole("option", { name: "Single column (85 mm)" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Double column (180 mm)" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Publication size" }));
+    fireEvent.click(screen.getByRole("button", { name: "Publication DPI" }));
     expect(screen.getByRole("option", { name: "600" })).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: /Colorblind-safe palette/ })).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: /Grayscale-safe/ })).toBeInTheDocument();
@@ -120,11 +125,18 @@ describe("chart publication export controls", () => {
   it("submits settings, custom physical size and uses the saved chart aspect for presets", async () => {
     renderChartNode({ chartWidth: 680, chartHeight: 340 }, "chart-export");
     fireEvent.click(screen.getByRole("button", { name: "Publication export…" }));
-    fireEvent.change(screen.getByRole("combobox", { name: "Publication format" }), { target: { value: "pdf" } });
-    fireEvent.change(screen.getByRole("combobox", { name: "Publication size" }), { target: { value: "custom" } });
-    fireEvent.change(screen.getByRole("spinbutton", { name: "Custom width in millimeters" }), { target: { value: "120" } });
-    fireEvent.change(screen.getByRole("spinbutton", { name: "Custom height in millimeters" }), { target: { value: "95" } });
-    fireEvent.change(screen.getByRole("combobox", { name: "Publication DPI" }), { target: { value: "600" } });
+    fireEvent.click(screen.getByRole("button", { name: "Publication format" }));
+    fireEvent.click(screen.getByRole("option", { name: "PDF (vector)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Publication size" }));
+    fireEvent.click(screen.getByRole("option", { name: "Custom (mm)" }));
+    const width = screen.getByRole("spinbutton", { name: "Custom width in millimeters" });
+    const height = screen.getByRole("spinbutton", { name: "Custom height in millimeters" });
+    fireEvent.change(width, { target: { value: "120" } });
+    fireEvent.blur(width);
+    fireEvent.change(height, { target: { value: "95" } });
+    fireEvent.blur(height);
+    fireEvent.click(screen.getByRole("button", { name: "Publication DPI" }));
+    fireEvent.click(screen.getByRole("option", { name: "600" }));
     fireEvent.click(screen.getByRole("checkbox", { name: /Colorblind-safe palette/ }));
     fireEvent.click(screen.getByRole("checkbox", { name: /Grayscale-safe/ }));
     fireEvent.click(screen.getByRole("button", { name: "Download PDF" }));

@@ -164,12 +164,22 @@ describe("ChartRenderer", () => {
     const zoomGroup = svg.querySelector("g")!;
     expect(zoomGroup.getAttribute("transform")).toBe("translate(0 0) scale(1)");
 
+    const resetButton = screen.getByRole("button", { name: "Reset zoom" });
+    expect(resetButton).toBeDisabled();
+    fireEvent.wheel(svg, { deltaY: -100, clientX: 100, clientY: 100 });
+    expect(zoomGroup.getAttribute("transform")).toBe("translate(0 0) scale(1)");
+
+    fireEvent.focus(svg);
+    expect(container.querySelector(".chart-canvas-wrapper")).toHaveAttribute("data-interactive", "true");
     fireEvent.wheel(svg, { deltaY: -100, clientX: 100, clientY: 100 });
     expect(zoomGroup.getAttribute("transform")).not.toBe("translate(0 0) scale(1)");
-    const resetButton = screen.getByRole("button", { name: "Reset zoom" });
-
+    expect(resetButton).toBeEnabled();
     fireEvent.click(resetButton);
     expect(zoomGroup.getAttribute("transform")).toBe("translate(0 0) scale(1)");
-    expect(screen.queryByRole("button", { name: "Reset zoom" })).toBeNull();
+    expect(resetButton).toBeDisabled();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(container.querySelector(".chart-canvas-wrapper")).toHaveAttribute("data-interactive", "false");
+    fireEvent.wheel(svg, { deltaY: -100, clientX: 100, clientY: 100, ctrlKey: true });
+    expect(container.querySelector(".chart-canvas-wrapper")).toHaveAttribute("data-interactive", "true");
   });
 });
