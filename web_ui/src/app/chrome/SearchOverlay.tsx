@@ -93,7 +93,7 @@ export function SearchOverlay({ store }: { store: SceneStore }) {
   if (!isOpen) return null;
   const current = currentIndex < 0 ? 0 : currentIndex + 1;
   return (
-    <div className="search-overlay-shell" ref={shellRef} role="search" aria-label="Search the canvas">
+    <div className="search-overlay-shell" ref={shellRef} role="search" aria-label="Canvas find toolbar">
       <TextField label="Search the canvas" size="sm" type="search" className="search-overlay-field"
         placeholder="Find node…" value={query} onValueChange={onQueryChange}
         autoComplete="off" spellCheck={false} onKeyDown={(event) => {
