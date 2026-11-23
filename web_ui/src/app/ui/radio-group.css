@@ -1,3 +1,4 @@
+@layer kit {
 .gl-radio-group { display: grid; min-width: 0; margin: 0; padding: 0; border: 0; gap: var(--gl-space-2); color: var(--gl-surface-text-primary); }
 .gl-radio-legend { padding: 0; margin-bottom: var(--gl-space-1-5); font-size: var(--gl-text-sm); font-weight: var(--gl-weight-medium); }
 .gl-radio-options { display: grid; gap: var(--gl-space-1); }
@@ -19,3 +20,4 @@
 .gl-radio-card:where(.gl-radio-selected)::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 2px; border-radius: var(--gl-radius-xs) 0 0 var(--gl-radius-xs); background: var(--gl-accent); }
 .gl-radio-check { margin-left: auto; color: var(--gl-accent); }
 .gl-radio-error { display: flex; align-items: center; gap: var(--gl-space-1); font-size: var(--gl-text-xs); color: var(--gl-surface-text-primary); }
+}

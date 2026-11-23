@@ -1,3 +1,4 @@
+@layer kit {
 .gl-progress { display: grid; gap: var(--gl-space-1-5); min-width: 0; color: var(--gl-surface-text-primary); }
 .gl-progress-heading {
   display: flex;
@@ -29,4 +30,5 @@
 @media (prefers-reduced-motion: reduce) {
   .gl-progress-fill { animation: none; transition: none; }
   .gl-progress-track--indeterminate .gl-progress-fill { width: 100%; transform: none; }
+}
 }

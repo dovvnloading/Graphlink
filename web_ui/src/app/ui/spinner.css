@@ -1,3 +1,4 @@
+@layer kit {
 .gl-spinner {
   display: inline-flex;
   align-items: center;
@@ -25,4 +26,5 @@
 @media (prefers-reduced-motion: reduce) {
   .gl-spinner-arc { display: none; animation: none; }
   .gl-spinner-static { display: block; }
+}
 }

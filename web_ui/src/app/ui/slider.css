@@ -1,3 +1,4 @@
+@layer kit {
 .gl-slider { display: grid; gap: var(--gl-space-2); min-width: 0; color: var(--gl-surface-text-primary); }
 .gl-slider-disabled { opacity: .45; cursor: not-allowed; }
 .gl-slider-row { display: flex; align-items: center; gap: var(--gl-space-3); }
@@ -14,3 +15,4 @@
 .gl-slider-value { font-size: var(--gl-text-xs); font-family: var(--gl-font-mono); min-width: var(--gl-space-10); text-align: right; }
 .gl-slider-ticks { position: relative; height: var(--gl-leading-xs); margin: 0 var(--gl-space-2); color: var(--gl-surface-text-muted); }
 .gl-slider-tick { position: absolute; transform: translateX(-50%); white-space: nowrap; font-size: var(--gl-text-2xs); line-height: var(--gl-leading-2xs); }
+}
