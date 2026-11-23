@@ -145,7 +145,11 @@ async def _run(call: ToolCall, ctx: RunContext) -> ToolResult:
     async def approve_host(host: str, url: str) -> bool:
         if ctx.cancel is not None and ctx.cancel.is_set():
             return False
-        if host in ctx._approved_web_domains:
+        browser_domains = getattr(ctx, "_approved_browser_domains", None)
+        if browser_domains is None:
+            browser_domains = set()
+            setattr(ctx, "_approved_browser_domains", browser_domains)
+        if host in browser_domains:
             return True
         decision = await ctx.request_approval(ToolCall(
             id=call.id + ":host:" + host,
@@ -156,13 +160,13 @@ async def _run(call: ToolCall, ctx: RunContext) -> ToolResult:
         if ctx.cancel is not None and ctx.cancel.is_set():
             return False
         if decision:
-            ctx._approved_web_domains.add(host)
+            browser_domains.add(host)
             return True
         return False
 
     action_index = 0
 
-    async def approve_action(kind: str, selector: str, page_url: str) -> bool:
+    async def approve_action(kind: str, selector: str, page_url: str, detail: dict[str, str]) -> bool:
         nonlocal action_index
         action_index += 1
         if ctx.cancel is not None and ctx.cancel.is_set():
@@ -174,6 +178,9 @@ async def _run(call: ToolCall, ctx: RunContext) -> ToolResult:
             name="browser.run",
             arguments={"approval": "interaction", "action": kind,
                        "selector": selector, "url": page_url,
+                       "element_text": detail.get("label", ""),
+                       "link_target": detail.get("href", ""),
+                       "field_value": detail.get("value", ""),
                        "disclosure": "This may change page state. All non-GET network calls are blocked."},
         ))
         return bool(decision) and not (ctx.cancel is not None and ctx.cancel.is_set())
