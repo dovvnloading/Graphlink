@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
+import { Fragment, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 import { Popover, useOverlays } from "../overlays/overlays";
 import { Icon } from "../ui/icons/Icon";
 import { Button } from "../ui/Button";
@@ -253,7 +253,7 @@ export function ComposerModelMenu({ store, disabled = false }: { store: Composer
         disabled={disabled} menuLabel="Choose a model"
         onClick={() => { setQuery(""); setOpenEpoch((n) => n + 1); }}>
         {models.length > 8 && (
-          <input ref={input} type="search" className="model-picker-search"
+          <input key="search" ref={input} type="search" className="model-picker-search"
             placeholder="Search local and cloud models…" aria-label="Search models"
             value={query} onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
@@ -277,12 +277,12 @@ export function ComposerModelMenu({ store, disabled = false }: { store: Composer
               }
             }} />
         )}
-        {!current && <span className="model-picker-empty" role="status">Loading local and cloud models…</span>}
+        {!current && <span key="loading" className="model-picker-empty" role="status">Loading local and cloud models…</span>}
         {current?.error && (
-          <>
+          <Fragment key="error">
             <span className="model-picker-empty" role="alert">{current.error}</span>
             <MenuItem label="Retry model list" icon="refresh" onSelect={() => setRetry((x) => x + 1)} />
-          </>
+          </Fragment>
         )}
         {!current?.error && providers.map((provider) => (
           <MenuGroup key={provider} label={provider}>
@@ -306,12 +306,12 @@ export function ComposerModelMenu({ store, disabled = false }: { store: Composer
           </MenuGroup>
         ))}
         {current && !current.error && !matches.length && (
-          <span className="model-picker-empty" role="status">
+          <span key="empty" className="model-picker-empty" role="status">
             {normalized ? "No matching models. Try another search." : "No models available. Configure a model in Settings."}
           </span>
         )}
-        <MenuSeparator />
-        <MenuItem label="Manage models…" icon="settings" onSelect={() => {
+        <MenuSeparator key="separator" />
+        <MenuItem key="manage" label="Manage models…" icon="settings" onSelect={() => {
           store.openOllamaSettings();
           overlays.open("settings", "dialog");
         }} />

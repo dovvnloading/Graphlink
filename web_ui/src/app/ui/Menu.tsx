@@ -258,6 +258,18 @@ function MenuSurface({
   const context = useMemo<MenuContextValue>(() => ({
     dismiss: onClose, nested: overlays.isNested(layerName), submenuPanels, submenuClosers,
   }), [onClose, overlays, layerName]);
+  // The overlay stack can dismiss this layer itself (Escape while focus has
+  // left the panel, an outer close). Mirror that into the owner's state so a
+  // dismissed menu never stays rendered.
+  const layerOpen = overlays.isOpen(layerName);
+  const layerWasOpen = useRef(false);
+  useEffect(() => {
+    if (layerOpen) layerWasOpen.current = true;
+    else if (layerWasOpen.current) {
+      layerWasOpen.current = false;
+      onClose();
+    }
+  }, [layerOpen, onClose]);
   const { regular, destructive } = partitionItems(children);
 
   useMenuKeyboard(panelRef, true, closeTop);

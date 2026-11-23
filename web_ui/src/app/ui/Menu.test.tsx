@@ -26,6 +26,18 @@ function ButtonHarness() {
 }
 
 describe("kit menu structure and focus", () => {
+  it("closes when the overlay stack dismisses it while focus has left the panel", async () => {
+    const user = userEvent.setup();
+    render(<OverlayProvider><ButtonHarness /></OverlayProvider>);
+    await user.click(screen.getByRole("button", { name: "Actions" }));
+    expect(screen.getByRole("menu", { name: "Actions" })).toBeInTheDocument();
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement).toBe(document.body);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "Actions" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Actions" })).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("closes an open menu with Escape even when focus is back on its trigger", async () => {
     const user = userEvent.setup();
     render(<ButtonHarness />);
