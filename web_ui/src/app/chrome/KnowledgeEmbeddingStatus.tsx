@@ -163,7 +163,7 @@ export function KnowledgeEmbeddingStatus({
 
   const statusLabel = active ? "Running" : choice?.source === "off" ? "Off" : "Ready";
   return (
-    <Card title="Embeddings" className="knowledge-embeddings-card"
+    <Card {...{ title: "Embeddings" }} className="knowledge-embeddings-card"
       actions={<div className="knowledge-embeddings-status">
         <StatusPill status={active ? "Running" : choice?.source === "off" ? "Skipped" : "Done"} />
         <Badge>{statusLabel}</Badge>
