@@ -1,3 +1,4 @@
+import "./SceneCanvas.css";
 import {
   ReactFlow,
   ViewportPortal,
@@ -9,7 +10,7 @@ import {
   type Node,
   type NodeChange,
 } from "@xyflow/react";
-import "@xyflow/react/dist/style.css";
+import "./ReactFlowVendor.css";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import type { SceneEdgeRow, SceneNodeRow, SceneState } from "../../lib/bridge-core/generated/scene-state";

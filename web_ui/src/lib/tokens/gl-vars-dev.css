@@ -1,3 +1,4 @@
+@layer base {
 /* ADR-012 stage 12.1: the real, hand-authored source-of-truth token file -
  * NOT generated, despite the historical "-dev" filename and the header this
  * file carried before this stage (which cited graphlink_styles.py::
@@ -684,4 +685,5 @@
   --gl-node-font-family: var(--gl-font-family);
   --gl-node-font-size: 12px;
   --gl-node-font-color: initial;
+}
 }

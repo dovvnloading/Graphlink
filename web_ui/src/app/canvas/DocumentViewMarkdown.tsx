@@ -10,7 +10,7 @@ import rehypeSlug from "rehype-slug";
 import rehypeAutolinkHeadings from "rehype-autolink-headings";
 import rehypeExternalLinks from "rehype-external-links";
 import Zoom from "react-medium-image-zoom";
-import "react-medium-image-zoom/dist/styles.css";
+import "./ZoomVendor.css";
 import { rehypeHighlightSearchMatches } from "./documentViewSearchHighlight";
 
 /**

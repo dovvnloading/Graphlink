@@ -9,3 +9,41 @@
 .builder-launch-budgets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--gl-space-3); margin-top: var(--gl-space-3); }
 .harness-launch-workspace { display: flex; align-items: center; flex-wrap: wrap; gap: var(--gl-space-2); min-width: 0; }
 .harness-launch-workspace-dir { flex: 1; min-width: 0; color: var(--gl-surface-text-primary); font-size: var(--gl-text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Shared first-task Host/Isolated choice in the launch dialog and composer. */
+.harness-launch-profile {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--gl-space-1-5) var(--gl-space-2-5);
+  min-width: 0;
+}
+
+.harness-launch-profile label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gl-space-1-5);
+  color: var(--gl-surface-text-secondary);
+  font-size: var(--gl-text-2xs);
+}
+
+.harness-launch-profile select {
+  max-width: 100%;
+  padding: calc(var(--gl-space-1) + 1px) calc(var(--gl-space-1-5) + 1px);
+  font: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-field, var(--gl-surface-inset));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+}
+
+.harness-launch-profile select:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 1px;
+}
+
+.harness-launch-profile-status {
+  color: var(--gl-surface-text-muted);
+  font-size: var(--gl-text-2xs);
+}
+

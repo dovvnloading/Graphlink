@@ -1,3 +1,4 @@
+import "./CommandPalette.css";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { AppChatLibraryState } from "../../lib/bridge-core/generated/app-chat-library-state";
 import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
