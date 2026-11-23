@@ -296,5 +296,5 @@
 }
 
 /* A selected group remains underneath the cards contained in it. */
-.scene-canvas .react-flow__node-frame.selected { z-index: -1 !important; }
-.scene-canvas .react-flow__node-container.selected { z-index: -2 !important; }
+.scene-canvas .react-flow__node-frame.selected { z-index: -1; }
+.scene-canvas .react-flow__node-container.selected { z-index: -2; }
