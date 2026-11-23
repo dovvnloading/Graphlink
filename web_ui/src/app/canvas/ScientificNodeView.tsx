@@ -1,5 +1,13 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode } from "react";
 import type { Node, NodeProps } from "@xyflow/react";
+import { StatusPill } from "../ui/Badge";
+import { Button } from "../ui/Button";
+import { Checkbox } from "../ui/Checkbox";
+import { Disclosure } from "../ui/Disclosure";
+import { IconButton } from "../ui/IconButton";
+import { Select } from "../ui/Select";
+import { InlineAlert } from "../ui/InlineAlert";
+import { formatCount, formatDuration } from "../ui/format";
 import { OverlayProviderIfMissing, useOverlays } from "../overlays/overlays";
 import { scientificFocusName } from "./scientificFocus";
 import { ScientificWorkspace, useScientificSlots, type ScienceEditorProps } from "./ScientificWorkspace";
@@ -96,10 +104,10 @@ function ResultDisclosure({ label, children, className = "", onClose, defaultOpe
   label: string; children: ReactNode; className?: string; onClose?: () => void; defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  return <details className={`science-result-disclosure ${className}`.trim()} open={open}>
-    <summary onClick={(event) => { event.preventDefault(); if (open) onClose?.(); setOpen((previous) => !previous); }}>{label}</summary>
+  return <Disclosure title={label} className={`science-result-disclosure ${className}`.trim()}
+    open={open} onOpenChange={(next) => { if (!next) onClose?.(); setOpen(next); }}>
     {open && children}
-  </details>;
+  </Disclosure>;
 }
 
 function Results({ result, title, headlineKey, scatter, freshness, exportJson, exportCsv, exportMethods, onChart, onRefresh, onDiscuss, charts }: {
@@ -130,14 +138,17 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
   return <section className="science-results" aria-label="Latest result">
     <div className="science-result-head">
       <h4>Last successful run · {title}</h4>
-      {freshness && <p role="note" className="science-result-notice">{freshness}</p>}
+      <div className="science-result-status">
+          <StatusPill status={freshness ? "Out of date" : "Done"} />
+          {freshness && <p role="note" className="science-result-notice">{freshness}</p>}
+        </div>
       {headline ? <div className="science-result-highlight">
-        <span title={headline[0]}>{readableScienceKey(headline[0])}</span>
+        <span>{readableScienceKey(headline[0])}</span>
         <strong>{uncertaintyUnavailable ? `${formatScienceValue(headline[1])} · uncertainty unavailable`
           : measurement ? formatMeasurement(measurement) : formatScienceValue(headline[1])}</strong>
       </div> : (table || tableAsset) && <div className="science-result-highlight">
         <span>Result table</span>
-        <strong>{tableRows.toLocaleString()} {tableRows === 1 ? "row" : "rows"}</strong>
+        <strong>{formatCount(tableRows)} {tableRows === 1 ? "row" : "rows"}</strong>
       </div>}
       <p role="status" className={`science-result-summary${longSummary ? " science-result-summary--clamped" : ""}`}>
         {formattedSummary}
@@ -151,8 +162,8 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
         <p>{formattedSummary}</p>
       </ResultDisclosure>}
       {values.length > 0 && <ResultDisclosure label={`All values · ${values.length}`}>
-        <label className="science-precision"><input type="checkbox" checked={exactValues}
-          onChange={event => setExactValues(event.target.checked)} />Show stored precision</label>
+        <Checkbox className="science-precision" label="Show stored precision" checked={exactValues}
+          onChange={(event) => setExactValues(event.currentTarget.checked)} />
         <dl className="science-result-values">{values.map(([label, value]) => {
           const measured = resultMeasurement(result, label);
           const unpropagatable = result.uncertainty?.unsupportedOutputs?.[label];
@@ -168,7 +179,7 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
           <h5>{name} · {formatMeasurement(measured)}</h5>
           {measured.interval && <small>{Math.round((measured.coverageProbability ?? 0.95) * 100)}% {measured.method === "monte_carlo" ? "Monte Carlo quantile coverage interval" : "coverage interval"} [{numberCell(measured.interval[0])}, {numberCell(measured.interval[1])}]{measured.method === "monte_carlo" ? " · Gaussian input model" : ` · coverage factor k = ${numberCell(measured.coverageFactor)}`}</small>}
           {measured.budgetNote && <small>{measured.budgetNote}</small>}
-          <details><summary>Stored measurement values</summary><dl className="science-result-values">
+          <Disclosure title="Stored measurement values"><dl className="science-result-values">
             <div><dt>Estimate</dt><dd>{exactScienceNumber(measured.value)} {measured.unit}</dd></div>
             <div><dt>Standard uncertainty</dt><dd>{exactScienceNumber(measured.standardUncertainty)} {measured.unit}</dd></div>
             {measured.interval && <div><dt>Coverage interval</dt><dd>{measured.interval.map(exactScienceNumber).join(" to ")} {measured.unit}</dd></div>}
@@ -176,7 +187,7 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
             {measured.method !== "monte_carlo" && <div><dt>Coverage factor</dt><dd>{exactScienceNumber(measured.coverageFactor)}</dd></div>}
             {measured.monteCarloMean !== undefined && <div><dt>Monte Carlo mean</dt><dd>{exactScienceNumber(measured.monteCarloMean)} {measured.unit}</dd></div>}
             {measured.monteCarloTrials !== undefined && <div><dt>Monte Carlo trials</dt><dd>{measured.monteCarloTrials}</dd></div>}
-          </dl></details>
+          </dl></Disclosure>
           {measured.budget && <table aria-label={`Uncertainty budget for ${name}`}>
             <thead><tr><th>Contributing input</th><th>Standard uncertainty</th><th>Sensitivity</th><th>Signed contribution</th><th>Variance / covariance</th></tr></thead>
             <tbody>{measured.budget.map((entry, index) => <tr key={index}>
@@ -206,7 +217,7 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
       <p role="status">Saved result table · {tableAsset.rowCount.toLocaleString()} rows · {tableAsset.columnCount} typed columns</p>
       <table aria-label="Generated result table preview">
         <thead><tr>{tableAsset.columns.slice(0, tableAsset.previewColumns).map((col, i) =>
-          <th key={i} scope="col" title={col.type + ", " + col.missingCount + " missing"}>{col.label}<small>{col.type}{col.missingCount ? " · " + col.missingCount + " missing" : ""}</small></th>)}</tr></thead>
+          <th key={i} scope="col" >{col.label}<small>{col.type}{col.missingCount ? " · " + col.missingCount + " missing" : ""}</small></th>)}</tr></thead>
         <tbody>{tableAsset.preview.map((row, i) =>
           <tr key={i}>{row.map((cell, j) => <td key={j}>{cell === null ? "—" : formatScienceValue(cell)}</td>)}</tr>)}</tbody>
       </table>
@@ -214,12 +225,12 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
           </div>}
         </div>
       </ResultDisclosure>}
-      {provenance.inputUnits != null && <details className="science-result-disclosure"><summary>Units used</summary>
+      {provenance.inputUnits != null && <Disclosure className="science-result-disclosure" title="Units used">
       <pre>{JSON.stringify(provenance.inputUnits, null, 2)}</pre>
-    </details>}
-      <details className="science-result-disclosure"><summary>Inputs and provenance</summary>
+    </Disclosure>}
+      <Disclosure className="science-result-disclosure" title="Inputs and provenance">
       <pre>{JSON.stringify({ inputs: result.inputs, provenance }, null, 2)}</pre>
-    </details>
+    </Disclosure>
       <ResultDisclosure label="Actions & exports">
         <div className="science-actions">
       <button type="button" disabled={copying} onClick={async () => {
@@ -267,24 +278,27 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
         finally { setExporting(false); }
       }}>Export CSV</button>
       {chartTypes.length > 0 && <>
-        {/* Inline with Chart this; the select carries its own accessible name. */}
-        <select aria-label="Chart type" value={chartTypes.includes(chartType) ? chartType : chartTypes[0]}
-          onChange={(e) => setChartType(e.target.value as ScienceChartType)}>
-          {chartTypes.map((type) =>
-            <option key={type} value={type}>{type === "boxplot" ? "Box plot" : type === "line" ? "Fitted line with 95% confidence envelope" : type === "heatmap" ? "Heatmap" : "Scatter"}</option>)}
-        </select>
+        {/* The chart picker is a keyboard-operable kit listbox. */}
+        <Select ariaLabel="Chart type" value={chartTypes.includes(chartType) ? chartType : chartTypes[0]}
+          onChange={(value) => setChartType(value as ScienceChartType)}
+          options={chartTypes.map((type) => ({
+            value: type, label: type === "boxplot" ? "Box plot" :
+              type === "line" ? "Fitted line with 95% confidence envelope" :
+              type === "heatmap" ? "Heatmap" : "Scatter",
+          }))} />
         <button type="button" onClick={() => onChart(chartTypes.includes(chartType) ? chartType : chartTypes[0])}>Chart this</button>
       </>}
     </div>
     {charts.length > 0 && <section aria-label="Linked charts">
       <strong>Linked charts</strong>
       {charts.map((chart) => <div key={chart.id} className="science-actions">
-        <span>{chart.title} · {chart.chartType} · <span role="status">{chart.stale ? "Source changed · refresh to update" : "Input up to date"}</span></span>
-        <small title={chart.receiptHash}>Receipt {chart.receiptHash.slice(0, 12)}…</small>
+        <span>{chart.title} · {chart.chartType} · {chart.stale ? "Source changed · refresh to update" : "Input up to date"}</span>
+        <StatusPill status={chart.stale ? "Out of date" : "Done"} />
+        <small aria-label={`Receipt ${chart.receiptHash}`}>Receipt {chart.receiptHash.slice(0, 12)}…</small>
         <button type="button" disabled={!chart.stale} onClick={() => onRefresh(chart)}>Refresh chart</button>
       </div>)}
     </section>}
-        {error && <p role="alert">{error}</p>}
+        {error && <InlineAlert variant="error" title="Scientific result action failed" body={error} />}
       </ResultDisclosure>
     </div>
   </section>;
@@ -530,7 +544,7 @@ function TableEditor({ state, nodeId, pluginId, store, defaultOpen = false }: {
       <div className="science-table">
         <table aria-label="Imported typed table preview">
           <thead><tr>{table.columns.slice(0, table.previewColumns).map((col, i) =>
-            <th scope="col" key={i} title={col.type + ", " + col.missingCount + " missing"}>{col.label}<small>{col.type}{col.missingCount ? " · " + col.missingCount + " missing" : ""}</small></th>)}</tr></thead>
+            <th scope="col" key={i} >{col.label}<small>{col.type}{col.missingCount ? " · " + col.missingCount + " missing" : ""}</small></th>)}</tr></thead>
           <tbody>{table.preview.map((row, i) => <tr key={i}>{row.map((cell, j) =>
             <td key={j}>{cell === null ? "—" : formatScienceValue(cell)}</td>)}</tr>)}</tbody>
         </table>
