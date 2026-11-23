@@ -69,7 +69,7 @@ test("saves a node, clears the canvas, then reloads it from the chat library", a
   await page.getByRole("button", { name: "Save", exact: true }).click();
 
   await page.locator('[data-overlay-trigger="library"]').click();
-  const libraryDialog = page.getByRole("dialog", { name: "Chat Library" });
+  const libraryDialog = page.getByRole("dialog", { name: "Chat library" });
   await expect(libraryDialog).toBeVisible();
 
   // Earlier test scenes may now be safely persisted when gotoApp clears
