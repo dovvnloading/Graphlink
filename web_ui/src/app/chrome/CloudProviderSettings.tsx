@@ -138,7 +138,7 @@ function ProviderForm({ state, provider, transport }: {
       <FieldGroup title="Models">
         <div className="cloud-section-heading">
 
-          {provider.supportsCatalog && !bedrockRuntime && <button type="button" className="settings-button cloud-small-button"
+          {provider.supportsCatalog && !bedrockRuntime && <Button variant="secondary" size="sm" className="cloud-small-button"
             disabled={!canConnect || catalogLoading} onClick={() => transport.fireIntent(
               "app-settings", "loadApiModels", [provider.id, key.trim(), endpoint.trim()],
             )}>{catalogLoading ? "Loading models…" : "Load available models"}</Button>}
