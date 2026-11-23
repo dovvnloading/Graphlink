@@ -295,13 +295,9 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/chrome/BuilderLaunchDialog.tsx", rule: "R8", count: 1 },
 
-  { file: "app/chrome/ChatLibraryDialog.tsx", rule: "R2", count: 10 },
 
-  { file: "app/chrome/ChatLibraryDialog.tsx", rule: "R3", count: 3 },
 
-  { file: "app/chrome/ChatLibraryDialog.tsx", rule: "R8", count: 2 },
 
-  { file: "app/chrome/ChatLibraryDialog.tsx", rule: "R13", count: 1 },
 
   { file: "app/chrome/CloudProviderSettings.css", rule: "R9", count: 11 },
 
@@ -337,7 +333,6 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/chrome/HelpDialog.tsx", rule: "R8", count: 1 },
 
-  { file: "app/chrome/KnowledgeSearchDialog.tsx", rule: "R8", count: 7 },
 
   { file: "app/chrome/KnowledgeSettingsPage.tsx", rule: "R4", count: 1 },
 
@@ -385,11 +380,9 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/chrome/PluginPicker.tsx", rule: "R1", count: 1 },
 
-  { file: "app/chrome/QuickSwitcherDialog.tsx", rule: "R3", count: 1 },
 
   { file: "app/chrome/RunnerDisclosure.tsx", rule: "R1", count: 2 },
 
-  { file: "app/chrome/SearchIcon.tsx", rule: "R2", count: 1 },
 
   { file: "app/chrome/SearchOverlay.tsx", rule: "R1", count: 3 },
 
@@ -433,15 +426,15 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/context/ContextInspectorLauncher.tsx", rule: "R8", count: 1 },
 
-  { file: "app/styles.css", rule: "R9", count: 386 },
+  { file: "app/styles.css", rule: "R9", count: 352 },
 
-  { file: "app/styles.css", rule: "R10", count: 211 },
+  { file: "app/styles.css", rule: "R10", count: 195 },
 
   { file: "app/styles.css", rule: "R11", count: 3 },
 
-  { file: "app/styles.css", rule: "R12", count: 10663 },
+  { file: "app/styles.css", rule: "R12", count: 9793 },
 
-  { file: "app/styles.css", rule: "R14", count: 850 },
+  { file: "app/styles.css", rule: "R14", count: 745 },
 
 ];
 
