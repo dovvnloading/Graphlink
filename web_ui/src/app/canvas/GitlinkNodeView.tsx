@@ -575,9 +575,7 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                   {contextFetchError ? (
                     <>
                       <p className="gitlink-node-banner-error">{contextFetchError}</p>
-                      <button type="button" onClick={runContextFetch}>
-                        Retry
-                      </button>
+                      <Button variant="secondary" size="sm" iconStart="refresh" onClick={runContextFetch}>Retry</Button>
                     </>
                   ) : (
                     // Machine-generated XML, rendered as plain preformatted
@@ -612,14 +610,9 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                       onClick={() => setApprovedPaths([])}>Select none</Button>
                   </div>
                   <div className="gitlink-node-review-files" aria-label="Select and review Gitlink files">
-                    <button
-                      type="button"
-                      aria-pressed={reviewIndex === null}
+                    <Button variant="ghost" size="sm" aria-pressed={reviewIndex === null}
                       className={reviewIndex === null ? "active" : ""}
-                      onClick={() => setReviewIndex(null)}
-                    >
-                      All files
-                    </button>
+                      onClick={() => setReviewIndex(null)}>All files</Button>
                     {data.gitlinkPendingChanges.map((change, index) => (
                       <div className="gitlink-node-review-file" key={change.path + ":" + index}>
                         <Checkbox label={"Include " + displayGitlinkPath(change.path) + " in Apply"}
@@ -629,17 +622,15 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                               ? [...current, change.path]
                               : current.filter((path) => path !== change.path));
                           }} />
-                        <button
-                          type="button"
+                        <Button variant="ghost" size="sm"
                           aria-label={"Review " + change.operation + " " + displayGitlinkPath(change.path)}
                           aria-pressed={reviewIndex === index}
                           className={reviewIndex === index ? "active" : ""}
                           disabled={!reviewSections}
-                          onClick={() => setReviewIndex(index)}
-                        >
+                          onClick={() => setReviewIndex(index)}>
                           <span className="gitlink-node-review-operation">{change.operation}</span>
                           <span>{displayGitlinkPath(change.path)}</span>
-                        </button>
+                        </Button>
                       </div>
                     ))}
                   </div>
