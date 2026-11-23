@@ -233,7 +233,7 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
     </Disclosure>
       <ResultDisclosure label="Actions & exports">
         <div className="science-actions">
-      <button type="button" disabled={copying} onClick={async () => {
+      <Button size="sm" type="button" disabled={copying} onClick={async () => {
         setError("");
         setCopied(false);
         setCopying(true);
@@ -247,16 +247,16 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
         } finally {
           setCopying(false);
         }
-      }}>{copying ? "Copying…" : copied ? "Copied methods" : "Copy methods"}</button>
-      <button type="button" onClick={() => onDiscuss(result)}>Discuss in chat</button>
-      <button type="button" disabled={exporting} onClick={async () => {
+      }}>{copying ? "Copying…" : copied ? "Copied methods" : "Copy methods"}</Button>
+      <Button size="sm" type="button" onClick={() => onDiscuss(result)}>Discuss in chat</Button>
+      <Button size="sm" type="button" disabled={exporting} onClick={async () => {
         setError("");
         setExporting(true);
         try { saveText(await exportJson(), `${baseName}.json`, "application/json"); }
         catch (e) { setError(e instanceof Error ? e.message : "Export failed."); }
         finally { setExporting(false); }
-      }}>Export JSON</button>
-      <button type="button" disabled={exporting} onClick={async () => {
+      }}>Export JSON</Button>
+      <Button size="sm" type="button" disabled={exporting} onClick={async () => {
         setError("");
         setExporting(true);
         try {
@@ -276,7 +276,7 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
           }
         } catch (e) { setError(e instanceof Error ? e.message : "CSV export failed."); }
         finally { setExporting(false); }
-      }}>Export CSV</button>
+      }}>Export CSV</Button>
       {chartTypes.length > 0 && <>
         {/* The chart picker is a keyboard-operable kit listbox. */}
         <Select ariaLabel="Chart type" value={chartTypes.includes(chartType) ? chartType : chartTypes[0]}
@@ -286,7 +286,7 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
               type === "line" ? "Fitted line with 95% confidence envelope" :
               type === "heatmap" ? "Heatmap" : "Scatter",
           }))} />
-        <button type="button" onClick={() => onChart(chartTypes.includes(chartType) ? chartType : chartTypes[0])}>Chart this</button>
+        <Button size="sm" type="button" onClick={() => onChart(chartTypes.includes(chartType) ? chartType : chartTypes[0])}>Chart this</Button>
       </>}
     </div>
     {charts.length > 0 && <section aria-label="Linked charts">
@@ -295,7 +295,7 @@ function Results({ result, title, headlineKey, scatter, freshness, exportJson, e
         <span>{chart.title} · {chart.chartType} · {chart.stale ? "Source changed · refresh to update" : "Input up to date"}</span>
         <StatusPill status={chart.stale ? "Out of date" : "Done"} />
         <small aria-label={`Receipt ${chart.receiptHash}`}>Receipt {chart.receiptHash.slice(0, 12)}…</small>
-        <button type="button" disabled={!chart.stale} onClick={() => onRefresh(chart)}>Refresh chart</button>
+        <Button size="sm" type="button" disabled={!chart.stale} onClick={() => onRefresh(chart)}>Refresh chart</Button>
       </div>)}
     </section>}
         {error && <InlineAlert variant="error" title="Scientific result action failed" body={error} />}
@@ -522,8 +522,8 @@ function TableEditor({ state, nodeId, pluginId, store, defaultOpen = false }: {
             <tr key={i}>{row.map((cell, j) => <td key={j}>{cell === null ? "Missing" : formatScienceValue(cell)}</td>)}</tr>)}
           </tbody></table>
         </div>}
-        <button type="submit" className="science-run">{validReview
-          ? (busy ? "Applying…" : "Apply reviewed table") : (busy ? "Previewing…" : "Preview table")}</button>
+        <Button size="sm" type="submit" className="science-run">{validReview
+          ? (busy ? "Applying…" : "Apply reviewed table") : (busy ? "Previewing…" : "Preview table")}</Button>
       </fieldset>
     </form>
     </ResultDisclosure>
@@ -538,7 +538,7 @@ function TableEditor({ state, nodeId, pluginId, store, defaultOpen = false }: {
         </table>
       </div>
       <small>Preview: {table.preview.length} rows, {table.previewColumns} columns. Connect this workbench to another to use the complete typed table with text, categorical and numeric column pickers, or select a bounded numeric vector.</small>
-      <button type="button" disabled={exporting} onClick={async () => {
+      <Button size="sm" type="button" disabled={exporting} onClick={async () => {
         setError("");
         setExporting(true);
         try {
@@ -546,7 +546,7 @@ function TableEditor({ state, nodeId, pluginId, store, defaultOpen = false }: {
             `${table.sourceName.replace(/[^a-zA-Z0-9._-]/g, "_")}.csv`);
         } catch (e) { setError(e instanceof Error ? e.message : "CSV export failed."); }
         finally { setExporting(false); }
-      }}>Export full table CSV</button>
+      }}>Export full table CSV</Button>
       <Disclosure title="Import receipt and parsing options">
         <pre>{JSON.stringify(table.provenance, null, 2)}</pre>
       </Disclosure>
@@ -581,8 +581,10 @@ function AttemptProgress({ attempt, title }: { attempt: ScienceAttempt; title: s
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
-  return <p><span role="status">{attempt.status === "cancelling" ? "Stopping" : "Running"} {title}…</span>{" "}
-    <span aria-label="Elapsed time">{Math.max(0, Math.floor((now - attempt.startedAtMs) / 1000))} s</span></p>;
+  return <div className="science-attempt-progress"><StatusPill status="Running" />
+    <span>{attempt.status === "cancelling" ? "Stopping" : "Running"} {title}…</span>
+    <span aria-label="Elapsed time">{formatDuration(Math.max(0, (now - attempt.startedAtMs) / 1000))}</span>
+  </div>;
 }
 
 function OperationEditor({ onDraftChange, session, op, result, configured, revision, runToken, limits, options, run, configure, cancel, fetchTableColumn, busy, setBusy, attemptProtocol, attempt, attemptTitle }: {
@@ -673,9 +675,8 @@ function OperationEditor({ onDraftChange, session, op, result, configured, revis
 
   return <form ref={formRef} className="science-operation-editor" onSubmit={submit}>
     <div className="science-operation-context">
-      {op.description && <p className="science-operation-preview" title={op.description}>{op.description}</p>}
-      {(op.description || op.methods || op.citations?.length) && <details className="science-methods">
-        <summary>About &amp; methods</summary>
+      {op.description && <p className="science-operation-preview">{op.description}</p>}
+      {(op.description || op.methods || op.citations?.length) && <Disclosure className="science-methods" title="About & methods">
         <div className="science-methods-content">
           {op.description && <p>{op.description}</p>}
           {op.methods && <p>{op.methods}</p>}
@@ -685,7 +686,7 @@ function OperationEditor({ onDraftChange, session, op, result, configured, revis
             </li>)}
           </ul>}
         </div>
-      </details>}
+      </Disclosure>}
     </div>
     <fieldset disabled={busy}>
       <div className="science-inputs" role="group" aria-label="Inputs">
@@ -755,42 +756,41 @@ function OperationEditor({ onDraftChange, session, op, result, configured, revis
           setError(null);
         }} />
       {bound.some(([, ref]) => options.some((option) => matchesSource(option, ref) && option.uncertainty)) &&
-        <label>Uncertainty propagation method
-          <select aria-label="Uncertainty propagation method" value={uncertaintyMethod}
-            onChange={(event) => {
-              const method = event.target.value as "auto" | "gum" | "monte_carlo";
-              setDraft((old) => ({ ...old, method, dirty: true }));
-            }}>
-            <option value="auto">Automatic · first-order GUM or Monte Carlo for strong nonlinearity</option>
-            <option value="gum">First-order GUM</option>
-            <option value="monte_carlo">Monte Carlo · JCGM 101 (Gaussian input model)</option>
-          </select>
-        </label>}
+        <Select label="Uncertainty propagation method" value={uncertaintyMethod}
+          onChange={(value) => {
+            const method = value as "auto" | "gum" | "monte_carlo";
+            setDraft((old) => ({ ...old, method, dirty: true }));
+          }}
+          options={[
+            { value: "auto", label: "Automatic · first-order GUM or Monte Carlo for strong nonlinearity" },
+            { value: "gum", label: "First-order GUM" },
+            { value: "monte_carlo", label: "Monte Carlo · JCGM 101 (Gaussian input model)" },
+          ]} />}
       {conflict && <div className="science-conflict">
         <p role="alert">The saved run changed while you were editing. Your inputs are still here.</p>
         <div className="science-actions">
-          <button type="button" onClick={() => { setDraft({ ...draft, revision }); setError(null); }}>Keep my inputs</button>
-          <button type="button" onClick={() => { setDraft(restoreDraft(op, result, revision, options, configured)); setError(null); }}>
+          <Button size="sm" type="button" onClick={() => { setDraft({ ...draft, revision }); setError(null); }}>Keep my inputs</Button>
+          <Button size="sm" type="button" onClick={() => { setDraft(restoreDraft(op, result, revision, options, configured)); setError(null); }}>
             {result ? "Load saved inputs" : "Reset to example"}
-          </button>
+          </Button>
         </div>
       </div>}
       <div className="science-actions">
-        <button className="science-run" type="submit" disabled={busy || conflict || stale}>Run calculation</button>
-        <button type="button" disabled={busy || conflict || stale} onClick={() => void saveForRunner()}>
+        <Button size="sm" className="science-run" type="submit" disabled={busy || conflict || stale}>Run calculation</Button>
+        <Button size="sm" type="button" disabled={busy || conflict || stale} onClick={() => void saveForRunner()}>
           Save for Graph Runner
-        </button>
-        <button type="button" onClick={() => {
+        </Button>
+        <Button size="sm" type="button" onClick={() => {
           const example = { ...restoreDraft(op, null, revision), dirty: true };
           if (session.replacedExamples.get(op.id)?.example !== draft) session.replacedExamples.set(op.id, { before: draft, example });
           else return;
           setDraft(example); setError(null);
-        }}>Load example</button>
-        {session.replacedExamples.get(op.id)?.example === draft && <button type="button" onClick={() => {
+        }}>Load example</Button>
+        {session.replacedExamples.get(op.id)?.example === draft && <Button size="sm" type="button" onClick={() => {
           const previous = session.replacedExamples.get(op.id);
           if (previous) setDraft(previous.before);
           session.replacedExamples.delete(op.id); setError(null);
-        }}>Undo load example</button>}
+        }}>Undo load example</Button>}
       </div>
       {configured && <small role="status">{savedMatches ? "Saved as an explicit Graph Runner step."
         : "Changes not saved to Graph Runner."}</small>}
@@ -800,12 +800,12 @@ function OperationEditor({ onDraftChange, session, op, result, configured, revis
       : busy && <p role="status">{running || submission?.phase === "submitting" ? "Running calculation…" : configuring ? "Saving Graph Runner configuration…" : "Loading selected table column…"}</p>}
     {/* Outside the disabled fieldset; only real calculations can be cancelled, not table-column imports. */}
     {attemptProtocol && (running || activeAttempt || (submission && submission.phase !== "finished")) && <div className="science-actions">
-      <button type="button" className="science-cancel" disabled={cancelling || activeAttempt?.status === "cancelling"} onClick={async () => {
+      <Button size="sm" type="button" className="science-cancel" disabled={cancelling || activeAttempt?.status === "cancelling"} onClick={async () => {
         setCancelling(true);
         try { await cancel(activeAttempt?.operationId ?? op.id, activeAttempt?.attemptId ?? (attemptProtocol ? submission?.id : undefined)); }
         catch (e) { setError({ message: e instanceof Error ? e.message : "Unable to cancel the calculation." }); }
         finally { setCancelling(false); }
-      }}>{cancelling || activeAttempt?.status === "cancelling" ? "Stopping…" : "Cancel calculation"}</button>
+      }}>{cancelling || activeAttempt?.status === "cancelling" ? "Stopping…" : "Cancel calculation"}</Button>
     </div>}
     {error ? <p id={errorId} role="alert">{error.message}</p>
       : (attempt?.status === "cancelled" || attempt?.status === "failed") && <p role="status">{attempt.error}</p>}
@@ -833,7 +833,6 @@ function Workbench({ requestedOperation, session, state, options, run, configure
   const submission = useSyncExternalStore(session.onSubmission, session.submission);
   const busy = localBusy || (submission !== undefined && submission.phase !== "finished")
     || state.attempt?.status === "running" || state.attempt?.status === "cancelling";
-  const operationId = useId();
   const op = state.operations.find((candidate) => candidate.id === selected) ?? state.operations[0];
   const result = state.latest?.operationId === op.id ? state.latest : null;
   const latestOperation = state.operations.find((candidate) => candidate.id === state.latest?.operationId);
@@ -848,10 +847,9 @@ function Workbench({ requestedOperation, session, state, options, run, configure
   const revision = (state.runToken ?? JSON.stringify(state.latest?.provenance ?? null)) + "|" + JSON.stringify(state.runner ?? null);
   return <>
     <div className="science-operation-picker">
-      <label htmlFor={operationId}>Operation</label>
-      <select id={operationId} value={op.id} disabled={busy} onChange={(e) => { session.selectOperation(e.target.value); setSelected(e.target.value); }}>
-        {state.operations.map((operation) => <option key={operation.id} value={operation.id}>{operation.title}</option>)}
-      </select>
+      <Select label="Operation" value={op.id} disabled={busy}
+        onChange={(value) => { session.selectOperation(value); setSelected(value); }}
+        options={state.operations.map((operation) => ({ value: operation.id, label: operation.title }))} />
     </div>
     {op.fields.some((field) => field.kind === "table") && !options.some((item) =>
       ["typed_table", "result_table"].includes(String(item.reference.selector[0]))) && tableSource}
@@ -877,7 +875,7 @@ export function ScientificEditor({ data, id, requestedOperation }: ScienceEditor
     overlays.open("settings", "dialog");
   };
   return <>{!data.raw ? <><p role="status">Enable {data.title} in Settings → Plugins to open this workbench.</p>
-    <button type="button" onClick={openSettings}>Open plugin settings</button></>
+    <Button size="sm" type="button" onClick={openSettings}>Open plugin settings</Button></>
       : state?.error ? <p role="alert">{state.error}</p> : state && data.pluginId === "science_" + state.packId
       ? <Workbench requestedOperation={requestedOperation} key={state.nodeKey ?? id} session={data.store.scientificEditor(id, state.nodeKey)} state={state} options={options}
         exportJson={() => data.store.exportScientificResult(data.pluginId, id, state.runToken)}
@@ -931,9 +929,9 @@ function ScientificCard({ data, id, selected }: NodeProps<ScientificFlowNode>) {
   }, [id, data, register]);
   return <NodeShell kindClassName="scientific-node" selected={!!selected} collapsed={collapsed}
     header={<><NodeHeading glyph="chart">{data.title}</NodeHeading>
-      <button type="button" className="science-focus-trigger nodrag" aria-haspopup="dialog"
+      <Button size="sm" iconStart="maximize" className="science-focus-trigger nodrag" aria-haspopup="dialog"
         aria-label={"Open focused workbench for " + data.title}
-        onClick={() => overlays.open(scientificFocusName(id), "dialog")}>Focus</button></>}
+        onClick={() => overlays.open(scientificFocusName(id), "dialog")}>Focus</Button></>}
     bodyClassName="science-body nodrag nopan nowheel"><div ref={attach} /></NodeShell>;
 }
 
