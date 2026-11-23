@@ -44,15 +44,15 @@
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 10px;
+  gap: var(--gl-space-2-5);
+  padding: var(--gl-space-2-5);
 }
 
 .document-view-panel-header {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--gl-space-2);
 }
 
 .document-view-panel-heading {
@@ -86,7 +86,7 @@
 .document-view-panel-copy,
 .document-view-panel-close {
   flex-shrink: 0;
-  padding: 6px 14px;
+  padding: var(--gl-space-1-5) var(--gl-space-3);
   font-size: var(--gl-text-xs);
   font-family: inherit;
   color: var(--gl-surface-text-primary);
@@ -111,7 +111,7 @@
   min-height: 0;
   overflow-y: auto;
   max-height: none;
-  padding: 8px 12px;
+  padding: var(--gl-space-2) var(--gl-space-3);
   border: 1px solid var(--gl-surface-border);
   border-radius: var(--gl-radius-sm);
 }
@@ -140,7 +140,7 @@
    shared, app-wide markdown-renderer change. */
 
 .document-view-heading-anchor {
-  margin-left: 6px;
+  margin-left: var(--gl-space-1-5);
   text-decoration: none;
   color: var(--gl-surface-text-muted);
   font-weight: 400;
@@ -158,7 +158,7 @@ h6:hover > .document-view-heading-anchor {
 }
 
 .document-view-code-block {
-  margin: 8px 0;
+  margin: var(--gl-space-2) 0;
   border: 1px solid var(--gl-surface-border);
   border-radius: var(--gl-radius-sm);
   overflow: hidden;
@@ -168,7 +168,7 @@ h6:hover > .document-view-heading-anchor {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 8px;
+  padding: var(--gl-space-1) var(--gl-space-2);
   background-color: var(--gl-surface-inset, var(--gl-surface-window));
   border-bottom: 1px solid var(--gl-surface-border);
   font-size: var(--gl-text-2xs);
@@ -181,7 +181,7 @@ h6:hover > .document-view-heading-anchor {
 }
 
 .document-view-code-block-copy {
-  padding: 2px 8px;
+  padding: var(--gl-space-0-5) var(--gl-space-2);
   font-size: var(--gl-text-2xs);
   font-family: inherit;
   color: var(--gl-surface-text-primary);
@@ -206,7 +206,7 @@ h6:hover > .document-view-heading-anchor {
 
 .document-view-table-wrapper {
   overflow-x: auto;
-  margin: 8px 0;
+  margin: var(--gl-space-2) 0;
 }
 
 /* Node redesign, stage 1 ("shared node markdown renderer") -
@@ -221,7 +221,7 @@ h6:hover > .document-view-heading-anchor {
    nodes do (--gl-node-font-size), so this version's own chrome text sizes
    in `em` to track it, where Document View's own uses a fixed px. */
 .node-md-code-block {
-  margin: 8px 0;
+  margin: var(--gl-space-2) 0;
   border: 1px solid var(--gl-surface-border);
   border-radius: var(--gl-radius-sm);
   overflow: hidden;
@@ -231,7 +231,7 @@ h6:hover > .document-view-heading-anchor {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 8px;
+  padding: var(--gl-space-1) var(--gl-space-2);
   background-color: var(--gl-surface-inset, var(--gl-surface-window));
   border-bottom: 1px solid var(--gl-surface-border);
   font-size: var(--gl-text-sm);
@@ -244,7 +244,7 @@ h6:hover > .document-view-heading-anchor {
 }
 
 .node-md-code-block-copy {
-  padding: 2px 8px;
+  padding: var(--gl-space-0-5) var(--gl-space-2);
   font-size: var(--gl-text-sm);
   font-family: inherit;
   color: var(--gl-surface-text-primary);
@@ -266,7 +266,7 @@ h6:hover > .document-view-heading-anchor {
 
 .node-md-table-wrapper {
   overflow-x: auto;
-  margin: 8px 0;
+  margin: var(--gl-space-2) 0;
 }
 
 /* Node redesign, stage 4: LaTeX math (rehype-katex's own output, not a
@@ -280,7 +280,7 @@ h6:hover > .document-view-heading-anchor {
    to match every other block element's own spacing. */
 .katex-display {
   overflow-x: auto;
-  margin: 8px 0;
+  margin: var(--gl-space-2) 0;
 }
 
 /* GitHub-style callouts (remark-github-blockquote-alert's own output shape:
@@ -294,8 +294,8 @@ h6:hover > .document-view-heading-anchor {
    visually distinct from the other 4) rather than inventing a new token
    for one alert type. */
 .markdown-alert {
-  margin: 8px 0;
-  padding: 8px 12px;
+  margin: var(--gl-space-2) 0;
+  padding: var(--gl-space-2) var(--gl-space-3);
   border-left: 3px solid var(--gl-surface-border);
   border-radius: var(--gl-radius-xs);
   background-color: var(--gl-surface-inset, var(--gl-surface-window));
@@ -308,10 +308,10 @@ h6:hover > .document-view-heading-anchor {
 .markdown-alert-title {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--gl-space-1-5);
   font-size: var(--gl-text-xs);
   font-weight: 700;
-  margin-bottom: 4px;
+  margin-bottom: var(--gl-space-1);
 }
 
 .markdown-alert-title .octicon {
@@ -364,7 +364,7 @@ h6:hover > .document-view-heading-anchor {
 }
 
 .document-view-toc-toggle {
-  padding: 6px 14px;
+  padding: var(--gl-space-1-5) var(--gl-space-3);
   font-size: var(--gl-text-xs);
   font-family: inherit;
   color: var(--gl-surface-text-primary);
@@ -398,7 +398,7 @@ h6:hover > .document-view-heading-anchor {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  padding: 4px;
+  padding: var(--gl-space-1);
   background-color: var(--gl-surface-window);
   border: 1px solid var(--gl-surface-border);
   border-radius: var(--gl-radius-sm);
@@ -413,7 +413,7 @@ h6:hover > .document-view-heading-anchor {
 
 .document-view-toc-item {
   text-align: left;
-  padding: 5px 8px;
+  padding: var(--gl-space-1) var(--gl-space-2);
   font-size: var(--gl-text-xs);
   font-family: inherit;
   color: var(--gl-surface-text-primary);
@@ -436,11 +436,11 @@ h6:hover > .document-view-heading-anchor {
 }
 
 .document-view-toc-depth-2 {
-  padding-left: 20px;
+  padding-left: var(--gl-space-5);
 }
 
 .document-view-toc-depth-3 {
-  padding-left: 32px;
+  padding-left: var(--gl-space-8);
 }
 
 .document-view-panel-progress {
@@ -461,7 +461,7 @@ h6:hover > .document-view-heading-anchor {
 
 .document-view-panel-search-toggle {
   flex-shrink: 0;
-  padding: 6px 14px;
+  padding: var(--gl-space-1-5) var(--gl-space-3);
   font-size: var(--gl-text-xs);
   font-family: inherit;
   color: var(--gl-surface-text-primary);
@@ -489,14 +489,14 @@ h6:hover > .document-view-heading-anchor {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 0;
+  gap: var(--gl-space-1-5);
+  padding: var(--gl-space-1-5) 0;
 }
 
 .document-view-search-input {
   flex: 1;
   min-width: 0;
-  padding: 5px 8px;
+  padding: var(--gl-space-1) var(--gl-space-2);
   font-size: var(--gl-text-xs);
   font-family: inherit;
   color: var(--gl-surface-text-primary);
@@ -516,7 +516,7 @@ h6:hover > .document-view-heading-anchor {
 .document-view-search-nav,
 .document-view-search-close {
   flex-shrink: 0;
-  padding: 4px 8px;
+  padding: var(--gl-space-1) var(--gl-space-2);
   font-size: var(--gl-text-xs);
   font-family: inherit;
   color: var(--gl-surface-text-primary);
@@ -568,11 +568,11 @@ mark.document-view-search-match-current {
   background-color: color-mix(in srgb, var(--gl-semantic-search-highlight) 25%, transparent);
   outline: 1px solid var(--gl-semantic-search-highlight);
   outline-offset: 2px;
-  scroll-margin-top: 12px;
+  scroll-margin-top: var(--gl-space-3);
 }
 .document-view-citation-notice {
   margin: 0;
-  padding: 6px 12px;
+  padding: var(--gl-space-1-5) var(--gl-space-3);
   border-bottom: 1px solid var(--gl-surface-border);
   color: var(--gl-surface-text-muted);
   font-size: var(--gl-text-2xs);
@@ -590,7 +590,7 @@ mark.document-view-search-match-current {
   width: 1px;
   height: 1px;
   padding: 0;
-  margin: -1px;
+  margin: calc(-1 * 1px);
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
@@ -606,17 +606,17 @@ mark.document-view-search-match-current {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--gl-space-2);
 }
 
 .document-view-panel-font-stepper {
   flex-shrink: 0;
   display: flex;
-  gap: 2px;
+  gap: var(--gl-space-0-5);
 }
 
 .document-view-panel-font-step {
-  padding: 6px 8px;
+  padding: var(--gl-space-1-5) var(--gl-space-2);
   font-size: var(--gl-text-xs);
   font-family: inherit;
   color: var(--gl-surface-text-primary);
@@ -631,7 +631,7 @@ mark.document-view-search-match-current {
 
 .document-view-panel-font-step:last-child {
   border-radius: 0 var(--gl-radius-xs) var(--gl-radius-xs) 0;
-  margin-left: -1px;
+  margin-left: calc(-1 * 1px);
 }
 
 .document-view-panel-font-step:hover:enabled {
@@ -645,7 +645,7 @@ mark.document-view-search-match-current {
 
 .document-view-panel-expand-toggle {
   flex-shrink: 0;
-  padding: 6px 14px;
+  padding: var(--gl-space-1-5) var(--gl-space-3);
   font-size: var(--gl-text-xs);
   font-family: inherit;
   color: var(--gl-surface-text-primary);
