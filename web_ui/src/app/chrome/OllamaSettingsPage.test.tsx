@@ -154,6 +154,20 @@ async function chooseOption(
 }
 
 describe("Settings > Ollama", () => {
+  it("shows a checking state, never a failure, while the server status is unknown", () => {
+    setup({ ollamaServerStatus: "checking" });
+    const status = screen.getByRole("status", { name: "Ollama server status" });
+    expect(status).toHaveTextContent("Checking…");
+    expect(status).not.toHaveTextContent(/Failed|Skipped/);
+  });
+
+  it("names an installed but stopped server without a job-state label", () => {
+    setup({ ollamaServerStatus: "installed" });
+    const status = screen.getByRole("status", { name: "Ollama server status" });
+    expect(status).toHaveTextContent("Installed, not running");
+    expect(status).not.toHaveTextContent(/Skipped|Failed/);
+  });
+
   it("uses the shared inventory and scans when the page opens, without pulling/removing anything", () => {
     const { intents } = setup();
     expect(intents).toContainEqual(["app-settings", "scanOllamaSystem", []]);

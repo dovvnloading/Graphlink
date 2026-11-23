@@ -12,8 +12,21 @@
 .empty-graph-secondary {
   display: flex;
   justify-content: center;
+  gap: var(--gl-space-2);
   margin-top: var(--gl-space-3);
 }
+.empty-graph-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--gl-space-2) var(--gl-space-4);
+  margin: var(--gl-space-3) 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--gl-surface-text-muted);
+  font-size: var(--gl-text-xs);
+}
+.empty-graph-shortcuts li { display: inline-flex; align-items: center; gap: var(--gl-space-1-5); }
 
 .empty-graph-model-alert {
   margin-top: var(--gl-space-4);
