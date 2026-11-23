@@ -30,7 +30,14 @@ docker buildx version > "$evidence/builder.txt"
 
 docker buildx create --name "$builder" --driver docker-container --platform linux/amd64 \
     --driver-opt "image=$builder_image" >> "$evidence/builder.txt"
-trap 'docker buildx rm "$builder" >&2' EXIT
+cleanup() {
+    status=$?
+    if [[ $status != 0 ]] && docker image inspect "$tag" >/dev/null 2>&1; then
+        docker image rm "$tag" >&2 || true
+    fi
+    docker buildx rm "$builder" >&2
+}
+trap cleanup EXIT
 docker buildx inspect "$builder" --bootstrap >> "$evidence/builder.txt"
 actual_builder=$(docker image inspect --format '{{.Id}}' "$builder_image")
 if [[ "$actual_builder" != "$builder_config" ]]; then
