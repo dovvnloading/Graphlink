@@ -884,7 +884,8 @@
   opacity: var(--gl-lod-full, 1);
 }
 .node-card-kind-icon { flex: none; color: var(--gl-surface-text-secondary); }
-.node-card-title-slot { flex: 1 1 auto; min-width: 0; }
+.node-card-title-slot { display: flex; flex: 1 1 auto; align-items: center; gap: var(--gl-space-1); min-width: 0; }
+.node-card-title-slot > .node-heading { flex: 1 1 auto; }
 .node-card-status { flex: 0 1 auto; min-width: 0; }
 .node-card-spacer { flex: 1 1 auto; min-width: var(--gl-space-1); }
 .scene-node-card .node-card-menu-trigger {
@@ -909,13 +910,11 @@
 .scene-node-card .node-card-title-slot > .node-heading > .node-glyph { display: none; }
 .node-glyph { display: inline-flex; align-items: center; justify-content: center; }
 .scene-node-card .node-card-title-slot .node-heading-detail { grid-column: 1 / -1; }
-.scene-node-card .scene-node-surface > :not(.node-card-header):not(.node-lod-overview) {
+/* The body is unmounted below 50% by useLodVisibility, so it keeps its own
+   sizing (several views cap and scroll it); only footers and extras fold. */
+.scene-node-card .scene-node-surface > :not(.node-card-header):not(.node-lod-overview):not(.scene-node-body) {
   max-height: calc(var(--gl-lod-full, 1) * 10000px);
   opacity: var(--gl-lod-full, 1);
-}
-.scene-node-card .scene-node-surface > .scene-node-body {
-  padding-block-start: calc(var(--gl-lod-full, 1) * var(--gl-space-2));
-  padding-block-end: calc(var(--gl-lod-full, 1) * var(--gl-space-3));
 }
 .scene-node-card .node-lod-overview {
   display: flex;
