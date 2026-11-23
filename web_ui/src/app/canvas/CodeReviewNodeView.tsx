@@ -6,6 +6,11 @@ import { Dialog, useOverlays } from "../overlays/overlays";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { Button } from "../ui/Button";
+import { Icon } from "../ui/icons/Icon";
+import { IconButton } from "../ui/IconButton";
+import { MenuItem } from "../ui/Menu";
+import { TextField } from "../ui/TextField";
 import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { reviewDiffContext } from "./reviewDiffFocus";
@@ -191,27 +196,9 @@ function CodeReviewNodeMenu({
 }) {
   return (
     <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onToggleCollapse();
-          onClose();
-        }}
-      >
-        {isCollapsed ? "Expand" : "Collapse"}
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="chat-node-menu-danger"
-        onClick={() => {
-          onDelete();
-          onClose();
-        }}
-      >
-        Delete Node
-      </button>
+      <MenuItem icon={isCollapsed ? "maximize" : "minimize"}
+        label={isCollapsed ? "Expand" : "Collapse"} onSelect={() => { onToggleCollapse(); onClose(); }} />
+      <MenuItem label="Delete Node" destructive onSelect={() => { onDelete(); onClose(); }} />
     </NodeMenu>
   );
 }
@@ -555,11 +542,9 @@ function CodeReviewNodeViewImpl({ id, data, selected }: NodeProps<CodeReviewFlow
         >
           <div className="code-review-node-field-row">
             <span className="code-review-node-field-label">Pull request</span>
-            <input
-              type="text"
-              className="code-review-node-input"
-              value={prUrlDraft}
-              onChange={(event) => setPrUrlDraft(event.target.value)}
+            <TextField label="Pull request URL" size="sm" type="text"
+              className="code-review-node-input" value={prUrlDraft}
+              onValueChange={setPrUrlDraft}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault();
@@ -567,17 +552,10 @@ function CodeReviewNodeViewImpl({ id, data, selected }: NodeProps<CodeReviewFlow
                 }
               }}
               placeholder="https://github.com/owner/repo/pull/123"
-              aria-label="Pull request URL"
             />
             <div className="code-review-node-inline-row">
-              <button
-                type="button"
-                className="code-review-node-primary-btn"
-                disabled={busy || !prUrlDraft.trim()}
-                onClick={fetchDiff}
-              >
-                Fetch Diff
-              </button>
+              <Button variant="primary" size="sm" disabled={busy || !prUrlDraft.trim()}
+                onClick={fetchDiff}>Fetch Diff</Button>
             </div>
           </div>
 
@@ -625,13 +603,11 @@ function CodeReviewNodeViewImpl({ id, data, selected }: NodeProps<CodeReviewFlow
           )}
 
           <div className="code-review-node-inline-row">
-            <button type="button" disabled={!canRun} onClick={data.onRun}>
-              Run Review
-            </button>
+            <Button variant="primary" size="sm" iconStart="play" disabled={!canRun}
+              onClick={data.onRun}>Run Review</Button>
             {data.pendingRequestId && (
-              <button type="button" onClick={() => data.onCancel()} title="Cancel Review Lens request">
-                Cancel
-              </button>
+              <Button variant="secondary" size="sm" aria-label="Cancel Review Lens request"
+                onClick={() => data.onCancel()}>Cancel</Button>
             )}
           </div>
 
@@ -657,7 +633,12 @@ function CodeReviewNodeViewImpl({ id, data, selected }: NodeProps<CodeReviewFlow
                   <div className="code-review-node-walkthrough-title">
                     {index + 1}. {group.groupTitle}
                   </div>
-                  <div className="code-review-node-walkthrough-paths">{group.paths.join(", ")}</div>
+                  <div className="code-review-node-walkthrough-paths">
+                    {group.paths.map((path) => <span key={path} className="code-review-node-file-path">
+                      <Icon name={/\.(?:tsx?|jsx?|css|html|py|json)$/i.test(path) ? "file-code" : "file"} size="sm" />
+                      {path}
+                    </span>)}
+                  </div>
                   <p className="code-review-node-walkthrough-explanation">{group.explanation}</p>
                 </li>
               ))}
@@ -674,9 +655,7 @@ function CodeReviewNodeViewImpl({ id, data, selected }: NodeProps<CodeReviewFlow
                     .code-review-node-inline-row, so this one rendered as a
                     raw user-agent button in the middle of a styled card. */}
                 <div className="code-review-node-inline-row">
-                  <button type="button" onClick={runDiffFetch}>
-                    Retry
-                  </button>
+                  <Button variant="secondary" size="sm" iconStart="refresh" onClick={runDiffFetch}>Retry</Button>
                 </div>
               </>
             ) : fetchedDiffText === null ? (
@@ -692,9 +671,7 @@ function CodeReviewNodeViewImpl({ id, data, selected }: NodeProps<CodeReviewFlow
                       {focusedDiff === null && " — not found in the saved excerpt; showing the full diff"}
                     </p>
                     <div className="code-review-node-inline-row">
-                      <button type="button" onClick={() => setDiffFocus(null)}>
-                        Show full diff
-                      </button>
+                      <Button variant="ghost" size="sm" onClick={() => setDiffFocus(null)}>Show full diff</Button>
                     </div>
                   </div>
                 )}
@@ -708,11 +685,9 @@ function CodeReviewNodeViewImpl({ id, data, selected }: NodeProps<CodeReviewFlow
           <div className="code-review-node-qa">
             <span className="code-review-node-field-label">Ask about this diff</span>
             <div className="code-review-node-inline-row">
-              <input
-                type="text"
-                className="code-review-node-input"
-                value={questionDraft}
-                onChange={(event) => setQuestionDraft(event.target.value)}
+              <TextField label="Ask about this diff" size="sm" type="text"
+                className="code-review-node-input" value={questionDraft}
+                onValueChange={setQuestionDraft}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {
                     event.preventDefault();
@@ -720,11 +695,9 @@ function CodeReviewNodeViewImpl({ id, data, selected }: NodeProps<CodeReviewFlow
                   }
                 }}
                 placeholder="e.g. Where is authentication checked?"
-                aria-label="Ask about this diff"
               />
-              <button type="button" disabled={busy || !questionDraft.trim() || data.codeReviewState === "draft"} onClick={askQuestion}>
-                Ask
-              </button>
+              <Button variant="primary" size="sm" disabled={busy || !questionDraft.trim() || data.codeReviewState === "draft"}
+                onClick={askQuestion}>Ask</Button>
             </div>
             {data.codeReviewQa.length > 0 && (
               <ul className="code-review-node-qa-list">
@@ -819,48 +792,22 @@ function CodeReviewNodeViewImpl({ id, data, selected }: NodeProps<CodeReviewFlow
               <p className="code-review-node-finding-text">
                 <strong>Fix:</strong> {error.fix}
               </p>
-              <div className="code-review-node-inline-row">
-                {error.path && (
-                  <button
-                    type="button"
-                    aria-label={`Inspect error in diff: ${error.title}`}
-                    onClick={() => inspectDiff(error.path, error.line)}
-                  >
-                    Inspect diff
-                  </button>
-                )}
-                <button
-                  type="button"
-                  aria-label={`Copy error: ${error.title}`}
-                  onClick={() => copyText(`[${error.severity}] ${error.title} (${findingLocation(error.path, error.line)}): ${error.evidence} Fix: ${error.fix}`)}
-                >
-                  Copy
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Preview GitHub comment for error: ${error.title}`}
+              <div className="code-review-node-inline-row code-review-node-finding-actions">
+                {error.path && <IconButton size="sm" icon="search"
+                  label={`Inspect error in diff: ${error.title}`}
+                  onClick={() => inspectDiff(error.path, error.line)} />}
+                <IconButton size="sm" icon="copy" label={`Copy error: ${error.title}`}
+                  onClick={() => copyText(`[${error.severity}] ${error.title} (${findingLocation(error.path, error.line)}): ${error.evidence} Fix: ${error.fix}`)} />
+                <IconButton size="sm" icon="message-circle"
+                  label={`Preview GitHub comment for error: ${error.title}`}
                   disabled={busy || previewingId !== null || posting || !error.path || error.line <= 0}
-                  title={error.line <= 0 ? "Only added PR lines can receive inline comments." : undefined}
-                  onClick={() => void previewComment(error.id)}
-                >
-                  Post to PR…
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Propose Gitlink fix for error: ${error.title}`}
+                  onClick={() => void previewComment(error.id)} />
+                <IconButton size="sm" icon="git-branch"
+                  label={`Propose Gitlink fix for error: ${error.title}`}
                   disabled={busy || proposingId !== null || !error.path || error.line <= 0}
-                  title={error.line <= 0 ? "A file and added line are required to propose a fix." : undefined}
-                  onClick={() => void proposeFix(error.id)}
-                >
-                  Propose fix
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Dismiss error: ${error.title}`}
-                  onClick={() => data.onDismissFinding(error.id)}
-                >
-                  Dismiss
-                </button>
+                  onClick={() => void proposeFix(error.id)} />
+                <IconButton size="sm" icon="close" label={`Dismiss error: ${error.title}`}
+                  onClick={() => data.onDismissFinding(error.id)} />
               </div>
             </article>
           ))}
@@ -881,52 +828,24 @@ function CodeReviewNodeViewImpl({ id, data, selected }: NodeProps<CodeReviewFlow
               <p className="code-review-node-finding-text">
                 <strong>Recommendation:</strong> {finding.recommendation}
               </p>
-              <div className="code-review-node-inline-row">
-                {finding.path && (
-                  <button
-                    type="button"
-                    aria-label={`Inspect finding in diff: ${finding.title}`}
-                    onClick={() => inspectDiff(finding.path, finding.line)}
-                  >
-                    Inspect diff
-                  </button>
-                )}
-                <button
-                  type="button"
-                  aria-label={`Copy finding: ${finding.title}`}
-                  onClick={() =>
-                    copyText(
+              <div className="code-review-node-inline-row code-review-node-finding-actions">
+                {finding.path && <IconButton size="sm" icon="search"
+                  label={`Inspect finding in diff: ${finding.title}`}
+                  onClick={() => inspectDiff(finding.path, finding.line)} />}
+                <IconButton size="sm" icon="copy" label={`Copy finding: ${finding.title}`}
+                  onClick={() => copyText(
                       `[${finding.severity}] ${finding.title} (${findingLocation(finding.path, finding.line)}): ${finding.evidence} Recommendation: ${finding.recommendation}`,
-                    )
-                  }
-                >
-                  Copy
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Preview GitHub comment for finding: ${finding.title}`}
+                    )} />
+                <IconButton size="sm" icon="message-circle"
+                  label={`Preview GitHub comment for finding: ${finding.title}`}
                   disabled={busy || previewingId !== null || posting || !finding.path || finding.line <= 0}
-                  title={finding.line <= 0 ? "Only added PR lines can receive inline comments." : undefined}
-                  onClick={() => void previewComment(finding.id)}
-                >
-                  Post to PR…
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Propose Gitlink fix for finding: ${finding.title}`}
+                  onClick={() => void previewComment(finding.id)} />
+                <IconButton size="sm" icon="git-branch"
+                  label={`Propose Gitlink fix for finding: ${finding.title}`}
                   disabled={busy || proposingId !== null || !finding.path || finding.line <= 0}
-                  title={finding.line <= 0 ? "A file and added line are required to propose a fix." : undefined}
-                  onClick={() => void proposeFix(finding.id)}
-                >
-                  Propose fix
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Dismiss finding: ${finding.title}`}
-                  onClick={() => data.onDismissFinding(finding.id)}
-                >
-                  Dismiss
-                </button>
+                  onClick={() => void proposeFix(finding.id)} />
+                <IconButton size="sm" icon="close" label={`Dismiss finding: ${finding.title}`}
+                  onClick={() => data.onDismissFinding(finding.id)} />
               </div>
             </article>
           ))}
@@ -960,17 +879,10 @@ function CodeReviewNodeViewImpl({ id, data, selected }: NodeProps<CodeReviewFlow
               aria-label="Exact GitHub comment text"
             >{commentPreview.body}</pre>
             <div className="code-review-node-comment-actions">
-              <button type="button" disabled={posting} onClick={() => overlays.close()}>
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={posting || busy}
+              <Button variant="secondary" size="sm" disabled={posting} onClick={() => overlays.close()}>Cancel</Button>
+              <Button variant="primary" size="sm" disabled={posting || busy}
                 aria-label="Approve and post this exact review comment to GitHub"
-                onClick={() => void approveComment()}
-              >
-                Post comment
-              </button>
+                onClick={() => void approveComment()}>Post comment</Button>
             </div>
           </>
         )}
