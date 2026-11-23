@@ -2,6 +2,11 @@ import { useReactFlow } from "@xyflow/react";
 import { useMemo, useState } from "react";
 import type { OrganizationOptions, OrganizationPreview, SceneStore } from "../canvas/sceneStore";
 import { Dialog, useOverlays } from "../overlays/overlays";
+import { Button } from "../ui/Button";
+import { Checkbox } from "../ui/Checkbox";
+import { Select } from "../ui/Select";
+import { SegmentedControl } from "../ui/SegmentedControl";
+import { formatCount } from "../ui/format";
 import "./OrganizationDialog.css";
 
 type Scope = OrganizationOptions["scope"];
@@ -222,93 +227,65 @@ export function OrganizationDialog({ store }: { store: SceneStore }) {
   }
 
   return (
-    <Dialog name="organize" title="Organize graph" className="organization-dialog">
+    <Dialog name="organize" title="Organize graph" size="md" className="organization-dialog"
+      status={!preview ? "Preview the layout before you apply it." : "Applying revalidates the plan and creates one undoable change."}
+      footer={<>
+        <Button variant="secondary" disabled={busy} loading={busy && !preview} onClick={() => void onPreview()}>
+          {preview ? "Refresh preview" : "Preview layout"}
+        </Button>
+        <Button variant="primary" onClick={() => void onApply()} disabled={!preview || busy}
+          disabledReason={!preview ? "Preview the layout first" : undefined} loading={busy && !!preview}>
+          Apply layout
+        </Button>
+      </>}>
       <p className="organization-description">
         Preview an arrangement before moving anything. Connections and group membership are preserved.
       </p>
       <div className="organization-options">
-        <label htmlFor="organization-scope">Organize</label>
-        <select
-          id="organization-scope" value={scope}
-          onChange={(event) => { setScope(event.target.value as Scope); setPreview(null); setError(""); }}
-          disabled={busy}
-        >
-          <option value="all">Entire canvas</option>
-          <option value="selection">Selected nodes</option>
-          <option value="branch">Selected branch and descendants</option>
-          <option value="group">Selected frame/container contents</option>
-        </select>
-        <label className="organization-check">
-          <input
-            type="checkbox" checked={preserveFrameSizes} disabled={busy}
-            onChange={(event) => { setPreserveFrameSizes(event.target.checked); setPreview(null); setError(""); }}
-          />
-          Preserve manually resized frame dimensions
-        </label>
-        <label className="organization-check">
-          <input
-            type="checkbox" checked={pinSelection && (scope === "all" || scope === "branch")}
-            disabled={busy || (scope !== "all" && scope !== "branch")}
-            onChange={(event) => { setPinSelection(event.target.checked); setPreview(null); setError(""); }}
-          />
-          Keep currently selected nodes fixed (hard constraint)
-        </label>
+        <Select label="Organize" value={scope} disabled={busy}
+          onChange={(next) => { setScope(next as Scope); setPreview(null); setError(""); }}
+          options={[
+            { value: "all", label: "Entire canvas" },
+            { value: "selection", label: "Selected nodes" },
+            { value: "branch", label: "Selected branch and descendants" },
+            { value: "group", label: "Selected frame/container contents" },
+          ]} />
+        <Checkbox label="Preserve manually resized frame dimensions" checked={preserveFrameSizes}
+          disabled={busy} onChange={(event) => { setPreserveFrameSizes(event.target.checked); setPreview(null); setError(""); }} />
+        <Checkbox label="Keep currently selected nodes fixed (hard constraint)"
+          checked={pinSelection && (scope === "all" || scope === "branch")}
+          disabled={busy || (scope !== "all" && scope !== "branch")}
+          onChange={(event) => { setPinSelection(event.target.checked); setPreview(null); setError(""); }} />
       </div>
-      {preview && (
-        <div className="organization-result">
-          <div className="organization-summary">
-            <strong>{preview.data.movedCount} nodes or group bounds change</strong>
-            <span>{preview.data.selectedCount} content nodes in scope</span>
-            <span>
-              Diagram area: {preview.data.areaBefore.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-              {" → "}
-              {preview.data.areaAfter.toLocaleString(undefined, { maximumFractionDigits: 0 })} px²
-            </span>
-          </div>
-          <div className="organization-preview-controls">
-            <div className="organization-view-toggle" role="group" aria-label="Preview layout view">
-              <button type="button" aria-pressed={viewMode === "compare"} onClick={() => setViewMode("compare")}>
-                Before / after
-              </button>
-              <button type="button" aria-pressed={viewMode === "after"} onClick={() => setViewMode("after")}>
-                After only
-              </button>
-            </div>
-            <label className="organization-check">
-              <input
-                type="checkbox" checked={showConnections}
-                onChange={(event) => setShowConnections(event.target.checked)}
-              />
-              Show connections ({preview.data.edges.length})
-            </label>
-          </div>
-          <div className={viewMode === "compare" ? "organization-comparison" : "organization-comparison after-only"}>
-            {viewMode === "compare" && (
-              <div className="organization-pane">
-                <h3>Before</h3>
-                <OrganizationMiniature plan={preview.data} stage="before" showConnections={showConnections} />
-              </div>
-            )}
-            <div className="organization-pane">
-              <h3>After</h3>
-              <OrganizationMiniature plan={preview.data} stage="after" showConnections={showConnections} />
-            </div>
-          </div>
-          <p className="organization-hint">
-            Selected cards can be pinned in place. The preview does not change your canvas;
-            Apply revalidates the plan server-side and creates one undoable change.
-          </p>
+      {preview && <div className="organization-result">
+        <div className="organization-summary">
+          <strong>{formatCount(preview.data.movedCount)} nodes or group bounds change</strong>
+          <span>{formatCount(preview.data.selectedCount)} content nodes in scope</span>
+          <span>Diagram area: {formatCount(preview.data.areaBefore)} → {formatCount(preview.data.areaAfter)} px²</span>
         </div>
-      )}
+        <div className="organization-preview-controls">
+          <SegmentedControl size="sm" label="Preview layout view" value={viewMode}
+            onChange={(next) => setViewMode(next as typeof viewMode)}
+            options={[{ value: "compare", label: "Before / after" }, { value: "after", label: "After only" }]} />
+          <Checkbox label={`Show connections (${preview.data.edges.length})`} checked={showConnections}
+            onChange={(event) => setShowConnections(event.target.checked)} />
+        </div>
+        <div className={viewMode === "compare" ? "organization-comparison" : "organization-comparison after-only"}>
+          {viewMode === "compare" && <div className="organization-pane">
+            <h3>Before</h3>
+            <OrganizationMiniature plan={preview.data} stage="before" showConnections={showConnections} />
+          </div>}
+          <div className="organization-pane">
+            <h3>After</h3>
+            <OrganizationMiniature plan={preview.data} stage="after" showConnections={showConnections} />
+          </div>
+        </div>
+        <p className="organization-hint">
+          Selected cards can be pinned in place. The preview does not change your canvas;
+          Apply revalidates the plan server-side and creates one undoable change.
+        </p>
+      </div>}
       {error && <p className="organization-error" role="alert">{error}</p>}
-      <div className="organization-actions">
-        <button type="button" onClick={() => void onPreview()} disabled={busy}>
-          {busy && !preview ? "Previewing…" : preview ? "Refresh preview" : "Preview layout"}
-        </button>
-        <button type="button" onClick={() => void onApply()} disabled={!preview || busy} className="organization-apply">
-          {busy && preview ? "Applying…" : "Apply layout"}
-        </button>
-      </div>
     </Dialog>
   );
 }
