@@ -58,7 +58,7 @@ describe("PinOverlay", () => {
   it("pins the center of the visible graph", async () => {
     const { store, addPin } = makeStore([]);
     renderOpen(store);
-    await userEvent.setup().click(screen.getByRole("button", { name: "+ Pin view" }));
+    await userEvent.setup().click(screen.getByRole("button", { name: "Pin current view" }));
     expect(addPin).toHaveBeenCalledWith("Pin 1", 524, 309);
   });
 
@@ -112,7 +112,7 @@ describe("PinOverlay", () => {
     expect(screen.queryByLabelText("Pin title")).toBeNull();
     expect(screen.getByText("Origin")).toBeInTheDocument();
     // ...and the popover itself is still open, unlike before this fix.
-    expect(screen.getByText("PINS")).toBeInTheDocument();
+    expect(screen.getByText("Pins")).toBeInTheDocument();
   });
 
   it("R8a finding #16: Escape in the note textarea also cancels the edit without closing the popover", async () => {
@@ -126,14 +126,14 @@ describe("PinOverlay", () => {
 
     expect(updatePin).not.toHaveBeenCalled();
     expect(screen.queryByLabelText("Pin note")).toBeNull();
-    expect(screen.getByText("PINS")).toBeInTheDocument();
+    expect(screen.getByText("Pins")).toBeInTheDocument();
   });
 
   it("remove calls the intent", async () => {
     const user = userEvent.setup();
     const { store, removePin } = makeStore([{ id: "p1", title: "Origin", note: "", x: 0, y: 0 }]);
     renderOpen(store);
-    await user.click(screen.getByLabelText("Remove Origin"));
+    await user.click(screen.getByLabelText("Delete Origin"));
     expect(removePin).toHaveBeenCalledWith("p1");
   });
 });

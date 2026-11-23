@@ -121,6 +121,8 @@ export class WsTopicBlockedError extends Error {}
 
 export type StateListener = (payload: Record<string, unknown>) => void;
 export type StatusListener = (status: ConnectionStatus) => void;
+/** Only correlated server error replies are reported; offline and timeout failures are not. */
+export type IntentErrorListener = (topic: string, intent: string, message: string) => void;
 export type StreamListener = (delta: string, done: boolean, reset: boolean, seq: number) => void;
 
 /** REVIEW-FIX (resubscribe-callback-dropped-on-version-rejection): the
@@ -259,6 +261,7 @@ export class WsTransport {
     { topic: string; listener: ResubscribeListener }
   >();
   private readonly statusListeners = new Set<StatusListener>();
+  private readonly intentErrorListeners = new Set<IntentErrorListener>();
   /** Keyed by requestId - stream deltas are addressed to a specific in-flight
    * request, not a topic. See handleMessage()'s "stream" branch. */
   private readonly streamListeners = new Map<string, Set<StreamListener>>();
@@ -309,7 +312,7 @@ export class WsTransport {
   private readonly blockedTopics = new Set<string>();
   private readonly pending = new Map<
     number,
-    { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
+    { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout>; topic: string; intent: string }
   >();
   private nextId = 1;
   /** ADR-003 stage 3.6: true once this transport has EVER seen a real
@@ -539,6 +542,12 @@ export class WsTransport {
     };
   }
 
+  /** Subscribe to all id-correlated server error replies; caller owns the unsubscribe. */
+  onIntentError(listener: IntentErrorListener): () => void {
+    this.intentErrorListeners.add(listener);
+    return () => { this.intentErrorListeners.delete(listener); };
+  }
+
   onStatus(listener: StatusListener): () => void {
     this.statusListeners.add(listener);
     listener(this.status);
@@ -647,7 +656,7 @@ export class WsTransport {
         this.pending.delete(id);
         reject(new WsTimeoutError(`request timed out: ${topic}/${intent}`));
       }, timeoutMs ?? this.requestTimeout);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { resolve, reject, timer, topic, intent });
       this.sendIntent(socket, topic, intent, args, id);
     });
   }
@@ -1089,7 +1098,15 @@ export class WsTransport {
         this.pending.delete(id);
         clearTimeout(entry.timer);
         if (kind === "result") entry.resolve(message.value);
-        else entry.reject(new WsRequestError(String(message.error)));
+        else {
+          const error = String(message.error);
+          entry.reject(new WsRequestError(error));
+          for (const listener of [...this.intentErrorListeners]) {
+            // A UI callback must never strand another observer or change request settlement.
+            try { listener(entry.topic, entry.intent, error); }
+            catch (callbackError) { console.error("[ws] intent-error listener failed:", callbackError); }
+          }
+        }
       } else if (kind === "error") {
         console.error("[ws] server error:", message.error);
       }
