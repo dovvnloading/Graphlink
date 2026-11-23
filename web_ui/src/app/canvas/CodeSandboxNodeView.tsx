@@ -10,6 +10,14 @@ import { NodeMenu } from "./NodeMenu";
 import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
+import { Button } from "../ui/Button";
+import { IconButton } from "../ui/IconButton";
+import { MenuItem } from "../ui/Menu";
+import { Badge } from "../ui/Badge";
+import { TextArea } from "../ui/TextArea";
+import { Disclosure } from "../ui/Disclosure";
+import { InlineAlert } from "../ui/InlineAlert";
+import { Icon } from "../ui/icons/Icon";
 
 /**
  * The Virtual Environment Runner node (Qt-removal plan R5.4, renamed under
@@ -103,30 +111,10 @@ function CodeSandboxNodeMenu({
 
   return (
     <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onToggleCollapse();
-          onClose();
-        }}
-      >
-        {isCollapsed ? "Expand" : "Collapse"}
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="chat-node-menu-danger"
-        onClick={() => {
-          onDelete();
-          onClose();
-        }}
-      >
-        Delete Node
-      </button>
+      <MenuItem icon="minimize" label={isCollapsed ? "Expand" : "Collapse"} onSelect={onToggleCollapse} />
+      <MenuItem label="Delete node" destructive onSelect={onDelete} />
     </NodeMenu>
-  );
-}
+  );}
 
 // -- helpers ----------------------------------------------------------------
 
@@ -316,6 +304,9 @@ export const CodeSandboxNodeView = memo(function CodeSandboxNodeView({
     data.onDeny();
   }
 
+  const dependenciesCount = requirementsDraft.split("\n")
+    .filter((line) => line.trim() && !line.trim().startsWith("#")).length;
+
   return (
     <NodeShell
       kindClassName="code-sandbox-node"
@@ -382,90 +373,41 @@ export const CodeSandboxNodeView = memo(function CodeSandboxNodeView({
               order put the requirements manifest first, which is the same
               mistake the Builder launcher made with its recipe picker:
               the qualifier before the question. */}
-          <textarea
-            className="code-sandbox-node-input"
-            value={promptDraft}
-            onChange={(event) => setPromptDraft(event.target.value)}
-            placeholder="Describe what the code should do…"
-            aria-label="Prompt"
-            rows={2}
-            spellCheck
-          />
-
+          <TextArea className="code-sandbox-node-input" label="Prompt" minRows={2} maxRows={4}
+            value={promptDraft} onValueChange={setPromptDraft}
+            placeholder="Describe what the code should do…" spellCheck />
           <div className="code-sandbox-node-run-row">
-            <button
-              type="button"
-              className="code-sandbox-node-run"
-              disabled={!canRun || busy || editingCode}
-              onClick={runNow}
-            >
-              {busy ? "Running…" : "Run"}
-            </button>
+            <Button size="sm" variant="primary" iconStart="play"
+              className="code-sandbox-node-run" disabled={!canRun || busy || editingCode}
+              onClick={runNow}>{busy ? "Running…" : "Run"}</Button>
             {!!data.codeSandboxCode.trim() && (
-              <button
-                type="button"
-                className="code-sandbox-node-cancel"
-                disabled={busy || editingCode}
-                onClick={() => data.onRun("")}
-                title="Re-run the saved Python script without asking the AI to regenerate it"
-              >
+              <Button size="sm" variant="secondary" className="code-sandbox-node-cancel"
+                disabled={busy || editingCode} onClick={() => data.onRun("")}>
                 Run saved script
-              </button>
+              </Button>
             )}
             {data.pendingRequestId && (
-              <button
-                type="button"
-                className="code-sandbox-node-cancel"
-                onClick={() => data.onCancel()}
-                title="Cancel Virtual Environment Runner request"
-              >
-                Cancel
-              </button>
+              <Button size="sm" variant="secondary" className="code-sandbox-node-cancel"
+                onClick={() => data.onCancel()}>Cancel</Button>
             )}
           </div>
-
-          {/* Dependencies fold away: a manifest is set once and then mostly
-              read never - it was previously the FIRST thing on the card, an
-              always-open two-row textarea that clipped its own third line.
-              The summary carries the count so a folded manifest still says
-              what it holds. Native <details>, so keyboard and screen-reader
-              behaviour come from the platform; the textarea keeps its
-              blur/Enter commit contract unchanged. */}
-          <details className="code-sandbox-node-deps">
-            <summary>
-              Dependencies
-              {(() => {
-                const count = requirementsDraft
-                  .split("\n")
-                  .filter((line) => line.trim() && !line.trim().startsWith("#")).length;
-                return count > 0 ? (
-                  <span className="code-sandbox-node-deps-count">{count}</span>
-                ) : null;
-              })()}
-            </summary>
-            <textarea
+          <div className="code-sandbox-node-deps-summary">
+            <span>Dependencies</span>
+            <Badge className="code-sandbox-node-deps-count">{dependenciesCount}</Badge>
+          </div>
+          <Disclosure title="Edit dependencies" className="code-sandbox-node-deps">
+            <TextArea label="Requirements" minRows={2} maxRows={5}
               className="code-sandbox-node-requirements"
-              value={requirementsDraft}
-              onChange={(event) => setRequirementsDraft(event.target.value)}
+              value={requirementsDraft} onValueChange={setRequirementsDraft}
               onBlur={commitRequirements}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                   event.preventDefault();
-                  // Do NOT call commitRequirements() here too - .blur()
-                  // below synchronously fires the onBlur={commitRequirements}
-                  // handler above, so calling it directly here as well would
-                  // dispatch the WS intent twice per Enter press (mirrors
-                  // GitlinkNodeView's own FIX 8).
                   (event.target as HTMLTextAreaElement).blur();
                 }
               }}
-              placeholder={"numpy\npandas==2.2.0"}
-              aria-label="Requirements"
-              rows={2}
-              spellCheck={false}
-            />
-          </details>
-
+              placeholder={"numpy\npandas==2.2.0"} spellCheck={false} />
+          </Disclosure>
           {data.codeSandboxError && (
             <div className="code-sandbox-node-banner-error" role="alert">
               {data.codeSandboxError}
@@ -476,27 +418,22 @@ export const CodeSandboxNodeView = memo(function CodeSandboxNodeView({
             <div className="code-sandbox-node-editor-actions">
               {editingCode ? (
                 <>
-                  <button type="button" disabled={savingCode || busy || staleCode} onClick={saveCodeEdit}>
-                    {savingCode ? "Saving…" : "Save script"}
-                  </button>
-                  <button type="button" disabled={savingCode} onClick={() => setEditingCode(false)}>
-                    Cancel edit
-                  </button>
+                  <Button size="sm" variant="primary" disabled={savingCode || busy || staleCode}
+                    onClick={saveCodeEdit}>{savingCode ? "Saving…" : "Save script"}</Button>
+                  <Button size="sm" onClick={() => setEditingCode(false)} disabled={savingCode}>Cancel edit</Button>
                 </>
               ) : (
-                <button type="button" disabled={busy || data.codeSandboxAwaitingApproval} onClick={beginCodeEdit}>
-                  {data.codeSandboxCode ? "Edit Python" : "Write Python"}
-                </button>
+                <Button size="sm" iconStart="edit" disabled={busy || data.codeSandboxAwaitingApproval}
+                  onClick={beginCodeEdit}>{data.codeSandboxCode ? "Edit Python" : "Write Python"}</Button>
               )}
-              <button type="button"
+              <Button size="sm" variant="ghost" iconStart="download"
                 disabled={!(editingCode ? codeDraft : data.codeSandboxCode)}
                 onClick={() => downloadTextFile(editingCode ? codeDraft : data.codeSandboxCode, "runner.py")}>
                 Download .py
-              </button>
+              </Button>
             </div>
-            <p className="code-sandbox-node-editor-notice">
-              Executed Python runs with your user-account permissions. Review and approve every run.
-            </p>
+            <InlineAlert variant="info" title="Code execution"
+              body="Executed Python runs with your user-account permissions. Review and approve every run." />
             {staleCode && <p role="alert" className="code-sandbox-node-banner-error">
               The saved script changed during this edit. Download your draft before reopening the latest version.
             </p>}
@@ -505,8 +442,7 @@ export const CodeSandboxNodeView = memo(function CodeSandboxNodeView({
             </p>}
             {editingCode ? (
               <textarea className="code-sandbox-node-source-editor nodrag"
-                aria-label="Edit Python script"
-                value={codeDraft}
+                aria-label="Edit Python script" value={codeDraft}
                 onChange={(event) => { setCodeDraft(event.target.value); setCodeEditError(""); }}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
@@ -514,13 +450,22 @@ export const CodeSandboxNodeView = memo(function CodeSandboxNodeView({
                     saveCodeEdit();
                   }
                 }}
-                disabled={savingCode}
-                spellCheck={false}
-              />
+                disabled={savingCode} spellCheck={false} />
             ) : data.codeSandboxCode ? (
-              <div className="chat-node-content code-sandbox-node-code">
-                <NodeMarkdown content={toPythonFence(data.codeSandboxCode)} />
-              </div>
+              <>
+                <div className="code-sandbox-node-code-header">
+                  <span><Icon name="node-code" size="sm" />Python</span>
+                  <IconButton size="sm" icon="copy" label="Copy Python code"
+                    onClick={() => {
+                      navigator.clipboard.writeText(data.codeSandboxCode).catch((error: unknown) => {
+                        console.error("[code-sandbox] Copy Python failed:", error);
+                      });
+                    }} />
+                </div>
+                <div className="chat-node-content code-sandbox-node-code">
+                  <NodeMarkdown content={toPythonFence(data.codeSandboxCode)} />
+                </div>
+              </>
             ) : null}
           </div>
 
@@ -530,7 +475,7 @@ export const CodeSandboxNodeView = memo(function CodeSandboxNodeView({
               not asked for yet. */}
           {(data.pendingRequestId || data.codeSandboxOutput) && (
             <div className="code-sandbox-node-section">
-              <span className="code-sandbox-node-section-label">Terminal</span>
+              <span className="code-sandbox-node-section-label"><Icon name="terminal" size="sm" />Terminal</span>
               {/* Plain preformatted text, never the markdown pipeline - see
                   module doc. While a run is in flight, shows live streamed
                   deltas; once it completes (pendingRequestId back to null),
