@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { Dialog, OverlayProvider, useOverlays } from "../overlays/overlays";
@@ -37,7 +37,7 @@ describe("ConfirmDialog and useConfirm", () => {
     expect(screen.getByRole("dialog", { name: "Settings" })).toBeInTheDocument();
     expect(nested.closest("[data-nested]")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
-    expect(screen.getByRole("button", { name: "Delete note", exact: true })).toHaveAttribute("data-destructive", "true");
+    expect(within(nested).getByRole("button", { name: "Delete note", exact: true })).toHaveAttribute("data-destructive", "true");
     fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() => expect(screen.getByRole("status", { name: "Confirmation result" })).toHaveTextContent("Cancelled"));
     expect(screen.getByRole("dialog", { name: "Settings" })).toBeInTheDocument();
@@ -52,7 +52,7 @@ describe("ConfirmDialog and useConfirm", () => {
     expect(await screen.findByText("Estimated cost: $1.50")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Details" }));
     expect(screen.getByText("The note will be removed.")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Delete note", exact: true }));
+    await user.click(within(screen.getByRole("dialog", { name: "Delete note?" })).getByRole("button", { name: "Delete note", exact: true }));
     await waitFor(() => expect(screen.getByRole("status", { name: "Confirmation result" })).toHaveTextContent("Accepted"));
   });
 
