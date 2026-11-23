@@ -17,14 +17,13 @@ import { useLodVisibility } from "./useLodVisibility";
 import type { SceneStore, ScienceEditorSession } from "./sceneStore";
 import { downloadBlob } from "./downloadTextFile";
 import { writeTableCsv } from "./tableCsv";
-import { createLinearScale } from "./charts/chartScales";
 import { ScienceTableSource } from "./ScienceTableSource";
 import { ScienceArrayInput } from "./ScienceArrayInput";
 import { ScienceColumnBinding, type FetchTableColumn } from "./ScienceColumnBinding";
 import { ScientificDataTable } from "./ScientificDataTable";
-import { ScientificResultViews } from "./ScientificResultViews";
+import { ScientificMiniPlot, ScientificResultViews } from "./ScientificResultViews";
 import {
-  isResult, exactScienceNumber, isImportedTable, type ScientificImportedTable, chartableScienceTypes, columnChoices, compatibleOptions, connectedInputText, currentSource, draftInputs, FieldError, fieldText, formatMeasurement, formatScienceNumber, formatScienceRange, formatScienceSummary, formatScienceValue, matchesSource, parseInputs, readableScienceKey, readScienceState, resultMeasurement, sourceOptions,
+  isResult, exactScienceNumber, isImportedTable, type ScientificImportedTable, chartableScienceTypes, columnChoices, compatibleOptions, connectedInputText, currentSource, draftInputs, FieldError, fieldText, formatMeasurement, formatScienceNumber, formatScienceSummary, formatScienceValue, matchesSource, parseInputs, readableScienceKey, readScienceState, resultMeasurement, sourceOptions,
   type EditorDraft, type ScienceAttempt, type ScienceField, type ScienceLimits, type ScienceOperation, type ScienceParent, type SciencePlot, type ScienceResult,
   type ScienceChartLink, type ScienceChartType, type ScienceState, type ScienceRunnerConfiguration, type ScientificColumnType, type Sources, type SourceOption, type SourceReference,
 } from "./scientificWorkbench";
@@ -39,29 +38,10 @@ function numberCell(value: number | undefined): string {
   return value === undefined ? "—" : formatScienceNumber(value);
 }
 
-function scienceScale(values: number[], from: number, to: number) {
-  const low = values.reduce((a, b) => Math.min(a, b)), high = values.reduce((a, b) => Math.max(a, b));
-  // Dividing by two avoids overflow when the finite bounds have opposite signs near 1e308.
-  const divisor = Number.isFinite(high - low) ? 1 : 2;
-  const position = createLinearScale([low / divisor, high / divisor], [from, to]);
-  return { low, high, at: (n: number) => position(n / divisor) };
-}
-
 function Plot({ plot, scatter }: { plot: SciencePlot; scatter: boolean }) {
-  const x = scienceScale(plot.x, 10, 310);
-  const y = scienceScale(plot.y, 98, 8);
-  const points = plot.x.map((v, i) => `${x.at(v)},${y.at(plot.y[i])}`).join(" ");
-
   return <figure className="science-plot">
     <figcaption>{plot.title}</figcaption>
-    <span>{plot.yLabel} · {formatScienceRange(y.low, y.high)}</span>
-    <svg viewBox="0 0 320 110" role="img" aria-label={`${plot.title}. ${plot.yLabel} versus ${plot.xLabel}, ${plot.x.length} points.`}>
-      <path d="M10 8V98H310" fill="none" stroke="currentColor" opacity=".4" />
-      {!scatter && <polyline points={points} fill="none" stroke="currentColor" strokeWidth="1.8" />}
-      {(scatter || plot.x.length <= 48) && plot.x.map((v, i) =>
-        <circle key={i} cx={x.at(v)} cy={y.at(plot.y[i])} r="2.4" fill="currentColor"><title>{v}, {plot.y[i]}</title></circle>)}
-    </svg>
-    <span>{plot.xLabel} · {formatScienceRange(x.low, x.high)}</span>
+    <ScientificMiniPlot plot={plot} scatter={scatter} />
     <ScientificDataTable heading="Exact plot coordinates" columns={["Point", plot.xLabel, plot.yLabel]}
       rows={() => plot.x.map((value, index) => [String(index + 1), exactScienceNumber(value), exactScienceNumber(plot.y[index])])} />
   </figure>;
