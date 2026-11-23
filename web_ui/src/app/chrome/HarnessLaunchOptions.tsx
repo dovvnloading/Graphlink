@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import type { SceneStore } from "../canvas/sceneStore";
+import { InlineAlert } from "../ui/InlineAlert";
+import { Select } from "../ui/Select";
 
 export { MAX_HARNESS_TASK_LENGTH, exceedsHarnessTaskLimit } from "../../lib/harnessTaskLimit";
 export type HarnessExecutionProfile = "host" | "isolated";
@@ -42,37 +44,21 @@ export function HarnessExecutionProfileSelect({
 
   return (
     <div className="harness-launch-profile">
-      <label>
-        <span>Execution profile</span>
-        <select
-          aria-label="Execution profile for new agent"
-          value={value}
-          disabled={disabled}
-          onChange={(event) => onChange(event.target.value as HarnessExecutionProfile)}
-        >
-          <option value="host">Host (default)</option>
-          <option value="isolated" disabled={!engine}>Isolated (Docker / Podman)</option>
-        </select>
-      </label>
-      <span className="harness-launch-profile-status" role="status">
-        {engine === undefined
-          ? "Checking Docker / Podman availability…"
-          : engine
-            ? `${engine === "docker" ? "Docker" : "Podman"} detected on the backend; Isolated never falls back to Host.`
-            : probeFailed
-              ? "Could not check Docker or Podman availability. Check the connection and retry."
-              : "Docker or Podman is unavailable on the backend; Isolated cannot start."}
-      </span>
-      {engine !== undefined && !engine && (
-        <button
-          type="button"
-          className="builder-launch-secondary"
-          disabled={disabled}
-          onClick={() => setProbeAttempt((attempt) => attempt + 1)}
-        >
-          Recheck Docker / Podman
-        </button>
-      )}
+      <Select label="Execution profile" ariaLabel="Execution profile for new agent"
+        value={value} disabled={disabled}
+        onChange={(next) => onChange(next as HarnessExecutionProfile)}
+        options={[
+          { value: "host", label: "Host (default)", description: "Run with per-action approval on this machine." },
+          { value: "isolated", label: "Isolated (Docker / Podman)", description: "Require a container engine on the backend.", disabled: !engine },
+        ]} />
+      {engine === undefined ? <p role="status">Checking Docker / Podman availability…</p> :
+        engine ? <p role="status">{engine === "docker" ? "Docker" : "Podman"} detected. Isolated never falls back to Host.</p> :
+        <InlineAlert variant="warning" title="Isolation unavailable"
+          body={probeFailed
+            ? "Docker or Podman isn't available, so Isolated mode can't start. The connection check failed."
+            : "Docker or Podman isn't available, so Isolated mode can't start."}
+          action={{ label: "Check again", onClick: () => setProbeAttempt((attempt) => attempt + 1) }} />
+      }
     </div>
   );
 }
