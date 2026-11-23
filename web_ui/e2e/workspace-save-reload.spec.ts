@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { gotoApp } from "./helpers";
+import { confirmLibraryNavigation, gotoApp } from "./helpers";
 
 /**
  * ADR-015 stage 15.6: a real save -> clear -> reload round trip through
@@ -81,9 +81,8 @@ test("saves a node, clears the canvas, then reloads it from the chat library", a
 
   // Confirm the user-visible graph switch. The New Chat action now saves
   // pending edits before clearing rather than silently discarding them.
-  page.once("dialog", (dialog) => { void dialog.accept(); });
-  await page.getByRole("button", { name: "New Chat", exact: true }).click();
-  await expect(libraryDialog).toBeHidden();
+  await libraryDialog.getByRole("button", { name: "New chat", exact: true }).first().click();
+  await confirmLibraryNavigation(page, libraryDialog);
   await expect(page.locator(".react-flow__node")).toHaveCount(0);
 
   await page.locator('[data-overlay-trigger="library"]').click();

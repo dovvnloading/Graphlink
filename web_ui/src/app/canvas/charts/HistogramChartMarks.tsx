@@ -108,7 +108,7 @@ export function HistogramChartMarks({ chartData, theme, width, height, onHover, 
         strokeDasharray="7 3 1 3"
       />
       </g>
-      <g transform="translate(8 8)" fontSize={9}>
+      <g transform="translate(8 8)" fontSize={11}>
         <line x1={0} x2={14} y1={2} y2={2} stroke={theme.categorical[0]} strokeWidth={1.6} strokeDasharray="6 4" />
         <text x={18} y={5} fill={theme.textMuted}>
           {`Mean ${formatValue(avg)}`}

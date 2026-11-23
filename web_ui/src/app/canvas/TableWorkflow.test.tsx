@@ -63,7 +63,8 @@ describe("table source editing", () => {
   it("uses the configured columns for each independent consumer", async () => {
     const { request, store } = makeStore();
     render(<TableSource id="a" content={'Team,Hours,Cost\nDev,2,10'} store={store} />);
-    fireEvent.change(screen.getByRole("combobox", { name: "Sum column" }), {target: {value: "Cost"}});
+    fireEvent.click(screen.getByRole("button", { name: "Sum column" }));
+    fireEvent.click(screen.getByRole("option", { name: "Cost" }));
     fireEvent.click(screen.getByRole("button", { name: "Create chart" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Create report" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Create report" }));

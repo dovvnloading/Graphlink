@@ -1,0 +1,11 @@
+.builder-launch-dialog .overlay-dialog-body { display: flex; flex-direction: column; gap: var(--gl-space-5); }
+.builder-launch-intro { margin: 0; font-size: var(--gl-text-sm); color: var(--gl-surface-text-secondary); line-height: var(--gl-leading-sm); }
+.builder-launch-recipe-preview ol { margin: var(--gl-space-2) 0; padding-left: var(--gl-space-5); font-size: var(--gl-text-sm); }
+.builder-launch-recipe-preview p { margin: 0; font-size: var(--gl-text-sm); }
+.builder-launch-budgets-control { display: grid; gap: var(--gl-space-2); }
+.builder-launch-budgets-control h3 { font-size: var(--gl-text-base); margin: 0; }
+.builder-launch-budget-summary { color: var(--gl-surface-text-primary); font-size: var(--gl-text-sm); font-weight: var(--gl-weight-semibold); font-variant-numeric: tabular-nums; margin: 0; }
+.builder-launch-hint { color: var(--gl-surface-text-muted); font-size: var(--gl-text-xs); margin: 0; }
+.builder-launch-budgets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--gl-space-3); margin-top: var(--gl-space-3); }
+.harness-launch-workspace { display: flex; align-items: center; flex-wrap: wrap; gap: var(--gl-space-2); min-width: 0; }
+.harness-launch-workspace-dir { flex: 1; min-width: 0; color: var(--gl-surface-text-primary); font-size: var(--gl-text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -37,8 +37,16 @@ test("ELISA plate: 4PL standard curve, diluted unknowns, then Discuss in chat", 
   await grantPacks(page, ["Plate Assays"]);
 
   const plate = await launchPack(page, "Plate Assays");
-  await plate.getByRole("combobox", { name: "Operation", exact: true }).selectOption("standard_curve");
-  await plate.getByRole("combobox", { name: "Calibration model", exact: true }).selectOption("4pl");
+  const operation = plate.getByRole("button", { name: "Operation", exact: true });
+  await operation.click();
+  await page.getByRole("listbox", { name: "Operation", exact: true })
+    .getByRole("option", { name: "Standard curves and diluted unknowns", exact: true }).click();
+  await expect(operation).toContainText("Standard curves and diluted unknowns");
+  const calibration = plate.getByRole("button", { name: "Calibration model", exact: true });
+  await calibration.click();
+  await page.getByRole("listbox", { name: "Calibration model", exact: true })
+    .getByRole("option", { name: "4pl", exact: true }).click();
+  await expect(calibration).toContainText("4pl");
   await plate.getByRole("textbox", { name: /^Known standard concentrations/ })
     .fill("[15.6, 31.25, 62.5, 125, 250, 500, 1000]");
   await plate.getByRole("textbox", { name: /^Corresponding standard signals/ })

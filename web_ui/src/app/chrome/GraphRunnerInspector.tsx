@@ -2,16 +2,18 @@ import type { GraphRunTrace } from "./graphRunTrace";
 import { serializeGraphRunTrace } from "./graphRunTrace";
 import { downloadBlob } from "../canvas/downloadTextFile";
 import { Disclosure } from "./RunnerDisclosure";
+import { Button } from "../ui/Button";
+import { formatCount, formatDuration, formatRelativeTime } from "../ui/format";
 
 // Only the expanded trace accordion imports this detailed timeline UI.
 function traceTime(value: string | null): string {
   if (!value) return "Not recorded";
   const date = new Date(value);
-  return Number.isNaN(date.valueOf()) ? "Not recorded" : date.toLocaleString();
+  return Number.isNaN(date.valueOf()) ? "Not recorded" : formatRelativeTime(date);
 }
 
 function traceDuration(value: number | null): string {
-  return value === null ? "Not recorded" : `${value.toLocaleString()} ms`;
+  return value === null ? "Not recorded" : formatDuration(value / 1000);
 }
 
 export function GraphRunnerInspectorContent({ trace, names, onSelect, statuses, operations }: {
@@ -26,15 +28,15 @@ export function GraphRunnerInspectorContent({ trace, names, onSelect, statuses, 
   return <>
     <div className="runner-commit">
       <p>Started: {traceTime(trace.startedAt)} · Finished: {traceTime(trace.finishedAt)} · Duration: {traceDuration(trace.durationMs)}</p>
-      <button type="button" className="appbar-btn" onClick={() => downloadBlob(
+      <Button variant="secondary" size="sm" iconStart="download" onClick={() => downloadBlob(
         new Blob([serializeGraphRunTrace(trace)], { type: "application/json" }),
         `graph-run-${trace.runId}.trace.json`,
-      )}>Export trace JSON</button>
+      )}>Export trace JSON</Button>
     </div>
     {trace.steps.length ? <ol className="runner-steps runner-timeline">
       {trace.steps.map((step) => <li key={step.index}>
         <Disclosure className="runner-trace-entry"
-          label={`Step ${step.index} · ${nodeName(step.destinationNodeId)} · ${statuses[step.status] ?? step.status}`}
+          label={`Step ${formatCount(step.index)} · ${nodeName(step.destinationNodeId)} · ${statuses[step.status] ?? step.status}`}
           onToggle={() => onSelect(step.destinationNodeId)}>
           <div>Source: <strong>{nodeName(step.sourceNodeId)}</strong> <code>{step.sourceNodeId || "Unavailable"}</code></div>
           {step.kind === "scientific" && !!step.sourceNodeIds?.length && <div>
@@ -65,7 +67,7 @@ export function GraphRunnerInspectorContent({ trace, names, onSelect, statuses, 
             </div>}
           </>}
           <div className="runner-attempts">
-            <strong>Attempt history ({step.attempts.length})</strong>
+            <strong>Attempt history ({formatCount(step.attempts.length)})</strong>
             {step.attempts.length ? <ol>
               {step.attempts.map((attempt) => <li key={attempt.requestId}>
                 <div>Request ID: <code>{attempt.requestId}</code></div>

@@ -77,13 +77,13 @@ export function HeatmapChartMarks({
           transform={rotate
             ? `rotate(-25 ${(index + 0.5) * cellWidth} ${innerHeight + 16})`
             : undefined}
-          fontSize={10} fill={theme.textMuted}>
+          fontSize={11} fill={theme.textMuted}>
           {wrapLabel(columns[index], 13, 1).join("")}
         </text>
       ))}
       {rowIndexes.map((index) => (
         <text key={index} x={-7} y={(index + 0.5) * cellHeight}
-          dominantBaseline="middle" textAnchor="end" fill={theme.textMuted} fontSize={10}>
+          dominantBaseline="middle" textAnchor="end" fill={theme.textMuted} fontSize={11}>
           {wrapLabel(rows[index], 14, 1).join("")}
         </text>
       ))}
@@ -94,10 +94,10 @@ export function HeatmapChartMarks({
         transform={`rotate(-90 -80 ${innerHeight / 2})`}>{data.yAxis}</text>
       <g className="chart-heatmap-legend" transform={`translate(${innerWidth + 14} 0)`}>
         <rect width={12} height={innerHeight} fill={`url(#${gradientId})`} />
-        <text x={17} y={8} fontSize={10} fill={theme.textMuted}>{String(high)}</text>
-        {diverging && <text x={17} y={innerHeight / 2 + 3} fontSize={10} fill={theme.textMuted}>0</text>}
-        <text x={17} y={innerHeight} fontSize={10} fill={theme.textMuted}>{String(low)}</text>
-        {data.valueUnit && <text x={0} y={innerHeight + 16} fontSize={10} fill={theme.textMuted}>{data.valueUnit}</text>}
+        <text x={17} y={8} fontSize={11} fill={theme.textMuted}>{String(high)}</text>
+        {diverging && <text x={17} y={innerHeight / 2 + 3} fontSize={11} fill={theme.textMuted}>0</text>}
+        <text x={17} y={innerHeight} fontSize={11} fill={theme.textMuted}>{String(low)}</text>
+        {data.valueUnit && <text x={0} y={innerHeight + 16} fontSize={11} fill={theme.textMuted}>{data.valueUnit}</text>}
       </g>
     </g>
   );

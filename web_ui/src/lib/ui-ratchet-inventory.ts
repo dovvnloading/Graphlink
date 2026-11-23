@@ -17,14 +17,6 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
   readonly rule: RatchetRule;
   readonly count: number;
 }> = [
-  { file: "app/canvas/ChartNodeView.tsx", rule: "R1", count: 1 },
-
-  { file: "app/canvas/ChartNodeView.tsx", rule: "R4", count: 3 },
-
-  { file: "app/canvas/ChartNodeView.tsx", rule: "R6", count: 2 },
-
-  { file: "app/canvas/ChartNodeView.tsx", rule: "R8", count: 1 },
-
   { file: "app/canvas/ChatCitationChips.css", rule: "R9", count: 5 },
 
   { file: "app/canvas/ChatCitationChips.css", rule: "R10", count: 1 },
@@ -36,16 +28,6 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
   { file: "app/canvas/ChatRerunDialog.css", rule: "R10", count: 4 },
 
   { file: "app/canvas/CodeReviewNodeView.tsx", rule: "R8", count: 1 },
-
-  { file: "app/canvas/DocumentViewPanel.tsx", rule: "R8", count: 6 },
-
-  { file: "app/canvas/DocumentViewSearch.tsx", rule: "R1", count: 3 },
-
-  { file: "app/canvas/DocumentViewSearch.tsx", rule: "R8", count: 3 },
-
-  { file: "app/canvas/DocumentViewToc.tsx", rule: "R7", count: 1 },
-
-  { file: "app/canvas/DocumentViewToc.tsx", rule: "R8", count: 1 },
 
   { file: "app/canvas/GitlinkNodeView.tsx", rule: "R8", count: 1 },
 
@@ -73,81 +55,17 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/canvas/ScientificDataTable.tsx", rule: "R5", count: 1 },
 
-  { file: "app/canvas/ScientificNodeView.css", rule: "R9", count: 18 },
-
-  { file: "app/canvas/ScientificNodeView.css", rule: "R10", count: 5 },
-
-  { file: "app/canvas/ScientificNodeView.css", rule: "R14", count: 66 },
-
   { file: "app/canvas/ScientificNodeView.tsx", rule: "R2", count: 1 },
-
-  { file: "app/canvas/ScientificNodeView.tsx", rule: "R4", count: 9 },
-
-  { file: "app/canvas/ScientificNodeView.tsx", rule: "R5", count: 7 },
-
-  { file: "app/canvas/ScientificNodeView.tsx", rule: "R6", count: 1 },
-
-  { file: "app/canvas/ScientificNodeView.tsx", rule: "R8", count: 8 },
-
-  { file: "app/canvas/ScientificResultViews.css", rule: "R9", count: 6 },
-
-  { file: "app/canvas/ScientificResultViews.css", rule: "R10", count: 3 },
-
-  { file: "app/canvas/ScientificResultViews.css", rule: "R14", count: 12 },
-
-  { file: "app/canvas/ScientificResultViews.tsx", rule: "R1", count: 1 },
-
-  { file: "app/canvas/ScientificResultViews.tsx", rule: "R5", count: 2 },
-
-  { file: "app/canvas/ScientificResultViews.tsx", rule: "R8", count: 3 },
 
   { file: "app/canvas/ScientificWorkspace.tsx", rule: "R8", count: 1 },
 
-  { file: "app/canvas/TableContributors.tsx", rule: "R4", count: 1 },
-
-  { file: "app/canvas/TableSource.tsx", rule: "R4", count: 2 },
-
-  { file: "app/canvas/TableWorkflow.css", rule: "R9", count: 1 },
-
-  { file: "app/canvas/TableWorkflow.css", rule: "R10", count: 1 },
-
-  { file: "app/canvas/TableWorkflow.css", rule: "R14", count: 17 },
-
   { file: "app/canvas/workspace.css", rule: "R11", count: 2 },
-
-  { file: "app/chrome/AboutDialog.tsx", rule: "R8", count: 1 },
-
-  { file: "app/chrome/BuilderLaunchDialog.tsx", rule: "R5", count: 1 },
-
-  { file: "app/chrome/BuilderLaunchDialog.tsx", rule: "R6", count: 2 },
-
-  { file: "app/chrome/BuilderLaunchDialog.tsx", rule: "R8", count: 1 },
 
   { file: "app/chrome/Composer.tsx", rule: "R1", count: 3 },
 
   { file: "app/chrome/Composer.tsx", rule: "R2", count: 1 },
 
   { file: "app/chrome/Composer.tsx", rule: "R8", count: 9 },
-
-  { file: "app/chrome/DiagnosticsDialog.tsx", rule: "R8", count: 1 },
-
-  { file: "app/chrome/GlobalSearchDialog.tsx", rule: "R8", count: 1 },
-
-  { file: "app/chrome/GraphRunnerDialog.css", rule: "R9", count: 3 },
-
-  { file: "app/chrome/GraphRunnerDialog.css", rule: "R10", count: 1 },
-
-  { file: "app/chrome/GraphRunnerDialog.css", rule: "R14", count: 26 },
-
-  { file: "app/chrome/GraphRunnerDialog.tsx", rule: "R4", count: 4 },
-
-  { file: "app/chrome/GraphRunnerDialog.tsx", rule: "R8", count: 1 },
-
-  { file: "app/chrome/HarnessLaunchDialog.tsx", rule: "R8", count: 2 },
-
-  { file: "app/chrome/HarnessLaunchOptions.tsx", rule: "R4", count: 1 },
-
-  { file: "app/chrome/HelpDialog.tsx", rule: "R8", count: 1 },
 
   { file: "app/chrome/KnowledgeSettingsPage.tsx", rule: "R13", count: 1 },
 
@@ -157,27 +75,9 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/chrome/ModelPicker.tsx", rule: "R8", count: 1 },
 
-  { file: "app/chrome/OnboardingDialog.tsx", rule: "R8", count: 1 },
-
-  { file: "app/chrome/OnboardingSteps.tsx", rule: "R8", count: 1 },
-
-  { file: "app/chrome/OrganizationDialog.css", rule: "R9", count: 10 },
-
-  { file: "app/chrome/OrganizationDialog.css", rule: "R10", count: 4 },
-
-  { file: "app/chrome/OrganizationDialog.css", rule: "R14", count: 23 },
-
   { file: "app/chrome/OrganizationDialog.tsx", rule: "R2", count: 1 },
 
-  { file: "app/chrome/OrganizationDialog.tsx", rule: "R4", count: 1 },
-
-  { file: "app/chrome/OrganizationDialog.tsx", rule: "R6", count: 3 },
-
-  { file: "app/chrome/OrganizationDialog.tsx", rule: "R8", count: 2 },
-
   { file: "app/chrome/PluginPicker.tsx", rule: "R1", count: 1 },
-
-  { file: "app/chrome/RunnerDisclosure.tsx", rule: "R1", count: 2 },
 
   { file: "app/context/ContextInspector.css", rule: "R9", count: 1 },
 

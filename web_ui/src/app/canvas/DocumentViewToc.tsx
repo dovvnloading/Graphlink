@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import type { DocumentHeading } from "./documentViewHeadings";
+import { IconButton } from "../ui/IconButton";
+import { Button } from "../ui/Button";
 
 /**
  * Document View full redesign, stage 2 ("table of contents + reading
@@ -124,23 +126,13 @@ export function DocumentViewToc({
 
   return (
     <div className="document-view-toc" ref={rootRef}>
-      <button
-        type="button"
-        className="document-view-toc-toggle"
-        aria-haspopup="true"
-        aria-expanded={isOpen}
-        onClick={() => setIsOpen((open) => !open)}
-        title="Table of contents"
-      >
-        Outline
-      </button>
+      <IconButton icon="panel-left" label="Table of contents" size="sm" aria-haspopup="true" aria-expanded={isOpen} onClick={() => setIsOpen((open) => !open)} />
       {isOpen && (
-        <div className="document-view-toc-dropdown" role="menu" aria-label="Table of contents">
+        <div className="document-view-toc-dropdown" role="navigation" aria-label="Table of contents">
           {headings.map((heading) => (
-            <button
+            <Button
               key={heading.id}
-              type="button"
-              role="menuitem"
+              variant="ghost" size="sm"
               className={
                 "document-view-toc-item" +
                 ` document-view-toc-depth-${Math.min(heading.depth, 3)}` +
@@ -149,7 +141,7 @@ export function DocumentViewToc({
               onClick={() => onSelectHeading(heading.id)}
             >
               {heading.text}
-            </button>
+            </Button>
           ))}
         </div>
       )}

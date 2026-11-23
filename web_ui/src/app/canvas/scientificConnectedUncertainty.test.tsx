@@ -93,13 +93,12 @@ describe("uncertainty-aware Scientific Workbench connections", () => {
 
   it("shows connected value ± uncertainty, and sends explicit Monte Carlo only when selected", async () => {
     const { request } = mount();
-    const source = screen.getByRole("combobox", { name: "Import Measured value from a connected result" });
-    const estimate = [...(source as HTMLSelectElement).options].find((option) => option.text.includes("estimate · 5 ± 0.2"))!;
-    fireEvent.change(source, { target: { value: estimate.value } });
+    fireEvent.click(screen.getByRole("button", { name: "Import Measured value from a connected result" }));
+    fireEvent.click(screen.getByRole("option", { name: /estimate · 5 ± 0\.2/ }));
     expect(screen.getByLabelText(/^Measured value(?: \(.+\))?$/)).toHaveValue("5");
     expect(screen.getByText(/Source · Uncertainty · estimate · 5 ± 0.2/)).toBeVisible();
-    fireEvent.change(screen.getByRole("combobox", { name: "Uncertainty propagation method" }),
-      { target: { value: "monte_carlo" } });
+    fireEvent.click(screen.getByRole("button", { name: "Uncertainty propagation method" }));
+    fireEvent.click(screen.getByRole("option", { name: /Monte Carlo · JCGM 101/ }));
     fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
     await waitFor(() => expect(request).toHaveBeenCalled());
     expect(request).toHaveBeenCalledWith("app-plugins", "invokePluginIntent", [
@@ -235,7 +234,12 @@ describe("uncertainty-aware Scientific Workbench connections", () => {
       ],
     };
     mount(JSON.stringify({ ...core, operations: [documented] }));
-    expect(screen.getByRole("combobox", { name: "Operation" })).toHaveValue("convert_unit");
+    const selectedOperation = screen.getByRole("button", { name: "Operation" });
+    expect(selectedOperation).toHaveTextContent("Convert");
+    fireEvent.click(selectedOperation);
+    const currentOption = screen.getByRole("option", { name: "Convert" });
+    expect(currentOption).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(currentOption);
     expect(screen.getByRole("group", { name: "Inputs" })).toBeInTheDocument();
     expect(screen.getByLabelText("Measured value (mm)").closest(".science-input-grid")).toBeInTheDocument();
     expect(screen.queryByText("Enter the measurement in its source unit.")).not.toBeInTheDocument();
@@ -244,10 +248,10 @@ describe("uncertainty-aware Scientific Workbench connections", () => {
     expect(screen.getByText("Enter the measurement in its source unit.")).toBeVisible();
     expect(screen.getByText(/Default unit: mm · length/)).toBeVisible();
 
-    const details = screen.getByText("About & methods").closest("details");
-    expect(details).not.toHaveAttribute("open");
-    fireEvent.click(screen.getByText("About & methods"));
-    expect(details).toHaveAttribute("open");
+    const details = screen.getByRole("button", { name: "About & methods" });
+    expect(details).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(details);
+    expect(details).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("Multiply by the exact SI conversion factor.")).toBeVisible();
     expect(screen.getByRole("link", { name: "Unit reference" })).toHaveAttribute("href", "https://example.org/units");
   });

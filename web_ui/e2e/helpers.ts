@@ -1,4 +1,4 @@
-import { expect, type Dialog, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 /**
  * ADR-015 stage 15.6: shared navigation entry point for every spec in this
@@ -65,13 +65,22 @@ export async function gotoApp(page: Page): Promise<void> {
   await page.locator('[data-overlay-trigger="library"]').click();
   const libraryDialog = page.getByRole("dialog", { name: "Chat library" });
   await expect(libraryDialog).toBeVisible();
-  const acceptReset = (dialog: Dialog) => { void dialog.accept(); };
-  page.on("dialog", acceptReset);
-  try {
-    await libraryDialog.getByRole("button", { name: "New chat", exact: true }).first().click();
-    await expect(libraryDialog).toBeHidden();
-  } finally {
-    page.off("dialog", acceptReset);
-  }
+  await libraryDialog.getByRole("button", { name: "New chat", exact: true }).first().click();
+  await confirmLibraryNavigation(page, libraryDialog);
   await expect(page.locator(".react-flow__node")).toHaveCount(0);
+}
+
+/**
+ * Leaving a populated scene from the Chat library asks in the kit
+ * ConfirmDialog ("Continue"), and an incomplete restored copy asks once more
+ * ("Discard incomplete copy"). Accept each until the library closes.
+ */
+export async function confirmLibraryNavigation(page: Page, library: Locator): Promise<void> {
+  const confirm = page.getByRole("button", { name: /^(Continue|Discard incomplete copy)$/ });
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline && await library.isVisible()) {
+    if (await confirm.first().isVisible()) await confirm.first().click();
+    else await page.waitForTimeout(100);
+  }
+  await expect(library).toBeHidden();
 }

@@ -133,7 +133,7 @@ function overviewMarks(spec: ChartDataRow, chartType: string) {
   const y = createLinearScale([low, high], [HEIGHT - 12, 10]);
   const slot = (WIDTH - 12) / series.length;
   const baseline = y(0);
-  const textProps = { fill: "var(--gl-surface-text-secondary)", fontSize: 8, textAnchor: "end" } as const;
+  const textProps = { fill: "var(--gl-surface-text-secondary)", fontSize: 11, textAnchor: "end" } as const;
 
   return (
     <>

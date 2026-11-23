@@ -48,8 +48,9 @@ test("imports measurements, analyzes a connected column, and reopens the reprodu
   await expect(source.getByRole("table", { name: "Result table" }).getByRole("row")).toHaveCount(4);
   await source.locator(".node-heading-row").click();
   const statistics = await launchPack(page, "Statistics");
-  await statistics.getByRole("combobox", { name: "Import Observations from a connected result" })
-    .selectOption({ label: "Scientific Core · Temperature (C)" });
+  await statistics.getByRole("button", { name: "Import Observations from a connected result" }).click();
+  await page.getByRole("listbox", { name: "Import Observations from a connected result", exact: true })
+    .getByRole("option", { name: "Scientific Core · Temperature (C)", exact: true }).click();
   await expect(statistics.getByRole("textbox", { name: "Observations", exact: true })).toHaveValue("[8,10,18]");
   await statistics.getByRole("button", { name: "Run calculation" }).click();
   const latest = statistics.getByRole("region", { name: "Latest result" });
@@ -87,7 +88,7 @@ test("imports measurements, analyzes a connected column, and reopens the reprodu
   await expect(mean).toHaveText("12");
   await latest.getByText("Inputs and provenance", { exact: true }).click();
   // "Units used" has its own <pre>; the receipt lives in the provenance one.
-  const provenance = latest.locator("details", { hasText: "Inputs and provenance" }).locator("pre");
+  const provenance = latest.getByRole("region", { name: "Inputs and provenance" }).locator("pre");
   await expect(provenance).toContainText(result.provenance.resultHash);
   await expect(provenance).toContainText(result.provenance.sources.observations.resultHash);
 });
@@ -102,8 +103,10 @@ test("reviews concurrent edits in two views and enforces grant changes on a conn
   await expect(source.getByRole("table")).toBeVisible();
   await source.locator(".node-heading-row").click();
   const stats = await launchPack(page, "Statistics");
-  await stats.getByRole("combobox", { name: "Import Observations from a connected result" })
-    .selectOption({ label: "Scientific Core · Reading" });
+  await stats.getByRole("button", { name: "Import Observations from a connected result" }).click();
+  await page.getByRole("listbox", { name: "Import Observations from a connected result", exact: true })
+    .getByRole("option", { name: "Scientific Core · Reading", exact: true }).click();
+  await expect(stats.getByRole("textbox", { name: "Observations", exact: true })).toHaveValue("[1,3]");
   await stats.getByRole("button", { name: "Run calculation" }).click();
   const mean = stats.locator(".science-result-highlight strong");
   await expect(mean).toHaveText("2");

@@ -242,7 +242,7 @@ async function captureTheme(page, theme, capture, interrupted) {
     await shot(`Onboarding step ${step}`, `onboarding-${step}`, async () => {
       await onboarding.waitFor({ state: "visible" });
       if (step > 1) await onboarding.getByRole("button", { name: "Next", exact: true }).click();
-      await onboarding.getByText(`Step ${step} of 4`).waitFor();
+      await onboarding.locator(".onboarding-stepper [aria-current=\"step\"]").getByText(["Welcome", "Model", "Sample", "Ready"][step - 1]).waitFor();
       return {};
     });
   }

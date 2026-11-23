@@ -1,4 +1,7 @@
 import { useReactFlow } from "@xyflow/react";
+import { Button } from "../ui/Button";
+import { Select } from "../ui/Select";
+import { TextArea } from "../ui/TextArea";
 import { motionDuration } from "../reducedMotion";
 import { useMemo, useRef, useState } from "react";
 import type { SceneStore, TableOutputKind } from "./sceneStore";
@@ -119,8 +122,8 @@ export default function TableSource({ id, content, store, derived }: TableSource
   return (
     <section className="table-workflow nodrag nopan nowheel" aria-label="Data table">
       {draft?.mode === "csv" ? <>
-        <label>CSV data<textarea value={draft.csv} disabled={pending} aria-label="CSV data" spellCheck={false}
-          onChange={(e) => { cancelImport(); setDraft({ ...draft, csv: e.target.value }); }} /></label>
+        <TextArea label="CSV data" value={draft.csv} disabled={pending} spellCheck={false}
+          minRows={5} onValueChange={(csv) => { cancelImport(); setDraft({ ...draft, csv }); }} />
         {readingFile && <span role="status">Reading CSV…</span>}
         <label>Import CSV file<input type="file" accept=".csv,text/csv" disabled={pending}
           onChange={(e) => { void importFile(e.target.files?.[0]); e.target.value = ""; }} /></label>
@@ -139,47 +142,45 @@ export default function TableSource({ id, content, store, derived }: TableSource
           </table>
         </div>
         <div className="table-workflow-actions">
-          {lastPage > 0 && <button type="button" disabled={!currentPage} onClick={() => setPage(currentPage - 1)}>Previous rows</button>}
+          {lastPage > 0 && <Button size="sm" type="button" disabled={!currentPage} onClick={() => setPage(currentPage - 1)}>Previous rows</Button>}
           <span>{lastPage ? `Rows ${start}–${Math.min(start + PAGE_SIZE - 1, rowCount)} of ${rowCount}` : `${rowCount} ${rowCount === 1 ? "row" : "rows"}`}</span>
-          {lastPage > 0 && <button type="button" disabled={currentPage >= lastPage} onClick={() => setPage(currentPage + 1)}>Next rows</button>}
+          {lastPage > 0 && <Button size="sm" type="button" disabled={currentPage >= lastPage} onClick={() => setPage(currentPage + 1)}>Next rows</Button>}
         </div>
       </>}
       <div className="table-workflow-actions">
         {draft ? <>
-          {draft.mode === "grid" && <button type="button" disabled={pending} onClick={() => {
+          {draft.mode === "grid" && <Button size="sm" type="button" disabled={pending} onClick={() => {
             setDraft({ ...draft, grid: [...draft.grid, draft.grid[0].map(() => "")] });
             setPage(Math.floor(rowCount / PAGE_SIZE));
-          }}>Add row</button>}
-          <button type="button" disabled={pending || readingFile || changedElsewhere} onClick={() => {
+          }}>Add row</Button>}
+          <Button size="sm" type="button" disabled={pending || readingFile || changedElsewhere} onClick={() => {
             importSequence.current++;
             const csv = draft.mode === "grid" ? writeTableCsv(draft.grid) : draft.csv;
             void request(() => store.setTableCsv(id, csv, draft.base), () => setDraft(null));
-          }}>Save table</button>
-          <button type="button" disabled={pending} onClick={() => { cancelImport(); setDraft(null); setError(""); }}>Cancel</button>
+          }}>Save table</Button>
+          <Button size="sm" type="button" disabled={pending} onClick={() => { cancelImport(); setDraft(null); setError(""); }}>Cancel</Button>
         </> : <>
-          <button type="button" disabled={pending} onClick={() => edit("grid")}>Edit table</button>
-          <button type="button" disabled={pending} onClick={() => edit("csv")}>Edit CSV</button>
+          <Button size="sm" type="button" disabled={pending} onClick={() => edit("grid")}>Edit table</Button>
+          <Button size="sm" type="button" disabled={pending} onClick={() => edit("csv")}>Edit CSV</Button>
         </>}
       </div>
       {changedElsewhere && <p role="alert">The saved table changed during this edit. Cancel to reopen the latest data.</p>}
       {derived && <TableOutput {...derived} editing={!!draft} />}
       {!draft && <fieldset disabled={pending}>
         <legend>Summarize by group</legend>
-        <label>Group by<select value={groupColumn} onChange={(e) => setGroup(e.target.value)}>
-          {headers.map((h) => <option key={h}>{h}</option>)}
-        </select></label>
-        <label>Sum column<select value={valueColumn} onChange={(e) => setValue(e.target.value)}>
-          {headers.filter((h) => h !== groupColumn).map((h) => <option key={h}>{h}</option>)}
-        </select></label>
+        <Select label="Group by" value={groupColumn}
+          disabled={pending} options={headers.map((header) => ({ value: header, label: header }))} onChange={setGroup} />
+        <Select label="Sum column" value={valueColumn}
+          disabled={pending} options={headers.filter((header) => header !== groupColumn).map((header) => ({ value: header, label: header }))} onChange={setValue} />
         <div className="table-workflow-actions">
-          <button type="button" disabled={!valueColumn} onClick={() => createOutput("table")}>Create grouped table</button>
-          <button type="button" disabled={!valueColumn} onClick={() => createOutput("chart")}>Create chart</button>
-          <button type="button" disabled={!valueColumn} onClick={() => createOutput("artifact")}>Create report</button>
+          <Button size="sm" type="button" disabled={!valueColumn} onClick={() => createOutput("table")}>Create grouped table</Button>
+          <Button size="sm" type="button" disabled={!valueColumn} onClick={() => createOutput("chart")}>Create chart</Button>
+          <Button size="sm" type="button" disabled={!valueColumn} onClick={() => createOutput("artifact")}>Create report</Button>
         </div>
       </fieldset>}
       {result && !draft && <div className="table-workflow-actions">
         <span role="status">{outputLabels[result.kind]} created</span>
-        <button type="button" onClick={showResult}>Show {outputLabels[result.kind].toLowerCase()}</button>
+        <Button size="sm" type="button" onClick={showResult}>Show {outputLabels[result.kind].toLowerCase()}</Button>
       </div>}
       {error && <p role="alert">{error}</p>}
     </section>
