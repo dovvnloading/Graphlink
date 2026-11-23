@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AppSettingsState } from "../../lib/bridge-core/generated/app-settings-state";
 import { WsTimeoutError, WsUnavailableError, type WsTransport } from "../../lib/ws/transport";
-import { CustomSelect } from "./CustomSelect";
+import { Select } from "../ui/Select";
+import { TextField } from "../ui/TextField";
+import { Switch } from "../ui/Switch";
+import { Button } from "../ui/Button";
+import { FieldGroup, FormRow } from "../ui/Field";
+import { Spinner } from "../ui/Spinner";
 
 type EmbeddingSource = "off" | "ollama" | "cloud";
 
@@ -9,9 +14,9 @@ type EmbeddingSource = "off" | "ollama" | "cloud";
 const EMBEDDING_TEST_TIMEOUT_MS = 5 * 60_000;
 
 const SOURCE_OPTIONS = [
-  { id: "off", label: "Off (keyword search)", description: "Local keyword search only, without embeddings." },
-  { id: "ollama", label: "Ollama (local)", description: "Use an installed embedding-capable Ollama model." },
-  { id: "cloud", label: "Cloud (OpenAI-compatible)", description: "Requires consent to send indexed documents, saved graph/chat text, and queries." },
+  { value: "off", label: "Off (keyword search)", description: "Local keyword search only, without embeddings." },
+  { value: "ollama", label: "Ollama (local)", description: "Use an installed embedding-capable Ollama model." },
+  { value: "cloud", label: "Cloud (OpenAI-compatible)", description: "Requires consent to send indexed documents, saved graph/chat text, and queries." },
 ];
 
 function suggestedModel(models: string[], capable: string[]): string {
@@ -113,21 +118,18 @@ export function KnowledgeSettingsPage({
 
   return (
     <div className="settings-general-page">
-      <p className="settings-integrations-intro">
+      <h2 className="settings-page-title">Knowledge</h2>
+      <p className="settings-page-description">
         Choose how Graphlink searches ingested knowledge. Off is the default:
         keyword search stays on your machine. Embedding models add semantic
         retrieval, independently of your chat model selection.
       </p>
 
-      <div className="settings-field">
-        <span className="settings-field-label">Embedding source</span>
-        <CustomSelect
-          ariaLabel="Embedding source"
-          options={SOURCE_OPTIONS}
-          value={source}
-          onChange={selectSource}
-        />
-      </div>
+      <FieldGroup title="Embedding source">
+        <FormRow label="Embedding source" layout="inline">
+          <Select ariaLabel="Embedding source" options={SOURCE_OPTIONS} value={source} onChange={selectSource} />
+        </FormRow>
+      </FieldGroup>
 
       {source === "off" && (
         <p className="settings-field-hint">
@@ -137,31 +139,27 @@ export function KnowledgeSettingsPage({
       )}
 
       {source === "ollama" && (
-        <fieldset className="settings-fieldset">
-          <legend>Local Ollama embedding model</legend>
-          <label className="settings-field">
-            <span className="settings-field-label">Installed model</span>
-            <select
-              aria-label="Installed Ollama embedding model"
-              className="settings-select"
+        <FieldGroup title="Local Ollama embedding model">
+          <FormRow label="Installed model" layout="inline">
+            <Select ariaLabel="Installed Ollama embedding model"
               value={localChoice}
-              onChange={(event) => setOllamaModel(event.target.value)}
-            >
-              {!localChoice && <option value="">Choose an installed model</option>}
-              {localChoice && !available.includes(localChoice) && (
-                <option value={localChoice} disabled>{localChoice} (not installed)</option>
-              )}
-              {available.map((model) => (
-                <option key={model} value={model} disabled={!capable.includes(model)}>
-                  {model}
-                  {capable.includes(model)
-                    ? (/^nomic-embed-text(?::|$)/i.test(model) ? " (recommended)" : " (embeddings)")
+              onChange={setOllamaModel}
+              options={[
+                ...(!localChoice ? [{ value: "", label: "Choose an installed model" }] : []),
+                ...(localChoice && !available.includes(localChoice) ? [{
+                  value: localChoice, label: localChoice + " (not installed)", disabled: true,
+                }] : []),
+                ...available.map((model) => ({
+                  value: model,
+                  label: model,
+                  description: capable.includes(model)
+                    ? (/^nomic-embed-text(?::|$)/i.test(model) ? "Recommended" : "Embeddings")
                     : state.ollamaInventory.find((entry) => entry.name === model)?.capabilities.length
-                      ? " (does not support embeddings)" : " (embedding support unverified)"}
-                </option>
-              ))}
-            </select>
-          </label>
+                      ? "Does not support embeddings" : "Embedding support unverified",
+                  disabled: !capable.includes(model),
+                })),
+              ]} />
+          </FormRow>
           <p className="settings-field-hint">
             Embedding-capable models appear first. nomic-embed-text is recommended
             when installed. Other installed models are shown but cannot be chosen.
@@ -179,14 +177,12 @@ export function KnowledgeSettingsPage({
             </p>
           )}
           <div className="settings-button-row">
-            <button
-              type="button"
-              className="settings-button"
+            <Button variant="secondary"
               disabled={state.ollamaScanStatus === "running"}
               onClick={() => transport.fireIntent("app-settings", "scanOllamaSystem", [])}
             >
-              {state.ollamaScanStatus === "running" ? "Scanning..." : "Refresh installed models"}
-            </button>
+              {state.ollamaScanStatus === "running" ? <><Spinner size={14} decorative /> Scanning…</> : "Refresh installed models"}
+            </Button>
           </div>
           {state.knowledgeScanStatus === "done" && state.ollamaServerReachable === true && capable.length === 0 && (
             <p className="settings-update-status">
@@ -194,46 +190,26 @@ export function KnowledgeSettingsPage({
               on the Ollama (Local) page.
             </p>
           )}
-        </fieldset>
+        </FieldGroup>
       )}
 
       {source === "cloud" && (
-        <fieldset className="settings-fieldset">
-          <legend>OpenAI-compatible embedding service</legend>
+        <FieldGroup title="OpenAI-compatible embedding service">
           <p className="settings-field-hint">
             Uses an existing connection and API key from Settings &gt; API Endpoint.
             Embedding requests may incur provider charges.
           </p>
-          <div className="settings-field">
-            <span className="settings-field-label">API provider</span>
-            <CustomSelect
-              ariaLabel="Knowledge cloud API provider"
-              value={usableCloudProvider}
-              onChange={setCloudProvider}
+          <FormRow label="API provider" layout="inline">
+            <Select ariaLabel="Knowledge cloud API provider"
+              value={usableCloudProvider} onChange={setCloudProvider}
               options={cloudProfiles.map((provider) => ({
-                id: provider.id, label: provider.label || provider.id,
-              }))}
-            />
-          </div>
-          <label className="settings-field">
-            <span className="settings-field-label">Embedding model ID</span>
-            <input
-              aria-label="Cloud embedding model ID"
-              className="settings-select"
-              type="text"
-              value={cloudModel}
-              placeholder="e.g. text-embedding-3-small"
-              onChange={(event) => setCloudModel(event.target.value)}
-            />
-          </label>
-          <label className="settings-checkbox-row">
-            <input
-              type="checkbox"
-              checked={consent}
-              onChange={(event) => setConsent(event.target.checked)}
-            />
-            I consent to sending indexed content and search queries to the selected cloud API endpoint.
-          </label>
+                value: provider.id, label: provider.label || provider.id,
+              }))} />
+          </FormRow>
+          <TextField label="Cloud embedding model ID" type="text" value={cloudModel}
+            placeholder="e.g. text-embedding-3-small" mono onValueChange={setCloudModel} />
+          <Switch label="I consent to sending indexed content and search queries to the selected cloud API endpoint."
+            checked={consent} onCheckedChange={setConsent} />
           <p className="settings-field-hint">
             With this opt-in, Graphlink sends full text chunks from indexed
             files and saved graphs (including chat messages, code, prompts, and
@@ -253,22 +229,18 @@ export function KnowledgeSettingsPage({
         separately be sent to that provider even when embeddings are Off.
       </p>
       <div className="settings-button-row">
-        <button
-          type="button"
-          className="settings-button"
+        <Button variant="secondary"
           disabled={!canSubmit || state.knowledgeTestStatus === "running"}
           onClick={testEmbedding}
         >
-          {state.knowledgeTestStatus === "running" ? "Testing..." : "Test"}
-        </button>
-        <button
-          type="button"
-          className="settings-button settings-button-primary"
+          {state.knowledgeTestStatus === "running" ? "Testing…" : "Test"}
+        </Button>
+        <Button variant="primary"
           disabled={!canSubmit}
           onClick={() => transport.fireIntent("app-settings", "setKnowledgeEmbedding", args)}
         >
           Save choice
-        </button>
+        </Button>
       </div>
       <p className="settings-field-hint">
         Test sends only a sample phrase, never a stored document.
@@ -276,7 +248,7 @@ export function KnowledgeSettingsPage({
       </p>
       {state.knowledgeTestStatus === "running" && (
         <p className="settings-update-status" role="status">
-          Testing embedding connection... A cold local model may take several minutes to load.
+          Testing embedding connection… A cold local model may take several minutes to load.
         </p>
       )}
       {state.knowledgeNotice && (
