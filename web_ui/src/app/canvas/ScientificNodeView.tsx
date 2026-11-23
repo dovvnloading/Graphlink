@@ -324,12 +324,19 @@ function FieldEditor({ field, value, onEdit, options, onImport, imported, errorI
     <div className="science-field-heading">
       {/* A bare dimensionless unit ("1") reads like a count or footnote in a
           label ("Observations (1)"); the help still states it. */}
-      {field.kind === "choice"
+      {field.kind === "choice" || field.kind === "column"
+        ? <span className="science-field-label">{field.label}{dimensioned && unit !== "1" && <> <span className="science-field-unit">({unit})</span></>}</span>
+        : <label htmlFor={id}>{field.label}{dimensioned && unit !== "1" && <> <span className="science-field-unit">({unit})</span></>}</label>}
+      {(field.description || dimensioned) && <IconButton icon="help" size="sm" className="science-help-toggle"
+        label={"Input and unit help for " + field.label} aria-expanded={helpOpen}
+        aria-controls={helpOpen ? id + "-help" : undefined} onClick={() => setHelpOpen(!helpOpen)} />}
+    </div>
+    {field.kind === "choice"
       ? <Select ariaLabel={field.label} value={value}
           onChange={onEdit} options={(field.choices ?? []).map((choice) => ({ value: choice, label: choice }))} />
       : field.kind === "column"
-      ? <Select ariaLabel={field.label} value={value}
-          onChange={onEdit} placeholder="Select a column…"
+      ? <Select ariaLabel={field.label} value={value} placeholder="Select a column…"
+          onChange={onEdit}
           options={[{ value: "", label: "Select a column…" }, ...columnOptions.map((col) =>
             ({ value: String(col.index), label: `${col.label} · ${col.type}` }))]} />
       : field.kind === "table"
@@ -358,7 +365,8 @@ function FieldEditor({ field, value, onEdit, options, onImport, imported, errorI
     </div>}
     {options.length > 0 && <Select ariaLabel={`Import ${field.label} from a connected result`}
       value="" placeholder="Use connected result…" onChange={(value) => { if (value) onImport(options[Number(value)]); }}
-      options={[{ value: "", label: "Use connected result…" }, ...options.map((option, i) => ({ value: String(i), label: option.label }))]} />}
+      options={[{ value: "", label: "Use connected result…" }, ...options.map((option, i) =>
+        ({ value: String(i), label: option.label }))]} />}
     {imported && <small id={id + "-source"}>Source · {imported}</small>}
   </div>;
 }
