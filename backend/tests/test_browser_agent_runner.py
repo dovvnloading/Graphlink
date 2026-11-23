@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -36,7 +37,7 @@ class FakePage:
         self.calls = []
         self.matches = 1
         self.element_type = "text"
-        self.mouse = type("Mouse", (), {"wheel": self._wheel})()
+        self.mouse = SimpleNamespace(wheel=self._wheel)
 
     async def _wheel(self, x, y):
         self.calls.append(("scroll", x, y))
