@@ -15,8 +15,8 @@
             "description": "Select a node before sending a message to reply along that path. The composer shows a “Replying to” chip with the node title and a “Clear reply target” button; clear it when you want a new root instead of a reply. A sibling reply does not inherit the other sibling’s messages."
           },
           {
-            "action": "It is a project file, not a session",
-            "description": "Nodes, frames, containers, pins, notes and plugin state persist, and a graph reopens from the Library exactly as you left it. Work that spans a week belongs here more than work that spans five minutes."
+            "action": "Saved work outlives a session",
+            "description": "Graphs, frames, notes and pins are saved for reopening from “Library”. A graph is work you can revisit later rather than a transcript you have to reconstruct."
           }
         ]
       },
@@ -272,11 +272,11 @@
         "items": [
           {
             "action": "Plan",
-            "description": "The Builder's checklist. It shows the steps, which one is running, what has been spent against the budgets, and every tool call the run has made."
+            "description": "The Builder’s checklist. It shows the steps, which one is running, what has been spent against the budgets, and every tool call the run has made."
           },
           {
             "action": "Agent",
-            "description": "The workspace agent's card — its task, the folder it is bound to, its turns, and any approval it is currently waiting on."
+            "description": "The workspace agent’s card — its task, the folder it is bound to, its turns, and any approval it is currently waiting on."
           },
           {
             "action": "Web Research, Gitlink, Virtual Environment Runner, HTML Renderer",
@@ -432,7 +432,7 @@
           },
           {
             "action": "Virtual Environment Runner",
-            "description": "Runs Python in an isolated virtualenv with per-node requirements. Read the isolation claim precisely: it isolates installed packages, not the operating system. Code runs with your user account's privileges."
+            "description": "Runs Python in an isolated virtualenv with per-node requirements. Read the isolation claim precisely: it isolates installed packages, not the operating system. Code runs with your user account’s privileges."
           },
           {
             "action": "HTML Renderer",
@@ -454,7 +454,7 @@
         "items": [
           {
             "action": "Third-party grants",
-            "description": "In Settings > Agent & tools > Plugins, discovered third-party plugins have “Granted” switches. Turning off a grant blocks that plugin’s actions; a grant is not an individual-tool sandbox."
+            "description": "In Settings > Agent & tools > Plugins, each discovered third-party plugin has a permission switch labelled with its plugin name. Disabling it blocks that plugin’s actions; a grant is not an individual-tool sandbox."
           },
           {
             "action": "Find a plugin",
@@ -639,7 +639,7 @@
           },
           {
             "action": "Notifications",
-            "description": "Success, warning and error messages appear as toasts in the “Notifications” region, not as a permanent banner. Expand “Details” when offered or choose “Dismiss notification”; Settings > General controls notification types."
+            "description": "Messages appear as toasts in the “Notifications” region, not a permanent banner. Informational and success toasts time out; warnings and errors remain until dismissed. Use “Details” when offered or “Dismiss notification”; Settings > General controls notification types."
           }
         ]
       }
@@ -667,8 +667,8 @@
             ]
           },
           {
-            "action": "It is all local",
-            "description": "Graphs, attachments and knowledge are stored on your machine. Nothing is uploaded except what you send to whichever model provider you have configured."
+            "action": "Local storage and external requests",
+            "description": "Graphs and imported materials persist on your machine. A cloud-model request, web research plugin or approved agent network action can still send data outside your machine; check the provider and permissions before using one."
           }
         ]
       },
