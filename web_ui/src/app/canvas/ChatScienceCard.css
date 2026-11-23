@@ -1,3 +1,4 @@
+@layer nodes {
 /* Discuss in chat: a verified Scientific Workbench result as a compact card.
    The headline box mirrors the Workbench node's own .science-result-highlight
    so the source and the discussion read as the same result. */
@@ -88,4 +89,4 @@
   background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
   border-radius: var(--gl-radius-sm);
 }
-
+}

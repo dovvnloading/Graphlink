@@ -1,3 +1,4 @@
+@layer nodes {
 /* Read-only, side-by-side chat version comparison. Uses the shared Dialog
    shell and Document View scroll/typography rules; every colour is a --gl
    theme token. Strike/underline, dashed/solid borders and explicit labels
@@ -126,5 +127,4 @@
   .chat-version-compare-panes { min-height: 320px; }
   .chat-version-compare-pane-heading .document-view-panel-subtitle { font-size: var(--gl-text-2xs); }
 }
-
-
+}

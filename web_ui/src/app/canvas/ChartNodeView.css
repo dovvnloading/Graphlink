@@ -1,3 +1,4 @@
+@layer nodes {
 /* Chart node chrome and controls, moved from the monolithic stylesheet. */
 .chart-node { display: flex; flex-direction: column; }
 .chart-node-title { display: flex; align-items: center; gap: var(--gl-space-1-5); }
@@ -60,4 +61,5 @@
   min-height: 120px; padding: var(--gl-space-4); color: var(--gl-surface-text-muted);
   font-size: var(--gl-text-2xs); text-align: center; border: 1px dashed var(--gl-surface-border);
   border-radius: var(--gl-radius-md);
+}
 }

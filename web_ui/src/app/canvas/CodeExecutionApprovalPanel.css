@@ -1,3 +1,4 @@
+@layer nodes {
 /* -- R5.4 shared code-execution approval panel ---------------------------- */
 /* Post-review fix pass: CodeExecutionApprovalPanel is now a small,
    self-contained modal (its own .overlay-scrim + .overlay-dialog markup,
@@ -139,4 +140,4 @@
 .code-exec-approval-scrim {
   z-index: var(--gl-z-approval);
 }
-
+}

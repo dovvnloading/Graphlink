@@ -1,3 +1,4 @@
+@layer nodes {
 /* -- R5.2 artifact node ------------------------------------------------- */
 
 .artifact-node {
@@ -260,5 +261,4 @@
 
 /* R8a (UI/UX issue list finding #23): see .conversation-node-cancel-btn's
    identical comment above - same shape, same gap, same fix. */
-
-
+}
