@@ -258,7 +258,7 @@ function MenuSurface({
     setPlacement((prev) => prev.x === next.x && prev.y === next.y ? prev : next);
   }, [position.x, position.y]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const trigger = restoreFocusRef?.current ??
       (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     focusOrigin.current = trigger;
@@ -267,7 +267,7 @@ function MenuSurface({
     return () => { if (trigger?.isConnected) trigger.focus(); };
   }, [restoreFocusRef]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     overlays.openNested(layerName, "popover", focusOrigin.current);
     overlays.registerSurfaceElement(layerName, panelRef.current);
     return () => {
