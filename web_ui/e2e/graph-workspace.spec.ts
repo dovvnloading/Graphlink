@@ -94,7 +94,15 @@ test("starts a graph and navigates it using the canvas controls", async ({ page 
         } else {
           await picker.getByRole("menuitemradio").first().click();
         }
-        await expect(picker).toBeHidden();
+        // TEMP-DIAG (removed before merge): report why the picker stays open.
+        try { await expect(picker).toBeHidden({ timeout: 5000 }); } catch (error) {
+          console.log("DIAG", name, width, JSON.stringify(await page.evaluate(() => ({
+            active: document.activeElement?.outerHTML.slice(0, 200),
+            menus: [...document.querySelectorAll("[role=menu]")].map((m) => m.getAttribute("aria-label") + "|" + (m as HTMLElement).innerText.slice(0, 400)),
+            trigger: document.querySelector('[data-overlay-trigger="model"]')?.outerHTML.slice(0, 300),
+          }))));
+          throw error;
+        }
         await expect(page.getByRole("dialog", { name: "Settings" })).toBeHidden();
         await expect(input).toHaveValue(draft);
       }
