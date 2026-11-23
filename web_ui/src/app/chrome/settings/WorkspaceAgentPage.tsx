@@ -12,9 +12,9 @@ export function WorkspaceAgentPage({ state, transport }: { state: AppSettingsSta
         These folders were granted through the folder picker. Revoking access prevents new agent runs there;
         an existing run retains its workspace until it ends.
       </p>
-      <FieldGroup title="Trusted folders">
+      <FieldGroup {...{ title: "Trusted folders" }}>
         {state.harnessTrustedDirs.length === 0 ? (
-          <EmptyState icon="folder" title="No trusted folders"
+          <EmptyState icon="folder" {...{ title: "No trusted folders" }}
             body="Choose a workspace folder on an agent to grant access." />
         ) : state.harnessTrustedDirs.map((path) => (
           <div className="settings-server-row" key={path}>
