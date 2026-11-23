@@ -55,13 +55,13 @@ describe("CommandPalette", () => {
     const user = setup();
     await user.click(screen.getByText("open palette"));
     const input = screen.getByLabelText("Search commands");
-    expect(screen.getByText("Fit All to View")).toBeInTheDocument();
+    expect(screen.getByText("Fit all to view")).toBeInTheDocument();
 
     await user.type(input, "organize");
-    expect(screen.getByText("Organize Nodes")).toBeInTheDocument();
-    expect(screen.queryByText("Fit All to View")).toBeNull();
+    expect(screen.getByText("Organize nodes")).toBeInTheDocument();
+    expect(screen.queryByText("Fit all to view")).toBeNull();
 
-    await user.click(screen.getByText("Organize Nodes"));
+    await user.click(screen.getByText("Organize nodes"));
     expect(screen.queryByLabelText("Search commands")).toBeNull();
   });
 
@@ -100,7 +100,7 @@ describe("CommandPalette", () => {
     expect(screen.getByTestId("about-open")).toHaveTextContent("false");
     await user.click(screen.getByText("open palette"));
     await user.type(screen.getByLabelText("Search commands"), "About");
-    await user.click(screen.getByText("Open About"));
+    await user.click(screen.getByText("Open about"));
     expect(screen.queryByLabelText("Search commands")).toBeNull();
     expect(screen.getByTestId("about-open")).toHaveTextContent("true");
   });
