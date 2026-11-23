@@ -309,7 +309,7 @@ export function FalAiPage({
       {!!localNotice && <p className="settings-update-status">{localNotice}</p>}
       <p className="settings-update-status" role="status" aria-live="polite"
         data-level={state.falNotice.includes("failed") || state.falNotice.includes("error") ? "warning" : undefined}>
-        {state.falBusy ? "Processing Fal.ai request…" : state.falNotice}
+        {state.falBusy ? <><Spinner size={14} decorative /> Processing Fal.ai request…</> : state.falNotice}
       </p>
 
       {!!state.falSyncResultJson && (
