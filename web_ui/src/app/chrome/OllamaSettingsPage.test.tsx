@@ -165,7 +165,7 @@ describe("Settings > Ollama", () => {
     const { user, intents, update } = setup({ ollamaCurrentModel: "llama:latest", ollamaServerStatus: "installed" });
     expect(screen.getByRole("status", { name: "Ollama server status" })).toHaveTextContent("Installed, not running");
     expect(screen.getByText("llama:latest")).toBeInTheDocument();
-    await user.click(screen.getByLabelText("Low"));
+    await user.click(screen.getByRole("radio", { name: "Low" }));
     expect(intents).toContainEqual(["app-settings", "setOllamaReasoningLevel", ["low"]]);
     await user.click(screen.getByRole("button", { name: "Start Ollama" }));
     expect(intents).toContainEqual(["app-settings", "startOllama", []]);
