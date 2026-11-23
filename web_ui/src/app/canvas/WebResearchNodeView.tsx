@@ -5,6 +5,10 @@ import { CollapseToggleButton } from "./CollapseToggleButton";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { Button } from "../ui/Button";
+import { Checkbox } from "../ui/Checkbox";
+import { MenuItem } from "../ui/Menu";
+import { TextField } from "../ui/TextField";
 import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
@@ -115,27 +119,10 @@ function WebResearchNodeMenu({
 
   return (
     <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onToggleCollapse();
-          onClose();
-        }}
-      >
-        {isCollapsed ? "Expand" : "Collapse"}
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="chat-node-menu-danger"
-        onClick={() => {
-          onDelete();
-          onClose();
-        }}
-      >
-        Delete Node
-      </button>
+      <MenuItem icon={isCollapsed ? "maximize" : "minimize"}
+        label={isCollapsed ? "Expand" : "Collapse"}
+        onSelect={() => { onToggleCollapse(); onClose(); }} />
+      <MenuItem label="Delete Node" destructive onSelect={() => { onDelete(); onClose(); }} />
     </NodeMenu>
   );
 }
@@ -230,11 +217,13 @@ function WebResearchNodeViewImpl({ data, selected }: NodeProps<WebResearchFlowNo
       }
     >
       <div className="web-research-node-query-row">
-        <input
+        <TextField
           type="text"
+          label="Research query"
+          size="sm"
           className="web-research-node-query-input"
           value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+          onValueChange={setDraft}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.preventDefault();
@@ -242,26 +231,13 @@ function WebResearchNodeViewImpl({ data, selected }: NodeProps<WebResearchFlowNo
             }
           }}
           placeholder="Research a question…"
-          aria-label="Research query"
         />
         <div className="web-research-node-query-actions">
-          <button
-            type="button"
-            className="web-research-node-run-btn"
-            disabled={!draft.trim() || !!data.pendingRequestId}
-            onClick={run}
-          >
-            Run
-          </button>
+          <Button variant="primary" size="sm" iconStart="play"
+            disabled={!draft.trim() || !!data.pendingRequestId} onClick={run}>Run</Button>
           {data.pendingRequestId && (
-            <button
-              type="button"
-              className="web-research-node-cancel-btn"
-              onClick={() => data.onCancel()}
-              title="Cancel research"
-            >
-              Cancel
-            </button>
+            <Button variant="secondary" size="sm"
+              onClick={() => data.onCancel()} aria-label="Cancel research">Cancel</Button>
           )}
         </div>
         {/* ADR-021 stage 21.5: the opt-in that finally reaches ADR-017's
@@ -270,16 +246,11 @@ function WebResearchNodeViewImpl({ data, selected }: NodeProps<WebResearchFlowNo
             caller ever set the flag - so Web Research always discarded what
             it fetched, and no user could choose otherwise. Off by default,
             preserving that long-standing behavior for every existing node. */}
-        <label className="web-research-node-retain nodrag">
-          <input
-            type="checkbox"
-            className="gl-checkbox"
-            checked={data.researchRetainToKnowledge}
-            disabled={!!data.pendingRequestId}
-            onChange={(event) => data.onSetRetainToKnowledge(event.target.checked)}
-          />
-          <span>Save sources to knowledge base</span>
-        </label>
+        <Checkbox className="web-research-node-retain nodrag"
+          label="Save sources to knowledge base"
+          checked={data.researchRetainToKnowledge}
+          disabled={!!data.pendingRequestId}
+          onChange={(event) => data.onSetRetainToKnowledge(event.currentTarget.checked)} />
       </div>
 
       {showStepper && (

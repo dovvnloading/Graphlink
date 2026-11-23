@@ -4,6 +4,7 @@ import { memo, useState } from "react";
 import { CollapseToggleButton } from "./CollapseToggleButton";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMenu } from "./NodeMenu";
+import { MenuItem, MenuSeparator } from "../ui/Menu";
 import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
@@ -206,82 +207,26 @@ function DocumentNodeMenu({
 
   return (
     <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
-      {/* Order verified against graphlink_node_document_menu.py's own
-          construction order: Copy Details, Collapse/Expand, Dock, Open File
-          (conditional), separator, Export (conditional), Hide Other
-          Branches, Delete. */}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          // ADR-011 stage 11.1 (D11): a bare fire-and-forget clipboard write
-          // left this promise's rejection unhandled - same fix ImageNodeView's
-          // own Copy Image action already applies for its clipboard write.
-          navigator.clipboard.writeText(content).catch((error: unknown) => {
-            console.error("[document-node] Copy Details failed:", error);
-          });
-          onClose();
-        }}
-      >
-        Copy Details
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onToggleCollapse();
-          onClose();
-        }}
-      >
-        {isCollapsed ? "Expand Attachment" : "Collapse to Pill"}
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onDock();
-          onClose();
-        }}
-      >
-        Dock into Parent Node
-      </button>
-      {filePath && (
-        <button
-          type="button"
-          role="menuitem"
-          disabled
-          title="Opening local files needs a new backend endpoint - browsers can't open arbitrary local paths"
-        >
-          Open File
-        </button>
-      )}
-      <div className="chat-node-menu-separator" role="separator" />
-      {isDocumentKind && (
-        <button type="button" role="menuitem" disabled title="Document export isn't available yet">
-          Export
-        </button>
-      )}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          onToggleBranchFocus();
-          onClose();
-        }}
-      >
-        {isBranchFocusActive ? "Show All Branches" : "Hide Other Branches"}
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="chat-node-menu-danger"
-        onClick={() => {
-          onDelete();
-          onClose();
-        }}
-      >
-        {isAudio ? "Delete Audio Attachment" : "Delete Attachment"}
-      </button>
+      <MenuItem icon="copy" label="Copy Details" onSelect={() => {
+        navigator.clipboard.writeText(content).catch((error: unknown) => {
+          console.error("[document-node] Copy Details failed:", error);
+        });
+        onClose();
+      }} />
+      <MenuItem icon={isCollapsed ? "maximize" : "minimize"}
+        label={isCollapsed ? "Expand Attachment" : "Collapse to Pill"}
+        onSelect={() => { onToggleCollapse(); onClose(); }} />
+      <MenuItem icon="panel-left" label="Dock into Parent Node"
+        onSelect={() => { onDock(); onClose(); }} />
+      {filePath && <MenuItem icon="folder-open" label="Open File" disabled
+        disabledReason="Opening local files needs a backend endpoint; browsers cannot open arbitrary local paths." />}
+      <MenuSeparator />
+      {isDocumentKind && <MenuItem icon="download" label="Export" disabled
+        disabledReason="Document export is not available yet." />}
+      <MenuItem icon="eye" label={isBranchFocusActive ? "Show All Branches" : "Hide Other Branches"}
+        onSelect={() => { onToggleBranchFocus(); onClose(); }} />
+      <MenuItem label={isAudio ? "Delete Audio Attachment" : "Delete Attachment"} destructive
+        onSelect={() => { onDelete(); onClose(); }} />
     </NodeMenu>
   );
 }
