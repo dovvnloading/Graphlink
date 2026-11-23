@@ -783,8 +783,6 @@
   border: 0;
   padding-inline: 0;
 }
-.note-text-input-toggle::before { content: "＋ "; }
-.note-text-input-toggle[aria-expanded="true"]::before { content: "− "; }
 .note-text-input-fields { display: grid; gap: 5px; margin-top: 4px; }
 .note-text-input-fields label { display: grid; grid-template-columns: auto minmax(90px, 1fr); gap: 8px; align-items: center; }
 .note-text-input-fields select { width: 100%; max-width: 210px; }

@@ -1,0 +1,83 @@
+/* -- R6.1 note node ---------------------------------------------------- */
+
+/* Deliberately no width/max-height here (unlike every other .scene-node.*
+   card) - Note's own size is content-driven, matching legacy ("just let the
+   div grow with its content, no manual resize UI"). max-width alone keeps
+   long markdown lines readable without capping vertical growth. */
+.note-node {
+  max-width: 360px;
+}
+
+/* A system prompt is marked by SHAPE, not by hue: a dashed, heavier border
+   plus the header's own badge. It used to also take the colour picker's
+   "Purple" swatch as its border colour, which put a semantic marker and a
+   user's own colour choice in the same channel - a note the user coloured
+   purple was then indistinguishable from one governing the branch. The
+   token below keeps it legible in both themes without spending a colour. */
+.note-node.system-prompt {
+  border-style: dashed;
+  border-width: 2px;
+  border-color: var(--gl-surface-text-muted);
+}
+
+.note-node-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gl-space-2);
+}
+
+.note-node-badges {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-1-5);
+}
+
+.note-node-badge {
+  font-size: var(--gl-text-2xs);
+  line-height: 1;
+  color: var(--gl-surface-text-muted);
+}
+
+.note-node-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-0-5);
+}
+
+.note-node-delete-btn.gl-icon-button { color: var(--gl-semantic-status-error, currentColor); }
+
+.note-node-content {
+  cursor: text;
+  /* A pasted essay scrolls instead of becoming a poster-sized note. */
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.note-node-content > :first-child {
+  margin-top: 0;
+}
+
+.note-node-content > :last-child {
+  margin-bottom: 0;
+}
+
+.note-node-editor {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 80px;
+  resize: vertical;
+  font-family: inherit;
+  font-size: var(--gl-text-2xs);
+  padding: var(--gl-space-1-5) var(--gl-space-2);
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+}
+
+.note-node-editor:focus {
+  outline: none;
+  border-color: var(--gl-surface-text-muted);
+}
+

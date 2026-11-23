@@ -1,0 +1,264 @@
+/* -- R5.2 artifact node ------------------------------------------------- */
+
+.artifact-node {
+  width: 420px;
+  /* No shell max-height: the shell is overflow-hidden, so a cap here
+     amputates the card bottom whenever header chrome plus the capped
+     content region outgrow it. Height is bounded by the content
+     region's own cap instead, so the bottom border always renders. */
+  min-height: 110px;
+}
+
+.artifact-node.collapsed {
+  width: 290px;
+  min-height: 58px;
+}
+
+.artifact-node-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-2-5);
+  max-height: 430px;
+  overflow-y: auto;
+}
+
+/* Same squeeze fix the code_sandbox card documents: a max-height flex
+   column shrinks its children below their content size unless told not to.
+   The instruction row is the one thing on this card that must never be
+   compressed or scrolled out of reach - it is how you use the node at all. */
+.artifact-node-content > * {
+  flex-shrink: 0;
+}
+
+.artifact-node-document {
+  display: flex;
+  flex-direction: column;
+}
+
+.artifact-node-proposal {
+  padding: var(--gl-space-2) var(--gl-space-2-5);
+  border: 1px solid var(--gl-surface-border-strong, var(--gl-surface-border));
+  border-radius: var(--gl-radius-md);
+  background: var(--gl-surface-inset, var(--gl-surface-window));
+}
+
+.artifact-node-proposal-heading {
+  font-size: var(--gl-text-2xs);
+  font-weight: 700;
+  color: var(--gl-surface-text-primary);
+  margin: 0 0 var(--gl-space-2);
+}
+
+.artifact-node-proposal-summary,
+.artifact-node-diff-summary {
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.artifact-node-diff-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--gl-space-2);
+  margin: var(--gl-space-2) 0;
+}
+
+.artifact-node-diff-grid strong {
+  display: block;
+  font-size: var(--gl-text-2xs);
+  margin-bottom: var(--gl-space-1);
+}
+
+.artifact-node-diff-grid pre {
+  box-sizing: border-box;
+  max-height: 150px;
+  overflow: auto;
+  padding: var(--gl-space-2);
+  margin: 0;
+  font-size: var(--gl-text-2xs);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+}
+
+.artifact-node-diff-before {
+  border-left: 3px solid var(--gl-semantic-status-error, var(--gl-surface-border));
+}
+
+.artifact-node-diff-after {
+  border-left: 3px solid var(--gl-surface-border-strong, var(--gl-surface-border));
+}
+
+.artifact-node-proposal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gl-space-1-5);
+}
+
+
+
+
+
+
+
+.artifact-node-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gl-space-1-5);
+}
+
+.artifact-node-word-count {
+  margin-right: auto;
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+
+
+
+
+
+
+.artifact-node-editor {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 180px;
+  max-height: 320px;
+  padding: var(--gl-space-2) var(--gl-space-2-5);
+  overflow: auto;
+  resize: vertical;
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: var(--gl-text-2xs);
+  line-height: 1.55;
+}
+
+.artifact-node-edit-warning {
+  margin: 0;
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-semantic-status-error, var(--gl-surface-text-primary));
+}
+
+.artifact-node-empty {
+  margin: 0;
+  font-size: var(--gl-text-xs);
+  font-style: italic;
+  color: var(--gl-surface-text-muted);
+}
+
+/* Reuses .chat-node-content's full markdown-body rule set (headings, lists,
+   code, tables, hljs) verbatim - same shared-class convention
+   .conversation-node-bubble-content/.web-research-node-answer already
+   establish for this pipeline. Only overrides the max-height/overflow-y a
+   nested preview pane should never take on its own (the outer
+   .artifact-node-content already scrolls). */
+/* The document preview is the unbounded region here (the model returns a
+   whole document every turn), so it is the region that scrolls itself.
+   Leaving it uncapped and letting the card body do the scrolling instead
+   meant a long draft pushed the turn history and the instruction row out
+   of the visible card entirely. */
+.artifact-node-document-content {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+/* The turn history - same scrollable-list posture as
+   .conversation-node-messages, applied here below the document preview
+   rather than as the node's only content region. */
+.artifact-node-messages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-2);
+  /* Bounded for the same reason as the preview above - an N-turn history
+     must not be able to push the instruction row off the card. */
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+/* Per-turn bubble - reuses conversation-node-bubble's own role-modifier
+   convention (var(--gl-neutral-button-hover) for the user variant) under
+   this node kind's own class name. */
+.artifact-node-bubble {
+  padding: var(--gl-space-2) var(--gl-space-2-5);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-md);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+}
+
+.artifact-node-bubble.user {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.artifact-node-bubble-content {
+  max-height: none;
+  overflow: visible;
+}
+
+.artifact-node-input-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-1-5);
+}
+
+.artifact-node-input {
+  box-sizing: border-box;
+  width: 100%;
+  resize: none;
+  /* Native auto-size, the same posture .composer-input and
+     .code-sandbox-node-input already take. Without it a rows=1 textarea
+     with no height of its own stays one line forever: you type a
+     paragraph into this card and can see the last line only. Chromium
+     makes textareas border-box, so these bounds are real pixel bounds. */
+  field-sizing: content;
+  min-height: 34px;
+  max-height: 140px;
+  overflow-y: auto;
+  font-family: inherit;
+  font-size: var(--gl-text-xs);
+  line-height: 1.4;
+  padding: var(--gl-space-2) var(--gl-space-2-5);
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+}
+
+.artifact-node-input:focus {
+  outline: none;
+  border-color: var(--gl-surface-text-muted);
+}
+
+.artifact-node-input-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--gl-space-1-5);
+}
+
+/* Reuses conversation-node/web-research-node's send/cancel button chrome
+   verbatim (same shared-token convention already established across sibling
+   node views) rather than duplicating the two declarations under a new
+   name. */
+.artifact-node-submit-btn,
+
+
+
+
+
+
+.artifact-node-submit-btn:disabled,
+
+
+
+
+/* R8a (UI/UX issue list finding #23): see .conversation-node-cancel-btn's
+   identical comment above - same shape, same gap, same fix. */
+
+

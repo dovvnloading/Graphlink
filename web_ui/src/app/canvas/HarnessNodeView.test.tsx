@@ -268,7 +268,7 @@ describe("HarnessNodeView", () => {
     expect(screen.getByText("Summarize the workspace files")).toBeInTheDocument();
     expect(screen.getByText("Working…")).toBeInTheDocument();
     expect(screen.getByText("Turns 3 (max 16/task)")).toBeInTheDocument();
-    expect(screen.getByText("Tokens 4,321")).toBeInTheDocument();
+    expect(screen.getByText(/^Tokens 4\.3\s?k$/)).toBeInTheDocument();
   });
 
   it("lists saved hooks, edits phases and commands, and saves only on explicit action", async () => {
@@ -1008,7 +1008,7 @@ describe("HarnessNodeView — activity visibility", () => {
   it("opens the activity log on a run's first tool call", () => {
     // "What is it doing?" is the question a running agent raises; the answer
     // was behind a closed <details> nobody thought to click.
-    const { container } = renderHarness(
+    renderHarness(
       makeData({ harnessStatus: "running", harnessActivity: activity }),
     );
     expect(screen.getByRole("button", { name: "1 activity entry" }))
