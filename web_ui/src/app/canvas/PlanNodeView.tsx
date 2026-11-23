@@ -114,11 +114,6 @@ function StepMarker({ status }: { status: string }) {
   return <Icon name={icon} size="md" className="plan-node-step-icon" />;
 }
 
-function EditorIcon({ name }: { name: "up" | "down" | "remove" }) {
-  return <Icon name={name === "up" ? "arrow-up" : name === "down" ? "arrow-down" : "close"}
-    size="sm" className="plan-node-step-icon" />;
-}
-
 const STATUS_LABELS: Record<string, string> = {
   draft: "Draft",
   planning: "Planning…",
@@ -375,32 +370,14 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
                       <TextField size="sm" className="plan-node-step-input nodrag"
                         value={step.title} label={`Step ${index + 1} title`}
                         onValueChange={(value) => retitleStep(index, value)} />
-                      <button
-                        type="button"
-                        className="plan-node-step-action nodrag"
-                        aria-label={`Move step ${index + 1} up`}
-                        disabled={!canMoveUp(index)}
-                        onClick={() => moveStep(index, -1)}
-                      >
-                        <EditorIcon name="up" />
-                      </button>
-                      <button
-                        type="button"
-                        className="plan-node-step-action nodrag"
-                        aria-label={`Move step ${index + 1} down`}
-                        disabled={!canMoveDown(index)}
-                        onClick={() => moveStep(index, 1)}
-                      >
-                        <EditorIcon name="down" />
-                      </button>
-                      <button
-                        type="button"
-                        className="plan-node-step-action nodrag"
-                        aria-label={`Remove step ${index + 1}`}
-                        onClick={() => removeStep(index)}
-                      >
-                        <EditorIcon name="remove" />
-                      </button>
+                      <IconButton size="sm" className="plan-node-step-action nodrag" icon="arrow-up"
+                        label={`Move step ${index + 1} up`} disabled={!canMoveUp(index)}
+                        onClick={() => moveStep(index, -1)} />
+                      <IconButton size="sm" className="plan-node-step-action nodrag" icon="arrow-down"
+                        label={`Move step ${index + 1} down`} disabled={!canMoveDown(index)}
+                        onClick={() => moveStep(index, 1)} />
+                      <IconButton size="sm" className="plan-node-step-action nodrag" icon="close"
+                        label={`Remove step ${index + 1}`} onClick={() => removeStep(index)} />
                     </>
                   )}
                 </li>
@@ -408,20 +385,10 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
             })}
           </ul>
           <div className="plan-node-step-editor-actions">
-            <button type="button" className="plan-node-button nodrag" onClick={addStep}>
-              Add step
-            </button>
-            <button
-              type="button"
-              className="plan-node-button plan-node-button-start nodrag"
-              disabled={!draftIsValid}
-              onClick={saveSteps}
-            >
-              Save plan
-            </button>
-            <button type="button" className="plan-node-button nodrag" onClick={cancelEditing}>
-              Cancel
-            </button>
+            <Button size="sm" className="nodrag" iconStart="plus" onClick={addStep}>Add step</Button>
+            <Button size="sm" variant="primary" className="nodrag"
+              disabled={!draftIsValid} onClick={saveSteps}>Save plan</Button>
+            <Button size="sm" variant="ghost" className="nodrag" onClick={cancelEditing}>Cancel</Button>
           </div>
           {!draftIsValid && (
             <p className="plan-node-detail" role="alert">
