@@ -1,0 +1,19 @@
+.gl-skeleton { display: grid; gap: var(--gl-space-2); width: 100%; }
+.gl-skeleton-shape {
+  display: block;
+  max-width: 100%;
+  border-radius: var(--gl-radius-sm);
+  background-color: var(--gl-surface-inset);
+  background-image: linear-gradient(90deg, var(--gl-surface-inset), var(--gl-surface-raised), var(--gl-surface-inset));
+  background-size: 200% 100%;
+  animation: gl-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+.gl-skeleton-shape--line { height: var(--gl-space-3); width: 100%; }
+.gl-skeleton-shape--block { height: var(--gl-space-12); width: 100%; }
+@keyframes gl-skeleton-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gl-skeleton-shape { animation: none; background-image: none; }
+}

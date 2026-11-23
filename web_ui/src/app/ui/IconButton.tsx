@@ -2,13 +2,14 @@ import type { ButtonHTMLAttributes } from "react";
 import { Icon } from "./icons/Icon";
 import type { IconName } from "./icons/registry";
 import type { ButtonSize, ButtonVariant } from "./Button";
+import { Tooltip } from "./Tooltip";
 import "./icon-button.css";
 
 export type IconButtonProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children" | "type" | "title" | "aria-label"> & {
   icon: IconName;
-  /** Required accessible name; the visual Tooltip is attached in a later task. */
+  /** Required accessible name, also used as tooltip content. */
   label: string;
-  /** Reserved for the future Kbd tooltip; exposed as aria-keyshortcuts now. */
+  /** Rendered with Kbd inside the tooltip and exposed to assistive technology. */
   shortcut?: string;
   size?: ButtonSize;
   variant?: ButtonVariant;
@@ -22,14 +23,16 @@ export function IconButton({
   }
 
   return (
-    <button
-      {...rest}
-      type="button"
-      className={["gl-icon-button", "gl-icon-button--" + size, "gl-icon-button--" + variant, className].filter(Boolean).join(" ")}
-      aria-label={label}
-      aria-keyshortcuts={shortcut}
-    >
-      <Icon name={icon} size={size === "sm" ? "sm" : size === "lg" ? "lg" : "md"} />
-    </button>
+    <Tooltip label={label} shortcut={shortcut}>
+      <button
+        {...rest}
+        type="button"
+        className={["gl-icon-button", "gl-icon-button--" + size, "gl-icon-button--" + variant, className].filter(Boolean).join(" ")}
+        aria-label={label}
+        aria-keyshortcuts={shortcut}
+      >
+        <Icon name={icon} size={size === "sm" ? "sm" : size === "lg" ? "lg" : "md"} />
+      </button>
+    </Tooltip>
   );
 }

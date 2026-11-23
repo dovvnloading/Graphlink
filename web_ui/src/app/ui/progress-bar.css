@@ -1,0 +1,32 @@
+.gl-progress { display: grid; gap: var(--gl-space-1-5); min-width: 0; color: var(--gl-surface-text-primary); }
+.gl-progress-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--gl-space-2);
+  font-size: var(--gl-text-xs);
+}
+.gl-progress-track {
+  height: var(--gl-space-2);
+  overflow: hidden;
+  border-radius: var(--gl-radius-full);
+  background: var(--gl-surface-inset);
+  border: 1px solid var(--gl-surface-border);
+}
+.gl-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--gl-accent);
+  transition: width var(--gl-motion-base) var(--gl-ease);
+}
+.gl-progress-track--indeterminate .gl-progress-fill {
+  width: 35%;
+  animation: gl-progress-slide 1.2s var(--gl-ease) infinite alternate;
+}
+@keyframes gl-progress-slide {
+  from { transform: translateX(0); }
+  to { transform: translateX(185%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gl-progress-fill { animation: none; transition: none; }
+  .gl-progress-track--indeterminate .gl-progress-fill { width: 100%; transform: none; }
+}

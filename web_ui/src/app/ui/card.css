@@ -1,0 +1,24 @@
+.gl-card {
+  min-width: 0;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-md);
+  background: var(--gl-surface-raised);
+  color: var(--gl-surface-text-primary);
+  box-shadow: var(--gl-shadow-1);
+}
+.gl-card-header {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-2);
+  padding: var(--gl-space-3);
+  border-bottom: 1px solid var(--gl-surface-border);
+}
+.gl-card-title {
+  min-width: 0;
+  margin: 0;
+  margin-right: auto;
+  font-size: var(--gl-text-sm);
+  font-weight: var(--gl-weight-semibold);
+}
+.gl-card-actions { display: flex; gap: var(--gl-space-1); margin-left: auto; }
+.gl-card-body { padding: var(--gl-space-3); font-size: var(--gl-text-sm); }
