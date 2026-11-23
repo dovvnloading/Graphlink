@@ -1,9 +1,23 @@
+import { useCallback, useSyncExternalStore } from "react";
 import type { SceneStore } from "./sceneStore";
+import { useComposerModelStore } from "../context/ModelCapabilityContext";
+import { useOverlays } from "../overlays/overlays";
+import { InlineAlert } from "../ui/InlineAlert";
 import { Button } from "../ui/Button";
 import { EmptyState } from "../ui/EmptyState";
 import "./EmptyGraph.css";
 
+const EMPTY_ROUTE = { provider: "", modelId: "" };
 export function EmptyGraph({ store }: { store: SceneStore }) {
+  const composerStore = useComposerModelStore();
+  const overlays = useOverlays();
+  const subscribeRoute = useCallback(
+    (notify: () => void) => composerStore?.subscribe(notify) ?? (() => {}),
+    [composerStore],
+  );
+  const readRoute = useCallback(() => composerStore?.getComposer().route ?? EMPTY_ROUTE, [composerStore]);
+  const route = useSyncExternalStore(subscribeRoute, readRoute, readRoute);
+  const noModelReady = composerStore !== null && (!route.provider || !route.modelId);
   return (
     <section className="empty-graph" aria-label="Empty canvas">
       <EmptyState icon="brand" size="lg" title="Start a graph"
@@ -25,6 +39,12 @@ export function EmptyGraph({ store }: { store: SceneStore }) {
           Open sample workspace
         </Button>
       </div>
+      {noModelReady && <InlineAlert className="empty-graph-model-alert" variant="warning"
+        title="No model selected" body="Set up a model to start a conversation."
+        action={{ label: "Set up a model", onClick: () => {
+          store.openModelTaskSettings("general");
+          overlays.open("settings", "dialog");
+        } }} />}
     </section>
   );
 }
