@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Dialog, useOverlays } from "../overlays/overlays";
+import { RadioGroup } from "../ui/RadioGroup";
+import { Checkbox } from "../ui/Checkbox";
+import { ProgressBar } from "../ui/ProgressBar";
+import { Button } from "../ui/Button";
+import { Icon } from "../ui/icons/Icon";
+import { formatTokens } from "../ui/format";
 import type { ChatRerunPreview, ChatRerunScope, ChatRerunStatus, SceneStore } from "./sceneStore";
 import "./ChatRerunDialog.css";
 
@@ -34,9 +40,7 @@ export function ChatRerunDialog({
   const completedCursorRef = useRef(0);
   const [starting, setStarting] = useState(false);
   const [previewRevision, setPreviewRevision] = useState(0);
-  const cancelButtonRef = useRef<HTMLButtonElement | null>(null);
-  const retryButtonRef = useRef<HTMLButtonElement | null>(null);
-  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  
   // Dialog stays mounted while closed. Never reuse a previously authorized
   // preview token after the scene may have changed in the meantime.
   const [wasOpen, setWasOpen] = useState(isOpen);
@@ -123,8 +127,8 @@ export function ChatRerunDialog({
     if (!isOpen || document.activeElement !== document.body) return;
     // Start and completion unmount the focused action. Keep the keyboard
     // inside the existing shared Dialog instead of leaving focus on body.
-    if (running && jobId) cancelButtonRef.current?.focus();
-    else if (finished) retryButtonRef.current?.focus();
+    if (running && jobId) document.getElementById("chat-rerun-cancel")?.focus();
+    else if (finished) document.getElementById("chat-rerun-retry")?.focus();
   }, [isOpen, jobId, running, finished]);
 
   async function begin() {
@@ -155,7 +159,7 @@ export function ChatRerunDialog({
       const response = await store.cancelChatRerun(jobId);
       if (response.ok) {
         setProgress((current) => current ? { ...current, cancelRequested: true } : current);
-        closeButtonRef.current?.focus();
+        document.getElementById("chat-rerun-close")?.focus();
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not cancel re-run.");
@@ -184,24 +188,18 @@ export function ChatRerunDialog({
   }
 
   return (
-    <Dialog name={DIALOG} title="Re-run from here" className="chat-rerun-dialog">
+    <Dialog name={DIALOG} title="Re-run from here" size="md" className="chat-rerun-dialog">
       <p>Only ordinary tool-free chat replies are re-run automatically. Workspace agents, Builder,
         code sandboxes, tool-executing replies, plugin actions and data-bound outputs are skipped.
         Skipped nodes and their downstream replies require manual review. Thinking traces
         refresh with their replies and are never skipped actions.</p>
-      <fieldset className="chat-rerun-scopes" disabled={!!jobId || starting}>
-        <legend>Replies to re-run</legend>
-        <label>
-          <input type="radio" name="chat-rerun-scope" value="this_path"
-            checked={scope === "this_path"} onChange={() => chooseScope("this_path")} />
-          This path (follow the active branch)
-        </label>
-        <label>
-          <input type="radio" name="chat-rerun-scope" value="all_branches_below"
-            checked={scope === "all_branches_below"} onChange={() => chooseScope("all_branches_below")} />
-          All branches below (include forks)
-        </label>
-      </fieldset>
+      <RadioGroup label="Replies to re-run" className="chat-rerun-scopes"
+        disabled={!!jobId || starting} value={scope}
+        onValueChange={(value) => chooseScope(value as ChatRerunScope)}
+        options={[
+          { value: "this_path", label: "This path (follow the active branch)" },
+          { value: "all_branches_below", label: "All branches below (include forks)" },
+        ]} />
 
       {!jobId && <p className="chat-rerun-scope-help">
         The preview lists replies from upstream to downstream. Input-token counts are estimates;
@@ -214,14 +212,15 @@ export function ChatRerunDialog({
             {preview.count} {preview.count === 1 ? "reply" : "replies"} in parent-before-child order
           </p>
           <ol className="chat-rerun-replies" aria-labelledby="chat-rerun-count">
-            {preview.replies.map((reply) => (
+            {preview.replies.map((reply, index) => (
               <li key={reply.nodeId}>
+                <Icon name={progress && index < progress.completed ? "status-success" : reply.nodeId === progress?.currentNodeId ? "status-running" : "status-pending"} size="sm" />
                 <strong>{reply.title}</strong>
                 <span className="chat-rerun-meta">
                   Model: {reply.provider && reply.model
                     ? reply.provider + " / " + reply.model
                     : reply.model || reply.provider || "Current route"}
-                  {" · "}Estimated input: {reply.estimatedInputTokens.toLocaleString()} tokens
+                  {" · "}Estimated input: {formatTokens(reply.estimatedInputTokens)} tokens
                   {" · "}Estimated input cost: {reply.estimatedInputCostUsd == null
                     ? "unavailable" : "$" + reply.estimatedInputCostUsd.toFixed(6)}
                 </span>
@@ -236,16 +235,14 @@ export function ChatRerunDialog({
               <ol className="chat-rerun-replies" aria-labelledby="chat-rerun-skipped-title">
                 {skipped.map((item) => (
                   <li key={item.nodeId}>
+                    <Icon name="status-skipped" size="sm" />
                     <strong>{item.title}</strong>
                     <span className="chat-rerun-meta">{item.reason}</span>
                   </li>
                 ))}
               </ol>
               {boundNodeIds.length > 0 && onRunBoundNodes && (
-                <button type="button" className="chat-rerun-run-bound"
-                  onClick={() => onRunBoundNodes(boundNodeIds)}>
-                  Run bound nodes
-                </button>
+                <Button size="sm" className="chat-rerun-run-bound" onClick={() => onRunBoundNodes(boundNodeIds)}>Run bound nodes</Button>
               )}
               {boundNodeIds.length > 0 && (
                 <p>Run bound nodes opens Graph Runner for a separate dependency preview and explicit approval.
@@ -255,18 +252,16 @@ export function ChatRerunDialog({
           )}
           {preview.count === 0 && <p>No ordinary chat replies are below this message.</p>}
           {preview.requiresConfirmation && !jobId && (
-            <label className="chat-rerun-confirm">
-              <input type="checkbox" checked={confirmedLarge}
-                onChange={(event) => setConfirmedToken(event.target.checked ? preview.previewToken : null)} />
-              I confirm re-running more than 10 replies ({preview.count} total).
-            </label>
+            <Checkbox className="chat-rerun-confirm" checked={confirmedLarge}
+              onChange={(event) => setConfirmedToken(event.target.checked ? preview.previewToken : null)}
+              label={`I confirm re-running more than 10 replies (${preview.count} total).`} />
           )}
         </>
       )}
 
       {progress && (
         <section aria-label="Re-run progress" className="chat-rerun-progress">
-          <progress aria-label="Replies completed" value={progress.completed} max={Math.max(1, progress.total)} />
+          <ProgressBar label="Replies completed" value={progress.completed} max={Math.max(1, progress.total)} />
           <p role="status" aria-live="polite">
             {progress.status === "running"
               ? (progress.cancelRequested ? "Stopping after the current reply…" : "Re-running replies…")
@@ -285,21 +280,19 @@ export function ChatRerunDialog({
 
       <div className="chat-rerun-actions">
         {!jobId && (
-          <button type="button" onClick={() => { void begin(); }}
+          <Button variant="primary" size="sm" onClick={() => { void begin(); }}
             disabled={starting || busyPreview || !preview || preview.count === 0
               || (preview.requiresConfirmation && !confirmedLarge)}>
             {starting ? "Starting…" : "Re-run replies"}
-          </button>
+          </Button>
         )}
-        {!jobId && <button type="button" onClick={refreshPreview}>Refresh preview</button>}
+        {!jobId && <Button size="sm" onClick={refreshPreview}>Refresh preview</Button>}
         {running && (
-          <button ref={cancelButtonRef} type="button" disabled={!!progress?.cancelRequested}
-            onClick={() => { void cancel(); }}>
-            Cancel re-run
-          </button>
+          <Button id="chat-rerun-cancel" size="sm" disabled={!!progress?.cancelRequested}
+            onClick={() => { void cancel(); }}>Cancel re-run</Button>
         )}
-        {finished && <button ref={retryButtonRef} type="button" onClick={reset}>Preview another re-run</button>}
-        <button ref={closeButtonRef} type="button" onClick={overlays.close}>Close</button>
+        {finished && <Button id="chat-rerun-retry" size="sm" onClick={reset}>Preview another re-run</Button>}
+        <Button id="chat-rerun-close" size="sm" variant="ghost" onClick={overlays.close}>Close</Button>
       </div>
     </Dialog>
   );
