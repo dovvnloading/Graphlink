@@ -60,9 +60,20 @@ describe("analysis interactions on numerical charts", () => {
       expect(svgFor(container).querySelector("g[transform*='scale(']")).toBeNull();
       expect(svgFor(container).querySelectorAll("rect, path, circle").length).toBeGreaterThan(0);
       expect(screen.getByRole("button", { name: "Chart tools" })).toBeInTheDocument();
+      expect(container.querySelector(".chart-analysis-toolbar-row .chart-analysis-status")).not.toBeNull();
+      expect(container.querySelector(".chart-canvas-wrapper > .chart-analysis-status")).toBeNull();
       expect(JSON.stringify(plotData[type])).toBe(original);
     },
   );
+
+  it("puts the keyboard hint in a kit Kbd row inside the tools tooltip, never over the plot", () => {
+    const { container } = render(<ChartRenderer chartType="scatter" chartData={scatter} />);
+    fireEvent.focus(screen.getByRole("button", { name: "Chart tools" }));
+    const tooltip = screen.getByRole("tooltip");
+    expect(tooltip.querySelector(".gl-kbd")).not.toBeNull();
+    expect(tooltip).toHaveTextContent("Home");
+    expect(container.querySelector(".chart-analysis-status")).toHaveTextContent("");
+  });
 
   it("reads out mouse cursor x/y with unrounded numbers and physical units", () => {
     const { container } = render(<ChartRenderer chartType="scatter" chartData={scatter} />);

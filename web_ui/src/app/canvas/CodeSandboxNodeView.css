@@ -318,5 +318,5 @@
 }
 
 .code-sandbox-node-deps-summary { display:flex; align-items:center; gap:var(--gl-space-1-5); font-size:var(--gl-text-xs); color:var(--gl-surface-text-muted); }
-.code-sandbox-node-code-header { display:flex; justify-content:space-between; align-items:center; padding:var(--gl-space-1) var(--gl-space-2); background:var(--gl-surface-inset); font-size:var(--gl-text-xs); font-family:var(--gl-font-mono); }
-.code-sandbox-node-code-header > span, .code-sandbox-node-section-label { display:inline-flex; align-items:center; gap:var(--gl-space-1); }
+.code-sandbox-node-section-label { display:inline-flex; align-items:center; gap:var(--gl-space-1); }
+.code-sandbox-node-code .node-md-code-block-language { text-transform: capitalize; }

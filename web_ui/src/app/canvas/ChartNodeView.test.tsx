@@ -76,18 +76,18 @@ describe("ChartNodeView", () => {
     await waitFor(() => expect(container.querySelector(".chart-canvas-wrapper")).not.toBeNull());
   });
 
-  it("the aspect-lock toggle button reads 'Unlock Aspect' when locked and calls onToggleAspectLock", async () => {
+  it("the aspect-lock toggle button reads 'Lock aspect ratio' when locked and calls onToggleAspectLock", async () => {
     const { onToggleAspectLock } = renderChartNode({ chartAspectLocked: true });
-    const button = screen.getByRole("button", { name: "Unlock Aspect" });
+    const button = screen.getByRole("button", { name: "Lock aspect ratio" });
     expect(button).toHaveAttribute("aria-pressed", "true");
 
     fireEvent.click(button);
     expect(onToggleAspectLock).toHaveBeenCalledOnce();
   });
 
-  it("the aspect-lock toggle button reads 'Lock Aspect' when unlocked", () => {
+  it("the aspect-lock toggle button reads 'Lock aspect ratio' when unlocked", () => {
     renderChartNode({ chartAspectLocked: false });
-    const button = screen.getByRole("button", { name: "Lock Aspect" });
+    const button = screen.getByRole("button", { name: "Lock aspect ratio" });
     expect(button).toHaveAttribute("aria-pressed", "false");
   });
 
