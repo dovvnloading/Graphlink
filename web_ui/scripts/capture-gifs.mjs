@@ -238,13 +238,13 @@ async function newCanvas(page) {
   if (await cancelBranch.isVisible().catch(() => false)) await cancelBranch.click();
   await page.getByRole("textbox", { name: "Message composer" }).fill("");
   await page.locator('[data-overlay-trigger="library"]').click();
-  const library = page.getByRole("dialog", { name: "Chat Library" });
+  const library = page.getByRole("dialog", { name: "Chat library" });
   // New Chat confirms before discarding the unsaved canvas.
   // On an already-empty canvas no confirm appears and this handler lingers
   // to the next call, so tolerate a dialog that another handler accepted.
   page.once("dialog", (dialog) => dialog.accept().catch(() => {}));
   // The empty-library state repeats New Chat; either one starts a canvas.
-  await library.getByRole("button", { name: "New Chat", exact: true }).first().click();
+  await library.getByRole("button", { name: "New chat", exact: true }).first().click();
   await library.waitFor({ state: "hidden" }).catch(() => page.keyboard.press("Escape"));
   await page.getByRole("button", { name: "Add a table" }).waitFor();
   await dismissToasts(page);
@@ -257,7 +257,7 @@ async function openSeededGraph(page) {
   if (await cancelBranch.isVisible().catch(() => false)) await cancelBranch.click();
   await page.getByRole("textbox", { name: "Message composer" }).fill("");
   await page.locator('[data-overlay-trigger="library"]').click();
-  const library = page.getByRole("dialog", { name: "Chat Library" });
+  const library = page.getByRole("dialog", { name: "Chat library" });
   page.once("dialog", (dialog) => dialog.accept().catch(() => {}));
   await library.getByRole("button", { name: /^Open chat/ }).first().click();
   await library.waitFor({ state: "hidden" });
