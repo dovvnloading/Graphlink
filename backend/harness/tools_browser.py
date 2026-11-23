@@ -251,7 +251,7 @@ def register_workspace_tools(registry: ToolRegistry, dispatcher, document) -> No
         if (document.current_chat_id, document.current_workspace_id) != identity or not _harness_live(ctx, document):
             return ToolResult("The active chat, workspace, or agent changed.", is_error=True)
         x, y = document.place_child(agent_id, "document", prefer="right")
-        title = ("Browser: " + capture.title)[:120]
+        title = ("Browser: " + " ".join(capture.title.split()))[:120]
 
         def create():
             doc = document.add_document_node(
