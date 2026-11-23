@@ -1,0 +1,494 @@
+/* -- Review Lens node ----------------------------------------------------
+   Same card chrome as .gitlink-node-*: a max-height scrolling flex column
+   with flex-shrink: 0 children (THE SQUEEZE fix), tab strip, labelled
+   field rows, inset inputs, neutral buttons with one filled primary, stat
+   rows, banners, and empty states - all on the same shared tokens, so the
+   card reads as the same family. New here: the severity-tier pills
+   (red/yellow/gray severity tiers), the verdict banner,
+   and the walkthrough/finding/Q&A list treatments. */
+
+.code-review-node-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-2-5);
+  max-height: 530px;
+  overflow-y: auto;
+}
+
+.code-review-node-content > * {
+  flex-shrink: 0;
+}
+
+.code-review-node-tabs {
+  display: flex;
+  gap: var(--gl-space-1);
+  border-bottom: 1px solid var(--gl-surface-border);
+}
+
+.code-review-node-tab {
+  font-size: var(--gl-text-2xs);
+  font-weight: 600;
+  font-family: inherit;
+  padding: var(--gl-space-1-5) var(--gl-space-2-5);
+  color: var(--gl-surface-text-muted);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.code-review-node-tab:hover {
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-tab.active {
+  color: var(--gl-surface-text-primary);
+  border-bottom-color: var(--gl-surface-text-muted);
+}
+
+.code-review-node-tab-count {
+  margin-left: var(--gl-space-1-5);
+  font-size: var(--gl-text-2xs);
+  font-weight: 700;
+  padding: 1px var(--gl-space-1-5);
+  border-radius: var(--gl-radius-full);
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+}
+
+.code-review-node-setup-tab,
+.code-review-node-walkthrough-tab,
+.code-review-node-findings-tab {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-2-5);
+}
+
+.code-review-node-field-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-1-5);
+}
+
+.code-review-node-field-label {
+  font-size: var(--gl-text-2xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--gl-surface-text-muted);
+}
+
+.code-review-node-inline-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gl-space-1-5);
+}
+
+.code-review-node-input {
+  box-sizing: border-box;
+  width: 100%;
+  font-family: inherit;
+  font-size: var(--gl-text-xs);
+  padding: var(--gl-space-2) var(--gl-space-2-5);
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+}
+
+.code-review-node-input:focus {
+  outline: none;
+  border-color: var(--gl-surface-text-muted);
+}
+
+.code-review-node-inline-row button {
+  font-size: var(--gl-text-2xs);
+  font-weight: 600;
+  font-family: inherit;
+  padding: var(--gl-space-1) var(--gl-space-3);
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: var(--gl-radius-sm);
+  cursor: pointer;
+}
+
+.code-review-node-inline-row button:hover:enabled {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.code-review-node-inline-row button.code-review-node-primary-btn {
+  color: var(--gl-surface-text-bright);
+  background-color: var(--gl-neutral-button-hover);
+  border-color: var(--gl-neutral-button-border);
+}
+
+.code-review-node-inline-row button.code-review-node-primary-btn:hover:enabled {
+  background-color: var(--gl-surface-border-strong);
+}
+
+.code-review-node-inline-row button.code-review-node-primary-btn:disabled {
+  color: var(--gl-surface-text-muted);
+  background-color: transparent;
+  border-color: var(--gl-surface-border);
+}
+
+.code-review-node-inline-row button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.code-review-node-identity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-1);
+}
+
+.code-review-node-identity-title {
+  font-size: var(--gl-text-xs);
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-stat-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--gl-space-2);
+  font-size: var(--gl-text-2xs);
+}
+
+.code-review-node-stat-key {
+  color: var(--gl-surface-text-muted);
+}
+
+.code-review-node-stat-value {
+  color: var(--gl-surface-text-primary);
+  font-weight: 600;
+}
+
+.code-review-node-banner-error {
+  padding: var(--gl-space-2) var(--gl-space-2-5);
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-semantic-status-error, currentColor);
+  border: 1px solid var(--gl-semantic-status-error, currentColor);
+  border-radius: var(--gl-radius-md);
+}
+
+.code-review-node-banner-warning {
+  margin: 0;
+  padding: var(--gl-space-2) var(--gl-space-2-5);
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-primary);
+  border: 1px solid var(--gl-surface-border-strong, var(--gl-surface-border));
+  border-radius: var(--gl-radius-md);
+}
+
+.code-review-node-empty {
+  margin: 0;
+  font-size: var(--gl-text-xs);
+  font-style: italic;
+  color: var(--gl-surface-text-muted);
+}
+
+.code-review-node-file-count {
+  margin: 0;
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-muted);
+}
+
+.code-review-node-walkthrough-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-2);
+}
+
+.code-review-node-walkthrough-group {
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  padding: var(--gl-space-2) var(--gl-space-2-5);
+}
+
+.code-review-node-walkthrough-title {
+  font-size: var(--gl-text-xs);
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-walkthrough-paths {
+  font-size: var(--gl-text-2xs);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  color: var(--gl-surface-text-muted);
+  word-break: break-word;
+}
+
+.code-review-node-walkthrough-explanation {
+  margin: var(--gl-space-1) 0 0;
+  font-size: var(--gl-text-xs);
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-diff-focus {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-2);
+  flex-wrap: wrap;
+  margin: var(--gl-space-2) 0;
+  color: var(--gl-surface-text-muted);
+  font-size: var(--gl-text-2xs);
+}
+
+.code-review-node-diff-focus p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.code-review-node-diff-focus button:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 2px;
+}
+
+.code-review-node-diff-markdown {
+  max-height: none;
+  overflow: visible;
+}
+
+.code-review-node-diff-text {
+  margin: 0;
+  padding: var(--gl-space-2) var(--gl-space-2-5);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: var(--gl-text-2xs);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow: auto;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+}
+
+.code-review-node-qa {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-1-5);
+}
+
+.code-review-node-qa-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-2);
+}
+
+/* The list-item wrapper the TSX has always emitted but nothing styled, so
+   consecutive Q&A turns ran together with no visible boundary between one
+   answer and the next question. */
+.code-review-node-qa-entry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-1);
+  padding-left: var(--gl-space-2);
+  border-left: 2px solid var(--gl-surface-border);
+}
+
+.code-review-node-qa-question {
+  font-size: var(--gl-text-2xs);
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-qa-answer {
+  max-height: none;
+  overflow: visible;
+}
+
+.code-review-node-verdict {
+  display: flex;
+  align-items: baseline;
+  gap: var(--gl-space-2);
+  padding: var(--gl-space-2) var(--gl-space-2-5);
+  border-radius: var(--gl-radius-md);
+  border: 1px solid var(--gl-surface-border);
+}
+
+.code-review-node-verdict-label {
+  font-size: var(--gl-text-xs);
+  font-weight: 700;
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-verdict-score {
+  font-size: var(--gl-text-xs);
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-verdict-risk {
+  margin-left: auto;
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-muted);
+}
+
+.code-review-node-verdict-strong {
+  border-color: var(--gl-surface-text-muted);
+}
+
+.code-review-node-verdict-needs_revision,
+.code-review-node-verdict-not_ready {
+  border-color: var(--gl-semantic-status-error, currentColor);
+}
+
+/* The "reviewed, but only by the deterministic pre-screen" state. Reads as
+   deliberately unemphatic - a dashed border rather than a colour - because
+   the point is the absence of a grade, not an alarm. */
+.code-review-node-verdict-none {
+  border-style: dashed;
+  border-color: var(--gl-surface-border);
+}
+
+.code-review-node-verdict-none .code-review-node-verdict-risk {
+  margin-left: 0;
+}
+
+.code-review-node-overview {
+  margin: 0;
+  font-size: var(--gl-text-xs);
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-review-title {
+  margin: 0;
+  font-size: var(--gl-text-xs);
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-scorecard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-1);
+}
+
+.code-review-node-finding {
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  padding: var(--gl-space-2) var(--gl-space-2-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-1-5);
+}
+
+.code-review-node-finding-head {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-2);
+}
+
+.code-review-node-finding-title {
+  font-size: var(--gl-text-xs);
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-finding-meta {
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-muted);
+}
+
+.code-review-node-finding-text {
+  margin: 0;
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-tier {
+  flex-shrink: 0;
+  font-size: var(--gl-text-2xs);
+  font-weight: 700;
+  padding: 1px var(--gl-space-2);
+  border-radius: var(--gl-radius-full);
+  border: 1px solid var(--gl-surface-border);
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-tier-red {
+  color: var(--gl-semantic-status-error, currentColor);
+  border-color: var(--gl-semantic-status-error, currentColor);
+}
+
+.code-review-node-tier-yellow {
+  border-color: var(--gl-surface-border-strong, var(--gl-surface-border));
+}
+
+
+/* Review Lens: the Gitlink-pattern approval modal is entirely token themed. */
+.code-review-node-comment-status {
+  margin: 0;
+  padding: var(--gl-space-1-5) var(--gl-space-2-5);
+  color: var(--gl-surface-text-primary);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  font-size: var(--gl-text-2xs);
+}
+
+.code-review-node-comment-dialog {
+  max-width: 600px;
+}
+
+.code-review-node-comment-details {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--gl-space-1-5) var(--gl-space-3);
+  font-size: var(--gl-text-xs);
+}
+
+.code-review-node-comment-details dt {
+  color: var(--gl-surface-text-muted);
+}
+
+.code-review-node-comment-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-comment-preview {
+  overflow: auto;
+  max-height: 260px;
+  padding: var(--gl-space-3);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  font-size: var(--gl-text-xs);
+}
+
+.code-review-node-comment-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--gl-space-2);
+}
+
+.code-review-node-comment-actions button {
+  padding: var(--gl-space-2) var(--gl-space-3);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: var(--gl-radius-sm);
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-neutral-button-background);
+  cursor: pointer;
+}
+
+.code-review-node-comment-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+

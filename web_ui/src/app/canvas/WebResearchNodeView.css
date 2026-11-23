@@ -1,0 +1,263 @@
+/* -- R5.1 web research node -------------------------------------------------- */
+
+.web-research-node {
+  width: 420px;
+  /* No shell max-height: the shell is overflow-hidden, so a cap here
+     amputates the card bottom whenever header chrome plus the capped
+     content region outgrow it. Height is bounded by the content
+     region's own cap instead, so the bottom border always renders. */
+  min-height: 110px;
+}
+
+.web-research-node.collapsed {
+  width: 290px;
+  min-height: 58px;
+}
+
+.web-research-node-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-2-5);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.web-research-node-query-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-1-5);
+}
+
+.web-research-node-query-input {
+  box-sizing: border-box;
+  width: 100%;
+  font-family: inherit;
+  font-size: var(--gl-text-xs);
+  padding: var(--gl-space-2) var(--gl-space-2-5);
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+}
+
+.web-research-node-query-input:focus {
+  outline: none;
+  border-color: var(--gl-surface-text-muted);
+}
+
+.web-research-node-query-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--gl-space-1-5);
+}
+
+/* ADR-021 stage 21.5: the knowledge-retention opt-in, sitting with the
+   query controls it applies to rather than in the card menu - it changes
+   what the next Run does, so it belongs beside Run. */
+.web-research-node-retain {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-1-5);
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-muted);
+  cursor: pointer;
+}
+.web-research-node-retain input { cursor: pointer; }
+.web-research-node-retain input:disabled,
+.web-research-node-retain:has(input:disabled) {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* Reuses conversation-node's send/cancel button chrome verbatim (same
+   shared-token convention .chat-node-content's markdown rules already
+   establish across sibling node views) rather than duplicating the two
+   declarations under a new name. */
+.web-research-node-run-btn,
+.web-research-node-cancel-btn {
+  font-size: var(--gl-text-2xs);
+  font-weight: 600;
+  font-family: inherit;
+  padding: var(--gl-space-1) var(--gl-space-3);
+  border-radius: var(--gl-radius-sm);
+  cursor: pointer;
+}
+
+.web-research-node-run-btn {
+  color: var(--gl-surface-window);
+  background-color: var(--gl-surface-text-muted);
+  border: none;
+}
+
+.web-research-node-run-btn:hover:enabled {
+  filter: brightness(1.1);
+}
+
+.web-research-node-run-btn:disabled,
+.web-research-node-cancel-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.web-research-node-cancel-btn {
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+}
+
+/* R8a (UI/UX issue list finding #23): see .conversation-node-cancel-btn's
+   identical comment above - same shape, same gap, same fix. */
+.web-research-node-cancel-btn:hover:enabled {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+/* Stage stepper - pending/active/done, one pill per STAGE_STEPS entry. */
+.web-research-node-stepper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gl-space-1-5);
+}
+
+.web-research-node-step {
+  font-size: var(--gl-text-2xs);
+  font-weight: 600;
+  padding: var(--gl-space-1) var(--gl-space-2);
+  border-radius: var(--gl-radius-full);
+  border: 1px solid var(--gl-surface-border);
+  color: var(--gl-surface-text-muted);
+}
+
+.web-research-node-step.active {
+  color: var(--gl-surface-text-primary);
+  border-color: var(--gl-semantic-status-info, currentColor);
+}
+
+.web-research-node-step.done {
+  color: var(--gl-semantic-status-success, currentColor);
+  border-color: var(--gl-semantic-status-success, currentColor);
+}
+
+.web-research-node-progress {
+  margin: 0;
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-muted);
+}
+
+/* Terminal-state banner - failed reuses the same error token every other
+   danger surface in this file uses; cancelled is deliberately neutral/muted
+   rather than error-colored (a user-initiated cancel is not a failure). */
+.web-research-node-banner {
+  padding: var(--gl-space-2) var(--gl-space-2-5);
+  font-size: var(--gl-text-2xs);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-md);
+}
+
+.web-research-node-banner-failed {
+  color: var(--gl-semantic-status-error, currentColor);
+  border-color: var(--gl-semantic-status-error, currentColor);
+}
+
+.web-research-node-banner-cancelled {
+  color: var(--gl-surface-text-muted);
+}
+
+/* Empty state, mirroring .library-empty-state's own anatomy (a title naming
+   the state, then one line saying what will fill it) at card scale rather
+   than dialog scale. Without it the card was a query box above blank space,
+   which never told the user what Run would produce. */
+.web-research-node-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--gl-space-1);
+  padding: var(--gl-space-5) var(--gl-space-3);
+  text-align: center;
+  color: var(--gl-surface-text-muted);
+}
+
+.web-research-node-empty-state-title {
+  margin: 0;
+  font-size: var(--gl-text-xs);
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+}
+
+.web-research-node-empty-state-sub {
+  margin: 0;
+  font-size: var(--gl-text-2xs);
+  line-height: 1.45;
+  max-width: 260px;
+}
+
+.web-research-node-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-2);
+}
+
+/* Reuses .chat-node-content's full markdown-body rule set (headings, lists,
+   code, tables, hljs) verbatim - same shared-class convention
+   .conversation-node-bubble-content already establishes for this pipeline.
+   Only overrides the max-height/overflow-y a nested answer pane should never
+   take on its own (the outer .web-research-node-content already scrolls). */
+.web-research-node-answer {
+  max-height: none;
+  overflow: visible;
+}
+
+.web-research-node-warnings {
+  margin: 0;
+  padding-left: var(--gl-space-5);
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-semantic-status-warning, currentColor);
+}
+
+.web-research-node-sources {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-1-5);
+}
+
+.web-research-node-source {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-2);
+  padding: var(--gl-space-1-5) var(--gl-space-2);
+  font-size: var(--gl-text-2xs);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+}
+
+.web-research-node-source-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--gl-surface-text-primary);
+}
+
+.web-research-node-source-status {
+  flex-shrink: 0;
+  font-size: var(--gl-text-2xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--gl-surface-text-muted);
+}
+
+.web-research-node-source-status-accepted {
+  color: var(--gl-semantic-status-success, currentColor);
+}
+
+.web-research-node-source-status-rejected,
+.web-research-node-source-status-failed {
+  color: var(--gl-semantic-status-error, currentColor);
+}
+
+.web-research-node-source-status-fetching {
+  color: var(--gl-semantic-status-info, currentColor);
+}
+

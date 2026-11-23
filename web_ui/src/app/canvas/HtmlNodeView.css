@@ -1,0 +1,150 @@
+/* -- R3.17/R3.18 html view node -------------------------------------------- */
+
+.html-node {
+  width: 420px;
+  /* No shell max-height: the shell is overflow-hidden, so a cap here
+     amputates the card bottom whenever header chrome plus the capped
+     content region outgrow it. Height is bounded by the content
+     region's own cap instead, so the bottom border always renders. */
+  min-height: 110px;
+}
+
+.html-node.collapsed {
+  width: 290px;
+  min-height: 58px;
+}
+
+/* Card controls live inline in the header (no context menu for this node -
+   see HtmlNodeView.tsx's doc comment for why). Reuses .chat-node-role's
+   space-between layout so the label sits left and the button row sits
+   right, same as every sibling node's title bar. */
+.html-node-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gl-space-2);
+}
+
+.html-node-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-0-5);
+}
+
+.html-node-delete-btn.gl-icon-button { color: var(--gl-semantic-status-error, currentColor); }
+
+.html-node-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-2);
+}
+
+.html-node-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-1);
+}
+
+.html-node-section-label {
+  margin: 0;
+  font-size: var(--gl-text-2xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gl-surface-text-muted);
+}
+
+/* Source/Preview pane heights are set inline by HtmlNodeView.tsx (driven by
+   its own splitterValue state), not fixed here - the 140px below is only the
+   pre-drag/pre-restore fallback (matches HTML_SPLIT_DEFAULT's 0.5 fraction of
+   HTML_SPLIT_TOTAL_PX exactly, so it's never visibly different from the
+   inline value on first paint). This USED to be genuinely fixed, deliberately
+   not resizable: legacy graphlink_html_view.py's QSplitter (splitter_state)
+   was scoped out as "pure Qt UI state with no domain meaning" back in
+   R3.17/R3.18. R6.3 reintroduced a real drag handle (.html-node-splitter
+   below) because R6.4/R6.5's session load/save pipeline needs every
+   legacy-persisted field - splitter_state included - to round-trip
+   losslessly; see canvasConstants.ts's own HTML_SPLIT_* doc. `resize: none`
+   on the textarea still stands: it suppresses the BROWSER's own native
+   textarea resize handle, an unrelated affordance from this custom splitter
+   that would otherwise fight it for the same corner. */
+.html-node-source {
+  box-sizing: border-box;
+  width: 100%;
+  height: 140px;
+  resize: none;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: var(--gl-text-2xs);
+  padding: var(--gl-space-2) var(--gl-space-2-5);
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+}
+
+.html-node-source:focus {
+  outline: none;
+  border-color: var(--gl-surface-text-muted);
+}
+
+/* R6.3: the draggable Source/Preview split handle - a thin bar, not a full
+   row, so it reads as a resize affordance rather than another content
+   section. row-resize cursor matches the only axis it actually drags on. */
+.html-node-splitter {
+  height: 6px;
+  margin: 0 var(--gl-space-0-5);
+  border-radius: var(--gl-radius-xs);
+  background-color: var(--gl-surface-border);
+  cursor: row-resize;
+  touch-action: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--gl-surface-text-muted);
+}
+
+.html-node-splitter:hover,
+.html-node-splitter:focus-visible {
+  background-color: var(--gl-surface-text-muted);
+}
+
+.html-node-splitter:focus-visible,
+.html-node-render-btn:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 2px;
+}
+
+.html-node-render-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-2);
+  flex-wrap: wrap;
+}
+
+.html-node-preview-status {
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-muted);
+}
+
+.html-node-preview-status.stale {
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+}
+
+
+
+/* A visible border matters here specifically - it's the visual cue that
+   this rectangle is a distinct, sandboxed embedded document, not part of
+   the card's own chrome. */
+.html-node-preview {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  height: 140px;
+  background-color: var(--gl-surface-window);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+}
+
+
+.html-node-splitter .gl-icon { pointer-events: none; }

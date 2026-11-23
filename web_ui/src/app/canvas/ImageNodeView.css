@@ -1,0 +1,53 @@
+/* -- R3.21/R3.22 image node ------------------------------------------------ */
+
+.image-node {
+  width: 420px;
+  /* No shell max-height: the shell is overflow-hidden, so a cap here
+     amputates the card bottom whenever header chrome plus the capped
+     content region outgrow it. Height is bounded by the content
+     region's own cap instead, so the bottom border always renders. */
+  min-height: 110px;
+}
+
+.image-node.collapsed {
+  width: 290px;
+  min-height: 58px;
+}
+
+.image-node-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-height: 300px;
+  overflow: hidden;
+}
+
+/* max-width/max-height + object-fit: contain so a large source image never
+   blows out the card layout - it scales down to fit the card, never up. */
+.image-node-img {
+  display: block;
+  max-width: 100%;
+  max-height: 300px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: var(--gl-radius-sm);
+}
+
+/* The broken/unknown-asset fallback (onError-driven, see ImageNodeView.tsx) -
+   a dashed box is the deliberate visual cue that this is a "missing content"
+   placeholder, not real card chrome. */
+.image-node-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 120px;
+  padding: var(--gl-space-4);
+  color: var(--gl-surface-text-muted);
+  font-size: var(--gl-text-2xs);
+  text-align: center;
+  border: 1px dashed var(--gl-surface-border);
+  border-radius: var(--gl-radius-md);
+}
+

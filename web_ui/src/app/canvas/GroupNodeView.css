@@ -1,0 +1,290 @@
+/* -- R6.1 frame/container group node --------------------------------------- */
+/* GroupNodeView.tsx - one shared component for both "frame" and "container"
+   NODE_TYPES entries. Renders as a background decoration BEHIND its member
+   nodes (SceneCanvas.tsx's toFlowNodes sets zIndex:-1) - width/height come
+   from the flow node object itself (backend-owned, see that file's own
+   comment), this root fills 100%/100% of that wrapper. */
+
+.group-node {
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  --group-frame-alpha: 6%;
+  background-color: color-mix(in srgb, var(--group-frame-color) var(--group-frame-alpha), transparent);
+  border: 1px solid color-mix(in srgb, var(--gl-surface-border) 45%, transparent);
+  border-radius: var(--gl-radius-lg);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--gl-surface-text-bright) 3%, transparent);
+  opacity: 1;
+  transition:
+    background-color var(--gl-motion-fast) var(--gl-motion-ease),
+    border-color var(--gl-motion-fast) var(--gl-motion-ease),
+    box-shadow var(--gl-motion-base) var(--gl-motion-ease);
+}
+
+.group-node:hover {
+  background-color: color-mix(in srgb, var(--group-frame-color) var(--group-frame-alpha), transparent);
+  border-color: var(--gl-surface-border);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--gl-surface-text-bright) 3%, transparent),
+    var(--gl-shadow-1);
+}
+
+.group-node.selected {
+  background-color: color-mix(in srgb, var(--group-frame-color) var(--group-frame-alpha), transparent);
+  border-color: var(--gl-surface-border);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--gl-surface-text-bright) 3%, transparent),
+    0 0 0 1px var(--gl-surface-border-strong),
+    var(--gl-shadow-2);
+}
+
+/* Keep the border subtle even when a bright saved swatch is selected. */
+.group-node.has-body-color { border-color: var(--gl-surface-border); }
+.group-node.has-body-color:hover,
+.group-node.has-body-color.selected { border-color: var(--gl-surface-border-strong); }
+
+/* Collapsed: .group-node-pill-header below carries ALL visible chrome
+   (fill, border, radius); the root becomes a plain invisible sizing box so
+   its own radius-lg rectangle never peeks out from behind the pill's
+   fully-rounded corners. Placed after :hover/.selected so it wins
+   regardless of which of those also match. */
+.group-node.collapsed {
+  background-color: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+/* R6.1 follow-up: the collapsed-container hover preview - a simplified
+   equivalent of legacy's timer-based "ghost frame" (see GroupNodeView.tsx's
+   own GhostPreview comment for why this shows counted kinds rather than a
+   rendered miniature of actual content). Positioned above the pill, same
+   convention as .reasoning-popover; reuses the shared popover chrome
+   (background/border/shadow) so it reads as the same kind of floating
+   surface as every other tooltip/popover in the app. */
+.group-node-ghost-preview {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: var(--gl-z-popover);
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-0-5);
+  padding: var(--gl-space-2) var(--gl-space-2-5);
+  min-width: 140px;
+  background-color: var(--gl-surface-node-body);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-md);
+  box-shadow: var(--gl-shadow-popover);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.group-node-ghost-preview-count {
+  font-size: var(--gl-text-2xs);
+  font-weight: 700;
+  color: var(--gl-surface-text-primary);
+}
+
+.group-node-ghost-preview-breakdown {
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-muted);
+}
+
+/* -- Expanded chrome: a floating label chip + a hover-revealed controls
+   chip, anchored above the box's top-left corner, replacing the old
+   full-width header bar (R8a: that permanent bar plus a full-opacity
+   border was the "ugly hard edge box" complaint). ---------------------- */
+
+.group-node-topbar {
+  position: absolute;
+  top: var(--gl-space-1-5);
+  left: 6px;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-1-5);
+  pointer-events: none;
+}
+
+.group-node-topbar > * {
+  pointer-events: auto;
+}
+
+.group-node-label-chip {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  padding: var(--gl-space-1) var(--gl-space-2);
+  font-size: var(--gl-text-sm);
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-raised);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  cursor: default;
+  transition:
+    color var(--gl-motion-fast) var(--gl-motion-ease),
+    border-color var(--gl-motion-fast) var(--gl-motion-ease);
+}
+
+ .group-node:hover .group-node-label-chip {
+  color: var(--gl-surface-text-secondary);
+  border-color: var(--gl-surface-border-strong);
+}
+
+.group-node.selected .group-node-label-chip {
+  color: var(--gl-surface-text-primary);
+  border-color: var(--gl-surface-border-strong);
+}
+
+.group-node-controls-row {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-1);
+  flex-shrink: 0;
+}
+
+.group-node-controls-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-0-5);
+  padding: var(--gl-space-0-5);
+  background-color: var(--gl-surface-node-body);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  opacity: 0;
+  transform: translateX(-4px);
+  pointer-events: none;
+  transition:
+    opacity var(--gl-motion-fast) var(--gl-motion-ease),
+    transform var(--gl-motion-fast) var(--gl-motion-ease);
+}
+
+.group-node:hover .group-node-controls-chip,
+.group-node.selected .group-node-controls-chip,
+.group-node-controls-chip:focus-within {
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.group-node-controls-divider {
+  width: 1px;
+  height: 14px;
+  flex-shrink: 0;
+  background-color: var(--gl-surface-border);
+}
+
+.group-node.has-header-color .group-node-label-chip,
+.group-node.has-header-color .group-node-controls-chip {
+  color: var(--gl-surface-text-bright);
+  border-color: color-mix(in srgb, var(--gl-surface-inset-deep) 65%, transparent);
+}
+
+/* The one control that stays discoverable without hovering first - see
+   GroupNodeView.tsx's doc comment for why Collapse/Expand is exempted from
+   the hover-reveal rule every other control follows. */
+.group-node-collapse-btn {
+  opacity: 0.6;
+}
+
+.group-node-collapse-btn:hover,
+.group-node:hover .group-node-collapse-btn,
+.group-node.selected .group-node-collapse-btn {
+  opacity: 1;
+}
+
+/* -- Collapsed chrome: a fixed-size pill. backend/canvas.py pins
+   group_width/group_height to GROUP_COLLAPSED_WIDTH/HEIGHT (260x50) while
+   collapsed, so this is a real fixed footprint, not just a CSS trick. --- */
+
+.group-node-pill-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gl-space-2);
+  width: 100%;
+  height: 100%;
+  padding: 0 var(--gl-space-2-5);
+  font-size: var(--gl-text-2xs);
+  font-weight: 600;
+  color: var(--gl-surface-text-secondary);
+  background-color: var(--gl-surface-node-body);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-full);
+  cursor: default;
+  transition:
+    border-color var(--gl-motion-fast) var(--gl-motion-ease),
+    box-shadow var(--gl-motion-base) var(--gl-motion-ease);
+}
+
+.group-node.collapsed:hover .group-node-pill-header {
+  border-color: var(--gl-surface-border-strong);
+  box-shadow: var(--gl-shadow-1);
+}
+
+.group-node.collapsed.selected .group-node-pill-header {
+  border-color: var(--gl-surface-border-strong);
+  box-shadow: 0 0 0 1px var(--gl-surface-border-strong), var(--gl-shadow-2);
+}
+
+.group-node.has-body-color .group-node-pill-header,
+.group-node.has-header-color .group-node-pill-header {
+  color: var(--gl-surface-text-bright);
+  border-color: color-mix(in srgb, var(--gl-surface-inset-deep) 65%, transparent);
+}
+
+.group-node-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-node-label-input {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--gl-text-2xs);
+  font-weight: 600;
+  font-family: inherit;
+  padding: var(--gl-space-0-5) var(--gl-space-1);
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset-deep, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-text-muted);
+  border-radius: var(--gl-radius-xs);
+}
+
+.group-node-label-input:focus {
+  outline: none;
+}
+
+.group-node-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-0-5);
+  flex-shrink: 0;
+}
+
+.group-node-ungroup-btn.gl-icon-button {
+  color: var(--gl-semantic-status-error, currentColor);
+}
+
+
+/* The chosen frame hue stays subtle in both themes, including on hover. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .group-node { --group-frame-alpha: 4%; }
+}
+:root[data-theme="light"] .group-node { --group-frame-alpha: 4%; }
+
+/* Containers have a quiet header band behind the raised title and toolbar. */
+.container-group-node:not(.collapsed)::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: var(--gl-space-8);
+  border-radius: var(--gl-radius-lg) var(--gl-radius-lg) 0 0;
+  border-bottom: 1px solid var(--gl-surface-border);
+  background-color: color-mix(in srgb, var(--group-header-color, var(--group-frame-color)) var(--group-frame-alpha), transparent);
+  pointer-events: none;
+}
