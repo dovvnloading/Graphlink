@@ -21,7 +21,7 @@ export function FalMediaUploader({
   onBusyChange: (uploading: boolean) => void;
 }) {
   const urlFieldListId = useId();
-  const confirm = useConfirm();
+  const requestApproval = useConfirm();
   const initialField = useMemo(() =>
     mode === "all" ? fields[0] || "" :
       operation === "image-to-image" || operation === "image-to-video" ? "image_url" :
@@ -55,7 +55,7 @@ export function FalMediaUploader({
       setMessage("Enter a valid model parameter name, such as image_url.");
       return;
     }
-    const approved = await confirm({
+    const approved = await requestApproval({
       title: "Upload reference to Fal.ai?",
       body: "Send \"" + file.name + "\" (" + formatBytes(file.size) +
         ") to the Fal.ai CDN? This transfers the file outside Graphlink. Do not upload private or sensitive data without consent.",
