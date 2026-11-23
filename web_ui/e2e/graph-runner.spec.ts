@@ -17,8 +17,10 @@ test("runs a grouped table and both downstream outputs, then reopens their saved
   const sourceId = await source.getAttribute("data-id");
   expect(sourceId).toBeTruthy();
   const table = page.locator(`.react-flow__node-note[data-id="${sourceId}"]`);
-  await table.getByRole("combobox", { name: "Group by" }).selectOption({ label: "Team" });
-  await table.getByRole("combobox", { name: "Sum column" }).selectOption({ label: "Hours" });
+  await table.getByRole("button", { name: "Group by" }).click();
+  await page.getByRole("option", { name: "Team" }).click();
+  await table.getByRole("button", { name: "Sum column" }).click();
+  await page.getByRole("option", { name: "Hours" }).click();
   await table.getByRole("button", { name: "Create grouped table" }).click();
   const grouped = page.locator(".react-flow__node-note").filter({
     has: page.getByRole("region", { name: "Table output" }),

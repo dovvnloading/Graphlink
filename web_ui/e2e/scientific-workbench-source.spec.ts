@@ -21,7 +21,8 @@ test("creates an upstream dataset from an empty table field, reviews its import 
     await page.getByRole("list", { name: "Plugin search results" }).getByText("Statistics", { exact: true }).click();
     const target = page.locator(".react-flow__node-scientific").first();
     await page.getByRole("button", { name: "Fit All" }).click();
-    await target.getByLabel("Operation", { exact: true }).selectOption("grouped_table_summary");
+    await target.getByRole("button", { name: "Operation", exact: true }).click();
+    await page.getByRole("option", { name: /Grouped table summary/i }).click();
     const recovery = target.getByRole("region", { name: "Connect a source table" });
     await recovery.getByRole("button", { name: "Create source and import" }).click();
     await expect(page.locator(".react-flow__node-scientific")).toHaveCount(2);
@@ -30,9 +31,10 @@ test("creates an upstream dataset from an empty table field, reviews its import 
     await recovery.getByRole("button", { name: "Preview table", exact: true }).click();
     await expect(recovery.getByRole("table", { name: "Pending import preview" })).toContainText("25");
     await recovery.getByRole("button", { name: "Apply reviewed table" }).click();
-    const sourceTable = target.getByRole("combobox", { name: "Import Typed table from a connected result" });
+    const sourceTable = target.getByRole("button", { name: "Import Typed table from a connected result" });
     await expect(sourceTable).toBeVisible();
-    await sourceTable.selectOption({ index: 1 });
+    await sourceTable.click();
+    await page.getByRole("option", { name: /Whole typed table/ }).click();
     await target.getByLabel("Numeric measurement column").selectOption({ label: "Value · numeric" });
     await target.getByLabel("Group column").selectOption({ index: 1 });
     await target.getByRole("button", { name: "Run calculation" }).click();
