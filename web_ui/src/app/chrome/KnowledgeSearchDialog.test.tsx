@@ -290,7 +290,7 @@ describe("KnowledgeSearchDialog kit library", () => {
   });
 
   it("import progress exposes current totals and release of controls after cancellation", async () => {
-    const { user, emit } = await setup();
+    const { emit } = await setup();
     const running = {
       jobId: "job-77", kind: "file", workspaceId: 5, status: "running",
       filesTotal: 8, filesProcessed: 3, bytesTotal: 100, bytesProcessed: 40,
