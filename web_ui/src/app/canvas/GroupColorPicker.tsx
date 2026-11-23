@@ -1,40 +1,16 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type CSSProperties } from "react";
+import { IconButton } from "../ui/IconButton";
+import { MenuGroup, MenuItem } from "../ui/Menu";
 import { NodeMenu } from "./NodeMenu";
+import { swatchStyle } from "./nodeSwatch";
 
-/**
- * The shared note/frame/container color-swatch popover (Qt-removal plan
- * R6.1) - the SPA equivalent of legacy's per-theme DARK_FRAME_COLORS/
- * MONO_FRAME_COLORS/MUTED_FRAME_COLORS palette
- * (graphlink_app/graphlink_styles.py), reused for Notes as well as
- * Frames/Containers per the R6.1 contract (SceneDocument.set_group_color
- * covers all three kinds identically).
- *
- * Named-color values here are DELIBERATELY NOT the same hex values legacy's
- * own DARK_FRAME_COLORS table carries (those are all near-identical grays -
- * `--gl-frame-green`/`--gl-frame-blue`/etc in gl-vars-dev.css all resolve to
- * #82-#8e, indistinguishable from one another) - this palette instead picks
- * real, visually-distinct hues for each name, matching this increment's own
- * scope decision (reasonable/sensible values, not pixel-parity with any
- * legacy theme). The NAME SET itself (Green/Blue/Purple/Orange/Red/Yellow
- * full-or-header, Mid Gray/Dark Gray full-only) is carried over exactly -
- * confirmed against DARK_FRAME_COLORS's own key set, including the fact that
- * only the 6 hued names ever get a "X Header" variant, never the 2 grays.
- *
- * Outside-click/Escape dismiss mirrors ThinkingNodeView.tsx's own
- * ThinkingNodeMenu - a local ref + pointerdown/keydown pair - rather than the
- * app-chrome OverlayProvider (overlays.tsx): that system's Popover is a
- * single named-surface registry (one "settings"/"view"/"plugins"/... slot at
- * a time), which does not fit a control that must be independently
- * instantiable per note/frame/container node on the canvas.
- */
-
+/** Persisted colour choices are actual values, not theme-dependent CSS
+ * tokens: saved notes and frames must keep their chosen hue in either theme. */
 export interface NamedColor {
   name: string;
   hex: string;
 }
 
-// The 6 hued colors - each selectable as either the note/group's full body
-// color OR its header-only color (two sub-sections below).
 export const GROUP_NAMED_COLORS: NamedColor[] = [
   { name: "Green", hex: "#3f8f5c" },
   { name: "Blue", hex: "#3f7dc9" },
@@ -43,9 +19,6 @@ export const GROUP_NAMED_COLORS: NamedColor[] = [
   { name: "Red", hex: "#cf5354" },
   { name: "Yellow", hex: "#d9b23d" },
 ];
-
-// The 2 monochrome colors - full-color only, no header-only variant (mirrors
-// DARK_FRAME_COLORS never defining "Mid Gray Header"/"Dark Gray Header").
 export const GROUP_MONO_COLORS: NamedColor[] = [
   { name: "Mid Gray", hex: "#7a7a7a" },
   { name: "Dark Gray", hex: "#454545" },
@@ -58,100 +31,43 @@ export interface GroupColorPickerProps {
 }
 
 export function GroupColorPicker({ color, headerColor, onSelect }: GroupColorPickerProps) {
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  // R8a: anchored off the trigger's real viewport rect and portaled by
-  // NodeMenu, because this popover used to be `position: absolute` inside
-  // `.scene-node`, which is `overflow: hidden` - so it was clipped away
-  // ENTIRELY and picking a colour was impossible on every note/frame.
-  //
-  // The rect is captured when OPENING rather than read during render: reading
-  // a ref mid-render is not concurrent-safe (and eslint rejects it outright).
+  const triggerRef = useRef<HTMLDivElement>(null);
+  // Capture the anchor only when opening; a nested kit ContextMenu provides
+  // keyboard navigation, outside-click dismissal and focus restoration.
   const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
   const open = anchor !== null;
-
   function toggle() {
-    if (open) {
-      setAnchor(null);
-      return;
-    }
+    if (open) { setAnchor(null); return; }
     const rect = triggerRef.current?.getBoundingClientRect();
     if (rect) setAnchor({ x: rect.left, y: rect.bottom + 6 });
   }
-
-
   function choose(nextColor: string | null, nextHeaderColor: string | null) {
     onSelect(nextColor, nextHeaderColor);
     setAnchor(null);
   }
-
+  function colorItem(c: NamedColor, headerOnly: boolean) {
+    const chosen = headerOnly ? headerColor === c.hex : color === c.hex;
+    return (
+      <div key={c.name} className="group-color-option"
+        style={{ "--group-option-color": c.hex } as CSSProperties}>
+        <MenuItem label={headerOnly ? `${c.name} Header` : c.name}
+          checked={chosen} onSelect={() => choose(headerOnly ? color : c.hex, headerOnly ? c.hex : headerColor)} />
+      </div>
+    );
+  }
   return (
-    <div className="group-color-picker nodrag">
-      <button
-        ref={triggerRef}
-        type="button"
+    <div className="group-color-picker nodrag" ref={triggerRef}>
+      <IconButton size="sm" icon="palette" label="Set color"
         className="group-color-swatch-trigger"
-        aria-label="Set color"
-        aria-haspopup="true"
-        aria-expanded={open}
-        style={{ backgroundColor: headerColor ?? color ?? undefined }}
-        onClick={toggle}
-      />
+        style={swatchStyle(headerColor ?? color)} aria-haspopup="menu"
+        aria-expanded={open} onClick={toggle} />
       {anchor && (
-        <NodeMenu
-          position={anchor}
-          onClose={() => setAnchor(null)}
-          ignoreRef={triggerRef}
-          className="group-color-popover"
-          ariaLabel="Color"
-        >
-          <p className="group-color-section-label">Body</p>
-          <div className="group-color-row">
-            {GROUP_NAMED_COLORS.map((c) => (
-              <button
-                key={c.name}
-                type="button"
-                role="menuitem"
-                className={"group-color-swatch" + (color === c.hex ? " active" : "")}
-                style={{ backgroundColor: c.hex }}
-                aria-label={c.name}
-                title={c.name}
-                onClick={() => choose(c.hex, headerColor)}
-              />
-            ))}
-          </div>
-          <p className="group-color-section-label">Header Only</p>
-          <div className="group-color-row">
-            {GROUP_NAMED_COLORS.map((c) => (
-              <button
-                key={c.name}
-                type="button"
-                role="menuitem"
-                className={"group-color-swatch" + (headerColor === c.hex ? " active" : "")}
-                style={{ backgroundColor: c.hex }}
-                aria-label={`${c.name} Header`}
-                title={`${c.name} Header`}
-                onClick={() => choose(color, c.hex)}
-              />
-            ))}
-          </div>
-          <p className="group-color-section-label">Monochrome</p>
-          <div className="group-color-row">
-            {GROUP_MONO_COLORS.map((c) => (
-              <button
-                key={c.name}
-                type="button"
-                role="menuitem"
-                className={"group-color-swatch" + (color === c.hex ? " active" : "")}
-                style={{ backgroundColor: c.hex }}
-                aria-label={c.name}
-                title={c.name}
-                onClick={() => choose(c.hex, headerColor)}
-              />
-            ))}
-          </div>
-          <button type="button" role="menuitem" className="group-color-reset" onClick={() => choose(null, null)}>
-            Reset to Default
-          </button>
+        <NodeMenu position={anchor} onClose={() => setAnchor(null)}
+          ignoreRef={triggerRef} className="group-color-popover" ariaLabel="Color">
+          <MenuGroup label="Body">{GROUP_NAMED_COLORS.map((c) => colorItem(c, false))}</MenuGroup>
+          <MenuGroup label="Header only">{GROUP_NAMED_COLORS.map((c) => colorItem(c, true))}</MenuGroup>
+          <MenuGroup label="Monochrome">{GROUP_MONO_COLORS.map((c) => colorItem(c, false))}</MenuGroup>
+          <MenuItem icon="refresh" label="Reset to Default" onSelect={() => choose(null, null)} />
         </NodeMenu>
       )}
     </div>
