@@ -98,7 +98,7 @@ describe("CodeExecutionApprovalPanel", () => {
     renderPanel();
     const buttons = screen.getAllByRole("button");
     // The code block's copy control is an icon button; compare accessible names.
-    expect(buttons.map((b) => b.getAttribute("aria-label") || b.textContent)).toEqual(["Copy code", "Deny", "Approve"]);
+    expect(buttons.map((b) => b.getAttribute("aria-label") || b.textContent)).toEqual(["Copy code", "Deny", "Approve and run"]);
     expect(screen.queryByRole("button", { name: /close/i })).toBeNull();
     expect(screen.queryByLabelText(/close/i)).toBeNull();
   });
