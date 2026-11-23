@@ -3224,6 +3224,9 @@ function CanvasInner({
         edges={exportInProgress ? edges : EMPTY_EDGES}
         nodeTypes={NODE_TYPES}
         edgeTypes={EDGE_TYPES}
+        // Let the selected frame keep its below-card stack instead of relying
+        // on a high-priority z-index override of React Flow's selection depth.
+        elevateNodesOnSelect={false}
         onNodesChange={onNodesChange}
         onConnect={onConnect}
         isValidConnection={isValidConnection}
