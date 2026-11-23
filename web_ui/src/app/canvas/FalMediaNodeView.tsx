@@ -1,7 +1,6 @@
 import type { Node, NodeProps } from "@xyflow/react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { withAuthToken } from "../../lib/auth/token";
-import { NodeGlyph } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { FalMediaUploader } from "./FalMediaUploader";
 import { useLodVisibility } from "./useLodVisibility";
@@ -9,8 +8,25 @@ import {
   MEDIA_OPERATIONS, comparableGroup, editJsonValue, formatMediaPrice,
   isMediaBusy, parseMediaCatalog, parseMediaSchema, parseMediaState,
   sortMediaModels, type MediaCatalog, type MediaMode, type MediaModel,
-  type MediaSchema, type MediaState, type PriceSort,
+  type MediaSchema, type MediaState, type MediaJob, type PriceSort,
 } from "./falMediaStudioModel";
+import { Badge } from "../ui/Badge";
+import { Button } from "../ui/Button";
+import { Checkbox } from "../ui/Checkbox";
+import { Disclosure } from "../ui/Disclosure";
+import { EmptyState } from "../ui/EmptyState";
+import { IconButton } from "../ui/IconButton";
+import { InlineAlert } from "../ui/InlineAlert";
+import { NumberField } from "../ui/NumberField";
+import { Select } from "../ui/Select";
+import { Spinner } from "../ui/Spinner";
+import { TextArea } from "../ui/TextArea";
+import { TextField } from "../ui/TextField";
+import { ToggleButton } from "../ui/ToggleButton";
+import { useConfirm } from "../ui/ConfirmDialog";
+import { formatCount } from "../ui/format";
+import { Icon } from "../ui/icons/Icon";
+import type { IconName } from "../ui/icons/registry";
 import "./FalMediaNodeView.css";
 
 interface StudioDraft {
@@ -75,44 +91,59 @@ function safeInlineMediaUrl(url: string): boolean {
   const host = new URL(url).hostname.toLowerCase();
   return host === "fal.media" || host.endsWith(".fal.media");
 }
-function iconFor(mode: MediaMode): string {
-  return mode === "image" ? "▧" : mode === "video" ? "▣" : mode === "audio" ? "♫" : "⌕";
+function iconFor(mode: MediaMode): IconName {
+  return mode === "image" ? "image" : mode === "video" ? "video" : mode === "audio" ? "audio" : "cube";
+}
+function categoryIcon(category: string): IconName {
+  return category.includes("video") ? "video" :
+    category.includes("audio") || category.includes("speech") ? "audio" :
+      category.includes("3d") || category.includes("mesh") ? "cube" : "image";
+}
+/** Adapters use label for a kit component's heading, never a native tooltip attribute. */
+function StudioDisclosure({ label, ...rest }: Omit<ComponentProps<typeof Disclosure>, "title"> & { label: string }) {
+  return <Disclosure {...rest} {...{ title: label }} />;
+}
+function StudioAlert({ label, ...rest }: Omit<ComponentProps<typeof InlineAlert>, "title"> & { label: string }) {
+  return <InlineAlert {...rest} {...{ title: label }} />;
+}
+function StudioEmpty({ label, ...rest }: Omit<ComponentProps<typeof EmptyState>, "title"> & { label: string }) {
+  return <EmptyState {...rest} {...{ title: label }} />;
 }
 function dateString(raw: string): string {
   const date = new Date(raw);
   return Number.isNaN(date.valueOf()) ? "" : date.toLocaleString();
 }
+
 function ModelCard({
-  model, selected, favorite, onSelect, onFavorite, compact = false, disabled = false,
+  model, selected, favorite, onSelect, onFavorite, disabled = false,
 }: {
   model: MediaModel; selected: boolean; favorite: boolean;
-  onSelect: () => void; onFavorite: () => void; compact?: boolean; disabled?: boolean;
+  onSelect: () => void; onFavorite: () => void; disabled?: boolean;
 }) {
   return (
-    <div className={`fal-studio-model-card${selected ? " is-selected" : ""}${compact ? " is-compact" : ""}`}>
-      <button type="button" className="fal-studio-model-pick" onClick={onSelect} disabled={disabled}
-        aria-label={`Select ${model.name}`} aria-pressed={selected}>
+    <div className={"fal-studio-model-card" + (selected ? " is-selected" : "")}>
+      <Button variant="ghost" size="sm" className="fal-studio-model-pick nodrag"
+        aria-label={"Select " + model.name} aria-pressed={selected}
+        disabled={disabled} onClick={onSelect}>
         <span className="fal-studio-model-avatar" aria-hidden="true">
-          {model.category.includes("video") ? "▣" : model.category.includes("audio") || model.category.includes("speech") ? "♫" : "◈"}
+          <Icon name={categoryIcon(model.category)} size="lg" />
         </span>
         <span className="fal-studio-model-text">
-          <strong title={model.id}>{model.name}</strong>
-          <small title={model.id}>{model.id}</small>
-          {!compact && !!model.description && <span className="fal-studio-model-desc">{model.description}</span>}
+          <strong>{model.name}</strong>
+          <small>{model.id}</small>
+          {model.description && <span className="fal-studio-model-desc">{model.description}</span>}
         </span>
-        <span className="fal-studio-model-price" aria-label={
-          model.price === null ? "Price unavailable" :
-          `${formatMediaPrice(model.price, model.currency)} per ${unitName(model.unit)}`
-        }>
+        <span className="fal-studio-model-price"
+          aria-label={model.price === null ? "Price unavailable" :
+            formatMediaPrice(model.price, model.currency) + " per " + unitName(model.unit)}>
           <strong>{formatMediaPrice(model.price, model.currency)}</strong>
-          <small>{model.price === null ? "Unverified" : `/ ${unitName(model.unit)}`}</small>
+          <small>{model.price === null ? "Unverified" : "/ " + unitName(model.unit)}</small>
         </span>
-      </button>
-      <button type="button" className={`fal-studio-star${favorite ? " is-favorite" : ""}`}
-        onClick={onFavorite} aria-label={favorite ? `Remove ${model.name} from favorites` : `Favorite ${model.name}`}
-        aria-pressed={favorite} title={favorite ? "Remove from favorites" : "Add to favorites"}>
-        {favorite ? "★" : "☆"}
-      </button>
+      </Button>
+      <ToggleButton size="sm" className="fal-studio-star nodrag"
+        icon={favorite ? "star-filled" : "star"} pressed={favorite}
+        disabled={disabled} onPressedChange={onFavorite}
+        aria-label={favorite ? "Remove " + model.name + " from favorites" : "Favorite " + model.name} />
     </div>
   );
 }
@@ -129,109 +160,92 @@ function ModelLibrary({
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [sortOrder, setSortOrder] = useState<PriceSort>("economy");
   const [showLibrary, setShowLibrary] = useState(true);
-  const searchSignature = `${draft.mode}|${draft.operation}|${query}`;
   useEffect(() => {
-    // Query is a deliberate network read; debounce each keystroke.
-    const timer = window.setTimeout(() => {
-      onSearch(draft.mode, draft.operation, query);
-    }, query.trim() ? 450 : 180);
+    const timer = window.setTimeout(() => onSearch(draft.mode, draft.operation, query), query.trim() ? 450 : 180);
     return () => window.clearTimeout(timer);
-  }, [draft.mode, draft.operation, query, searchSignature, onSearch]);
-  const loaded = catalog.mode === draft.mode && catalog.operation === draft.operation &&
-    catalog.query === query;
+  }, [draft.mode, draft.operation, query, onSearch]);
+  const loaded = catalog.mode === draft.mode && catalog.operation === draft.operation && catalog.query === query;
   const favorites = useMemo(() => new Set(catalog.favorites), [catalog.favorites]);
   const visible = useMemo(() => sortMediaModels(
     (loaded ? catalog.models : []).filter((model) => !favoritesOnly || favorites.has(model.id)),
     sortOrder,
   ), [catalog.models, loaded, favoritesOnly, favorites, sortOrder]);
+  const renderModels = (models: MediaModel[]) => models.map((model, index) => {
+    const group = comparableGroup(model);
+    const previous = index ? comparableGroup(models[index - 1]) : "";
+    return (
+      <div key={model.id}>
+        {sortOrder !== "name" && group !== previous &&
+          <div className="fal-studio-price-group">{group === "Unpriced" ? "Price unavailable" : "Billed in " + group}</div>}
+        <ModelCard model={model} selected={draft.modelId === model.id}
+          favorite={favorites.has(model.id)} disabled={isBusy}
+          onSelect={() => onSelect(model)}
+          onFavorite={() => onFavorite(model.id, !favorites.has(model.id))} />
+      </div>
+    );
+  });
   return (
     <section className="fal-studio-library" aria-label="Fal model catalog">
       <div className="fal-studio-section-heading">
-        <div>
-          <h4>Model catalog <span>{loaded ? catalog.models.length : "—"}</span></h4>
-        </div>
-        <button type="button" className="fal-studio-icon-button" aria-label={showLibrary ? "Collapse catalog" : "Expand catalog"}
-          onClick={() => setShowLibrary(!showLibrary)}>{showLibrary ? "⌃" : "⌄"}</button>
+        <h4>Model catalog <Badge>{loaded ? formatCount(catalog.models.length) : "—"}</Badge></h4>
+        <IconButton size="sm" icon={showLibrary ? "chevron-up" : "chevron-down"}
+          label={showLibrary ? "Collapse catalog" : "Expand catalog"}
+          onClick={() => setShowLibrary(!showLibrary)} />
       </div>
       {showLibrary && <>
-        <label className="fal-studio-search-field">
-          <span aria-hidden="true">⌕</span>
-          <input className="nodrag nopan" type="search" value={query}
-            placeholder="Search models, creators, capabilities…"
-            onChange={(event) => setQuery(event.target.value)}
-            aria-label="Search Fal media models" />
-          {(loaded && catalog.status === "loading") && <span className="fal-studio-loading-dot" role="status" aria-label="Searching"/>}
-        </label>
+        <div className="fal-studio-search nodrag nopan">
+          <TextField label="Search Fal media models" type="search" size="sm"
+            prefixIcon="search" value={query} onValueChange={setQuery}
+            placeholder="Search models, creators, capabilities…" />
+          {loaded && catalog.status === "loading" && <Spinner size={12} label="Searching" />}
+        </div>
         <div className="fal-studio-library-controls">
-          <div className="fal-studio-choice" aria-label="Model filter">
-            <button type="button" aria-pressed={!favoritesOnly} onClick={() => setFavoritesOnly(false)}>
-              All results
-            </button>
-            <button type="button" aria-pressed={favoritesOnly} onClick={() => setFavoritesOnly(true)}>
-              <span aria-hidden="true">★</span> Favorites
-            </button>
+          <div className="fal-studio-choice" role="group" aria-label="Model filter">
+            <ToggleButton size="sm" label="All results" pressed={!favoritesOnly}
+              onPressedChange={() => setFavoritesOnly(false)} />
+            <ToggleButton size="sm" label="Favorites" icon={favoritesOnly ? "star-filled" : "star"}
+              pressed={favoritesOnly} onPressedChange={() => setFavoritesOnly(true)} />
           </div>
-          <label className="fal-studio-sort">
-            <span className="sr-only">Sort model catalog</span>
-            <select value={sortOrder} onChange={(event) => setSortOrder(event.target.value as PriceSort)}>
-              <option value="economy">Economy first</option>
-              <option value="premium">Premium first</option>
-              <option value="name">Name A–Z</option>
-            </select>
-          </label>
+          <Select ariaLabel="Sort model catalog" value={sortOrder}
+            onChange={(next) => setSortOrder(next as PriceSort)}
+            options={[{value: "economy", label: "Economy first"},
+              {value: "premium", label: "Premium first"}, {value: "name", label: "Name A–Z"}]} />
         </div>
-        <div className="fal-studio-compare-disclosure">
-          Prices are live unit rates, grouped by billing unit. Final cost varies by output.
-        </div>
-        <div className="fal-studio-model-list nowheel nodrag" role="region" aria-label="Available Fal models">
+        <StudioDisclosure label="How pricing compares" className="fal-studio-pricing-info">
+          Prices are live unit rates grouped by billing unit. Final cost varies by output.
+        </StudioDisclosure>
+        <div className="fal-studio-model-list" role="region" aria-label="Available Fal models">
           {!loaded && <p className="fal-studio-quiet">Loading models for this category…</p>}
-          {loaded && catalog.status === "error" && (
-            <div className="fal-studio-inline-alert" role="alert">
-              <strong>Catalog unavailable</strong>
-              <p>{catalog.error || "We could not reach the Fal catalog. Check your Fal API key in Settings."}</p>
-              <button type="button" onClick={() => onSearch(draft.mode, draft.operation, query)}>Retry catalog</button>
-            </div>
-          )}
-          {loaded && catalog.pricingWarning && (
-            <p className="fal-studio-inline-warning">{catalog.pricingWarning}</p>
-          )}
-          {visible.map((model, index) => {
-            const group = comparableGroup(model);
-            const previousGroup = index > 0 ? comparableGroup(visible[index-1]) : "";
-            const newGroup = sortOrder !== "name" && group !== previousGroup;
-            return (
-              <div key={model.id}>
-                {newGroup && <div className="fal-studio-price-group">{group === "Unpriced" ? "Price unavailable" : `Billed in ${group}`}</div>}
-                <ModelCard model={model} selected={draft.modelId === model.id}
-                  favorite={favorites.has(model.id)} onSelect={() => onSelect(model)}
-                  onFavorite={() => onFavorite(model.id, !favorites.has(model.id))}
-                  compact={favoritesOnly} disabled={isBusy} />
-              </div>
-            );
-          })}
-          {loaded && catalog.status !== "loading" && visible.length === 0 && (
-            <div className="fal-studio-empty-catalog">
-              <span aria-hidden="true">{favoritesOnly ? "☆" : "⌕"}</span>
-              <strong>{favoritesOnly ? "No saved models in these results" : "No matching models"}</strong>
-              <p>{favoritesOnly ? "Use the star beside a model to save it. Favorites stay available across sessions." :
-                "Try another search or generation category."}</p>
-            </div>
-          )}
-          {loaded && draft.mode === "all" && !!catalog.currentCursor && !favoritesOnly && (
-            <button type="button" className="fal-studio-loadmore" disabled={catalog.status === "loading"}
-              onClick={() => onSearch(draft.mode, draft.operation, query)}>First page</button>
-          )}
-          {loaded && catalog.hasMore && !favoritesOnly && (
-            <button type="button" className="fal-studio-loadmore"
-              disabled={catalog.status === "loading" || isBusy || !catalog.nextCursor}
-              onClick={() => onSearch(draft.mode, draft.operation, query, catalog.nextCursor)}>
-              {catalog.status === "loading" ? "Loading…" : draft.mode === "all" ? "Next page" : "Show more models"}
-            </button>
-          )}
+          {loaded && catalog.status === "error" &&
+            <StudioAlert variant="error" label="Catalog unavailable"
+              body={catalog.error || "We could not reach the Fal catalog. Check your Fal API key in Settings."}
+              action={{label: "Retry catalog", onClick: () => onSearch(draft.mode, draft.operation, query)}} />}
+          {loaded && catalog.pricingWarning &&
+            <StudioAlert variant="warning" label="Pricing information" body={catalog.pricingWarning} />}
+          {renderModels(visible.slice(0, 4))}
+          {loaded && catalog.status !== "loading" && visible.length === 0 &&
+            <StudioEmpty icon={favoritesOnly ? "star" : "search"}
+              label={favoritesOnly ? "No saved models in these results" : "No matching models"}
+              body={favoritesOnly ? "Star a model to save it across sessions." :
+                "Try another search or generation category."} />}
+          {visible.length > 4 && <StudioDisclosure className="fal-studio-extra-models"
+            label={"More models (" + formatCount(visible.length - 4) + ")"}>
+            {renderModels(visible.slice(4))}
+          </StudioDisclosure>}
+          <div className="fal-studio-pagination">
+            {loaded && draft.mode === "all" && !!catalog.currentCursor && !favoritesOnly &&
+              <Button size="sm" variant="ghost" disabled={catalog.status === "loading"}
+                onClick={() => onSearch(draft.mode, draft.operation, query)}>First page</Button>}
+            {loaded && catalog.hasMore && !favoritesOnly &&
+              <Button size="sm" variant="secondary"
+                disabled={catalog.status === "loading" || isBusy || !catalog.nextCursor}
+                onClick={() => onSearch(draft.mode, draft.operation, query, catalog.nextCursor)}>
+                {catalog.status === "loading" ? "Loading…" : draft.mode === "all" ? "Next page" : "Show more models"}
+              </Button>}
+          </div>
         </div>
-        {!!catalog.favorites.length && favoritesOnly && visible.length === 0 && (
-          <p className="fal-studio-quiet">You have {catalog.favorites.length} saved model{catalog.favorites.length === 1 ? "" : "s"} across your library. Switch categories to view other favorites.</p>
-        )}
+        {!!catalog.favorites.length && favoritesOnly && visible.length === 0 &&
+          <p className="fal-studio-quiet">You have {formatCount(catalog.favorites.length)} saved models across your library. Switch categories to view other favorites.</p>}
       </>}
     </section>
   );
