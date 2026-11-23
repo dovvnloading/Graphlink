@@ -1,5 +1,8 @@
-import { createContext, memo, useContext, useMemo, useRef, useState, type JSX } from "react";
+import { createContext, memo, useContext, useMemo, useRef, useState, type JSX, type ReactElement } from "react";
 import ReactMarkdown, { type ExtraProps } from "react-markdown";
+import { IconButton } from "../ui/IconButton";
+import { Icon } from "../ui/icons/Icon";
+import "./markdown.css";
 import type { PluggableList } from "unified";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -109,7 +112,22 @@ import type { DisplayCitation, KnowledgeCitationSource } from "./ChatCitationChi
 
 const REMARK_PLUGINS = [remarkGfm, remarkAlert, remarkMath];
 
-function CodeBlock({ node: _node, children, ...props }: JSX.IntrinsicElements["pre"] & ExtraProps) {
+const ALERT_ICONS = {
+  note: "status-info", tip: "status-success", important: "status-info",
+  warning: "status-warning", caution: "status-error",
+} as const;
+
+function MarkdownAlert({ node: _node, className, children, ...props }: JSX.IntrinsicElements["div"] & ExtraProps) {
+  const kind = /(?:^|\s)markdown-alert-(note|tip|important|warning|caution)(?:\s|$)/.exec(className ?? "")?.[1];
+  return (
+    <div {...props} className={className}>
+      {kind && <Icon name={ALERT_ICONS[kind as keyof typeof ALERT_ICONS]} className="markdown-alert-status-icon" />}
+      {children}
+    </div>
+  );
+}
+
+const CodeBlock = memo(function CodeBlock({ node: _node, children, ...props }: JSX.IntrinsicElements["pre"] & ExtraProps) {
   const preRef = useRef<HTMLPreElement>(null);
   const [copied, setCopied] = useState(false);
 
@@ -132,7 +150,7 @@ function CodeBlock({ node: _node, children, ...props }: JSX.IntrinsicElements["p
       ?.writeText(text)
       .then(() => {
         setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
+        setTimeout(() => setCopied(false), 2000);
       })
       // ADR-011 stage 11.6 promised a .catch() on every clipboard write; a
       // 2026-08-12 audit found four sites (this one included) still missing
@@ -149,22 +167,15 @@ function CodeBlock({ node: _node, children, ...props }: JSX.IntrinsicElements["p
     <div className="node-md-code-block">
       <div className="node-md-code-block-header">
         <span className="node-md-code-block-language">{language || "text"}</span>
-        <button
-          type="button"
-          className="node-md-code-block-copy nodrag"
-          onClick={onCopy}
-          title="Copy code"
-          aria-label="Copy code"
-        >
-          {copied ? "Copied" : "Copy"}
-        </button>
+        <IconButton size="sm" className="nodrag"
+          icon={copied ? "check" : "copy"} label={copied ? "Copied" : "Copy code"} onClick={onCopy} />
       </div>
       <pre {...props} ref={preRef}>
         {children}
       </pre>
     </div>
   );
-}
+});
 
 function TableWrapper({ node: _node, ...props }: JSX.IntrinsicElements["table"] & ExtraProps) {
   // Fixes a real, pre-existing bug, not just a nicety: node cards have a
@@ -176,6 +187,10 @@ function TableWrapper({ node: _node, ...props }: JSX.IntrinsicElements["table"] 
       <table {...props} />
     </div>
   );
+}
+
+function MarkdownZoomChrome({ img, onUnzoom }: { img: ReactElement | null; onUnzoom: () => void }) {
+  return <>{img}<IconButton className="markdown-zoom-close" icon="close" label="Close image zoom" onClick={onUnzoom} /></>;
 }
 
 function ZoomImage({ node: _node, alt, src, ...props }: JSX.IntrinsicElements["img"] & ExtraProps) {
@@ -208,7 +223,7 @@ function ZoomImage({ node: _node, alt, src, ...props }: JSX.IntrinsicElements["i
     return null;
   }
   return (
-    <Zoom wrapElement="span">
+    <Zoom wrapElement="span" ZoomContent={MarkdownZoomChrome}>
       {/* referrerPolicy="no-referrer": defense-in-depth alongside the CSP
           above, matching SafeAnchor's own rel="noreferrer" precedent for
           the identical concern on <a> - never hand the image host this
@@ -235,7 +250,7 @@ function SafeAnchor({ node: _node, href, children, ...props }: JSX.IntrinsicElem
     // these three are the ones this component's own security decision
     // governs, so nothing upstream can silently override them.
     <a {...props} href={href} target="_blank" rel="nofollow noopener noreferrer">
-      {children}
+      {children}<Icon name="external-link" size="xs" className="markdown-external-icon" />
     </a>
   );
 }
@@ -286,7 +301,7 @@ function rehypeInlineKnowledgeCitations() {
   };
 }
 
-const MARKDOWN_COMPONENTS = { pre: CodeBlock, table: TableWrapper, img: ZoomImage, a: SafeAnchor };
+const MARKDOWN_COMPONENTS = { pre: CodeBlock, table: TableWrapper, img: ZoomImage, a: SafeAnchor, div: MarkdownAlert };
 
 // Keep the markdown component override static (React's static-components
 // rule) while making only this reply's verified citation ledger available.
@@ -305,14 +320,13 @@ function CitationSpan({ node, children, ...props }: JSX.IntrinsicElements["span"
       const source = item.source;
       return (
         <button type="button" className="chat-citation-inline nodrag"
-          title={`Open ${source.documentTitle} in Document View`}
           aria-label={`Source ${item.number}: ${source.documentTitle}`}
           onClick={() => onCitationClick?.(source)}>
           [{item.number}]
         </button>
       );
     }
-    return <span className="chat-citation-unverified" title="Unverified citation">[{citationId}] (unverified)</span>;
+    return <span className="chat-citation-unverified">[{citationId}] (unverified)</span>;
   }
   return <span {...props}>{children}</span>;
 }
