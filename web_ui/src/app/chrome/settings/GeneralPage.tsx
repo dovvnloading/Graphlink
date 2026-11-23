@@ -1,124 +1,66 @@
 import type { WsTransport } from "../../../lib/ws/transport";
 import type { AppSettingsState } from "../../../lib/bridge-core/generated/app-settings-state";
 import { useOverlays } from "../../overlays/overlays";
-import { CustomSelect } from "../CustomSelect";
+import { FieldGroup, FormRow } from "../../ui/Field";
+import { SegmentedControl } from "../../ui/SegmentedControl";
+import { Select } from "../../ui/Select";
+import { Switch } from "../../ui/Switch";
+import { Button } from "../../ui/Button";
 
-// ADR-018 stage 18.4: mirrors graphlink_model_catalog.AUTO_POLICIES - the
-// policy the auto rung of the resolution chain applies when neither an
-// explicit task assignment nor a node/branch pin resolves a model.
-const AUTO_MODEL_POLICY_OPTIONS = [
-  { id: "cheapest-capable", label: "Cheapest Capable" },
-  { id: "fastest", label: "Fastest" },
-  { id: "best-quality", label: "Best Quality" },
+const POLICY_OPTIONS = [
+  { value: "cheapest-capable", label: "Cheapest capable", description: "Pick the lowest-priced model that can complete the task." },
+  { value: "fastest", label: "Fastest", description: "Prefer the quickest capable model." },
+  { value: "best-quality", label: "Best quality", description: "Prefer the highest-quality capable model." },
 ] as const;
 
-// ADR-012 stage 12.2: mirrors SettingsManager.THEMES (graphlink_settings_store.py).
 const THEME_OPTIONS = [
-  { id: "system", label: "Match System" },
-  { id: "light", label: "Light" },
-  { id: "dark", label: "Dark" },
+  { value: "system", label: "Match system" },
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
 ] as const;
 
+const NOTIFICATIONS = [
+  { type: "info", label: "Information" },
+  { type: "success", label: "Success" },
+  { type: "warning", label: "Warnings" },
+  { type: "error", label: "Errors" },
+] as const;
 
-const NOTIFICATION_TYPE_LABELS: Record<string, string> = {
-  info: "Info",
-  success: "Success",
-  warning: "Warning",
-  error: "Error",
-};
-
-export function GeneralPage({
-  state,
-  transport,
-}: {
-  state: AppSettingsState;
-  transport: WsTransport;
-}) {
-  // R8a (UI/UX issue list finding #9) removed the prior Theme select
-  // (Dark/Muted/Monochromatic): it persisted a real setTheme intent, but
-  // nothing in the SPA ever applied the value - no data-theme attribute, no
-  // alternate token set, the app rendered identically no matter what was
-  // selected. A persisted preference that provably does nothing is worse
-  // than no preference at all, so it was cut rather than left inert.
-  // ADR-012 stages 12.1 (a real light+dark token palette) and 12.2 (this
-  // control, plus App.tsx's own applyTheme effect) resolve exactly that gap
-  // - system/light/dark all genuinely repaint the app now.
+export function GeneralPage({ state, transport }: { state: AppSettingsState; transport: WsTransport }) {
   const overlays = useOverlays();
   return (
     <div className="settings-general-page">
-      <div className="settings-field">
-        <span className="settings-field-label">Theme</span>
-        <CustomSelect
-          ariaLabel="Theme"
-          value={state.theme}
-          options={THEME_OPTIONS.map((option) => ({ id: option.id, label: option.label }))}
-          onChange={(id) => transport.fireIntent("app-settings", "setTheme", [id], undefined, true)}
-        />
-      </div>
-
-      <label className="settings-checkbox-row">
-        <input
-          type="checkbox"
-          checked={state.showTokenCounter}
-          onChange={(event) => transport.fireIntent("app-settings", "setShowTokenCounter", [event.target.checked], undefined, true)}
-        />
-        Show Token Counter Overlay
-      </label>
-
-      <label className="settings-checkbox-row">
-        <input
-          type="checkbox"
-          checked={state.enableSystemPrompt}
-          onChange={(event) => transport.fireIntent("app-settings", "setEnableSystemPrompt", [event.target.checked], undefined, true)}
-        />
-        Enable Assistant System Prompt
-      </label>
-
-      <div className="settings-field">
-        <span className="settings-field-label">Automatic Model Selection Policy</span>
-        <CustomSelect
-          ariaLabel="Automatic Model Selection Policy"
-          value={state.autoModelPolicy}
-          options={AUTO_MODEL_POLICY_OPTIONS.map((option) => ({ id: option.id, label: option.label }))}
-          onChange={(id) => transport.fireIntent("app-settings", "setAutoModelPolicy", [id], undefined, true)}
-        />
-        <p className="settings-field-hint">
-          Used when a task has no explicitly assigned model and no node/branch pin - picks the cheapest, fastest,
-          or highest-quality capable model from your configured providers.
-        </p>
-      </div>
-
-      <fieldset className="settings-fieldset">
-        <legend>Notification types</legend>
-        {Object.keys(NOTIFICATION_TYPE_LABELS).map((type) => (
-          <label className="settings-checkbox-row" key={type}>
-            <input
-              type="checkbox"
-              checked={state.notificationPreferences[type] ?? true}
-              onChange={(event) =>
-                transport.fireIntent("app-settings", "setNotificationPreference", [type, event.target.checked], undefined, true)
-              }
-            />
-            {NOTIFICATION_TYPE_LABELS[type]}
-          </label>
+      <h2 className="settings-page-title">General</h2>
+      <p className="settings-page-description">Choose how Graphlink looks, selects models, and notifies you.</p>
+      <FieldGroup title="Appearance">
+        <FormRow label="Theme" layout="inline">
+          <SegmentedControl label="Theme" options={THEME_OPTIONS} value={state.theme}
+            onChange={(value) => transport.fireIntent("app-settings", "setTheme", [value], undefined, true)} />
+        </FormRow>
+        <Switch label="Show token counter" checked={state.showTokenCounter}
+          onCheckedChange={(checked) => transport.fireIntent("app-settings", "setShowTokenCounter", [checked], undefined, true)} />
+        <Switch label="Use the assistant system prompt" checked={state.enableSystemPrompt}
+          onCheckedChange={(checked) => transport.fireIntent("app-settings", "setEnableSystemPrompt", [checked], undefined, true)} />
+      </FieldGroup>
+      <FieldGroup title="Model selection">
+        <FormRow label="Model selection policy" layout="inline"
+          description="Used when a task has no assigned model or pin.">
+          <Select ariaLabel="Model selection policy" value={state.autoModelPolicy} options={POLICY_OPTIONS}
+            onChange={(value) => transport.fireIntent("app-settings", "setAutoModelPolicy", [value], undefined, true)} />
+        </FormRow>
+      </FieldGroup>
+      <FieldGroup title="Notification types" description="Choose which notifications appear in Graphlink.">
+        {NOTIFICATIONS.map(({ type, label }) => (
+          <Switch key={type} label={label} checked={state.notificationPreferences[type] ?? true}
+            onCheckedChange={(checked) =>
+              transport.fireIntent("app-settings", "setNotificationPreference", [type, checked], undefined, true)} />
         ))}
-      </fieldset>
-
-      {/* ADR-012 stage 12.6: manual re-entry to the first-run onboarding
-          wizard (OnboardingDialog.tsx) - it auto-opens exactly once (a
-          fresh machine's hasCompletedOnboarding defaults false) and never
-          shows itself again on its own, so this button is the only way
-          back to it afterward - the "still reachable manually" entry point,
-          matching how Help's own AppBar chip is a standing way back into
-          that dialog. */}
-      <div className="settings-field">
-        <span className="settings-field-label">Onboarding</span>
+      </FieldGroup>
+      <FieldGroup title="Onboarding" description="Replay the first-run introduction at any time.">
         <div className="settings-button-row">
-          <button type="button" className="settings-button" onClick={() => overlays.open("onboarding", "dialog")}>
-            Show Onboarding
-          </button>
+          <Button variant="secondary" onClick={() => overlays.open("onboarding", "dialog")}>Show onboarding</Button>
         </div>
-      </div>
+      </FieldGroup>
     </div>
   );
 }
