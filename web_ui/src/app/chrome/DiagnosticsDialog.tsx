@@ -144,8 +144,8 @@ export function DiagnosticsDialog({ transport }: { transport: WsTransport }) {
   }
 
   return (
-    <Dialog name="diagnostics" title="Diagnostics" size="md" className="diagnostics-dialog">
-      <Card title="Health" status={connection === "open" ? "Done" : connection === "connecting" || connection === "reconnecting" ? "Running" : "Failed"}>
+    <Dialog name="diagnostics" {...{ title: "Diagnostics" }} size="md" className="diagnostics-dialog">
+      <Card {...{ title: "Health" }} status={connection === "open" ? "Done" : connection === "connecting" || connection === "reconnecting" ? "Running" : "Failed"}>
         <dl className="diagnostics-health-grid">
           <div><dt>App version</dt><dd>{version || "Not reported"}</dd></div>
           <div><dt>Connection</dt><dd>{connection === "open" ? "Connected" : connection}</dd></div>
@@ -164,7 +164,7 @@ export function DiagnosticsDialog({ transport }: { transport: WsTransport }) {
             loading={exporting} disabled={exporting}>Export diagnostic bundle</Button>
         </div>
       </Card>
-      {exportError && <InlineAlert variant="error" title="Couldn't export diagnostics" body={exportError} />}
+      {exportError && <InlineAlert variant="error" {...{ title: "Couldn't export diagnostics" }} body={exportError} />}
       {exportResult && <div className="diagnostics-bundle-preview-wrap">
         <Button size="sm" variant="secondary" iconStart="copy" onClick={copyBundleToClipboard}>
           {copied ? "Copied" : "Copy to clipboard"}
@@ -172,7 +172,7 @@ export function DiagnosticsDialog({ transport }: { transport: WsTransport }) {
         <pre className="diagnostics-bundle-preview">{JSON.stringify(exportResult.bundle, null, 2)}</pre>
         <p className="diagnostics-bundle-path">Also written to {exportResult.path}</p>
       </div>}
-      <Disclosure title="Advanced" className="diagnostics-advanced">
+      <Disclosure {...{ title: "Advanced" }} className="diagnostics-advanced">
         <h3 className="diagnostics-section-title">Publishing metrics</h3>
         <dl className="diagnostics-stats">
           <div><dt>Sessions</dt><dd>{state.sessionCount == null ? "—" : formatCount(state.sessionCount)}</dd></div>
