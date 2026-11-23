@@ -8,7 +8,6 @@ import { EmptyState } from "../ui/EmptyState";
 import { TextField } from "../ui/TextField";
 import { Kbd } from "../ui/Kbd";
 import { Icon } from "../ui/icons/Icon";
-import { formatRelativeTime } from "../ui/format";
 import { registerNewChatConfirm } from "./requestNewChat";
 import { fuzzyFilterAndSort } from "./quickSwitcherFuzzy";
 import "./chat-library.css";
@@ -119,8 +118,7 @@ export function QuickSwitcherDialog({ transport }: { transport: WsTransport }) {
       ) : (
         <ul id="quick-switcher-results" className="quick-switcher-results" role="listbox" aria-label="Graphs" ref={resultsRef}>
           {filtered.map((row, index) => {
-            const when = row.updatedAtIso ?? row.createdAtIso;
-            const stamp = when && Number.isFinite(Date.parse(when)) ? formatRelativeTime(new Date(when)) : row.updatedLabel;
+            const stamp = row.updatedLabel;
             return (
               // Focus stays in the combobox; aria-activedescendant follows the highlighted option.
               // eslint-disable-next-line jsx-a11y/click-events-have-key-events
