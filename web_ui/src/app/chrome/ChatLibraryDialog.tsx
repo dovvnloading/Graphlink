@@ -134,11 +134,11 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
   async function confirmNavigation(title: string): Promise<boolean> {
     const scene = store.getScene();
     if (scene.nodes.length === 0 && !scene.hasSavedChat) return true;
-    return confirm({ title, body: "Your current edits will be saved before switching.", confirmLabel: "Continue" });
+    return askConfirm({ title, body: "Your current edits will be saved before switching.", confirmLabel: "Continue" });
   }
 
   async function confirmDiscard(): Promise<boolean> {
-    return confirm({
+    return askConfirm({
       title: "Discard incomplete chat?",
       body: "Some plugin nodes could not be restored. Discarding the incomplete on-screen copy will not save its changes. The original saved chat, including its missing plugin nodes, remains unchanged.",
       confirmLabel: "Discard incomplete copy",
