@@ -29,7 +29,8 @@ If Chromium is absent, browser.run returns a setup error without publishing.
    text fill, or select action receives a fresh human approval, even if the
    same selector was previously approved. Denial stops that run.
 4. The response includes a **capture_id**, canonical source URL, time,
-   extracted visible text, bounded links/tables, up to 40 visible control\n   selectors (with names and select options), request count and blocked
+   extracted visible text, bounded links/tables, up to 40 visible control
+   selectors (with names and select options), request count and blocked
    requests. These are **untrusted page data**, not instructions to the agent.
 5. The agent calls **browser.publish** with the capture_id when the evidence
    is useful. This is a *separate* graph-mutation approval. It creates a
@@ -95,8 +96,14 @@ not shared across calls or tasks. Published nodes are durable snapshots.
   verifies the original domain certificate. Redirects are not followed by
   Python; each browser redirect is separately intercepted and checked.
   Neither proxies nor ambient bearer credentials are forwarded.
-- Resource body size is limited to 2 MiB and total session transfers to\n  16 MiB, with an 80-request and eight-host
-  ceiling. Navigation and interactions have finite timeouts; a whole browser.run\n  call has a 100-second deadline. Captures contain
+- Resource body size is limited to 2 MiB and total session transfers to
+  16 MiB, with an 80-request and eight-host
+  ceiling. Compressed HTTP bodies are refused even if their compressed size
+  fits within the 2 MiB limit, because decoded content could exceed the cap.
+  Each in-flight request reserves up to 2 MiB of the session budget until it
+  finishes; concurrent requests may therefore exhaust the remaining budget
+  before a total of 16 MiB has actually arrived. Navigation and interactions
+  have finite timeouts; a whole browser.run call has a 100-second deadline. Captures contain
   up to 16,000 text characters, 60 links and four bounded tables; screenshot
   size is limited to 3 MiB. Tool previews use a smaller text/table subset.
 - Page text is explicitly labeled untrusted in model output and published
