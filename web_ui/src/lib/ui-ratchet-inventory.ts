@@ -21,10 +21,6 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/canvas/AgentWorkspaceBrowser.tsx", rule: "R8", count: 3 },
 
-  { file: "app/canvas/ArtifactNodeView.tsx", rule: "R7", count: 2 },
-
-  { file: "app/canvas/ArtifactNodeView.tsx", rule: "R8", count: 1 },
-
   { file: "app/canvas/ChartNodeView.tsx", rule: "R1", count: 1 },
 
   { file: "app/canvas/ChartNodeView.tsx", rule: "R4", count: 3 },
@@ -69,9 +65,7 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/canvas/CodeNodeView.tsx", rule: "R7", count: 5 },
 
-  { file: "app/canvas/CodeReviewNodeView.tsx", rule: "R7", count: 2 },
-
-  { file: "app/canvas/CodeReviewNodeView.tsx", rule: "R8", count: 6 },
+  { file: "app/canvas/CodeReviewNodeView.tsx", rule: "R8", count: 1 },
 
   { file: "app/canvas/CodeSandboxNodeView.tsx", rule: "R5", count: 1 },
 
@@ -85,10 +79,6 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/canvas/ConversationNodeView.tsx", rule: "R8", count: 4 },
 
-  { file: "app/canvas/DocumentNodeView.tsx", rule: "R7", count: 7 },
-
-  { file: "app/canvas/DocumentNodeView.tsx", rule: "R8", count: 2 },
-
   { file: "app/canvas/DocumentViewPanel.tsx", rule: "R8", count: 6 },
 
   { file: "app/canvas/DocumentViewSearch.tsx", rule: "R1", count: 3 },
@@ -99,30 +89,7 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/canvas/DocumentViewToc.tsx", rule: "R8", count: 1 },
 
-
-
-
-
-
-
-
-
-
-
-
-  { file: "app/canvas/GitlinkNodeView.tsx", rule: "R6", count: 2 },
-
-  { file: "app/canvas/GitlinkNodeView.tsx", rule: "R7", count: 2 },
-
-  { file: "app/canvas/GitlinkNodeView.tsx", rule: "R8", count: 2 },
-
-  { file: "app/canvas/GroupColorPicker.tsx", rule: "R7", count: 4 },
-
-  { file: "app/canvas/GroupColorPicker.tsx", rule: "R8", count: 3 },
-
-  { file: "app/canvas/GroupNodeView.tsx", rule: "R2", count: 1 },
-
-  { file: "app/canvas/GroupNodeView.tsx", rule: "R8", count: 5 },
+  { file: "app/canvas/GitlinkNodeView.tsx", rule: "R8", count: 1 },
 
   { file: "app/canvas/HarnessNodeView.tsx", rule: "R1", count: 6 },
 
@@ -138,23 +105,11 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/canvas/HarnessNodeView.tsx", rule: "R8", count: 9 },
 
-  { file: "app/canvas/HtmlNodeView.tsx", rule: "R8", count: 1 },
-
-  { file: "app/canvas/ImageNodeView.tsx", rule: "R7", count: 5 },
-
   { file: "app/canvas/NodeCards.css", rule: "R9", count: 12 },
 
   { file: "app/canvas/NodeCards.css", rule: "R10", count: 19 },
 
   { file: "app/canvas/NodeCards.css", rule: "R14", count: 71 },
-
-  { file: "app/canvas/NoteNodeView.tsx", rule: "R1", count: 4 },
-
-  { file: "app/canvas/NoteNodeView.tsx", rule: "R8", count: 3 },
-
-  { file: "app/canvas/NoteTextInput.tsx", rule: "R4", count: 2 },
-
-  { file: "app/canvas/NoteTextInput.tsx", rule: "R8", count: 1 },
 
   { file: "app/canvas/PlanNodeView.tsx", rule: "R2", count: 6 },
 
@@ -223,12 +178,6 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
   { file: "app/canvas/TableWorkflow.css", rule: "R14", count: 17 },
 
   { file: "app/canvas/ThinkingNodeView.tsx", rule: "R7", count: 4 },
-
-  { file: "app/canvas/WebResearchNodeView.tsx", rule: "R6", count: 1 },
-
-  { file: "app/canvas/WebResearchNodeView.tsx", rule: "R7", count: 2 },
-
-  { file: "app/canvas/WebResearchNodeView.tsx", rule: "R8", count: 1 },
 
   { file: "app/canvas/workspace.css", rule: "R9", count: 6 },
 
@@ -374,16 +323,15 @@ export const UI_RATCHET_INVENTORY: ReadonlyArray<{
 
   { file: "app/context/ContextInspectorLauncher.tsx", rule: "R8", count: 1 },
 
-  { file: "app/styles.css", rule: "R9", count: 347 },
+  { file: "app/styles.css", rule: "R9", count: 259 },
 
-  { file: "app/styles.css", rule: "R10", count: 177 },
+  { file: "app/styles.css", rule: "R10", count: 128 },
 
-  { file: "app/styles.css", rule: "R11", count: 3 },
+  { file: "app/styles.css", rule: "R11", count: 2 },
 
-  { file: "app/styles.css", rule: "R12", count: 8928 },
+  { file: "app/styles.css", rule: "R12", count: 6666 },
 
-  { file: "app/styles.css", rule: "R14", count: 740 },
-
+  { file: "app/styles.css", rule: "R14", count: 564 },
 ];
 
 /** Each historical R1 exception must remain exact, too; it is not a blanket
