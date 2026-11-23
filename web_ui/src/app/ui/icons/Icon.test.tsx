@@ -223,6 +223,12 @@ describe("gallery icon baselines", () => {
     const Component = iconsSection.Component;
     const { container } = render(<Component theme="dark" />);
     expect(container.querySelectorAll(".gl-icon-gallery-card").length).toBe(iconNames.length);
+    expect(container.querySelectorAll(".gl-icon-gallery-size").length).toBe(iconNames.length);
+
+    const sizesToggle = screen.getByRole("button", { name: "Show all sizes" });
+    fireEvent.click(sizesToggle);
+    expect(sizesToggle).toHaveAttribute("aria-pressed", "true");
+    expect(sizesToggle).toHaveTextContent("Hide extra sizes");
     expect(container.querySelectorAll(".gl-icon-gallery-size").length).toBe(iconNames.length * 4);
     expect(container.querySelectorAll(".gl-icon-guide-grid").length).toBe(0);
 

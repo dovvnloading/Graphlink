@@ -11,7 +11,7 @@ export type GallerySection = {
 // New visual baselines are registered by adding a file, never by changing
 // this shell. The eager glob belongs to the gallery's lazy-loaded chunk.
 const modules = import.meta.glob<{ default: GallerySection }>("./sections/*.tsx", { eager: true });
-const sections = Object.entries(modules)
+const discoveredSections = Object.entries(modules)
   .map(([path, module]) => ({ path, ...module.default }))
   .sort((a, b) => a.order - b.order || a.title.localeCompare(b.title) || a.path.localeCompare(b.path));
 
@@ -21,7 +21,7 @@ function initialTheme(): "dark" | "light" {
   return window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark";
 }
 
-export default function Gallery() {
+export default function Gallery({ sections = discoveredSections }: { sections?: GallerySection[] }) {
   const [theme, setTheme] = useState<"dark" | "light">(initialTheme);
 
   // The main app applies the same attribute via applyTheme(app-settings.theme).
@@ -52,8 +52,8 @@ export default function Gallery() {
         </div>
       </header>
       <div className="gl-gallery-sections">
-        {sections.map(({ path, title, Component }) => (
-          <section key={path} className="gl-gallery-section" aria-label={title}>
+        {sections.map(({ title, Component }) => (
+          <section key={title} className="gl-gallery-section" aria-label={title}>
             <div className="gl-gallery-section-heading">
               <h2>{title}</h2>
             </div>
