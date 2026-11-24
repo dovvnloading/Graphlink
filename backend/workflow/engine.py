@@ -224,10 +224,6 @@ class WorkflowEngine:
         plan = build_plan(spec, parameters, self.registry, self.artifacts, self.policy_for)
         self._expire_approvals()
         approved_fingerprint = plan.preview.fingerprint
-        # No await separates the active-run check from durable admission.
-        # A paused run still owns the workflow, including across workspaces.
-        if any(r.plan.spec.workflow_id == spec.workflow_id for r in self._runs.values()):
-            raise ValueError("This workflow already has an active run.")
         limits = self.limits
         if unattended is not None:
             if approval_token is not None or unattended.fingerprint != approved_fingerprint:
@@ -235,9 +231,19 @@ class WorkflowEngine:
             unattended.validate_map_children(plan.preview.control_flow)
             limits = replace(limits, cost_usd=min(limits.cost_usd, unattended.cost_usd))
         elif plan.preview.requires_approval or approval_token is not None:
-            entry = self._approvals.pop(approval_token, None)
+            entry = self._approvals.get(approval_token)
             if entry is None or entry[:2] != (approved_fingerprint, workspace_id):
+                self._approvals.pop(approval_token, None)
                 raise PermissionError("Approve this exact workflow preview before running it.")
+        # Validate consent before reporting a busy workflow, so replayed
+        # approval tokens are rejected even while the original run is active.
+        # No await separates the active-run check from durable admission.
+        # A paused run still owns the workflow, including across workspaces.
+        if any(r.plan.spec.workflow_id == spec.workflow_id for r in self._runs.values()):
+            raise ValueError("This workflow already has an active run.")
+        # Busy admission must not consume an otherwise valid approval.
+        if approval_token is not None:
+            self._approvals.pop(approval_token, None)
         plan = build_plan(spec, parameters, self.registry, self.artifacts, self.policy_for, persist=True)
         if approved_fingerprint != plan.preview.fingerprint:
             raise PermissionError("Workflow preview changed; approve it again.")
