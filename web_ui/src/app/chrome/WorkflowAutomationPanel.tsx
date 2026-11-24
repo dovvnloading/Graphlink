@@ -29,7 +29,7 @@ async function request<T>(path: string, method = "GET", body?: unknown): Promise
 const effects = ["pure", "local-read", "cloud"];
 
 export function WorkflowAutomationPanel({ view }: { view: WorkflowDocument | null }) {
-  const confirm = useConfirm();
+  const confirmDialog = useConfirm();
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspace, setWorkspace] = useState("");
   const [presets, setPresets] = useState<Preset[]>([]);
@@ -152,7 +152,7 @@ export function WorkflowAutomationPanel({ view }: { view: WorkflowDocument | nul
             await request(prefix + "/presets/" + p.preset_id + "/run", "POST");
           })}>Run saved preset</Button>
           <Button disabled={busy} onClick={() => void act(async () => {
-            if (await confirm({ title: "Delete preset?", body: "Future triggers will stop. Existing runs are not cancelled.", confirmLabel: "Delete", destructive: true }))
+            if (await confirmDialog({ title: "Delete preset?", body: "Future triggers will stop. Existing runs are not cancelled.", confirmLabel: "Delete", destructive: true }))
               await request(prefix + "/presets/" + p.preset_id, "DELETE");
           })}>Delete preset</Button>
         </div>
