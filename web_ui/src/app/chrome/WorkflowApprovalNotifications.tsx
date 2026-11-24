@@ -6,6 +6,22 @@ import { toast } from "../ui/Toast";
 type Gate = {
   workspace_id: number; run_id: string; workflow: string; step_id: string; message: string;
 };
+export type ApprovalTarget = { workspaceId: number; runId: string };
+let target: ApprovalTarget | null = null;
+const listeners = new Set<() => void>();
+export function takeApprovalTarget() {
+  const next = target;
+  target = null;
+  return next;
+}
+export function subscribeApprovalTarget(listener: () => void) {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+function openApprovalTarget(gate: Gate) {
+  target = { workspaceId: gate.workspace_id, runId: gate.run_id };
+  for (const listener of listeners) listener();
+}
 async function activeApprovals(signal: AbortSignal): Promise<Gate[]> {
   const response = await fetch("/api/workflows/active-approvals", { headers: authHeaders(), signal });
   if (!response.ok) throw new Error("Could not read active approvals.");
@@ -33,7 +49,7 @@ export function WorkflowApprovalNotifications({ connected }: { connected: boolea
             shown.set(key, toast.show({
               variant: "warning", title: "Workflow waiting for approval: " + gate.workflow,
               details: gate.message, action: {
-                label: "Open run history", onClick: () => open("run-history", "dialog"),
+                label: "Open run history", onClick: () => { openApprovalTarget(gate); open("run-history", "dialog"); },
               },
             }));
           }
