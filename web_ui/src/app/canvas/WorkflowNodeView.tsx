@@ -28,7 +28,7 @@ export type WorkflowFlowNode = Node<WorkflowNodeData, "workflow">;
 
 function Editor({ id, state, store, x, y }: { id: string; state: WorkflowNodeState; store: SceneStore; x: number; y: number }) {
   const overlays = useOverlays();
-  const confirm = useConfirm();
+  const askConfirm = useConfirm();
   const spec = state.document.spec;
   const [inputs, setInputs] = useState<Record<string, string>>(() => Object.fromEntries(spec.inputs.map(p => [
     p.name, p.kind === "text" ? String(state.inputs[p.name] ?? "") : JSON.stringify(state.inputs[p.name] ?? null),
@@ -81,7 +81,7 @@ function Editor({ id, state, store, x, y }: { id: string; state: WorkflowNodeSta
       <p>Current version {state.version} → version {latest.version}. Upgrading clears saved inputs, parameters and outputs; review the new definition.</p>
       <WorkflowSpecView value={preview} />
       <Button disabled={busy} variant="primary" onClick={() => void act(async () => {
-        if (!await confirm({ title: "Upgrade pinned workflow?", body: "The node will use the reviewed version. Existing input values and outputs will be cleared.", confirmLabel: "Upgrade" })) return;
+        if (!await askConfirm({ title: "Upgrade pinned workflow?", body: "The node will use the reviewed version. Existing input values and outputs will be cleared.", confirmLabel: "Upgrade" })) return;
         await store.mutateWorkflowNode("upgrade", { node_id: id, ...workflowPin(preview), expected_revision: spec.revision });
         setPreview(null);
       })}>Upgrade to version {latest.version}</Button>
@@ -118,7 +118,7 @@ function Editor({ id, state, store, x, y }: { id: string; state: WorkflowNodeSta
       value={output.kind === "text" ? output.text : JSON.stringify(output, null, 2)} readOnly />)}
     {state.childRunId && <p>Child run: <code>{state.childRunId}</code></p>}
     <Button size="sm" disabled={busy} onClick={() => void act(async () => {
-      if (await confirm({ title: "Delete Workflow node?", body: "The library definition is not deleted.", confirmLabel: "Delete node", destructive: true })) store.removeNodes([id]);
+      if (await askConfirm({ title: "Delete Workflow node?", body: "The library definition is not deleted.", confirmLabel: "Delete node", destructive: true })) store.removeNodes([id]);
     })}>Delete node</Button>
   </>;
 }

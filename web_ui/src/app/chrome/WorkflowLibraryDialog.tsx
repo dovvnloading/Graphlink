@@ -16,7 +16,7 @@ import "./GraphRunnerDialog.css";
 
 function Library({ store }: { store: SceneStore }) {
   const rf = useReactFlow();
-  const confirm = useConfirm();
+  const askConfirm = useConfirm();
   const [rows, setRows] = useState<WorkflowEntry[]>([]);
   const [query, setQuery] = useState("");
   const [name, setName] = useState("");
@@ -145,7 +145,7 @@ function Library({ store }: { store: SceneStore }) {
           await refresh();
         })}>Duplicate version</Button>
         <Button disabled={busy} onClick={() => void act(async () => {
-          if (!await confirm({ title: "Delete workflow?", body: "Existing pinned nodes keep their versions. The entry will disappear from the library.", confirmLabel: "Delete", destructive: true })) return;
+          if (!await askConfirm({ title: "Delete workflow?", body: "Existing pinned nodes keep their versions. The entry will disappear from the library.", confirmLabel: "Delete", destructive: true })) return;
           await store.workflowLibrary("delete", { workflow_id: entry.workflow_id });
           setEntry(null); setView(null); await refresh();
         })}>Delete</Button>

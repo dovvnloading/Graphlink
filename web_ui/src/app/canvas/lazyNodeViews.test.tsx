@@ -93,9 +93,9 @@ describe("a chunk that is still loading", () => {
 describe("the exported node views", () => {
   it("are all wrapped, so no kind can bypass the boundary", () => {
     const views = Object.entries(lazyNodeViews).filter(([name]) => name.endsWith("NodeView"));
-    // Includes the placeholder, shared Scientific Workbench and MCP tool cards.
+    // Includes the placeholder, shared Scientific Workbench, MCP tool and Workflow cards.
     // GroupNodeView backs frames and containers.
-    expect(views.length).toBe(22);
+    expect(views.length).toBe(23);
     for (const [name, view] of views) {
       expect(typeof view, name).toBe("function");
       expect((view as ComponentType).displayName, name).toContain("LazyNodeView");
