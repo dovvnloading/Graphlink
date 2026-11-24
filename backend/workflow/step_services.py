@@ -76,7 +76,7 @@ class WorkflowRequestJournal:
         with closing(self._connect()) as conn, conn:
             conn.execute("BEGIN IMMEDIATE")
             old = conn.execute(
-                """SELECT request_id, workflow_id, revision, fingerprint
+                """SELECT request_id, workflow_id, revision, fingerprint, receipt_json, outputs_json
                    FROM workflow_external_requests WHERE run_id=? AND step_id=?""", key
             ).fetchone()
             identity = (request_id, spec.workflow_id, spec.revision, step["inputHash"])
@@ -95,9 +95,19 @@ class WorkflowRequestJournal:
                     (*key, spec.workflow_id, spec.revision, request["kind"],
                      step["inputHash"], request_id, receipt, output_json),
                 )
-            elif old != identity:
+            elif old[:4] != identity:
                 raise RuntimeError("External request already reserved; inspect its durable receipt")
             else:
+                saved = json.loads(old[4])
+                saved_outputs = json.loads(old[5]) if old[5] is not None else None
+                if saved == step and saved_outputs == (json.loads(output_json) if output_json is not None else None):
+                    return True  # idempotent redelivery, not a second transition
+                previous = saved["externalAttempt"]
+                if (previous["phase"] != "dispatched" or request["phase"] not in
+                        ("completed", "reconciliation-required")
+                        or {k: v for k, v in previous.items() if k != "phase"} !=
+                        {k: v for k, v in request.items() if k != "phase"}):
+                    raise RuntimeError("External request receipt cannot be overwritten")
                 conn.execute(
                     """UPDATE workflow_external_requests SET receipt_json=?, outputs_json=?
                        WHERE run_id=? AND step_id=?""", (receipt, output_json, *key)

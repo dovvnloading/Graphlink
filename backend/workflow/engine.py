@@ -180,6 +180,9 @@ class WorkflowEngine:
             "local": asyncio.Semaphore(self.limits.local_concurrency),
         }
         self._runs: dict[str, _Run] = {}
+        # Cancelled adapters can still be draining non-abortable work. Do
+        # not admit another run of that workflow until they actually settle.
+        self._draining: dict[str, set[asyncio.Task]] = {}
         self._previews: dict[str, tuple[RunPreview, float]] = {}
         self._approvals: dict[str, tuple[str, int, float]] = {}
         if recover:
@@ -239,7 +242,8 @@ class WorkflowEngine:
         # approval tokens are rejected even while the original run is active.
         # No await separates the active-run check from durable admission.
         # A paused run still owns the workflow, including across workspaces.
-        if any(r.plan.spec.workflow_id == spec.workflow_id for r in self._runs.values()):
+        if (self._draining.get(spec.workflow_id)
+                or any(r.plan.spec.workflow_id == spec.workflow_id for r in self._runs.values())):
             raise ValueError("This workflow already has an active run.")
         # Busy admission must not consume an otherwise valid approval.
         if approval_token is not None:
@@ -252,7 +256,9 @@ class WorkflowEngine:
             record.update(preset_id=preset_id, operation_id=operation_id, awaiting_approval=None,
                           unattended_effects=sorted(unattended.allowed_effects))
         run = _Run(workspace_id, plan, record, limits, unattended)
-        self.store.create(workspace_id, record)
+        existing = self.store.create(workspace_id, record)
+        if existing is not None:
+            return existing
         run_id = record["run_id"]
         self._runs[run_id] = run
         run.task = loop.create_task(self._drive(run))
@@ -313,7 +319,8 @@ class WorkflowEngine:
                    "preview_fingerprint": run.plan.preview.fingerprint}
         run.record["awaiting_approval"] = pending
         _event(run.record, "step-progress", step_id=spec.step_id,
-               message="Waiting for operator approval.", data=pending)
+               message="Waiting for operator approval.",
+               data={key: value for key, value in pending.items() if key != "nonce"})
         self._checkpoint(run)
         if self.on_pause is not None:
             try:
@@ -391,7 +398,8 @@ class WorkflowEngine:
                 for child in item["steps"].values():
                     if child["status"] in ("pending", "running"):
                         child.update(status=status, error=error, finished_at=utc_now())
-        run.record["cost_usd"] = float(sum(Decimal(str(s["cost_usd"])) for s in run.record["steps"].values()))
+        run.record["cost_usd"] = float(sum(Decimal(str(s["cost_usd"])) for s in run.record["steps"].values()
+                                           if s["status"] not in ("pending", "running")))
         _event(run.record, f"step-{status}", step_id=step_id, message=error or "",
                data={"skipped_outputs": step["skipped_outputs"]} if "skipped_outputs" in step else None)
         self._checkpoint(run)
@@ -434,6 +442,13 @@ class WorkflowEngine:
             if not math.isfinite(cost) or cost < (attempt.cost or 0):
                 raise ValueError("Reported workflow cost must be finite and cumulative.")
             attempt.cost = cost
+            # Persist overruns immediately; a crash before collection must
+            # not silently lose an already reported charge.
+            if (run.record["status"] == "running"
+                    and run.record["steps"][spec.step_id]["status"] == "running"
+                    and cost > run.record["steps"][spec.step_id]["cost_usd"]):
+                run.record["steps"][spec.step_id]["cost_usd"] = cost
+                self._checkpoint(run)
             if cost > policy.cost_usd:
                 reason = "Run stopped: a step exceeded its approved cost estimate (cost limit)."
                 run.stop(reason, "failed")
@@ -478,6 +493,7 @@ class WorkflowEngine:
             # Persist dispatch before an effect; no replay after restart.
             run.record["steps"][step_id].update(
                 status="running", started_at=utc_now(), fingerprint=fingerprint,
+                cost_usd=policy.cost_usd,
             )
             _event(run.record, "step-started", step_id=step_id)
             self._checkpoint(run)
@@ -553,12 +569,15 @@ class WorkflowEngine:
     def _charge(self, run: _Run, attempt: _Attempt) -> float:
         if not attempt.dispatched:
             return 0.0
-        if attempt.step.adapter.adapter_id == MAP and not attempt.task.done():
-            # An in-flight child may already have incurred its full reservation.
-            return run.plan.policies[attempt.step.step_id].cost_usd
-        if attempt.cost is not None:
+        bound = run.plan.policies[attempt.step.step_id].cost_usd
+        if attempt.step.adapter.adapter_id == MAP and attempt.task.done() and attempt.cost is not None:
+            # A settled Map accounts for the receipts of dispatched children.
             return attempt.cost
-        return run.plan.policies[attempt.step.step_id].cost_usd
+        if not attempt.task.done() or attempt.task.cancelled() or attempt.task.exception() is not None:
+            # Partial usage is not a final bill. A failed or cancelled call
+            # may have incurred the rest of its reservation.
+            return max(bound, attempt.cost or 0.0)
+        return attempt.cost if attempt.cost is not None else bound
 
     def _collect_finished(self, run: _Run, active: dict[str, _Attempt]) -> None:
         finished = sorted(((key, attempt) for key, attempt in active.items() if attempt.task.done()),
@@ -580,6 +599,21 @@ class WorkflowEngine:
             else:
                 self._finish_step(run, step_id, "completed", outputs=outputs, cost=cost)
 
+    def _track_draining(self, run: _Run, task: asyncio.Task) -> None:
+        while run.parent is not None:
+            run = run.parent
+        workflow_id = run.plan.spec.workflow_id
+        tasks = self._draining.setdefault(workflow_id, set())
+        tasks.add(task)
+
+        def settled(done):
+            _observe(done)
+            tasks.discard(done)
+            if not tasks:
+                self._draining.pop(workflow_id, None)
+
+        task.add_done_callback(settled)
+
     async def _cancel_attempts(self, run: _Run, active: dict[str, _Attempt]) -> None:
         async def cancel_adapter(attempt: _Attempt) -> None:
             try:
@@ -592,12 +626,12 @@ class WorkflowEngine:
             if attempt.dispatched:
                 hooks.append(asyncio.create_task(cancel_adapter(attempt)))
             attempt.task.cancel()
-            attempt.task.add_done_callback(_observe)
+            self._track_draining(run, attempt.task)
         if hooks:
             _, pending = await asyncio.wait(hooks, timeout=1.0)
             for hook in pending:
                 hook.cancel()
-                hook.add_done_callback(_observe)
+                self._track_draining(run, hook)
         for step_id, attempt in active.items():
             self._finish_step(run, step_id, "interrupted" if run.stop_status == "interrupted" else "cancelled",
                               run.stop_reason, cost=self._charge(run, attempt))
