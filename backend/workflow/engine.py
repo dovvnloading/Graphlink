@@ -288,6 +288,12 @@ class WorkflowEngine:
                 step["skipped_outputs"] = skipped
         if step.get("approval", {}).get("status") == "pending":
             step["approval"]["status"] = status
+        for item in step.get("map_items", {}).values():
+            if item["status"] in ("pending", "running") and status != "completed":
+                item.update(status=status, error=error)
+                for child in item["steps"].values():
+                    if child["status"] in ("pending", "running"):
+                        child.update(status=status, error=error, finished_at=utc_now())
         run.record["cost_usd"] = float(sum(Decimal(str(s["cost_usd"])) for s in run.record["steps"].values()))
         _event(run.record, f"step-{status}", step_id=step_id, message=error or "",
                data={"skipped_outputs": step["skipped_outputs"]} if "skipped_outputs" in step else None)
@@ -341,8 +347,10 @@ class WorkflowEngine:
             run.record["run_id"], spec.step_id, 1, scratch_document=run.scratch,
             artifacts=self.artifacts, model_identity=policy.model_identity,
             cost_limit_usd=policy.cost_usd, report_cost=report_cost,
-            wait_for_approval=lambda message: self._wait_for_approval(run, spec.step_id, message),
-            run_map=lambda config, items: self._run_map(run, attempt, config, items),
+            wait_for_approval=(lambda message: self._wait_for_approval(run, spec.step_id, message))
+            if spec.adapter.adapter_id == APPROVAL else None,
+            run_map=(lambda config, items: self._run_map(run, attempt, config, items))
+            if spec.adapter.adapter_id == MAP else None,
         )
         attempt = _Attempt(spec, context)
         async def execute():
@@ -445,6 +453,9 @@ class WorkflowEngine:
     def _charge(self, run: _Run, attempt: _Attempt) -> float:
         if not attempt.dispatched:
             return 0.0
+        if attempt.step.adapter.adapter_id == MAP and not attempt.task.done():
+            # An in-flight child may already have incurred its full reservation.
+            return run.plan.policies[attempt.step.step_id].cost_usd
         if attempt.cost is not None:
             return attempt.cost
         return run.plan.policies[attempt.step.step_id].cost_usd

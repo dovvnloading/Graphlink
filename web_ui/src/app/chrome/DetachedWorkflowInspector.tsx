@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { authHeaders } from "../../lib/auth/token";
-import { useOverlays } from "../overlays/overlays";
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
@@ -8,18 +7,17 @@ import { Disclosure } from "../ui/Disclosure";
 import { InlineAlert } from "../ui/InlineAlert";
 import { Select } from "../ui/Select";
 import { TextArea } from "../ui/TextArea";
-import { toast } from "../ui/Toast";
 
-type Gate = {
-  workspace_id: number; run_id: string; workflow: string; step_id: string; message: string;
-};
 type Workspace = { id: number; name: string };
+type Policy = { execution_lane: string; model_identity: [string, string] | null; cost_usd: number };
+type ReviewedStep = [string, string, Policy];
 type ControlPreview = {
   paths?: string[]; predicate?: string; message?: string; mode?: string;
-  item_count?: number; estimated_cost_usd?: number;
+  item_count?: number; estimated_cost_usd?: number; child_steps?: ReviewedStep[];
 };
 type Preview = {
   fingerprint: string; estimated_cost_usd: number; requires_approval: boolean;
+  steps: ReviewedStep[];
   control_flow: Record<string, ControlPreview>;
 };
 type Step = {
@@ -47,59 +45,25 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 function message(error: unknown) { return error instanceof Error ? error.message : String(error); }
 function money(value: number) { return "$" + value.toFixed(6).replace(/0{0,4}$/, ""); }
 
-export function WorkflowApprovalNotifications({ connected }: { connected: boolean }) {
-  const overlays = useOverlays();
-  // Poll only while connected. The lightweight endpoint does not initialize
-  // the detached engine or open the database when there is no active run.
-  useEffect(() => {
-    if (!connected) return;
-    const controller = new AbortController();
-    const shown = new Map<string, string>();
-    let timer: number | undefined;
-    async function poll() {
-      try {
-        const gates = await request<Gate[]>(root + "/active-approvals", { signal: controller.signal });
-        if (controller.signal.aborted || !Array.isArray(gates)) return;
-        const pending = new Set<string>();
-        for (const gate of gates) {
-          const key = JSON.stringify([gate.workspace_id, gate.run_id, gate.step_id]);
-          pending.add(key);
-          if (!shown.has(key)) {
-            shown.set(key, toast.show({
-              variant: "warning", title: "Workflow waiting for approval: " + gate.workflow,
-              details: gate.message, action: {
-                label: "Open run history", onClick: () => overlays.open("run-history", "dialog"),
-              },
-            }));
-          }
-        }
-        for (const [key, id] of shown) {
-          if (!pending.has(key)) { toast.dismiss(id); shown.delete(key); }
-        }
-      } catch { /* A disconnected client must not fabricate a gate. */ }
-      finally {
-        if (!controller.signal.aborted) timer = window.setTimeout(() => { void poll(); }, 1500);
-      }
-    }
-    void poll();
-    return () => {
-      controller.abort();
-      window.clearTimeout(timer);
-      for (const id of shown.values()) toast.dismiss(id);
-    };
-  }, [connected, overlays]);
-  return null;
+function ReviewedSteps({ steps }: { steps: ReviewedStep[] }) {
+  return <ol>{steps.map(([id, effect, policy]) => <li key={id}>
+    {id} · {effect} · {policy.execution_lane}
+    {policy.model_identity && " · " + policy.model_identity.join(" / ")}
+    {" · " + money(policy.cost_usd)}
+  </li>)}</ol>;
 }
 
 function PreviewDetails({ preview }: { preview: Preview }) {
   return <section aria-label="Workflow preview">
     <p>Maximum estimated cost: {money(preview.estimated_cost_usd)}.
       {preview.requires_approval ? " Execution requires explicit approval." : " No provider approval required."}</p>
+    <ReviewedSteps steps={preview.steps} />
     {Object.entries(preview.control_flow ?? {}).map(([id, control]) => <Card key={id} title={id}>
       {control.paths && <div>Possible paths: {control.paths.join(" / ")} · {control.predicate}</div>}
       {control.mode && <div>Merge: {control.mode === "first" ? "First completed input" : "All non-skipped inputs"}</div>}
       {control.message && <div>Human approval: {control.message} (no timeout)</div>}
-      {control.item_count !== undefined && <div>Map: {control.item_count} items · total estimated cost {money(control.estimated_cost_usd ?? 0)}</div>}
+      {control.item_count !== undefined && <><div>Map: {control.item_count} items · total estimated cost {money(control.estimated_cost_usd ?? 0)}</div>
+        {control.child_steps && <ReviewedSteps steps={control.child_steps} />}</>}
     </Card>)}
   </section>;
 }
@@ -141,13 +105,11 @@ function WorkspaceRuns({ workspace }: { workspace: number }) {
     if (!preview) return;
     setBusy(true); setError("");
     try {
-      const body = JSON.parse(source);
-      if (preview.requires_approval) {
-        const result = await request<{ approval_token: string }>(workspacePath(workspace) + "/approve", {
-          method: "POST", body: JSON.stringify({ approved: true, fingerprint: preview.fingerprint }),
-        });
-        body.approval_token = result.approval_token;
-      }
+      const parsed = JSON.parse(source);
+      const { approval_token } = await request<{ approval_token: string }>(workspacePath(workspace) + "/approve", {
+        method: "POST", body: JSON.stringify({ approved: true, fingerprint: preview.fingerprint }),
+      });
+      const body = { spec: parsed.spec, parameters: parsed.parameters, approval_token };
       const result = await request<{ run_id: string }>(workspacePath(workspace) + "/runs", {
         method: "POST", body: JSON.stringify(body),
       });
@@ -192,7 +154,8 @@ function WorkspaceRuns({ workspace }: { workspace: number }) {
     {!runs.length && <p>No detached workflow runs in this workspace.</p>}
     {run && <section aria-label="Detached workflow inspector">
       <Card title={run.spec.name}>
-        <Badge>{run.status}</Badge><p>Recorded cost: {money(run.cost_usd)}</p>
+        <Badge>{Object.values(run.steps).some(step => step.approval?.status === "pending") && run.status === "running"
+          ? "Waiting for approval" : run.status}</Badge><p>Recorded cost: {money(run.cost_usd)}</p>
         {run.error && <InlineAlert title="Run reason" body={run.error} variant="warning" />}
         {(run.status === "running" || run.status === "pending") &&
           <Button disabled={busy} variant="secondary" onClick={() => { void cancel(run); }}>Cancel run</Button>}

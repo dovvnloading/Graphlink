@@ -246,3 +246,73 @@ existing v1 WorkflowSpec and PortValue records as JSON using spec and
 parameters fields; admission additionally accepts approval_token. The app
 owns one lazy service and cancels it at shutdown. Existing read-only/MCP
 control capabilities do not authorize workflow execution.
+
+
+## Deterministic control flow (version 1)
+
+Control adapters use registry.describe and freeze_config like transforms.
+
+| Adapter | Configuration | Input → output |
+| --- | --- | --- |
+| control.condition | kind (default json), predicate and arguments | value → then or else (same kind) |
+| control.merge | kind (default json), inputs (unique names; default left/right), mode (all or first) | named inputs → result (ordered JSON array for all, original kind for first) |
+| control.approval | kind (default json), message | value → value after approval |
+| control.assert | kind (default json), predicate and arguments, on_failure (block by default, or route) | value → pass; optional fail when routing |
+| control.map | workflow (contained v1 WorkflowSpec), concurrency (1–100, default 1), on_error (stop or continue), optional item_count | items (JSON array or table via table-to-JSON coercion) → results JSON |
+
+Condition and Assert kinds may be text, json or table. Predicate configuration:
+
+- equals and contains take value. Equality is recursively type-aware
+  (booleans are not numbers). Contains means case-sensitive substring,
+  array membership by type-aware equality, or a JSON object key.
+- regex takes pattern and searches text with bounded matching time.
+- numeric_compare takes operator (eq, ne, lt, lte, gt, gte) and a finite
+  numeric value. It compares JSON numbers only, never booleans or strings.
+- empty matches null, the empty string, empty array/object or a table with
+  zero rows. json_path_truthy takes path, uses the single-value path grammar
+  of the JSON-path transform, and treats missing paths as false.
+- Assert supports contains, regex, json_schema (schema using the existing
+  structured-output schema subset), numeric_range (inclusive min and/or max),
+  and row_count (inclusive nonnegative integer min and/or max, for arrays
+  or tables). Block mode stops admission and records a sanitized reason.
+  Route mode forwards the original value to exactly one output.
+  Invalid configurations are rejected rather than treated as false.
+
+Branch outputs are optional but may bind to required inputs. The journal
+records the untaken output in skipped_outputs and its completion event.
+Consumers of skipped inputs are skipped, including transitive consumers.
+Skips are successful terminal outcomes, not failures. All-mode Merge waits
+for terminal inputs, ignores skips, and emits values in declared port order.
+First-mode consumes the first successful available value, using completion
+sequence and binding order for ties (direct parameters are available
+immediately). It neither cancels other producers nor suppresses their real
+failures. A Merge with no available input is skipped if there was no failure.
+
+A human gate drains already-admitted work, records its message and pending
+approval in the step inspector, and pauses admission and the duration
+clock until approved/rejected/cancelled. No automatic timeout or approval
+exists. Backend restart interrupts the run; it never replays it.
+GET /api/workflows/active-approvals lists pending gates. POST
+/api/workflows/{workspace_id}/runs/{run_id}/step-approval with
+{"step_id":"gate","approved":true} explicitly resumes (false rejects and
+blocks the run). The existing per-launch authorization and workspace/run
+scope are checked. The desktop shows a notification for each new pending gate
+and provides controls in Run history → Detached workflow runs.
+
+Map receives table rows as JSON objects or items directly from a JSON array.
+The contained immutable spec must declare exactly one required JSON input
+named item. Nested Map and human Approval inside Map are rejected in this
+version; use top-level gates around a Map. At most 100 items are accepted.
+For a direct parameter the preview derives the exact count; for an upstream
+producer item_count must declare the expected count (checked before child
+dispatch). Preview control_flow metadata lists both branch paths and pins
+child workflow, policy/model identity, item count and aggregate maximum
+estimated cost. Map reserves expanded attempts and costs before dispatch;
+child steps share the engine's provider semaphores. Each child has a private
+scratch document and durable nested receipts. Results are an input-order
+array of {index,status,outputs,error,cost_usd}; outputs contain typed value
+records. Stop mode cancels in-flight items and admits no more after failure;
+continue retains per-item errors and runs remaining items. Cost overruns
+still stop the outer run. Empty input produces an empty array.
+The desktop inspector accepts typed request JSON, shows its pinned preview,
+and exposes a separate explicit start action.

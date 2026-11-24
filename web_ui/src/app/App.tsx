@@ -31,7 +31,7 @@ import { Composer } from "./chrome/Composer";
 import { ComposerStore } from "./chrome/composerStore";
 import { ModelCapabilityProvider } from "./context/ModelCapabilityContext";
 import { NotificationToaster } from "./chrome/NotificationBanner";
-import { WorkflowApprovalNotifications } from "./chrome/DetachedWorkflowInspector";
+import { WorkflowApprovalNotifications } from "./chrome/WorkflowApprovalNotifications";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 import { OnboardingDialog } from "./chrome/OnboardingDialog";
 import { OverlayProvider, useOverlays } from "./overlays/overlays";
