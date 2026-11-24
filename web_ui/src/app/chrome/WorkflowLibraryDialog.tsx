@@ -331,16 +331,20 @@ function Library({ store }: { store: SceneStore }) {
   return <div className="workflow-library">
     <p className="visually-hidden" role="status">{loading ? "Loading workflows…" : busy ? "Updating the workflow library…" : ""}</p>
     {error && <InlineAlert variant="error" title="Something in the workflow library failed" body={error} />}
-    <Tabs label="Workflow library sections" value={tab} onValueChange={value => setTab(value as Tab)} items={[
+    <Tabs label="Workflow library sections" value={tab} items={[
       { id: "workflows", label: `Workflows (${rows.length})`, content: workflowsPanel },
       { id: "runs", label: waiting ? `Runs (${waiting} waiting)` : `Runs (${runs.length})`, content:
         <WorkflowRunsPanel workspace={workspace} runs={runs} loaded={runsLoaded || workspace === null} presets={presets}
           selected={selectedRun} onSelect={setSelectedRun} onChanged={() => setPoke(n => n + 1)} toolbar={workspaceControl} /> },
       { id: "presets", label: `Presets (${presets.length})`, content:
         <WorkflowPresetsPanel store={store} workspace={workspace} presets={presets} loaded={runsLoaded || workspace === null} rows={rows}
-          startWith={presetStart} onChanged={() => setPoke(n => n + 1)}
+          startWith={presetStart} onFormClosed={() => setPresetStart(null)} onChanged={() => setPoke(n => n + 1)}
           onRunStarted={showRun} toolbar={workspaceControl} /> },
-    ]} />
+    ]} onValueChange={value => {
+      setTab(value as Tab);
+      // Tab panels unmount when hidden; a pending "Save as a preset…" request must not reopen the form later.
+      if (value !== "presets") setPresetStart(null);
+    }} />
   </div>;
 }
 

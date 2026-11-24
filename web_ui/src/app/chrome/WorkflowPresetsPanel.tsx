@@ -154,9 +154,10 @@ function PresetForm({ store, rows, workspace, initialWorkflow, onCancel, onSaved
 /** A request to open the new-preset form for one workflow; a fresh object each time. */
 export type PresetStart = { workflowId: string };
 
-export function WorkflowPresetsPanel({ store, workspace, presets, loaded, rows, startWith, onChanged, onRunStarted, toolbar }: {
+export function WorkflowPresetsPanel({ store, workspace, presets, loaded, rows, startWith, onFormClosed, onChanged, onRunStarted, toolbar }: {
   store: SceneStore; workspace: number | null; presets: Preset[]; loaded: boolean; rows: WorkflowEntry[];
-  startWith: PresetStart | null; onChanged: () => void; onRunStarted: (runId: string) => void; toolbar?: ReactNode;
+  startWith: PresetStart | null; onFormClosed: () => void; onChanged: () => void; onRunStarted: (runId: string) => void;
+  toolbar?: ReactNode;
 }) {
   const askConfirm = useConfirm();
   const [form, setForm] = useState<string | null>(startWith?.workflowId ?? null);
@@ -173,7 +174,8 @@ export function WorkflowPresetsPanel({ store, workspace, presets, loaded, rows, 
     if (!mounted.current) { mounted.current = true; return; }
     heading.current?.focus();
   }, [form]);
-  const openForm = (value: string | null) => setForm(value);
+  // Closing the form also clears the request that opened it, so returning to this tab shows the list.
+  const openForm = (value: string | null) => { setForm(value); if (value === null) onFormClosed(); };
   async function act(fn: () => Promise<void>) {
     setBusy(true); setError("");
     try { await fn(); onChanged(); } catch (err) { setError(errorText(err)); }
