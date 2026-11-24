@@ -445,6 +445,7 @@ def create_app(
         # Starts on application startup, not create_app construction; no
         # background work is spawned by a mere TestClient/app factory call.
         watch_service.start()
+        workflow_service.automation.start()
         try:
             yield
         finally:
@@ -536,6 +537,22 @@ def create_app(
         coalesce_window_seconds=DEFAULT_COALESCE_WINDOW_SECONDS,
     )
     app.state.bus = bus
+
+    async def notify_paused(workspace_id: int, run_id: str, step_id: str):
+        for session in list(bus._sessions.values()):
+            try:
+                if get_session_context(session).canvas_document.current_workspace_id == workspace_id:
+                    await session.dispatch_intent("notification", "showInfo", [
+                        "Workflow run is waiting for operator approval. Open Workflow Library → Run presets and runs.",
+                    ])
+            except SessionNotConfiguredError:
+                continue
+
+    def on_workflow_pause(workspace_id: int, run_id: str, step_id: str):
+        task = asyncio.create_task(notify_paused(workspace_id, run_id, step_id))
+        task.add_done_callback(lambda finished: finished.exception() if not finished.cancelled() else None)
+
+    workflow_service.on_pause = on_workflow_pause
     from backend.control import is_readonly_control_request
     from backend.control_writes import is_write_control_request
 
@@ -688,6 +705,9 @@ def create_app(
         from backend.control_agent_tasks import register_control_agent_task_api
 
         register_control_agent_task_api(app, bus)
+        from backend.workflow.control_api import register_workflow_control_api
+
+        register_workflow_control_api(app, workflow_service)
 
     @app.websocket("/ws")
     async def ws_endpoint(websocket: WebSocket) -> None:

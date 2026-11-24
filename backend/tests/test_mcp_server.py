@@ -246,7 +246,7 @@ def test_mcp_writes_are_hidden_unless_adapter_explicitly_receives_a_write_token(
     enabled = StdioMcpServer(WriteControl())
     enabled.handle(request(1, "initialize", {"protocolVersion": "2025-11-25"}))
     listed = enabled.handle(request(2, "tools/list"))["result"]["tools"]
-    assert len(listed) == 12
+    assert len(listed) == 15
     names = {entry["name"] for entry in listed}
     assert names - {"graphlink_list_workspaces", "graphlink_list_graphs",
                     "graphlink_get_graph", "graphlink_list_nodes",
@@ -254,12 +254,13 @@ def test_mcp_writes_are_hidden_unless_adapter_explicitly_receives_a_write_token(
         "graphlink_create_node", "graphlink_connect_nodes",
         "graphlink_set_node_content", "graphlink_save_graph",
         "graphlink_start_agent_task", "graphlink_get_agent_task",
-        "graphlink_cancel_agent_task",
+        "graphlink_cancel_agent_task", "graphlink_list_workflows",
+        "graphlink_run_workflow", "graphlink_get_workflow_run",
     }
     assert {entry["name"] for entry in listed if entry["annotations"]["readOnlyHint"]} == {
         "graphlink_list_workspaces", "graphlink_list_graphs",
         "graphlink_get_graph", "graphlink_list_nodes", "graphlink_read_subgraph",
-        "graphlink_get_agent_task",
+        "graphlink_get_agent_task", "graphlink_list_workflows", "graphlink_get_workflow_run",
     }
     # The only non-destructive write-capability tool is a status read.
     # Agent start may auto-edit files; content replacement and Save can
@@ -267,7 +268,7 @@ def test_mcp_writes_are_hidden_unless_adapter_explicitly_receives_a_write_token(
     assert {item["name"] for item in listed if item["annotations"]["destructiveHint"]} == {
         "graphlink_create_node", "graphlink_connect_nodes",
         "graphlink_set_node_content", "graphlink_save_graph",
-        "graphlink_start_agent_task", "graphlink_cancel_agent_task",
+        "graphlink_start_agent_task", "graphlink_cancel_agent_task", "graphlink_run_workflow",
     }
     assert next(item for item in listed if item["name"] == "graphlink_get_agent_task")[
         "annotations"
@@ -276,7 +277,7 @@ def test_mcp_writes_are_hidden_unless_adapter_explicitly_receives_a_write_token(
     assert {item["name"] for item in modern_list if item["annotations"]["destructiveHint"]} == {
         "graphlink_create_node", "graphlink_connect_nodes",
         "graphlink_set_node_content", "graphlink_save_graph",
-        "graphlink_start_agent_task", "graphlink_cancel_agent_task",
+        "graphlink_start_agent_task", "graphlink_cancel_agent_task", "graphlink_run_workflow",
     }
 
     revision = "a" * 64

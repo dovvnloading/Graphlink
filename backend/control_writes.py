@@ -49,6 +49,9 @@ _WRITE_ROUTES = frozenset({
     ("GET", "/api/control/agent/task"),
     ("POST", "/api/control/agent/task/start"),
     ("POST", "/api/control/agent/task/cancel"),
+    ("GET", "/api/control/workflows"),
+    ("GET", "/api/control/workflows/run"),
+    ("POST", "/api/control/workflows/run"),
 })
 _MAX_RECEIPTS = 256
 _ALLOWED_NODE_KINDS = frozenset({"chat", "note", "code", "document"})
