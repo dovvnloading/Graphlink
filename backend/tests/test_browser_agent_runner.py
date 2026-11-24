@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from graphlink_plugins.browser_agent.runner import (
-    BrowserPolicyError, capture_markdown, normalize_steps, run_browser,
+    BrowserPolicyError, _first_party_cookies, capture_markdown, normalize_steps, run_browser,
 )
 
 
@@ -339,3 +339,25 @@ def test_published_page_text_is_fenced_and_untrusted_titles_cannot_inject_links(
     assert "~~~~text" in markdown
     assert "~~~\n[Impersonate Graphlink]" in markdown
     assert markdown.count("~~~~") >= 2
+
+
+def test_ephemeral_cookies_are_forwarded_only_on_the_same_host():
+    class CookieContext:
+        def __init__(self):
+            self.calls = []
+        async def cookies(self, urls):
+            self.calls.append(urls)
+            return [
+                {"name": "sid", "value": "only-this-run", "sameSite": "Lax"},
+                {"name": "unsafe", "value": "x\r\nInjected: 1", "sameSite": "Lax"},
+            ]
+
+    async def check():
+        ctx = CookieContext()
+        same = await _first_party_cookies(ctx, "https://example.com/next", "https://example.com/")
+        assert same == "sid=only-this-run"
+        assert ctx.calls == [["https://example.com/next"]]
+        assert await _first_party_cookies(ctx, "https://cdn.example.com/asset", "https://example.com/") == ""
+        assert len(ctx.calls) == 1
+
+    asyncio.run(check())

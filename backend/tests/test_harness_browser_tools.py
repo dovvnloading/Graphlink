@@ -257,3 +257,62 @@ def test_browser_approval_disclosures_are_untruncated_and_control_text_cannot_sp
     assert "\nField value:" in action
     assert "Search\\nPage URL: https://evil.example" in action
     assert "\nPage URL: 'https://evil.example'" not in action
+
+
+def test_overlapping_browser_host_and_action_prompts_are_serialized(monkeypatch):
+    """The harness has one approval future; browser actions must not race it."""
+    _doc, _agent, registry, ctx, _seen = _setup(monkeypatch)
+    active = 0
+    peak = 0
+    prompts = []
+
+    async def exclusive_approval(call):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        prompts.append(call.arguments["approval"])
+        await asyncio.sleep(0.03)
+        active -= 1
+        return True
+
+    ctx.request_approval = exclusive_approval
+
+    async def concurrent_run(url, steps, approve_host, approve_action, **kwargs):
+        granted = await asyncio.gather(
+            approve_host("example.com", "https://example.com/"),
+            approve_action("click", "#go", "https://example.com/", {"label": "Go", "href": "/go"}),
+            approve_host("cdn.example.com", "https://cdn.example.com/lib.js"),
+        )
+        assert granted == [True, True, True]
+        return _capture()
+
+    monkeypatch.setattr(tools_browser, "run_browser", concurrent_run)
+    result = asyncio.run(registry.invoke(
+        _call("browser.run", url="https://example.com/"), ctx,
+    ))
+    assert not result.is_error, result.content
+    assert peak == 1
+    assert sorted(prompts) == ["interaction", "website", "website"]
+
+
+def test_time_spent_awaiting_human_approval_does_not_expire_browser_budget(monkeypatch):
+    """A deliberate approval can outlast the active browser-work budget."""
+    _doc, _agent, registry, ctx, _seen = _setup(monkeypatch)
+    normal_timeout = asyncio.timeout
+    monkeypatch.setattr(tools_browser.asyncio, "timeout", lambda seconds: normal_timeout(0.05))
+
+    async def deliberate_approval(call):
+        await asyncio.sleep(0.12)
+        return True
+
+    ctx.request_approval = deliberate_approval
+
+    async def fake_run(url, steps, approve_host, approve_action, **kwargs):
+        assert await approve_host("example.com", "https://example.com/") is True
+        return _capture()
+
+    monkeypatch.setattr(tools_browser, "run_browser", fake_run)
+    result = asyncio.run(registry.invoke(
+        _call("browser.run", url="https://example.com/"), ctx,
+    ))
+    assert not result.is_error, result.content
