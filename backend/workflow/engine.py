@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 import math
 import secrets
 import time
 import uuid
+from decimal import Decimal
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -15,7 +17,7 @@ from typing import Any
 from backend.asset_store import store_for
 from backend.canvas import SceneDocument
 from .adapter import StepContext
-from .artifacts import WorkflowArtifacts
+from .artifacts import WorkflowArtifacts, canonical
 from .contracts import PortValue, StepOutputSource, WorkflowInputSource, WorkflowSpec, WorkflowStepSpec
 from .detached_store import DetachedRunStore, utc_now
 from .planning import Plan, PolicyResolver, RunPreview, build_plan, default_policy
@@ -121,7 +123,12 @@ class WorkflowEngine:
             registry = detached_registry(builtin_registry())
         self.registry = registry.with_entries(())
         self.limits = limits or RunLimits()
-        self.policy_for = policy_for or default_policy
+        def adapter_policy(spec):
+            adapter = self.registry.resolve(spec.adapter.adapter_id, spec.adapter.adapter_version)
+            resolve = getattr(adapter, "execution_policy", None)
+            return resolve(spec) if resolve is not None else default_policy(spec)
+
+        self.policy_for = policy_for or adapter_policy
         self._lanes = {
             "cloud": asyncio.Semaphore(self.limits.cloud_concurrency),
             "local": asyncio.Semaphore(self.limits.local_concurrency),
@@ -181,7 +188,7 @@ class WorkflowEngine:
     async def wait(self, workspace_id: int, run_id: str) -> dict[str, Any] | None:
         run = self._runs.get(run_id)
         if run is not None and run.workspace_id == workspace_id:
-            return copy.deepcopy(await asyncio.shield(run.task))
+            return json.loads(canonical(await asyncio.shield(run.task)))
         return self.store.read(workspace_id, run_id)
 
     def cancel(self, workspace_id: int, run_id: str) -> bool:
@@ -206,7 +213,7 @@ class WorkflowEngine:
         step.update(status=status, finished_at=utc_now(), error=error, cost_usd=cost)
         if outputs is not None:
             step["outputs"] = outputs
-        run.record["cost_usd"] = math.fsum(s["cost_usd"] for s in run.record["steps"].values())
+        run.record["cost_usd"] = float(sum(Decimal(str(s["cost_usd"])) for s in run.record["steps"].values()))
         _event(run.record, f"step-{status}", step_id=step_id, message=error or "")
         self._checkpoint(run)
 
@@ -270,6 +277,8 @@ class WorkflowEngine:
             self._checkpoint(run)
             attempt.dispatched = True
             values = await adapter.run(prepared, attempt.context)
+            if run.stop_reason is not None:
+                raise asyncio.CancelledError
             return self._outputs(spec, values)
 
     def _charge(self, run: _Run, attempt: _Attempt) -> float:
@@ -315,12 +324,13 @@ class WorkflowEngine:
                 hook.cancel()
                 hook.add_done_callback(_observe)
         for step_id, attempt in active.items():
-            self._finish_step(run, step_id, "cancelled", run.stop_reason, cost=self._charge(run, attempt))
+            self._finish_step(run, step_id, "interrupted" if run.stop_status == "interrupted" else "cancelled",
+                              run.stop_reason, cost=self._charge(run, attempt))
         active.clear()
 
     def _admit(self, run: _Run, active: dict[str, _Attempt], admitted: int) -> tuple[int, str | None]:
         record = run.record
-        reserved = math.fsum(run.plan.policies[key].cost_usd for key in active)
+        reserved = sum((Decimal(str(run.plan.policies[key].cost_usd)) for key in active), Decimal(0))
         lanes = {"local": 0, "cloud": 0}
         for key in active:
             lanes[run.plan.policies[key].provider] += 1
@@ -342,12 +352,12 @@ class WorkflowEngine:
             capacity = self.limits.cloud_concurrency if policy.provider == "cloud" else self.limits.local_concurrency
             if lanes[policy.provider] >= capacity:
                 continue
-            if math.fsum((record["cost_usd"], reserved, policy.cost_usd)) > self.limits.cost_usd:
+            if Decimal(str(record["cost_usd"])) + reserved + Decimal(str(policy.cost_usd)) > Decimal(str(self.limits.cost_usd)):
                 blocked_cap = "Run stopped: cost limit ($%.2f) reached." % self.limits.cost_usd
                 continue
             active[step_id] = self._launch(run, spec)
             admitted += 1
-            reserved = math.fsum((reserved, policy.cost_usd))
+            reserved += Decimal(str(policy.cost_usd))
             lanes[policy.provider] += 1
         return admitted, blocked_cap
 
@@ -374,6 +384,8 @@ class WorkflowEngine:
             while True:
                 self._collect_finished(run, active)
                 if run.stop_reason is not None:
+                    break
+                if not active and all(s["status"] != "pending" for s in record["steps"].values()):
                     break
                 remaining = deadline - asyncio.get_running_loop().time()
                 if remaining <= 0:
@@ -402,7 +414,7 @@ class WorkflowEngine:
                 await self._cancel_attempts(run, active)
             for step_id, step in record["steps"].items():
                 if step["status"] == "pending":
-                    self._finish_step(run, step_id, "cancelled" if run.stop_status == "cancelled" else "blocked",
+                    self._finish_step(run, step_id, {"cancelled": "cancelled", "interrupted": "interrupted"}.get(run.stop_status, "blocked"),
                                       run.stop_reason or "Step was not run.")
             self._publish_outputs(run)
             if run.stop_reason is not None:

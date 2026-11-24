@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+from decimal import Decimal
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
@@ -123,7 +124,10 @@ def build_plan(spec: WorkflowSpec, parameters: Mapping[str, PortValue],
         if registry.describe(descriptor.adapter_id, descriptor.adapter_version, step.config_json) != descriptor:
             raise ValueError(f"Adapter descriptor changed for {step.step_id!r}.")
         adapters[step.step_id] = registry.resolve(descriptor.adapter_id, descriptor.adapter_version)
-        policies[step.step_id] = policy_for(step)
+        policy = policy_for(step)
+        if not isinstance(policy, StepPolicy):
+            raise ValueError("Invalid workflow execution policy.")
+        policies[step.step_id] = policy
         if descriptor.side_effect_class == "cloud" and policies[step.step_id].provider != "cloud":
             raise ValueError("Cloud steps cannot use the local concurrency lane.")
         output_ports[step.step_id] = _ports(descriptor.ports.outputs)
@@ -159,7 +163,7 @@ def build_plan(spec: WorkflowSpec, parameters: Mapping[str, PortValue],
 
     workflow_hash = digest(asdict(spec))
     entries = tuple((step.step_id, step.adapter.side_effect_class, policies[step.step_id]) for step in spec.steps)
-    cost = math.fsum(policy.cost_usd for policy in policies.values())
+    cost = float(sum(Decimal(str(policy.cost_usd)) for policy in policies.values()))
     approval = any(effect in ("cloud", "executes", "writes") or policy.provider == "cloud"
                    for _, effect, policy in entries)
     pin = {"workflow_hash": workflow_hash, "parameters": packed,

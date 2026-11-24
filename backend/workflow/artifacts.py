@@ -36,6 +36,8 @@ class WorkflowArtifacts:
         return ImageValue(asset) if image else FileValue(asset)
 
     def bytes_for(self, asset: AssetRef) -> bytes:
+        if type(asset.size_bytes) is not int or asset.size_bytes < 0:
+            raise ValueError("Invalid workflow asset size.")
         data = self.store.get(asset.sha256, max_bytes=asset.size_bytes)
         if data is None or len(data) != asset.size_bytes:
             raise ValueError("Workflow asset is missing or corrupt.")
@@ -49,7 +51,8 @@ class WorkflowArtifacts:
             return {**payload, "asset_ref": value.asset.sha256, "mime_type": value.asset.media_type}
         # Validate/snapshot even inline values (JSON containers are mutable).
         raw = canonical(payload).encode("utf-8")
-        if len(raw) > INLINE_LIMIT:
+        size = len(value.text.encode("utf-8")) if isinstance(value, TextValue) else len(raw)
+        if size > INLINE_LIMIT:
             ref = self.store.put(raw) if persist else content_ref(raw)
             return {"kind": value.kind, "asset_ref": ref, "mime_type": "application/json",
                     "size_bytes": len(raw)}
