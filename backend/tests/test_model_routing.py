@@ -96,6 +96,30 @@ def test_auto_returns_none_when_nothing_in_the_catalog_is_capable():
     assert mc.choose_auto_model_ref(catalog, {"vision"}) is None
 
 
+@pytest.mark.parametrize("embedding_capability", ["embedding", "embeddings"])
+@pytest.mark.parametrize("text_capability", ["completion", "chat", "text-generation"])
+def test_ollama_embedding_capability_is_not_text_generation(embedding_capability, text_capability):
+    # Family/size metadata is present even on real embedding-only models.
+    raw = {
+        "model": "nomic-embed-text:latest",
+        "details": {"family": "nomic-bert", "parameter_size": "137M"},
+        "capabilities": [embedding_capability],
+    }
+    embed_only = mc.ollama_descriptor(raw)
+    assert embed_only.capabilities == frozenset({mc.CAPABILITY_EMBEDDING})
+    assert not embed_only.supports({mc.CAPABILITY_TEXT})
+    for task in (config.TASK_CHAT, config.TASK_TITLE, config.TASK_WEB_SUMMARIZE, config.TASK_CHART):
+        assert mc.choose_auto_model_ref([embed_only], mc.TASK_REQUIREMENTS[task]) is None
+        assert mc.choose_auto_model(task, [embed_only]) == ""
+
+    raw["capabilities"].append(text_capability)
+    dual = mc.ollama_descriptor(raw)
+    assert dual.capabilities == frozenset({mc.CAPABILITY_EMBEDDING, mc.CAPABILITY_TEXT})
+    assert mc.choose_auto_model_ref([dual], {mc.CAPABILITY_TEXT}) == mc.ModelRef(
+        config.LOCAL_PROVIDER_OLLAMA, raw["model"],
+    )
+
+
 def test_auto_skips_unready_and_unavailable_entries():
     catalog = [
         _descriptor("not-ready", "Ollama", cost=(0.0, 0.0), ready=False),
@@ -192,6 +216,30 @@ def test_unified_catalog_aggregates_every_configured_source():
     assert ("Llama.cpp", "local-model.gguf") in by_id
     assert by_id[("Anthropic Claude", "claude-opus-5")].capabilities == frozenset({"text"})
     assert by_id[("OpenAI-Compatible", "gpt-4o")].ready is False
+
+
+def test_unified_catalog_uses_verified_ollama_capabilities_without_guessing(tmp_path):
+    from graphlink_settings_store import SettingsManager
+
+    settings = SettingsManager(tmp_path / "session.dat")
+    settings.set_ollama_model_scan_cache(
+        ["Nomic-Embed:latest", "qwen3:4b", "unprobed:latest"], "server",
+        verified_capabilities={
+            "nomic-embed:latest": ["embeddings"],
+            "qwen3:4b": ["chat", "tools"],
+        },
+    )
+    catalog = mc.unified_catalog(settings)
+    by_id = {descriptor.model_id: descriptor for descriptor in catalog
+             if descriptor.provider == config.LOCAL_PROVIDER_OLLAMA}
+    assert by_id["Nomic-Embed:latest"].capabilities == frozenset({mc.CAPABILITY_EMBEDDING})
+    chat = by_id["qwen3:4b"]
+    assert chat.capabilities == frozenset({mc.CAPABILITY_TEXT, mc.CAPABILITY_TOOLS})
+    # No separate code flag in /api/show; keep chart generation eligible.
+    assert chat.supports(mc.TASK_REQUIREMENTS[config.TASK_CHART])
+    assert not chat.supports({mc.CAPABILITY_VISION})
+    assert not by_id["unprobed:latest"].capabilities
+    assert by_id["unprobed:latest"].supports({mc.CAPABILITY_TEXT})
 
 
 def test_unified_catalog_applies_the_supplied_price_lookup():
@@ -377,6 +425,50 @@ def test_auto_fallback_fires_for_the_blocking_ollama_call_too(monkeypatch, ollam
     )
     assert response["message"]["content"] == "Auto Title"
     assert ollama_chat.calls[0]["model"] == "auto-title-model"
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("with_chat_model", [False, True])
+def test_auto_fallback_skips_verified_embedding_only_models(
+    monkeypatch, ollama_chat, tmp_path, stream, with_chat_model,
+):
+    from graphlink_settings_store import SettingsManager
+
+    monkeypatch.setattr(api_provider, "chat_stream", _REAL_CHAT_STREAM)
+    monkeypatch.setattr(api_provider, "USE_API_MODE", False)
+    monkeypatch.setattr(api_provider, "LOCAL_PROVIDER_TYPE", config.LOCAL_PROVIDER_OLLAMA)
+    monkeypatch.setitem(config.OLLAMA_MODELS, config.TASK_TITLE, "")
+
+    # Use the actual persisted scan cache (the inventory uses plural
+    # "embeddings" and "chat"), not a catalog constructed by the test.
+    model = "nomic-embed-text:latest"
+    models = [model]
+    verified = {model: ["embeddings"]}
+    if with_chat_model:
+        models.append("qwen3:4b")
+        verified["qwen3:4b"] = ["chat", "embeddings"]
+    settings = SettingsManager(tmp_path / "session.dat")
+    settings.set_ollama_model_scan_cache(models, "server", verified_capabilities=verified)
+    settings = SettingsManager(settings.state_file)
+
+    ollama_chat.responses = [{"message": {"content": "Auto Title"}, "done": True}]
+    ollama_chat.streams = [_FakeOllamaStream([_part(content="Auto Title", done=True)])]
+    messages = [{"role": "user", "content": "name this"}]
+
+    def dispatch():
+        if stream:
+            return api_provider.chat_stream(
+                config.TASK_TITLE, messages, lambda d, r: None, settings_manager=settings,
+            )
+        return api_provider.chat(config.TASK_TITLE, messages, settings_manager=settings)
+
+    if with_chat_model:
+        assert dispatch()["message"]["content"] == "Auto Title"
+        assert [call["model"] for call in ollama_chat.calls] == ["qwen3:4b"]
+    else:
+        with pytest.raises(ValueError, match="No Ollama model configured for task"):
+            dispatch()
+        assert ollama_chat.calls == []
 
 
 def test_without_a_settings_manager_the_original_no_model_error_is_unchanged(monkeypatch):
