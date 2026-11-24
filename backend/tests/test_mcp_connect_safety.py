@@ -7,7 +7,7 @@ import threading
 
 import pytest
 
-from backend.tests.test_mcp_connect_intents import setup, open_session, add_tool, run_tool
+from backend.tests.test_mcp_connect_intents import MCP_HANDOFF_TIMEOUT, setup, open_session, add_tool, run_tool
 from graphlink_plugins.mcp_connect import core
 
 
@@ -149,30 +149,34 @@ def test_revocation_during_predispatch_checkpoint_prevents_remote_call(tmp_path,
         doc, bus, scene = open_session(tmp_path / "revocation-graphs.db", settings)
         node_id = await add_tool(bus, scene)
         original = chat_library.save_chat_atomically_row
-        entered, release = threading.Event(), threading.Event()
+        loop = asyncio.get_running_loop()
+        entered, release = asyncio.Event(), threading.Event()
         held = False
 
         def hold_fence(*args, **kwargs):
             nonlocal held
-            step = doc.graph_runs[-1]["steps"][0]
+            step = args[3]["graph_runs"][-1]["steps"][0]
             if not held and step.get("externalAttempt", {}).get("phase") == "dispatched":
                 held = True
-                entered.set()
-                assert release.wait(10)
+                loop.call_soon_threadsafe(entered.set)
+                assert release.wait(MCP_HANDOFF_TIMEOUT)
             return original(*args, **kwargs)
 
         monkeypatch.setattr(chat_library, "save_chat_atomically_row", hold_fence)
         task = asyncio.create_task(run_tool(scene, node_id, "revoked-before-send"))
         try:
-            assert await asyncio.to_thread(entered.wait, 10)
+            await asyncio.wait_for(entered.wait(), MCP_HANDOFF_TIMEOUT)
+            assert not server.calls, "The tool was sent before its durable fence"
             if revoke == "server":
                 settings.set_mcp_servers([{**settings.get_mcp_servers()[0], "enabled": False}])
             else:
                 settings.set_plugin_grant("mcp_connect", False)
         finally:
             release.set()
-        await asyncio.wait_for(task, 10)
+        result, _ = await asyncio.wait_for(task, MCP_HANDOFF_TIMEOUT)
         assert not server.calls, "Revoked MCP authority was used after the durable checkpoint resumed"
+        assert result["status"] == "reconciliation-required"
+        assert result["steps"][0]["externalAttempt"]["phase"] == "reconciliation-required"
         assert doc.nodes[node_id].state.data["latest"] is None
 
     asyncio.run(scenario())

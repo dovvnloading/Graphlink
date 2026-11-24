@@ -195,7 +195,7 @@ def test_mid_step_cancel_and_preserved_results(tmp_path):
 def test_run_caps(tmp_path, limit):
     async def scenario():
         limits = {"cost": RunLimits(cost_usd=0.25), "steps": RunLimits(max_steps=1),
-                  "duration": RunLimits(duration_seconds=0.75)}[limit]
+                  "duration": RunLimits(wall_time_seconds=0.75)}[limit]
         engine, ws, local, cloud, *_ = _engine(tmp_path / "chats.db", limits=limits)
         adapter = "cloud" if limit == "cost" else "local"
         spec = _spec(engine.registry, [

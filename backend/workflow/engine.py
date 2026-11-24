@@ -30,7 +30,7 @@ class RunLimits:
     cloud_concurrency: int = 4
     local_concurrency: int = 1
     cost_usd: float = 2.00
-    duration_seconds: float = 30 * 60
+    wall_time_seconds: float = 30 * 60
     max_steps: int = 500
 
     def __post_init__(self):
@@ -38,7 +38,7 @@ class RunLimits:
             if type(value) is not int or value < 1:
                 raise ValueError("Workflow concurrency and step limits must be positive integers.")
         if (not math.isfinite(self.cost_usd) or self.cost_usd < 0
-                or not math.isfinite(self.duration_seconds) or self.duration_seconds <= 0):
+                or not math.isfinite(self.wall_time_seconds) or self.wall_time_seconds <= 0):
             raise ValueError("Workflow cost and duration limits must be finite and nonnegative.")
 
 
@@ -272,7 +272,7 @@ class WorkflowEngine:
         step_id = spec.step_id
         policy = run.plan.policies[step_id]
         adapter = run.plan.adapters[step_id]
-        async with self._lanes[policy.provider]:
+        async with self._lanes[policy.execution_lane]:
             if run.stop_reason is not None:
                 raise asyncio.CancelledError
             prepared = adapter.prepare(spec, self._inputs(run, spec))
@@ -341,7 +341,7 @@ class WorkflowEngine:
         reserved = sum((Decimal(str(run.plan.policies[key].cost_usd)) for key in active), Decimal(0))
         lanes = {"local": 0, "cloud": 0}
         for key in active:
-            lanes[run.plan.policies[key].provider] += 1
+            lanes[run.plan.policies[key].execution_lane] += 1
         blocked_cap = None
         for spec in run.plan.spec.steps:
             step_id = spec.step_id
@@ -357,8 +357,8 @@ class WorkflowEngine:
                 blocked_cap = f"Run stopped: step limit ({self.limits.max_steps}) reached."
                 continue
             policy = run.plan.policies[step_id]
-            capacity = self.limits.cloud_concurrency if policy.provider == "cloud" else self.limits.local_concurrency
-            if lanes[policy.provider] >= capacity:
+            capacity = self.limits.cloud_concurrency if policy.execution_lane == "cloud" else self.limits.local_concurrency
+            if lanes[policy.execution_lane] >= capacity:
                 continue
             if Decimal(str(record["cost_usd"])) + reserved + Decimal(str(policy.cost_usd)) > Decimal(str(self.limits.cost_usd)):
                 blocked_cap = "Run stopped: cost limit ($%.2f) reached." % self.limits.cost_usd
@@ -366,7 +366,7 @@ class WorkflowEngine:
             active[step_id] = self._launch(run, spec)
             admitted += 1
             reserved += Decimal(str(policy.cost_usd))
-            lanes[policy.provider] += 1
+            lanes[policy.execution_lane] += 1
         return admitted, blocked_cap
 
     def _publish_outputs(self, run: _Run) -> None:
@@ -384,7 +384,7 @@ class WorkflowEngine:
         active: dict[str, _Attempt] = {}
         admitted = 0
         record = run.record
-        deadline = asyncio.get_running_loop().time() + self.limits.duration_seconds
+        deadline = asyncio.get_running_loop().time() + self.limits.wall_time_seconds
         record.update(status="running", started_at=utc_now())
         _event(record, "run-started")
         try:

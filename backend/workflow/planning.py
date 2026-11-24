@@ -25,12 +25,12 @@ class StepPolicy:
     typical price. A provider adapter must enforce the bound at dispatch.
     Model identities include the concrete provider and model, not aliases.
     """
-    provider: Provider = "local"
+    execution_lane: Provider = "local"
     model_identity: tuple[str, str] | None = None
     cost_usd: float = 0.0
 
     def __post_init__(self):
-        if self.provider not in ("cloud", "local"):
+        if self.execution_lane not in ("cloud", "local"):
             raise ValueError("Unknown workflow provider class.")
         if not math.isfinite(self.cost_usd) or self.cost_usd < 0:
             raise ValueError("A workflow step needs a finite nonnegative cost bound.")
@@ -128,7 +128,7 @@ def build_plan(spec: WorkflowSpec, parameters: Mapping[str, PortValue],
         if not isinstance(policy, StepPolicy):
             raise ValueError("Invalid workflow execution policy.")
         policies[step.step_id] = policy
-        if descriptor.side_effect_class == "cloud" and policies[step.step_id].provider != "cloud":
+        if descriptor.side_effect_class == "cloud" and policies[step.step_id].execution_lane != "cloud":
             raise ValueError("Cloud steps cannot use the local concurrency lane.")
         output_ports[step.step_id] = _ports(descriptor.ports.outputs)
 
@@ -164,7 +164,7 @@ def build_plan(spec: WorkflowSpec, parameters: Mapping[str, PortValue],
     workflow_hash = digest(asdict(spec))
     entries = tuple((step.step_id, step.adapter.side_effect_class, policies[step.step_id]) for step in spec.steps)
     cost = float(sum(Decimal(str(policy.cost_usd)) for policy in policies.values()))
-    approval = any(effect in ("cloud", "executes", "writes") or policy.provider == "cloud"
+    approval = any(effect in ("cloud", "executes", "writes") or policy.execution_lane == "cloud"
                    for _, effect, policy in entries)
     pin = {"workflow_hash": workflow_hash, "parameters": packed,
            "steps": [(step_id, effect, asdict(policy)) for step_id, effect, policy in entries],
