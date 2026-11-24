@@ -37,7 +37,7 @@ _RETURN_HEADERS = frozenset({
     "access-control-allow-origin", "access-control-allow-credentials",
     "access-control-allow-headers", "access-control-allow-methods",
     "cross-origin-resource-policy", "cross-origin-embedder-policy",
-    "cross-origin-opener-policy", "location", "etag", "last-modified", "vary",
+    "cross-origin-opener-policy", "etag", "last-modified", "vary",
     "x-content-type-options", "set-cookie",
 })
 
@@ -66,7 +66,7 @@ class _PinnedConnection(http.client.HTTPSConnection):
 
 
 def _fetch_verified(url: str, pinned_ip: str, headers: dict[str, str]) -> BrowserResponse:
-    """No redirects here: a 30x is surfaced to Chromium and re-gated on its next request."""
+    """Fetch exactly one pinned HTTPS resource. Redirects must never reach Chromium."""
     target = urlsplit(url)
     host = target.hostname
     if not host:
@@ -81,6 +81,13 @@ def _fetch_verified(url: str, pinned_ip: str, headers: dict[str, str]) -> Browse
     try:
         connection.request("GET", path, headers=request_headers)
         response = connection.getresponse()
+        # Playwright does NOT re-intercept redirect hops after route.fulfill().
+        # Returning *any* 3xx here would let Chromium follow Location itself,
+        # outside host approval, DNS validation and pinned HTTPS transport.
+        if 300 <= response.status < 400:
+            raise BrowserPolicyError(
+                "HTTP redirects are blocked; navigate directly to the verified destination."
+            )
         # A remote origin can ignore Accept-Encoding: identity. Returning a
         # tiny gzip/brotli bomb to Chromium would bypass the bound on decoded
         # page bytes. Fail closed rather than forwarding encoded content.
@@ -209,6 +216,13 @@ class BrowserNetworkGate:
             response = await asyncio.to_thread(
                 _fetch_verified, target.canonical_url, target.pinned_ip, headers,
             )
+            # Defense in depth: even injected/test transports must not return
+            # redirect responses to Chromium's route.fulfill() path.
+            if 300 <= response.status < 400:
+                self._block("Blocked HTTP redirect from " + host)
+                raise BrowserPolicyError(
+                    "HTTP redirects are blocked; navigate to the destination explicitly."
+                )
             if len(response.body) > MAX_RESOURCE_BYTES:
                 raise BrowserPolicyError("Browser resource exceeded 2 MiB.")
             async with self._lock:
