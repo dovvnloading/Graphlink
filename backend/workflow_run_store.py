@@ -192,8 +192,8 @@ def _write(conn: sqlite3.Connection, table: str, key: dict[str, Any], record: di
         if table == "workflow_steps":
             if old["kind"] != record["kind"] or old["operation"] != record["operation"]:
                 raise ValueError("A durable step cannot be replaced with another operation.")
-            if old["status"] in {"completed", "current", "failed", "cancelled"} and record["status"] in {"pending", "running"}:
-                raise ValueError("A finished workflow step cannot be restarted.")
+            if old["status"] in {"completed", "current", "failed", "cancelled", "reconciliation-required"} and record["status"] in {"pending", "running"}:
+                raise ValueError("A finished or uncertain workflow step cannot be restarted.")
             if old["request_id"] and (old["request_id"] != record["request_id"]
                     or (old["attempt_phase"] in {"completed", "reconciled"}
                         and old["attempt_phase"] != record["attempt_phase"])
@@ -227,7 +227,7 @@ def checkpoint(conn: sqlite3.Connection, graph_id: int, runs: Any) -> None:
     an entry. The graph FK removes it only when its owning graph is deleted.
     """
     if not isinstance(runs, list):
-        return
+        runs = []
     seen = set()
     for run in runs:
         if not _valid_run(run) or run["runId"] in seen:
@@ -259,6 +259,15 @@ def checkpoint(conn: sqlite3.Connection, graph_id: int, runs: Any) -> None:
                 _event(conn, graph_id, run_id, index, "step_state", step_record)
         if changed and record["status"] != "running":
             _event(conn, graph_id, run_id, None, "run_state", record)
+    # A stale or incomplete graph write must not make an unresolved fence
+    # disappear from the plan consumed by the existing resume guards.
+    unresolved = conn.execute(
+        "SELECT DISTINCT run_id FROM workflow_steps WHERE graph_id = ? AND "
+        "(status = 'reconciliation-required' OR attempt_phase IN ('dispatched', 'reconciliation-required'))",
+        (graph_id,),
+    )
+    if any(run_id not in seen for (run_id,) in unresolved):
+        raise ValueError("Reconcile the unresolved workflow request before removing its plan.")
 
 
 def overlay_receipts(conn: sqlite3.Connection, graph_id: int, runs: Any) -> None:
