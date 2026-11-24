@@ -16,6 +16,10 @@
   gap: var(--gl-space-3);
 }
 .workflow-compare > div { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 48rem) {
+  .workflow-compare { grid-template-columns: minmax(0, 1fr); }
+}
+.workflow-content:focus-visible { outline: 2px solid var(--gl-focus-ring); outline-offset: 2px; }
 .workflow-content {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
