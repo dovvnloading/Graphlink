@@ -254,7 +254,10 @@ trusted StepPolicy supplies a maximum charge, and StepContext exposes that
 bound plus a cumulative report_cost callback. Adapters must enforce their
 own provider-side bound; a reported overrun stops the run rather than
 pretending an already-incurred external charge can be rolled back. Missing
-usage is accounted at the reserved maximum. A cloud adapter without trusted
+usage is accounted at the reserved maximum, including interrupted dispatches.
+Failed or cancelled non-Map steps retain at least the reserved maximum; a
+partial usage report is not a final bill. A cancelled workflow remains busy
+until any draining adapter tasks and cancel hooks settle. A cloud adapter without trusted
 policy metadata is rejected. Use policy_for to pin cloud provider/model
 identities and pricing; never derive authorization from untrusted JSON.
 
@@ -532,7 +535,10 @@ Use `--request-json '{"workflow_id":"...","revision":"...","inputs":{"input_1":"
 on run to verify an exact approved request. The preset already saves those
 parameters; arbitrary overrides are rejected and must be reviewed in the UI.
 Reuse the printed `--operation-id` on a retry; it resolves to the prior run
-while the receipt is retained. No retry guarantees exist after retention.
+even after its receipt is pruned. The run ID remains reserved in that workspace
+until the workspace is deleted; an expired receipt itself cannot be read.
+The migration preserves operation IDs still present in existing run history;
+IDs already pruned by an older release cannot be reconstructed.
 MCP offers `graphlink_list_workflows`, `graphlink_run_workflow`,
 and `graphlink_get_workflow_run` only when the separate write token is opted in.
 Read and write control credentials cannot create presets, approve run previews,

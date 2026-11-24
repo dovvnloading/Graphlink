@@ -186,11 +186,9 @@ class WorkflowAutomation:
         if operation_id is not None:
             if not isinstance(operation_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", operation_id):
                 raise ValueError("Use an operation ID of 8–100 letters, digits, underscores or hyphens.")
-            for run in engine.store.list(workspace_id):
-                if run.get("operation_id") == operation_id:
-                    if run.get("preset_id") != preset_id:
-                        raise ValueError("Operation ID already belongs to another preset.")
-                    return run["run_id"]
+            existing = engine.store.operation_run(workspace_id, operation_id, preset_id)
+            if existing is not None:
+                return existing
         policy = UnattendedPolicy(preset["fingerprint"], frozenset(preset["allowed_effects"]), preset["cost_usd"])
         return engine.start(workspace_id, *self.resolve(preset["request"]), unattended=policy,
                             preset_id=preset_id, operation_id=operation_id)

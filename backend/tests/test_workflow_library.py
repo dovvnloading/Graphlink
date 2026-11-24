@@ -66,10 +66,10 @@ def test_upgrade_from_either_version_seven_schema(tmp_path, version_seven):
             with conn:
                 original = store.save(conn, example(), name="Original")
     with closing(chat_library._connect(path)) as conn, conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         assert {"detached_workflow_runs", "workflow_library", "workflow_library_versions",
-                "workflow_child_runs", "workflow_presets"} <= tables
+                "workflow_child_runs", "workflow_presets", "detached_workflow_operations"} <= tables
         if version_seven == "library":
             assert store.get(conn, original["workflow_id"], original["revision"])["spec"]["name"] == "Original"
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -304,3 +304,31 @@ def test_builder_workflow_edits_preview_and_recheck_after_approval(tmp_path):
         assert len(approvals) == 6
 
     asyncio.run(scenario())
+
+
+def test_unpack_invalid_source_leaves_graph_unchanged():
+    from backend.domain.graph import SceneDocument
+    from backend.workflow import canvas
+
+    doc = SceneDocument()
+    before_nodes = set(doc.nodes)
+    before_edges = set(doc.edges)
+    with pytest.raises(Exception, match="(?i)(source|node|missing|exist)"):
+        canvas.unpack(doc, example(), {}, {}, 0, 0, connected={"input": "missing"})
+    assert set(doc.nodes) == before_nodes
+    assert set(doc.edges) == before_edges
+
+
+def test_workflow_config_hash_pins_source_identity():
+    from backend.domain.graph import SceneDocument
+    from backend.workflow import canvas
+
+    doc = SceneDocument()
+    first = doc.add_note(0, 0)
+    second = doc.add_note(400, 0)
+    first.content = second.content = "same text"
+    node = doc.nodes[canvas.insert(doc, example(), 1, 800, 0)]
+    canvas.configure(doc, node, {}, {}, {"input": first.id})
+    before = canvas.config_hash(node)
+    canvas.configure(doc, node, {}, {}, {"input": second.id})
+    assert canvas.config_hash(node) != before

@@ -168,7 +168,7 @@ def prepare(document, node):
 
 def config_hash(node):
     value = data(node)
-    return digest([value["document"], value["parameters"], sorted(value.get("sources", {}))])
+    return digest([value["document"], value["parameters"], value.get("sources", {})])
 
 
 def output_hash(node):
@@ -213,9 +213,18 @@ def unpack(document, frozen, inputs, parameters, x, y, connected=None):
         raise ValueError("This workflow contains adapters without editable canvas equivalents.")
     if any(p.kind != "text" for p in spec.inputs):
         raise ValueError("Only text inputs can be unpacked onto the canvas.")
-    connected = connected or {}
+    connected = {} if connected is None else connected
     if not isinstance(connected, dict) or not connected.keys() <= {p.name for p in spec.inputs}:
         raise ValueError("Unknown connected workflow input.")
+    if not isinstance(inputs, dict) or not inputs.keys() <= {p.name for p in spec.inputs}:
+        raise ValueError("Unknown workflow input.")
+    typed_inputs(spec, inputs, require_all=False)
+    # record_command cannot roll back a mutator that raises halfway through.
+    # Validate every external source before creating any editable notes.
+    for source in connected.values():
+        if not isinstance(source, str):
+            raise ValueError("Choose a valid workflow source.")
+        document._text_output(source)
     sources, steps = {}, {}
     width, height = document.kind_fallback_footprint("note")
 

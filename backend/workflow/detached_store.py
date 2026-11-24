@@ -9,6 +9,7 @@ import json
 import sqlite3
 from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,28 @@ def migrate_presets(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS workflow_presets_workspace ON workflow_presets(workspace_id)")
 
 
+def migrate_operation_ids(conn: sqlite3.Connection) -> None:
+    # Keep a minimal retry fence independently of the bounded receipt store.
+    # A run may have incurred an external charge even after its receipt expires.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS detached_workflow_operations (
+            workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            operation_id TEXT NOT NULL,
+            preset_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            PRIMARY KEY (workspace_id, operation_id)
+        )
+    """)
+    for workspace_id, run_id, payload in conn.execute("""
+        SELECT workspace_id, run_id, payload FROM detached_workflow_runs
+        ORDER BY created_at, run_id
+    """).fetchall():
+        record = json.loads(payload)
+        if record.get("operation_id") is not None and record.get("preset_id") is not None:
+            conn.execute("INSERT OR IGNORE INTO detached_workflow_operations VALUES (?, ?, ?, ?)",
+                         (workspace_id, record["operation_id"], record["preset_id"], run_id))
+
+
 def prune(conn: sqlite3.Connection, *, now: datetime | None = None) -> None:
     # Active runs are never evicted. Run on admission/finish and offline GC.
     cutoff = ((now or datetime.now(timezone.utc)) - timedelta(days=MAX_AGE_DAYS)).isoformat()
@@ -78,8 +101,35 @@ class DetachedRunStore:
         with closing(_connect(self.db_path)) as conn, conn:
             yield conn
 
-    def create(self, workspace_id: int, record: dict[str, Any]) -> None:
+    def operation_run(self, workspace_id: int, operation_id: str, preset_id: str) -> str | None:
         with self._connection() as conn:
+            return self._operation_run(conn, workspace_id, operation_id, preset_id)
+
+    @staticmethod
+    def _operation_run(conn, workspace_id, operation_id, preset_id):
+        row = conn.execute("""
+            SELECT preset_id, run_id FROM detached_workflow_operations
+            WHERE workspace_id = ? AND operation_id = ?
+        """, (workspace_id, operation_id)).fetchone()
+        if row is None:
+            return None
+        if row[0] != preset_id:
+            raise ValueError("Operation ID already belongs to another preset.")
+        return row[1]
+
+    def create(self, workspace_id: int, record: dict[str, Any]) -> str | None:
+        with self._connection() as conn:
+            # Reserve the operation and admit the run in the same transaction.
+            # The preflight lookup in automation is not itself a write fence.
+            conn.execute("BEGIN IMMEDIATE")
+            operation_id = record.get("operation_id")
+            if operation_id is not None:
+                preset_id = record["preset_id"]
+                existing = self._operation_run(conn, workspace_id, operation_id, preset_id)
+                if existing is not None:
+                    return existing
+                conn.execute("INSERT INTO detached_workflow_operations VALUES (?, ?, ?, ?)",
+                             (workspace_id, operation_id, preset_id, record["run_id"]))
             conn.execute("""
                 INSERT INTO detached_workflow_runs(run_id, workspace_id, created_at, status, payload)
                 VALUES (?, ?, ?, ?, ?)
@@ -122,17 +172,36 @@ class DetachedRunStore:
                 run = json.loads(payload)
                 now = utc_now()
                 reason = "The backend stopped before the workflow finished."
+                # A running step has crossed the durable dispatch fence.
+                # Its exact usage may be unknown; retain at least the pinned
+                # maximum, including receipts from pre-reservation versions.
+                policies = {key: policy for key, _, policy in run["preview"]["steps"]}
                 for step in run["steps"].values():
                     if step["status"] in ("pending", "running"):
+                        if step["status"] == "running":
+                            step["cost_usd"] = max(step["cost_usd"], policies[step["step_id"]]["cost_usd"])
                         step.update(status="interrupted", finished_at=now, error=reason)
                         if step.get("approval", {}).get("status") == "pending":
                             step["approval"]["status"] = "interrupted"
                         for child in step.get("map_items", {}).values():
                             if child["status"] in ("pending", "running"):
                                 child.update(status="interrupted", error=reason)
+                                child_policies = {
+                                    key: policy for key, _, policy in
+                                    run["preview"].get("control_flow", {}).get(step["step_id"], {}).get("child_steps", ())
+                                }
                                 for nested in child["steps"].values():
                                     if nested["status"] in ("pending", "running"):
+                                        if nested["status"] == "running":
+                                            nested["cost_usd"] = max(nested["cost_usd"],
+                                                                     child_policies[nested["step_id"]]["cost_usd"])
                                         nested.update(status="interrupted", finished_at=now, error=reason)
+                                child["cost_usd"] = float(sum(Decimal(str(s["cost_usd"]))
+                                                              for s in child["steps"].values()))
+                        if step.get("map_items"):
+                            observed = sum((Decimal(str(child["cost_usd"]))
+                                            for child in step["map_items"].values()), Decimal(0))
+                            step["cost_usd"] = max(step["cost_usd"], float(observed))
                         run["events"].append({
                             "schema_version": 1, "run_id": run["run_id"], "sequence": len(run["events"]),
                             "timestamp": now, "kind": "step-interrupted", "step_id": step["step_id"],
@@ -140,6 +209,7 @@ class DetachedRunStore:
                         })
                 if "awaiting_approval" in run:
                     run["awaiting_approval"] = None
+                run["cost_usd"] = float(sum(Decimal(str(s["cost_usd"])) for s in run["steps"].values()))
                 run.update(status="interrupted", finished_at=now, error=reason)
                 run["events"].append({
                     "schema_version": 1, "run_id": run["run_id"], "sequence": len(run["events"]),
