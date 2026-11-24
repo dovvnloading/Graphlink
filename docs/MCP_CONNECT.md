@@ -3,6 +3,13 @@
 MCP Connect makes a configured Model Context Protocol tool a saved canvas node. Choose a tool, supply literal arguments or connect upstream outputs, review the resolved request, and run it. The node keeps the response and a provenance receipt. Graph Runner can execute connected tool nodes in dependency order alongside existing text, table, scientific and local Model steps.
 
 This guide covers Graphlink acting as an **MCP client**. The separate headless MCP server in [`backend/mcp_server.py`](../backend/mcp_server.py), which exposes Graphlink to another client, has its own access controls.
+See [Headless Graphlink and MCP](HEADLESS_MCP.md#run-approved-workflows-with-cli-or-mcp)
+for the opt-in `graphlink_list_workflows`, `graphlink_run_workflow` and
+`graphlink_get_workflow_run` tools. Those start and inspect operator-approved
+detached presets; they do not approve steps or invoke arbitrary MCP Connect
+nodes. MCP Connect tool nodes remain explicit Graph Runner steps with their
+own server policies, not automatically registered typed detached adapters.
+See [Executable Workflows](WORKFLOWS.md) for the distinction.
 
 ## Enable the plugin and connect a server
 
