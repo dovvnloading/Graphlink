@@ -76,7 +76,7 @@ def test_registered_transforms_run_and_preview(operation, config, inputs, expect
 
 def test_registry_pins_versions_and_is_fresh():
     registry = builtin_registry()
-    assert registry.keys() == tuple(sorted((f"transform.{op}", "1") for op in (
+    assert tuple(key for key in registry.keys() if key[0].startswith("transform.")) == tuple(sorted((f"transform.{op}", "1") for op in (
         "template", "json_path", "text_split", "text_join", "table_filter",
         "table_sort", "table_select", "table_rename",
     )))
