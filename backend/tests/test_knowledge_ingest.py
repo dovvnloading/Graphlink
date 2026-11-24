@@ -172,6 +172,31 @@ class TestIngestFile:
         chunks = list_chunks_for_document(db_path, outcome.document_id)
         assert len(chunks) == outcome.chunk_count
 
+    @pytest.mark.parametrize(("raw", "expected"), [
+        pytest.param(b"caf\xe9", "café", id="latin1-even"),
+        pytest.param(b"caf\xe9!", "café!", id="latin1-odd"),
+        pytest.param("“café”".encode("cp1252"), "“café”", id="cp1252-even"),
+        pytest.param("“café”!".encode("cp1252"), "“café”!", id="cp1252-odd"),
+        pytest.param(b"caf\xe9\x81!", "café\x81!", id="latin1-undefined-cp1252"),
+        pytest.param("résumé — 日本語 😀".encode("utf-8"), "résumé — 日本語 😀", id="utf8"),
+    ])
+    def test_ingested_text_preserves_decoded_source(self, db_path, tmp_path, raw, expected):
+        from backend.knowledge_store import list_chunks_for_document
+
+        path = tmp_path / "source.txt"
+        path.write_bytes(raw)
+        assert extract_text(path) == (expected, "text/plain")
+
+        outcome = ingest_file(str(path), db_path=db_path)
+        assert outcome.was_new is True
+        assert outcome.chunk_count == 1
+        chunks = list_chunks_for_document(db_path, outcome.document_id)
+        assert len(chunks) == 1
+        assert chunks[0]["text"] == expected
+        assert chunks[0]["offset_start"] == 0
+        assert chunks[0]["offset_end"] == len(expected)
+
+
     def test_reingesting_the_same_file_is_a_no_op(self, db_path, tmp_path):
         path = tmp_path / "notes.txt"
         path.write_text("Identical content every time.")
