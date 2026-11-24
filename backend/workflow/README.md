@@ -395,3 +395,86 @@ The focused offline regression suite is:
 It imports the actual library entries and uses the production engine,
 registry, chart/report, Map and Assert; only the local-model completion
 transport is replaced with scripted fixture replies.
+
+## Workflow assurance and task evaluation
+
+The ordinary root pytest collection in the PR `python-tests` CI job includes
+both suites; neither needs a provider key, daemon, external tool, or live
+network access. Focused reproduction from the repository root:
+
+```sh
+python -m pytest -q -n0 backend/tests/test_workflow_fault_assurance.py backend/tests/test_workflow_task_evals.py
+python -m backend.evals.workflow_tasks
+```
+
+The fault suite uses the detached engine, real SQLite journal and asset
+store, a real spawned worker, and in-process ASGI/WebSocket transport. A
+separate fsynced ledger stands in for paid model and external write calls;
+it is intentionally independent of the recorded run/step state. Each fault
+checks the exact allowed effect sequence, preserved completed step
+outputs/receipts, and the absence of downstream effects where applicable:
+
+| Fault | Injection / expected behavior |
+| --- | --- |
+| Process death mid-step | Hard exit after the remote-effect ledger append and durable dispatch checkpoint. Startup interrupts uncertain steps without replay; previously completed outputs are retained. |
+| WebSocket disconnect | Disconnect and reconnect a real ASGI WebSocket while an HTTP-admitted detached run is gated in a provider adapter. Replay its consumed approval; it cannot start a second run. |
+| Stale revision | Change the frozen revision after approval and edit an actual canvas after its preview. Neither stale admission can dispatch; the prior durable result remains. |
+| Duplicate provider response | Replay dispatch and re-deliver the identical completed receipt at the request-journal boundary. The original request IDs, typed outputs and row count remain unchanged. |
+| Slow adapter | Block on an explicit gate; cancel or advance the loop's monotonic deadline. No sleeps determine when the fault occurs. |
+| Corrupt run record | Add trailing malformed JSON to a checkpoint containing finished steps. Startup fails closed and leaves the damaged bytes untouched; after explicit restoration of the intact prefix, recovery preserves finished receipts without replay. |
+| Exhausted budget | Spend the approved cost on the first model step, then block the next paid step and its write dependency. |
+| Denied approval | Withhold approval and retry admission; no new run or dispatch is created. |
+| Partial artifact write | Truncate the staged asset and raise at atomic replacement. No torn asset is published or referenced; the previously completed steps survive. |
+
+These are regression tests of the current safety contract, not a promise of
+general exactly-once remote execution. Uncertain dispatched work is not
+automatically replayed. In particular, the detached store currently refuses
+startup on malformed active JSON; the corruption case verifies non-destructive
+failure and explicit recovery of a still-intact checkpoint, **not** automatic
+repair or recovery of bytes destroyed by disk corruption.
+
+The task evaluator uses the real typed service adapters, pure transforms,
+approval/preview admission, scheduler and persisted receipts. Its restricted
+host replaces model and research dispatch with fixed fictional data and
+denies every other effectful service. The scripted model checks actual bound
+inputs and rendered prompts. It scores semantic outputs independently of
+the run's completed status and records dispatched steps, cost, retries, and
+wrong-side-effect count from the independent host action log. Duplicates,
+unexpected steps/services and wrong request inputs are counted as wrong
+effects; missing expected calls also fail the task.
+
+| Offline task | Success | Dispatched steps | Simulated USD | Retries | Wrong effects |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Research → cited summary | true | 2 | 0.03 | 0 | 0 |
+| Table → chart → report | true | 3 | 0.02 | 0 | 0 |
+| Conditional repair | true | 2 | 0.04 | 1 | 0 |
+| Mapped summaries | true | 4 | 0.06 | 0 | 0 |
+
+These are expected fixture baselines, asserted by pytest; the CLI emits the
+observed metrics as JSON. Charges are synthetic ($0.02/model call,
+$0.01/research call), not provider invoices. A retry is a dispatched attempt
+beyond the first or an explicit host-orchestrated repair iteration. The
+repair case validates the output and admits up to two separate frozen repair
+runs, while mapping uses explicit fan-out and fan-in bindings. These fixtures
+exercise those DAG-based patterns, not the native control-flow adapters
+(including Map) documented above. Tests also exercise immediate success, repair exhaustion,
+wrong model outputs and forbidden actions.
+
+### Optional local model comparison
+
+```sh
+python -m backend.evals.workflow_tasks --live --model qwen3:8b --model llama3.2:3b
+```
+
+Choose exact installed Ollama tags on a numeric loopback endpoint
+(`OLLAMA_HOST`, default `http://127.0.0.1:11434`). No models are downloaded,
+and no research or other effectful services become live. The command
+requires explicit `--live` and model selection, rejects cloud-backed tags
+and CI environments, and runs the same task scorers with real local model
+replies. It records each model tag, installed content digest (checked before
+and after the run), and USD price basis alongside the scripted baseline.
+Local API billing is zero; hardware and electricity are not estimated.
+The live scores are report-only, with strict output-format scoring rather
+than an LLM judge. Only the deterministic baseline controls the exit status
+for task quality. Provider/metadata failures exit nonzero. Redirect stdout
+to a file to retain a comparison.
