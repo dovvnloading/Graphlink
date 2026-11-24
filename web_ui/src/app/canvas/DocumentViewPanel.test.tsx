@@ -60,10 +60,15 @@ describe("Document View knowledge citation focus", () => {
     expect(landmark).toHaveFocus();
   });
 
-  it("highlights the cited markdown passage and scrolls to it without opening Find", async () => {
-    const raw = ["# Runbook", "", "Unrelated introduction.", "", "Restore the **encrypted snapshot** carefully.", "", "Final check."].join("\n");
-    const start = raw.indexOf("Restore the");
-    const end = start + "Restore the **encrypted snapshot** carefully.".length;
+  it.each([
+    { label: "ASCII", introduction: "Unrelated introduction." },
+    { label: "supplementary Unicode", introduction: "😀".repeat(40) },
+  ])("highlights and scrolls to a cited passage after $label without opening Find", async ({ introduction }) => {
+    const before = "# Runbook\n\n" + introduction + "\n\n";
+    const passage = "Restore the **encrypted snapshot** carefully.";
+    const raw = before + passage + "\n\nFinal check.";
+    const start = [...before].length;
+    const end = start + [...passage].length;
     const originalRect = HTMLElement.prototype.getBoundingClientRect;
     const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
       const top = this.classList.contains("document-view-cited-passage") ? 260
@@ -80,6 +85,8 @@ describe("Document View knowledge citation focus", () => {
         const mark = container.querySelector(".document-view-cited-passage");
         expect(mark).not.toBeNull();
         expect(mark).toHaveTextContent("Restore the encrypted snapshot carefully.");
+        expect(container.querySelectorAll(".document-view-cited-passage")).toHaveLength(1);
+        expect(screen.getByText(introduction)).not.toHaveClass("document-view-cited-passage");
       }, LAZY_BODY_TIMEOUT);
       const scrollArea = container.querySelector(".document-view-panel-scroll") as HTMLDivElement;
       await waitFor(() => expect(scrollArea.scrollTop).toBe(220), LAZY_BODY_TIMEOUT);

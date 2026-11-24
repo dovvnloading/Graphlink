@@ -194,9 +194,10 @@ function ZoomImage({ node: _node, alt, src, ...props }: JSX.IntrinsicElements["i
   );
 }
 
-/** Citation offsets refer to the stored source markdown, not to user-entered
- * search text. Highlight rendered block elements whose source positions
- * overlap the verified chunk, including across inline markdown formatting. */
+/** Half-open Unicode code-point offsets into the stored source markdown
+ * (Python string indices, not JavaScript UTF-16 offsets or grapheme counts).
+ * Highlight rendered blocks overlapping the verified chunk, including
+ * across inline markdown formatting. */
 export interface DocumentCitationTarget {
   citationId: string;
   offsetStart: number;
@@ -211,16 +212,38 @@ interface PositionedElement {
   position?: { start?: { offset?: number }; end?: { offset?: number } };
 }
 
-function rehypeHighlightCitedPassage(start: number, end: number) {
+// Python stores half-open ranges in Unicode code points; Markdown AST
+// positions use JavaScript UTF-16 code units. Walk the exact source once
+// up to the end of the citation, without allocating a code-point array.
+function citationRangeInUtf16(content: string, start: number, end: number): { start: number; end: number } | null {
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start || end > content.length) {
+    return null;
+  }
+  let index = 0;
+  let offset = 0;
+  let startOffset = 0;
+  for (const codePoint of content) {
+    if (index === start) startOffset = offset;
+    offset += codePoint.length;
+    index += 1;
+    if (index === end) return { start: startOffset, end: offset };
+  }
+  // The end may be within content.length but outside its code-point length.
+  return null;
+}
+
+function rehypeHighlightCitedPassage(content: string, start: number, end: number) {
   return (tree: PositionedElement) => {
-    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start) return;
+    const range = citationRangeInUtf16(content, start, end);
+    if (!range) return;
+    const { start: firstOffset, end: lastOffset } = range;
     const blocks = new Set(["p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "pre", "table", "blockquote"]);
     function mark(node: PositionedElement) {
       const first = node.position?.start?.offset;
       const last = node.position?.end?.offset;
       if (node.type === "element" && blocks.has(node.tagName ?? "") &&
           typeof first === "number" && typeof last === "number" &&
-          first < end && last > start) {
+          first < lastOffset && last > firstOffset) {
         const existing = node.properties?.className;
         const classNames = Array.isArray(existing) ? existing : [];
         node.properties = {
@@ -255,7 +278,7 @@ export function DocumentViewMarkdown({ content, searchQuery, citation }: {
         rehypeHighlight,
         [rehypeExternalLinks, { target: "_blank", rel: ["nofollow", "noopener", "noreferrer"] }],
         [rehypeHighlightSearchMatches, searchQuery ?? ""],
-        [rehypeHighlightCitedPassage, citation?.offsetStart ?? -1, citation?.offsetEnd ?? -1],
+        [rehypeHighlightCitedPassage, content, citation?.offsetStart ?? -1, citation?.offsetEnd ?? -1],
       ]}
       components={{ pre: CodeBlock, table: TableWrapper, img: ZoomImage, a: MarkdownAnchor, div: MarkdownAlert }}
     >

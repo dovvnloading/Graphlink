@@ -28,6 +28,47 @@ describe("Document View cited passage highlighting", () => {
     expect(screen.getByText("After the cited passage.")).not.toHaveClass("document-view-cited-passage");
   });
 
+  it.each([
+    { label: "emoji before the passage", before: "😀".repeat(20), passage: "Target phrase.", rendered: "Target phrase." },
+    { label: "supplementary scripts before and inside", before: "𐐷".repeat(20), passage: "Target **𠮷** phrase.", rendered: "Target 𠮷 phrase." },
+    { label: "mixed BMP, combining marks and joined emoji", before: "e\u0301 👩‍🔬".repeat(12), passage: "Target **👩‍🔬** e\u0301.", rendered: "Target 👩‍🔬 e\u0301." },
+  ])("highlights only the cited paragraph with $label", ({ before, passage, rendered }) => {
+    const content = [before, passage, "After."].join("\n\n");
+    // Array iteration counts Unicode code points, matching Python's len().
+    const start = [...before].length + 2;
+    const end = start + [...passage].length;
+    const { container } = render(<DocumentViewMarkdown content={content} citation={{
+      citationId: "kb:0123456789abcdef0123", offsetStart: start, offsetEnd: end,
+    }} />);
+    const highlighted = container.querySelectorAll(".document-view-cited-passage");
+    expect(highlighted).toHaveLength(1);
+    expect(highlighted[0]).toHaveTextContent(rendered);
+    expect(screen.getByText(before)).not.toHaveClass("document-view-cited-passage");
+    expect(screen.getByText("After.")).not.toHaveClass("document-view-cited-passage");
+  });
+
+  it("converts the end boundary when a citation spans multiple paragraphs", () => {
+    const first = "😀".repeat(20);
+    const second = "Target phrase.";
+    const cited = [first, second].join("\n\n");
+    const { container } = render(<DocumentViewMarkdown content={cited + "\n\nAfter."} citation={{
+      citationId: "kb:0123456789abcdef0123", offsetStart: 0, offsetEnd: [...cited].length,
+    }} />);
+    const highlighted = container.querySelectorAll(".document-view-cited-passage");
+    expect([...highlighted].map((element) => element.textContent)).toEqual([first, second]);
+    expect(screen.getByText("After.")).not.toHaveClass("document-view-cited-passage");
+  });
+
+  it.each([
+    [-1, 1], [1, 1], [1, 0], [0, 2], [0, 1.5], [NaN, 1], [0, Infinity],
+  ])("rejects invalid code-point range %s:%s", (start, end) => {
+    // This string has two UTF-16 code units but only one code point.
+    const { container } = render(<DocumentViewMarkdown content="😀" citation={{
+      citationId: "kb:0123456789abcdef0123", offsetStart: start, offsetEnd: end,
+    }} />);
+    expect(container.querySelector(".document-view-cited-passage")).toBeNull();
+  });
+
   it("never highlights content for absent or invalid offsets", () => {
     const { container, rerender } = render(<DocumentViewMarkdown content="First paragraph" />);
     expect(container.querySelector(".document-view-cited-passage")).toBeNull();
