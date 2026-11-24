@@ -1000,7 +1000,7 @@ def test_typed_table_parser_limits_tsv_and_error_atomicity(session):
 
 
 def test_graph_runner_accepts_imported_table_node_state(session):
-    from backend.api.intents_graph_runner import _state_data
+    from backend.workflow.graph_execution import _state_data
 
     document, bus, _, _ = session
     grant(bus, "core")

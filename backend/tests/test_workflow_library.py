@@ -89,7 +89,8 @@ def test_invalid_spec_and_secrets():
 def test_capture_unpack_and_run_as_one_step(tmp_path):
     from backend.domain.graph import SceneDocument
     from backend.domain.graph_runner import plan_graph_run
-    from backend.api.intents_graph_runner import _run_reusable_step
+    from backend.workflow.graph_execution import GraphRunExecution
+    from backend.workflow.graph_steps import adapter_for_step
     from backend.workflow import canvas
 
     doc = SceneDocument()
@@ -115,7 +116,17 @@ def test_capture_unpack_and_run_as_one_step(tmp_path):
         assert (wid, rev) == (pin["workflow_id"], pin["revision"])
         return frozen
 
-    asyncio.run(_run_reusable_step(doc, {"runId": "test-run"}, steps[0], {node_id: steps[0]}, resolve))
+    def record(operation, node_ids):
+        return doc.record_command("runGraphStep", "user", operation, node_ids=node_ids, run_id="test-run")
+
+    async def checkpoint():
+        return True
+
+    execution = GraphRunExecution(
+        doc, None, None, checkpoint, {"runId": "test-run"},
+        {node_id: steps[0]}, record, 0, workflow_resolver=resolve,
+    )
+    asyncio.run(adapter_for_step(steps[0]).run(execution, steps[0]))
     assert steps[0]["status"] == "completed"
     assert canvas.data(node)["outputs"]["output_2"]["text"] == "7"
     assert len(steps[0]["childRun"]["steps"]) == 2

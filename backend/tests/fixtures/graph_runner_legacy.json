@@ -1,0 +1,300 @@
+{
+  "note_chain_preview": [
+    {
+      "nodeId": "upstream",
+      "sourceId": "source",
+      "kind": "note",
+      "operation": "copy",
+      "label": "Note",
+      "status": "ready",
+      "detail": "Input has not run yet.",
+      "inputHash": "a507bb09fd9e2f7f6d41039a0eeb5afa49b830cd74156009290d54c2c7071bbe",
+      "configHash": "80ba8cf7d5fbc110c8f0919811e9b9e941b3101b1298d4d408f9a6a27833a774",
+      "targetHash": "db31b7bb122f33ec39529b774f5eaf3d57798d9f743ef89cf91370f94067371b"
+    },
+    {
+      "nodeId": "selected",
+      "sourceId": "upstream",
+      "kind": "note",
+      "operation": "word_count",
+      "label": "Note",
+      "status": "ready",
+      "detail": "Input has not run yet.",
+      "inputHash": "a507bb09fd9e2f7f6d41039a0eeb5afa49b830cd74156009290d54c2c7071bbe",
+      "configHash": "0d6d5ad97185b9811eebae70a2da670beddd314915c621c0478f5e85c778562e",
+      "targetHash": "db31b7bb122f33ec39529b774f5eaf3d57798d9f743ef89cf91370f94067371b"
+    },
+    {
+      "nodeId": "leaf",
+      "sourceId": "selected",
+      "kind": "note",
+      "operation": "copy",
+      "label": "Note",
+      "status": "ready",
+      "detail": "Input has not run yet.",
+      "inputHash": "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce",
+      "configHash": "80ba8cf7d5fbc110c8f0919811e9b9e941b3101b1298d4d408f9a6a27833a774",
+      "targetHash": "db31b7bb122f33ec39529b774f5eaf3d57798d9f743ef89cf91370f94067371b"
+    }
+  ],
+  "note_chain_outputs": [
+    "a507bb09fd9e2f7f6d41039a0eeb5afa49b830cd74156009290d54c2c7071bbe",
+    "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce",
+    "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce"
+  ],
+  "grouped_table_preview": {
+    "nodeId": "grouped",
+    "sourceId": "source",
+    "kind": "table",
+    "operation": "group_sum",
+    "label": "Grouped table",
+    "status": "ready",
+    "detail": "Input has changed.",
+    "inputHash": "cb0a8a8ce2ccb5276f4bb23751d7b3d99398b5dcf66e4ecc3bd29d43f3043296",
+    "configHash": "be7ed1992f3f28a497ee6882f984f91b01285833ebd786e81de92788df341327",
+    "targetHash": "bf308c634fd863f9f2e46dbea62aadef0da199446890e4105e1b70ed615f06e0"
+  },
+  "grouped_table_result": {
+    "content": "Team,Cost\r\n\"A,B\",11\r\nN,1",
+    "outputHash": "91d5646c0fc16569cce7e1a645ca4ce61dc4f6fe4856976bc9ccafb827d45328",
+    "version": 2
+  },
+  "resume_paused": {
+    "status": "interrupted",
+    "steps": [
+      {
+        "kind": "artifact",
+        "operation": "group_sum",
+        "status": "completed"
+      },
+      {
+        "kind": "note",
+        "operation": "copy",
+        "status": "pending"
+      }
+    ],
+    "version": 2
+  },
+  "resume_completed": {
+    "status": "completed",
+    "steps": [
+      {
+        "kind": "artifact",
+        "operation": "group_sum",
+        "status": "completed"
+      },
+      {
+        "kind": "note",
+        "operation": "copy",
+        "status": "completed"
+      }
+    ],
+    "version": 2
+  },
+  "resume_drift": {
+    "status": "partial",
+    "steps": [
+      {
+        "kind": "artifact",
+        "operation": "group_sum",
+        "status": "completed"
+      },
+      {
+        "kind": "note",
+        "operation": "copy",
+        "status": "blocked"
+      }
+    ],
+    "version": 2
+  },
+  "model_note_preview": {
+    "kind": "model",
+    "operation": "model",
+    "status": "ready",
+    "detail": "Local Ollama model: qwen3:8b. Loopback request; verify custom aliases do not route to cloud.",
+    "inputHash": "f04458ca4df92e8d560341ca0e998074b8cffdd2fafe3a3b93d56a2c30f2ba79"
+  },
+  "model_note_result": {
+    "status": "completed",
+    "detail": "External output checkpointed.",
+    "outputHash": "f624a3367017395cbe721221c59d1b747b0edec3d735f37ca6d9a6cf80781427",
+    "content": "Ship safely with clear results.",
+    "phase": "completed"
+  },
+  "model_chain_preview": [
+    {
+      "kind": "model",
+      "operation": "model",
+      "status": "ready",
+      "deferred": false
+    },
+    {
+      "kind": "model",
+      "operation": "model",
+      "status": "waiting",
+      "deferred": true
+    },
+    {
+      "kind": "note",
+      "operation": "word_count",
+      "status": "waiting",
+      "deferred": true
+    }
+  ],
+  "model_chain_result": [
+    {
+      "kind": "model",
+      "operation": "model",
+      "status": "completed",
+      "detail": "External output checkpointed."
+    },
+    {
+      "kind": "model",
+      "operation": "model",
+      "status": "completed",
+      "detail": "External output checkpointed."
+    },
+    {
+      "kind": "note",
+      "operation": "word_count",
+      "status": "completed",
+      "detail": "Output updated."
+    }
+  ],
+  "science_preview": [
+    {
+      "kind": "scientific",
+      "operation": "numeric_csv",
+      "status": "ready",
+      "detail": "Scientific inputs are ready."
+    },
+    {
+      "kind": "scientific",
+      "operation": "numeric_csv",
+      "status": "ready",
+      "detail": "Scientific inputs are ready."
+    },
+    {
+      "kind": "scientific",
+      "operation": "linear_regression",
+      "status": "waiting",
+      "detail": "Awaiting an upstream result."
+    }
+  ],
+  "science_result": {
+    "steps": [
+      {
+        "kind": "scientific",
+        "operation": "numeric_csv",
+        "status": "completed",
+        "detail": "Scientific result recorded."
+      },
+      {
+        "kind": "scientific",
+        "operation": "numeric_csv",
+        "status": "completed",
+        "detail": "Scientific result recorded."
+      },
+      {
+        "kind": "scientific",
+        "operation": "linear_regression",
+        "status": "completed",
+        "detail": "Scientific result recorded."
+      }
+    ],
+    "inputs": {
+      "x": [
+        2.0,
+        4.0,
+        6.0
+      ],
+      "y": [
+        5.0,
+        8.0,
+        11.0
+      ]
+    }
+  },
+  "mcp_preview": [
+    {
+      "kind": "tool",
+      "operation": "tool",
+      "status": "ready",
+      "detail": "MCP inputs are ready for review."
+    },
+    {
+      "kind": "tool",
+      "operation": "tool",
+      "status": "waiting",
+      "detail": "Awaiting an upstream result."
+    },
+    {
+      "kind": "note",
+      "operation": "copy",
+      "status": "waiting",
+      "detail": "Awaiting an upstream result."
+    }
+  ],
+  "mcp_chain_result": [
+    {
+      "kind": "tool",
+      "operation": "tool",
+      "status": "completed",
+      "detail": "External output checkpointed."
+    },
+    {
+      "kind": "tool",
+      "operation": "tool",
+      "status": "completed",
+      "detail": "External output checkpointed."
+    },
+    {
+      "kind": "note",
+      "operation": "copy",
+      "status": "completed",
+      "detail": "Output updated."
+    }
+  ],
+  "mcp_dispatch_fence": {
+    "status": "running",
+    "detail": "External request reserved; awaiting its outcome.",
+    "attempt": {
+      "kind": "tool",
+      "provider": "mcp:test-server",
+      "model": "",
+      "tool": "echo",
+      "phase": "dispatched",
+      "inputRef": "mcp-input:<inputHash>",
+      "inputHash": "<inputHash>",
+      "requestId": "<requestId>"
+    }
+  },
+  "mcp_completed_fence": {
+    "status": "completed",
+    "detail": "External output checkpointed.",
+    "attempt": {
+      "kind": "tool",
+      "provider": "mcp:test-server",
+      "model": "",
+      "tool": "echo",
+      "phase": "completed",
+      "inputRef": "mcp-input:<inputHash>",
+      "inputHash": "<inputHash>",
+      "requestId": "<requestId>"
+    }
+  },
+  "mcp_uncertain_fence": {
+    "status": "reconciliation-required",
+    "detail": "The external request may have run or incurred a charge. Reconcile its request ID with the provider before starting another attempt.",
+    "attempt": {
+      "kind": "tool",
+      "provider": "mcp:test-server",
+      "model": "",
+      "tool": "echo",
+      "phase": "reconciliation-required",
+      "inputRef": "mcp-input:<inputHash>",
+      "inputHash": "<inputHash>",
+      "requestId": "<requestId>"
+    }
+  }
+}
