@@ -56,6 +56,7 @@ from backend import knowledge_store
 from backend import native_dialogs
 from backend import workspace_archive
 from backend import workflow_run_store
+from backend.workflow import detached_store
 from backend.canvas import SceneDocument
 from backend.domain.node_states import ChatState
 from backend.api.intents_graph_runner import register_graph_runner
@@ -121,7 +122,7 @@ class ConcurrentSaveConflict(RuntimeError):
 # The note-edge fix adds version "5": the notes table gains a note_id
 # column so note-endpoint edges survive a save/load round-trip - see
 # _migration_005_note_ids's own docstring.
-CHATS_DB_SCHEMA_VERSION = 6
+CHATS_DB_SCHEMA_VERSION = 7
 
 
 # ADR-009 stage 9.2: `created_at` and historical `updated_at` values use
@@ -1119,6 +1120,7 @@ _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     4: _migration_004_workspace_defaults,
     5: _migration_005_note_ids,
     6: workflow_run_store.migrate,
+    7: detached_store.migrate,
 }
 
 

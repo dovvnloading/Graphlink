@@ -26,6 +26,7 @@ from pathlib import Path
 from backend.asset_store import AssetStore, _CONTENT_REF_RE, assets_dir_for
 from backend.db_backup import _valid_backup, list_backups
 from backend.instance_lock import exclusive_data_directory
+from backend.workflow.detached_store import TABLE as DETACHED_RUN_TABLE, prune as prune_detached_runs
 from backend.workspace_archive import _collect_asset_refs, _collect_externalized_plugin_refs
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,15 @@ def _read_references(database: Path, *, immutable: bool, asset_store: AssetStore
                 # typed scientific table. Fail closed if its refs cannot be
                 # inspected: pruning an unknown dependency is never safe.
                 _collect_externalized_plugin_refs(parsed, refs, asset_store, strict=True)
+        if DETACHED_RUN_TABLE in tables:
+            for (payload,) in conn.execute("SELECT payload FROM detached_workflow_runs"):
+                try:
+                    parsed = json.loads(payload)
+                except (TypeError, ValueError) as exc:
+                    raise RuntimeError("Unreadable detached workflow run; refusing asset cleanup.") from exc
+                if not isinstance(parsed, dict):
+                    raise RuntimeError("Invalid detached workflow run; refusing asset cleanup.")
+                _collect_asset_refs(parsed, refs)
     return refs
 
 
@@ -119,6 +129,11 @@ def collect_unreferenced_assets(
     with exclusive_data_directory(db_path):
         root = assets_dir_for(db_path)
         store = AssetStore(root)
+        if apply:
+            with contextlib.closing(sqlite3.connect(db_path, timeout=10)) as conn, conn:
+                if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                                (DETACHED_RUN_TABLE,)).fetchone():
+                    prune_detached_runs(conn)
         refs = _read_references(db_path, immutable=False, asset_store=store)
         for backup in list_backups(db_path):
             if not _valid_backup(backup, required_table=_CHAT_TABLES):
