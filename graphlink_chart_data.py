@@ -9,6 +9,10 @@ from decimal import Decimal, localcontext
 
 SUPPORTED_CHART_TYPES = frozenset({"bar", "line", "pie", "histogram", "sankey", "scatter", "boxplot", "heatmap"})
 MAX_SERIES_POINTS = 300
+# Scientific line/scatter arrays retain all finite observations, while the
+# SVG renderer uses bounded, viewport-aware samples. Other chart types keep
+# their original 300-item bounds to protect memory and publication output.
+MAX_SCIENTIFIC_OBSERVATIONS = 10_000
 MAX_NAMED_SERIES = 12
 MAX_SANKEY_FLOWS = 300
 MAX_LABEL_LENGTH = 160
@@ -441,8 +445,8 @@ def _scientific_chart(data, chart_type, result):
             raise ChartDataError("xValues must be a list")
         if not raw_x:
             raise ChartDataError("xValues require at least one data point")
-        if len(raw_x) > MAX_SERIES_POINTS:
-            raise ChartDataError(f"Charts support at most {MAX_SERIES_POINTS} data points")
+        if len(raw_x) > MAX_SCIENTIFIC_OBSERVATIONS:
+            raise ChartDataError(f"Charts support at most {MAX_SCIENTIFIC_OBSERVATIONS} data points")
         x_values = [_finite_number(value, f"xValues at index {i}") for i, value in enumerate(raw_x)]
         result["xValues"] = x_values
     else:
@@ -464,8 +468,8 @@ def _scientific_chart(data, chart_type, result):
     if labels is not None:
         if not isinstance(labels, list):
             raise ChartDataError("Labels must be a list")
-        if len(labels) > MAX_SERIES_POINTS:
-            raise ChartDataError(f"Charts support at most {MAX_SERIES_POINTS} data points")
+        if len(labels) > MAX_SCIENTIFIC_OBSERVATIONS:
+            raise ChartDataError(f"Charts support at most {MAX_SCIENTIFIC_OBSERVATIONS} data points")
         result["labels"] = [_clean_text(label, f"Label at index {i}") for i, label in enumerate(labels)]
 
     raw_series = data.get("series")
@@ -490,8 +494,8 @@ def _scientific_chart(data, chart_type, result):
                 raise ChartDataError(f"series {name} values must be a list")
             if not values:
                 raise ChartDataError(f"series {name} requires at least one data point")
-            if len(values) > MAX_SERIES_POINTS:
-                raise ChartDataError(f"Charts support at most {MAX_SERIES_POINTS} data points")
+            if len(values) > MAX_SCIENTIFIC_OBSERVATIONS:
+                raise ChartDataError(f"Charts support at most {MAX_SCIENTIFIC_OBSERVATIONS} data points")
             row = {
                 "name": name,
                 "values": [_finite_number(value, f"series {name} value at index {i}") for i, value in enumerate(values)],
@@ -505,8 +509,8 @@ def _scientific_chart(data, chart_type, result):
         raw_values = data.get("values")
         if not isinstance(raw_values, list) or not raw_values:
             raise ChartDataError(f"{chart_type.title()} charts require at least one data point")
-        if len(raw_values) > MAX_SERIES_POINTS:
-            raise ChartDataError(f"Charts support at most {MAX_SERIES_POINTS} data points")
+        if len(raw_values) > MAX_SCIENTIFIC_OBSERVATIONS:
+            raise ChartDataError(f"Charts support at most {MAX_SCIENTIFIC_OBSERVATIONS} data points")
         series = [{
             "values": [_finite_number(value, f"Value at index {i}") for i, value in enumerate(raw_values)],
         }]
@@ -523,8 +527,8 @@ def _scientific_chart(data, chart_type, result):
             raise ChartDataError(f"series {row.get('name', 'values')} length must match the other series ({count})")
     if chart_type == "line" and count < 2:
         raise ChartDataError("Line charts require at least two data points")
-    if count > MAX_SERIES_POINTS or len(series) * count > MAX_SERIES_POINTS:
-        raise ChartDataError(f"Charts support at most {MAX_SERIES_POINTS} total series points")
+    if count > MAX_SCIENTIFIC_OBSERVATIONS or len(series) * count > MAX_SCIENTIFIC_OBSERVATIONS:
+        raise ChartDataError(f"Charts support at most {MAX_SCIENTIFIC_OBSERVATIONS} total series points")
     if x_values is not None and len(x_values) != count:
         raise ChartDataError(f"xValues length must match the series length ({count})")
     if "labels" in result and len(result["labels"]) != count:

@@ -9,6 +9,7 @@ import { scientificExtents } from "./ScientificChartMarks";
 import { linearFits, regressionYExtent } from "./linearFit";
 import { raincloudDensity, raincloudJitter } from "./raincloud";
 import { clusterHeatmap } from "./heatmapClustering";
+import { scientificMarkIndices } from "./scientificSampling";
 
 const WIDTH = 240;
 const HEIGHT = 116;
@@ -101,8 +102,10 @@ function overviewMarks(spec: ChartDataRow, chartType: string) {
     const y = data.yScale === "log10"
       ? createLog10Scale(yDomain, [HEIGHT - 10, 8])
       : createLinearScale(yDomain, [HEIGHT - 10, 8]);
-    return series.map((row, seriesIndex) => (
-      <g key={seriesIndex} className="chart-overview-scientific-series">
+    return series.map((row, seriesIndex) => {
+      const indices = scientificMarkIndices(xs, row.values, undefined, Math.floor(400 / series.length),
+        chartType === "line" ? "line" : "scatter", row.yError);
+      return <g key={seriesIndex} className="chart-overview-scientific-series">
         {fits && <>
           <polygon fill={PALETTE[seriesIndex % PALETTE.length]} fillOpacity={0.18}
             points={[
@@ -114,9 +117,10 @@ function overviewMarks(spec: ChartDataRow, chartType: string) {
         </>}
         {chartType === "line" && (
           <polyline fill="none" stroke={PALETTE[seriesIndex % PALETTE.length]}
-            strokeWidth="2" points={xs.map((v, i) => x(v) + "," + y(row.values[i])).join(" ")} />
+            strokeWidth="2" points={indices.map(i => x(xs[i]) + "," + y(row.values[i])).join(" ")} />
         )}
-        {xs.map((xValue, index) => {
+        {indices.map((index) => {
+          const xValue = xs[index];
           const cx = x(xValue);
           const cy = y(row.values[index]);
           const xError = row.xError?.[index];
@@ -130,8 +134,8 @@ function overviewMarks(spec: ChartDataRow, chartType: string) {
             </g>
           );
         })}
-      </g>
-    ));
+      </g>;
+    });
   }
 
   const values = spec.values ?? [];

@@ -20,6 +20,7 @@ export const SUPPORTED_CHART_TYPES = ["bar", "line", "pie", "histogram", "sankey
 export type SupportedChartType = (typeof SUPPORTED_CHART_TYPES)[number];
 
 const MAX_SERIES_POINTS = 300;
+const MAX_SCIENTIFIC_OBSERVATIONS = 10_000;
 const MAX_NAMED_SERIES = 12;
 const MAX_SANKEY_FLOWS = 300;
 const MAX_LABEL_LENGTH = 160;
@@ -329,7 +330,7 @@ function canonicalizeScientific(raw: Record<string, unknown>, type: "line" | "sc
   if (raw.xValues != null) {
     if (!Array.isArray(raw.xValues)) throw new ChartSpecError("xValues must be a list");
     if (raw.xValues.length === 0) throw new ChartSpecError("xValues require at least one data point");
-    if (raw.xValues.length > MAX_SERIES_POINTS) throw new ChartSpecError("Charts support at most 300 data points");
+    if (raw.xValues.length > MAX_SCIENTIFIC_OBSERVATIONS) throw new ChartSpecError("Scientific charts support at most 10000 data points");
     xValues = raw.xValues.map((value, i) => finiteNumber(value, "xValues at index " + i));
     output.xValues = xValues;
   }
@@ -369,7 +370,7 @@ function canonicalizeScientific(raw: Record<string, unknown>, type: "line" | "sc
       names.add(name);
       if (!Array.isArray(item.values)) throw new ChartSpecError("series " + name + " values must be a list");
       if (!item.values.length) throw new ChartSpecError("series " + name + " requires at least one data point");
-      if (item.values.length > MAX_SERIES_POINTS) throw new ChartSpecError("Charts support at most 300 data points");
+      if (item.values.length > MAX_SCIENTIFIC_OBSERVATIONS) throw new ChartSpecError("Scientific charts support at most 10000 data points");
       const values = item.values.map((value, i) => finiteNumber(value, "series " + name + " value at index " + i));
       const row: ChartScientificSeriesRow = { name, values };
       for (const field of ["xError", "yError"] as const) {
@@ -383,7 +384,7 @@ function canonicalizeScientific(raw: Record<string, unknown>, type: "line" | "sc
     if (!Array.isArray(raw.values) || !raw.values.length) {
       throw new ChartSpecError(type[0].toUpperCase() + type.slice(1) + " charts require at least one data point");
     }
-    if (raw.values.length > MAX_SERIES_POINTS) throw new ChartSpecError("Charts support at most 300 data points");
+    if (raw.values.length > MAX_SCIENTIFIC_OBSERVATIONS) throw new ChartSpecError("Scientific charts support at most 10000 data points");
     const values = raw.values.map((value, i) => finiteNumber(value, "Value at index " + i));
     const row: ScientificValues = { values };
     output.values = values;
@@ -402,8 +403,8 @@ function canonicalizeScientific(raw: Record<string, unknown>, type: "line" | "sc
     }
   }
   if (type === "line" && count < 2) throw new ChartSpecError("Line charts require at least two data points");
-  if (count > MAX_SERIES_POINTS || series.length * count > MAX_SERIES_POINTS) {
-    throw new ChartSpecError("Charts support at most 300 total series points");
+  if (count > MAX_SCIENTIFIC_OBSERVATIONS || series.length * count > MAX_SCIENTIFIC_OBSERVATIONS) {
+    throw new ChartSpecError("Scientific charts support at most 10000 total series points");
   }
   if (xValues && xValues.length !== count) {
     throw new ChartSpecError("xValues length must match the series length (" + count + ")");

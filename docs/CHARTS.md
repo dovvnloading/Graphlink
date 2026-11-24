@@ -380,3 +380,25 @@ the original matrix; the full data color domain and colorbar are unchanged.
 The on-canvas SVG, overview and publication export use the same deterministic
 reordering rule. This is exploratory clustering, not an inferential test;
 the Euclidean metric is sensitive to units and feature scaling.
+
+
+### Full-resolution scientific data with adaptive SVG sampling
+
+Scientific `line` (with numeric X) and `scatter` charts now accept up to
+**10,000 total series observations** with canonical finite-range checking.
+Bar, pie, histogram, Sankey, box plot and heatmap limits are unchanged.
+The v1 schema remains backwards compatible: no observations are truncated
+during validation, persistence, statistics or publication export.
+
+To keep the local-first canvas responsive, its scientific SVG shows at most
+1,200 representative point glyphs shared across series (and at most 400 in
+the minimap preview). The sampling is deterministic: input-order buckets
+contribute X extrema, Y/error endpoints extrema, plus the first and last
+observations. On pan and zoom, visible observations are reselected from the
+full original array. For scatter, samples are additionally restricted by
+the current Y viewport. This is a **display-only** approximation: it
+does not represent point density and must not be used for inferential
+calculations. The chart status indicates when sampling is active.
+The publication exporter and numerical fit use all measurements.
+This does not yet implement external Arrow datasets or unrestricted
+million-point visualizations.

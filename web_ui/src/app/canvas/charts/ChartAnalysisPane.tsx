@@ -60,6 +60,9 @@ export function ChartAnalysisPane({
     - (analysis.regression || analysis.distribution ? 18 : 0));
   const fits = useMemo(() => (chartType === "line" || chartType === "scatter") ? linearFits(chartData) : null, [chartData, chartType]);
   const displayData = analysis === persisted ? chartData : { ...chartData, analysis };
+  const scientificObservations = chartType === "scatter" || chartType === "line"
+    ? (chartData.series?.reduce((sum, series) => sum + series.values.length, 0)
+      ?? chartData.values?.length ?? 0) : 0;
   const frame = chartFrame(displayData, chartType, width, plotHeight);
   const [view, setView] = useState<ViewDomains | null>(null);
   const current: ViewDomains = {
@@ -303,6 +306,10 @@ export function ChartAnalysisPane({
           Unweighted OLS · 95% pointwise mean CI · {fits.map((fit, i) =>
             (chartData.series?.[i].name ? chartData.series[i].name + ": " : "")
             + "n=" + fit.n + ", R²=" + (fit.r2 === null ? "undefined" : fit.r2.toFixed(3))).join(" · ")}
+        </div>}
+        {scientificObservations > 1200 && <div className="chart-analysis-status">
+          {scientificObservations.toLocaleString("en-US")} original observations retained ·
+          viewport-aware SVG sampling · export uses all observations
         </div>}
         {analysis.distribution === "raincloud" && <div className="chart-analysis-status">
           Gaussian density (relative peak) · quartiles · individual observations

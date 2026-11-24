@@ -3,6 +3,7 @@
  * SVG; only the scale (linear/log10) changes, never the numeric data. */
 import { useId } from "react";
 import { linearFits, regressionYExtent } from "./linearFit";
+import { scientificMarkBudget, scientificMarkIndices } from "./scientificSampling";
 import type { AxisScale, ErrorPair } from "../chartSpec";
 import type { ViewDomains } from "./chartViewport";
 import type { ChartMarksProps } from "./BarChartMarks";
@@ -157,8 +158,10 @@ export function ScientificChartMarks({
       {series.map((row, seriesIndex) => {
         const color = palette[seriesIndex % palette.length];
         const name = row.name || data.title || "Series";
-        const path = xValues.map((xValue, index) =>
-          (index === 0 ? "M " : "L ") + x(xValue) + " " + y(row.values[index]),
+        const indices = scientificMarkIndices(xValues, row.values, viewport,
+          scientificMarkBudget(series.length), chartType === "line" ? "line" : "scatter", row.yError);
+        const path = indices.map((index, position) =>
+          (position === 0 ? "M " : "L ") + x(xValues[index]) + " " + y(row.values[index]),
         ).join(" ");
         return (
           <g key={name} className="chart-scientific-series" data-series={name}>
@@ -182,7 +185,8 @@ export function ScientificChartMarks({
               <path className="chart-series-line" d={path} fill="none"
                 stroke={color} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
             )}
-            {xValues.map((xValue, index) => {
+            {indices.map((index) => {
+              const xValue = xValues[index];
               const value = row.values[index];
               const centerX = x(xValue);
               const centerY = y(value);
