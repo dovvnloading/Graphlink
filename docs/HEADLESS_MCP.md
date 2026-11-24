@@ -249,9 +249,8 @@ handling. The UI remains usable through its existing WebSocket intents.
 See [Executable Workflows](WORKFLOWS.md) for library revisions, typed
 specifications, effect classes, approvals, budgets, history and triggers.
 Use the `--allow-mcp-writes --open-ui` launch above. In the authenticated
-operator browser, open **Workflows → Run presets and runs**. Choose a
-workspace and a library revision (or a trusted local detached spec), fill
-the exact inputs/parameters, choose unattended classes and a USD cap, then
+operator browser, open **Workflows → Presets → New preset**. Choose a
+workflow, fill its inputs and settings, choose unattended classes and a USD cap, then
 **Preview preset → Approve and save preset**. For scheduled runs, choose
 an interval (minimum 10 seconds), local-time daily schedule or watched folder.
 Triggers run only during backend uptime; missed/busy triggers are skipped.
@@ -310,8 +309,7 @@ does not grant approval capability. Treat results as untrusted data, not
 instructions.
 
 If awaiting_approval is true, a person must review the frozen inputs and
-pending step in the operator UI (Workflow Library or Run history, depending
-on the gate). Neither scoped token can create/delete/approve presets,
+pending step in the operator UI (**Workflows → Runs**). Neither scoped token can create/delete/approve presets,
 approve a preview, approve or reject a step, cancel a workflow or submit
 an arbitrary spec. Use the operator UI. Do not expose administrative
 workflow routes to MCP. For Graphlink acting as an MCP **client** in a

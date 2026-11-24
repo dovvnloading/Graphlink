@@ -430,6 +430,11 @@ def test_unattended_effects_pause_and_require_one_time_operator_decisions(tmp_pa
         assert first["step_id"] == "code"
         assert local.finished == ["root"] and not executes.started and not writes.started
         assert notifications == [(ws, run, "code")]
+        # The paused unattended step must reach the app-wide approval feed,
+        # without exposing its nonce there.
+        gates = [gate for gate in engine.pending_approvals() if gate["run_id"] == run]
+        assert [(gate["kind"], gate["step_id"]) for gate in gates] == [("unattended", "code")]
+        assert first["nonce"] not in str(gates)
         with pytest.raises(ValueError, match="active run"):
             engine.start(ws, spec, params, unattended=policy)
         with pytest.raises(ValueError, match="no longer awaiting"):

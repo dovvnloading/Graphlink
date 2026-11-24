@@ -252,7 +252,7 @@ def test_human_gate_pauses_without_duration_timeout(tmp_path, monkeypatch, appro
         await _until(lambda: bool(engine.pending_approvals()))
         assert engine.pending_approvals() == [
             {"workspace_id": ws, "run_id": run_id, "workflow": "Control flow",
-             "step_id": "gate", "message": "Review the report"},
+             "step_id": "gate", "kind": "gate", "message": "Review the report"},
         ]
         clock.now += 0.7
         await asyncio.sleep(0.7)

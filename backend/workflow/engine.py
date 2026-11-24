@@ -281,15 +281,30 @@ class WorkflowEngine:
         return True
 
     def pending_approvals(self) -> list[dict[str, Any]]:
-        """Active gates, scoped to the authenticated local application."""
-        return [
+        """Active gates, scoped to the authenticated local application.
+
+        Both kinds of wait are listed: an Approval step inside the workflow
+        ("gate") and an unattended run paused before a step its preset may
+        not run on its own ("unattended"). Nonces stay in the run record.
+        """
+        gates = [
             {"workspace_id": run.workspace_id, "run_id": run.record["run_id"],
-             "workflow": run.plan.spec.name, "step_id": step_id,
+             "workflow": run.plan.spec.name, "step_id": step_id, "kind": "gate",
              "message": run.record["steps"][step_id]["approval"]["message"]}
             for run in self._runs.values()
             for step_id, future in run.approvals.items()
             if not future.done() and run.stop_reason is None
         ]
+        for run in self._runs.values():
+            pending = run.record.get("awaiting_approval")
+            if pending and run.stop_reason is None:
+                gates.append({
+                    "workspace_id": run.workspace_id, "run_id": run.record["run_id"],
+                    "workflow": run.plan.spec.name, "step_id": pending["step_id"], "kind": "unattended",
+                    "message": f"Paused before the {pending['side_effect_class']} step {pending['step_id']}. "
+                               "Nothing in it has run. Review it before it runs.",
+                })
+        return gates
 
     def decide_step(self, workspace_id: int, run_id: str, step_id: str, nonce: str | bool,
                     *, approved: bool | None = None) -> bool | None:

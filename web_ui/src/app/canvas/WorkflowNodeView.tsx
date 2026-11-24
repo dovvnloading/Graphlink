@@ -1,3 +1,4 @@
+/* eslint-disable jsx-a11y/no-noninteractive-tabindex -- each result is a scrollable, read-only region that must be keyboard focusable (WCAG 2.1.1). */
 import { memo, useEffect, useState, useSyncExternalStore } from "react";
 import type { Node, NodeProps } from "@xyflow/react";
 import { useOverlays } from "../overlays/overlays";
@@ -8,12 +9,15 @@ import { NumberField } from "../ui/NumberField";
 import { Select } from "../ui/Select";
 import { InlineAlert } from "../ui/InlineAlert";
 import { useConfirm } from "../ui/ConfirmDialog";
+import { Badge } from "../ui/Badge";
+import { MenuButton, MenuItem } from "../ui/Menu";
 import { NodeShell } from "./NodeShell";
 import { NodeHeading } from "./NodeHeading";
 import { CollapseToggleButton } from "./CollapseToggleButton";
 import { useLodVisibility } from "./useLodVisibility";
 import { availableTextSources, textSourceLabel } from "./textInputs";
 import { WorkflowSpecView } from "../chrome/WorkflowSpecView";
+import { stepName } from "../chrome/WorkflowPreviewSummary";
 import type { SceneStore } from "./sceneStore";
 import { readWorkflowNode, workflowPin, type WorkflowDocument, type WorkflowNodeState, type WorkflowVersion } from "./workflowLibrary";
 import "./McpToolNodeView.css";
@@ -67,60 +71,77 @@ function Editor({ id, state, store, x, y }: { id: string; state: WorkflowNodeSta
       sources: Object.fromEntries(Object.entries(sources).filter(([, source]) => !!source)) });
     if (!saved) throw new Error("Another graph operation is in progress. Try again.");
   }
-  return <>
-    <p>Workflow · pinned version {state.version}</p>
-    <WorkflowSpecView value={state.document} />
-    {error && <InlineAlert variant="error" title="Workflow" body={error} />}
-    <Button size="sm" disabled={busy} onClick={() => void act(checkVersion)}>Check for newer version</Button>
-    {latest && <InlineAlert variant="info" title="Newer version available" body={"Version " + latest.version + " is available. Your pinned version will not change automatically."} />}
-    {latest && !preview && <Button size="sm" disabled={busy} onClick={() => void act(async () => {
-      setPreview(await store.workflowLibrary<WorkflowDocument>("get", { workflow_id: spec.workflow_id, revision: latest.revision }));
-    })}>Preview upgrade</Button>}
-    {preview && latest && <section>
-      <h4>Upgrade preview</h4>
-      <p>Current version {state.version} → version {latest.version}. Upgrading clears saved inputs, parameters and outputs; review the new definition.</p>
+  const outputs = Object.entries(state.outputs);
+  const label = (name: string, kind?: string) => stepName(name) + (kind && kind !== "text" ? " (" + kind + ")" : "");
+  return <div className="workflow-node">
+    <div className="workflow-node-summary">
+      <Badge>Version {state.version}</Badge>
+      <WorkflowSpecView value={state.document} />
+    </div>
+    {error && <InlineAlert variant="error" title="This workflow node failed" body={error} />}
+    {latest && !preview && <InlineAlert title={"Version " + latest.version + " is available"}
+      body={"This node stays on version " + state.version + " until you upgrade it."}
+      action={{ label: "Review upgrade", onClick: () => void act(async () => {
+        setPreview(await store.workflowLibrary<WorkflowDocument>("get", { workflow_id: spec.workflow_id, revision: latest.revision }));
+      }) }} />}
+    {preview && latest && <section className="workflow-node-upgrade" aria-label="Upgrade preview">
+      <h4>Upgrade to version {latest.version}</h4>
+      <p className="workflow-muted">Upgrading clears the inputs, settings and results on this node. Review the new definition first.</p>
       <WorkflowSpecView value={preview} />
-      <Button disabled={busy} variant="primary" onClick={() => void act(async () => {
-        if (!await askConfirm({ title: "Upgrade pinned workflow?", body: "The node will use the reviewed version. Existing input values and outputs will be cleared.", confirmLabel: "Upgrade" })) return;
-        await store.mutateWorkflowNode("upgrade", { node_id: id, ...workflowPin(preview), expected_revision: spec.revision });
-        setPreview(null);
-      })}>Upgrade to version {latest.version}</Button>
-      <Button onClick={() => setPreview(null)}>Cancel preview</Button>
+      <div className="workflow-actions">
+        <Button size="sm" variant="primary" disabled={busy} onClick={() => void act(async () => {
+          if (!await askConfirm({ title: "Upgrade this workflow node?", body: "It will use version " + latest.version + ". Its inputs and results are cleared.", confirmLabel: "Upgrade" })) return;
+          await store.mutateWorkflowNode("upgrade", { node_id: id, ...workflowPin(preview), expected_revision: spec.revision });
+          setPreview(null);
+        })}>Upgrade to version {latest.version}</Button>
+        <Button size="sm" variant="ghost" onClick={() => setPreview(null)}>Cancel</Button>
+      </div>
     </section>}
-    {spec.inputs.map(port => <div key={port.name}>
-      {port.kind === "text" && <Select label={port.name + " source"} value={sources[port.name] ?? ""}
-        options={[{ value: "", label: "Enter text" }, ...sourceChoices.map(node => ({ value: node.id, label: textSourceLabel(node) })),
-          ...(sources[port.name] && !sourceChoices.some(n => n.id === sources[port.name]) ? [{ value: sources[port.name], label: "Missing source", disabled: true }] : [])]}
-        onChange={value => setSources(old => ({ ...old, [port.name]: value }))} disabled={busy} />}
-      {!sources[port.name] && <TextArea label={port.name + " · " + port.kind} value={inputs[port.name] ?? ""}
-        disabled={busy} onValueChange={value => setInputs(old => ({ ...old, [port.name]: value }))} />}
-    </div>)}
-    {state.document.parameters.map(p => {
-      const step = spec.steps.find(s => s.step_id === p.step_id);
-      const defaultValue = step ? JSON.parse(step.config_json)[p.setting] : "";
-      const value = parameters[p.name] ?? defaultValue;
-      const change = (next: string | number) => setParameters(old => ({ ...old, [p.name]: next }));
-      if (p.kind === "choice") return <Select key={p.name} label={p.name} value={String(value)} options={p.choices.map(c => ({ value: c, label: c }))} onChange={change} disabled={busy} />;
-      if (p.kind === "number") return <NumberField key={p.name} label={p.name} value={typeof value === "number" ? value : ""} onValueChange={change} disabled={busy} />;
-      return <TextField key={p.name} label={p.name} value={String(value)} onValueChange={change} disabled={busy} />;
-    })}
-    <div className="mcp-actions">
-      <Button size="sm" disabled={busy} onClick={() => void act(save)}>Save inputs</Button>
-      <Button size="sm" variant="primary" disabled={busy} onClick={() => void act(async () => {
+    {(spec.inputs.length > 0 || state.document.parameters.length > 0) && <div className="workflow-node-inputs">
+      {spec.inputs.map(port => <div key={port.name} className="workflow-node-input">
+        {port.kind === "text" && <Select label={label(port.name) + " comes from"} value={sources[port.name] ?? ""}
+          options={[{ value: "", label: "Text typed here" }, ...sourceChoices.map(node => ({ value: node.id, label: textSourceLabel(node) })),
+            ...(sources[port.name] && !sourceChoices.some(n => n.id === sources[port.name]) ? [{ value: sources[port.name], label: "Missing source", disabled: true }] : [])]}
+          onChange={value => setSources(old => ({ ...old, [port.name]: value }))} disabled={busy} />}
+        {!sources[port.name] && <TextArea label={port.kind === "text" ? label(port.name) : label(port.name, port.kind)} minRows={2} maxRows={8}
+          value={inputs[port.name] ?? ""} disabled={busy} onValueChange={value => setInputs(old => ({ ...old, [port.name]: value }))} />}
+      </div>)}
+      {state.document.parameters.map(p => {
+        const step = spec.steps.find(s => s.step_id === p.step_id);
+        const defaultValue = step ? JSON.parse(step.config_json)[p.setting] : "";
+        const value = parameters[p.name] ?? defaultValue;
+        const change = (next: string | number) => setParameters(old => ({ ...old, [p.name]: next }));
+        if (p.kind === "choice") return <Select key={p.name} label={label(p.name)} value={String(value)} options={p.choices.map(c => ({ value: c, label: c }))} onChange={change} disabled={busy} />;
+        if (p.kind === "number") return <NumberField key={p.name} label={label(p.name)} value={typeof value === "number" ? value : ""} onValueChange={change} disabled={busy} />;
+        return <TextField key={p.name} label={label(p.name)} value={String(value)} onValueChange={change} disabled={busy} />;
+      })}
+    </div>}
+    <div className="workflow-actions">
+      <Button size="sm" variant="primary" iconStart="play" disabled={busy} onClick={() => void act(async () => {
         await save(); store.requestGraphRunnerNodes([id]); overlays.open("graph-runner", "dialog");
       })}>Preview run</Button>
-      <Button size="sm" disabled={busy} onClick={() => void act(async () => {
-        await store.mutateWorkflowNode("unpack", { ...workflowPin(state.document), inputs: values(), parameters,
-          sources: Object.fromEntries(Object.entries(sources).filter(([, source]) => !!source)), x: x + 360, y });
-      })}>Unpack editable nodes</Button>
+      <Button size="sm" variant="secondary" disabled={busy} onClick={() => void act(save)}>Save inputs</Button>
+      <MenuButton label="More" menuLabel="More actions for this workflow node" disabled={busy}>
+        <MenuItem label="Check for a newer version" icon="refresh" onSelect={() => void act(checkVersion)} />
+        <MenuItem label="Unpack as editable nodes" icon="layers" onSelect={() => void act(async () => {
+          await store.mutateWorkflowNode("unpack", { ...workflowPin(state.document), inputs: values(), parameters,
+            sources: Object.fromEntries(Object.entries(sources).filter(([, source]) => !!source)), x: x + 360, y });
+        })} />
+        <MenuItem label="Delete node…" icon="trash" destructive onSelect={() => void act(async () => {
+          if (await askConfirm({ title: "Delete this workflow node?", body: "The workflow stays in the library.", confirmLabel: "Delete node", destructive: true })) store.removeNodes([id]);
+        })} />
+      </MenuButton>
     </div>
-    {Object.entries(state.outputs).map(([name, output]) => <TextArea key={name} label={name + " · result"}
-      value={output.kind === "text" ? output.text : JSON.stringify(output, null, 2)} readOnly />)}
-    {state.childRunId && <p>Child run: <code>{state.childRunId}</code></p>}
-    <Button size="sm" disabled={busy} onClick={() => void act(async () => {
-      if (await askConfirm({ title: "Delete Workflow node?", body: "The library definition is not deleted.", confirmLabel: "Delete node", destructive: true })) store.removeNodes([id]);
-    })}>Delete node</Button>
-  </>;
+    {outputs.length > 0 && <section className="workflow-node-results" aria-label="Results">
+      <h4>Results</h4>
+      {outputs.map(([name, output]) => <div key={name} className="workflow-value">
+        <span className="workflow-value-name">{stepName(name)}</span>
+        <pre className="workflow-pre" tabIndex={0} role="region" aria-label={stepName(name) + " result"}>
+          {output.kind === "text" ? output.text : JSON.stringify(output.kind === "json" ? output.value : output, null, 2)}
+        </pre>
+      </div>)}
+    </section>}
+  </div>;
 }
 
 export const WorkflowNodeView = memo(function WorkflowNodeView({ id, data, selected, positionAbsoluteX, positionAbsoluteY }: NodeProps<WorkflowFlowNode>) {

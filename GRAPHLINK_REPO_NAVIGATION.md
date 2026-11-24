@@ -342,8 +342,9 @@ This is the practical lookup map for where code actually lives today.
 - `canvas/mcpScene.ts` - MCP scene intent facade.
 - `chrome/settings/McpServersPage.tsx` - stdio/HTTP setup, write-only credentials, discovery, tool allowlists and approval settings.
 - `canvas/WorkflowNodeView.tsx`, `workflowLibrary.ts`, `workflowRunTypes.ts`, `WorkflowCanvasContext.tsx` - pinned workflow node, library wire facade and run types.
-- `chrome/WorkflowLibraryDialog.tsx`, `WorkflowSpecView.tsx`, `WorkflowAutomationPanel.tsx` - capture/import/version review, preset policy, triggers and pending step review.
-- `chrome/WorkflowHistoryDialog.tsx`, `DetachedWorkflowInspector.tsx`, `WorkflowApprovalNotifications.tsx` - graph receipts, typed request review and detached run/approval UI.
+- `chrome/WorkflowLibraryDialog.tsx`, `WorkflowSpecView.tsx`, `WorkflowRunLauncher.tsx`, `WorkflowPreviewSummary.tsx` - Workflow library tabs (workflows, runs, presets), readable definitions, generated input forms and run previews.
+- `chrome/WorkflowRunsPanel.tsx`, `WorkflowPresetsPanel.tsx`, `workflowApi.ts` - detached runs with both approval kinds and save-as-graph, preset forms and triggers, and the shared detached workflow API client.
+- `chrome/WorkflowHistoryDialog.tsx`, `WorkflowApprovalNotifications.tsx` - canvas graph run receipts and comparison, and approval notifications that open the waiting run.
 - `overlays/overlays.tsx` - the `OverlayProvider` coordinator only (no dialogs live here).
 
 ### `web_ui/src/lib/`

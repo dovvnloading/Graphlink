@@ -101,9 +101,9 @@ test("library revision selection and keyboard dismissal in both themes", async (
     await setTheme(page, theme);
     const trigger = page.locator('[data-overlay-trigger="workflow-library"]');
     await trigger.press("Enter");
-    const library = page.getByRole("dialog", { name: "Workflow Library" });
+    const library = page.getByRole("dialog", { name: "Workflow library" });
     const starters = library.getByRole("region", { name: "Built-in starter workflows" });
-    await starters.getByRole("button", { name: /^Import / }).first().press("Enter");
+    await starters.getByRole("button", { name: /^Add .+ to the library$/ }).first().press("Enter");
     const version = library.getByRole("button", { name: "Version history" });
     await expect(version).toContainText("Version 1");
     await version.press("Enter");
@@ -111,11 +111,13 @@ test("library revision selection and keyboard dismissal in both themes", async (
     await page.keyboard.press("Escape");
     await expect(version).toBeFocused();
     await expect(library).toBeVisible();
-    await library.getByRole("searchbox", { name: "Search workflows" }).fill("no-audit-matches-8ca970");
-    await expect(library.getByRole("status").filter({ hasText: "No workflows match your search." })).toBeVisible();
+    await expect(library.getByRole("region", { name: "Run this workflow" }).getByRole("button", { name: "Preview workflow" })).toBeEnabled();
     const image = testInfo.outputPath(`library-${theme.toLowerCase()}.png`);
     await page.screenshot({ path: image, animations: "disabled" });
-    await testInfo.attach(`Workflow Library (${theme})`, { path: image, contentType: "image/png" });
+    await testInfo.attach(`Workflow library (${theme})`, { path: image, contentType: "image/png" });
+    await library.getByRole("button", { name: "All workflows" }).press("Enter");
+    await library.getByRole("searchbox", { name: "Search workflows" }).fill("no-audit-matches-8ca970");
+    await expect(library.getByRole("status").filter({ hasText: "No workflows match your search." })).toBeAttached();
     await page.keyboard.press("Escape");
     await expect(library).toBeHidden();
     await expect(trigger).toBeFocused();
@@ -124,11 +126,10 @@ test("library revision selection and keyboard dismissal in both themes", async (
 
 test("a reviewed human approval gate waits until explicit keyboard approval", async ({ page }) => {
   await openTable(page);
-  const dialog = await runner(page);
-  await dialog.getByRole("button", { name: "Run history", exact: true }).press("Enter");
-  const history = page.getByRole("dialog", { name: "Run history", exact: true });
-  await history.getByRole("button", { name: "Detached workflow runs" }).press("Enter");
-  await history.getByRole("button", { name: "Preview and start a typed workflow" }).press("Enter");
+  await page.locator('[data-overlay-trigger="workflow-library"]').press("Enter");
+  const history = page.getByRole("dialog", { name: "Workflow library" });
+  await history.getByRole("tab", { name: /^Runs/ }).press("Enter");
+  await history.getByRole("button", { name: "Run from JSON" }).press("Enter");
   const port = { name: "value", kind: "text", required: true } as const;
   const spec: WorkflowSpec = {
     schema_version: 1, workflow_id: "operator-audit", revision: "v1", name: "Keyboard approval audit",
@@ -145,10 +146,10 @@ test("a reviewed human approval gate waits until explicit keyboard approval", as
   await history.getByRole("button", { name: "Preview workflow", exact: true }).press("Enter");
   await expect(history.getByRole("region", { name: "Workflow preview", exact: true })).toContainText("Check the synthetic input");
   await history.getByRole("button", { name: /^(Start reviewed workflow|Approve preview and start)$/ }).press("Enter");
-  const inspector = history.getByRole("region", { name: "Detached workflow inspector" });
+  const inspector = history.getByRole("region", { name: "Run detail" });
   await expect(inspector.getByRole("button", { name: "Approve step", exact: true })).toBeEnabled();
-  await expect(history.getByRole("status").filter({ hasText: "Waiting for approval: review" })).toBeVisible();
+  await expect(history.getByRole("status").filter({ hasText: "Waiting for approval: Review" })).toBeAttached();
   await inspector.getByRole("button", { name: "Approve step", exact: true }).press("Enter");
-  await expect(history.getByRole("status").filter({ hasText: "Keyboard approval audit: completed" })).toBeVisible();
+  await expect(history.getByRole("status").filter({ hasText: "Keyboard approval audit: Completed" })).toBeAttached();
   await expect(inspector.getByRole("button", { name: "Approve step", exact: true })).toHaveCount(0);
 });
