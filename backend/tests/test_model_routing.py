@@ -536,6 +536,86 @@ def _raising_openai_client(exc: Exception):
     return types.SimpleNamespace(chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create)))
 
 
+class _MockHTTPError(RuntimeError):
+    def __init__(self, status_code, message):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize(("task", "status_code", "should_fallback"), [
+    (config.TASK_TITLE, 429, True),
+    (config.TASK_WEB_VALIDATE, 429, True),
+    (config.TASK_CHAT, 429, False),
+    (config.TASK_CHART, 429, False),
+    (config.TASK_IMAGE_GEN, 429, False),
+    (config.TASK_WEB_SUMMARIZE, 429, False),
+    (config.TASK_TITLE, 403, False),
+    (config.TASK_TITLE, None, False),
+])
+def test_translated_rate_limit_fallback_respects_task_and_status(
+    monkeypatch, ollama_chat, no_backoff, streaming, task, status_code, should_fallback,
+):
+    """A friendly quota message must not hide a retryable HTTP status, nor
+    turn a non-retryable error into a reason to swap providers."""
+    import types
+
+    monkeypatch.setattr(api_provider, "chat_stream", _REAL_CHAT_STREAM)
+    monkeypatch.setattr(api_provider, "USE_API_MODE", True)
+    monkeypatch.setattr(api_provider, "API_PROVIDER_TYPE", config.API_PROVIDER_OPENAI)
+    monkeypatch.setattr(api_provider, "API_KEY", "sk-fake")
+    monkeypatch.setitem(api_provider.API_MODELS, task, "gpt-4o-mini")
+
+    primary_calls = []
+
+    def create(**kwargs):
+        primary_calls.append(kwargs)
+        message = "429 rate limit reached" if status_code == 429 else "quota exceeded"
+        raise _MockHTTPError(status_code, message)
+
+    client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create)))
+    monkeypatch.setattr(api_provider, "API_CLIENT", client)
+
+    settings = _FakeSettingsManager(ollama=["fallback-model:8b"])
+    ollama_chat.responses = [{"message": {"content": "fallback reply"}, "done": True}]
+    ollama_chat.streams = [_FakeOllamaStream([_part(content="fallback reply", done=True)])]
+    chunks = []
+    fallback_calls = []
+
+    def on_fallback(failed_provider, ref, exc):
+        fallback_calls.append((failed_provider, ref, exc, len(primary_calls)))
+
+    def call():
+        messages = [{"role": "user", "content": "test"}]
+        kwargs = {"settings_manager": settings, "on_fallback": on_fallback}
+        if streaming:
+            return api_provider.chat_stream(task, messages, lambda d, r: chunks.append((d, r)), **kwargs)
+        return api_provider.chat(task, messages, **kwargs)
+
+    expected_attempts = api_provider._TRANSPORT_RETRY_MAX_ATTEMPTS + 1 if status_code == 429 else 1
+    if should_fallback:
+        assert call()["message"]["content"] == "fallback reply"
+        assert len(fallback_calls) == 1
+        failed_provider, ref, exc, attempts = fallback_calls[0]
+        assert failed_provider == config.API_PROVIDER_OPENAI
+        assert ref == mc.ModelRef("Ollama", "fallback-model:8b")
+        assert isinstance(exc, RuntimeError)
+        assert "quota exceeded or rate limited" in str(exc)
+        assert exc.__cause__.status_code == 429
+        assert attempts == expected_attempts
+        assert len(ollama_chat.calls) == 1
+        assert ollama_chat.calls[0]["model"] == "fallback-model:8b"
+        assert chunks == ([("fallback reply", False)] if streaming else [])
+    else:
+        with pytest.raises(RuntimeError, match="quota exceeded or rate limited") as raised:
+            call()
+        assert raised.value.__cause__.status_code == status_code
+        assert fallback_calls == []
+        assert ollama_chat.calls == []
+        assert chunks == []
+    assert len(primary_calls) == expected_attempts
+
+
 def test_fallback_fires_for_a_fallback_enabled_task_when_the_configured_provider_is_down(
     monkeypatch, ollama_chat, no_backoff,
 ):
@@ -627,7 +707,13 @@ def test_correctness_sensitive_tasks_never_fall_back(monkeypatch, no_backoff):
     assert fallback_calls == []
 
 
-def test_fallback_never_fires_once_the_stream_has_delivered_real_text(monkeypatch, no_backoff):
+@pytest.mark.parametrize(("error", "error_type"), [
+    (ConnectionError("Connection refused mid-stream"), ConnectionError),
+    (_MockHTTPError(429, "429 rate limit reached mid-stream"), RuntimeError),
+])
+def test_fallback_never_fires_once_the_stream_has_delivered_real_text(
+    monkeypatch, ollama_chat, no_backoff, error, error_type,
+):
     """The streaming-specific guard: chat_stream's own module docstring
     already establishes transport retry is legal ONLY before anything
     reaches on_chunk - stage 18.5 extends that invariant to the cross-model
@@ -659,7 +745,7 @@ def test_fallback_never_fires_once_the_stream_has_delivered_real_text(monkeypatc
             if not self._delivered:
                 self._delivered = True
                 return _text_chunk("partial")
-            raise ConnectionError("Connection refused mid-stream")
+            raise error
 
         def close(self):
             pass
@@ -675,7 +761,7 @@ def test_fallback_never_fires_once_the_stream_has_delivered_real_text(monkeypatc
     fallback_calls = []
     chunks = []
 
-    with pytest.raises(ConnectionError):
+    with pytest.raises(error_type):
         api_provider.chat_stream(
             config.TASK_TITLE, [{"role": "user", "content": "name this"}], lambda d, r: chunks.append((d, r)),
             settings_manager=settings,
@@ -684,6 +770,7 @@ def test_fallback_never_fires_once_the_stream_has_delivered_real_text(monkeypatc
 
     assert chunks == [("partial", False)]
     assert fallback_calls == []
+    assert ollama_chat.calls == []
 
 
 def test_fallback_never_fires_on_cancellation(monkeypatch, no_backoff):
