@@ -201,10 +201,16 @@ def _write(conn: sqlite3.Connection, table: str, key: dict[str, Any], record: di
                 raise ValueError("An existing external request fence cannot be replaced or replayed.")
         if old == record:
             return False
+        # A reminted node ID changes a reference, not execution history.
+        # Keep the current reference but do not append a duplicate state event.
+        event_changed = table != "workflow_steps" or any(
+            old[name] != record[name] for name in columns if name not in {"input_ref", "output_ref"}
+        )
         conn.execute(
             f"UPDATE {table} SET {', '.join(name + ' = ?' for name in columns)} WHERE {where}",
             (*record.values(), *key.values()),
         )
+        return event_changed
     else:
         values = {**key, **record}
         conn.execute(
@@ -237,6 +243,11 @@ def checkpoint(conn: sqlite3.Connection, graph_id: int, runs: Any) -> None:
             "started_at": start, "finished_at": end, "duration_ms": _duration_ms(start, end),
             "max_concurrency": concurrency if type(concurrency) is int and 1 <= concurrency <= 8 else 3,
         }
+        previous_count = conn.execute(
+            "SELECT count(*) FROM workflow_steps WHERE graph_id = ? AND run_id = ?", (graph_id, run_id),
+        ).fetchone()[0]
+        if previous_count and previous_count != len(run["steps"]):
+            raise ValueError("A durable run cannot change its approved step count.")
         changed = _write(conn, "workflow_runs", key, record)
         # Initial admission precedes step events; terminal run status follows
         # its receipts. The sequence reflects commits, not wall-clock order.
@@ -283,17 +294,27 @@ def overlay_receipts(conn: sqlite3.Connection, graph_id: int, runs: Any) -> None
             run["finishedAt"] = receipt[4]
         else:
             run.pop("finishedAt", None)
-        for row in conn.execute(
+        rows = conn.execute(
             "SELECT step_index, status, started_at, finished_at, input_ref, output_ref, "
-            "request_id, attempt_phase, approval, approval_id, retry_count, input_tokens, output_tokens, cost_usd "
+            "request_id, attempt_phase, approval, approval_id, retry_count, input_tokens, output_tokens, cost_usd, kind, operation "
             "FROM workflow_steps WHERE graph_id = ? AND run_id = ? ORDER BY step_index", key,
+        ).fetchall()
+        if len(rows) != len(run["steps"]) or any(
+            row[0] != index or row[-2:] != (step["kind"], _identifier(step.get("operation")) or "unknown")
+            for index, (row, step) in enumerate(zip(rows, run["steps"]))
         ):
-            index, status, start, end, input_ref, output_ref, request_id, phase, approval, approval_id, retries, in_tokens, out_tokens, cost = row
-            if index >= len(run["steps"]):
-                continue
+            run["status"] = "reconciliation-required"
+            for step in run["steps"]:
+                if step["status"] in {"pending", "running"}:
+                    step["status"] = "reconciliation-required"
+            continue
+        for row in rows:
+            (index, status, start, end, input_ref, output_ref, request_id, phase, approval, approval_id,
+             retries, in_tokens, out_tokens, cost, _kind, _operation) = row
             step = run["steps"][index]
             attempt = restore_external_attempt(step.get("externalAttempt"))
-            if request_id and (attempt is None or attempt["requestId"] != request_id):
+            if request_id and (attempt is None or attempt["requestId"] != request_id
+                               or attempt["inputHash"] != json.loads(input_ref)["sha256"]):
                 step["status"] = "reconciliation-required"
                 continue
             step["status"] = status
