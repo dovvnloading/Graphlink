@@ -38,13 +38,17 @@ or add anything to the existing topic contract.
 
 ## Graph Runner compatibility adapters
 
-`StepAdapterRegistry` pins implementations by exact ID and version. Legacy
+`StepAdapterRegistry` pins implementations by exact ID and version. The live
+runner extends `builtin_registry()` with legacy entries in a frozen registry
+snapshot, using the same lookup API. Only legacy GraphStepAdapter entries are
+selected by scene kind; typed transforms retain their own port and preview API.
+Legacy
 `graph_steps` entries select v1 by existing step kind: note (copy and word
 count), table/chart/artifact (group sum), model (first-class Model), scientific
 and tool (MCP Connect). The opt-in model output note has its own
 `model-note` entry; it is never discovered during an ordinary preview.
 The compatibility interface does not convert the old scene journal into
-WorkflowSpec or change the typed StepAdapter protocol. No adapter/version
+WorkflowSpec or change the typed StepAdapter protocol (including preview). No adapter/version
 field is added to legacy preview or run bytes.
 
 Read-only pins, inspection, matching and result digests live in the adapters.
@@ -60,3 +64,59 @@ Golden compatibility projections in
 `backend/tests/fixtures/graph_runner_legacy.json` come from the existing runner
 test scenarios. Deterministic text/CSV digests and bytes are literal;
 external request identities are checked before normalizing UUIDs.
+
+## Built-in Transform steps (adapter version 1)
+
+Use `backend.workflow.registry.builtin_registry()` to construct a fresh
+version-pinned registry. `registry.describe(id, "1", freeze_config(config))`
+returns the typed descriptor to store in a step spec; `registry.resolve(id, "1")`
+returns the adapter. Unknown IDs/versions and duplicate registrations fail;
+there is no version fallback. The standalone factory has no live-runner
+service dependencies; typed transforms are not dispatched by Graph Runner.
+
+All eight adapters declare the `pure` side-effect class. Each accepts
+already-resolved values of exactly its declared input kind, validates its
+configuration and inputs during prepare, and snapshots them by value.
+Fingerprints include the pinned ID/version, canonical configuration and
+canonical input content, not the step/run/attempt identity. Configurations
+have exactly the keys shown below (use `freeze_config`).
+
+| Adapter ID | Config example | Input → output |
+| --- | --- | --- |
+| `transform.template` | `{"template":"Hello {name}"}` | Named text ports (first occurrence order) → text `text` |
+| `transform.json_path` | `{"path":"$.users[0].name"}` | JSON `json` → JSON `value` |
+| `transform.text_split` | `{"separator":","}` | Text `text` → JSON `parts` (array of strings) |
+| `transform.text_join` | `{"separator":" / "}` | JSON `parts` (array of strings) → text `text` |
+| `transform.table_filter` | `{"column":"score","operator":"gte","value":10}` | Table `table` → table `table` |
+| `transform.table_sort` | `{"column":"score","direction":"desc"}` | Table `table` → table `table` |
+| `transform.table_select` | `{"columns":["name","score"]}` | Table `table` → table `table` |
+| `transform.table_rename` | `{"renames":{"score":"points"}}` | Table `table` → table `table` |
+
+- Templates accept simple named fields and doubled braces for literal braces.
+  Repeated names share a port; attribute access, indexing, conversions and
+  formatting expressions are rejected.
+- JSON paths select exactly one value: root `$`, dotted names, zero-based
+  array indices, or bracketed JSON-string keys such as `$["a.b"]`. No
+  wildcard, recursive descent, script or filter expressions. Missing paths
+  fail; an existing JSON null is a valid result.
+- Split uses a nonempty literal separator and preserves empty pieces; join
+  accepts only an array of strings and permits an empty separator.
+- Filter operators: `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `contains`.
+  Equality is type-aware (booleans are not numbers); ordered comparisons
+  compare only numbers with numbers or strings with strings; contains is a
+  case-sensitive substring test. Nonmatching types do not match ordered or
+  substring predicates. Filter preserves row order.
+- Sort is stable, with booleans before numbers before strings in ascending
+  order and the reverse in descending order. Strings use Unicode code-point
+  order, numbers use numeric order; nulls always come last.
+- Select preserves requested column order, including an empty selection.
+  Rename changes only column names in place (swaps are allowed). Unknown
+  columns, duplicate selections or rename collisions fail; inputs are never
+  mutated.
+
+`adapter.preview(prepared)` returns JSON-compatible metadata by output
+port: text character count; JSON type and array length or object keys where
+applicable; or table column names and row count. It uses the same local pure
+transformation as `run`, but does not call `run` or expose output contents.
+No provider, filesystem, asset, network, process or scheduler is required.
+Cancellation is a no-op because these adapters retain no external work.

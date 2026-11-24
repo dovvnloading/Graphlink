@@ -1,1 +1,1 @@
-"""Pure workflow contracts. Nothing here is registered with the live runner."""
+"""Workflow contracts, built-in transforms, and Graph Runner compatibility adapters."""

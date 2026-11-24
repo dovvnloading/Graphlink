@@ -27,7 +27,7 @@ from graphlink_plugins.scientific.graph_run_adapter import (
 )
 
 from .model_note_adapter import ModelNoteAdapter
-from .registry import StepAdapterRegistry
+from .registry import builtin_registry
 
 if TYPE_CHECKING:
     from backend.domain.graph import SceneDocument
@@ -319,7 +319,7 @@ _MCP = GraphStepAdapter(
 
 # The old wire kind is the compatibility selector, not a new wire field.
 # All legacy steps are pinned to this v1 implementation.
-GRAPH_STEP_ADAPTERS = StepAdapterRegistry[GraphStepAdapter | ModelNoteAdapter]((
+GRAPH_STEP_ADAPTERS = builtin_registry().with_entries((
     ("note", "1", _NOTE),
     ("table", "1", _TABLE),
     ("chart", "1", _TABLE),
@@ -333,7 +333,7 @@ GRAPH_STEP_ADAPTERS = StepAdapterRegistry[GraphStepAdapter | ModelNoteAdapter]((
 
 def adapter_for_step(step: Step) -> GraphStepAdapter:
     try:
-        adapter = GRAPH_STEP_ADAPTERS.require(step["kind"], "1")
+        adapter = GRAPH_STEP_ADAPTERS.resolve(step["kind"], "1")
     except KeyError as exc:
         raise SceneError("The connection changed since the preview. Preview the branch again.") from exc
     if not isinstance(adapter, GraphStepAdapter):
@@ -342,7 +342,7 @@ def adapter_for_step(step: Step) -> GraphStepAdapter:
 
 
 def model_note_adapter() -> ModelNoteAdapter:
-    adapter = GRAPH_STEP_ADAPTERS.require("model-note", "1")
+    adapter = GRAPH_STEP_ADAPTERS.resolve("model-note", "1")
     if not isinstance(adapter, ModelNoteAdapter):
         raise RuntimeError("The Model note adapter is unavailable.")
     return adapter
@@ -351,7 +351,7 @@ def model_note_adapter() -> ModelNoteAdapter:
 def discover_binding(document: SceneDocument, node: SceneNode) -> GraphBinding | None:
     kind = _kind(node)
     try:
-        adapter = GRAPH_STEP_ADAPTERS.require(kind, "1")
+        adapter = GRAPH_STEP_ADAPTERS.resolve(kind, "1")
     except KeyError:
         return None
     if not isinstance(adapter, GraphStepAdapter):
@@ -390,7 +390,7 @@ def _matching_node(document: SceneDocument, step: Step) -> SceneNode:
 
 def _output_digest(node: SceneNode) -> str:
     try:
-        adapter = GRAPH_STEP_ADAPTERS.require(_kind(node), "1")
+        adapter = GRAPH_STEP_ADAPTERS.resolve(_kind(node), "1")
     except KeyError:
         return _ordinary_digest(node)
     return adapter.output_digest(node) if isinstance(adapter, GraphStepAdapter) else _ordinary_digest(node)
