@@ -61,7 +61,7 @@ class FakePage:
 
     async def goto(self, url, **kwargs):
         self.url = url
-        self.calls.append(("goto", url))
+        self.calls.append(("goto", url, kwargs.get("timeout")))
 
     def on(self, event, callback):
         self.calls.append(("on", event))
@@ -361,3 +361,28 @@ def test_ephemeral_cookies_are_forwarded_only_on_the_same_host():
         assert len(ctx.calls) == 1
 
     asyncio.run(check())
+
+
+def test_managed_browser_uses_outer_approval_aware_deadline_instead_of_playwright_wall_clocks():
+    wrapper = FakePlaywrightContext()
+
+    async def approve(*args):
+        return True
+
+    asyncio.run(run_browser(
+        "https://example.com/",
+        [{"kind": "click", "selector": "#q"}],
+        approve, approve,
+        playwright_factory=lambda: wrapper,
+        managed_deadline=True,
+    ))
+    calls = wrapper.driver.browser.context.page.calls
+    assert ("goto", "https://example.com/", 0) in calls
+    assert any(call[0] == "click" for call in calls)
+
+    unwrapped = FakePlaywrightContext()
+    asyncio.run(run_browser(
+        "https://example.com/", [], approve, approve,
+        playwright_factory=lambda: unwrapped,
+    ))
+    assert ("goto", "https://example.com/", 16000) in unwrapped.driver.browser.context.page.calls

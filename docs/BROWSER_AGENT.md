@@ -107,7 +107,10 @@ not shared across calls or tasks. Published nodes are durable snapshots.
   finishes; concurrent requests may therefore exhaust the remaining budget
   before a total of 16 MiB has actually arrived. Navigation and interactions
   have finite timeouts; browser.run has a 100-second **active-work** deadline
-  that pauses during each serialized user approval. The browser has one active
+  that pauses during each serialized user approval. In managed agent runs the
+  outer active-work deadline replaces Playwright\x27s independent wall-clock navigation
+  and action timers, so a consent prompt cannot trigger an unrelated timeout.
+  The browser has one active
   human approval prompt at a time. Captures contain
   up to 16,000 text characters, 60 links and four bounded tables; screenshot
   size is limited to 3 MiB. Tool previews use a smaller text/table subset.

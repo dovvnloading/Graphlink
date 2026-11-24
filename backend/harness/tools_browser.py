@@ -219,6 +219,7 @@ async def _run(call: ToolCall, ctx: RunContext) -> ToolResult:
                 capture = await run_browser(
                     args["url"], steps, approve_host, approve_action,
                     allowed_hosts=tuple(allowed_hosts), screenshot=screenshot, cancel=ctx.cancel,
+                    managed_deadline=True,
                 )
             finally:
                 active_deadline = None

@@ -259,10 +259,19 @@ async def run_browser(
     screenshot: bool = False,
     cancel: object = None,
     playwright_factory: Callable[[], Any] | None = None,
+    managed_deadline: bool = False,
 ) -> BrowserCapture:
     """Run in a disposable browser; no user-supplied JS or arbitrary evaluate."""
     gate = BrowserNetworkGate(url, approve_host, allowed_hosts=allowed_hosts)
     steps = normalize_steps(steps)
+    if type(managed_deadline) is not bool:
+        raise BrowserPolicyError("managed_deadline must be a boolean.")
+    # The harness owns an approval-aware 100-second active-work budget.
+    # When managed, Playwright's independent 8/16-second wall clocks must
+    # not expire while a human decides on a navigation's subresource consent.
+    # Direct run_browser() callers retain the finite per-operation defaults.
+    page_nav_timeout_ms = 0 if managed_deadline else NAVIGATION_TIMEOUT_MS
+    page_action_timeout_ms = 0 if managed_deadline else ACTION_TIMEOUT_MS
     if type(screenshot) is not bool:
         raise BrowserPolicyError("screenshot must be true or false.")
     if _cancelled(cancel):
@@ -354,7 +363,7 @@ async def run_browser(
                 async def navigate(target: str):
                     try:
                         response = await page.goto(
-                            target, wait_until="domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS,
+                            target, wait_until="domcontentloaded", timeout=page_nav_timeout_ms,
                         )
                     except Exception as exc:
                         if any("redirect" in reason.lower() for reason in gate.blocked):
@@ -391,7 +400,7 @@ async def run_browser(
                         element_type = (await locator.get_attribute("type") or "").lower()
                         if element_type in {"password", "file", "hidden"}:
                             raise BrowserPolicyError("Password, file and hidden inputs are not supported.")
-                        element = await locator.element_handle(timeout=ACTION_TIMEOUT_MS)
+                        element = await locator.element_handle(timeout=page_action_timeout_ms)
                         if element is None:
                             raise BrowserPolicyError("Browser target disappeared before approval.")
                         fingerprint = await element.evaluate(_ACTION_FINGERPRINT)
@@ -423,11 +432,11 @@ async def run_browser(
                                 "Browser target changed during approval; inspect and retry."
                             )
                         if kind == "click":
-                            await element.click(timeout=ACTION_TIMEOUT_MS, no_wait_after=True)
+                            await element.click(timeout=page_action_timeout_ms, no_wait_after=True)
                         elif kind == "fill":
-                            await element.fill(step["value"], timeout=ACTION_TIMEOUT_MS, no_wait_after=True)
+                            await element.fill(step["value"], timeout=page_action_timeout_ms, no_wait_after=True)
                         else:
-                            await element.select_option(value=step["value"], timeout=ACTION_TIMEOUT_MS)
+                            await element.select_option(value=step["value"], timeout=page_action_timeout_ms)
                         trace.append({"kind": kind, "selector": selector,
                                       **({"value_length": len(step["value"])} if kind != "click" else {})})
                     elif kind == "scroll":
@@ -443,7 +452,7 @@ async def run_browser(
                 if not isinstance(data, dict):
                     raise BrowserPolicyError("Browser could not extract document content.")
                 text = str(data.get("text") or "")
-                png = await page.screenshot(full_page=False, animations="disabled", timeout=ACTION_TIMEOUT_MS) \
+                png = await page.screenshot(full_page=False, animations="disabled", timeout=page_action_timeout_ms) \
                     if screenshot else None
                 if png is not None and len(png) > MAX_SCREENSHOT:
                     raise BrowserPolicyError("Browser screenshot exceeds the 3 MiB limit.")

@@ -87,6 +87,7 @@ def test_run_uses_per_host_consent_and_fresh_action_approval(monkeypatch):
     async def fake_run(url, steps, approve_host, approve_action, **kwargs):
         assert kwargs["allowed_hosts"] == ("cdn.example",)
         assert kwargs["screenshot"] is False
+        assert kwargs["managed_deadline"] is True
         assert await approve_host("example.com", "https://example.com/") is True
         assert await approve_host("example.com", "https://example.com/new") is True
         assert await approve_action("click", "#go", "https://example.com/", {"label": "Go", "href": "/go"}) is True
