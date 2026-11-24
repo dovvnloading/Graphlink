@@ -378,6 +378,7 @@ export function Popover({
 const FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+// Explicitly hidden/inert disclosure descendants are filtered below.
 // Deliberately NOT also filtering on el.offsetParent !== null (an
 // "is this actually rendered, not display:none'd by some ancestor" check
 // the audit's own fuller fix suggests, for a hidden tab section / a step
@@ -452,7 +453,8 @@ export function useFocusEscapeBackstop(
       if (!lastKeyWasTab) return;
       lastKeyWasTab = false;
       if (panel.contains(event.target as Node)) return;
-      const focusables = [...panel.querySelectorAll<HTMLElement>(focusableSelector)];
+      const focusables = [...panel.querySelectorAll<HTMLElement>(focusableSelector)]
+        .filter(element => element.tabIndex >= 0 && !element.closest("[hidden], [inert], [aria-hidden=true]"));
       (focusables[0] ?? panel).focus();
     };
     document.addEventListener("keydown", onKeyDownCapture, true);
@@ -507,7 +509,8 @@ export function Dialog({
     if (!panel) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Tab") return;
-      const focusables = [...panel.querySelectorAll<HTMLElement>(FOCUSABLE)];
+      const focusables = [...panel.querySelectorAll<HTMLElement>(FOCUSABLE)]
+        .filter(element => element.tabIndex >= 0 && !element.closest("[hidden], [inert], [aria-hidden=true]"));
       if (!focusables.length) {
         event.preventDefault();
         titleRef.current?.focus();
