@@ -459,7 +459,7 @@ function Runner({ store }: { store: SceneStore }) {
         <h2 ref={previewHeading} tabIndex={-1}>Run preview</h2>
         <span>{ready} ready</span>
       </header>
-      {ready > 0 && <Button size="sm" onClick={() => commitArea.current?.querySelector("button")?.focus()}>Jump to run confirmation</Button>}
+      {ready > 0 && <Button size="sm" disabled={!!busy || running} onClick={() => commitArea.current?.querySelector("button")?.focus()}>Jump to run confirmation</Button>}
       {preview.steps.length ? <RunSteps key={preview.previewToken} steps={preview.steps} names={names}
         reveal={index => store.showWorkflowPreviewStep(preview.nodeIds, preview.previewToken, index, preview.scope, preview.sourceRunId)} /> :
         <p>No connected outputs in this scope. Bind a note's text input, create a table output, or save a Scientific Workbench operation for Graph Runner.</p>}
