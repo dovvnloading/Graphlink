@@ -29,7 +29,7 @@ def test_hexbin_contract_is_roundtrip_and_preserves_measurements():
 ])
 def test_invalid_hexbin_sources_are_rejected(change):
     spec = {**SOURCE, **change}
-    if change.get("values") is None:
+    if "values" in change and change["values"] is None:
         spec.pop("values", None)
     with pytest.raises(ChartDataError):
         canonicalize_chart_data(spec)

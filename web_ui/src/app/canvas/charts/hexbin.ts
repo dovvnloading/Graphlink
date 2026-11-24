@@ -31,11 +31,11 @@ export function hexbinPoints(
     const aq = (SQRT3 / 3 * px - py / 3) / radius;
     const ar = (2 / 3 * py) / radius;
     // Round the axial -> cube coordinates to the nearest hex center.
-    let cq = Math.round(aq), cr = Math.round(ar), cs = Math.round(-aq - ar);
+    let cq = Math.round(aq), cr = Math.round(ar);
+    const cs = Math.round(-aq - ar);
     const dq = Math.abs(cq - aq), dr = Math.abs(cr - ar), ds = Math.abs(cs + aq + ar);
     if (dq > dr && dq > ds) cq = -cr - cs;
     else if (dr > ds) cr = -cq - cs;
-    else cs = -cq - cr;
     const key = cq + ":" + cr;
     const existing = cells.get(key);
     if (existing) existing.count++;
