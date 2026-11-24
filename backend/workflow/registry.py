@@ -57,11 +57,12 @@ class StepAdapterRegistry[T]:
 
 def builtin_registry(host=None) -> StepAdapterRegistry[StepAdapter[Any]]:
     """Return a fresh registry; effectful steps require an explicitly bound run host."""
+    from .control_flow import CONTROL_ADAPTERS
     from .transforms import TRANSFORM_ADAPTERS
     from .step_adapters import STEP_CLASSES, ServiceStepAdapter
 
     registry = StepAdapterRegistry[StepAdapter[Any]]()
-    for adapter in TRANSFORM_ADAPTERS:
+    for adapter in (*TRANSFORM_ADAPTERS, *CONTROL_ADAPTERS):
         registry.register(adapter.adapter_id, adapter.adapter_version, adapter)
     for adapter_id in STEP_CLASSES:
         registry.register(adapter_id, "1", ServiceStepAdapter(adapter_id, host))
