@@ -1,4 +1,4 @@
-"""Structural interface for future workflow step adapters; no implementations."""
+"""Structural interface for typed workflow adapters (independent of legacy scene steps)."""
 
 from __future__ import annotations
 

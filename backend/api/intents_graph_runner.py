@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -13,22 +11,14 @@ from datetime import datetime, timezone
 from typing import Any
 
 from backend.domain.graph import SceneDocument
-from backend.domain.graph_run_external import (
-    RECONCILIATION_DETAIL, ExternalCall, dispatch_external_attempt, drain_cancelled_task,
-)
+from backend.domain.graph_run_external import RECONCILIATION_DETAIL, drain_cancelled_task
 from backend.domain.graph_run_history import RUN_HISTORY_LIMIT, RUN_ID, can_prune_run
 from backend.domain.graph_run_inspector import build_graph_run_trace
-from backend.domain.graph_runner import (
-    _inspect, _matching_node, _output_digest, execute_graph_step, plan_graph_run, schedule_graph_steps,
-    step_sources, validate_graph_run_ancestors,
-)
-from backend.domain.model import SceneError, SceneNode
-from backend.domain.node_states import ModelState, PersistedPluginState, PluginStateSnapshot
-from backend.domain.nodes_content import _text_digest
-from backend.domain.table_workflows import table_output
-from graphlink_plugins.scientific.data_table import TableState
-from graphlink_plugins.scientific.graph_run_adapter import prepare as prepare_science
-from graphlink_plugins.scientific.workbench import _run_token
+from backend.domain.graph_runner import plan_graph_run, schedule_graph_steps, step_sources
+from backend.domain.model import SceneError
+from backend.workflow.graph_execution import GraphRunExecution
+from backend.workflow.graph_steps import _output_digest, adapter_for_step, pin_output_version as _pin_output_version
+from backend.workflow.model_note_adapter import _digest as _digest
 from backend.events import IntentValidationError, SessionBus
 
 
@@ -54,11 +44,6 @@ class GetGraphRunArgs:
     pass
 
 
-def _digest(payload: Any) -> str:
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    return hashlib.sha256(encoded.encode("ascii")).hexdigest()
-
-
 def _public_step(step: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in step.items() if key not in {"targetHash", "configHash", "endpointHash"}}
 
@@ -72,14 +57,6 @@ def _public_run(run: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _pin_output_version(document: SceneDocument, step: dict[str, Any]) -> None:
-    """Capture the table's version during execution, never at inspection time."""
-    node = document.nodes.get(step["nodeId"])
-    output = table_output(node) if node is not None else None
-    if output is not None:
-        step["outputVersion"] = output.current.version
-
-
 def _find_run(document: SceneDocument, run_id: str) -> dict[str, Any] | None:
     return next((run for run in document.graph_runs if run["runId"] == run_id), None)
 
@@ -88,11 +65,10 @@ def _plan(document: SceneDocument, node_ids: list[str], mcp_runtime: Any = None)
     try:
         steps = plan_graph_run(document, node_ids)
         for step in steps:
-            if step["kind"] == "tool" and step["status"] in {"ready", "waiting"}:
-                if mcp_runtime is None:
-                    raise SceneError("MCP Connect is unavailable in this session. Reopen the graph.")
-                mcp_runtime.pin_step(document.nodes[step["nodeId"]], step)
-        model_steps = [s for s in steps if s["kind"] == "model" and s["status"] in {"ready", "waiting"}]
+            adapter = adapter_for_step(step)
+            if adapter.pin_preview is not None and step["status"] in {"ready", "waiting"}:
+                adapter.pin_preview(document.nodes[step["nodeId"]], step, mcp_runtime)
+        model_steps = [s for s in steps if adapter_for_step(s).local_model and s["status"] in {"ready", "waiting"}]
         if len(model_steps) > 8:
             raise SceneError("A graph run can issue at most eight local model calls.")
         # Existing current Model receipts are local data. They must
@@ -108,213 +84,6 @@ def _plan(document: SceneDocument, node_ids: list[str], mcp_runtime: Any = None)
     token = _digest([str(document.graph_run_epoch), sorted(set(node_ids)), steps])
     return token, steps
 
-
-
-def _state_data(node: SceneNode) -> dict[str, Any]:
-    """A scientific node's state payload; a node without state cannot run."""
-    if not isinstance(node.state, (PersistedPluginState, PluginStateSnapshot, TableState)):
-        raise SceneError("The scientific node has no saved plugin state.")
-    return node.state.data
-
-
-def _adopt_scientific_result(
-    document: SceneDocument, step: dict[str, Any], by_node_id: dict[str, Any],
-    *, detail: str, elapsed_ms: int,
-) -> bool:
-    """Recover a committed result when its run receipt was not checkpointed.
-
-    Check live inputs, configuration, ancestor receipts and the output before
-    claiming completion. Used after dispatch, on resume, and when cancellation
-    races with a calculation that has already committed.
-    """
-    try:
-        validate_graph_run_ancestors(document, step, by_node_id)
-        node = _matching_node(document, step)
-        live = step.copy()
-        _inspect(document, live)
-        if (live["status"] != "current" or live["configHash"] != step["configHash"]
-                or (step["inputHash"] and live["inputHash"] != step["inputHash"])):
-            return False
-        latest = _state_data(node).get("latest")
-        if not isinstance(latest, dict):
-            return False
-        step.update(
-            status="completed", detail=detail, inputHash=live["inputHash"],
-            outputHash=_output_digest(node), scientificResult=latest,
-            elapsedMs=elapsed_ms,
-        )
-        return True
-    except SceneError:
-        return False
-
-
-async def _run_model_step(
-    document: SceneDocument, confirmed_checkpoint: Callable[[], Awaitable[bool]],
-    run: dict[str, Any], step: dict[str, Any], by_node_id: dict[str, Any],
-) -> None:
-    """One reviewed local Model step with a durable fence, never auto-retried."""
-    # Imported at execution time to keep the existing GraphModel one-shot
-    # API's dependency on _digest out of module import cycles.
-    from backend.api import intents_graph_model as local
-
-    validate_graph_run_ancestors(document, step, by_node_id)
-    node = _matching_node(document, step)
-    if not isinstance(node.state, ModelState):
-        raise SceneError("This is not an executable Model node.")
-    if any(
-        prior is not step and prior.get("nodeId") == node.id
-        and prior.get("status") == "reconciliation-required"
-        for record in document.graph_runs for prior in record.get("steps", [])
-    ):
-        raise SceneError("This Model output has an unresolved request; reconcile it before another call.")
-    endpoint = local._require_loopback_ollama()
-    if step.get("endpointHash") != _digest(["local_model_endpoint", endpoint]):
-        raise SceneError("The Ollama endpoint changed since preview. Preview the graph again.")
-    live = step.copy()
-    _inspect(document, live)
-    if live["status"] not in {"ready", "current"}:
-        raise SceneError("Model input cannot be executed in its current state.")
-    for key in ("configHash", "targetHash"):
-        if live[key] != step[key]:
-            raise SceneError("A Model configuration or output changed since preview.")
-    if step["inputHash"] and step["inputHash"] != live["inputHash"]:
-        raise SceneError("The Model input changed since preview.")
-    # Deferred hashes become concrete only after the upstream Model
-    # completion is committed. Save it with the same request fence.
-    step["inputHash"] = live["inputHash"]
-    binding = node.state.model_binding
-    identity = binding.binding_id
-    model_id, provider = binding.model_id, binding.provider_name
-    prompt = document._text_output(step["sourceId"])
-
-    async def invoke(_request_id: str) -> Any:
-        return await asyncio.to_thread(
-            local.local_ollama_complete, prompt=prompt, model_id=model_id, endpoint=endpoint,
-        )
-
-    async def apply_result(payload: Any) -> str:
-        text = local._response_text(payload)
-        current = _matching_node(document, step)
-        if not isinstance(current.state, ModelState):
-            raise SceneError("The Model node changed during inference.")
-        new_live = step.copy()
-        _inspect(document, new_live)
-        if any(new_live[key] != step[key] for key in ("inputHash", "configHash", "targetHash")):
-            raise SceneError("The Model input, configuration or output changed during inference.")
-        current_model_state = current.state
-        if current_model_state.model_binding.binding_id != identity:
-            raise SceneError("The Model port was rebound during inference.")
-        output_hash = _text_digest(text)
-
-        def apply() -> None:
-            current.content = text
-            current_model_state.model_binding.last_input_hash = step["inputHash"]
-            current_model_state.model_binding.last_output_hash = output_hash
-
-        document.record_command("runGraphStep", "user", apply, node_ids=(current.id,), run_id=run["runId"])
-        return output_hash
-
-    await dispatch_external_attempt(
-        step, ExternalCall(
-            kind="model", provider_name=provider, model_id=model_id,
-            input_ref=f"graph-text:{step['sourceId']}:{step['inputHash']}",
-            input_hash=step["inputHash"],
-        ), checkpoint=confirmed_checkpoint, invoke=invoke, apply_result=apply_result,
-    )
-
-async def _run_scientific_step(
-    document: SceneDocument, bus: SessionBus, settings_manager: Any,
-    run: dict[str, Any], step: dict[str, Any], by_node_id: dict[str, Any],
-) -> None:
-    """Run only an explicitly configured workbench through its existing
-    granted, capped, killable PR 621 worker. No generic tool dispatch.
-    """
-    started = time.monotonic()
-
-    def elapsed() -> int:
-        return max(0, int((time.monotonic() - started) * 1000))
-
-    validate_graph_run_ancestors(document, step, by_node_id)
-    node = _matching_node(document, step)
-    live = step.copy()
-    _inspect(document, live)
-    if live["configHash"] != step["configHash"]:
-        raise SceneError("The scientific configuration changed since preview.")
-    if step["inputHash"] and live["inputHash"] != step["inputHash"]:
-        raise SceneError("The scientific inputs changed since preview.")
-    step["inputHash"] = live["inputHash"]
-
-    # A successful calculation may have committed just before an
-    # interrupted receipt checkpoint. Do not repeat it on resume.
-    if live["status"] == "current":
-        if not _adopt_scientific_result(
-            document, step, by_node_id,
-            detail="Verified existing scientific result; not replayed.", elapsed_ms=elapsed(),
-        ):
-            raise SceneError("The committed scientific result could not be verified.")
-        return
-    if live["status"] != "ready" or live["targetHash"] != step["targetHash"]:
-        raise SceneError("The scientific output changed since preview.")
-
-    pack = node.kind.split(".", 1)[0]
-    granted = lambda plugin_id: (
-        settings_manager is not None
-        and bool(settings_manager.get_plugin_grants().get(plugin_id, False))
-    )
-    operation, inputs, sources, input_hash, _same = prepare_science(document, node, granted)
-    if input_hash != step["inputHash"]:
-        raise SceneError("The scientific input fingerprint changed before dispatch.")
-    answer = await bus.dispatch_intent("app-plugins", "invokePluginIntent", [
-        pack, "run", {
-            "node_id": node.id, "operation_id": operation.id,
-            "inputs": inputs, "sources": sources,
-            "expected_run": _run_token(_state_data(node)),
-            "graph_run_id": run["runId"],
-            "uncertainty_method": _state_data(node)["runner"].get("uncertaintyMethod", "auto"),
-        },
-    ])
-    if not isinstance(answer, dict) or answer.get("ok") is not True:
-        failure = answer if isinstance(answer, dict) else {}
-        error_type = failure.get("errorType", "conflict" if failure.get("conflict") is True else "validation")
-        if error_type not in {"timeout", "cancelled", "invalid_input", "worker_error", "validation", "conflict"}:
-            error_type = "validation"
-        measured = failure.get("elapsedMs")
-        step.update(
-            status="failed" if error_type != "cancelled" else "cancelled",
-            errorType=error_type, elapsedMs=measured if type(measured) is int and measured >= 0 else elapsed(),
-            detail=str(failure.get("error") or "Scientific execution was not authorized.")[:400],
-        )
-        return
-
-    if not _adopt_scientific_result(
-        document, step, by_node_id, detail="Scientific result recorded.",
-        elapsed_ms=elapsed(),
-    ):
-        raise SceneError("The scientific result or its input changed during execution.")
-
-async def _run_mcp_tool_step(document, bus, checkpoint, run, step, by_node_id):
-    """The same MCP adapter serves a direct card run and Graph Runner."""
-    from graphlink_plugins.mcp_connect import core
-
-    runtime = getattr(bus, "mcp_connect_runtime", None)
-    if runtime is None:
-        raise SceneError("MCP Connect is unavailable in this session. Reopen the graph.")
-    validate_graph_run_ancestors(document, step, by_node_id)
-
-    def apply_result(payload, request_id, prepared, started_at):
-        validate_graph_run_ancestors(document, step, by_node_id)
-        node = _matching_node(document, step)
-        document.record_command(
-            "runGraphStep", "user", lambda: core.commit_result(
-                node, payload, request_id=request_id, input_hash=prepared.input_hash,
-                sources=prepared.sources, started_at=started_at,
-                finished_at=datetime.now(timezone.utc).isoformat(),
-            ), node_ids=(node.id,), run_id=run["runId"],
-        )
-        step["outputVersion"] = core.state_data(node)["latest"]["version"]
-        return core.output_hash(node)
-
-    await runtime.execute(step, checkpoint, apply_result)
 
 
 def _make_graph_checkpoint(save_checkpoint: Callable[[], Awaitable[bool]]) -> Callable[[], Awaitable[None]]:
@@ -390,75 +159,26 @@ def register_graph_runner(
 
         by_node_id = {step["nodeId"]: step for step in run["steps"]}
 
+        def record_step(operation: Callable, node_ids: tuple[str, ...]):
+            return document.record_command("runGraphStep", "user", operation, node_ids=node_ids, run_id=run["runId"])
+
         async def run_step(step: dict[str, Any]) -> None:
             # Record when this task actually starts, not when it entered the
             # preview queue. On resume a pending step gets a new real start.
             step["startedAt"] = datetime.now(timezone.utc).isoformat()
             step.pop("finishedAt", None)
             started_clock = time.monotonic()
+            adapter = adapter_for_step(step)
+            execution = GraphRunExecution(
+                document, bus, settings_manager, confirmed_checkpoint, run, by_node_id, record_step, started_clock,
+            )
             try:
                 if "externalAttempt" in step:
                     # Even a corrupt/imported pending step with an old fence
                     # must never be sent again.
                     step.update(status="reconciliation-required", detail=RECONCILIATION_DETAIL)
-                elif step["kind"] == "model":
-                    try:
-                        await _run_model_step(document, confirmed_checkpoint, run, step, by_node_id)
-                    except asyncio.CancelledError:
-                        raise
-                    except SceneError as exc:
-                        if step["status"] != "reconciliation-required":
-                            step.update(status="blocked", detail=str(exc))
-                    except Exception:
-                        # The external adapter owns the uncertainty fence. An
-                        # unadmitted failure is local; a sent call is uncertain.
-                        if "externalAttempt" not in step:
-                            step.update(status="blocked", detail="Model dispatch could not start.")
-                        elif step["status"] != "reconciliation-required":
-                            step.update(status="reconciliation-required", detail=RECONCILIATION_DETAIL)
-                elif step["kind"] == "scientific":
-                    try:
-                        await _run_scientific_step(document, bus, settings_manager, run, step, by_node_id)
-                    except asyncio.CancelledError:
-                        raise
-                    except SceneError as exc:
-                        step.update(status="blocked", detail=str(exc), errorType="validation",
-                                    elapsedMs=max(0, int((time.monotonic() - started_clock) * 1000)))
-                    except Exception:
-                        step.update(status="failed", detail="The scientific runner could not finish.",
-                                    errorType="worker_error",
-                                    elapsedMs=max(0, int((time.monotonic() - started_clock) * 1000)))
-                elif step["kind"] == "tool":
-                    try:
-                        await _run_mcp_tool_step(document, bus, confirmed_checkpoint, run, step, by_node_id)
-                    except asyncio.CancelledError:
-                        raise
-                    except SceneError as exc:
-                        if "externalAttempt" not in step:
-                            step.update(status="blocked", detail=str(exc))
-                    except Exception:
-                        if "externalAttempt" not in step:
-                            step.update(status="blocked", detail="The MCP tool could not start. Check its server settings.")
-                        else:
-                            step.update(status="reconciliation-required", detail=RECONCILIATION_DETAIL)
                 else:
-                    try:
-                        validate_graph_run_ancestors(document, step, by_node_id)
-                        if not step["inputHash"]:
-                            live = step.copy()
-                            _inspect(document, live)
-                            if live["configHash"] != step["configHash"] or live["targetHash"] != step["targetHash"]:
-                                raise SceneError("The deferred output or configuration changed since preview.")
-                            step["inputHash"] = live["inputHash"]
-                        digest, _ = document.record_command(
-                            "runGraphStep", "user", lambda: execute_graph_step(document, step),
-                            node_ids=(step["nodeId"],), run_id=run["runId"],
-                        )
-                    except SceneError as exc:
-                        step.update(status="blocked", detail=str(exc))
-                    else:
-                        step.update(status="completed", detail="Output updated.", outputHash=digest)
-                        _pin_output_version(document, step)
+                    await adapter.run(execution, step)
 
                 step.setdefault("finishedAt", datetime.now(timezone.utc).isoformat())
                 # Transforms and receipts share a transaction. The Model
@@ -472,12 +192,7 @@ def register_graph_runner(
                 # dispatch returns. Never save a cancelled receipt over an
                 # already committed scientific result, even on a user cancel.
                 committed_science = (
-                    step["kind"] == "scientific"
-                    and _adopt_scientific_result(
-                        document, step, by_node_id,
-                        detail="Committed before cancellation; result preserved.",
-                        elapsed_ms=max(0, int((time.monotonic() - started_clock) * 1000)),
-                    )
+                    adapter.recover_cancelled is not None and adapter.recover_cancelled(execution, step)
                 )
                 if committed_science:
                     step["finishedAt"] = datetime.now(timezone.utc).isoformat()

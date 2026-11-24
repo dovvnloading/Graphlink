@@ -1,8 +1,10 @@
 # Workflow contracts (v1)
 
-This package deliberately does not change the Graph Runner, canvas, plugin
-execution, persistence or WebSocket behavior. It is a foundation for later
-work, not an executor, adapter implementation, permission system or cache.
+This package contains the versioned workflow contracts and step-adapter
+registry. Graph Runner's scene/journal execution is hosted here by
+compatibility adapters, without changing canvas, plugin execution, persistence
+or WebSocket behavior. The typed WorkflowSpec is still a foundation for
+later execution work, not a replacement for the existing scheduler.
 
 - **Ports:** text, JSON (any JSON value), table (ordered unique columns and
   rectangular JSON-scalar rows), file and image (content-addressed asset
@@ -33,3 +35,28 @@ work, not an executor, adapter implementation, permission system or cache.
 and TypeScript types in `web_ui/src/lib/workflow-contract/generated/`. The
 existing `--check` command checks them for drift; they do not register a topic
 or add anything to the existing topic contract.
+
+## Graph Runner compatibility adapters
+
+`StepAdapterRegistry` pins implementations by exact ID and version. Legacy
+`graph_steps` entries select v1 by existing step kind: note (copy and word
+count), table/chart/artifact (group sum), model (first-class Model), scientific
+and tool (MCP Connect). The opt-in model output note has its own
+`model-note` entry; it is never discovered during an ordinary preview.
+The compatibility interface does not convert the old scene journal into
+WorkflowSpec or change the typed StepAdapter protocol. No adapter/version
+field is added to legacy preview or run bytes.
+
+Read-only pins, inspection, matching and result digests live in the adapters.
+The domain planner owns dependency ordering, private projection copies and
+ancestor validation. The intent owns admission, mutation serialization,
+scheduling, timestamps and checkpoints; `graph_execution` uses those host
+services for approved runs. The scientific worker and MCP runtime remain
+authoritative for grants, cancellation and results. Both model and MCP use
+the existing durable external-request fence, with no new retry path.
+Saved histories, remapping, trace exports and schema codegen are unchanged.
+
+Golden compatibility projections in
+`backend/tests/fixtures/graph_runner_legacy.json` come from the existing runner
+test scenarios. Deterministic text/CSV digests and bytes are literal;
+external request identities are checked before normalizing UUIDs.
