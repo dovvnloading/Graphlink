@@ -58,7 +58,7 @@ class _Builder:
     def template(self, step_id, template, **bindings):
         self.step(step_id, "transform.template", {"template": template}, **bindings)
 
-    def model(self, step_id, source, model=MODEL_A):
+    def add_model_step(self, step_id, source, model=MODEL_A):
         self.step(step_id, "graph.local_model",
                   {"provider": LOCAL_PROVIDER_OLLAMA, "model": model, "endpoint": ENDPOINT},
                   text=source)
@@ -82,7 +82,7 @@ def _table_chart_report(b):
     b.template("interpret_chart",
                "Explain this chart in two sentences using its actual values.\nChart:\n{chart}",
                chart=_source("chart", "chart"))
-    b.model("commentary", _source("interpret_chart"))
+    b.add_model_step("commentary", _source("interpret_chart"))
     b.step("report", "report.generate", grouping, table=_input("table"), text=_source("commentary"))
     return b.document(
         [_port("table", "table")],
@@ -97,12 +97,12 @@ def _research_summary(b):
                "Keep source labels and distinguish evidence from uncertainty.\n"
                "Question: {question}\nResearch notes:\n{sources}",
                question=_input("question"), sources=_input("sources"))
-    b.model("findings", _source("research_prompt"))
+    b.add_model_step("findings", _source("research_prompt"))
     b.template("summary_prompt",
                "Summarize these research findings in three concise bullets. Preserve source labels "
                "and do not introduce new claims.\nFindings:\n{findings}",
                findings=_source("findings"))
-    b.model("summary", _source("summary_prompt"))
+    b.add_model_step("summary", _source("summary_prompt"))
     return b.document(
         [_port("question"), _port("sources")],
         [_output("findings", "findings"), _output("summary", "summary")],
@@ -113,8 +113,8 @@ def _research_summary(b):
 
 
 def _compare_models(b):
-    b.model("model_a", _input("prompt"), MODEL_A)
-    b.model("model_b", _input("prompt"), MODEL_B)
+    b.add_model_step("model_a", _input("prompt"), MODEL_A)
+    b.add_model_step("model_b", _input("prompt"), MODEL_B)
     b.template("comparison", "## Model A\n{a}\n\n## Model B\n{b}",
                a=_source("model_a"), b=_source("model_b"))
     return b.document(
@@ -131,7 +131,7 @@ def _document_qa(b):
                "claim with its passage ID (for example [D1]). If the answer is absent, say so; "
                "do not invent citations.\nQuestion: {question}\nDocument passages:\n{document}",
                question=_input("question"), document=_input("document"))
-    b.model("answer", _source("grounded_prompt"))
+    b.add_model_step("answer", _source("grounded_prompt"))
     return b.document(
         [_port("question"), _port("document")], [_output("answer", "answer")],
         question=TextValue("How long may a loan be renewed?"),
@@ -144,7 +144,7 @@ def _summarize_rows(b):
     child = _Builder("starter-row-summary-child-v1", "Summarize one row")
     child.template("row_prompt", "Summarize this table row in one sentence:\n{row}",
                    row=_input("item"))
-    child.model("summary", _source("row_prompt"))
+    child.add_model_step("summary", _source("row_prompt"))
     child_spec = child.spec([_port("item", "json")], [_output("summary", "summary")])
     b.step("summarize_rows", "control.map",
            {"workflow": _json(asdict(child_spec)), "concurrency": 2, "on_error": "stop"},
@@ -161,7 +161,7 @@ def _quality_gate(b):
     b.template("rewrite_prompt",
                "Rewrite the draft as two lines: Summary: <summary> and Action: <next step>.\n"
                "Draft:\n{draft}", draft=_input("draft"))
-    b.model("rewrite", _source("rewrite_prompt"))
+    b.add_model_step("rewrite", _source("rewrite_prompt"))
     b.step("quality_gate", "control.assert",
            {"kind": "text", "predicate": "regex",
             "pattern": r"(?m)^Action:[ \t]+\S", "on_failure": "block"},

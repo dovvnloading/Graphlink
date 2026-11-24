@@ -86,7 +86,10 @@ def _assert_result(starter_id, outputs, calls):
         assert '"Support"' in calls[0][1] and "12" in calls[0][1]
         report = outputs["report"]["text"]
         assert report.startswith("Support has 12 tickets; Sales has 3.")
-        assert "| Support | 12 |" in report and "| Sales | 3 |" in report
+        # The report renderer uses code spans to keep table labels literal.
+        rows = report.splitlines()
+        assert "| ` Support ` | 12 |" in rows
+        assert "| ` Sales ` | 3 |" in rows
     elif starter_id == "research-summary-v1":
         assert outputs["findings"]["text"] in calls[1][1]
         assert outputs["summary"]["text"] == SCRIPTS[starter_id][1][2]
