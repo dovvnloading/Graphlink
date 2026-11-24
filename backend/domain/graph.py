@@ -1031,11 +1031,15 @@ class SceneDocument(
         row = node_wire(
             n,
             is_final_deliverable=n.id == self.final_deliverable_node_id,
-            text_input_status=self._text_input_status(n, source_digests),
-            plugin_state=self._plugin_state_wire(n),
+            text_input_status=self._text_input_status(n, source_digests) if n.kind == "note" else "unbound",
+            plugin_state=self._plugin_state_wire(n) if self.plugin_node_serializers else {},
             staleness=staleness,
         )
-        row.update(self._table_output_wire(n, table_reads))
+        # Chats own neither bound text-input nor table-output metadata. The
+        # old path called both projectors and allocated/discarded an empty
+        # table dict for every chat, on both snapshot and patch publishes.
+        if n.kind != "chat":
+            row.update(self._table_output_wire(n, table_reads))
         if (
             self.reply_cost_estimator is not None
             and n.kind == "chat" and isinstance(n.state, ChatState)

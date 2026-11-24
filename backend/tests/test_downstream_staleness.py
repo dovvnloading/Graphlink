@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import backend.agents as agents_module  # noqa: F401 - preserve canvas/session import order
 from backend.domain.graph import SceneDocument
-from backend.domain.staleness import fingerprint_for_reply, scene_staleness
+from backend.domain.staleness import _lineage, fingerprint_for_reply, scene_staleness
 from backend.session_load import _restore_chat_payload
 from backend.session_save import _serialize_chat_node
 
@@ -293,3 +293,33 @@ def test_reply_versions_restore_their_own_fingerprint_after_switch_and_reload():
     assert restored.state.reply_history_fingerprint == new_proof
     assert restored.state.versions[0].history_fingerprint == old_proof
     assert restored.state.versions[1].knowledge_enabled is True
+
+
+def test_selective_publish_keeps_unstamped_intermediates_and_legacy_descendants():
+    doc = SceneDocument()
+    root = doc.add_chat_node(0, 0, "Question", True)
+    reply = _answer(doc, root)
+    intermediate = doc.add_chat_node(0, 240, "Manual continuation", True, parent_id=reply.id)
+    derived = doc.add_code_node(0, 360, "print(1)", "python", intermediate.id)
+    # A pre-feature derived node has no direct proof, but must still inherit
+    # upstream staleness through an unstamped chat intermediary.
+    doc.nonchat_upstream_fingerprints.pop(derived.id)
+    doc.scene_payload()
+    doc.take_dirty_patch_ops()
+    root.content = "Changed"
+    expected = {reply.id: "out_of_date", derived.id: "upstream_changed"}
+    assert scene_staleness(doc) == expected == _lineage(doc)[1]
+    ops = doc.take_dirty_patch_ops()
+    assert {op["node"]["id"]: op["node"]["staleness"] for op in ops
+            if op["op"] == "upsertNode" and "staleness" in op["node"]} == expected
+    root.content = "Question"
+    assert scene_staleness(doc) == {}
+
+
+def test_selective_publish_preserves_full_walk_for_malformed_cycle():
+    doc = SceneDocument()
+    root = doc.add_chat_node(0, 0, "Question", True)
+    reply = _answer(doc, root)
+    doc.connect_unchecked(reply.id, root.id)
+    # Legacy saved cycles must not hang or acquire invented provenance.
+    assert scene_staleness(doc) == _lineage(doc)[1] == {}
