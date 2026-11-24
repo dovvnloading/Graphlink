@@ -114,9 +114,8 @@ class GeminiProvider:
         system_prompt, gemini_contents, uploaded_files = _prepare_gemini_contents(
             request.messages, cancel_event=cancel.event, api_key=self.api_key
         )
-        request_body = self._request_body(request, system_prompt, gemini_contents)
-
         try:
+            request_body = self._request_body(request, system_prompt, gemini_contents)
             payload = _gemini_post_json(
                 f"{GEMINI_BASE_URL}/v1beta/models/{self.model_id}:generateContent",
                 request_body,

@@ -354,75 +354,87 @@ def _prepare_gemini_contents(messages: list, cancel_event=None, api_key: str | N
     uploaded_files: list[str] = []
     native_call_ids: dict[str, str] = {}
 
-    for msg in messages:
-        _mod._raise_if_cancelled(cancel_event)
-        role_name = msg.get("role")
+    try:
+        for msg in messages:
+            _mod._raise_if_cancelled(cancel_event)
+            role_name = msg.get("role")
 
-        # Replay signed function-call parts with their model-issued IDs.
-        # Older models omit IDs, so never send them Graphlink's synthetic IDs.
-        if role_name == "tool":
-            response = {
-                "name": msg.get("name", ""),
-                "response": {"result": str(msg.get("content") or "")},
-            }
-            native_id = native_call_ids.get(msg.get("tool_call_id", ""))
-            if native_id:
-                response["id"] = native_id
-            parts: list[dict[str, Any]] = [{"functionResponse": response}]
-            if contents and contents[-1]["role"] == "user":
-                contents[-1]["parts"].extend(parts)
-            else:
-                contents.append({"role": "user", "parts": parts})
-            continue
-        tool_calls = msg.get("tool_calls")
-        if tool_calls:
+            # Replay signed function-call parts with their model-issued IDs.
+            # Older models omit IDs, so never send them Graphlink's synthetic IDs.
+            if role_name == "tool":
+                response = {
+                    "name": msg.get("name", ""),
+                    "response": {"result": str(msg.get("content") or "")},
+                }
+                native_id = native_call_ids.get(msg.get("tool_call_id", ""))
+                if native_id:
+                    response["id"] = native_id
+                parts: list[dict[str, Any]] = [{"functionResponse": response}]
+                if contents and contents[-1]["role"] == "user":
+                    contents[-1]["parts"].extend(parts)
+                else:
+                    contents.append({"role": "user", "parts": parts})
+                continue
+            tool_calls = msg.get("tool_calls")
+            if tool_calls:
+                parts = []
+                lead_in_text = str(msg.get("content") or "").strip()
+                if lead_in_text:
+                    parts.append({"text": lead_in_text})
+                native_call_ids.clear()
+                for call in tool_calls:
+                    function_call = {"name": call["name"], "args": call["arguments"]}
+                    if call.get("gemini_call_id"):
+                        function_call["id"] = call["gemini_call_id"]
+                        native_call_ids[call["id"]] = call["gemini_call_id"]
+                    part: dict[str, Any] = {"functionCall": function_call}
+                    if call.get("gemini_signature"):
+                        part["thoughtSignature"] = call["gemini_signature"]
+                    parts.append(part)
+                contents.append({"role": "model", "parts": parts})
+                continue
+
+            if role_name == "system":
+                system_prompt = msg.get("content")
+                continue
+
+            role = "model" if role_name == "assistant" else "user"
+            content = msg.get("content")
             parts = []
-            lead_in_text = str(msg.get("content") or "").strip()
-            if lead_in_text:
-                parts.append({"text": lead_in_text})
-            native_call_ids.clear()
-            for call in tool_calls:
-                function_call = {"name": call["name"], "args": call["arguments"]}
-                if call.get("gemini_call_id"):
-                    function_call["id"] = call["gemini_call_id"]
-                    native_call_ids[call["id"]] = call["gemini_call_id"]
-                part: dict[str, Any] = {"functionCall": function_call}
-                if call.get("gemini_signature"):
-                    part["thoughtSignature"] = call["gemini_signature"]
-                parts.append(part)
-            contents.append({"role": "model", "parts": parts})
-            continue
 
-        if role_name == "system":
-            system_prompt = msg.get("content")
-            continue
+            if isinstance(content, list):
+                for part in content:
+                    if not isinstance(part, dict):
+                        parts.append({"text": str(part)})
+                        continue
+                    gemini_part = _mod._gemini_part_from_content(part, uploaded_files, cancel_event=cancel_event, api_key=api_key)
+                    if gemini_part is not None:
+                        parts.append(gemini_part)
+            else:
+                parts.append({"text": str(content)})
 
-        role = "model" if role_name == "assistant" else "user"
-        content = msg.get("content")
-        parts = []
+            if not parts:
+                continue
 
-        if isinstance(content, list):
-            for part in content:
-                if not isinstance(part, dict):
-                    parts.append({"text": str(part)})
-                    continue
-                gemini_part = _mod._gemini_part_from_content(part, uploaded_files, cancel_event=cancel_event, api_key=api_key)
-                if gemini_part is not None:
-                    parts.append(gemini_part)
-        else:
-            parts.append({"text": str(content)})
+            if contents and contents[-1]["role"] == role:
+                contents[-1]["parts"].extend(parts)
+                continue
 
-        if not parts:
-            continue
-
-        if contents and contents[-1]["role"] == role:
-            contents[-1]["parts"].extend(parts)
-            continue
-
-        contents.append({
-            "role": role,
-            "parts": parts,
-        })
+            contents.append({
+                "role": role,
+                "parts": parts,
+            })
+    except BaseException:
+        # No caller has received uploaded_files yet. Roll back every upload
+        # recorded so far, even when preparation is cancelled. Cleanup is
+        # best-effort: a failed delete must not mask the original failure
+        # or prevent attempts to delete the remaining files.
+        for file_name in uploaded_files:
+            try:
+                _mod._gemini_delete_file(file_name, api_key=api_key)
+            except Exception:
+                pass
+        raise
 
     return system_prompt, contents, uploaded_files
 
