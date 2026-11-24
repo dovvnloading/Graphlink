@@ -12,7 +12,8 @@ from backend.events import IntentValidationError
 from backend.secret_scrub import scrub_text
 from backend import workflow_library_store as library
 from backend.workflow import canvas
-from backend.workflow.library import export_document, import_document
+from backend.workflow.library import FORMAT, export_document, import_document
+from backend.workflow.starters import list_starters, starter_document
 
 
 @dataclass
@@ -46,6 +47,11 @@ def register_workflow_library(bus, document, connect, serialize_mutation):
                     workflow_id=payload.get("workflow_id"), expected_revision=payload.get("expected_revision")))
             if action == "list":
                 return await db(lambda c: library.list_library(c, payload.get("query", "")))
+            if action == "starters":
+                return list_starters()
+            if action == "importStarter":
+                frozen = starter_document(payload["starter_id"])
+                return await db(lambda c: library.save(c, frozen, name=frozen["spec"]["name"]))
             if action == "import":
                 frozen = import_document(payload["text"])
                 return await db(lambda c: library.save(c, frozen, name=frozen["spec"]["name"]))
@@ -79,6 +85,8 @@ def register_workflow_library(bus, document, connect, serialize_mutation):
             if action in {"insert", "upgrade", "unpack"}:
                 wid, rev = payload["workflow_id"], payload["revision"]
                 frozen = await resolve(wid, rev)
+                if frozen["format"] != FORMAT:
+                    raise ValueError("Built-in starters run in the detached workflow inspector, not on the canvas.")
                 history = await db(lambda c: library.history(c, wid))
                 version = next(row["version"] for row in history if row["revision"] == rev)
             else:

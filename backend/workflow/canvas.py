@@ -11,7 +11,7 @@ from backend.workflow.contracts import (
     WorkflowSpec, WorkflowStepSpec, freeze_config,
 )
 from backend.workflow.library import (
-    canonical, configured_spec, library_registry, make_document, ordered_steps, typed_inputs,
+    FORMAT, canonical, configured_spec, library_registry, make_document, ordered_steps, typed_inputs,
 )
 
 KIND = "graph_runner.workflow"
@@ -83,6 +83,8 @@ def data(node):
 
 
 def new_state(document, version):
+    if document.get("format") != FORMAT:
+        raise ValueError("Built-in starters run in the detached workflow inspector, not on the canvas.")
     return {"document": document, "version": version, "inputs": {}, "sources": {}, "parameters": {},
             "outputs": {}, "lastInputHash": "", "childRunId": ""}
 

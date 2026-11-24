@@ -282,6 +282,17 @@ def validate_document(document: Any) -> dict:
     return {"format": FORMAT, "spec": _json(asdict(spec)), "parameters": _json(parameters)}
 
 
+def validate_library_document(document: Any) -> dict:
+    """Library storage admits pure portable definitions and exact detached starters."""
+    from .starters import STARTER_FORMAT, validate_starter_document
+
+    if isinstance(document, dict) and document.get("format") == STARTER_FORMAT:
+        if len(canonical(document).encode()) > MAX_FILE:
+            raise ValueError("Workflow file exceeds 1 MB.")
+        return validate_starter_document(document)
+    return validate_document(document)
+
+
 def make_document(spec: WorkflowSpec, parameters: list[dict]) -> dict:
     return validate_document({"format": FORMAT, "spec": _json(asdict(spec)), "parameters": parameters})
 
@@ -294,10 +305,14 @@ def import_document(text: str) -> dict:
         _unique((key for key, _ in items), "JSON key")
         return dict(items)
 
-    return validate_document(json.loads(text, object_pairs_hook=pairs))
+    return validate_library_document(json.loads(text, object_pairs_hook=pairs))
 
 
 def export_document(document: dict) -> str:
+    from .starters import STARTER_FORMAT
+
+    if document.get("format") == STARTER_FORMAT:
+        return canonical(validate_library_document(document))
     # Scrub parsed settings, not merely the opaque config_json strings.
     copy = _json(document)
     for step in copy["spec"]["steps"]:
