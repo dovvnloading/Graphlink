@@ -985,7 +985,7 @@ def raincloud_density(values):
 
 def raincloud_jitter(index):
     """Stable visual offset; never change or randomize a measurement."""
-    return 0.15 + 0.28 * ((index * 137) % 307) / 306
+    return min(0.43, max(0.15, 0.15 + 0.28 * ((index * 137) % 307) / 306))
 
 
 def canonicalize_chart_analysis(analysis, chart_type, *, x_scale="linear", y_scale="linear", chart_data=None):

@@ -21,5 +21,5 @@ export function raincloudDensity(values: number[]): [number, number][] {
 }
 
 export function raincloudJitter(index: number): number {
-  return 0.15 + 0.28 * ((index * 137) % 307) / 306;
+  return Math.min(0.43, Math.max(0.15, 0.15 + 0.28 * ((index * 137) % 307) / 306));
 }

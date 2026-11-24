@@ -84,7 +84,6 @@ function ChartRenderer({ chartType, chartData, onAnalysisChange }: ChartRenderer
     );
   }
 
-  const heatmapAnalysis = canonical.data.analysis;
   const heatmapData = heatmapPending?.source === canonical.data
     ? { ...canonical.data, analysis: heatmapPending.value } : canonical.data;
   const heatmapClustering = heatmapData.analysis?.clustering;
