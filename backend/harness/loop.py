@@ -597,6 +597,7 @@ async def run_harness(
     settings_manager=None,
     runtime=None,
     allow_session_grants: bool = True,
+    require_user_workspace: bool = False,
     permission_mode: str = "ask",
     execution_profile: str | None = None,
 ) -> None:
@@ -1071,6 +1072,9 @@ async def run_harness(
             node.state.harness_workspace_path,
             settings_manager=settings_manager,
         )
+        if require_user_workspace and not is_user_dir:
+            await _land("failed", "The selected workspace folder is no longer trusted.")
+            return
         ctx.harness_workspace_dir = root
         ctx.harness_workspace_is_user_dir = is_user_dir
         if allow_session_grants:

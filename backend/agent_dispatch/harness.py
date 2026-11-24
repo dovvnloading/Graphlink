@@ -402,6 +402,7 @@ class HarnessDispatchOps(DispatcherParts):
         user_text: str,
         model_ref=None,
         allow_session_grants: bool = True,
+        require_user_workspace: bool = False,
     ) -> str | None:
         """Claims the "harness" kind and runs one harness task as a
         background task (backend/harness/loop.run_harness). One harness
@@ -504,6 +505,7 @@ class HarnessDispatchOps(DispatcherParts):
                     request_id=request_id, handle=handle, cancel_event=cancel_event,
                     model_ref=model_ref, settings_manager=self._settings_manager,
                     allow_session_grants=allow_session_grants,
+                    require_user_workspace=require_user_workspace,
                     permission_mode=task_mode, execution_profile=task_profile,
                     **self._runtime_kwargs(),
                 )
