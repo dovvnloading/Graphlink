@@ -1003,11 +1003,139 @@ def _render_chart_analysis(ax, analysis: dict[str, Any], theme: dict[str, Any]) 
                         zorder=12, annotation_clip=True)
 
 
+def _render_composite_chart(figure, data: dict[str, Any], theme: dict[str, Any]) -> None:
+    """Render bounded V2 layers/facets from original named columns.
+
+    No AI-generated expression or script executes here. Each mark is a
+    reference to canonicalized arrays; every observation participates in
+    the publication image. Panels share X/Y domains so comparisons cannot
+    silently change scale across experimental groups.
+    """
+    spec = data["composite"]
+    numbers = spec["numbers"]
+    categories = spec["categories"]
+    facet_field = spec.get("facetBy")
+    facets = list(dict.fromkeys(categories[facet_field])) if facet_field else [None]
+    columns = 1 if len(facets) == 1 else 2
+    rows = math.ceil(len(facets) / columns)
+
+    # Establish data-wide domains *before* faceting, including band upper
+    # boundaries and the area baseline.
+    x_values, y_values = [], []
+    for layer in spec["layers"]:
+        x_values.extend(numbers[layer["x"]])
+        y_values.extend(numbers[layer["y"]])
+        if layer.get("y2"):
+            y_values.extend(numbers[layer["y2"]])
+        if layer["mark"] == "area":
+            y_values.append(0.0)
+
+    # Category-to-color mapping is global, not per panel; colors do not
+    # shift when a category is absent from one facet.
+    category_colors = {}
+    for layer in spec["layers"]:
+        color_by = layer.get("colorBy")
+        if color_by:
+            for value in categories[color_by]:
+                if value not in category_colors:
+                    category_colors[value] = theme["cycle"][len(category_colors) % len(theme["cycle"])]
+
+    x_unit, y_unit = data.get("xUnit"), data.get("yUnit")
+    xlabel = data["xAxis"] + (f" ({x_unit})" if x_unit else "")
+    ylabel = data["yAxis"] + (f" ({y_unit})" if y_unit else "")
+    figure.clear()
+    axes = [
+        figure.add_subplot(rows, columns, i + 1)
+        for i in range(rows * columns)
+    ]
+    for i, facet in enumerate(facets):
+        ax = axes[i]
+        _prepare_standard_axes(ax, theme, xlabel, ylabel)
+        if data.get("xScale") == "log10":
+            ax.set_xscale("log", base=10)
+        if data.get("yScale") == "log10":
+            ax.set_yscale("log", base=10)
+        present = [
+            index for index in range(len(next(iter(numbers.values()))))
+            if facet_field is None or categories[facet_field][index] == facet
+        ]
+        for layer_index, layer in enumerate(spec["layers"]):
+            color_by = layer.get("colorBy")
+            groups = (list(dict.fromkeys(categories[color_by][j] for j in present))
+                      if color_by else [None])
+            for group in groups:
+                indices = [
+                    j for j in present
+                    if color_by is None or categories[color_by][j] == group
+                ]
+                indices.sort(key=lambda index: (numbers[layer["x"]][index], index))
+                if not indices:
+                    continue
+                xx = [numbers[layer["x"]][j] for j in indices]
+                yy = [numbers[layer["y"]][j] for j in indices]
+                color = (category_colors[group] if group is not None
+                         else theme["cycle"][layer_index % len(theme["cycle"])])
+                label = layer.get("label") or layer["y"]
+                if group is not None:
+                    label = f"{label} · {group}"
+                mark = layer["mark"]
+                if mark == "band":
+                    upper = [numbers[layer["y2"]][j] for j in indices]
+                    ax.fill_between(xx, yy, upper, facecolor=color, alpha=0.24,
+                                    linewidth=0.8, edgecolor=color, label=label)
+                elif mark == "area":
+                    ax.fill_between(xx, 0, yy, facecolor=color, alpha=0.24,
+                                    linewidth=0.8, edgecolor=color, label=label)
+                elif mark == "line":
+                    ax.plot(xx, yy, color=color, linestyle=("-", "--", "-.", ":")[layer_index % 4],
+                            linewidth=1.8, label=label)
+                else:
+                    ax.scatter(xx, yy, s=19, color=color, alpha=0.87,
+                               marker=("o", "s", "^", "D")[layer_index % 4],
+                               label=label, zorder=4)
+        if facet is not None:
+            ax.set_title(f"{facet_field}: {facet}", fontsize=9, color=theme["text"])
+        if data.get("xScale") == "log10":
+            xmin, xmax = min(x_values), max(x_values)
+            if xmin == xmax:
+                xmin, xmax = xmin / 1.2, xmax * 1.2
+        else:
+            xmin, xmax = min(x_values), max(x_values)
+            if xmin == xmax:
+                delta = max(abs(xmin) * 0.05, 1)
+                xmin, xmax = xmin - delta, xmax + delta
+        if data.get("yScale") == "log10":
+            ymin, ymax = min(y_values), max(y_values)
+            if ymin == ymax:
+                ymin, ymax = ymin / 1.2, ymax * 1.2
+        else:
+            ymin, ymax = min(y_values), max(y_values)
+            if ymin == ymax:
+                delta = max(abs(ymin) * 0.05, 1)
+                ymin, ymax = ymin - delta, ymax + delta
+        ax.set_xlim(xmin, xmax)
+        ax.set_ylim(ymin, ymax)
+        if len(spec["layers"]) > 1 or category_colors:
+            handles, labels = ax.get_legend_handles_labels()
+            unique = dict(zip(labels, handles))
+            if unique:
+                ax.legend(unique.values(), unique.keys(), fontsize=7, frameon=False,
+                          labelcolor=theme["text"], loc="best")
+    for ax in axes[len(facets):]:
+        ax.set_visible(False)
+    figure.suptitle(data["title"], fontsize=10, color=theme["text"])
+    # The common publication geometry is shared by SVG/PDF/PNG.
+    figure.tight_layout(rect=[0, 0, 1, 0.95], pad=1.35)
+
+
 def _render_chart_content(figure, chart_type: str, chart_data: dict[str, Any], theme: dict[str, Any], layout_width: float) -> None:
     figure.clear()
     figure.patch.set_facecolor(theme["surface"])
-    ax = figure.add_subplot(111)
     canonical = canonicalize_chart_data(chart_data, chart_type)
+    if chart_type == "composite":
+        _render_composite_chart(figure, canonical, theme)
+        return
+    ax = figure.add_subplot(111)
 
     if chart_type == "bar":
         use_tight_layout = _render_bar_chart(ax, canonical, theme, layout_width)
