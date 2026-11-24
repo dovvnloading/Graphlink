@@ -271,13 +271,14 @@ def test_final_write_is_reported_as_running_until_sqlite_commits(tmp_path, monke
         loop = asyncio.get_running_loop()
         started = asyncio.Event()
         released = threading.Event()
+        timeout = 60  # Deadlock guard, not an estimate of SQLite latency.
 
         def pause_terminal(db_path, chat_id, title, data, *args, **kwargs):
             if data["graph_runs"][-1]["status"] == "completed":
                 # The writer runs in a thread; notify the event loop without
                 # assuming how long earlier graph checkpoints take on CI.
                 loop.call_soon_threadsafe(started.set)
-                released.wait()
+                assert released.wait(timeout), "test did not release the terminal SQLite write"
                 if not commit_succeeds:
                     raise OSError("terminal write rolled back")
             return original_write(db_path, chat_id, title, data, *args, **kwargs)
@@ -293,11 +294,13 @@ def test_final_write_is_reported_as_running_until_sqlite_commits(tmp_path, monke
         try:
             # Wait for the intercepted terminal write, or fail promptly if the
             # run ends without reaching it. The timeout is only a deadlock guard.
-            async with asyncio.timeout(60):
-                done, _ = await asyncio.wait({started_waiter, run}, return_when=asyncio.FIRST_COMPLETED)
+            done, _ = await asyncio.wait(
+                {started_waiter, run}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED,
+            )
             if run in done:
                 await run
                 pytest.fail("graph run finished without reaching the terminal SQLite write")
+            assert started_waiter in done, "terminal SQLite write did not start before the deadline"
             assert not run.done()
             assert (await send("executeGraphRun", *args))["status"] == "running"
             assert (await send("getGraphRun"))["status"] == "running"
@@ -308,12 +311,12 @@ def test_final_write_is_reported_as_running_until_sqlite_commits(tmp_path, monke
             await asyncio.gather(started_waiter, return_exceptions=True)
 
         if commit_succeeds:
-            assert (await run)["status"] == "completed"
+            assert (await asyncio.wait_for(run, timeout=timeout))["status"] == "completed"
             assert (await send("getGraphRun"))["status"] == "completed"
             assert persisted_status() == "completed"
         else:
             with pytest.raises(IntentValidationError, match="checkpoint"):
-                await run
+                await asyncio.wait_for(run, timeout=timeout)
             assert (await send("getGraphRun"))["status"] == "interrupted"
             assert persisted_status() == "running"
 
