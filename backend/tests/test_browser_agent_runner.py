@@ -25,6 +25,16 @@ class FakeLocator:
     async def inner_text(self, **kwargs):
         return "Visible control name"
 
+    async def element_handle(self, **kwargs):
+        return self
+
+    async def evaluate(self, script, *args):
+        if "current === approved" in script:
+            return not getattr(self.page, "replace_during_approval", False)
+        if "_irrelevant" in script:
+            raise AssertionError("Unexpected evaluator")
+        return "changed" if getattr(self.page, "changed_during_approval", False) else "stable"
+
     async def click(self, **kwargs):
         self.page.calls.append(("click", self.selector))
 
@@ -80,6 +90,11 @@ class FakeContext:
         self.route_handler = None
         self.websocket_handler = None
         self.scripts = []
+        self.cookies_seen = []
+
+    async def cookies(self, urls=None):
+        self.cookies_seen.append(urls)
+        return []
 
     async def route(self, pattern, handler):
         self.route_handler = handler
