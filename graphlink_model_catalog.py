@@ -21,6 +21,7 @@ AUTO_MODEL = "auto"
 INHERIT_MODEL = "inherit"
 
 CAPABILITY_TEXT = "text"
+CAPABILITY_EMBEDDING = "embedding"
 CAPABILITY_CODE = "code"
 CAPABILITY_VISION = "vision"
 CAPABILITY_AUDIO = "audio"
@@ -83,6 +84,12 @@ class ModelDescriptor:
         # the picker.  The runtime/provider remains the final authority.
         if not self.capabilities:
             return True
+        # Ollama reports completion, not a separate code-generation flag.
+        # Keep chart tasks eligible for chat-capable Ollama models without
+        # inventing a verified "code" capability or relaxing other providers'
+        # explicit capability requirements.
+        if self.provider == LOCAL_PROVIDER_OLLAMA and CAPABILITY_TEXT in self.capabilities:
+            required.discard(CAPABILITY_CODE)
         return required.issubset(self.capabilities)
 
     @property
@@ -182,25 +189,28 @@ def ollama_descriptor(model, *, provider: str = "Ollama") -> ModelDescriptor:
     for capability in raw_capabilities or ():
         normalized = str(capability).strip().lower().replace("-", "_")
         aliases = {
-            "embedding": CAPABILITY_TEXT,
+            "embedding": CAPABILITY_EMBEDDING,
+            "embeddings": CAPABILITY_EMBEDDING,
             "completion": CAPABILITY_TEXT,
+            "chat": CAPABILITY_TEXT,
+            "text_generation": CAPABILITY_TEXT,
             "image_generation": CAPABILITY_IMAGE,
             "image": CAPABILITY_VISION,
             "vision": CAPABILITY_VISION,
             "tool": CAPABILITY_TOOLS,
             "function_calling": CAPABILITY_TOOLS,
         }
-        capabilities.add(aliases.get(normalized, normalized))
+        if normalized:
+            capabilities.add(aliases.get(normalized, normalized))
 
     family = str(_field(details, "family", "") or "").lower()
-    if family:
+    if not capabilities and (family or _field(details, "parameter_size")):
+        # Legacy list() responses may have details but no capability metadata.
+        # Neither a family nor a parameter count proves text generation when
+        # show() explicitly reports a non-completion model.
         capabilities.add(CAPABILITY_TEXT)
-        if "code" in family or "coder" in family:
-            capabilities.add(CAPABILITY_CODE)
-    if _field(details, "parameter_size"):
-        # A model with Ollama details is at least a usable text model unless
-        # the provider explicitly reports another modality.
-        capabilities.add(CAPABILITY_TEXT)
+    if CAPABILITY_TEXT in capabilities and "code" in family:
+        capabilities.add(CAPABILITY_CODE)
 
     return ModelDescriptor(
         model_id=model_id,
@@ -440,10 +450,21 @@ def unified_catalog(
     descriptors: list[ModelDescriptor] = []
 
     ollama_models = settings_manager.get_ollama_scanned_models() or ()
+    # The inventory scan persists /api/show observations under case-folded
+    # IDs, using "chat"/"embeddings" rather than Ollama's raw names. Reuse
+    # them here so the auto rung cannot re-select a known embedding-only
+    # model that the task-config selector has already ruled out.
+    verified = (
+        settings_manager.get_ollama_verified_capabilities() or {}
+        if hasattr(settings_manager, "get_ollama_verified_capabilities") else {}
+    )
     for model_id in ollama_models:
         model_id = normalize_model_id(model_id)
         if model_id:
-            descriptors.append(ModelDescriptor(model_id=model_id, provider=LOCAL_PROVIDER_OLLAMA, source="installed"))
+            descriptors.append(ollama_descriptor(
+                {"model": model_id, "capabilities": verified.get(model_id.casefold(), ())},
+                provider=LOCAL_PROVIDER_OLLAMA,
+            ))
 
     llama_cpp_models = settings_manager.get_llama_cpp_scanned_models() or ()
     for model_path in llama_cpp_models:
