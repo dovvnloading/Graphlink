@@ -27,7 +27,7 @@ VALUES = {
 }
 
 
-@pytest.mark.parametrize("source,target", product(VALUES, repeat=2))
+@pytest.mark.parametrize("source,target", list(product(VALUES, repeat=2)))
 def test_complete_coercion_matrix(source, target):
     value = VALUES[source]
     port = PortSpec("destination", target, True)
