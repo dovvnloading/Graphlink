@@ -15,7 +15,7 @@ import httpx
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
 
-def local_ollama_complete(*, prompt: str, model_id: str, endpoint: str) -> dict[str, Any]:
+def local_ollama_complete(*, prompt: str, model_id: str, endpoint: str, system_prompt: str = "") -> dict[str, Any]:
     """Make one bounded, no-auth local chat call through an explicit HTTP client.
 
     The caller MUST validate and pin the numeric loopback endpoint, authorize
@@ -24,7 +24,8 @@ def local_ollama_complete(*, prompt: str, model_id: str, endpoint: str) -> dict[
     """
     request = {
         "model": model_id,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": ([{"role": "system", "content": system_prompt}] if system_prompt else [])
+        + [{"role": "user", "content": prompt}],
         "stream": False,
     }
     with httpx.Client(
