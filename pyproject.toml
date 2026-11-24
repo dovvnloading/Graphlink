@@ -202,6 +202,7 @@ faulthandler_timeout = 60
 # config that looks right and gates nothing is the failure this list was
 # widened to fix, so: names, not paths.
 source = [
+    # backend recursively measures backend.workflow as well as the existing backend packages.
     "backend", "graphlink_plugins", "provider_runtime", "settings_store", "contracts",
     "api_provider", "graphlink_artifact_agent", "graphlink_audio",
     "graphlink_chart_data", "graphlink_chart_rendering", "graphlink_chat_agent",
@@ -306,7 +307,7 @@ py-modules = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = [
-    "backend*",
+    "backend*",  # includes backend.workflow and its pure contract modules
     "graphlink_plugins*",
     "provider_runtime*",
     "settings_store*",

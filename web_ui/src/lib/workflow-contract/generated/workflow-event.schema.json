@@ -1,0 +1,124 @@
+{
+  "$defs": {
+    "EventKind": {
+      "enum": [
+        "run-created",
+        "run-started",
+        "run-completed",
+        "run-failed",
+        "run-cancelled",
+        "run-interrupted",
+        "step-started",
+        "step-progress",
+        "step-completed",
+        "step-failed",
+        "step-cancelled",
+        "step-blocked",
+        "step-cached",
+        "step-skipped",
+        "step-interrupted"
+      ]
+    },
+    "JsonData": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonScalar"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/JsonData"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonData"
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "JsonScalar": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "WorkflowEventRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "$ref": "#/$defs/JsonData"
+        },
+        "kind": {
+          "$ref": "#/$defs/EventKind"
+        },
+        "message": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "enum": [
+            1
+          ]
+        },
+        "sequence": {
+          "type": "integer"
+        },
+        "step_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "timestamp": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "run_id",
+        "sequence",
+        "timestamp",
+        "kind",
+        "step_id",
+        "attempt",
+        "message",
+        "data"
+      ],
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/WorkflowEventRecord",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WorkflowEventRecord"
+}

@@ -1,0 +1,91 @@
+{
+  "$defs": {
+    "AdapterDescriptor": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter_id": {
+          "type": "string"
+        },
+        "adapter_version": {
+          "type": "string"
+        },
+        "ports": {
+          "$ref": "#/$defs/PortSet"
+        },
+        "side_effect_class": {
+          "$ref": "#/$defs/SideEffectClass"
+        }
+      },
+      "required": [
+        "adapter_id",
+        "adapter_version",
+        "ports",
+        "side_effect_class"
+      ],
+      "type": "object"
+    },
+    "PortKind": {
+      "enum": [
+        "text",
+        "json",
+        "table",
+        "file",
+        "image"
+      ]
+    },
+    "PortSet": {
+      "additionalProperties": false,
+      "properties": {
+        "inputs": {
+          "items": {
+            "$ref": "#/$defs/PortSpec"
+          },
+          "type": "array"
+        },
+        "outputs": {
+          "items": {
+            "$ref": "#/$defs/PortSpec"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "inputs",
+        "outputs"
+      ],
+      "type": "object"
+    },
+    "PortSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/PortKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "required"
+      ],
+      "type": "object"
+    },
+    "SideEffectClass": {
+      "enum": [
+        "pure",
+        "local-read",
+        "cloud",
+        "executes",
+        "writes"
+      ]
+    }
+  },
+  "$ref": "#/$defs/AdapterDescriptor",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AdapterDescriptor"
+}
