@@ -185,9 +185,24 @@ it("shows and removes a persisted OLS confidence layer without changing observat
   expect(container.querySelectorAll(".chart-regression-band")).toHaveLength(1);
   expect(container.querySelectorAll(".chart-regression-line")).toHaveLength(1);
   expect(container.querySelectorAll(".chart-scientific-point")).toHaveLength(5);
-  expect(screen.getByText(/R²=0.640/)).toBeInTheDocument();
+  expect(screen.getByText(/^Unweighted OLS.*R²=0\.640/)).toBeInTheDocument();
   fireEvent.click(toggle);
   expect(save).toHaveBeenLastCalledWith({ lockX: false, lockY: false, annotations: [] });
   expect(container.querySelector(".chart-regression-band")).toBeNull();
   expect(JSON.stringify(input)).toBe(original);
+});
+
+it("renders a raincloud density and every original observation, and restores the boxplot", () => {
+  const input = plotData.boxplot;
+  const save = vi.fn();
+  const { container } = render(<ChartRenderer chartType="boxplot" chartData={input} onAnalysisChange={save} />);
+  openTools();
+  const toggle = screen.getByRole("button", { name: "Raincloud distribution" });
+  fireEvent.click(toggle);
+  expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ distribution: "raincloud" }));
+  expect(container.querySelectorAll(".chart-raincloud-density")).toHaveLength(2);
+  expect(container.querySelectorAll(".chart-raincloud-observation")).toHaveLength(8);
+  fireEvent.click(toggle);
+  expect(container.querySelector(".chart-raincloud-density")).toBeNull();
+  expect(container.querySelector(".chart-raincloud-observation")).toBeNull();
 });

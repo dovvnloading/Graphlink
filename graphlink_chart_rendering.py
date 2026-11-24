@@ -47,7 +47,8 @@ from matplotlib.colors import Colormap, LinearSegmentedColormap, Normalize, TwoS
 from matplotlib.patches import FancyBboxPatch, PathPatch
 from matplotlib.path import Path as MplPath
 
-from graphlink_chart_data import SUPPORTED_CHART_TYPES, canonicalize_chart_data, chart_regression_fits
+from graphlink_chart_data import (SUPPORTED_CHART_TYPES, canonicalize_chart_data, chart_regression_fits,
+                                  raincloud_density, raincloud_jitter)
 
 # -- dark-theme hex palette --------------------------------------------------
 # Copied verbatim from graphlink_config.py's THEME_TOKENS["dark"] (the app's
@@ -474,9 +475,21 @@ def _render_boxplot(ax, chart_data: dict[str, Any], theme: dict[str, Any],
     groups = chart_data["groups"]
     entries = [dict(label=group["label"], **_boxplot_statistics(group["values"]))
                for group in groups]
+    raincloud = chart_data.get("analysis", {}).get("distribution") == "raincloud"
+    if raincloud:
+        for index, group in enumerate(groups):
+            color = theme["cycle"][index % len(theme["cycle"])]
+            density = raincloud_density(group["values"])
+            if density:
+                values, relative = zip(*density)
+                ax.fill_betweenx(values, index - 0.12, [index - 0.12 - 0.32 * d for d in relative],
+                                 color=color, alpha=0.35, linewidth=0.8, edgecolor=color)
+            ax.scatter([index + raincloud_jitter(j) for j in range(len(group["values"]))],
+                       group["values"], s=13, color=color, alpha=0.8, edgecolors=theme["text"],
+                       linewidths=0.35, zorder=4)
     artists = ax.bxp(
-        entries, positions=list(range(len(groups))), widths=0.56,
-        patch_artist=True, showfliers=True, manage_ticks=False,
+        entries, positions=list(range(len(groups))), widths=0.14 if raincloud else 0.56,
+        patch_artist=True, showfliers=not raincloud, manage_ticks=False,
         boxprops={"edgecolor": theme["text"], "linewidth": 1.1},
         medianprops={"color": theme["text"], "linewidth": 2.0},
         whiskerprops={"color": theme["muted"], "linewidth": 1.3},
@@ -491,6 +504,10 @@ def _render_boxplot(ax, chart_data: dict[str, Any], theme: dict[str, Any],
             patch.set_hatch(PUBLICATION_HATCHES[index % len(PUBLICATION_HATCHES)])
     _prepare_standard_axes(ax, theme, chart_data["xAxis"], chart_data["yAxis"])
     _set_categorical_ticks(ax, list(range(len(groups))), [group["label"] for group in groups], layout_width)
+    if raincloud:
+        ax.set_xlim(-0.5, len(groups) - 0.5)
+        ax.set_title("Raincloud: density (relative peak), quartiles, raw observations",
+                     fontsize=8, color=theme["text"], loc="left")
     ax.margins(x=0.07, y=0.16)
     return True
 

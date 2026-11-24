@@ -233,6 +233,12 @@
                     },
                     "type": "array"
                   },
+                  "distribution": {
+                    "enum": [
+                      "raincloud"
+                    ],
+                    "type": "string"
+                  },
                   "lockX": {
                     "type": "boolean"
                   },

@@ -345,3 +345,19 @@ the existing undoable chart-analysis intent; numerical results are derived
 deterministically from the original samples at render time. Unedited charts
 retain their existing behavior and shape. This is a first composable
 statistical layer, not a replacement for the existing visualization engine.
+
+
+### Raincloud distributions
+
+Open **Chart tools → Raincloud distribution** on a box plot. This
+combines the original Tukey summary with a Gaussian kernel density estimate
+(on the left) and all original observations (on the right). A deterministic
+horizontal jitter separates points without changing their values or sample
+order. Constant groups show the box and all observations but omit an
+undefined density. Density bandwidth uses the normal reference rule
+1.06 × sample standard deviation × n^(-1/5), computed in normalized
+coordinates; clouds are restricted to the observed span. Each cloud is
+scaled to its own peak, so compare distribution shapes, not absolute
+density heights. The layer is persisted as
+`analysis.distribution: "raincloud"` and can be undone. Live charts,
+low-zoom overviews and publication exports render the same three components.

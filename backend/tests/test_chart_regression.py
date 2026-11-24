@@ -67,3 +67,18 @@ def test_export_keeps_fit_and_source(fmt, signature):
         labels = " ".join("".join(e.itertext()) for e in root.iter() if e.tag.endswith("}text"))
         assert "95% mean CI" in labels
         assert "OLS" in labels
+
+
+def test_many_observations_and_tiny_or_large_units():
+    xs = list(range(60))
+    for factor in (1e-150, 1e150):
+        spec = canonicalize_chart_data({
+            "type": "scatter",
+            "xValues": [x * factor for x in xs],
+            "values": [(2 * x + x % 3) * factor for x in xs],
+            "analysis": OVERLAY,
+        })
+        fit = chart_regression_fits(spec)[0]
+        assert fit["n"] == 60
+        assert 0.99 < fit["r2"] <= 1
+        assert fit["points"][32][2] < fit["points"][32][1] < fit["points"][32][3]

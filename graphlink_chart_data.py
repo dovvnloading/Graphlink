@@ -793,7 +793,7 @@ MAX_CHART_ANNOTATIONS = 60
 
 
 # Pointwise 95% Student-t critical values for df 1..30; the asymptotic
-# expansion below is accurate to < 1e-6 for df > 30 at this quantile.
+# expansion below is accurate to < 2e-6 for df > 30 at this quantile.
 _T95 = (
     12.706204736, 4.302652730, 3.182446305, 2.776445105, 2.570581836, 2.446911851,
     2.364624252, 2.306004135, 2.262157163, 2.228138852, 2.200985160, 2.178812830,
@@ -877,11 +877,45 @@ def chart_regression_fits(data):
     return fits
 
 
+def raincloud_density(values):
+    """Scott/Silverman normal-reference Gaussian KDE on the observed span.
+
+    Compute in normalized coordinates, return (original value, relative
+    density) points. Each group's peak is scaled to 1 for visual shape
+    comparison, not absolute probability-density comparison. Constant
+    samples have no estimable bandwidth; return no cloud for that group.
+    """
+    if len(values) < 2:
+        return []
+    lo, hi = min(values), max(values)
+    span = hi - lo
+    if not math.isfinite(span) or span <= 0:
+        return []
+    u = [(value - lo) / span for value in values]
+    avg = sum(u) / len(u)
+    sd = math.sqrt(sum((value - avg)**2 for value in u) / (len(u) - 1))
+    bandwidth = 1.06 * sd * len(u)**(-0.2)
+    if bandwidth <= 0 or not math.isfinite(bandwidth):
+        return []
+    estimates = []
+    for i in range(65):
+        q = i / 64
+        density = sum(math.exp(-0.5 * ((q - value) / bandwidth)**2) for value in u)
+        estimates.append((lo + q * span, density))
+    peak = max(density for _, density in estimates)
+    return [(value, density / peak) for value, density in estimates] if peak else []
+
+
+def raincloud_jitter(index):
+    """Stable visual offset; never change or randomize a measurement."""
+    return 0.15 + 0.28 * ((index * 137) % 307) / 306
+
+
 def canonicalize_chart_analysis(analysis, chart_type, *, x_scale="linear", y_scale="linear", chart_data=None):
     """Bounded document-state annotations and frozen axes; no data mutation."""
     if not isinstance(analysis, dict):
         raise ChartDataError("Chart analysis must be an object")
-    allowed = {"lockX", "lockY", "xRange", "yRange", "annotations", "regression"}
+    allowed = {"lockX", "lockY", "xRange", "yRange", "annotations", "regression", "distribution"}
     if set(analysis) - allowed:
         raise ChartDataError("Unknown chart analysis field")
     if chart_type not in CHART_ANALYSIS_TYPES:
@@ -914,6 +948,10 @@ def canonicalize_chart_analysis(analysis, chart_type, *, x_scale="linear", y_sca
             raise ChartDataError("Linear regression requires at least three numeric observations, "
                                  "varying X, linear axes and finite confidence bounds")
         result["regression"] = "ols95"
+    if "distribution" in analysis:
+        if chart_type != "boxplot" or analysis["distribution"] != "raincloud":
+            raise ChartDataError("Raincloud distributions require a box plot")
+        result["distribution"] = "raincloud"
     annotations = analysis.get("annotations", [])
     if not isinstance(annotations, list) or len(annotations) > MAX_CHART_ANNOTATIONS:
         raise ChartDataError("Chart annotations must be a list of at most 60 items")

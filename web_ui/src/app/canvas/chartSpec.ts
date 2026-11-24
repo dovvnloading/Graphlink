@@ -138,6 +138,7 @@ export interface ChartAnalysis {
   yRange?: [number, number];
   annotations: ChartAnnotation[];
   regression?: "ols95";
+  distribution?: "raincloud";
 }
 
 export const EMPTY_CHART_ANALYSIS: ChartAnalysis = { lockX: false, lockY: false, annotations: [] };
@@ -159,7 +160,7 @@ export function canonicalizeChartAnalysis(
     throw new ChartSpecError("Chart analysis is only supported on cartesian analysis charts");
   }
   const raw = value as Record<string, unknown>;
-  if (Object.keys(raw).some((key) => !["lockX", "lockY", "xRange", "yRange", "annotations", "regression"].includes(key))) {
+  if (Object.keys(raw).some((key) => !["lockX", "lockY", "xRange", "yRange", "annotations", "regression", "distribution"].includes(key))) {
     throw new ChartSpecError("Unknown chart analysis field");
   }
   const result: ChartAnalysis = { lockX: false, lockY: false, annotations: [] };
@@ -192,6 +193,12 @@ export function canonicalizeChartAnalysis(
       throw new ChartSpecError("Linear regression requires at least three numeric observations, varying X, linear axes and finite confidence bounds");
     }
     result.regression = "ols95";
+  }
+  if ("distribution" in raw) {
+    if (type !== "boxplot" || raw.distribution !== "raincloud") {
+      throw new ChartSpecError("Raincloud distributions require a box plot");
+    }
+    result.distribution = "raincloud";
   }
   if (raw.annotations !== undefined && (!Array.isArray(raw.annotations) || raw.annotations.length > 60)) {
     throw new ChartSpecError("Chart annotations must be a list of at most 60 items");

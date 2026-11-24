@@ -1,6 +1,7 @@
 /** Tukey box/whisker marks: median-of-halves quartiles, 1.5-IQR whiskers,
  * and all individual outliers. Geometry is shared with the export semantics. */
-import { useId } from "react";
+import { useId, useMemo } from "react";
+import { raincloudDensity, raincloudJitter } from "./raincloud";
 import type { ChartMarksProps } from "./BarChartMarks";
 import { CartesianAxes, type XTick } from "./CartesianAxes";
 import {
@@ -14,6 +15,8 @@ export function BoxplotChartMarks({
 }: ChartMarksProps) {
   const clipId = useId();
   const groups = chartData.groups ?? [];
+  const raincloud = chartData.analysis?.distribution === "raincloud";
+  const densities = useMemo(() => raincloud ? (chartData.groups ?? []).map(group => raincloudDensity(group.values)) : [], [chartData.groups, raincloud]);
   if (!groups.length || width <= 0 || height <= 0) return null;
   const summaries = groups.map((group) => computeBoxplotStats(group.values));
   const low = Math.min(...groups.flatMap((group) => group.values));
@@ -51,7 +54,7 @@ export function BoxplotChartMarks({
       {groups.map((group, index) => {
         const stat = summaries[index];
         const cx = viewport ? xScale(index) : (index + 0.5) * slot;
-        const half = slot * 0.28;
+        const half = slot * (raincloud ? 0.07 : 0.28);
         const top = y(stat.q3);
         const bottom = y(stat.q1);
         const color = palette[index % palette.length];
@@ -64,6 +67,14 @@ export function BoxplotChartMarks({
         ];
         return (
           <g className="chart-boxplot-group" data-label={group.label} key={group.label}>
+            {raincloud && densities[index].length > 0 && (
+              <polygon className="chart-raincloud-density" fill={color} fillOpacity={0.35}
+                stroke={color} strokeWidth={1} pointerEvents="none"
+                points={[
+                  ...densities[index].map(([value, d]) => (cx - slot * (0.12 + 0.32 * d)) + "," + y(value)),
+                  ...[...densities[index]].reverse().map(([value]) => (cx - slot * 0.12) + "," + y(value)),
+                ].join(" ")} />
+            )}
             <g stroke={theme.textMuted} strokeWidth={1.5} pointerEvents="none">
               <line x1={cx} x2={cx} y1={y(stat.max)} y2={top} />
               <line x1={cx} x2={cx} y1={bottom} y2={y(stat.min)} />
@@ -76,7 +87,7 @@ export function BoxplotChartMarks({
               pointerEvents="none" />
             <line className="chart-boxplot-median" x1={cx - half} x2={cx + half}
               y1={y(stat.median)} y2={y(stat.median)} stroke={theme.text} strokeWidth={2.2} pointerEvents="none" />
-            {stat.outliers.map((outlier, j) => (
+            {!raincloud && stat.outliers.map((outlier, j) => (
               <circle key={j} className="chart-boxplot-outlier" cx={cx} cy={y(outlier)}
                 r={3.5} fill={theme.surface} stroke={color} strokeWidth={1.5} pointerEvents="none" />
             ))}
@@ -86,6 +97,17 @@ export function BoxplotChartMarks({
                 onHover({ title: group.label, rows: hoverRows, ...tooltipPositionFromEvent(event, wrapperRef) });
               }}
               onPointerLeave={() => onHover(null)} />
+            {raincloud && group.values.map((value, j) => (
+              <circle key={j} className="chart-raincloud-observation" data-index={j}
+                cx={cx + slot * raincloudJitter(j)} cy={y(value)}
+                r={3} fill={color} fillOpacity={0.8} stroke={theme.text} strokeWidth={0.5}
+                onPointerMove={(event) => onHover({
+                  title: group.label, rows: [{ label: "Observation", value: String(j + 1) },
+                    { label: chartData.yAxis ?? "Value", value: String(value) }],
+                  ...tooltipPositionFromEvent(event, wrapperRef),
+                })}
+                onPointerLeave={() => onHover(null)} />
+            ))}
           </g>
         );
       })}

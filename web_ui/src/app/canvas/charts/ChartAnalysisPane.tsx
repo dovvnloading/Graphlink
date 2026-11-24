@@ -50,13 +50,14 @@ export function ChartAnalysisPane({
   chartType, chartData, width, height, theme, wrapperRef, onAnalysisChange, interactive, onActivate,
 }: ChartAnalysisPaneProps) {
   const [toolsOpen, setToolsOpen] = useState(false);
-  const plotHeight = Math.max(80, height - (toolsOpen ? 200 : 32));
   const persisted = chartAnalysisOf(chartData);
   // Optimistic edits are valid only for the exact scene snapshot they edit.
   // On save, reload or undo a new chartData object automatically wins, so
   // there is no synchronous setState-in-effect update (or stale overlay).
   const [pending, setPending] = useState<{ source: ChartDataRow; value: ChartAnalysis } | null>(null);
   const analysis = pending?.source === chartData ? pending.value : persisted;
+  const plotHeight = Math.max(80, height - (toolsOpen ? 200 : 32)
+    - (analysis.regression || analysis.distribution ? 18 : 0));
   const fits = useMemo(() => (chartType === "line" || chartType === "scatter") ? linearFits(chartData) : null, [chartData, chartType]);
   const displayData = analysis === persisted ? chartData : { ...chartData, analysis };
   const frame = chartFrame(displayData, chartType, width, plotHeight);
@@ -303,6 +304,9 @@ export function ChartAnalysisPane({
             (chartData.series?.[i].name ? chartData.series[i].name + ": " : "")
             + "n=" + fit.n + ", R²=" + (fit.r2 === null ? "undefined" : fit.r2.toFixed(3))).join(" · ")}
         </div>}
+        {analysis.distribution === "raincloud" && <div className="chart-analysis-status">
+          Gaussian density (relative peak) · quartiles · individual observations
+        </div>}
         {toolsOpen && (
           <div id={toolsId} role="group" aria-label="Chart analysis tools" className="chart-analysis-tools-panel">
             <div className="chart-analysis-tool-modes">
@@ -326,7 +330,14 @@ export function ChartAnalysisPane({
                   else next.regression = "ols95";
                   commit(next);
                 }} />}
-
+              {chartType === "boxplot" && <ToggleButton size="sm" icon="crosshair"
+                pressed={analysis.distribution === "raincloud"} label="Raincloud distribution"
+                onPressedChange={() => {
+                  const next = { ...analysis };
+                  if (next.distribution) delete next.distribution;
+                  else next.distribution = "raincloud";
+                  commit(next);
+                }} />}
             </div>
             <form aria-label="Set exact visible axis ranges" onSubmit={(event) => {
               event.preventDefault(); applyPreciseRanges(event.currentTarget);
@@ -398,7 +409,7 @@ export function ChartAnalysisPane({
           width={width} height={plotHeight} onHover={setHover} wrapperRef={wrapperRef} viewport={activeViewport} />}
         {chartType === "histogram" && <HistogramChartMarks chartData={chartData} theme={theme}
           width={width} height={plotHeight} onHover={setHover} wrapperRef={wrapperRef} viewport={activeViewport} />}
-        {chartType === "boxplot" && <BoxplotChartMarks chartData={chartData} theme={theme}
+        {chartType === "boxplot" && <BoxplotChartMarks chartData={displayData} theme={theme}
           width={width} height={plotHeight} onHover={setHover} wrapperRef={wrapperRef} viewport={activeViewport} />}
         <defs>
           <clipPath id={clipId}><rect x={frame.left} y={frame.top} width={frame.width} height={frame.height} /></clipPath>

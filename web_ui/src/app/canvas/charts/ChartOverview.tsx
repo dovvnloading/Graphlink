@@ -6,6 +6,8 @@ import { computeSankeyLayout, sankeyFlowPath } from "./sankeyLayout";
 import { buildSlices } from "./pieSlices";
 import { FALLBACK_CHART_THEME } from "./chartTheme";
 import { scientificExtents } from "./ScientificChartMarks";
+import { linearFits, regressionYExtent } from "./linearFit";
+import { raincloudDensity, raincloudJitter } from "./raincloud";
 
 const WIDTH = 240;
 const HEIGHT = 116;
@@ -30,21 +32,29 @@ function overviewMarks(spec: ChartDataRow, chartType: string) {
     const all = groups.flatMap((group) => group.values);
     const y = createLinearScale(scientificDomain(Math.min(...all), Math.max(...all), "linear"), [HEIGHT - 8, 8]);
     const slot = (WIDTH - 16) / groups.length;
+    const raincloud = spec.analysis?.distribution === "raincloud";
     return (
       <g className="chart-overview-boxplots">
         {groups.map((group, index) => {
           const stats = computeBoxplotStats(group.values);
           const cx = 8 + (index + 0.5) * slot;
-          const hw = slot * 0.25;
+          const hw = slot * (raincloud ? 0.07 : 0.25);
+          const density = raincloud ? raincloudDensity(group.values) : [];
           return (
             <g key={group.label} stroke={PALETTE[index % PALETTE.length]}>
+              {density.length > 0 && <polygon fill={PALETTE[index % PALETTE.length]} fillOpacity={0.35}
+                points={[
+                  ...density.map(([v, d]) => (cx - slot * (0.12 + 0.32 * d)) + "," + y(v)),
+                  ...[...density].reverse().map(([v]) => (cx - slot * 0.12) + "," + y(v)),
+                ].join(" ")} />}
               <line x1={cx} x2={cx} y1={y(stats.min)} y2={y(stats.max)} strokeWidth={1.5} />
               <rect x={cx - hw} y={y(stats.q3)} width={hw * 2}
                 height={Math.max(0.5, y(stats.q1) - y(stats.q3))}
                 fill={PALETTE[index % PALETTE.length]} fillOpacity=".7" />
               <line x1={cx - hw} x2={cx + hw} y1={y(stats.median)}
                 y2={y(stats.median)} stroke={FALLBACK_CHART_THEME.text} strokeWidth={1.5} />
-              {stats.outliers.map((v, j) => <circle key={j} cx={cx} cy={y(v)} r={2} />)}
+              {!raincloud && stats.outliers.map((v, j) => <circle key={j} cx={cx} cy={y(v)} r={2} />)}
+              {raincloud && group.values.map((v, j) => <circle key={j} cx={cx + slot * raincloudJitter(j)} cy={y(v)} r={1.6} />)}
             </g>
           );
         })}
@@ -81,7 +91,8 @@ function overviewMarks(spec: ChartDataRow, chartType: string) {
     const xs = data.xValues ?? series[0].values.map((_, index) => index);
     const extents = scientificExtents(xs, series);
     const xDomain = scientificDomain(...extents.x, data.xScale ?? "linear");
-    const yDomain = scientificDomain(...extents.y, data.yScale ?? "linear");
+    const yDomain = scientificDomain(...regressionYExtent(data, extents.y), data.yScale ?? "linear");
+    const fits = data.analysis?.regression === "ols95" ? linearFits(data) : null;
     const x = data.xScale === "log10"
       ? createLog10Scale(xDomain, [8, WIDTH - 8])
       : createLinearScale(xDomain, [8, WIDTH - 8]);
@@ -90,6 +101,15 @@ function overviewMarks(spec: ChartDataRow, chartType: string) {
       : createLinearScale(yDomain, [HEIGHT - 10, 8]);
     return series.map((row, seriesIndex) => (
       <g key={seriesIndex} className="chart-overview-scientific-series">
+        {fits && <>
+          <polygon fill={PALETTE[seriesIndex % PALETTE.length]} fillOpacity={0.18}
+            points={[
+              ...fits[seriesIndex].points.map(p => x(p[0]) + "," + y(p[3])),
+              ...[...fits[seriesIndex].points].reverse().map(p => x(p[0]) + "," + y(p[2])),
+            ].join(" ")} />
+          <polyline fill="none" stroke={PALETTE[seriesIndex % PALETTE.length]} strokeDasharray="4 3"
+            points={fits[seriesIndex].points.map(p => x(p[0]) + "," + y(p[1])).join(" ")} />
+        </>}
         {chartType === "line" && (
           <polyline fill="none" stroke={PALETTE[seriesIndex % PALETTE.length]}
             strokeWidth="2" points={xs.map((v, i) => x(v) + "," + y(row.values[i])).join(" ")} />
