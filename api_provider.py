@@ -1488,8 +1488,19 @@ def _fallback_model_ref_on_failure(
       section 6 already classifies (_is_transient_transport_error) -
       never a cancellation, never a content/validation error a different
       model would fail identically at."""
-    if settings_manager is None or task not in FALLBACK_ENABLED_TASKS or not _is_transient_transport_error(exc):
+    if settings_manager is None or task not in FALLBACK_ENABLED_TASKS:
         return None
+    if isinstance(exc, (RequestCancelledError, ReasoningWithoutAnswerError)):
+        return None
+    if not _is_transient_transport_error(exc):
+        # Dispatch translates provider errors for the user before this wrapper
+        # sees them (e.g. an HTTP 429 becomes a quota/rate-limit RuntimeError).
+        # Consult the explicit original cause, not the friendly message or
+        # an unrelated implicit exception context. Keep transport retries
+        # themselves unchanged and preserve the translated error for callers.
+        cause = exc.__cause__
+        if not isinstance(cause, Exception) or not _is_transient_transport_error(cause):
+            return None
     failed_provider = model_ref.provider if model_ref is not None else (
         state.api_provider_type if state.use_api_mode else state.local_provider_type
     )
