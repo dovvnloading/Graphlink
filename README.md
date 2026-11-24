@@ -2,7 +2,7 @@
 
 **A local-first desktop workspace for branching AI conversations.** Ask a question, fork a reply into two lines of inquiry, then bring their answers together. Each branch keeps its own conversation history. Notes, sources, code, charts, and model replies sit next to the question they came from.
 
-[Install Graphlink](#getting-started) · [Connect a model](#connect-a-model) · [Knowledge Library](#knowledge-library) · [MCP Connect](#mcp-connect) · [Build your first graph](#build-your-first-graph) · [Workspace agent guide](docs/WORKSPACE_AGENT.md) · [API providers](#api-providers) · [Developer guide](#development)
+[Install Graphlink](#getting-started) · [Connect a model](#connect-a-model) · [Knowledge Library](#knowledge-library) · [Executable Workflows](#executable-workflows) · [MCP Connect](#mcp-connect) · [Build your first graph](#build-your-first-graph) · [Workspace agent guide](docs/WORKSPACE_AGENT.md) · [API providers](#api-providers) · [Developer guide](#development)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/node-detail.png">
@@ -103,6 +103,36 @@ To add a shared intermediate step, choose **Create grouped table** on the source
 Open Graph Runner again to inspect the saved result. If the app closed during execution, reopen the graph from the **Chat Library** and choose **Resume run**. Each completed step and its output were saved together. Deterministic text and table transforms run locally; explicit Model and MCP steps use their configured connections. Existing chat replies can supply text to a workflow. [See the completed three-step run](assets/screenshots/graph-runner.png).
 
 To run a local AI model explicitly, start **Ollama** and install a chat model. In **Plugins → Graph Runner**, expand **Run a local model into a note**. The existing one-shot and saved model-to-note options remain available. For a multi-step workflow, choose a source and model ID, then **Create Model node**. You can connect an upstream card's named text-output handle to a Model node's text-input handle, or create a second Model from the first one's output. Connect a downstream plain note to the final Model output to copy or count its words. **Preview run** shows which nodes will run and which are waiting on a real model reply—preview does not call Ollama. **Run graph** explicitly executes and checkpoints each step in dependency order, without automatically retrying uncertain remote requests. Changed sources mark model outputs stale but preserve earlier replies. First-class Model nodes use local Ollama. MCP Connect adds explicitly configured tool steps, including remote services and write-capable tools, with server approval policies and durable receipts. Graph Runner can schedule independent branches within its selected concurrency limit; remote/cloud Model-node execution remains separate follow-on work. [Model-node workflow guide](docs/GRAPH_RUN_MODEL_NODES.md) · [One-shot model guide](docs/GRAPH_RUN_LOCAL_MODEL.md).
+
+## Executable Workflows
+
+Turn connected operations into repeatable work. Use **Graph Runner** for the
+live canvas, or **Workflows** in the app bar to capture connected text
+operations and save immutable library revisions. Insert a pinned Workflow
+node in another graph, bind its inputs, preview and run it.
+
+![Animated schematic: preview the graph, review the inputs and effects, run and inspect the receipt.](assets/gifs/workflow-preview-run.gif)
+
+![Animated schematic: capture connected text operations, pin a library revision, insert and execute a reusable Workflow node.](assets/gifs/workflow-library.gif)
+
+For a detached run, import a **Built-in starter** (including table-to-report,
+model comparison, mapped summaries and quality gates), or open **Run history
+→ Detached workflow runs** and enter a typed workflow request. Inspect the
+preview and explicitly start it. Named ports, side-effect classes, human
+approval gates, conditions, assertions, merges, bounded Maps and run budgets
+make execution inspectable. Results and step receipts are retained by workspace.
+
+In **Workflow Library → Run presets and runs**, review an exact revision and
+inputs, choose permitted unattended effects and a cost cap, then save a
+preset. Start it manually, through the scoped CLI or MCP server, or on an
+interval, daily schedule or folder change while Graphlink is running. Code
+execution and writes still require fresh operator approval; missed triggers
+are not replayed.
+
+![Animated schematic: approve a preset, fire a trigger, pause for an operator decision, and retain the run receipt.](assets/gifs/workflow-presets.gif)
+
+*These three animations illustrate the execution lifecycle; they are not app recordings.*
+[Executable Workflows guide](docs/WORKFLOWS.md) · [Headless CLI and MCP setup](docs/HEADLESS_MCP.md)
 
 ## MCP Connect
 

@@ -7,8 +7,9 @@ local browser can provide the app's human-approval UI for MCP-controlled Agent
 tasks; by default no browser opens. A separate local MCP stdio adapter
 connects back to its protected control routes.
 
-The default setup supports **inspection only**. Optional canvas writes
-and workspace-agent task control require an explicit opt-in and a separate
+The default setup supports **inspection only**. Optional canvas writes,
+workspace-agent task control and operator-approved workflow preset runs
+require an explicit opt-in and a separate
 scoped credential (described below). Arbitrary intent execution, MCP tool
 approvals/permission grants, direct filesystem access and remote MCP/HTTP
 hosting remain unavailable.
@@ -131,12 +132,13 @@ only `http://127.0.0.1:<port>` URLs, ignores proxy environment variables,
 and refuses redirects to prevent forwarding the limited credential to
 another origin.
 
-## Optional MCP canvas writes and agent tasks (explicit opt-in)
+## Optional MCP canvas writes, agent tasks and workflow presets (explicit opt-in)
 
 This is a separate, permission-scoped capability. **Graphlink starts
 read-only by default**, and the MCP adapter lists only its five
 read tools until explicitly given a write-token-file path. To enable
-scoped editing and workspace-agent task control on the **currently open canvas**:
+scoped editing and workspace-agent task control on the **currently open canvas**,
+and workspace-scoped approved workflow preset execution:
 
 ```powershell
 python -m backend.headless --port 8765 --allow-mcp-writes --open-ui
@@ -177,15 +179,17 @@ backend token passed to the operator browser **only with `--open-ui`**, a read-o
 `~/.graphlink/headless.token`, and a write token in
 `~/.graphlink/headless.write.token`. Both files use the same secure
 atomic creation and Windows DACL/POSIX permission protection. The write
-token authorizes only five exact control routes: canvas mutation/save
-(POST), workspace-agent task start/cancel (POST), and agent task status
-(GET). The task-status GET requires the **write token**, not the read
-token. It does not authorize `/ws`, `/api/health`, general graph reads,
+token authorizes only eight exact method/route pairs: canvas mutation/save
+(POST), workspace-agent task start/cancel (POST), agent task status (GET),
+workflow library/preset list (GET), preset run start (POST), and preset run
+status (GET). The agent status and workflow GETs require the **write token**,
+not the read token. It does not authorize `/ws`, `/api/health`, general graph reads,
 deletion, shell execution, workspace grants, tool approval, or arbitrary
 intent dispatch. Do not share it with untrusted MCP hosts: a host with
-this file can change the live canvas and start tasks on existing agents.
+this file can change the live canvas, start tasks on existing agents and
+start operator-approved workflow presets.
 
-**Seven additional MCP tools are available only with this opt-in:**
+**Ten additional MCP tools are available only with this opt-in:**
 
 | MCP tool | Behavior |
 | --- | --- |
@@ -196,6 +200,9 @@ this file can change the live canvas and start tasks on existing agents.
 | `graphlink_start_agent_task` | Start a task on an **existing live harness (Agent) node** by `node_id` |
 | `graphlink_get_agent_task` | Read the node's latest run ID, status, checklist, bounded reply and app-attention flags |
 | `graphlink_cancel_agent_task` | Request cancellation of the specified `node_id` + `run_id` |
+| `graphlink_list_workflows` | List library workflows and approved presets for a workspace |
+| `graphlink_run_workflow` | Start an exact operator-approved preset with an operation ID |
+| `graphlink_get_workflow_run` | Read a retained preset run's status, steps, outputs and approval-wait flag |
 
 Every **canvas mutation/save** and **agent-task start** requires an
 `expected_revision` (64-character hex digest returned by
@@ -236,6 +243,79 @@ are explicit. These tools do not open a different graph or create a new
 workspace. A separate, reviewed stage will add persisted graph creation,
 selection and deletion with additional authorization and conflict
 handling. The UI remains usable through its existing WebSocket intents.
+
+## Run approved workflows with CLI or MCP
+
+See [Executable Workflows](WORKFLOWS.md) for library revisions, typed
+specifications, effect classes, approvals, budgets, history and triggers.
+Use the `--allow-mcp-writes --open-ui` launch above. In the authenticated
+operator browser, open **Workflows → Run presets and runs**. Choose a
+workspace and a library revision (or a trusted local detached spec), fill
+the exact inputs/parameters, choose unattended classes and a USD cap, then
+**Preview preset → Approve and save preset**. For scheduled runs, choose
+an interval (minimum 10 seconds), local-time daily schedule or watched folder.
+Triggers run only during backend uptime; missed/busy triggers are skipped.
+The folder watcher observes metadata, not file contents.
+
+A preset pins the resolved fingerprint, adapter/policy identities, exact
+request and cost cap. Only pure, local-read and cloud are selectable for
+unattended effects; every executes/writes step pauses before dispatch.
+Changed pins need a new operator-reviewed preset. Only one detached run per
+workflow ID may be active, including paused runs; a preset Map requires all
+child effects and execution lanes to be allowed. The preset duration cap
+includes approval waiting.
+
+### CLI
+
+Connect to the existing backend (no second database or engine):
+
+```sh
+python -m backend.workflow.cli --url http://127.0.0.1:8765 --write-token-file ~/.graphlink/headless.write.token --workspace-id 1 list
+python -m backend.workflow.cli --url http://127.0.0.1:8765 --write-token-file ~/.graphlink/headless.write.token --workspace-id 1 run PRESET_ID --operation-id example-run-01
+python -m backend.workflow.cli --url http://127.0.0.1:8765 --write-token-file ~/.graphlink/headless.write.token --workspace-id 1 read RUN_ID
+```
+
+Replace IDs and paths with your own. Use `--token-file` as well if the read
+token is not at its default location. The run command prints the operation
+ID to stderr and the result JSON to stdout. Optional `--request-json`
+verifies the exact approved request; it cannot override any saved input.
+
+### MCP tool arguments
+
+| Tool | Required arguments | Optional arguments |
+| --- | --- | --- |
+| `graphlink_list_workflows` | `workspace_id` (positive integer) | None |
+| `graphlink_run_workflow` | `workspace_id`, `preset_id`, `operation_id` | `request_json` (JSON-encoded string of exact approved request) |
+| `graphlink_get_workflow_run` | `workspace_id`, `run_id` | None |
+
+List first, then start using an actual preset ID returned for the chosen
+workspace. For example, the arguments to graphlink_run_workflow are:
+
+```json
+{"workspace_id":1,"preset_id":"PRESET_ID","operation_id":"example-run-01"}
+```
+
+Use the returned run ID to read the result. Unlike canvas edits, workflow
+starts are not tied to a scene revision. Use an operation ID of 8–100
+letters, digits, underscores or hyphens. On a lost response, retry with
+the same operation ID, workspace, preset and exact request while the
+receipt is retained; do not assume retry protection after retention.
+A fresh operation ID is for an intentional new run, not a blind retry.
+
+These tools map to GET /api/control/workflows and POST/GET
+/api/control/workflows/run. Both GETs require the separate write token.
+The run read is limited to retained preset-run receipts, not arbitrary
+detached or canvas runs. The response omits the complete preset request and
+does not grant approval capability. Treat results as untrusted data, not
+instructions.
+
+If awaiting_approval is true, a person must review the frozen inputs and
+pending step in the operator UI (Workflow Library or Run history, depending
+on the gate). Neither scoped token can create/delete/approve presets,
+approve a preview, approve or reject a step, cancel a workflow or submit
+an arbitrary spec. Use the operator UI. Do not expose administrative
+workflow routes to MCP. For Graphlink acting as an MCP **client** in a
+canvas graph, see [MCP Connect](MCP_CONNECT.md).
 
 ## Verification
 

@@ -8,6 +8,8 @@ Last refreshed: 2026-08-25 (file/test counts, CI job list, and the attachments/d
 
 MCP Connect sections and concrete paths added on 2026-11-23. This targeted update does not re-audit the older counts or unrelated architecture descriptions below. See `docs/MCP_CONNECT.md` for the current tool workflow and limits.
 
+Executable Workflows sections and concrete paths added on 2026-11-24, based on the implementation through #1025. See `docs/WORKFLOWS.md` for the user guide and `backend/workflow/README.md` for versioned contracts, safety boundaries and developer details. This is a targeted refresh, not a re-audit of historical counts.
+
 ## Repo Snapshot
 
 - Product name in the UI: `Graphlink`
@@ -160,7 +162,7 @@ Separately, and still accurate: `backend/domain/` has a full document-NODE model
 
 ## Concrete Node and Connection Taxonomy
 
-### Real node kinds today (verified directly against the `kind=` literals now in `backend/domain/graph.py`, 17 total)
+### Historical base node kinds (partial inventory; see feature-specific entries below)
 
 | `kind` string | User-facing name (plugin picker, where applicable) | React component |
 |---|---|---|
@@ -181,7 +183,7 @@ Separately, and still accurate: `backend/domain/` has a full document-NODE model
 | `container` | (Create Container command) | `GroupNodeView.tsx` |
 | `chart` | Chart | `ChartNodeView.tsx` |
 
-"System Prompt" is a plugin-picker entry, not a distinct node kind - it creates a `note` node with `is_system_prompt=True`. There is no separate `reasoning`/`workflow`/`graph_diff`/`quality_gate` node kind - those plugin categories were removed before the Qt-removal effort even began and were never ported. (`code_review` is the one exception: a NEW first-party kind added post-migration for Review Lens, not a port of the removed advisor plugin.)
+"System Prompt" is a plugin-picker entry, not a distinct node kind - it creates a `note` node with `is_system_prompt=True`. The historical `reasoning`/`graph_diff`/`quality_gate` plugin categories were removed before the Qt-removal effort. The current pinned Workflow canvas operation is `graph_runner.workflow` (see `backend/workflow/canvas.py` and `web_ui/src/app/canvas/WorkflowNodeView.tsx`); typed detached control-flow adapters are not additional canvas kinds. (`code_review` is the one exception: a NEW first-party kind added post-migration for Review Lens, not a port of the removed advisor plugin.)
 
 ### Connections: one unified model, not 13 parallel lists
 
@@ -236,6 +238,13 @@ Separately, and still accurate: `backend/domain/` has a full document-NODE model
 1. `backend/plugins.py::get_plugin_categories()` supplies the `app-plugins` topic's static category/plugin listing (a from-scratch reimplementation of the deleted `PluginPortal`'s algorithm, not an import).
 2. `PluginPicker.tsx` renders that listing and dispatches the `app-plugins` topic's `executePlugin` intent with the selected plugin name and the currently-selected node id.
 3. `execute_plugin()` validates the plugin name and required parent, then calls the matching `SceneDocument.add_*_node()` method (defined in `backend/domain/graph.py`, invoked via canvas.py's wrappers) and publishes `scene` - every one of the 8 picker entries does real node creation today (see Architecture Truths #7).
+
+### 7. Executable Workflows
+
+- Canvas Graph Runner previews and executes a live scene through compatibility adapters (`backend/workflow/graph_steps.py`, `graph_execution.py`); the existing graph run journal retains external request fences and child workflow receipts.
+- Global Workflow Library captures connected pure text operations and imports validated pure definitions. Revisions are immutable; pinned canvas nodes never upgrade automatically. Built-in starters are separately versioned typed requests, not reusable effectful canvas nodes.
+- Detached WorkflowEngine validates a frozen typed DAG, pins preview and policy, admits dependencies within limits, journals typed results, and interrupts unfinished runs without replay. Control flow is typed Condition, Merge, Approval, Assert and bounded Map.
+- Workspace presets pin exact reviewed requests, allowed effects and budget. Interval/daily/folder triggers run in-process without catch-up; one active run per workflow ID. Executes/writes park for operator approval. CLI/MCP start only approved presets using the separate write credential.
 
 ## Plugin Catalog As Registered Today
 
@@ -297,6 +306,15 @@ This is the practical lookup map for where code actually lives today.
 - `domain/graph_run_inspector.py` - dependency-ordered, privacy-preserving saved-run trace projection.
 - `domain/nodes_content.py` - text output/input bindings, including freshness checks on MCP text sources.
 - `domain/table_workflows.py` - native table projections and MCP structured-table sources.
+- `workflow/contracts.py`, `ports.py`, `wire.py` - frozen v1 records, compatible coercions and strict HTTP decoding.
+- `workflow/adapter.py`, `registry.py`, `transforms.py`, `scratch_adapters.py`, `step_adapters.py`, `step_services.py` - versioned descriptors, pure transforms, scratch-scene operations and trusted service adapters.
+- `workflow/graph_steps.py`, `graph_execution.py`, `child_runs.py` - live Graph Runner compatibility and linked pure child receipts; preserve existing external-request fences.
+- `workflow/planning.py`, `engine.py`, `control_flow.py` - typed DAG validation/preview, scheduler, cost/attempt limits, approvals and branch/map semantics.
+- `workflow/detached_store.py`, `artifacts.py`, `workflow_run_store.py` (backend root) - detached and graph run receipts, asset references, retention.
+- `workflow/library.py`, `canvas.py`, `starters.py`, `workflow_library_store.py` (backend root), `api/intents_workflow_library.py` - pure versioned library, capture/insert/unpack, import/export and six starters.
+- `workflow/api.py`, `automation.py`, `control_api.py`, `cli.py`, `mcp_server.py` (backend root) - full app workflow API, preset/trigger scheduler and narrowly scoped headless preset execution.
+- `tools_workflow.py` - Builder's preview-pinned workflow edits; approval does not start a run.
+- `tests/test_workflow_*.py` and `tests/test_detached_workflow_engine.py` - contracts, registry, control flow, service steps, library, retention, starters, fault assurance and task evals; `evals/workflow_tasks.py` - offline task evaluator.
 - `tests/test_mcp_connect_domain.py` - MCP bindings, receipt integrity, history, native consumers and persistence/remapping tests.
 - `tests/test_mcp_connect_schema.py` - bounded JSON Schema/Pointer validation tests.
 - `tests/test_mcp_connect_intents.py` - discovery, approvals, explicit execution and durable SQLite integration.
@@ -323,6 +341,9 @@ This is the practical lookup map for where code actually lives today.
 - `canvas/mcpConnect.ts` - plugin payload types, runtime guards and schema/result helpers.
 - `canvas/mcpScene.ts` - MCP scene intent facade.
 - `chrome/settings/McpServersPage.tsx` - stdio/HTTP setup, write-only credentials, discovery, tool allowlists and approval settings.
+- `canvas/WorkflowNodeView.tsx`, `workflowLibrary.ts`, `workflowRunTypes.ts`, `WorkflowCanvasContext.tsx` - pinned workflow node, library wire facade and run types.
+- `chrome/WorkflowLibraryDialog.tsx`, `WorkflowSpecView.tsx`, `WorkflowAutomationPanel.tsx` - capture/import/version review, preset policy, triggers and pending step review.
+- `chrome/WorkflowHistoryDialog.tsx`, `DetachedWorkflowInspector.tsx`, `WorkflowApprovalNotifications.tsx` - graph receipts, typed request review and detached run/approval UI.
 - `overlays/overlays.tsx` - the `OverlayProvider` coordinator only (no dialogs live here).
 
 ### `web_ui/src/lib/`
@@ -331,6 +352,7 @@ This is the practical lookup map for where code actually lives today.
 - `api-contract/topics.ts` - `TOPIC_VALIDATORS`, validating every incoming snapshot against its generated JSON Schema before use.
 - `bridge-core/generated/` - codegen'd TS types + JSON Schemas, one pair per `contracts/` payload dataclass (11 pairs).
 - `bridge-core/islandState.ts`, `schemaVersion.ts`, `textFocus.ts` - small shared bridge helpers (naming is a holdover from the pre-SPA per-island era; there is only one app target now).
+- `workflow-contract/generated/` - standalone v1 workflow TypeScript and JSON Schemas from `contracts/workflow_codegen.py`; check/write with `python contracts/codegen.py --check` / `--write`. Not a new scene topic.
 - `tokens/gl-vars-dev.css` - the design-token CSS variables (dark and light palettes).
 - `ui/BridgeErrorState.tsx`, `base.css` - shared error-state UI and the CSS reset.
 
@@ -437,6 +459,14 @@ This is the practical lookup map for where code actually lives today.
 - Keep dispatch behind `backend/domain/graph_run_external.py` checkpoints. Preserve unresolved fences when changing run retention, cancellation, resume or undo behavior.
 - Node/forms/results: `web_ui/src/app/canvas/McpToolNodeView.tsx`, `McpArgumentEditor.tsx`, `McpResultView.tsx`; server settings: `web_ui/src/app/chrome/settings/McpServersPage.tsx`.
 - Run the focused MCP tests plus the full repository gates in `AGENTS.md`; the path-filtered browser workflow exercises the production SPA/backend with the local fixture.
+
+### You want to change Executable Workflows
+
+- Start with `docs/WORKFLOWS.md` and `backend/workflow/README.md`; distinguish legacy scene execution from typed detached execution and pure library child runs.
+- For typed steps, extend the exact adapter registry, contracts and validators, not an untrusted config-based permission grant. Regenerate schemas when changing contracts.
+- For scheduling and review, follow `backend/workflow/planning.py`, `engine.py`, `control_flow.py`, `automation.py` and `api.py`; preserve fingerprint rechecks, cost reservations, nonce decisions, single-flight and no replay.
+- For external preset reach, follow `backend/workflow/control_api.py`, `cli.py` and `backend/mcp_server.py`; do not expose full app approvals or arbitrary intent execution through scoped credentials.
+- Run focused `python -m pytest -q -n0 backend/tests/test_detached_workflow_engine.py backend/tests/test_workflow_control_flow.py backend/tests/test_workflow_library.py backend/tests/test_workflow_starters.py backend/tests/test_workflow_fault_assurance.py backend/tests/test_mcp_server.py` and the full gates in `AGENTS.md`. Check `web_ui/src/app/chrome/WorkflowContents.test.tsx` and `canvas/workflowRunTypes.test.ts` for UI contracts.
 
 ### You want to change save/load compatibility with `~/.graphlink/chats.db`
 
