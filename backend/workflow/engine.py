@@ -9,8 +9,8 @@ import secrets
 import time
 import uuid
 from decimal import Decimal
-from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field
+from collections.abc import Callable, Mapping
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +22,7 @@ from .contracts import PortValue, StepOutputSource, WorkflowInputSource, Workflo
 from .detached_store import DetachedRunStore, utc_now
 from .planning import Plan, PolicyResolver, RunPreview, build_plan, default_policy
 from .ports import coerce_port
-from .registry import StepAdapterRegistry, builtin_registry
+from .registry import StepAdapterRegistry
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +42,26 @@ class RunLimits:
             raise ValueError("Workflow cost and duration limits must be finite and nonnegative.")
 
 
+@dataclass(frozen=True, slots=True)
+class UnattendedPolicy:
+    """An operator-reviewed exact preview and a restricted dispatch grant."""
+
+    fingerprint: str
+    allowed_effects: frozenset[str]
+    cost_usd: float
+
+    def __post_init__(self):
+        if not self.allowed_effects <= {"pure", "local-read", "cloud"}:
+            raise ValueError("Code execution and writes always require fresh operator approval.")
+        if type(self.cost_usd) not in (int, float) or not math.isfinite(self.cost_usd) or self.cost_usd < 0:
+            raise ValueError("Preset cost cap must be finite and nonnegative.")
+
+    def permits(self, effect: str, policy) -> bool:
+        return (effect in self.allowed_effects
+                and effect not in ("executes", "writes")
+                and (policy.execution_lane != "cloud" or "cloud" in self.allowed_effects))
+
+
 @dataclass
 class _Attempt:
     step: WorkflowStepSpec
@@ -56,6 +76,9 @@ class _Run:
     workspace_id: int
     plan: Plan
     record: dict[str, Any]
+    limits: RunLimits
+    unattended: UnattendedPolicy | None = None
+    approved_steps: set[str] = field(default_factory=set)
     scratch: SceneDocument = field(default_factory=SceneDocument)
     wake: asyncio.Event = field(default_factory=asyncio.Event)
     stop_reason: str | None = None
@@ -115,12 +138,14 @@ class WorkflowEngine:
 
     def __init__(self, db_path: Path, *, registry: StepAdapterRegistry | None = None,
                  limits: RunLimits | None = None, policy_for: PolicyResolver | None = None,
-                 recover: bool = True):
+                 recover: bool = True, on_pause: Callable[[int, str, str], None] | None = None):
         self.store = DetachedRunStore(db_path)
+        self.on_pause = on_pause
         self.artifacts = WorkflowArtifacts(store_for(Path(db_path)))
         if registry is None:
             from .scratch_adapters import detached_registry
-            registry = detached_registry(builtin_registry())
+            from .library import library_registry
+            registry = detached_registry(library_registry())
         self.registry = registry.with_entries(())
         self.limits = limits or RunLimits()
         def adapter_policy(spec):
@@ -169,7 +194,8 @@ class WorkflowEngine:
         return self.approve(workspace_id, issued[0])
 
     def start(self, workspace_id: int, spec: WorkflowSpec, parameters: Mapping[str, PortValue],
-              *, approval_token: str | None = None) -> str:
+              *, approval_token: str | None = None, unattended: UnattendedPolicy | None = None,
+              preset_id: str | None = None, operation_id: str | None = None) -> str:
         """Admit a frozen run, then schedule it; caller receives its cancel ID."""
         loop = asyncio.get_running_loop()
         spec = copy.deepcopy(spec)
@@ -177,21 +203,64 @@ class WorkflowEngine:
         plan = build_plan(spec, parameters, self.registry, self.artifacts, self.policy_for)
         self._expire_approvals()
         approved_fingerprint = plan.preview.fingerprint
-        if plan.preview.requires_approval or approval_token is not None:
+        # No await separates the active-run check from durable admission.
+        # A paused run still owns the workflow, including across workspaces.
+        if any(r.plan.spec.workflow_id == spec.workflow_id for r in self._runs.values()):
+            raise ValueError("This workflow already has an active run.")
+        limits = self.limits
+        if unattended is not None:
+            if approval_token is not None or unattended.fingerprint != approved_fingerprint:
+                raise PermissionError("The unattended preview changed; review and save the preset again.")
+            limits = replace(limits, cost_usd=min(limits.cost_usd, unattended.cost_usd))
+        elif plan.preview.requires_approval or approval_token is not None:
             entry = self._approvals.pop(approval_token, None)
             if entry is None or entry[:2] != (approved_fingerprint, workspace_id):
                 raise PermissionError("Approve this exact workflow preview before running it.")
         plan = build_plan(spec, parameters, self.registry, self.artifacts, self.policy_for, persist=True)
         if approved_fingerprint != plan.preview.fingerprint:
             raise PermissionError("Workflow preview changed; approve it again.")
-        record = _new_record(plan, self.limits)
-        run = _Run(workspace_id, plan, record)
+        record = _new_record(plan, limits)
+        if unattended is not None:
+            record.update(preset_id=preset_id, operation_id=operation_id, awaiting_approval=None,
+                          unattended_effects=sorted(unattended.allowed_effects))
+        run = _Run(workspace_id, plan, record, limits, unattended)
         self.store.create(workspace_id, record)
         run_id = record["run_id"]
         self._runs[run_id] = run
         run.task = loop.create_task(self._drive(run))
         run.task.add_done_callback(_observe)
         return run_id
+
+    def decide_step(self, workspace_id: int, run_id: str, step_id: str, nonce: str,
+                    *, approved: bool) -> None:
+        """Trusted operator-only decision on one exact pending step."""
+        run = self._runs.get(run_id)
+        pending = run.record.get("awaiting_approval") if run else None
+        if (run is None or run.workspace_id != workspace_id or run.stop_reason is not None
+                or not pending or pending["step_id"] != step_id or pending["nonce"] != nonce):
+            raise ValueError("This step is no longer awaiting that approval.")
+        run.record["awaiting_approval"] = None
+        if approved:
+            run.approved_steps.add(step_id)
+        else:
+            run.stop("Operator denied the workflow step.")
+        _event(run.record, "step-progress", step_id=step_id,
+               message="Operator approved step." if approved else "Operator denied step.")
+        self._checkpoint(run)
+        run.wake.set()
+
+    def _pause(self, run: _Run, spec: WorkflowStepSpec) -> None:
+        if run.record.get("awaiting_approval"):
+            return
+        pending = {"step_id": spec.step_id, "nonce": secrets.token_urlsafe(24),
+                   "side_effect_class": spec.adapter.side_effect_class,
+                   "preview_fingerprint": run.plan.preview.fingerprint}
+        run.record["awaiting_approval"] = pending
+        _event(run.record, "step-progress", step_id=spec.step_id,
+               message="Waiting for operator approval.", data=pending)
+        self._checkpoint(run)
+        if self.on_pause is not None:
+            self.on_pause(run.workspace_id, run.record["run_id"], spec.step_id)
 
     async def wait(self, workspace_id: int, run_id: str) -> dict[str, Any] | None:
         run = self._runs.get(run_id)
@@ -273,6 +342,9 @@ class WorkflowEngine:
         policy = run.plan.policies[step_id]
         adapter = run.plan.adapters[step_id]
         async with self._lanes[policy.execution_lane]:
+            if (run.unattended is not None and step_id not in run.approved_steps
+                    and not run.unattended.permits(spec.adapter.side_effect_class, policy)):
+                raise PermissionError("This unattended step has no operator approval.")
             if run.stop_reason is not None:
                 raise asyncio.CancelledError
             prepared = adapter.prepare(spec, self._inputs(run, spec))
@@ -353,16 +425,22 @@ class WorkflowEngine:
                 continue
             if statuses - {"completed"}:
                 continue
-            if admitted >= self.limits.max_steps:
-                blocked_cap = f"Run stopped: step limit ({self.limits.max_steps}) reached."
+            if admitted >= run.limits.max_steps:
+                blocked_cap = f"Run stopped: step limit ({run.limits.max_steps}) reached."
                 continue
             policy = run.plan.policies[step_id]
-            capacity = self.limits.cloud_concurrency if policy.execution_lane == "cloud" else self.limits.local_concurrency
+            capacity = run.limits.cloud_concurrency if policy.execution_lane == "cloud" else run.limits.local_concurrency
             if lanes[policy.execution_lane] >= capacity:
                 continue
-            if Decimal(str(record["cost_usd"])) + reserved + Decimal(str(policy.cost_usd)) > Decimal(str(self.limits.cost_usd)):
-                blocked_cap = "Run stopped: cost limit ($%.2f) reached." % self.limits.cost_usd
+            if Decimal(str(record["cost_usd"])) + reserved + Decimal(str(policy.cost_usd)) > Decimal(str(run.limits.cost_usd)):
+                blocked_cap = "Run stopped: cost limit ($%.2f) reached." % run.limits.cost_usd
                 continue
+            if (run.unattended is not None and step_id not in run.approved_steps
+                    and not run.unattended.permits(spec.adapter.side_effect_class, policy)):
+                # Drain already admitted work before stopping at the boundary.
+                if not active:
+                    self._pause(run, spec)
+                return admitted, None
             active[step_id] = self._launch(run, spec)
             admitted += 1
             reserved += Decimal(str(policy.cost_usd))
@@ -384,12 +462,13 @@ class WorkflowEngine:
         active: dict[str, _Attempt] = {}
         admitted = 0
         record = run.record
-        deadline = asyncio.get_running_loop().time() + self.limits.wall_time_seconds
+        deadline = asyncio.get_running_loop().time() + run.limits.wall_time_seconds
         record.update(status="running", started_at=utc_now())
         _event(record, "run-started")
         try:
             self._checkpoint(run)
             while True:
+                run.wake.clear()
                 self._collect_finished(run, active)
                 if run.stop_reason is not None:
                     break
@@ -400,6 +479,12 @@ class WorkflowEngine:
                     run.stop("Run stopped: duration limit reached.", "failed")
                     break
                 admitted, cap = self._admit(run, active, admitted)
+                if not active and record.get("awaiting_approval"):
+                    try:
+                        await asyncio.wait_for(run.wake.wait(), timeout=remaining)
+                    except TimeoutError:
+                        run.stop("Run stopped: duration limit reached while awaiting approval.", "failed")
+                    continue
                 if not active:
                     pending = [s for s in record["steps"].values() if s["status"] == "pending"]
                     if not pending:
@@ -442,6 +527,8 @@ class WorkflowEngine:
         for step_id, step in record["steps"].items():
             if step["status"] in ("pending", "running"):
                 self._finish_step(run, step_id, "interrupted" if status == "interrupted" else "blocked", reason)
+        if run.unattended is not None:
+            record["awaiting_approval"] = None
         record.update(status=status, finished_at=utc_now(), error=reason)
         _event(record, f"run-{status}", message=reason or "")
         try:
