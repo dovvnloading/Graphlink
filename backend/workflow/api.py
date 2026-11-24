@@ -64,9 +64,14 @@ def _require_run(engine: WorkflowEngine, workspace_id: int, run_id: str):
     return record
 
 
-def _download(engine: WorkflowEngine, ref: str, payload: Any) -> Response:
-    refs: set[str] = set()
-    _collect_asset_refs(payload, refs)
+def _run_asset_refs(record: dict[str, Any]) -> set[str]:
+    values = [*record["inputs"].values(), *record["outputs"].values()]
+    for step in record["steps"].values():
+        values.extend(step["outputs"].values())
+    return {value["asset_ref"] for value in values if "asset_ref" in value}
+
+
+def _download(engine: WorkflowEngine, ref: str, refs: set[str]) -> Response:
     if ref not in refs:
         raise HTTPException(404, "Workflow asset not found.")
     data = engine.artifacts.store.get(ref)
@@ -143,7 +148,7 @@ def register_workflow_api(app: FastAPI, service: WorkflowService) -> None:
     @app.get(prefix + "/runs/{run_id}/assets/{ref}")
     async def run_asset(workspace_id: int, run_id: str, ref: str):
         engine = service.engine()
-        return _download(engine, ref, _require_run(engine, workspace_id, run_id))
+        return _download(engine, ref, _run_asset_refs(_require_run(engine, workspace_id, run_id)))
 
     @app.get(prefix + "/graphs/{graph_id}/assets/{ref}")
     async def graph_asset(workspace_id: int, graph_id: int, ref: str):
@@ -152,4 +157,6 @@ def register_workflow_api(app: FastAPI, service: WorkflowService) -> None:
         graph = load_chat_row(service.db_path, graph_id)
         if graph is None or graph.get("workspace_id") != workspace_id:
             raise HTTPException(404, "Graph not found.")
-        return _download(engine, ref, graph["data"])
+        refs: set[str] = set()
+        _collect_asset_refs(graph["data"], refs)
+        return _download(engine, ref, refs)

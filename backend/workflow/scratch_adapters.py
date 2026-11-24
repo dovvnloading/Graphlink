@@ -224,6 +224,13 @@ def save_result_graph(db_path: Path, artifacts: WorkflowArtifacts, workspace_id:
         raise ValueError("This workflow has no completed results to save.")
     for index, (name, payload) in enumerate(results.items()):
         y = index * 320
+        if payload.get("asset_ref") and payload["kind"] not in ("file", "image"):
+            document.add_document_node(
+                0, y, f"{name}.json", f"Workflow output: {name}", "document", None,
+                file_path=f'asset://{payload["asset_ref"]}', mime_type=payload["mime_type"],
+                byte_size=payload["size_bytes"],
+            )
+            continue
         value = artifacts.unpack(payload)
         if isinstance(value, ImageValue):
             document.add_image_node(0, y, artifacts.bytes_for(value.asset), name, None,

@@ -354,3 +354,49 @@ def test_graph_local_model_approval_identity_and_cancellation(tmp_path, monkeypa
         with closing(sqlite3.connect(tmp_path / "chats.db")) as conn:
             assert conn.execute("SELECT count(*) FROM graphs").fetchone()[0] == 0
     asyncio.run(scenario())
+
+
+def test_authenticated_detached_file_run_and_save(tmp_path):
+    from dataclasses import asdict
+    import time
+    from fastapi.testclient import TestClient
+    from backend.app import create_app
+
+    db = tmp_path / "chats.db"
+    ws = get_default_workspace_id(db)
+    app = create_app(spa_dir=tmp_path / "missing-spa", auth_token="workflow-admin",
+                     chat_db_path=db, settings_state_file=tmp_path / "session.dat")
+    prefix = f"/api/workflows/{ws}"
+    auth = {"Authorization": "Bearer workflow-admin"}
+    with TestClient(app, base_url="http://127.0.0.1", headers={"host": "127.0.0.1"}) as client:
+        assert client.get(prefix + "/runs").status_code == 401
+        upload = client.post(prefix + "/files", params={"filename": "data.bin"},
+                             content=b"binary-data", headers=auth)
+        assert upload.status_code == 201
+        value = upload.json()
+        port = PortSpec("file", "file", True)
+        spec = WorkflowSpec(1, "files", "r", "File", (port,), (),
+                            (WorkflowOutput(port, WorkflowInputSource("file")),))
+        request = {"spec": asdict(spec), "parameters": {"file": value}}
+        preview = client.post(prefix + "/preview", json=request, headers=auth)
+        assert preview.status_code == 200
+        assert not preview.json()["requires_approval"]
+        start = client.post(prefix + "/runs", json=request, headers=auth)
+        assert start.status_code == 202
+        run_url = prefix + "/runs/" + start.json()["run_id"]
+        deadline = time.monotonic() + 3
+        while True:
+            record = client.get(run_url, headers=auth).json()
+            if record["status"] == "completed":
+                break
+            assert time.monotonic() < deadline, record
+            time.sleep(0.01)
+        ref = record["outputs"]["file"]["asset_ref"]
+        assert client.get(run_url + "/assets/" + ref, headers=auth).content == b"binary-data"
+        result = client.post(run_url + "/save-as-graph", headers=auth)
+        assert result.status_code == 201
+        graph_id = result.json()["graph_id"]
+        url = f"{prefix}/graphs/{graph_id}/assets/{ref}"
+        assert client.get(url, headers=auth).content == b"binary-data"
+        assert client.get(url.replace(prefix, f"/api/workflows/{ws + 1}"),
+                          headers=auth).status_code == 404
