@@ -294,6 +294,75 @@
                 },
                 "type": "array"
               },
+              "composite": {
+                "additionalProperties": false,
+                "properties": {
+                  "categories": {
+                    "additionalProperties": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "type": "object"
+                  },
+                  "facetBy": {
+                    "type": "string"
+                  },
+                  "layers": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "colorBy": {
+                          "type": "string"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "mark": {
+                          "enum": [
+                            "point",
+                            "line",
+                            "band",
+                            "area"
+                          ],
+                          "type": "string"
+                        },
+                        "x": {
+                          "type": "string"
+                        },
+                        "y": {
+                          "type": "string"
+                        },
+                        "y2": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "mark",
+                        "x",
+                        "y"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "numbers": {
+                    "additionalProperties": {
+                      "items": {
+                        "type": "number"
+                      },
+                      "type": "array"
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "numbers",
+                  "layers"
+                ],
+                "type": "object"
+              },
               "flows": {
                 "items": {
                   "additionalProperties": false,
@@ -412,7 +481,8 @@
                   "sankey",
                   "scatter",
                   "boxplot",
-                  "heatmap"
+                  "heatmap",
+                  "composite"
                 ],
                 "type": "string"
               },
@@ -487,7 +557,7 @@
             "type": "string"
           },
           "chartHeight": {
-            "default": 340.0,
+            "default": 340,
             "type": "number"
           },
           "chartSourceNodeId": {
@@ -499,11 +569,11 @@
             "type": "string"
           },
           "chartWidth": {
-            "default": 480.0,
+            "default": 480,
             "type": "number"
           },
           "chatScrollValue": {
-            "default": 0.0,
+            "default": 0,
             "type": "number"
           },
           "code": {
