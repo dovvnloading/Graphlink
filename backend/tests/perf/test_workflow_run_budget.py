@@ -14,6 +14,7 @@ def test_500_node_scene_with_100_step_workflow(tmp_path):
         doc = build_graph(node_count=399, content_bytes=1200, chart_count=10,
                           image_count=0, extra_edges=200)
         source = doc.add_note(0, 0)
+        doc.set_note_content(source.id, "workflow budget input " * 60)
         targets = []
         for index in range(100):
             target = doc.add_note(300, 200 * index)
@@ -35,6 +36,7 @@ def test_500_node_scene_with_100_step_workflow(tmp_path):
         assert result["status"] == "completed"
         assert len(result["steps"]) == 100
         assert all(step["status"] == "completed" for step in result["steps"])
+        assert all(doc.nodes[node_id].content == source.content for node_id in targets)
         assert doc.current_chat_id is not None
 
         # Use the established two-sample class-catcher, not a new threshold.
