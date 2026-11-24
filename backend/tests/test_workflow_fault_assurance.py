@@ -294,6 +294,13 @@ def test_duplicate_provider_reply_cannot_overwrite_durable_receipt(tmp_path):
                 await dispatch(steps[1], attempt)
         assert len(calls) == len(set(calls)) == 2
         assert applied == [reply, reply]
+        # Inject the duplicate completion itself at the persistence boundary,
+        # not merely a repeated request for a new provider call.
+        saved_second, outputs_second = second
+        assert journal.checkpoint(StepContext("run", "second", 1), spec, saved_second, outputs_second)
+        assert journal.checkpoint(StepContext("run", "second", 1), spec, saved_second, outputs_second)
+        with closing(sqlite3.connect(path)) as conn:
+            assert conn.execute("SELECT count(*) FROM workflow_external_requests").fetchone() == (2,)
         for step_id, receipt in (("first", first), ("second", second)):
             assert journal.read("run", step_id) == receipt
             saved, outputs = receipt
@@ -323,26 +330,37 @@ def test_slow_adapter_cancelled_without_replay(tmp_path):
     asyncio.run(scenario())
 
 
-def test_corrupt_active_record_fails_closed_without_erasing_healthy_receipt(tmp_path):
+def test_corrupt_active_record_fails_closed_without_erasing_finished_steps(tmp_path):
     async def scenario():
         path = tmp_path / "chats.db"
         engine = _engine(path)
         ws = get_default_workspace_id(path)
         run_id = _start(engine, ws, _chain(engine.registry))
         before = await _wait(engine, ws, run_id)
-        # Inject a torn JSON payload in a separate unfinished record. Current
-        # startup fails closed; there is no automatic reconstruction of bytes
-        # that were destroyed by corruption.
-        broken = '{"steps":'
+        # Recreate the last valid checkpoint before run-finalization, then
+        # inject trailing corruption. Both finished step receipts are intact
+        # inside the damaged record, not just in an unrelated healthy run.
+        checkpoint = dict(before, status="running", finished_at=None, outputs={},
+                          events=before["events"][:-1])
+        good = canonical(checkpoint)
+        broken = good + "\n{"
         with closing(sqlite3.connect(path)) as conn, conn:
-            conn.execute("INSERT INTO detached_workflow_runs VALUES (?, ?, ?, ?, ?)",
-                         ("corrupt", ws, before["created_at"], "running", broken))
+            conn.execute("UPDATE detached_workflow_runs SET status='running', payload=? WHERE run_id=?",
+                         (broken, run_id))
         with pytest.raises(json.JSONDecodeError):
             _engine(path)
-        with closing(sqlite3.connect(path)) as conn:
-            assert conn.execute("SELECT status, payload FROM detached_workflow_runs WHERE run_id=?",
-                                ("corrupt",)).fetchone() == ("running", broken)
-        assert _assert_assurance(engine, ws, run_id, PREFIX, before=before) == before
+        with closing(sqlite3.connect(path)) as conn, conn:
+            stored = conn.execute("SELECT status, payload FROM detached_workflow_runs WHERE run_id=?",
+                                  (run_id,)).fetchone()
+            assert stored == ("running", broken)
+            assert json.loads(stored[1][:-2])["steps"] == before["steps"]
+            assert _effects(path) == [(step, 1) for step in PREFIX]
+            # Operator recovery of the intact prefix, NOT automatic repair:
+            # the engine currently fails closed on malformed JSON.
+            conn.execute("UPDATE detached_workflow_runs SET payload=? WHERE run_id=?", (good, run_id))
+        recovered = _assert_assurance(_engine(path), ws, run_id, PREFIX, before=before)
+        assert recovered["status"] == "interrupted"
+        assert _assert_assurance(_engine(path), ws, run_id, PREFIX, before=before) == recovered
 
     asyncio.run(scenario())
 
