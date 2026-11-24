@@ -161,9 +161,12 @@ usage is accounted at the reserved maximum. A cloud adapter without trusted
 policy metadata is rejected. Use policy_for to pin cloud provider/model
 identities and pricing; never derive authorization from untrusted JSON.
 
-The typed registry includes transforms and graph.note (copy/word count),
-which delegates to the existing Graph Runner note adapter on a private
-SceneDocument. Other scene-based legacy adapters retain their existing
+The typed registry includes transforms, graph.note (copy/word count),
+graph.group_sum (table/chart/report) and graph.local_model (explicit
+loopback Ollama). They use the existing Graph Runner adapters on a private
+SceneDocument. Local inference requires approval and pins its endpoint and
+model identity; the async transport preserves the existing loopback-only
+no-credential policy. Scientific and MCP scene-based adapters retain their existing
 authorization and external-request fences; they are not implicitly
 converted into typed detached adapters. Additional typed adapters use the
 same StepAdapter protocol, with the scratch document and asset store supplied

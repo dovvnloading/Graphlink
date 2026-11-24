@@ -195,7 +195,7 @@ def test_mid_step_cancel_and_preserved_results(tmp_path):
 def test_run_caps(tmp_path, limit):
     async def scenario():
         limits = {"cost": RunLimits(cost_usd=0.25), "steps": RunLimits(max_steps=1),
-                  "duration": RunLimits(duration_seconds=0.1)}[limit]
+                  "duration": RunLimits(duration_seconds=0.75)}[limit]
         engine, ws, local, cloud, *_ = _engine(tmp_path / "chats.db", limits=limits)
         adapter = "cloud" if limit == "cost" else "local"
         spec = _spec(engine.registry, [
@@ -314,4 +314,43 @@ def test_workspace_retention_and_recovery(tmp_path):
         recovered = engine.store.read(ws, record["run_id"])
         assert recovered["status"] == "interrupted"
         assert recovered["events"][-1]["kind"] == "run-interrupted"
+    asyncio.run(scenario())
+
+
+def test_graph_local_model_approval_identity_and_cancellation(tmp_path, monkeypatch):
+    from backend.providers import graph_local_ollama
+    from graphlink_task_config import LOCAL_PROVIDER_OLLAMA
+
+    async def scenario():
+        monkeypatch.setenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+        engine = WorkflowEngine(tmp_path / "chats.db")
+        ws = get_default_workspace_id(tmp_path / "chats.db")
+        entered = asyncio.Event()
+        released = asyncio.Event()
+        async def complete(*, prompt, model_id, endpoint):
+            assert (prompt, model_id, endpoint) == ("test prompt", "qwen3:8b", "http://127.0.0.1:11434")
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                released.set()
+        monkeypatch.setattr(graph_local_ollama, "async_local_ollama_complete", complete)
+        spec = _spec(engine.registry, [
+            _entry("model", "graph.local_model", provider=LOCAL_PROVIDER_OLLAMA,
+                   model="qwen3:8b", endpoint="http://127.0.0.1:11434"),
+        ])
+        params = {"text": TextValue("test prompt")}
+        preview = engine.preview(spec, params)
+        assert preview.requires_approval
+        assert preview.steps[0][2].model_identity == (LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
+        with pytest.raises(PermissionError):
+            engine.start(ws, spec, params)
+        run_id = engine.start(ws, spec, params, approval_token=engine.approve(ws, preview))
+        await asyncio.wait_for(entered.wait(), 3)
+        assert engine.cancel(ws, run_id)
+        record = await asyncio.wait_for(engine.wait(ws, run_id), 3)
+        assert record["status"] == "cancelled"
+        await asyncio.wait_for(released.wait(), 3)
+        with closing(sqlite3.connect(tmp_path / "chats.db")) as conn:
+            assert conn.execute("SELECT count(*) FROM graphs").fetchone()[0] == 0
     asyncio.run(scenario())
