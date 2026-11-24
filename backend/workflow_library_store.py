@@ -10,7 +10,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from backend.secret_scrub import scrub
-from backend.workflow.library import canonical, identifier, validate_document
+from backend.workflow.library import canonical, identifier, validate_library_document
 
 
 def migrate(conn: sqlite3.Connection) -> None:
@@ -79,13 +79,13 @@ def get(conn, workflow_id, revision):
                        (workflow_id, revision)).fetchone()
     if row is None:
         raise ValueError("This pinned workflow version is not in the library.")
-    return validate_document(json.loads(row[0]))
+    return validate_library_document(json.loads(row[0]))
 
 
 def save(conn, document, *, name, workflow_id=None, expected_revision=None):
     """New library entry or compare-and-append version. Never overwrite a spec."""
     name = _name(name)
-    document = validate_document(document)
+    document = validate_library_document(document)
     if workflow_id is None:
         workflow_id = identifier()
         version = 1
@@ -104,7 +104,7 @@ def save(conn, document, *, name, workflow_id=None, expected_revision=None):
         conn.execute("UPDATE workflow_library SET name = ? WHERE workflow_id = ?", (name, workflow_id))
     revision = identifier()
     document["spec"].update(workflow_id=workflow_id, revision=revision, name=name)
-    document = validate_document(document)
+    document = validate_library_document(document)
     conn.execute("INSERT INTO workflow_library_versions VALUES (?, ?, ?, ?, ?)",
                  (workflow_id, revision, version, datetime.now(timezone.utc).isoformat(), canonical(document)))
     return {"workflow_id": workflow_id, "revision": revision, "version": version}

@@ -267,7 +267,9 @@ def test_once_approval_is_not_reused_after_capability_change(tmp_path, monkeypat
 
         async def observe(topic):
             outcome = await publish(topic)
-            if bus.mcp_connect_runtime.approvals:
+            if topic == "scene" and any(
+                not future.done() for _row, future in bus.mcp_connect_runtime.approvals.values()
+            ):
                 appeared.set()
             return outcome
 
@@ -275,12 +277,12 @@ def test_once_approval_is_not_reused_after_capability_change(tmp_path, monkeypat
         preview = await scene("previewGraphRun", [])
         task = asyncio.create_task(scene("executeGraphRun", [], preview["previewToken"], "review-changed-tool"))
         try:
-            await asyncio.wait_for(appeared.wait(), 10)
+            await asyncio.wait_for(appeared.wait(), MCP_HANDOFF_TIMEOUT)
             pending, = await scene("getMcpToolApprovals")
             assert pending["nodeId"] == node_id
             assert len(server.calls) == 1
-            await scene("approveMcpTool", pending["id"], False)
-            outcome = await asyncio.wait_for(task, 10)
+            assert await scene("approveMcpTool", pending["id"], False) == {"ok": True}
+            outcome = await asyncio.wait_for(task, MCP_HANDOFF_TIMEOUT)
             assert outcome["status"] == "partial"
             assert len(server.calls) == 1
         finally:

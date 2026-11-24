@@ -68,10 +68,10 @@ function PreviewDetails({ preview }: { preview: Preview }) {
   </section>;
 }
 
-function WorkspaceRuns({ workspace }: { workspace: number }) {
+function WorkspaceRuns({ workspace, initialSource }: { workspace: number; initialSource?: string }) {
   const [runs, setRuns] = useState<Run[]>([]);
   const [selected, setSelected] = useState("");
-  const [source, setSource] = useState("");
+  const [source, setSource] = useState(initialSource ?? "");
   const [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -137,7 +137,7 @@ function WorkspaceRuns({ workspace }: { workspace: number }) {
   }
   const run = runs.find(item => item.run_id === selected);
   return <>
-    <Disclosure title="Preview and start a typed workflow">
+    <Disclosure title="Preview and start a typed workflow" defaultOpen={!!initialSource}>
       <TextArea label="Workflow request JSON (spec and parameters)" value={source} disabled={busy}
         onValueChange={value => { setSource(value); setPreview(null); }} minRows={4} />
       <Button disabled={!source.trim() || busy} onClick={() => { void review(); }}>Preview workflow</Button>
@@ -179,7 +179,7 @@ function WorkspaceRuns({ workspace }: { workspace: number }) {
   </>;
 }
 
-function Inspector() {
+function Inspector({ initialSource }: { initialSource?: string }) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspace, setWorkspace] = useState("");
   const [error, setError] = useState("");
@@ -196,13 +196,13 @@ function Inspector() {
     {error && <InlineAlert title="Could not load workspaces" body={error} variant="error" />}
     <Select label="Workspace" value={workspace} onChange={setWorkspace}
       options={workspaces.map(item => ({ value: String(item.id), label: item.name }))} />
-    {workspace && <WorkspaceRuns key={workspace} workspace={Number(workspace)} />}
+    {workspace && <WorkspaceRuns key={workspace} workspace={Number(workspace)} initialSource={initialSource} />}
   </>;
 }
 
-export function DetachedWorkflowInspector() {
-  const [open, setOpen] = useState(false);
+export function DetachedWorkflowInspector({ initialSource }: { initialSource?: string } = {}) {
+  const [open, setOpen] = useState(!!initialSource);
   return <Disclosure title="Detached workflow runs" variant="section" open={open} onOpenChange={setOpen}>
-    {open && <Inspector />}
+    {open && <Inspector initialSource={initialSource} />}
   </Disclosure>;
 }
