@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Protocol, TypeVar
+from typing import TYPE_CHECKING, Protocol, TypeVar
 
 from .contracts import JsonData, PortSet, PortValue, SideEffectClass, WorkflowStepSpec
+
+if TYPE_CHECKING:
+    from backend.canvas import SceneDocument
+    from .artifacts import WorkflowArtifacts
 
 PreparedT = TypeVar("PreparedT")
 
@@ -18,6 +22,11 @@ class StepContext:
     run_id: str
     step_id: str
     attempt: int
+    scratch_document: SceneDocument | None = None
+    artifacts: WorkflowArtifacts | None = None
+    model_identity: tuple[str, str] | None = None
+    cost_limit_usd: float = 0.0
+    report_cost: Callable[[float], None] | None = None
 
 
 class StepAdapter(Protocol[PreparedT]):
