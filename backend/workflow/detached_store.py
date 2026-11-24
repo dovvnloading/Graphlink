@@ -114,6 +114,14 @@ class DetachedRunStore:
                 for step in run["steps"].values():
                     if step["status"] in ("pending", "running"):
                         step.update(status="interrupted", finished_at=now, error=reason)
+                        if step.get("approval", {}).get("status") == "pending":
+                            step["approval"]["status"] = "interrupted"
+                        for child in step.get("map_items", {}).values():
+                            if child["status"] in ("pending", "running"):
+                                child.update(status="interrupted", error=reason)
+                                for nested in child["steps"].values():
+                                    if nested["status"] in ("pending", "running"):
+                                        nested.update(status="interrupted", finished_at=now, error=reason)
                         run["events"].append({
                             "schema_version": 1, "run_id": run["run_id"], "sequence": len(run["events"]),
                             "timestamp": now, "kind": "step-interrupted", "step_id": step["step_id"],

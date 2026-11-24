@@ -5,14 +5,15 @@ import json
 import math
 from decimal import Decimal
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 from .artifacts import WorkflowArtifacts, canonical, digest
-from .contracts import (PortSpec, PortValue, StepOutputSource, WorkflowInputSource,
+from .contracts import (JsonValue, PortSpec, PortValue, StepOutputSource, WorkflowInputSource,
                         WorkflowSpec, WorkflowStepSpec, freeze_config)
 from .ports import ALLOWED_COERCIONS, PORT_KINDS, coerce_port
 from .registry import StepAdapterRegistry
+from .control_flow import BRANCHES, MAP, MERGE, ControlAdapter, map_items, map_workflow
 
 Provider = Literal["cloud", "local"]
 
@@ -58,6 +59,7 @@ class RunPreview:
     estimated_cost_usd: float
     requires_approval: bool
     fingerprint: str
+    control_flow: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +70,7 @@ class Plan:
     policies: dict[str, StepPolicy]
     inputs: dict[str, dict[str, Any]]
     preview: RunPreview
+    map_plans: dict[str, Plan] = field(default_factory=dict)
 
 
 def _ports(ports: tuple[PortSpec, ...]) -> dict[str, PortSpec]:
@@ -79,10 +82,10 @@ def _ports(ports: tuple[PortSpec, ...]) -> dict[str, PortSpec]:
     return result
 
 
-def _connection(source: PortSpec, destination: PortSpec) -> None:
+def _connection(source: PortSpec, destination: PortSpec, *, conditional: bool = False) -> None:
     if source.kind != destination.kind and (source.kind, destination.kind) not in ALLOWED_COERCIONS:
         raise ValueError(f"Port {destination.name!r}: cannot coerce {source.kind} to {destination.kind}.")
-    if destination.required and not source.required:
+    if destination.required and not source.required and not conditional:
         raise ValueError(f"Required port {destination.name!r} cannot depend on an optional output.")
 
 
@@ -114,6 +117,7 @@ def build_plan(spec: WorkflowSpec, parameters: Mapping[str, PortValue],
     if len(steps) != len(spec.steps) or "" in steps:
         raise ValueError("Invalid or duplicate workflow step ID.")
     adapters, policies, output_ports, dependencies = {}, {}, {}, {}
+    controls, map_plans = {}, {}
     for step in spec.steps:
         descriptor = step.adapter
         config = json.loads(step.config_json)
@@ -124,7 +128,11 @@ def build_plan(spec: WorkflowSpec, parameters: Mapping[str, PortValue],
         if registry.describe(descriptor.adapter_id, descriptor.adapter_version, step.config_json) != descriptor:
             raise ValueError(f"Adapter descriptor changed for {step.step_id!r}.")
         adapters[step.step_id] = registry.resolve(descriptor.adapter_id, descriptor.adapter_version)
-        policy = policy_for(step)
+        adapter = adapters[step.step_id]
+        if isinstance(adapter, ControlAdapter):
+            controls[step.step_id] = adapter.preview_config(config)
+        # A Map's aggregate policy is derived from its trusted child policies below.
+        policy = StepPolicy() if descriptor.adapter_id == MAP else policy_for(step)
         if not isinstance(policy, StepPolicy):
             raise ValueError("Invalid workflow execution policy.")
         policies[step.step_id] = policy
@@ -143,6 +151,11 @@ def build_plan(spec: WorkflowSpec, parameters: Mapping[str, PortValue],
             raise ValueError("Workflow binding refers to an unknown source port.")
         return port
 
+    def conditional(source):
+        return (isinstance(source, StepOutputSource)
+                and isinstance(adapters[source.step_id], ControlAdapter)
+                and source.port in BRANCHES.get(steps[source.step_id].adapter.adapter_id, ()))
+
     for step in spec.steps:
         ports = _ports(step.adapter.ports.inputs)
         bound = set()
@@ -151,23 +164,55 @@ def build_plan(spec: WorkflowSpec, parameters: Mapping[str, PortValue],
             if binding.port in bound or binding.port not in ports:
                 raise ValueError("Invalid or duplicate workflow input binding.")
             bound.add(binding.port)
-            _connection(source_port(binding.source), ports[binding.port])
+            _connection(source_port(binding.source), ports[binding.port], conditional=conditional(binding.source))
             if isinstance(binding.source, StepOutputSource):
                 deps.add(binding.source.step_id)
         if any(port.required and port.name not in bound for port in ports.values()):
             raise ValueError(f"Step {step.step_id!r} has an unbound required input.")
+        if step.adapter.adapter_id == MERGE and not bound:
+            raise ValueError("Merge requires at least one bound input.")
         dependencies[step.step_id] = frozenset(deps)
     for output in spec.outputs:
-        _connection(source_port(output.source), output.port)
+        _connection(source_port(output.source), output.port, conditional=conditional(output.source))
     _acyclic(dependencies)
+
+    # Preview every map expansion before any dispatch. For an upstream
+    # producer the author must pin its expected cardinality; runtime checks it.
+    for step in spec.steps:
+        if step.adapter.adapter_id != MAP:
+            continue
+        config = json.loads(step.config_json)
+        source = step.bindings[0].source
+        count = config.get("item_count")
+        if isinstance(source, WorkflowInputSource):
+            if source.port not in parameters:
+                raise ValueError("Map requires its input for preview.")
+            actual = len(map_items(coerce_port(parameters[source.port], PortSpec("items", "json", True))))
+            if count is not None and count != actual:
+                raise ValueError("Map input count differs from its configured item_count.")
+            count = actual
+        if count is None:
+            raise ValueError("Map with an upstream input requires item_count for preview.")
+        child = build_plan(map_workflow(config), {"item": JsonValue(None)}, registry, artifacts, policy_for)
+        map_plans[step.step_id] = child
+        total = float(Decimal(str(child.preview.estimated_cost_usd)) * count)
+        policies[step.step_id] = StepPolicy(cost_usd=total)
+        controls[step.step_id].update(
+            item_count=count, estimated_cost_usd=total, child_fingerprint=child.preview.fingerprint,
+            child_steps=[
+                [key, effect, asdict(policy)] for key, effect, policy in child.preview.steps
+            ],
+        )
 
     workflow_hash = digest(asdict(spec))
     entries = tuple((step.step_id, step.adapter.side_effect_class, policies[step.step_id]) for step in spec.steps)
     cost = float(sum(Decimal(str(policy.cost_usd)) for policy in policies.values()))
     approval = any(effect in ("cloud", "executes", "writes") or policy.execution_lane == "cloud"
-                   for _, effect, policy in entries)
+                   for _, effect, policy in entries) or any(
+                       child.preview.requires_approval for child in map_plans.values()
+                   )
     pin = {"workflow_hash": workflow_hash, "parameters": packed,
            "steps": [(step_id, effect, asdict(policy)) for step_id, effect, policy in entries],
-           "estimated_cost_usd": cost}
-    preview = RunPreview(workflow_hash, canonical(packed), entries, cost, approval, digest(pin))
-    return Plan(spec, dependencies, adapters, policies, packed, preview)
+           "estimated_cost_usd": cost, "control_flow": controls}
+    preview = RunPreview(workflow_hash, canonical(packed), entries, cost, approval, digest(pin), controls)
+    return Plan(spec, dependencies, adapters, policies, packed, preview, map_plans)
