@@ -10,7 +10,7 @@ describe("Badge and StatusPill", () => {
     expect(screen.getByText("Queued")).toHaveClass("gl-badge--xs");
   });
 
-  it.each(["Running", "Done", "Failed", "Cancelled", "Waiting for approval", "Out of date", "Skipped"] as const)(
+  it.each(["Queued", "Running", "Done", "Failed", "Cancelled", "Waiting for approval", "Out of date", "Skipped"] as const)(
     "labels the %s status without relying on color", (status) => {
       const { unmount } = render(<StatusPill status={status} />);
       const pill = screen.getByRole("status", { name: status });

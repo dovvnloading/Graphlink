@@ -135,6 +135,11 @@ CLASSIFICATION: tuple[Classified, ...] = (
 
     Classified("scene", "previewGraphRun", "B", "read-only: previews bound transforms on a projected graph"),
     Classified("scene", "getGraphRun", "B", "read-only: inspects saved run history"),
+    Classified("scene", "getWorkflowHistory", "B", "read-only: lists durable receipts in the open graph"),
+    Classified("scene", "getWorkflowRunDetail", "B", "read-only: inspects durable step receipts and events"),
+    Classified("scene", "showWorkflowStep", "B", "read-only: explicitly reveals fingerprint-matching content"),
+    Classified("scene", "showWorkflowPreviewStep", "B", "read-only: reveals a fingerprint-matching preview input"),
+    Classified("scene", "getWorkflowCanvasState", "B", "read-only: reads execution badges and progress"),
     Classified("scene", "cancelGraphRun", "B", "run control: cancels active tasks and checkpoints the terminal receipt; no undo command"),
     Classified("scene", "executeGraphRun", "A", "content: records each completed output with its run id"),
     Classified("scene", "resumeGraphRun", "A", "content: records remaining output changes under the original run id"),

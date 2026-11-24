@@ -129,6 +129,7 @@ def _step_record(step: dict[str, Any]) -> dict[str, Any]:
         source_ids = [step.get("sourceId")]
     input_ref = {
         "nodeIds": [_node_id(source) for source in source_ids[:64]],
+        "destinationNodeId": _node_id(step.get("nodeId")),
         "sha256": _digest(step.get("inputHash")),
         "configuration": _digest(step.get("configHash")),
     }
@@ -385,3 +386,22 @@ def read_run(conn: sqlite3.Connection, graph_id: int, run_id: str) -> dict[str, 
             "SELECT receipt_json FROM workflow_child_runs WHERE graph_id = ? AND run_id = ? ORDER BY step_index"
         )]
     return result
+
+
+def list_runs(conn: sqlite3.Connection, graph_id: int, offset: int = 0, limit: int = 50) -> list[dict[str, Any]]:
+    """Summaries from the durable journal, including plans pruned from graph JSON."""
+    cursor = conn.execute(
+        """SELECT r.run_id, r.status, r.started_at, r.finished_at, r.duration_ms,
+                  count(s.step_index) AS step_count,
+                  sum(CASE WHEN s.status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
+                  sum(s.total_tokens) AS total_tokens, sum(s.cost_usd) AS cost_usd,
+                  count(s.cost_usd) AS priced_steps
+           FROM workflow_runs r LEFT JOIN workflow_steps s
+             ON s.graph_id = r.graph_id AND s.run_id = r.run_id
+           WHERE r.graph_id = ?
+           GROUP BY r.graph_id, r.run_id
+           ORDER BY r.started_at DESC, r.run_id DESC LIMIT ? OFFSET ?""",
+        (graph_id, limit, offset),
+    )
+    names = [column[0] for column in cursor.description]
+    return [dict(zip(names, row)) for row in cursor]
