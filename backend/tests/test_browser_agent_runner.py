@@ -272,6 +272,53 @@ def test_markdown_capture_escapes_external_markup_and_anchors_provenance():
     assert "Interactive controls" in markdown
 
 
+
+def test_replaced_control_and_rewritten_attributes_are_rejected_after_consent():
+    for mutation in ("replace_during_approval", "changed_during_approval"):
+        wrapper = FakePlaywrightContext()
+
+        async def approve_host(host, url):
+            return True
+
+        async def approve_action(kind, selector, url, detail):
+            setattr(wrapper.driver.browser.context.page, mutation, True)
+            return True
+
+        with pytest.raises(BrowserPolicyError, match="target changed"):
+            asyncio.run(run_browser(
+                "https://example.com/",
+                [{"kind": "click", "selector": "#submit"}],
+                approve_host, approve_action, playwright_factory=lambda: wrapper,
+            ))
+        assert not any(
+            call[0] == "click" for call in wrapper.driver.browser.context.page.calls
+        )
+        assert wrapper.driver.browser.closed
+
+
+def test_http_status_is_reflected_in_capture_and_markdown():
+    wrapper = FakePlaywrightContext()
+
+    class Response:
+        status = 403
+
+    async def navigate(url, **kwargs):
+        wrapper.driver.browser.context.page.url = url
+        return Response()
+
+    wrapper.driver.browser.context.page.goto = navigate
+
+    async def approve(*args):
+        return True
+
+    capture = asyncio.run(run_browser(
+        "https://example.com/", [], approve, approve, playwright_factory=lambda: wrapper,
+    ))
+    assert capture.http_status == 403
+    assert capture.report()["http_status"] == 403
+    assert "**HTTP status:** 403" in capture_markdown(capture)
+
+
 def test_published_page_text_is_fenced_and_untrusted_titles_cannot_inject_links():
     wrapper = FakePlaywrightContext()
 

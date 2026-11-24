@@ -262,7 +262,29 @@ def test_non_identity_compression_is_refused_before_reading(monkeypatch):
     assert closed == [True]
 
 
-def test_pinned_transport_preserves_tls_hostname_and_does_not_follow_redirect(monkeypatch):
+
+@pytest.mark.parametrize("status", [300, 301, 302, 303, 304, 307, 308, 399])
+def test_gate_rejects_redirects_even_from_injected_transport(status, monkeypatch):
+    """A 3xx must never reach route.fulfill(), even if the transport regresses."""
+    monkeypatch.setattr(
+        network, "_fetch_verified",
+        lambda *args: network.BrowserResponse(
+            status, {"location": "https://127.0.0.1/secret"}, b"unsafe"
+        ),
+    )
+
+    async def approve(host, url):
+        assert host == "example.com"
+        return True
+
+    gate = network.BrowserNetworkGate("https://example.com/", approve, policy=_policy())
+    with pytest.raises(network.BrowserPolicyError, match="redirect"):
+        asyncio.run(gate.fetch("https://example.com/", method="GET", navigation=True, headers={}))
+    assert gate._reserved_bytes == 0
+    assert any("redirect" in reason.lower() for reason in gate.blocked)
+
+
+def test_pinned_transport_rejects_redirect_before_chromium_and_closes_connection(monkeypatch):
     sent = []
 
     class FakeResponse:
@@ -270,8 +292,7 @@ def test_pinned_transport_preserves_tls_hostname_and_does_not_follow_redirect(mo
         def getheader(self, name):
             return {"Content-Length": "4", "Content-Disposition": "inline"}.get(name)
         def read(self, cap):
-            assert cap == network.MAX_RESOURCE_BYTES + 1
-            return b"next"
+            pytest.fail("Redirect response body must not be read or fulfilled")
         def getheaders(self):
             return [("Location", "https://elsewhere.example/new"), ("Content-Type", "text/html")]
 
@@ -286,12 +307,11 @@ def test_pinned_transport_preserves_tls_hostname_and_does_not_follow_redirect(mo
             sent.append(("closed",))
 
     monkeypatch.setattr(network, "_PinnedConnection", FakeConnection)
-    result = network._fetch_verified(
-        "https://example.com/path?q=1", "93.184.216.34",
-        {"Authorization": "sensitive", "Cookie": "ephemeral=1"},
-    )
-    assert result.status == 302
-    assert result.headers["location"] == "https://elsewhere.example/new"
+    with pytest.raises(network.BrowserPolicyError, match="redirect"):
+        network._fetch_verified(
+            "https://example.com/path?q=1", "93.184.216.34",
+            {"Authorization": "sensitive", "Cookie": "ephemeral=1"},
+        )
     assert sent[0] == ("connect", "example.com", 443, "93.184.216.34")
     assert sent[1][1:3] == ("GET", "/path?q=1")
     assert "Authorization" not in sent[1][3]
