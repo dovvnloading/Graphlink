@@ -55,6 +55,7 @@ from backend import db_backup
 from backend import knowledge_store
 from backend import native_dialogs
 from backend import workspace_archive
+from backend import workflow_run_store
 from backend.canvas import SceneDocument
 from backend.domain.node_states import ChatState
 from backend.api.intents_graph_runner import register_graph_runner
@@ -120,7 +121,7 @@ class ConcurrentSaveConflict(RuntimeError):
 # The note-edge fix adds version "5": the notes table gains a note_id
 # column so note-endpoint edges survive a save/load round-trip - see
 # _migration_005_note_ids's own docstring.
-CHATS_DB_SCHEMA_VERSION = 5
+CHATS_DB_SCHEMA_VERSION = 6
 
 
 # ADR-009 stage 9.2: `created_at` and historical `updated_at` values use
@@ -436,6 +437,8 @@ def _connect(
         # comment above for the empirical verification this rests on).
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA busy_timeout = 30000")
+        # Request fences and output receipts require a durable WAL commit.
+        conn.execute("PRAGMA synchronous = FULL")
     except sqlite3.OperationalError:
         # ADR-009 stage 9.2: a locked/busy file or a real disk I/O error -
         # genuinely transient conditions (a concurrent writer, a slow
@@ -1115,6 +1118,7 @@ _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     3: _migration_003_tags_favorite_archive,
     4: _migration_004_workspace_defaults,
     5: _migration_005_note_ids,
+    6: workflow_run_store.migrate,
 }
 
 
@@ -1690,11 +1694,20 @@ def load_chat_snapshot(
         conn.execute("BEGIN")
         try:
             row = _load_chat_row_from_conn(conn, chat_id)
+            if row is not None and isinstance(row["data"], dict):
+                workflow_run_store.overlay_receipts(conn, chat_id, row["data"].get("graph_runs"))
             notes_rows = _load_notes_rows_from_conn(conn, chat_id)
             pins_rows = _load_pins_rows_from_conn(conn, chat_id)
         finally:
             conn.commit()
     return row, notes_rows, pins_rows
+
+
+def load_workflow_run(db_path: Path, chat_id: int, run_id: str) -> dict[str, Any] | None:
+    """Read one run and its ordered events from a single SQLite snapshot."""
+    with contextlib.closing(_connect(db_path)) as conn, conn:
+        conn.execute("BEGIN")
+        return workflow_run_store.read_run(conn, chat_id, run_id)
 
 
 def save_chat_atomically_row(
@@ -1850,6 +1863,11 @@ def save_chat_atomically_row(
                 )
                 # lastrowid is set by the INSERT immediately above.
                 resolved_chat_id = cursor.lastrowid  # type: ignore[assignment]
+
+            # The runner's existing shielded, off-loop graph checkpoint is
+            # also the durable run-store transaction. A request fence or
+            # completion receipt cannot commit separately from its graph.
+            workflow_run_store.checkpoint(conn, resolved_chat_id, chat_data.get("graph_runs"))
 
             conn.execute("DELETE FROM notes WHERE chat_id = ?", (resolved_chat_id,))
             for note in notes_data:
