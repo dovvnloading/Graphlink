@@ -101,6 +101,7 @@ def save(conn, document, *, name, workflow_id=None, expected_revision=None):
         if expected_revision != previous["revision"]:
             raise ValueError("A newer workflow version exists. Refresh before saving a new version.")
         version = previous["version"] + 1
+        conn.execute("UPDATE workflow_library SET name = ? WHERE workflow_id = ?", (name, workflow_id))
     revision = identifier()
     document["spec"].update(workflow_id=workflow_id, revision=revision, name=name)
     document = validate_document(document)

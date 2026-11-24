@@ -162,9 +162,14 @@ def _restore_step(raw: Any, ids: dict[str, str]) -> dict[str, Any] | None:
 
     if step["kind"] == "workflow":
         from backend.workflow.child_runs import validate_child
-        if raw.get("sourceIds") != []:
+        raw_sources = raw.get("sourceIds")
+        if (not isinstance(raw_sources, list) or len(raw_sources) > 64
+                or any(not isinstance(source, str) or not source for source in raw_sources)
+                or len(set(raw_sources)) != len(raw_sources)):
             return None
-        step["sourceIds"] = []
+        step["sourceIds"] = [ids.get(source, "") for source in raw_sources]
+        if any(not source for source in step["sourceIds"]) and step["status"] in {"pending", "current", "running"}:
+            step.update(status="blocked", detail="A saved workflow input no longer exists.")
         child = validate_child(raw.get("childRun"))
         if child:
             step["childRun"] = child

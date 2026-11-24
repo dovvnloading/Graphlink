@@ -3699,7 +3699,7 @@ def register_chat_library(
             bus, canvas_document, settings_manager,
             lambda: save_chat(checkpoint=True), _serialize_mutating_intent,
         )
-        workflow_resolver = register_workflow_library(bus, canvas_document, lambda: _connect(resolved_path))
+        workflow_resolver = register_workflow_library(bus, canvas_document, lambda: _connect(resolved_path), _serialize_mutating_intent)
         register_graph_runner(
             bus, canvas_document, lambda: save_chat(checkpoint=True), _serialize_mutating_intent,
             settings_manager=settings_manager, workflow_resolver=workflow_resolver,

@@ -25,6 +25,7 @@ export interface WorkflowNodeState {
   document: WorkflowDocument;
   version: number;
   inputs: Record<string, unknown>;
+  sources?: Record<string, string>;
   parameters: Record<string, string | number>;
   outputs: Record<string, PortValue>;
   lastInputHash: string;

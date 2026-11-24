@@ -5,13 +5,13 @@ import hashlib
 import json
 
 from backend.domain.model import SceneError
-from backend.domain.node_states import PluginStateSnapshot, PersistedPluginState
+from backend.domain.node_states import ModelState, NoteState, PluginStateSnapshot, PersistedPluginState
 from backend.workflow.contracts import (
     InputBinding, PortSpec, StepOutputSource, WorkflowInputSource, WorkflowOutput,
     WorkflowSpec, WorkflowStepSpec, freeze_config,
 )
 from backend.workflow.library import (
-    canonical, configured_spec, identifier, library_registry, make_document, ordered_steps,
+    canonical, configured_spec, library_registry, make_document, ordered_steps, typed_inputs,
 )
 
 KIND = "graph_runner.workflow"
@@ -81,7 +81,7 @@ def data(node):
 
 
 def new_state(document, version):
-    return {"document": document, "version": version, "inputs": {}, "parameters": {},
+    return {"document": document, "version": version, "inputs": {}, "sources": {}, "parameters": {},
             "outputs": {}, "lastInputHash": "", "childRunId": ""}
 
 
@@ -90,25 +90,71 @@ def insert(document, frozen, version, x, y):
                                     state=PluginStateSnapshot.from_data(new_state(frozen, version))).id
 
 
-def configure(node, inputs, parameters):
+def dependencies(node):
+    value = data(node)
+    sources = value.get("sources", {})
+    if (not isinstance(sources, dict) or len(sources) > 64
+            or any(not isinstance(source, str) or not source for source in sources.values())):
+        raise SceneError("The workflow source bindings are invalid.")
+    return tuple(dict.fromkeys(sources[key] for key in sorted(sources)))
+
+
+def contains_dependency(document, source_id, target_id):
+    pending, seen = [source_id], set()
+    while pending:
+        current = pending.pop()
+        if current == target_id:
+            return True
+        if current in seen or current not in document.nodes:
+            continue
+        seen.add(current)
+        node = document.nodes[current]
+        if node.kind == KIND:
+            pending.extend(dependencies(node))
+        elif isinstance(node.state, NoteState):
+            binding = node.state.model_text_input
+            pending.append(binding.source_id if binding else node.state.text_input_source_id)
+        elif isinstance(node.state, ModelState):
+            pending.append(node.state.model_binding.source_id)
+    return False
+
+
+def configure(document, node, inputs, parameters, sources):
     old = data(node)
     spec = configured_spec(old["document"], parameters)
     if not isinstance(inputs, dict) or not inputs.keys() <= {p.name for p in spec.inputs}:
         raise ValueError("Unknown workflow input.")
+    typed_inputs(spec, inputs, require_all=False)
+    if not isinstance(sources, dict) or len(sources) > 64 or set(inputs) & set(sources):
+        raise ValueError("Choose a literal or connected source for each workflow input.")
+    text_ports = {p.name for p in spec.inputs if p.kind == "text"}
+    if not sources.keys() <= text_ports:
+        raise ValueError("Only text inputs can bind to a canvas text source.")
+    for source in sources.values():
+        document._text_output(source)
+        if contains_dependency(document, source, node.id):
+            raise ValueError("A workflow connection cannot form a cycle.")
     if len(canonical(inputs).encode()) > 1_000_000:
         raise ValueError("Workflow inputs are too large.")
-    if old["inputs"] != inputs or old["parameters"] != parameters:
-        old.update(inputs=inputs, parameters=parameters, outputs={}, lastInputHash="", childRunId="")
+    if old["inputs"] != inputs or old["parameters"] != parameters or old.get("sources", {}) != sources:
+        old.update(inputs=inputs, sources=sources, parameters=parameters, outputs={}, lastInputHash="", childRunId="")
         node.state = PluginStateSnapshot.from_data(old)
 
 
-def prepare(node):
+def prepare(document, node):
     try:
         value = data(node)
         spec = configured_spec(value["document"], value["parameters"])
-        inputs = value["inputs"]
-        if any(p.required and p.name not in inputs for p in spec.inputs):
-            raise ValueError("Fill every required workflow input before running.")
+        inputs = dict(value["inputs"])
+        dependencies(node)
+        sources = value.get("sources", {})
+        if set(inputs) & set(sources) or not sources.keys() <= {p.name for p in spec.inputs if p.kind == "text"}:
+            raise ValueError("Invalid workflow input bindings.")
+        for port, source in sources.items():
+            inputs[port] = document._text_output(source)
+        typed_inputs(spec, inputs)
+        if len(canonical(inputs).encode()) > 1_000_000:
+            raise ValueError("Workflow inputs are too large.")
         return spec, inputs, digest([value["document"], value["parameters"], inputs])
     except (ValueError, KeyError, TypeError) as exc:
         raise SceneError("Configure valid workflow inputs and parameters before running.") from exc
@@ -116,12 +162,42 @@ def prepare(node):
 
 def config_hash(node):
     value = data(node)
-    return digest([value["document"], value["parameters"]])
+    return digest([value["document"], value["parameters"], sorted(value.get("sources", {}))])
 
 
 def output_hash(node):
     value = data(node)
     return digest(value["outputs"])
+
+
+def text_output(node):
+    value = data(node)
+    spec = value["document"]["spec"]
+    ports = [output["port"]["name"] for output in spec["outputs"] if output["port"]["kind"] == "text"]
+    if len(ports) != 1:
+        raise SceneError("A Workflow text connection requires exactly one exposed text output.")
+    output = value["outputs"].get(ports[0])
+    if output is None:
+        return ""
+    if output.get("kind") != "text" or not isinstance(output.get("text"), str):
+        raise SceneError("The saved workflow output is invalid.")
+    return output["text"]
+
+
+def remap_sources(document, ids):
+    for node in document.nodes.values():
+        if node.kind != KIND:
+            continue
+        try:
+            value = data(node)
+            sources = value.get("sources", {})
+            if not isinstance(sources, dict):
+                continue
+            # Missing saved node IDs stay invalid; never alias a reminted ID.
+            value["sources"] = {key: ids.get(source, "missing") for key, source in sources.items()}
+            node.state = PluginStateSnapshot.from_data(value)
+        except (SceneError, ValueError, TypeError):
+            continue
 
 
 def unpack(document, frozen, inputs, parameters, x, y):

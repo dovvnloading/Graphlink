@@ -341,7 +341,7 @@ def _make_graph_checkpoint(save_checkpoint: Callable[[], Awaitable[bool]]) -> Ca
     return checkpoint
 
 
-async def _run_reusable_step(document, run, step, resolver):
+async def _run_reusable_step(document, run, step, by_node_id, resolver):
     from backend.workflow import canvas
     from backend.workflow.library import execute, identifier
 
@@ -350,11 +350,14 @@ async def _run_reusable_step(document, run, step, resolver):
     try:
         if node is None or resolver is None:
             raise SceneError("Workflow Library is unavailable.")
-        spec, inputs, digest = canvas.prepare(node)
+        validate_graph_run_ancestors(document, step, by_node_id)
+        _matching_node(document, step)
+        spec, inputs, digest = canvas.prepare(document, node)
         old = canvas.data(node)
         if (step["configHash"] != canvas.config_hash(node) or step["targetHash"] != canvas.output_hash(node)
-                or step["inputHash"] != digest):
+                or step["inputHash"] and step["inputHash"] != digest):
             raise SceneError("The workflow changed since preview.")
+        step["inputHash"] = digest
         frozen = await resolver(spec.workflow_id, spec.revision)
         if frozen != old["document"]:
             raise SceneError("The pinned Workflow Library version does not match.")
@@ -367,7 +370,8 @@ async def _run_reusable_step(document, run, step, resolver):
             child["steps"] = list(receipts.values())
 
         outputs = await execute(spec, inputs, child["runId"], receipt)
-        if document.nodes.get(node.id) is not node or canvas.data(node) != old:
+        if (document.nodes.get(node.id) is not node or canvas.data(node) != old
+                or canvas.prepare(document, node)[2] != digest):
             raise SceneError("The workflow changed while running.")
         if len(canvas.canonical(outputs).encode()) > 1_000_000:
             raise SceneError("Workflow outputs are too large.")
@@ -455,7 +459,7 @@ def register_graph_runner(
                     # must never be sent again.
                     step.update(status="reconciliation-required", detail=RECONCILIATION_DETAIL)
                 elif step["kind"] == "workflow":
-                    await _run_reusable_step(document, run, step, workflow_resolver)
+                    await _run_reusable_step(document, run, step, by_node_id, workflow_resolver)
                 elif step["kind"] == "model":
                     try:
                         await _run_model_step(document, confirmed_checkpoint, run, step, by_node_id)

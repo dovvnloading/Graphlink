@@ -2460,6 +2460,8 @@ def _restore_chat_into_document(
 
     from graphlink_plugins.mcp_connect.core import remap_sources as remap_mcp_sources
     remap_mcp_sources(document, by_payload_id)
+    from backend.workflow.canvas import remap_sources as remap_workflow_sources
+    remap_workflow_sources(document, by_payload_id)
     restore_table_data(document.nodes, by_payload_id, chat_data.get("table_sources"), chat_data.get("table_outputs"))
     _remap_model_sources(document, by_payload_id)
     _restore_note_text_inputs(document, chat_data.get("note_text_inputs"), by_payload_id)

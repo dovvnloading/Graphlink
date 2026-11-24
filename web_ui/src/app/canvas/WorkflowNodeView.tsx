@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useState, useSyncExternalStore } from "react";
 import type { Node, NodeProps } from "@xyflow/react";
 import { useOverlays } from "../overlays/overlays";
 import { Button } from "../ui/Button";
@@ -12,6 +12,7 @@ import { NodeShell } from "./NodeShell";
 import { NodeHeading } from "./NodeHeading";
 import { CollapseToggleButton } from "./CollapseToggleButton";
 import { useLodVisibility } from "./useLodVisibility";
+import { availableTextSources, textSourceLabel } from "./textInputs";
 import { WorkflowSpecView } from "../chrome/WorkflowSpecView";
 import type { SceneStore } from "./sceneStore";
 import { readWorkflowNode, workflowPin, type WorkflowDocument, type WorkflowNodeState, type WorkflowVersion } from "./workflowLibrary";
@@ -32,6 +33,9 @@ function Editor({ id, state, store, x, y }: { id: string; state: WorkflowNodeSta
     p.name, p.kind === "text" ? String(state.inputs[p.name] ?? "") : JSON.stringify(state.inputs[p.name] ?? null),
   ])));
   const [parameters, setParameters] = useState<Record<string, string | number>>(state.parameters);
+  const [sources, setSources] = useState<Record<string, string>>(state.sources ?? {});
+  const scene = useSyncExternalStore(store.subscribe, store.getScene);
+  const sourceChoices = availableTextSources(scene.nodes, id);
   const [latest, setLatest] = useState<WorkflowVersion | null>(null);
   const [preview, setPreview] = useState<WorkflowDocument | null>(null);
   const [error, setError] = useState("");
@@ -48,9 +52,10 @@ function Editor({ id, state, store, x, y }: { id: string; state: WorkflowNodeSta
     try { await fn(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   }
-  const values = () => Object.fromEntries(spec.inputs.map(p => [p.name, p.kind === "text" ? inputs[p.name] : JSON.parse(inputs[p.name])]));
+  const values = () => Object.fromEntries(spec.inputs.filter(p => !sources[p.name]).map(p => [p.name, p.kind === "text" ? inputs[p.name] : JSON.parse(inputs[p.name])]));
   async function save() {
-    await store.mutateWorkflowNode("configure", { node_id: id, inputs: values(), parameters });
+    await store.mutateWorkflowNode("configure", { node_id: id, expected_revision: spec.revision, inputs: values(), parameters,
+      sources: Object.fromEntries(Object.entries(sources).filter(([, source]) => !!source)) });
   }
   return <>
     <p>Workflow · pinned version {state.version}</p>
@@ -72,8 +77,14 @@ function Editor({ id, state, store, x, y }: { id: string; state: WorkflowNodeSta
       })}>Upgrade to version {latest.version}</Button>
       <Button onClick={() => setPreview(null)}>Cancel preview</Button>
     </section>}
-    {spec.inputs.map(port => <TextArea key={port.name} label={port.name + " · " + port.kind} value={inputs[port.name] ?? ""}
-      disabled={busy} onValueChange={value => setInputs(old => ({ ...old, [port.name]: value }))} />)}
+    {spec.inputs.map(port => <div key={port.name}>
+      {port.kind === "text" && <Select label={port.name + " source"} value={sources[port.name] ?? ""}
+        options={[{ value: "", label: "Enter text" }, ...sourceChoices.map(node => ({ value: node.id, label: textSourceLabel(node) })),
+          ...(sources[port.name] && !sourceChoices.some(n => n.id === sources[port.name]) ? [{ value: sources[port.name], label: "Missing source", disabled: true }] : [])]}
+        onChange={value => setSources(old => ({ ...old, [port.name]: value }))} disabled={busy} />}
+      {!sources[port.name] && <TextArea label={port.name + " · " + port.kind} value={inputs[port.name] ?? ""}
+        disabled={busy} onValueChange={value => setInputs(old => ({ ...old, [port.name]: value }))} />}
+    </div>)}
     {state.document.parameters.map(p => {
       const step = spec.steps.find(s => s.step_id === p.step_id);
       const defaultValue = step ? JSON.parse(step.config_json)[p.setting] : "";
@@ -89,7 +100,11 @@ function Editor({ id, state, store, x, y }: { id: string; state: WorkflowNodeSta
         await save(); store.requestGraphRunnerNodes([id]); overlays.open("graph-runner", "dialog");
       })}>Preview run</Button>
       <Button size="sm" disabled={busy} onClick={() => void act(async () => {
-        await store.mutateWorkflowNode("unpack", { ...workflowPin(state.document), inputs: values(), parameters, x: x + 360, y });
+        const unpackInputs = { ...values() };
+        for (const [name, source] of Object.entries(sources)) {
+          if (source) unpackInputs[name] = "";
+        }
+        await store.mutateWorkflowNode("unpack", { ...workflowPin(state.document), inputs: unpackInputs, parameters, x: x + 360, y });
       })}>Unpack editable nodes</Button>
     </div>
     {Object.entries(state.outputs).map(([name, output]) => <TextArea key={name} label={name + " · result"}
@@ -105,6 +120,7 @@ export const WorkflowNodeView = memo(function WorkflowNodeView({ id, data, selec
   const lodCollapsed = useLodVisibility();
   const state = readWorkflowNode(data.raw);
   return <NodeShell kindClassName="mcp-tool-node" selected={!!selected} collapsed={data.isCollapsed || lodCollapsed}
+    textOutput={state?.document.spec.outputs.filter(o => o.port.kind === "text").length === 1}
     header={<><CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={() => data.store.setChatCollapsed(id, !data.isCollapsed)} />
       <NodeHeading>{data.title || "Workflow"}</NodeHeading></>}
     bodyClassName="mcp-tool-body nodrag nopan nowheel">

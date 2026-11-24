@@ -16,7 +16,7 @@ from .contracts import (
     TextValue, WorkflowInputSource, WorkflowOutput, WorkflowSpec, WorkflowStepSpec,
     freeze_config,
 )
-from .ports import ALLOWED_COERCIONS, PORT_KINDS, coerce_port
+from .ports import ALLOWED_COERCIONS, PORT_KINDS, coerce_port, _check_table
 from .registry import builtin_registry
 
 FORMAT = "graphlink-workflow"
@@ -330,13 +330,12 @@ def configured_spec(document: dict, values: dict) -> WorkflowSpec:
     return replace(spec, steps=tuple(steps))
 
 
-async def execute(spec: WorkflowSpec, inputs: dict, run_id: str, on_step=None) -> dict:
-    """Pure adapter execution; the caller owns durable admission and receipts."""
-    registry = library_registry()
+def typed_inputs(spec: WorkflowSpec, inputs: dict, *, require_all=True) -> dict:
+    """Validate runtime input shape without performing any operation."""
     declared = {port.name: port for port in spec.inputs}
     if not isinstance(inputs, dict) or not inputs.keys() <= declared.keys():
         raise ValueError("Unknown workflow input.")
-    if any(port.required and port.name not in inputs for port in spec.inputs):
+    if require_all and any(port.required and port.name not in inputs for port in spec.inputs):
         raise ValueError("Supply every required workflow input.")
     typed = {}
     for name, value in inputs.items():
@@ -347,8 +346,16 @@ async def execute(spec: WorkflowSpec, inputs: dict, run_id: str, on_step=None) -
             typed[name] = JsonValue(_json(value))
         elif kind == "table" and isinstance(value, dict) and set(value) == {"columns", "rows"}:
             typed[name] = TableValue(tuple(value["columns"]), tuple(tuple(row) for row in value["rows"]))
+            _check_table(typed[name])
         else:
             raise ValueError(f"Unsupported value for input {name}.")
+    return typed
+
+
+async def execute(spec: WorkflowSpec, inputs: dict, run_id: str, on_step=None) -> dict:
+    """Pure adapter execution; the caller owns durable admission and receipts."""
+    registry = library_registry()
+    typed = typed_inputs(spec, inputs)
     results = {}
 
     def resolve(source):

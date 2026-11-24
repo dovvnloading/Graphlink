@@ -73,7 +73,12 @@ def bound_dependents(document: SceneDocument, source_ids: set[str]) -> list[str]
     """
     children: dict[str, list[str]] = defaultdict(list)
     for node in document.nodes.values():
-        if mcp_configured(node):
+        if node.kind == reusable.KIND:
+            try:
+                parents = reusable.dependencies(node)
+            except SceneError:
+                parents = ()
+        elif mcp_configured(node):
             try:
                 parents = mcp_dependencies(document, node)
             except SceneError:
@@ -172,7 +177,7 @@ def _inspect(document: SceneDocument, step: dict[str, str]) -> None:
     node = document.nodes[node_id]
     _config_and_target(document, step)
     if step["kind"] == "workflow":
-        _, _, digest = reusable.prepare(node)
+        _, _, digest = reusable.prepare(document, node)
         current = reusable.data(node)["lastInputHash"] == digest
         step["inputHash"] = digest
         step.update(status="current" if current else "ready", detail="Pinned workflow inputs are ready.")
@@ -264,8 +269,13 @@ def plan_graph_run(document: SceneDocument, selected_ids: list[str]) -> list[dic
     invalid_mcp: dict[str, str] = {}
     for node in document.nodes.values():
         if node.kind == reusable.KIND:
-            bindings[node.id] = ("", "workflow")
-            sources[node.id] = ()
+            try:
+                parents = reusable.dependencies(node)
+            except SceneError as exc:
+                parents = ()
+                invalid_mcp[node.id] = str(exc)
+            bindings[node.id] = (parents[0] if parents else "", "workflow")
+            sources[node.id] = parents
         elif mcp_configured(node):
             try:
                 parents = mcp_dependencies(document, node)
@@ -364,7 +374,7 @@ def _matching_node(document: SceneDocument, step: dict[str, Any]) -> SceneNode:
     if node is None or _kind(node) != step["kind"]:
         raise SceneError("The connection changed since the preview. Preview the branch again.")
     if step["kind"] == "workflow":
-        if step["operation"] != "workflow" or step_sources(step):
+        if step["operation"] != "workflow" or reusable.dependencies(node) != step_sources(step):
             raise SceneError("Workflow configuration changed since preview.")
     elif step["kind"] == "tool":
         if (not mcp_configured(node) or step["operation"] != "tool"
@@ -406,7 +416,7 @@ def validate_graph_run_ancestors(
         ancestor = by_node_id.get(source_id)
         if ancestor is None:
             source = document.nodes.get(source_id)
-            if source is not None and (_binding(source) is not None or science_configured(source) or mcp_configured(source)):
+            if source is not None and (_binding(source) is not None or science_configured(source) or mcp_configured(source) or source.kind == reusable.KIND):
                 raise SceneError("An upstream connection changed. Preview the branch again.")
             return
         if ancestor["status"] not in {"current", "completed"}:

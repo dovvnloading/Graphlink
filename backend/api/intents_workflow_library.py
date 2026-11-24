@@ -21,7 +21,7 @@ class WorkflowArgs:
     payload: dict
 
 
-def register_workflow_library(bus, document, connect):
+def register_workflow_library(bus, document, connect, serialize_mutation):
     publish_scene = make_publish_scene(bus)
 
     async def db(fn):
@@ -38,6 +38,8 @@ def register_workflow_library(bus, document, connect):
             if action == "preview":
                 return canvas.selected_workflow(document, payload["ids"])
             if action == "make":
+                if payload.get("expected_spec") != canvas.selected_workflow(document, payload["ids"])["spec"]:
+                    raise ValueError("The selected graph changed. Preview Make workflow again.")
                 frozen = canvas.selected_workflow(document, payload["ids"], payload["name"],
                                                   payload["outputs"], payload.get("parameters"))
                 return await db(lambda c: library.save(c, frozen, name=payload["name"],
@@ -69,6 +71,7 @@ def register_workflow_library(bus, document, connect):
         except (KeyError, TypeError, AttributeError) as exc:
             raise IntentValidationError(["Invalid Workflow Library request."]) from exc
 
+    @serialize_mutation
     async def edit_node(action, payload):
         try:
             node_id = payload.get("node_id")
@@ -92,7 +95,9 @@ def register_workflow_library(bus, document, connect):
             elif action == "configure":
                 if node is None:
                     raise ValueError("Workflow node no longer exists.")
-                mutate = lambda: canvas.configure(node, payload["inputs"], payload["parameters"])
+                if canvas.data(node)["document"]["spec"]["revision"] != payload["expected_revision"]:
+                    raise ValueError("The pinned version changed. Reopen the node.")
+                mutate = lambda: canvas.configure(document, node, payload["inputs"], payload["parameters"], payload.get("sources", {}))
             elif action == "upgrade":
                 if node is None:
                     raise ValueError("Workflow node no longer exists.")
@@ -105,6 +110,7 @@ def register_workflow_library(bus, document, connect):
                 def mutate():
                     from backend.domain.node_states import PluginStateSnapshot
                     node.state = PluginStateSnapshot.from_data(canvas.new_state(frozen, version))
+                    node.title = frozen["spec"]["name"]
             else:
                 raise ValueError("Unknown Workflow node action.")
             if node_id is not None and document.nodes.get(node_id) is not node:

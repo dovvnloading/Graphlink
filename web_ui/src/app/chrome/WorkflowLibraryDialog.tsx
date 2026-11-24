@@ -91,7 +91,7 @@ function Library({ store }: { store: SceneStore }) {
       <p>Unbound inputs: {capture.doc.spec.inputs.map(p => p.name + " (" + p.kind + ")").join(", ") || "None"}</p>
       <h4>Expose outputs</h4>
       {capture.doc.spec.outputs.map(o => <Checkbox key={o.port.name} label={o.port.name + " from " + (o.source.kind === "step" ? o.source.step_id : o.source.port)}
-        checked={outputs.includes(o.port.name)} onChange={event => setOutputs(old => event.currentTarget.checked ? [...old, o.port.name] : old.filter(n => n !== o.port.name))} />)}
+        checked={outputs.includes(o.port.name)} onChange={event => { const checked = event.currentTarget.checked; setOutputs(old => checked ? [...old, o.port.name] : old.filter(n => n !== o.port.name)); }} />)}
       <h4>Promote settings to parameters</h4>
       {capture.doc.spec.steps.map(step => {
         const parameterName = step.step_id + "_operation";
@@ -105,7 +105,7 @@ function Library({ store }: { store: SceneStore }) {
       <div className="runner-commit">
         <Button variant="primary" disabled={busy || !name.trim() || !outputs.length} onClick={() => void act(async () => {
           const previous = rows.find(row => row.workflow_id === append);
-          await store.workflowLibrary("make", { ids: capture.ids, name, outputs, parameters: params,
+          await store.workflowLibrary("make", { ids: capture.ids, name, outputs, parameters: params, expected_spec: capture.doc.spec,
             ...(previous ? { workflow_id: previous.workflow_id, expected_revision: previous.revision } : {}) });
           setCapture(null); setName(""); await refresh();
         })}>Save workflow version</Button>
