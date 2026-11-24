@@ -4448,3 +4448,33 @@ def test_reopening_active_graph_never_restores_stale_pre_save_snapshot(db_path):
     assert "new edit that must remain visible" in json.dumps(
         load_chat_row(db_path, original_id)["data"]
     )
+
+
+@pytest.mark.posix_permissions
+def test_workflow_receipts_and_online_backup_are_owner_only(db_path):
+    if sys.platform == "win32":
+        pytest.skip("POSIX mode bits are not Windows ACLs")
+    from contextlib import closing
+
+    from backend import db_backup
+
+    run = {
+        "runId": "permission-run", "previewHash": "a" * 64, "selectionHash": "b" * 64,
+        "startedAt": "2026-11-24T10:00:00Z", "status": "running",
+        "steps": [{"kind": "note", "operation": "copy", "status": "pending", "nodeId": "n2", "sourceId": "n1"}],
+    }
+    graph_id, _ = save_chat_atomically_row(db_path, None, "Run", {"graph_runs": [run]}, [], [])
+    wal = db_path.with_name(db_path.name + "-wal")
+    shm = db_path.with_name(db_path.name + "-shm")
+    with closing(chat_library_module._connect(db_path)):
+        for path in (db_path, wal, shm):
+            assert stat.S_IMODE(path.stat().st_mode) == 0o600
+            os.chmod(path, 0o644)
+        assert chat_library_module.load_workflow_run(db_path, graph_id, run["runId"]) is not None
+        for path in (db_path, wal, shm):
+            assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        backup = db_backup.take_backup(db_path)
+        assert backup is not None and stat.S_IMODE(backup.stat().st_mode) == 0o600
+    assert db_backup.restore_from_newest_backup(db_path, required_table="workflow_runs") == backup
+    assert stat.S_IMODE(db_path.stat().st_mode) == 0o600
+    assert chat_library_module.load_workflow_run(db_path, graph_id, run["runId"]) is not None
