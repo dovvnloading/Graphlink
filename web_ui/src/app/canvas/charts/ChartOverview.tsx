@@ -8,6 +8,7 @@ import { FALLBACK_CHART_THEME } from "./chartTheme";
 import { scientificExtents } from "./ScientificChartMarks";
 import { linearFits, regressionYExtent } from "./linearFit";
 import { raincloudDensity, raincloudJitter } from "./raincloud";
+import { clusterHeatmap } from "./heatmapClustering";
 
 const WIDTH = 240;
 const HEIGHT = 116;
@@ -65,6 +66,7 @@ function overviewMarks(spec: ChartDataRow, chartType: string) {
   if (chartType === "heatmap") {
     const data = spec;
     const matrix = data.matrix ?? [];
+    const plan = clusterHeatmap(matrix, data.analysis?.clustering);
     const values = matrix.flat();
     const min = Math.min(...values);
     const max = Math.max(...values);
@@ -72,9 +74,9 @@ function overviewMarks(spec: ChartDataRow, chartType: string) {
     const cellHeight = HEIGHT / (data.rowLabels?.length ?? 1);
     return (
       <g className="chart-overview-heatmap">
-        {matrix.map((row, i) => row.map((value, j) => (
-          <rect key={i + ":" + j} x={j * cellWidth} y={i * cellHeight}
-            width={cellWidth} height={cellHeight} fill={heatmapColor(value, min, max)} />
+        {plan.rowOrder.map((rowIndex, i) => plan.columnOrder.map((colIndex, j) => (
+          <rect key={rowIndex + ":" + colIndex} x={j * cellWidth} y={i * cellHeight}
+            width={cellWidth} height={cellHeight} fill={heatmapColor(matrix[rowIndex][colIndex], min, max)} />
         )))}
       </g>
     );

@@ -1,6 +1,7 @@
 /** Dense heatmap SVG cells with a single matrix-wide color domain.
  * Negative/positive matrices use zero-centered colors, matching exports. */
-import { useId } from "react";
+import { useId, useMemo } from "react";
+import { clusterHeatmap, dendrogramPaths } from "./heatmapClustering";
 import type { ChartMarksProps } from "./BarChartMarks";
 import { heatmapColor, pickCategoricalTicks, wrapLabel } from "./chartScales";
 import { computeBottomMargin, tooltipPositionFromEvent } from "./chartLayout";
@@ -13,15 +14,17 @@ export function HeatmapChartMarks({
   const rows = data.rowLabels ?? [];
   const columns = data.columnLabels ?? [];
   const matrix = data.matrix ?? [];
+  const mode = data.analysis?.clustering;
+  const plan = useMemo(() => clusterHeatmap(matrix, mode), [matrix, mode]);
   if (!rows.length || !columns.length || width <= 0 || height <= 0) return null;
 
   const values = matrix.flat();
   const low = Math.min(...values);
   const high = Math.max(...values);
   const diverging = low < 0 && high > 0;
-  const marginLeft = 94;
+  const marginLeft = 94 + (plan.rowTree?.left ? 42 : 0);
   const marginRight = 78;
-  const marginTop = 12;
+  const marginTop = 12 + (plan.columnTree?.left ? 42 : 0);
   const innerWidth = Math.max(1, width - marginLeft - marginRight);
   const { indexes: colIndexes, rotate } = pickCategoricalTicks(columns.length, innerWidth);
   const marginBottom = computeBottomMargin(rotate, true) + 10;
@@ -50,21 +53,21 @@ export function HeatmapChartMarks({
       </defs>
       <rect x={0} y={0} width={innerWidth} height={innerHeight}
         fill="none" stroke={theme.border} strokeWidth={1} />
-      {matrix.map((row, rowIndex) => row.map((value, colIndex) => (
+      {plan.rowOrder.map((rowIndex, viewRow) => plan.columnOrder.map((colIndex, viewCol) => (
         <rect key={rowIndex + ":" + colIndex} className="chart-heatmap-cell"
           data-row={rowIndex} data-column={colIndex}
-          x={colIndex * cellWidth} y={rowIndex * cellHeight}
+          x={viewCol * cellWidth} y={viewRow * cellHeight}
           width={cellWidth} height={cellHeight}
-          fill={heatmapColor(value, low, high)} stroke={theme.surface}
+          fill={heatmapColor(matrix[rowIndex][colIndex], low, high)} stroke={theme.surface}
           strokeWidth={0.6}
-          aria-label={rows[rowIndex] + ", " + columns[colIndex] + ": " + String(value)}
+          aria-label={rows[rowIndex] + ", " + columns[colIndex] + ": " + String(matrix[rowIndex][colIndex])}
           onPointerMove={(event) => {
             onHover({
               title: data.title ?? "Heatmap",
               rows: [
                 { label: data.yAxis ?? "Rows", value: rows[rowIndex] },
                 { label: data.xAxis ?? "Columns", value: columns[colIndex] },
-                { label: "Value", value: String(value) + (data.valueUnit ? " " + data.valueUnit : "") },
+                { label: "Value", value: String(matrix[rowIndex][colIndex]) + (data.valueUnit ? " " + data.valueUnit : "") },
               ],
               ...tooltipPositionFromEvent(event, wrapperRef),
             });
@@ -78,15 +81,22 @@ export function HeatmapChartMarks({
             ? `rotate(-25 ${(index + 0.5) * cellWidth} ${innerHeight + 16})`
             : undefined}
           fontSize={11} fill={theme.textMuted}>
-          {wrapLabel(columns[index], 13, 1).join("")}
+          {wrapLabel(columns[plan.columnOrder[index]], 13, 1).join("")}
         </text>
       ))}
       {rowIndexes.map((index) => (
         <text key={index} x={-7} y={(index + 0.5) * cellHeight}
           dominantBaseline="middle" textAnchor="end" fill={theme.textMuted} fontSize={11}>
-          {wrapLabel(rows[index], 14, 1).join("")}
+          {wrapLabel(rows[plan.rowOrder[index]], 14, 1).join("")}
         </text>
       ))}
+      <g className="chart-heatmap-dendrogram" fill="none" stroke={theme.textMuted}
+        strokeWidth={1} pointerEvents="none">
+        {dendrogramPaths(plan.rowTree, plan.rowOrder, "rows", cellHeight).map((path, i) =>
+          <path key={"r" + i} d={path} />)}
+        {dendrogramPaths(plan.columnTree, plan.columnOrder, "columns", cellWidth).map((path, i) =>
+          <path key={"c" + i} d={path} />)}
+      </g>
       <text x={innerWidth / 2} y={innerHeight + (rotate ? 60 : 40)}
         textAnchor="middle" fontSize={11} fill={theme.textMuted}>{data.xAxis}</text>
       <text x={-80} y={innerHeight / 2}

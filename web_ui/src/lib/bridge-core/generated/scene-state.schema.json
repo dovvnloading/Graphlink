@@ -233,6 +233,14 @@
                     },
                     "type": "array"
                   },
+                  "clustering": {
+                    "enum": [
+                      "rows",
+                      "columns",
+                      "both"
+                    ],
+                    "type": "string"
+                  },
                   "distribution": {
                     "enum": [
                       "raincloud"

@@ -361,3 +361,22 @@ scaled to its own peak, so compare distribution shapes, not absolute
 density heights. The layer is persisted as
 `analysis.distribution: "raincloud"` and can be undone. Live charts,
 low-zoom overviews and publication exports render the same three components.
+
+
+### Hierarchically clustered heatmaps
+
+Heatmap toolbar controls **Cluster rows** and **Cluster columns** are independent,
+undoable options. Each axis is reordered using Euclidean distance and
+agglomerative **average-linkage (UPGMA)**; merges use deterministic original
+index tie breaks. Row and column dendrograms are drawn beside the matrix.
+A common magnitude normalization is used for robust distance computations,
+not as a color or measurement transformation.
+
+The options are stored under `chartData.analysis.clustering` as
+`"rows"`, `"columns"` or `"both"`; disabling both removes the field.
+Raw `matrix`, labels, underlying row numbers and source values are never
+reordered. Hover tooltips and cell source indices continue to reference
+the original matrix; the full data color domain and colorbar are unchanged.
+The on-canvas SVG, overview and publication export use the same deterministic
+reordering rule. This is exploratory clustering, not an inferential test;
+the Euclidean metric is sensitive to units and feature scaling.

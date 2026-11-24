@@ -497,6 +497,7 @@ class ChartAnalysisRow:
     yRange: list[float] | None = None
     regression: Literal["ols95"] | None = None
     distribution: Literal["raincloud"] | None = None
+    clustering: Literal["rows", "columns", "both"] | None = None
 
 
 @dataclass

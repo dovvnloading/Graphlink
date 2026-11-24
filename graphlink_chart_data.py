@@ -788,7 +788,7 @@ def _canonicalize_chart_data_base(data, chart_type=None):
 # Chart analysis is an additive, explicitly user-authored part of ChartSpec.
 # Omit it entirely for unedited charts: generating or opening an existing chart
 # must not alter its measurements, its visible domain, or the legacy defaults.
-CHART_ANALYSIS_TYPES = frozenset({"line", "scatter", "histogram", "boxplot"})
+CHART_ANALYSIS_TYPES = frozenset({"line", "scatter", "histogram", "boxplot", "heatmap"})
 MAX_CHART_ANNOTATIONS = 60
 
 
@@ -877,6 +877,83 @@ def chart_regression_fits(data):
     return fits
 
 
+# Agglomerative average-linkage heatmap clustering. This operates solely on
+# original finite matrix observations. Returned order/merge trees are
+# presentation metadata and never mutate the stored chart or numeric values.
+def heatmap_cluster_axis(vectors):
+    from heapq import heappop, heappush
+
+    n = len(vectors)
+    if n == 0:
+        return {"order": [], "tree": None}
+    active = {
+        i: {"id": i, "minLeaf": i, "leaf": i, "height": 0.0, "depth": 0, "size": 1}
+        for i in range(n)
+    }
+    if n == 1:
+        return {"order": [0], "tree": active[0]}
+
+    scale = max(abs(value) for row in vectors for value in row) or 1.0
+    normalized = [[value / scale for value in row] for row in vectors]
+    distances = {}
+    heap = []
+
+    def key(a, b):
+        return (min(a, b), max(a, b))
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            distance = math.sqrt(sum((a - b)**2 for a, b in zip(normalized[i], normalized[j])))
+            distances[(i, j)] = distance
+            heappush(heap, (distance, i, j, i, j))
+
+    next_id = n
+    while len(active) > 1:
+        while True:
+            distance, _, _, aid, bid = heappop(heap)
+            if aid in active and bid in active:
+                break
+        a, b = active.pop(aid), active.pop(bid)
+        left, right = (a, b) if a["minLeaf"] < b["minLeaf"] else (b, a)
+        merged = {
+            "id": next_id, "minLeaf": min(a["minLeaf"], b["minLeaf"]),
+            "size": a["size"] + b["size"], "height": distance,
+            "depth": max(a["depth"], b["depth"]) + 1,
+            "left": left, "right": right,
+        }
+        for other in active.values():
+            d = ((a["size"] * distances[key(aid, other["id"])]
+                  + b["size"] * distances[key(bid, other["id"])]) / merged["size"])
+            distances[key(next_id, other["id"])] = d
+            first, second = sorted((merged["minLeaf"], other["minLeaf"]))
+            heappush(heap, (d, first, second, next_id, other["id"]))
+        active[next_id] = merged
+        next_id += 1
+
+    tree = next(iter(active.values()))
+
+    def order(node):
+        if "leaf" in node:
+            return [node["leaf"]]
+        return order(node["left"]) + order(node["right"])
+
+    return {"order": order(tree), "tree": tree}
+
+
+def heatmap_cluster_plan(matrix, mode=None):
+    rows = len(matrix)
+    columns = len(matrix[0]) if rows else 0
+    row = heatmap_cluster_axis(matrix) if mode in ("rows", "both") else None
+    col = (heatmap_cluster_axis([[row[j] for row in matrix] for j in range(columns)])
+           if mode in ("columns", "both") else None)
+    return {
+        "rowOrder": row["order"] if row else list(range(rows)),
+        "columnOrder": col["order"] if col else list(range(columns)),
+        "rowTree": row["tree"] if row else None,
+        "columnTree": col["tree"] if col else None,
+    }
+
+
 def raincloud_density(values):
     """Scott/Silverman normal-reference Gaussian KDE on the observed span.
 
@@ -915,7 +992,7 @@ def canonicalize_chart_analysis(analysis, chart_type, *, x_scale="linear", y_sca
     """Bounded document-state annotations and frozen axes; no data mutation."""
     if not isinstance(analysis, dict):
         raise ChartDataError("Chart analysis must be an object")
-    allowed = {"lockX", "lockY", "xRange", "yRange", "annotations", "regression", "distribution"}
+    allowed = {"lockX", "lockY", "xRange", "yRange", "annotations", "regression", "distribution", "clustering"}
     if set(analysis) - allowed:
         raise ChartDataError("Unknown chart analysis field")
     if chart_type not in CHART_ANALYSIS_TYPES:
@@ -952,6 +1029,10 @@ def canonicalize_chart_analysis(analysis, chart_type, *, x_scale="linear", y_sca
         if chart_type != "boxplot" or analysis["distribution"] != "raincloud":
             raise ChartDataError("Raincloud distributions require a box plot")
         result["distribution"] = "raincloud"
+    if "clustering" in analysis:
+        if chart_type != "heatmap" or analysis["clustering"] not in ("rows", "columns", "both"):
+            raise ChartDataError("Heatmap clustering requires a heatmap and rows, columns, or both")
+        result["clustering"] = analysis["clustering"]
     annotations = analysis.get("annotations", [])
     if not isinstance(annotations, list) or len(annotations) > MAX_CHART_ANNOTATIONS:
         raise ChartDataError("Chart annotations must be a list of at most 60 items")
@@ -988,6 +1069,10 @@ def canonicalize_chart_analysis(analysis, chart_type, *, x_scale="linear", y_sca
                 raise ChartDataError(where + " region must be positive on log10 axes")
             row.update({"axis": item["axis"], "from": lo, "to": hi})
         result["annotations"].append(row)
+    if chart_type == "heatmap" and (result["lockX"] or result["lockY"]
+                                   or "xRange" in result or "yRange" in result
+                                   or result["annotations"]):
+        raise ChartDataError("Heatmap analysis supports only clustering")
     return result
 
 

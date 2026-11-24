@@ -48,7 +48,7 @@ from matplotlib.patches import FancyBboxPatch, PathPatch
 from matplotlib.path import Path as MplPath
 
 from graphlink_chart_data import (SUPPORTED_CHART_TYPES, canonicalize_chart_data, chart_regression_fits,
-                                  raincloud_density, raincloud_jitter)
+                                  raincloud_density, raincloud_jitter, heatmap_cluster_plan)
 
 # -- dark-theme hex palette --------------------------------------------------
 # Copied verbatim from graphlink_config.py's THEME_TOKENS["dark"] (the app's
@@ -514,9 +514,12 @@ def _render_boxplot(ax, chart_data: dict[str, Any], theme: dict[str, Any],
 
 def _render_heatmap(figure, ax, chart_data: dict[str, Any],
                     theme: dict[str, Any], layout_width: float) -> bool:
-    rows = chart_data["rowLabels"]
-    columns = chart_data["columnLabels"]
-    matrix = chart_data["matrix"]
+    mode = chart_data.get("analysis", {}).get("clustering")
+    plan = heatmap_cluster_plan(chart_data["matrix"], mode)
+    rows = [chart_data["rowLabels"][i] for i in plan["rowOrder"]]
+    columns = [chart_data["columnLabels"][i] for i in plan["columnOrder"]]
+    matrix = [[chart_data["matrix"][i][j] for j in plan["columnOrder"]]
+              for i in plan["rowOrder"]]
     smallest = min(min(row) for row in matrix)
     largest = max(max(row) for row in matrix)
     norm: Normalize
@@ -555,8 +558,41 @@ def _render_heatmap(figure, ax, chart_data: dict[str, Any],
     if shown[-1] != len(rows) - 1:
         shown.append(len(rows) - 1)
     ax.set_yticks(shown, [_wrap_label(rows[i], 14, 2) for i in shown])
-    ax.set_xlim(-0.5, len(columns) - 0.5)
-    ax.set_ylim(len(rows) - 0.5, -0.5)
+    # Draw deterministic UPGMA dendrograms outside the heatmap's cell
+    # coordinates. Preserve identical ticks and physical unit values.
+    def draw_tree(tree, order, axis):
+        if not tree or "left" not in tree:
+            return
+        positions = {leaf: i for i, leaf in enumerate(order)}
+        max_height = tree["height"]
+
+        def visit(node):
+            if "leaf" in node:
+                return (-0.5, positions[node["leaf"]]) if axis == "rows" else (positions[node["leaf"]], -0.5)
+            a, b = visit(node["left"]), visit(node["right"])
+            ratio = (node["height"] / max_height if max_height > 0
+                     else node["depth"] / tree["depth"])
+            if axis == "rows":
+                x = -0.6 - 1.8 * ratio
+                ax.plot([a[0], x, x, b[0]], [a[1], a[1], b[1], b[1]],
+                        color=theme["muted"], linewidth=0.75, zorder=5)
+                return (x, (a[1] + b[1]) / 2)
+            y = -0.6 - 1.8 * ratio
+            ax.plot([a[0], a[0], b[0], b[0]], [a[1], y, y, b[1]],
+                    color=theme["muted"], linewidth=0.75, zorder=5)
+            return ((a[0] + b[0]) / 2, y)
+
+        visit(tree)
+
+    draw_tree(plan["rowTree"], plan["rowOrder"], "rows")
+    draw_tree(plan["columnTree"], plan["columnOrder"], "columns")
+    ax.set_xlim(-2.6 if plan["rowTree"] and plan["rowTree"].get("left") else -0.5,
+                len(columns) - 0.5)
+    ax.set_ylim(len(rows) - 0.5,
+                -2.6 if plan["columnTree"] and plan["columnTree"].get("left") else -0.5)
+    if mode:
+        ax.set_title("Average-linkage clustered heatmap (Euclidean)", fontsize=8,
+                     color=theme["text"], loc="left")
     colorbar = figure.colorbar(image, ax=ax, fraction=0.045, pad=0.04)
     colorbar.ax.tick_params(colors=theme["muted"], labelsize=8)
     colorbar.outline.set_edgecolor(theme["border"])

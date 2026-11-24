@@ -139,6 +139,7 @@ export interface ChartAnalysis {
   annotations: ChartAnnotation[];
   regression?: "ols95";
   distribution?: "raincloud";
+  clustering?: "rows" | "columns" | "both";
 }
 
 export const EMPTY_CHART_ANALYSIS: ChartAnalysis = { lockX: false, lockY: false, annotations: [] };
@@ -156,11 +157,11 @@ export function canonicalizeChartAnalysis(
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new ChartSpecError("Chart analysis must be an object");
   }
-  if (!["line", "scatter", "histogram", "boxplot"].includes(type)) {
+  if (!["line", "scatter", "histogram", "boxplot", "heatmap"].includes(type)) {
     throw new ChartSpecError("Chart analysis is only supported on cartesian analysis charts");
   }
   const raw = value as Record<string, unknown>;
-  if (Object.keys(raw).some((key) => !["lockX", "lockY", "xRange", "yRange", "annotations", "regression", "distribution"].includes(key))) {
+  if (Object.keys(raw).some((key) => !["lockX", "lockY", "xRange", "yRange", "annotations", "regression", "distribution", "clustering"].includes(key))) {
     throw new ChartSpecError("Unknown chart analysis field");
   }
   const result: ChartAnalysis = { lockX: false, lockY: false, annotations: [] };
@@ -199,6 +200,12 @@ export function canonicalizeChartAnalysis(
       throw new ChartSpecError("Raincloud distributions require a box plot");
     }
     result.distribution = "raincloud";
+  }
+  if ("clustering" in raw) {
+    if (type !== "heatmap" || !["rows", "columns", "both"].includes(raw.clustering as string)) {
+      throw new ChartSpecError("Heatmap clustering requires a heatmap and rows, columns, or both");
+    }
+    result.clustering = raw.clustering as "rows" | "columns" | "both";
   }
   if (raw.annotations !== undefined && (!Array.isArray(raw.annotations) || raw.annotations.length > 60)) {
     throw new ChartSpecError("Chart annotations must be a list of at most 60 items");
@@ -248,6 +255,9 @@ export function canonicalizeChartAnalysis(
       }
       result.annotations.push({ kind: "region", axis: item.axis, from: start, to: end });
     }
+  }
+  if (type === "heatmap" && (result.lockX || result.lockY || result.xRange || result.yRange || result.annotations.length)) {
+    throw new ChartSpecError("Heatmap analysis supports only clustering");
   }
   return result;
 }

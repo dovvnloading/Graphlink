@@ -17,10 +17,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { IconButton } from "../../ui/IconButton";
+import { ToggleButton } from "../../ui/ToggleButton";
 import { supportsChartAnalysis } from "./chartViewport";
 import { ChartAnalysisPane } from "./ChartAnalysisPane";
 import type { ChartDataRow } from "../../../lib/bridge-core/generated/scene-state";
-import { canonicalizeChartSpec, ChartSpecError, usesScientificMarks, type ChartAnalysis } from "../chartSpec";
+import { canonicalizeChartSpec, canonicalizeChartAnalysis, ChartSpecError, usesScientificMarks, type ChartAnalysis } from "../chartSpec";
 import { useChartTheme, useElementSize } from "./chartHooks";
 import { useZoomPane } from "./useZoomPane";
 import { ChartTooltip, type TooltipContent } from "./ChartTooltip";
@@ -64,6 +65,8 @@ function ChartRenderer({ chartType, chartData, onAnalysisChange }: ChartRenderer
     };
   }, [interactive, wrapperRef]);
   const [hover, setHover] = useState<TooltipContent | null>(null);
+  const [heatmapPending, setHeatmapPending] = useState<{ source: ChartDataRow; value: ChartAnalysis } | null>(null);
+  const [heatmapError, setHeatmapError] = useState("");
 
   const canonical = useMemo(() => {
     try {
@@ -79,6 +82,26 @@ function ChartRenderer({ chartType, chartData, onAnalysisChange }: ChartRenderer
         <span>{canonical.error ?? "Chart unavailable"}</span>
       </div>
     );
+  }
+
+  const heatmapAnalysis = canonical.data.analysis;
+  const heatmapData = heatmapPending?.source === canonical.data
+    ? { ...canonical.data, analysis: heatmapPending.value } : canonical.data;
+  const heatmapClustering = heatmapData.analysis?.clustering;
+  function changeHeatmapMode(next: "rows" | "columns" | "both" | undefined) {
+    if (!canonical.data) return;
+    try {
+      const analysis = { lockX: false, lockY: false, annotations: [] as [], ...(next ? { clustering: next } : {}) };
+      const normalized = canonicalizeChartAnalysis(analysis, "heatmap", "linear", "linear", canonical.data);
+      setHeatmapError("");
+      setHeatmapPending({ source: canonical.data, value: normalized });
+      Promise.resolve(onAnalysisChange?.(normalized)).catch((error: unknown) => {
+        setHeatmapPending(null);
+        setHeatmapError(error instanceof Error ? error.message : "Could not save heatmap clustering");
+      });
+    } catch (error) {
+      setHeatmapError(error instanceof Error ? error.message : "Invalid clustering mode");
+    }
   }
 
   // Domain-based interactions for numerical analysis, preserving the default
@@ -100,7 +123,7 @@ function ChartRenderer({ chartType, chartData, onAnalysisChange }: ChartRenderer
   }
 
   const marksProps = {
-    chartData: canonical.data,
+    chartData: chartType === "heatmap" ? heatmapData : canonical.data,
     theme,
     width: size.width,
     height: plotHeight,
@@ -113,6 +136,17 @@ function ChartRenderer({ chartType, chartData, onAnalysisChange }: ChartRenderer
       onPointerDownCapture={() => setInteractive(true)} onFocusCapture={() => setInteractive(true)}>
       <div className="chart-legacy-toolbar nodrag">
         <IconButton icon="fit-view" label="Reset zoom" shortcut="Home" size="sm" disabled={!isZoomed} onClick={reset} />
+        {chartType === "heatmap" && <>
+          <ToggleButton size="sm" label="Cluster rows" pressed={heatmapClustering === "rows" || heatmapClustering === "both"}
+            onPressedChange={(pressed) => changeHeatmapMode(pressed
+              ? heatmapClustering === "columns" ? "both" : "rows"
+              : heatmapClustering === "both" ? "columns" : undefined)} />
+          <ToggleButton size="sm" label="Cluster columns" pressed={heatmapClustering === "columns" || heatmapClustering === "both"}
+            onPressedChange={(pressed) => changeHeatmapMode(pressed
+              ? heatmapClustering === "rows" ? "both" : "columns"
+              : heatmapClustering === "both" ? "rows" : undefined)} />
+          {heatmapError && <span role="alert">{heatmapError}</span>}
+        </>}
       </div>
       {size.width > 0 && size.height > 0 && (
         <svg
