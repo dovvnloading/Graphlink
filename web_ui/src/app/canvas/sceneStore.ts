@@ -36,6 +36,10 @@ import type { HarnessHook } from "./HarnessNodeView";
 import { announce } from "../announcer";
 import { describeNodeRunTransition } from "./nodeRunAnnouncements";
 import {
+  parseMcpApprovals, parseMcpAttempts, parseMcpCatalog, parseMcpParents, parseMcpPreview, parseMcpToolStatus,
+  type McpApproval, type McpAttempt, type McpCatalog, type McpConfigureArgs, type McpParent, type McpPreview, type McpToolStatus,
+} from "./mcpConnect";
+import {
   parseHarnessWorkspaceDocument,
   parseHarnessWorkspaceListing,
   type HarnessWorkspaceDocument,
@@ -1311,6 +1315,51 @@ export class SceneStore {
 
   cancelWebResearchRequest(requestId: string): void {
     this.transport.fireIntent("scene", "cancelWebResearchRequest", [requestId]);
+  }
+
+  async listMcpTools(serverId: string): Promise<McpCatalog> {
+    return parseMcpCatalog(await this.transport.request("scene", "listMcpTools", [serverId], 120_000));
+  }
+
+  async getMcpToolSources(nodeId: string): Promise<McpParent[]> {
+    return parseMcpParents(await this.transport.request("scene", "getMcpToolSources", [nodeId]));
+  }
+
+  async getMcpToolStatus(nodeId: string): Promise<McpToolStatus> {
+    return parseMcpToolStatus(await this.transport.request("scene", "getMcpToolStatus", [nodeId]));
+  }
+
+  async configureMcpTool(nodeId: string, configuration: McpConfigureArgs): Promise<void> {
+    await this.transport.request("scene", "configureMcpTool", [nodeId, configuration], 120_000);
+  }
+
+  async previewMcpTool(nodeId: string): Promise<McpPreview> {
+    return parseMcpPreview(await this.transport.request("scene", "previewMcpTool", [nodeId], 120_000));
+  }
+
+  /** Explicit external calls are never queued or retried after a lost reply. */
+  runMcpTool(nodeId: string, previewToken: string, operationId: string): Promise<GraphRun> {
+    return this.transport.request("scene", "runMcpTool", [nodeId, previewToken, operationId], 10 * 60_000) as Promise<GraphRun>;
+  }
+
+  async cancelMcpTool(nodeId: string): Promise<void> {
+    await this.transport.request("scene", "cancelMcpTool", [nodeId]);
+  }
+
+  async getMcpToolApprovals(): Promise<McpApproval[]> {
+    return parseMcpApprovals(await this.transport.request("scene", "getMcpToolApprovals", []));
+  }
+
+  async approveMcpTool(approvalId: string, approved: boolean): Promise<void> {
+    await this.transport.request("scene", "approveMcpTool", [approvalId, approved]);
+  }
+
+  async getMcpToolAttempts(nodeId: string): Promise<McpAttempt[]> {
+    return parseMcpAttempts(await this.transport.request("scene", "getMcpToolAttempts", [nodeId]));
+  }
+
+  async reconcileMcpTool(nodeId: string, requestId: string): Promise<void> {
+    await this.transport.request("scene", "reconcileMcpTool", [nodeId, requestId]);
   }
 
   // ADR-008 stage 8.3: the Builder's run controls - same requestId-shaped

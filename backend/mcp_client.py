@@ -1,40 +1,9 @@
-"""ADR-007 stage 7.5: a minimal, hand-rolled MCP (Model Context Protocol)
-CLIENT - stdio transport, JSON-RPC 2.0, newline-delimited framing (the
-transport MCP servers overwhelmingly ship as - a filesystem/git/search MCP
-server is a local subprocess, not a network service). Hand-rolled rather
-than depending on the official `mcp` package for the same reason
-graphlink_wire_schema.py hand-rolls its own dataclass->JSON-Schema
-generator instead of pydantic (see that module's own docstring): the
-protocol surface this app actually needs - initialize, tools/list,
-tools/call - is small and closed, and a new runtime dependency is not a
-decision to make lightly in a codebase whose own ADR-005 stage 5.5 exists
-specifically because of a hostile-sdist supply-chain finding. HTTP
-transport (the ADR's own "stdio/HTTP per the MCP spec" line) is deferred:
-every commonly-used MCP server today (filesystem, git, search) ships as a
-stdio subprocess, and adding a second transport with no server to
-exercise it against would be speculative surface, not a tested capability.
+"""Bounded MCP clients and Builder registration.
 
-NOT an MCP *server* (exposing GraphLink's own tools outward) - explicitly
-out of this ADR's scope (see its own "Decision" section, item 4).
-
-This module owns exactly two things:
-1. McpStdioClient - the JSON-RPC session with one running MCP server
-   subprocess (connect/list_tools/call_tool/close).
-2. register_mcp_server_tools - the glue that lists a connected client's
-   tools and registers each into a backend.tools.ToolRegistry, namespaced
-   `mcp:<server>:<tool>` (per the ADR's own decision), scope-mapped, and
-   approval-gated - MCP servers are untrusted by default (arbitrary user-
-   configured code, not a first-party tool), so approval defaults to
-   "always" unless the caller explicitly relaxes it.
-
-Where a configured server's settings actually LIVE (SettingsManager, see
-graphlink_settings_store.py's own get_mcp_servers/set_mcp_servers) and the
-Settings UI panel to edit them are separate concerns: the ADR's own
-"Consequences" section defers the UI surface to ADR-012 ("Settings gain an
-MCP configuration surface"). This stage's exit criterion - "a configured
-filesystem MCP server's tool is callable, namespaced, approval-gated" - is
-satisfied by the client + registry glue + the persisted config SHAPE, not
-by a finished settings panel.
+Stdio retains the established 2024 handshake. Streamable HTTP negotiates
+the 2025 protocol family in backend.mcp_http. Both expose the same tool
+metadata and structured results, while retaining ToolSpec/ToolResult
+compatibility for Builder. Servers remain untrusted and approval-gated.
 """
 
 from __future__ import annotations
@@ -42,12 +11,13 @@ from __future__ import annotations
 import asyncio
 import collections
 import json
+import math
 import queue
 import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Protocol
 
 from backend.providers.base import ToolCall, ToolSpec
 from backend.tools import RunContext, ToolRegistry, ToolResult
@@ -137,6 +107,150 @@ class McpError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class McpToolSpec(ToolSpec):
+    """MCP metadata kept alongside the provider-neutral tool definition.
+
+    Annotations are server-supplied hints, never permission grants.
+    """
+
+    output_schema: dict | None = None
+    annotations: dict = field(default_factory=dict)
+    title: str = ""
+
+
+@dataclass(frozen=True)
+class McpToolResult(ToolResult):
+    """A bounded lossless result for graph nodes, plus Builder's text view."""
+
+    content_blocks: tuple[dict, ...] = ()
+    structured_content: dict | list | None = None
+    truncated: bool = False
+
+
+class McpClient(Protocol):
+    @property
+    def is_connected(self) -> bool: ...
+
+    def connect(self) -> None: ...
+    def close(self) -> None: ...
+    def list_tools(self) -> tuple[McpToolSpec, ...]: ...
+    def call_tool(self, name: str, arguments: dict) -> McpToolResult: ...
+
+
+MAX_MCP_TOOLS = 2_000
+MAX_MCP_TOOL_PAGES = 100
+MAX_MCP_SCHEMA_CHARS = 256_000
+MAX_MCP_CATALOGUE_CHARS = 2_000_000
+MAX_MCP_RESULT_CHARS = 2_000_000
+
+
+def _json_size(value: Any) -> int:
+    try:
+        return len(json.dumps(value, ensure_ascii=True, allow_nan=False))
+    except (ValueError, TypeError, RecursionError) as exc:
+        raise McpError("MCP server returned invalid or excessively nested JSON data.") from exc
+
+
+def list_mcp_tools(call: Callable[[str, dict], dict]) -> tuple[McpToolSpec, ...]:
+    """Read a complete, bounded catalogue, rejecting ambiguous identities."""
+    specs: list[McpToolSpec] = []
+    names: set[str] = set()
+    cursors: set[str] = set()
+    params: dict = {}
+    catalogue_size = 0
+    for _ in range(MAX_MCP_TOOL_PAGES):
+        response = call("tools/list", params)
+        raw_tools = response.get("tools")
+        if not isinstance(raw_tools, list):
+            raw_tools = []
+        for tool in raw_tools:
+            if not isinstance(tool, dict):
+                continue
+            name = tool.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            if name in names:
+                raise McpError("MCP server advertised a duplicate tool name. Refresh after fixing the server.")
+            if len(name) > 256 or any(ord(char) < 32 for char in name):
+                continue
+            names.add(name)
+            description = str(tool.get("description") or "")
+            if len(description) > MAX_TOOL_DESCRIPTION_CHARS:
+                omitted = len(description) - MAX_TOOL_DESCRIPTION_CHARS
+                description = description[:MAX_TOOL_DESCRIPTION_CHARS] + f"...[truncated, {omitted} more characters omitted]"
+            input_schema = tool.get("inputSchema")
+            if not isinstance(input_schema, dict):
+                input_schema = {"type": "object"}
+            output_schema = tool.get("outputSchema")
+            if not isinstance(output_schema, dict):
+                output_schema = None
+            schema_size = _json_size([input_schema, output_schema])
+            if schema_size > MAX_MCP_SCHEMA_CHARS:
+                raise McpError("MCP tool schema is too large. Reduce the server's schema and refresh.")
+            catalogue_size += schema_size + len(description) + len(name)
+            if catalogue_size > MAX_MCP_CATALOGUE_CHARS:
+                raise McpError("MCP tool catalogue is too large. Reduce it and refresh.")
+            raw_annotations = tool.get("annotations")
+            annotations = {
+                key: value for key, value in (raw_annotations.items() if isinstance(raw_annotations, dict) else ())
+                if key in {"readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"}
+                and isinstance(value, bool)
+            }
+            title = str(tool.get("title") or "")[:256]
+            specs.append(McpToolSpec(
+                name=name, description=description, input_schema=input_schema,
+                output_schema=output_schema, annotations=annotations, title=title,
+            ))
+            if len(specs) > MAX_MCP_TOOLS:
+                raise McpError("MCP server advertised too many tools. Reduce the catalogue and refresh.")
+        cursor = response.get("nextCursor")
+        if not cursor:
+            return tuple(specs)
+        if not isinstance(cursor, str) or len(cursor) > 4_096 or cursor in cursors:
+            raise McpError("MCP server returned an invalid or repeated catalogue cursor.")
+        cursors.add(cursor)
+        params = {"cursor": cursor}
+    raise McpError("MCP tool catalogue exceeded its page limit.")
+
+
+def parse_mcp_result(response: dict) -> McpToolResult:
+    """Retain structured data even when a tool also supplies text blocks.
+
+    Large payloads are visibly truncated and lose their structured binding
+    value, rather than quietly persisting incomplete JSON as a full result.
+    """
+    if response.get("resultType") == "input_required":
+        raise McpError("This MCP tool requires an interactive continuation that this client does not support.")
+    content = response.get("content", [])
+    if not isinstance(content, list):
+        raise McpError("tools/call returned an invalid content list")
+    blocks = tuple(block for block in content if isinstance(block, dict))
+    structured = response.get("structuredContent")
+    if not isinstance(structured, (dict, list)):
+        structured = None
+    text_parts = [str(block.get("text", "")) for block in blocks if block.get("type") == "text"]
+    result_text = "\n".join(text_parts)
+    result_size = _json_size([blocks, structured])
+    if not text_parts and structured is not None:
+        result_text = json.dumps(structured, ensure_ascii=True)
+    truncated = len(result_text) > MAX_TOOL_RESULT_CHARS
+    if truncated:
+        result_text = (
+            result_text[:MAX_TOOL_RESULT_CHARS]
+            + f"\n...[truncated, {len(result_text) - MAX_TOOL_RESULT_CHARS} more characters omitted]"
+        )
+    if result_size > MAX_MCP_RESULT_CHARS:
+        truncated = True
+        structured = None
+        result_text += "\n[Structured data and content blocks omitted: result exceeds the storage limit.]"
+        blocks = ({"type": "text", "text": result_text},)
+    return McpToolResult(
+        content=result_text, is_error=bool(response.get("isError", False)),
+        content_blocks=blocks, structured_content=structured, truncated=truncated,
+    )
+
+
+@dataclass(frozen=True)
 class McpServerConfig:
     """One configured MCP server - the persisted shape SettingsManager
     stores (graphlink_settings_store.py's own get_mcp_servers/
@@ -153,7 +267,7 @@ class McpServerConfig:
     opted into is silently skipped, not registered read-only-by-default."""
 
     name: str
-    command: str
+    command: str = ""
     args: tuple[str, ...] = ()
     scopes: frozenset[str] = frozenset()
     approval: str = "always"
@@ -169,7 +283,11 @@ class McpServerConfig:
     # whole environment, so every such server silently received every
     # provider key the user had configured as an env var - the exact leak
     # safe_subprocess_env was written to close at every other spawn site.
-    env: dict[str, str] = field(default_factory=dict)
+    env: dict[str, str] = field(default_factory=dict, repr=False)
+    id: str = ""
+    transport: str = "stdio"
+    url: str = ""
+    headers: dict[str, str] = field(default_factory=dict, repr=False)
 
     def to_dict(self) -> dict:
         return {
@@ -182,6 +300,10 @@ class McpServerConfig:
             "enabled": self.enabled,
             "timeout": self.timeout,
             "env": dict(self.env),
+            "id": self.id,
+            "transport": self.transport,
+            "url": self.url,
+            "headers": dict(self.headers),
         }
 
     @classmethod
@@ -196,6 +318,10 @@ class McpServerConfig:
             enabled=bool(data.get("enabled", True)),
             timeout=float(data.get("timeout", 30.0) or 30.0),
             env=_coerce_env(data.get("env")),
+            id=str(data.get("id") or "").strip(),
+            transport=str(data.get("transport") or "stdio").strip(),
+            url=str(data.get("url") or "").strip(),
+            headers=_coerce_env(data.get("headers")),
         )
 
 
@@ -214,6 +340,23 @@ def _coerce_env(raw: object) -> dict[str, str]:
             continue
         out[name] = str(value)
     return out
+
+
+def create_mcp_client(config: McpServerConfig) -> McpClient:
+    """Create a disconnected client; credentials never enter a node receipt."""
+    if not math.isfinite(config.timeout) or not 1 <= config.timeout <= 300:
+        raise McpError("MCP timeout must be between 1 and 300 seconds.")
+    if not config.enabled:
+        raise McpError("This MCP server is disabled. Enable it in Settings before connecting.")
+    if config.transport == "streamable_http":
+        from backend.mcp_http import McpHttpClient
+
+        return McpHttpClient(url=config.url, headers=config.headers, timeout=config.timeout)
+    if config.transport != "stdio":
+        raise McpError("Unsupported MCP transport. Choose stdio or Streamable HTTP.")
+    if not config.command:
+        raise McpError("Set the MCP server command in Settings before connecting.")
+    return McpStdioClient(command=config.command, args=config.args, env=config.env, timeout=config.timeout)
 
 
 class McpStdioClient:
@@ -332,89 +475,12 @@ class McpStdioClient:
                 if stream is not None:
                     stream.close()
 
-    def list_tools(self) -> tuple[ToolSpec, ...]:
-        response = self._call("tools/list", {})
-        raw_tools = response.get("tools") if isinstance(response, dict) else None
-        if not isinstance(raw_tools, list):
-            raw_tools = []
-        specs: list[ToolSpec] = []
-        for tool in raw_tools:
-            # REVIEW-FIX: a spec-noncompliant server's tools/list response
-            # (a non-dict entry, a missing/null/blank "name") used to crash
-            # via an uncaught KeyError/TypeError - the only real caller
-            # (agents.py's _register_configured_mcp_tools) only catches
-            # (McpError, OSError), so this took down the WHOLE Builder tool
-            # registry for the session, every other configured server's
-            # tools included, not just this one's. Same "drop the bad
-            # entry, keep the rest" posture as graphlink_settings_store.py's
-            # get_mcp_servers for a malformed persisted server entry.
-            if not isinstance(tool, dict):
-                continue
-            name = tool.get("name")
-            if not isinstance(name, str) or not name.strip():
-                continue
-            # SECURITY-FIX: cap the untrusted description at
-            # MAX_TOOL_DESCRIPTION_CHARS (see that constant's own comment) -
-            # truncated with an explicit marker, mirroring how a truncated
-            # value is signalled anywhere else in this codebase, so a
-            # shortened description reads as "cut off", never as the
-            # server's complete, honest text.
-            description = str(tool.get("description") or "")
-            if len(description) > MAX_TOOL_DESCRIPTION_CHARS:
-                omitted = len(description) - MAX_TOOL_DESCRIPTION_CHARS
-                description = (
-                    description[:MAX_TOOL_DESCRIPTION_CHARS]
-                    + f"...[truncated, {omitted} more characters omitted]"
-                )
-            # SECURITY-FIX: `tool.get("inputSchema") or {...}` only falls
-            # back to the safe default when inputSchema is missing/None/
-            # falsy - a non-dict value (e.g. a hostile server sending a
-            # plain string or a list) is truthy and was being forwarded
-            # as-is straight into ToolSpec.input_schema, which every
-            # provider's tool-call translation assumes is a JSON Schema
-            # dict (see ToolSpec's own docstring). That broke the provider
-            # call downstream instead of degrading gracefully. Validate the
-            # TYPE explicitly so a non-dict schema falls back the same way
-            # a missing one already does.
-            input_schema = tool.get("inputSchema")
-            if not isinstance(input_schema, dict):
-                input_schema = {"type": "object"}
-            specs.append(ToolSpec(
-                name=name,
-                description=description,
-                input_schema=input_schema,
-            ))
-        return tuple(specs)
+    def list_tools(self) -> tuple[McpToolSpec, ...]:
+        return list_mcp_tools(self._call)
 
-    def call_tool(self, name: str, arguments: dict) -> ToolResult:
+    def call_tool(self, name: str, arguments: dict) -> McpToolResult:
         response = self._call("tools/call", {"name": name, "arguments": dict(arguments or {})})
-        content = response.get("content", [])
-        if not isinstance(content, list):
-            raise McpError("tools/call returned an invalid content list")
-        # MCP's own content-block shape (a list of {"type": "text", "text":
-        # ...} - the ADR's own ToolSpec docstring already documents the
-        # OpenAPI-schema caveat for the request side; this is the mirror
-        # concession on the response side) - only text blocks are supported
-        # today, matching every other ToolResult in this codebase being a
-        # plain string; a non-text block (image/resource) is skipped rather
-        # than crashing the call, since a partial answer beats a hard failure.
-        text_parts = [
-            str(block.get("text", ""))
-            for block in content
-            if isinstance(block, dict) and block.get("type") == "text"
-        ]
-        result_text = "\n".join(text_parts)
-        if not text_parts and isinstance(response.get("structuredContent"), (dict, list)):
-            # Modern MCP tools may return structuredContent without any
-            # accompanying text blocks. Previously this looked like an
-            # empty success even though the server returned useful data.
-            result_text = json.dumps(response["structuredContent"], ensure_ascii=True)
-        if len(result_text) > MAX_TOOL_RESULT_CHARS:
-            result_text = (
-                result_text[:MAX_TOOL_RESULT_CHARS]
-                + f"\n...[truncated, {len(result_text) - MAX_TOOL_RESULT_CHARS} more characters omitted]"
-            )
-        return ToolResult(content=result_text, is_error=bool(response.get("isError", False)))
+        return parse_mcp_result(response)
 
     # -- JSON-RPC framing ------------------------------------------------
 
@@ -647,7 +713,7 @@ class McpStdioClient:
 
 
 def register_mcp_server_tools(
-    registry: ToolRegistry, client: McpStdioClient, config: McpServerConfig,
+    registry: ToolRegistry, client: McpClient, config: McpServerConfig,
 ) -> tuple[str, ...]:
     """Lists `client`'s tools and registers each into `registry` (a
     backend.tools.ToolRegistry) as `mcp:<config.name>:<tool name>`, scoped
@@ -672,7 +738,7 @@ def register_mcp_server_tools(
     return tuple(registered)
 
 
-def _make_mcp_handler(client: McpStdioClient, real_tool_name: str) -> Callable[[Any, "RunContext"], Awaitable[ToolResult]]:
+def _make_mcp_handler(client: McpClient, real_tool_name: str) -> Callable[[Any, "RunContext"], Awaitable[ToolResult]]:
     """One handler per real (un-namespaced) tool name - a closure rather
     than a shared handler keying off call.name, since call.name for an
     MCP-backed registration is the NAMESPACED name (mcp:<server>:<tool>),

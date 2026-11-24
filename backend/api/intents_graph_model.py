@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 from backend.api.intents_graph_runner import _digest, _public_run, _public_step
 from backend.domain.graph import SceneDocument
 from backend.domain.graph_run_external import ExternalCall, dispatch_external_attempt
-from backend.domain.graph_run_history import RUN_HISTORY_LIMIT, RUN_ID
+from backend.domain.graph_run_history import RUN_HISTORY_LIMIT, RUN_ID, can_prune_run
 from backend.domain.graph_model_binding import validate_local_model_identity
 from backend.domain.model import SceneError
 from backend.domain.node_states import ModelState, NoteState
@@ -196,7 +196,7 @@ def register_graph_model_runner(
         pinned_binding_id = binding_id
         step.update(status="pending", detail="Waiting for the durable request checkpoint.")
         if len(document.graph_runs) >= RUN_HISTORY_LIMIT:
-            finished = next((item for item in document.graph_runs if item["status"] in {"completed", "partial"}), None)
+            finished = next((item for item in document.graph_runs if can_prune_run(item, document.graph_runs)), None)
             if finished is None:
                 raise IntentValidationError(["Run history is full of unfinished work. Reconcile an earlier run."])
             document.graph_runs.remove(finished)

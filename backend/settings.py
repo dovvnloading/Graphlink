@@ -134,6 +134,8 @@ def _api_model_catalog_for_wire(manager: SettingsManager, provider: str) -> list
 
 
 def _mcp_servers_for_wire(manager: SettingsManager) -> list[dict[str, Any]]:
+    from backend.mcp_http import http_endpoint_for_wire
+
     # SettingsManager.get_mcp_servers (graphlink_settings_store.py) always
     # returns snake_case enabled_tools keys - its own internal convention,
     # not this payload's - same boundary-mapping posture as
@@ -144,6 +146,8 @@ def _mcp_servers_for_wire(manager: SettingsManager) -> list[dict[str, Any]]:
         {
             "id": entry["id"],
             "name": entry["name"],
+            "transport": entry.get("transport", "stdio"),
+            "url": http_endpoint_for_wire(entry.get("url", "")),
             "command": entry["command"],
             "args": list(entry.get("args", [])),
             "scopes": list(entry.get("scopes", [])),
@@ -161,6 +165,7 @@ def _mcp_servers_for_wire(manager: SettingsManager) -> list[dict[str, Any]]:
             # it now receives only what it displays, and a value the user
             # wants to change is retyped, exactly like an API key.
             "envKeys": sorted(str(k) for k in (entry.get("env") or {})),
+            "headerKeys": sorted(str(k) for k in (entry.get("headers") or {})),
         }
         for entry in manager.get_mcp_servers()
     ]

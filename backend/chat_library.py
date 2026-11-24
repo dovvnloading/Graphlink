@@ -59,6 +59,7 @@ from backend.canvas import SceneDocument
 from backend.domain.node_states import ChatState
 from backend.api.intents_graph_runner import register_graph_runner
 from backend.api.intents_graph_model import register_graph_model_runner
+from backend.api.intents_mcp_connect import register_mcp_connect
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.session_load import restore_chat_into_document
@@ -3674,6 +3675,10 @@ def register_chat_library(
     )
 
     if canvas_document is not None:
+        register_mcp_connect(
+            bus, canvas_document, settings_manager,
+            lambda: save_chat(checkpoint=True), _serialize_mutating_intent,
+        )
         register_graph_runner(
             bus, canvas_document, lambda: save_chat(checkpoint=True), _serialize_mutating_intent,
             settings_manager=settings_manager,

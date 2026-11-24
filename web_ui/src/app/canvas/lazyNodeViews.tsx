@@ -182,3 +182,6 @@ export const WebResearchNodeView = withNodeSuspense(
 export const ScientificNodeView = withNodeSuspense(
   lazy(() => import("./ScientificNodeView").then((m) => ({ default: m.ScientificNodeView }))),
 );
+export const McpToolNodeView = withNodeSuspense(
+  lazy(() => import("./McpToolNodeView").then((m) => ({ default: m.McpToolNodeView }))),
+);

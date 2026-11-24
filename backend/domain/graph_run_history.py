@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any
 
 from backend.domain.graph_run_external import RECONCILIATION_DETAIL, restore_external_attempt
@@ -13,6 +14,60 @@ RUN_ID = re.compile(r"[a-zA-Z0-9_-]{8,100}")
 DIGEST = re.compile(r"[a-f0-9]{64}")
 _RUN_STATUSES = {"completed", "partial", "cancelled", "running", "interrupted", "reconciliation-required"}
 _STEP_STATUSES = {"pending", "current", "completed", "blocked", "failed", "cancelled", "running", "reconciliation-required"}
+
+
+def _superseded_tool_fence(step: dict[str, Any], history: Any) -> bool:
+    """A later successful call can replace an acknowledged refresh barrier."""
+    node_id = step.get("nodeId")
+    barrier_time = _timestamp(step.get("finishedAt")) or _timestamp(step.get("startedAt"))
+    if not isinstance(node_id, str) or not node_id or barrier_time is None or not isinstance(history, list):
+        return False
+    barrier = datetime.fromisoformat(barrier_time.replace("Z", "+00:00"))
+    for run in history:
+        if not isinstance(run, dict) or not isinstance(run.get("steps"), list):
+            continue
+        for candidate in run["steps"]:
+            if (not isinstance(candidate, dict) or candidate.get("nodeId") != node_id
+                    or candidate.get("kind") != "tool" or candidate.get("status") != "completed"
+                    or candidate.get("errorType") == "tool_error"
+                    or not isinstance(candidate.get("outputHash"), str) or not DIGEST.fullmatch(candidate["outputHash"])):
+                continue
+            attempt = restore_external_attempt(candidate.get("externalAttempt"))
+            started = _timestamp(candidate.get("startedAt"))
+            finished = _timestamp(candidate.get("finishedAt"))
+            if (attempt is not None and attempt["kind"] == "tool" and attempt["phase"] == "completed"
+                    and attempt["inputHash"] == candidate.get("inputHash") and started and finished
+                    and datetime.fromisoformat(finished.replace("Z", "+00:00"))
+                    >= datetime.fromisoformat(started.replace("Z", "+00:00")) > barrier):
+                return True
+    return False
+
+
+def can_prune_run(run: Any, history: Any = None) -> bool:
+    """Retire finished history only when it cannot erase an uncertain request.
+
+    A cancelled/partial run can still contain a dispatched external fence.
+    Check the steps and validated fences, never just the top-level status.
+    Invalid journals remain visible for reconciliation rather than being
+    mistaken for proof that an external request was never sent.
+    An acknowledged tool request still invalidates older saved output across
+    undo. Retain that barrier until a later successful call supersedes it.
+    """
+    if (not isinstance(run, dict) or not isinstance(run.get("status"), str)
+            or run["status"] not in {"completed", "partial", "cancelled"}
+            or not isinstance(run.get("steps"), list)):
+        return False
+    for step in run["steps"]:
+        if (not isinstance(step, dict) or not isinstance(step.get("status"), str)
+                or step["status"] not in _STEP_STATUSES or step["status"] in {"running", "reconciliation-required"}):
+            return False
+        if "externalAttempt" in step:
+            attempt = restore_external_attempt(step["externalAttempt"])
+            if attempt is None or attempt["phase"] not in {"completed", "reconciled"}:
+                return False
+            if attempt["kind"] == "tool" and attempt["phase"] == "reconciled" and not _superseded_tool_fence(step, history):
+                return False
+    return True
 
 
 def _restore_step(raw: Any, ids: dict[str, str]) -> dict[str, Any] | None:
@@ -27,7 +82,7 @@ def _restore_step(raw: Any, ids: dict[str, str]) -> dict[str, Any] | None:
     for key in ("inputHash", "configHash", "targetHash"):
         if step[key] and not DIGEST.fullmatch(step[key]):
             return None
-    if raw["kind"] == "model" and "endpointHash" in raw:
+    if raw["kind"] in {"model", "tool"} and "endpointHash" in raw:
         if not isinstance(raw["endpointHash"], str) or not DIGEST.fullmatch(raw["endpointHash"]):
             return None
         step["endpointHash"] = raw["endpointHash"]
@@ -47,6 +102,22 @@ def _restore_step(raw: Any, ids: dict[str, str]) -> dict[str, Any] | None:
             identifier = _identifier(raw.get(key))
             if identifier is not None:
                 step[key] = identifier
+    if step["kind"] == "tool":
+        for key in ("serverId", "toolName"):
+            value = raw.get(key)
+            if isinstance(value, str) and 0 < len(value) <= 256:
+                step[key] = value
+        if raw.get("errorType") == "tool_error":
+            step["errorType"] = "tool_error"
+        if "sourceIds" in raw:
+            raw_sources = raw["sourceIds"]
+            if (not isinstance(raw_sources, list) or len(raw_sources) > 64
+                    or any(not isinstance(source, str) or not source for source in raw_sources)
+                    or len(set(raw_sources)) != len(raw_sources)):
+                return None
+            step["sourceIds"] = [ids.get(source, "") for source in raw_sources]
+            if any(not source for source in step["sourceIds"]) and step["status"] in {"pending", "current"}:
+                step.update(status="blocked", detail="A saved MCP input no longer exists.")
     if step["kind"] == "scientific":
         from graphlink_plugins.scientific.core import canonical_bytes, readable_result, MAX_RESULT_BYTES
 
@@ -96,16 +167,18 @@ def _restore_step(raw: Any, ids: dict[str, str]) -> dict[str, Any] | None:
             step["externalAttempt"] = attempt
             if (attempt["inputHash"] != step["inputHash"]
                     or (attempt["phase"] == "completed" and
-                        (step["status"] != "completed" or not step.get("outputHash")))):
+                        ((step["status"] != "completed" and not (step["kind"] == "tool" and step["status"] == "failed"
+                            and step.get("errorType") == "tool_error")) or not step.get("outputHash")))
+                    or (attempt["phase"] == "reconciled" and step["status"] not in {"failed", "cancelled"})):
                 step.update(status="reconciliation-required", detail="External request receipt is inconsistent; do not retry.")
-            elif attempt["phase"] != "completed":
+            elif attempt["phase"] not in {"completed", "reconciled"}:
                 # A persisted 'dispatched' fence does not prove the remote call
                 # finished, failed, or even left the host. Never auto-replay it.
                 step.update(status="reconciliation-required", detail=RECONCILIATION_DETAIL)
     elif step["status"] in {"running", "reconciliation-required"}:
         # An in-flight remote step with no durable identity is unsafe to replay.
         step.update(status="reconciliation-required", detail="External request identity is missing; do not retry.")
-    if step["status"] == "pending" and not (step["nodeId"] and (step["sourceId"] or step["kind"] == "scientific")):
+    if step["status"] == "pending" and not (step["nodeId"] and (step["sourceId"] or step["kind"] in {"scientific", "tool"})):
         step.update(status="blocked", detail="The saved input or output no longer exists.")
     return step
 

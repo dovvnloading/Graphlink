@@ -14,6 +14,10 @@ from backend.domain.node_states import ModelState, NoteState
 from backend.domain.graph_model_binding import validate_local_model_identity
 from backend.domain.nodes_content import _text_digest
 from backend.domain.table_workflows import _current_result, _fingerprint, table_output
+from graphlink_plugins.mcp_connect.core import (
+    configured as mcp_configured, configuration as mcp_configuration, config_hash as mcp_config_hash,
+    dependencies as mcp_dependencies, output_hash as mcp_output_hash, prepare as prepare_mcp,
+)
 from graphlink_plugins.scientific.graph_run_adapter import (
     configured as science_configured, config_hash as science_config_hash,
     dependencies as science_dependencies, operation_id as science_operation_id,
@@ -25,6 +29,8 @@ if TYPE_CHECKING:
 
 
 def _kind(node: SceneNode) -> str:
+    if mcp_configured(node):
+        return "tool"
     if science_configured(node):
         return "scientific"
     return "table" if isinstance(node.state, NoteState) and node.state.is_table_source else node.kind
@@ -48,7 +54,7 @@ def is_bound_node(node: SceneNode) -> bool:
     not its ordinary deterministic graph-plan endpoint.
     """
     return (
-        science_configured(node)
+        science_configured(node) or mcp_configured(node)
         or _binding(node) is not None
         or isinstance(node.state, NoteState) and node.state.model_text_input is not None
     )
@@ -64,7 +70,12 @@ def bound_dependents(document: SceneDocument, source_ids: set[str]) -> list[str]
     """
     children: dict[str, list[str]] = defaultdict(list)
     for node in document.nodes.values():
-        if science_configured(node):
+        if mcp_configured(node):
+            try:
+                parents = mcp_dependencies(document, node)
+            except SceneError:
+                parents = ()
+        elif science_configured(node):
             try:
                 parents = science_dependencies(document, node)
             except SceneError:
@@ -105,7 +116,13 @@ def _closure(seeds: set[str], neighbors: dict[str, list[str]]) -> set[str]:
 def _config_and_target(document: SceneDocument, step: dict[str, str]) -> None:
     """Pin output and configuration without requiring a future model reply."""
     node = document.nodes[step["nodeId"]]
-    if step["kind"] == "scientific":
+    if step["kind"] == "tool":
+        config = mcp_configuration(node)
+        step["configHash"] = mcp_config_hash(node)
+        step["targetHash"] = mcp_output_hash(node)
+        step["serverId"] = config["serverId"]
+        step["toolName"] = config["toolName"]
+    elif step["kind"] == "scientific":
         step["configHash"] = science_config_hash(node)
         step["targetHash"] = science_output_hash(node)
     elif step["kind"] == "model":
@@ -148,6 +165,14 @@ def _inspect(document: SceneDocument, step: dict[str, str]) -> None:
     node_id, source_id = step["nodeId"], step["sourceId"]
     node = document.nodes[node_id]
     _config_and_target(document, step)
+    if step["kind"] == "tool":
+        prepared = prepare_mcp(document, node)
+        step["inputHash"] = prepared.input_hash
+        step.update(
+            status="current" if prepared.current else "ready",
+            detail="Input is up to date." if prepared.current else "MCP inputs are ready for review.",
+        )
+        return
     if step["kind"] == "scientific":
         _, _, _, digest, same = prepare_science(document, node, lambda _pack: True)
         step["inputHash"] = digest
@@ -205,7 +230,7 @@ def _inspect(document: SceneDocument, step: dict[str, str]) -> None:
 def _evaluate(document: SceneDocument, step: dict[str, str]) -> None:
     if step["kind"] == "note":
         document.run_note_text_input(step["nodeId"])
-    elif step["kind"] in {"model", "scientific"}:
+    elif step["kind"] in {"model", "scientific", "tool"}:
         raise SceneError("This step requires its explicit asynchronous execution adapter.")
     else:
         document.run_table_output(step["nodeId"])
@@ -224,8 +249,17 @@ def plan_graph_run(document: SceneDocument, selected_ids: list[str]) -> list[dic
     """
     bindings: dict[str, tuple[str, str]] = {}
     sources: dict[str, tuple[str, ...]] = {}
+    invalid_mcp: dict[str, str] = {}
     for node in document.nodes.values():
-        if science_configured(node):
+        if mcp_configured(node):
+            try:
+                parents = mcp_dependencies(document, node)
+            except SceneError as exc:
+                parents = ()
+                invalid_mcp[node.id] = str(exc)
+            bindings[node.id] = (parents[0] if parents else node.id, "tool")
+            sources[node.id] = parents
+        elif science_configured(node):
             parents = science_dependencies(document, node)
             operation = science_operation_id(node)
             bindings[node.id] = (parents[0] if parents else "", operation)
@@ -259,7 +293,7 @@ def plan_graph_run(document: SceneDocument, selected_ids: list[str]) -> list[dic
                 "status": "blocked", "detail": "", "inputHash": "",
                 "configHash": "", "targetHash": "",
             }
-            if science_configured(node):
+            if science_configured(node) or mcp_configured(node):
                 step["sourceIds"] = list(sources[target_id])
             steps[target_id] = step
 
@@ -273,11 +307,13 @@ def plan_graph_run(document: SceneDocument, selected_ids: list[str]) -> list[dic
         target = pending.popleft()
         step = steps[target]
         parent_steps = [steps[parent] for parent in sources[target] if parent in steps]
-        if any(parent["status"] == "blocked" for parent in parent_steps):
+        if target in invalid_mcp:
+            step["detail"] = invalid_mcp[target]
+        elif any(parent["status"] == "blocked" for parent in parent_steps):
             step["detail"] = "The upstream step is blocked."
         elif any(
             parent["status"] == "waiting"
-            or (parent["kind"] in {"model", "scientific"} and parent["status"] == "ready")
+            or (parent["kind"] in {"model", "scientific", "tool"} and parent["status"] == "ready")
             for parent in parent_steps
         ):
             # Neither a Model reply nor an isolated scientific calculation
@@ -290,7 +326,7 @@ def plan_graph_run(document: SceneDocument, selected_ids: list[str]) -> list[dic
         else:
             try:
                 _inspect(projected, step)
-                if step["status"] == "ready" and step["kind"] not in {"model", "scientific"}:
+                if step["status"] == "ready" and step["kind"] not in {"model", "scientific", "tool"}:
                     projected.nodes[target] = copy.deepcopy(projected.nodes[target])
                     _evaluate(projected, step)
             except SceneError as exc:
@@ -312,7 +348,11 @@ def _matching_node(document: SceneDocument, step: dict[str, Any]) -> SceneNode:
     node = document.nodes.get(step["nodeId"])
     if node is None or _kind(node) != step["kind"]:
         raise SceneError("The connection changed since the preview. Preview the branch again.")
-    if step["kind"] == "scientific":
+    if step["kind"] == "tool":
+        if (not mcp_configured(node) or step["operation"] != "tool"
+                or mcp_dependencies(document, node) != step_sources(step)):
+            raise SceneError("The MCP inputs changed since preview. Preview the branch again.")
+    elif step["kind"] == "scientific":
         if (not science_configured(node)
                 or science_operation_id(node) != step["operation"]
                 or science_dependencies(document, node) != step_sources(step)):
@@ -323,6 +363,8 @@ def _matching_node(document: SceneDocument, step: dict[str, Any]) -> SceneNode:
 
 
 def _output_digest(node: SceneNode) -> str:
+    if mcp_configured(node):
+        return mcp_output_hash(node)
     if science_configured(node):
         return science_output_hash(node)
     value = node.content if node.kind in {"note", "model"} else _current_result(node)
@@ -344,7 +386,7 @@ def validate_graph_run_ancestors(
         ancestor = by_node_id.get(source_id)
         if ancestor is None:
             source = document.nodes.get(source_id)
-            if source is not None and (_binding(source) is not None or science_configured(source)):
+            if source is not None and (_binding(source) is not None or science_configured(source) or mcp_configured(source)):
                 raise SceneError("An upstream connection changed. Preview the branch again.")
             return
         if ancestor["status"] not in {"current", "completed"}:
@@ -377,8 +419,8 @@ def execute_graph_step(document: SceneDocument, step: dict[str, str]) -> str:
     """Apply one approved ready step and return the committed output digest."""
     if step["status"] not in ("ready", "pending"):
         raise SceneError("This step is not ready to run.")
-    if step["kind"] == "scientific":
-        raise SceneError("Scientific steps require their bounded asynchronous worker.")
+    if step["kind"] in {"scientific", "tool"}:
+        raise SceneError("This step requires its explicit asynchronous execution adapter.")
     node = _matching_node(document, step)
     live = step.copy()
     _inspect(document, live)

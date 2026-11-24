@@ -480,6 +480,9 @@ def test_set_mcp_servers_persists_and_normalizes_a_round_trip(manager):
             "enabled": True,
             "timeout": 30.0,
             "env": {},
+            "transport": "stdio",
+            "url": "",
+            "headers": {},
         },
     ]
 

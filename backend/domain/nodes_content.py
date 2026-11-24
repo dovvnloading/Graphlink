@@ -298,11 +298,14 @@ class ContentOps(SceneDocumentParts):
             return self._plain_note(source_id).content
         if source.kind == "model" and isinstance(source.state, ModelState):
             return source.content
+        if source.kind == "mcp_connect.tool":
+            from graphlink_plugins.mcp_connect.core import saved_text
+            return saved_text(source)
         if source.kind == "chat":
             return source.content
         if source.kind == "artifact" and isinstance(source.state, ArtifactState):
             return source.state.artifact_content
-        raise SceneError("Choose a plain note, chat message, Model node, or Drafter document as the text source.")
+        raise SceneError("Choose a plain note, chat message, Model node, MCP tool, or Drafter document as the text source.")
 
     def bind_note_text_input(self, source_id: str, target_id: str, operation: str = "copy") -> None:
         """Connect one text output to a note without evaluating it."""
@@ -473,7 +476,13 @@ class ContentOps(SceneDocumentParts):
             if current_id in seen:
                 raise SceneError("The source graph contains a dependency cycle.")
             seen.add(current_id)
-            state = self.nodes[current_id].state
+            source = self.nodes[current_id]
+            if source.kind == "mcp_connect.tool":
+                from graphlink_plugins.mcp_connect.core import prepare
+                if not prepare(self, source).current:
+                    raise SceneError("Run the upstream MCP tool first; its output is not current.")
+                return
+            state = source.state
             if isinstance(state, ModelState):
                 traversed_model = True
                 model_input = state.model_binding
@@ -519,6 +528,14 @@ class ContentOps(SceneDocumentParts):
         if not state.text_input_last_source_sha256:
             return "unrun"
         source_id = state.text_input_source_id
+        source = self.nodes.get(source_id)
+        if source is not None and source.kind == "mcp_connect.tool":
+            from graphlink_plugins.mcp_connect.core import prepare
+            try:
+                if not prepare(self, source).current:
+                    return "stale"
+            except SceneError:
+                return "stale"
         digest = source_digests.get(source_id) if source_digests is not None else None
         if digest is None:
             digest = _text_digest(self._text_output(source_id))

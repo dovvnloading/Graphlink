@@ -1,0 +1,104 @@
+name: MCP Connect browser checks
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/mcp-connect.yml"
+      - "plugins/mcp_connect/**"
+      - "graphlink_plugins/mcp_connect/**"
+      - "backend/mcp_client.py"
+      - "backend/mcp_http.py"
+      - "backend/mcp_connect_runtime.py"
+      - "backend/api/intents_mcp_connect.py"
+      - "backend/api/intents_graph_runner.py"
+      - "backend/api/intents_graph_model.py"
+      - "backend/api/intents_settings_general.py"
+      - "backend/agent_dispatch/builder.py"
+      - "backend/settings.py"
+      - "settings_store/mcp.py"
+      - "backend/chat_library.py"
+      - "backend/session_load.py"
+      - "backend/session_save.py"
+      - "backend/plugins.py"
+      - "backend/plugin_sdk.py"
+      - "backend/domain/graph_runner.py"
+      - "backend/domain/graph_run_*.py"
+      - "backend/domain/nodes_content.py"
+      - "backend/domain/table_workflows.py"
+      - "backend/tests/test_mcp*.py"
+      - "contracts/graphlink_app_settings_payload.py"
+      - "web_ui/src/app/canvas/Mcp*"
+      - "web_ui/src/app/canvas/mcp*"
+      - "web_ui/src/app/canvas/SceneCanvas.tsx"
+      - "web_ui/src/app/canvas/sceneStore.ts"
+      - "web_ui/src/app/canvas/NodeShell.tsx"
+      - "web_ui/src/app/canvas/lazyNodeViews.tsx"
+      - "web_ui/src/app/canvas/minimapNodeMeta.ts"
+      - "web_ui/src/app/chrome/settings/McpServersPage*"
+      - "web_ui/src/app/chrome/GraphRunnerDialog.tsx"
+      - "web_ui/e2e/mcp-connect.spec.ts"
+      - "web_ui/e2e/helpers.ts"
+      - "tests_e2e/fixture_mcp_server.py"
+      - "tests_e2e/run_backend.py"
+      - "web_ui/playwright.config.ts"
+      - "web_ui/package.json"
+      - "web_ui/package-lock.json"
+      - "web_ui/.nvmrc"
+      - "requirements.in"
+      - "requirements.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mcp-connect-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  browser:
+    name: MCP Connect in Chromium
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: web_ui/.nvmrc
+          cache: npm
+          cache-dependency-path: web_ui/package-lock.json
+      - name: Install backend dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: web_ui
+      - name: Build production SPA
+        run: npm run build
+        working-directory: web_ui
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: web_ui
+      - name: Run the MCP Connect production journey
+        run: npx playwright test e2e/mcp-connect.spec.ts --project=chromium --workers=1 --retries=0 --trace=retain-on-failure
+        working-directory: web_ui
+      - name: Preserve MCP review screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mcp-connect-review
+          path: web_ui/test-results/**/mcp-*.png
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Preserve failed MCP browser traces
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mcp-connect-browser-failure
+          path: web_ui/test-results/
+          if-no-files-found: warn
+          retention-days: 7

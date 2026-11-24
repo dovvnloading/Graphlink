@@ -2,6 +2,7 @@ import { useReactFlow, useStoreApi } from "@xyflow/react";
 import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { GraphModelBinding, GraphRun, GraphRunPreview, GraphRunStep, LatestGraphRun, SceneStore } from "../canvas/sceneStore";
 import { formatScienceSummary } from "../canvas/scientificWorkbench";
+import { McpApprovalPanel } from "../canvas/McpApprovalPanel";
 import { Dialog, useOverlays } from "../overlays/overlays";
 import { getRunTrace } from "./graphRunTrace";
 import { Disclosure } from "./RunnerDisclosure";
@@ -26,6 +27,7 @@ const statuses: Record<string, string> = {
 const operations: Record<string, string> = {
   copy: "Copy text", word_count: "Word count", group_sum: "Group and sum",
   model: "Local model reply",
+  tool: "MCP tool",
 };
 
 function RunSteps({ steps, names }: { steps: GraphRunStep[]; names: Map<string, string> }) {
@@ -103,7 +105,7 @@ function Runner({ store }: { store: SceneStore }) {
     !node.isSummaryNote && !node.isBranchComparison && !node.tableOutputVersion
   );
   const sources = scene.nodes.filter((node) =>
-    node.kind === "chat" || node.kind === "artifact" || node.kind === "model" ||
+    node.kind === "chat" || node.kind === "artifact" || node.kind === "model" || node.kind === "mcp_connect.tool" ||
     (node.kind === "note" && plainNotes.some((note) => note.id === node.id))
   );
   const modelNoteHandoff = !!requestedIds?.some((id) => plainNotes.some((node) =>
@@ -298,7 +300,7 @@ function Runner({ store }: { store: SceneStore }) {
 
   const ready = preview?.steps.filter((step) => step.status === "ready").length ?? 0;
   return <>
-    <p className="runner-intro">Preview a dependency-ordered graph. Local Model nodes and explicitly configured Scientific Workbench operations run only after approval; every connected input must be ready. Scientific calculations use a bounded, cancellable local worker. Preview never executes either.</p>
+    <p className="runner-intro">Preview a dependency-ordered graph. Local Model nodes, configured Scientific Workbench operations, and MCP tools run after you review the plan; every connected input must be ready. MCP tools follow their server’s approval policy and pause for resolved input review when required. Preview does not execute tools or calculations.</p>
     <div className="runner-controls">
       <Select label="Run scope" value={scope} disabled={!!busy}
         onChange={(value) => { setScope(value); setPreview(null); setError(""); }}
@@ -362,7 +364,7 @@ function Runner({ store }: { store: SceneStore }) {
         Saved text → text connection (version {savedModelBinding.version}). Status: {savedModelBinding.status}.
         Changes upstream do not trigger execution.
       </p>}
-      <p className="runner-note">This sends text to your Ollama daemon over loopback. Verify custom model aliases are local: Ollama itself can route an alias to cloud. Graph Runner does not directly call cloud providers or external tools.</p>
+      <p className="runner-note">This sends text to your Ollama daemon over loopback. Verify custom model aliases are local: Ollama itself can route an alias to cloud. Configured MCP tool nodes run separately with their server permissions and approval policy.</p>
       {modelPreview && <section aria-label="Model preview">
         <RunSteps steps={modelPreview.steps} names={names} />
         <div className="runner-commit">
@@ -391,6 +393,8 @@ function Runner({ store }: { store: SceneStore }) {
       </ol>
     </section>}
     {busy && <p role="status">{busy}</p>}
+    <McpApprovalPanel store={store} active={scene.nodes.some(node => node.kind === "mcp_connect.tool")
+      && (!!running || busy === "Running graph…" || busy === "Resuming run…")} />
     {error && <div className="runner-error">
       <p role="alert">{error}</p>
       <Button variant="secondary" disabled={!!busy} onClick={() => void perform("Checking run status…", async () => {

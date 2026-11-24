@@ -12,7 +12,7 @@ legacy island's own settings-state.ts.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -132,6 +132,10 @@ class McpServerConfigPayload:
     # settings change. The Settings page lists these names; changing a value
     # means retyping it. See backend/settings.py's _mcp_servers_for_wire.
     envKeys: list[str]
+    # Connection credentials remain write-only for both transports.
+    transport: str = "stdio"
+    url: str = ""
+    headerKeys: list[str] = field(default_factory=list)
 
 
 @dataclass

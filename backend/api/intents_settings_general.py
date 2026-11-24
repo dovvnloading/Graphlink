@@ -29,7 +29,9 @@ from typing import TYPE_CHECKING
 import graphlink_task_config as config
 
 from backend.api._settings_shared import SettingsSessionState, run_locked
-from backend.events import SessionBus
+from backend.events import IntentValidationError, SessionBus
+from backend.mcp_client import McpError
+from backend.mcp_http import validate_http_endpoint, validate_http_headers
 from backend.notifications import NotificationState
 from backend.observability import apply_log_level
 from graphlink_settings_store import SettingsManager
@@ -82,6 +84,8 @@ def _mcp_servers_from_wire(servers: object) -> list[dict] | None:
             # see its own docstring on why the client never mints one.
             "id": str(entry.get("id") or "").strip(),
             "name": entry.get("name", ""),
+            "transport": entry.get("transport", "stdio"),
+            "url": entry.get("url", ""),
             "command": entry.get("command", ""),
             "args": entry.get("args", []),
             "scopes": entry.get("scopes", []),
@@ -101,6 +105,18 @@ def _mcp_servers_from_wire(servers: object) -> list[dict] | None:
         # is stored for this server".
         if "env" in entry:
             normalized_entry["env"] = entry.get("env") or {}
+        if "headers" in entry:
+            normalized_entry["headers"] = entry.get("headers") or {}
+        # Reject invalid remote connections before replacing the collection.
+        # A credential in a URL would otherwise enter the public settings
+        # snapshot even when connection validation subsequently rejects it.
+        if normalized_entry["transport"] == "streamable_http":
+            raw_url = normalized_entry["url"]
+            if not isinstance(raw_url, str):
+                raise McpError("Enter an MCP endpoint URL as text.")
+            normalized_entry["url"] = validate_http_endpoint(raw_url.strip())
+            if "headers" in normalized_entry:
+                validate_http_headers(normalized_entry["headers"])
         normalized.append(normalized_entry)
     return normalized
 
@@ -223,7 +239,10 @@ def register_settings_general_intents(
         # set_mcp_servers' own "replace the whole collection" posture (see
         # its docstring) - the MCP Servers settings page always sends the
         # FULL updated array, never a single-server patch.
-        normalized = _mcp_servers_from_wire(servers)
+        try:
+            normalized = _mcp_servers_from_wire(servers)
+        except McpError as exc:
+            raise IntentValidationError([str(exc)]) from exc
         if normalized is None:
             if notifications is not None:
                 notifications.show("MCP server list is malformed - nothing was saved.", "warning")

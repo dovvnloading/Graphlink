@@ -982,6 +982,9 @@ describe("SettingsDialog", () => {
   describe("MCP Servers page", () => {
     const fsServer = {
       id: "fs-id",
+      transport: "stdio",
+      url: "",
+      headerKeys: [],
       name: "fs",
       command: "npx",
       args: ["-y", "server-filesystem"],
@@ -1135,6 +1138,9 @@ describe("SettingsDialog", () => {
     it("Remove fires setMcpServers with the full array minus that entry", async () => {
       const gitServer = {
         id: "git-id",
+        transport: "stdio",
+        url: "",
+        headerKeys: [],
         name: "git",
         command: "uvx",
         args: [],

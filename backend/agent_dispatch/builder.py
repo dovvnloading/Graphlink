@@ -99,7 +99,7 @@ class BuilderDispatchOps(DispatcherParts):
         and skipped - one broken config must not cost the Builder its graph
         tools. Connected clients are kept for disposal at session end."""
         from backend import agents as agents_module  # deferred: patch-seam + circular-import safety
-        from backend.mcp_client import McpError, McpServerConfig, McpStdioClient, register_mcp_server_tools
+        from backend.mcp_client import McpError, McpServerConfig, create_mcp_client, register_mcp_server_tools
 
         if self._settings_manager is None:
             return
@@ -117,11 +117,9 @@ class BuilderDispatchOps(DispatcherParts):
                 continue
             if not config_entry.enabled:
                 continue
-            client = McpStdioClient(
-                command=config_entry.command, args=tuple(config_entry.args),
-                env=config_entry.env, timeout=config_entry.timeout,
-            )
+            client = None
             try:
+                client = create_mcp_client(config_entry)
                 client.connect()
                 registered = register_mcp_server_tools(registry, client, config_entry)
                 self._mcp_clients.append(client)
@@ -149,9 +147,15 @@ class BuilderDispatchOps(DispatcherParts):
                 # the per-server tolerance this loop's own contract promises:
                 # the bad server is logged and skipped, its client closed,
                 # and the Builder still starts with every other server.
-                agents_module.logger.warning("MCP server %r unavailable: %s", config_entry.name, exc)
+                # A server can echo its env/header credentials in stderr or
+                # an RPC error. Keep remote messages out of application logs.
+                agents_module.logger.warning(
+                    "MCP server unavailable",
+                    extra={"kind": "builder", "mcp_server_id": config_entry.id, "error_type": type(exc).__name__},
+                )
                 try:
-                    client.close()
+                    if client is not None:
+                        client.close()
                 except Exception:
                     pass
 

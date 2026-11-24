@@ -72,6 +72,9 @@ export interface McpServerConfig {
   enabled: boolean;
   timeout: number;
   envKeys: string[];
+  transport: string;
+  url: string;
+  headerKeys: string[];
 }
 
 export interface ModelPricingOverride {
@@ -245,6 +248,9 @@ const MCP_SERVER_CONFIG_FIELDS: WireFields = [
   ["enabled", "b", 0],
   ["timeout", "n", 0],
   ["envKeys", { a: "s" }, 0],
+  ["transport", "s", 0],
+  ["url", "s", 0],
+  ["headerKeys", { a: "s" }, 0],
 ];
 
 const MODEL_PRICING_OVERRIDE_FIELDS: WireFields = [
