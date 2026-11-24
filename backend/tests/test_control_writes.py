@@ -333,3 +333,26 @@ def test_write_token_cannot_skip_permission_via_query_or_bad_method(backend):
     assert client.post("/api/control/scene/mutate", headers=_auth(WRITE), json={
         **body, "expected_revision": "not-a-revision",
     }).status_code == 422
+
+
+def test_workflow_control_credentials_cannot_approve_or_modify_presets(backend):
+    from backend.chat_library import get_default_workspace_id
+
+    client, _, db = backend
+    ws = get_default_workspace_id(db)
+    for token in (READ, "wrong"):
+        assert client.get("/api/control/workflows", params={"workspace_id": ws},
+                          headers=_auth(token)).status_code == 401
+    response = client.get("/api/control/workflows", params={"workspace_id": ws}, headers=_auth(WRITE))
+    assert response.status_code == 200 and response.json() == {"workflows": [], "presets": []}
+    prefix = f"/api/workflows/{ws}"
+    for route in ("/approve", "/presets", "/presets/preview", "/runs", "/runs/unknown/step-decision"):
+        assert client.post(prefix + route, json={}, headers=_auth(WRITE)).status_code == 401
+    assert client.get(prefix + "/presets", headers=_auth(WRITE)).status_code == 401
+    assert client.post("/api/control/workflows/run", headers=_auth(WRITE), json={
+        "workspace_id": ws, "preset_id": "missing", "operation_id": "test-0001",
+        "approved": True,
+    }).status_code == 400
+    assert client.post("/api/control/workflows/run", headers=_auth(WRITE), json={
+        "workspace_id": ws, "preset_id": "missing", "operation_id": "test-0001",
+    }).status_code == 400

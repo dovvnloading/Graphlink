@@ -443,7 +443,7 @@ def _approval_summary(call: ToolCall, document) -> str:
         # approver sees exactly what will run or go out over the network.
         return f"{call.name} {disclosure}"
     args = json.dumps(call.arguments, sort_keys=True, ensure_ascii=False)
-    if call.name.startswith("fal."):
+    if call.name.startswith(("fal.", "workflow.")):
         # Show every field sent to Fal, including billing options and result bindings.
         return f"{call.name} {args}"
     return f"{call.name} {_truncate(args, _APPROVAL_SUMMARY_CAP)}"

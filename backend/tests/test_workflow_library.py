@@ -66,10 +66,10 @@ def test_upgrade_from_either_version_seven_schema(tmp_path, version_seven):
             with conn:
                 original = store.save(conn, example(), name="Original")
     with closing(chat_library._connect(path)) as conn, conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         assert {"detached_workflow_runs", "workflow_library", "workflow_library_versions",
-                "workflow_child_runs"} <= tables
+                "workflow_child_runs", "workflow_presets"} <= tables
         if version_seven == "library":
             assert store.get(conn, original["workflow_id"], original["revision"])["spec"]["name"] == "Original"
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -160,3 +160,147 @@ def test_capture_unpack_and_run_as_one_step(tmp_path):
     assert doc.nodes[ids[2]].content == "2"
     with pytest.raises(ValueError, match="cycle"):
         canvas.configure(doc, node, {}, {}, {"input_1": node_id})
+
+
+def test_presets_pin_parameters_and_triggers_never_backfill(tmp_path):
+    from datetime import datetime
+    from backend.workflow.api import WorkflowService
+
+    async def scenario():
+        path = tmp_path / "chats.db"
+        workspace = chat_library.get_default_workspace_id(path)
+        with closing(chat_library._connect(path)) as conn, conn:
+            pin = store.save(conn, example(), name="Automation")
+        service = WorkflowService(path)
+        automation = service.automation
+        request = {"workflow_id": pin["workflow_id"], "revision": pin["revision"],
+                   "inputs": {"input": "one two three"}, "parameters": {"operation": "word_count"}}
+        preview = automation.preview(request)
+        body = {"request": request, "name": "Count", "allowed_effects": ["pure"],
+                "cost_usd": 0, "fingerprint": preview["fingerprint"], "approved": True,
+                "trigger": {"kind": "interval", "seconds": 10}}
+        with pytest.raises(PermissionError):
+            automation.save(workspace, {**body, "approved": False})
+        preset = automation.save(workspace, body)
+        pid = preset["preset_id"]
+        with pytest.raises(PermissionError):
+            automation.run(workspace, pid, request={**request, "inputs": {"input": "changed"}})
+        assert automation.list(workspace + 1) == []
+        await automation.tick(monotonic=0)
+        assert service.engine().store.list(workspace) == []
+        await automation.tick(monotonic=10)
+        rows = service.engine().store.list(workspace)
+        assert len(rows) == 1
+        assert (await service.engine().wait(workspace, rows[0]["run_id"]))["outputs"]["output"]["text"] == "3"
+        await automation.tick(monotonic=1000)
+        assert len(service.engine().store.list(workspace)) == 1
+        first = automation.run(workspace, pid, operation_id="repeat-0001")
+        await service.engine().wait(workspace, first)
+        assert automation.run(workspace, pid, operation_id="repeat-0001") == first
+        await service.shutdown()
+
+        # Fresh process baseline: a missed interval is not admitted.
+        restarted = WorkflowService(path)
+        await restarted.automation.tick(monotonic=9999)
+        assert len(restarted.engine().store.list(workspace)) == 2
+        assert restarted.automation.delete(workspace, pid)
+        daily = restarted.automation.save(workspace, {
+            **body, "trigger": {"kind": "daily", "time": "09:00"},
+        })
+        await restarted.automation.tick(now=datetime(2026, 1, 1, 9, 1))
+        assert len(restarted.engine().store.list(workspace)) == 2
+        await restarted.automation.tick(now=datetime(2026, 1, 2, 9, 0))
+        rows = restarted.engine().store.list(workspace)
+        assert len(rows) == 3
+        await restarted.engine().wait(workspace, rows[0]["run_id"])
+        assert restarted.automation.delete(workspace, daily["preset_id"])
+
+        folder = tmp_path / "watched"
+        folder.mkdir()
+        restarted.automation.save(workspace, {**body, "trigger": {"kind": "folder", "path": str(folder)}})
+        await restarted.automation.tick()
+        assert len(restarted.engine().store.list(workspace)) == 3
+        (folder / "new.txt").write_text("new")
+        await restarted.automation.tick()
+        rows = restarted.engine().store.list(workspace)
+        assert len(rows) == 4
+        await restarted.engine().wait(workspace, rows[0]["run_id"])
+        await restarted.automation.tick()
+        assert len(restarted.engine().store.list(workspace)) == 4
+        await restarted.shutdown()
+    asyncio.run(scenario())
+
+
+def test_builder_workflow_edits_preview_and_recheck_after_approval(tmp_path):
+    from backend.domain.graph import SceneDocument
+    from backend.providers.base import ToolCall
+    from backend.tools import GRAPH_MUTATE, GRAPH_READ, RunContext, ToolRegistry
+    from backend.tools_workflow import register_workflow_tools
+    from backend.workflow import canvas
+
+    async def scenario():
+        path = tmp_path / "chats.db"
+        with closing(chat_library._connect(path)) as conn, conn:
+            pin = store.save(conn, example(), name="Builder workflow")
+        doc = SceneDocument()
+        doc.current_workspace_id = chat_library.get_default_workspace_id(path)
+        registry = ToolRegistry()
+        register_workflow_tools(registry, doc, path)
+        approvals = []
+        decision = [False]
+        edit_during_approval = [None]
+
+        async def approve(call):
+            approvals.append(call.name)
+            if edit_during_approval[0] is not None:
+                edit_during_approval[0]()
+            return decision[0]
+
+        ctx = RunContext(frozenset({GRAPH_READ, GRAPH_MUTATE}), approve)
+
+        async def call(name, args):
+            return await registry.invoke(ToolCall("test", "workflow." + name, args), ctx)
+
+        async def preview(action, args):
+            result = await call("preview_edit", {"action": action, "arguments": args})
+            assert not result.is_error, result.content
+            return json.loads(result.content)
+
+        async def apply(action, args):
+            return await call(action, {"review": await preview(action, args)})
+
+        listed = await call("list", {})
+        assert not listed.is_error and json.loads(listed.content)["workflows"][0]["workflow_id"] == pin["workflow_id"]
+        args = {"workflow_id": pin["workflow_id"], "revision": pin["revision"]}
+        review = await preview("instantiate", args)
+        assert not doc.nodes and not approvals
+        denied = await call("instantiate", {"review": review})
+        assert denied.is_error and not doc.nodes
+        decision[0] = True
+        inserted = await call("instantiate", {"review": review})
+        assert not inserted.is_error, inserted.content
+        node_id = json.loads(inserted.content)["node_id"]
+        assert doc.nodes[node_id].kind == canvas.KIND
+        assert canvas.data(doc.nodes[node_id])["document"]["spec"]["revision"] == pin["revision"]
+
+        made = await apply("create_control", {"kind": "input", "text": "hello world"})
+        assert not made.is_error, made.content
+        source_id = json.loads(made.content)["node_id"]
+        args = {"source_id": source_id, "operation": "word_count"}
+        review = await preview("create_step", args)
+        before = set(doc.nodes)
+        edit_during_approval[0] = lambda: setattr(doc.nodes[source_id], "content", "changed")
+        stale = await call("create_step", {"review": review})
+        assert stale.is_error and set(doc.nodes) == before
+        edit_during_approval[0] = None
+        step = await apply("create_step", args)
+        assert not step.is_error, step.content
+        step_id = json.loads(step.content)["node_id"]
+        wired = await apply("wire_inputs", {"node_id": node_id, "inputs": {},
+                                           "parameters": {"operation": "copy"}, "sources": {"input": step_id}})
+        assert not wired.is_error, wired.content
+        state = canvas.data(doc.nodes[node_id])
+        assert state["sources"] == {"input": step_id} and not state["childRunId"]
+        assert len(approvals) == 6
+
+    asyncio.run(scenario())

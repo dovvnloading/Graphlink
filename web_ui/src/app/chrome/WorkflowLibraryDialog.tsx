@@ -13,6 +13,7 @@ import { InlineAlert } from "../ui/InlineAlert";
 import { useConfirm } from "../ui/ConfirmDialog";
 import { WorkflowSpecView } from "./WorkflowSpecView";
 import { DetachedWorkflowInspector } from "./DetachedWorkflowInspector";
+import { WorkflowAutomationPanel } from "./WorkflowAutomationPanel";
 import "./GraphRunnerDialog.css";
 
 function Library({ store }: { store: SceneStore }) {
@@ -181,6 +182,7 @@ function Library({ store }: { store: SceneStore }) {
       {view.format === "graphlink-starter-workflow" && <>
         <p>Review or edit the synthetic example inputs and model IDs in the request before running.
           Install the pinned local models or select installed IDs; the endpoint must match your loopback Ollama configuration.</p>
+        <p>To create a run preset for a starter, use the local detached workflow spec option below with the reviewed typed request.</p>
         <DetachedWorkflowInspector key={view.spec.revision}
           initialSource={JSON.stringify({ spec: view.spec, parameters: view.example_inputs }, null, 2)} />
       </>}
@@ -199,6 +201,7 @@ function Library({ store }: { store: SceneStore }) {
         })}>Export version</Button>
       </div>
     </section>}
+    <WorkflowAutomationPanel view={view?.format === "graphlink-workflow" ? view : null} />
   </>;
 }
 

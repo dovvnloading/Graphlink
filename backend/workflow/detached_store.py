@@ -39,6 +39,17 @@ def migrate(conn: sqlite3.Connection) -> None:
     """)
 
 
+def migrate_presets(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS workflow_presets (
+            preset_id TEXT PRIMARY KEY,
+            workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            payload TEXT NOT NULL
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS workflow_presets_workspace ON workflow_presets(workspace_id)")
+
+
 def prune(conn: sqlite3.Connection, *, now: datetime | None = None) -> None:
     # Active runs are never evicted. Run on admission/finish and offline GC.
     cutoff = ((now or datetime.now(timezone.utc)) - timedelta(days=MAX_AGE_DAYS)).isoformat()
@@ -127,6 +138,8 @@ class DetachedRunStore:
                             "timestamp": now, "kind": "step-interrupted", "step_id": step["step_id"],
                             "attempt": 1, "message": reason, "data": None,
                         })
+                if "awaiting_approval" in run:
+                    run["awaiting_approval"] = None
                 run.update(status="interrupted", finished_at=now, error=reason)
                 run["events"].append({
                     "schema_version": 1, "run_id": run["run_id"], "sequence": len(run["events"]),

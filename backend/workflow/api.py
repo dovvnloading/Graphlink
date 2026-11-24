@@ -17,6 +17,7 @@ from backend.asset_store import ALLOWED_IMAGE_MIME_TYPES
 from backend.domain.model import SceneError
 from backend.workspace_archive import _collect_asset_refs
 from .engine import RunLimits, WorkflowEngine
+from .automation import WorkflowAutomation
 from .planning import PolicyResolver
 from .registry import StepAdapterRegistry
 from .wire import decode_request
@@ -34,17 +35,20 @@ class WorkflowService:
         self.registry = registry
         self.policy_for = policy_for
         self._engine: WorkflowEngine | None = None
+        self.on_pause = None
+        self.automation = WorkflowAutomation(self)
 
     def engine(self) -> WorkflowEngine:
         if self._engine is None:
             self._engine = WorkflowEngine(self.db_path, limits=self.limits, registry=self.registry,
-                                          policy_for=self.policy_for)
+                                          policy_for=self.policy_for, on_pause=self.on_pause)
         return self._engine
 
     def pending_approvals(self):
         return self._engine.pending_approvals() if self._engine is not None else []
 
     async def shutdown(self) -> None:
+        await self.automation.stop()
         if self._engine is not None:
             await self._engine.shutdown()
 
@@ -155,6 +159,38 @@ def register_workflow_api(app: FastAPI, service: WorkflowService) -> None:
         if title is not None and not isinstance(title, str):
             raise HTTPException(400, "Graph title must be text.")
         return _checked(lambda: {"graph_id": engine.save_result_as_graph(workspace_id, run_id, title=title)})
+
+    @app.post(prefix + "/presets/preview")
+    async def preview_preset(workspace_id: int, body: dict[str, Any]):
+        return _checked(lambda: service.automation.preview(body))
+
+    @app.post(prefix + "/presets", status_code=201)
+    async def save_preset(workspace_id: int, body: dict[str, Any]):
+        return _checked(lambda: service.automation.save(workspace_id, body))
+
+    @app.get(prefix + "/presets")
+    async def list_presets(workspace_id: int):
+        return service.automation.list(workspace_id)
+
+    @app.delete(prefix + "/presets/{preset_id}")
+    async def delete_preset(workspace_id: int, preset_id: str):
+        if not service.automation.delete(workspace_id, preset_id):
+            raise HTTPException(404, "Workflow preset not found.")
+        return {"deleted": True}
+
+    @app.post(prefix + "/presets/{preset_id}/run", status_code=202)
+    async def run_preset(workspace_id: int, preset_id: str):
+        return _checked(lambda: {"run_id": service.automation.run(workspace_id, preset_id)})
+
+    @app.post(prefix + "/runs/{run_id}/step-decision")
+    async def step_decision(workspace_id: int, run_id: str, body: dict[str, Any]):
+        if (set(body) != {"step_id", "nonce", "approved"} or type(body["approved"]) is not bool
+                or not isinstance(body["step_id"], str) or not isinstance(body["nonce"], str)):
+            raise HTTPException(400, "Review the pending step and supply an explicit decision.")
+        _checked(lambda: service.engine().decide_step(
+            workspace_id, run_id, body["step_id"], body["nonce"], approved=body["approved"],
+        ))
+        return {"accepted": True}
 
     @app.post(prefix + "/files", status_code=201)
     async def file_parameter(workspace_id: int, request: Request, filename: str,
