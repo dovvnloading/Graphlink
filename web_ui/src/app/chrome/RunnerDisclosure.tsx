@@ -7,14 +7,15 @@ export function Disclosure({ label, children, className, onOpen, onToggle, initi
   onToggle?: () => void; initiallyOpen?: boolean;
 }) {
   const [open, setOpen] = useState(initiallyOpen);
+  const [visited, setVisited] = useState(initiallyOpen);
   return (
     <KitDisclosure title={label} open={open} className={className}
       onOpenChange={(next) => {
         setOpen(next);
         onToggle?.();
-        if (next) onOpen?.();
+        if (next) { setVisited(true); onOpen?.(); }
       }}>
-      {children}
+      {visited && children}
     </KitDisclosure>
   );
 }
