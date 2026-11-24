@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import logging
 import math
 import secrets
 import time
@@ -260,7 +261,11 @@ class WorkflowEngine:
                message="Waiting for operator approval.", data=pending)
         self._checkpoint(run)
         if self.on_pause is not None:
-            self.on_pause(run.workspace_id, run.record["run_id"], spec.step_id)
+            try:
+                self.on_pause(run.workspace_id, run.record["run_id"], spec.step_id)
+            except Exception:
+                # The durable pending receipt remains reviewable even if a notification fails.
+                logging.getLogger(__name__).warning("Workflow approval notification could not be delivered.")
 
     async def wait(self, workspace_id: int, run_id: str) -> dict[str, Any] | None:
         run = self._runs.get(run_id)

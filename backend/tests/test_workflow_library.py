@@ -229,3 +229,78 @@ def test_presets_pin_parameters_and_triggers_never_backfill(tmp_path):
         assert len(restarted.engine().store.list(workspace)) == 4
         await restarted.shutdown()
     asyncio.run(scenario())
+
+
+def test_builder_workflow_edits_preview_and_recheck_after_approval(tmp_path):
+    from backend.domain.graph import SceneDocument
+    from backend.providers.base import ToolCall
+    from backend.tools import GRAPH_MUTATE, GRAPH_READ, RunContext, ToolRegistry
+    from backend.tools_workflow import register_workflow_tools
+    from backend.workflow import canvas
+
+    async def scenario():
+        path = tmp_path / "chats.db"
+        with closing(chat_library._connect(path)) as conn, conn:
+            pin = store.save(conn, example(), name="Builder workflow")
+        doc = SceneDocument()
+        doc.current_workspace_id = chat_library.get_default_workspace_id(path)
+        registry = ToolRegistry()
+        register_workflow_tools(registry, doc, path)
+        approvals = []
+        decision = [False]
+        edit_during_approval = [None]
+
+        async def approve(call):
+            approvals.append(call.name)
+            if edit_during_approval[0] is not None:
+                edit_during_approval[0]()
+            return decision[0]
+
+        ctx = RunContext(frozenset({GRAPH_READ, GRAPH_MUTATE}), approve)
+
+        async def call(name, args):
+            return await registry.invoke(ToolCall("test", "workflow." + name, args), ctx)
+
+        async def preview(action, args):
+            result = await call("preview_edit", {"action": action, "arguments": args})
+            assert not result.is_error, result.content
+            return json.loads(result.content)
+
+        async def apply(action, args):
+            return await call(action, {"review": await preview(action, args)})
+
+        listed = await call("list", {})
+        assert not listed.is_error and json.loads(listed.content)["workflows"][0]["workflow_id"] == pin["workflow_id"]
+        args = {"workflow_id": pin["workflow_id"], "revision": pin["revision"]}
+        review = await preview("instantiate", args)
+        assert not doc.nodes and not approvals
+        denied = await call("instantiate", {"review": review})
+        assert denied.is_error and not doc.nodes
+        decision[0] = True
+        inserted = await call("instantiate", {"review": review})
+        assert not inserted.is_error, inserted.content
+        node_id = json.loads(inserted.content)["node_id"]
+        assert doc.nodes[node_id].kind == canvas.KIND
+        assert canvas.data(doc.nodes[node_id])["document"]["spec"]["revision"] == pin["revision"]
+
+        made = await apply("create_control", {"kind": "input", "text": "hello world"})
+        assert not made.is_error, made.content
+        source_id = json.loads(made.content)["node_id"]
+        args = {"source_id": source_id, "operation": "word_count"}
+        review = await preview("create_step", args)
+        before = set(doc.nodes)
+        edit_during_approval[0] = lambda: setattr(doc.nodes[source_id], "content", "changed")
+        stale = await call("create_step", {"review": review})
+        assert stale.is_error and set(doc.nodes) == before
+        edit_during_approval[0] = None
+        step = await apply("create_step", args)
+        assert not step.is_error, step.content
+        step_id = json.loads(step.content)["node_id"]
+        wired = await apply("wire_inputs", {"node_id": node_id, "inputs": {},
+                                           "parameters": {"operation": "copy"}, "sources": {"input": step_id}})
+        assert not wired.is_error, wired.content
+        state = canvas.data(doc.nodes[node_id])
+        assert state["sources"] == {"input": step_id} and not state["childRunId"]
+        assert len(approvals) == 6
+
+    asyncio.run(scenario())

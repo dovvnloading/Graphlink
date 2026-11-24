@@ -24,6 +24,7 @@ intent - the acceptance round-trip. Real domain topics arrive per-phase
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
