@@ -32,7 +32,7 @@ test("keyboard preview, execute, inspect and compare durable runs in both themes
   for (const [label, value] of [["Group by", "Team"], ["Sum column", "Hours"]]) {
     const select = table.getByRole("button", { name: label, exact: true });
     await select.press("Enter");
-    await page.getByRole("option", { name: value, exact: true }).press("Enter");
+    await page.getByRole("option", { name: value, exact: true }).click();
     await expect(select).toContainText(value);
   }
   await table.getByRole("button", { name: "Create grouped table" }).press("Enter");
@@ -55,8 +55,9 @@ test("keyboard preview, execute, inspect and compare durable runs in both themes
     await expect(show).toHaveAttribute("aria-expanded", "false");
     await expect(preview.getByRole("region", { name: "Full input" })).toHaveCount(0);
     await show.press("Enter");
-    await expect(show).toHaveAttribute("aria-expanded", "true");
-    await expect(show).toBeFocused();
+    const hide = preview.getByRole("button", { name: "Hide full" });
+    await expect(hide).toHaveAttribute("aria-expanded", "true");
+    await expect(hide).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(preview.getByRole("region", { name: "Full input" })).toBeFocused();
     await preview.getByRole("button", { name: "Hide full" }).press("Enter");
@@ -90,6 +91,7 @@ test("keyboard preview, execute, inspect and compare durable runs in both themes
     await expect(history.getByRole("heading", { name: "Saved runs" })).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(history).toBeHidden();
+    if (await dialog.isVisible()) { await page.keyboard.press("Escape"); await expect(dialog).toBeHidden(); }
   }
 });
 
