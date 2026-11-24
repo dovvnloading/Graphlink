@@ -5,6 +5,8 @@ import threading
 
 import pytest
 
+from backend.tests.graph_runner_golden import assert_golden, step_fields
+
 from backend import chat_library
 from backend.canvas import SceneDocument
 from backend.domain.graph_run_history import restore_graph_runs
@@ -127,11 +129,19 @@ def test_restart_resumes_only_uncommitted_steps_and_honors_upstream_drift(tmp_pa
         initial_note_content = note2.content
         assert report2.state.table_output.current.version == 2
         assert note2.content != report2.state.artifact_content
+        assert_golden("resume_paused", {
+            "status": paused["status"], "steps": step_fields(paused["steps"], "kind", "operation", "status"),
+            "version": report2.state.table_output.current.version,
+        })
         if edit_source:
             source = reopened.nodes[first["sourceId"]]
             reopened.set_table_source(source.id, "Region,Qty\nWest,72", source.content)
         result = await send2("resumeGraphRun", "recover-chain")
         assert result["status"] == ("partial" if edit_source else "completed")
+        assert_golden("resume_drift" if edit_source else "resume_completed", {
+            "status": result["status"], "steps": step_fields(result["steps"], "kind", "operation", "status"),
+            "version": report2.state.table_output.current.version,
+        })
         if edit_source:
             assert "upstream" in result["steps"][1]["detail"]
             assert not reopened.command_log
