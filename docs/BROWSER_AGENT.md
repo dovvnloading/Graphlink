@@ -108,7 +108,7 @@ not shared across calls or tasks. Published nodes are durable snapshots.
   before a total of 16 MiB has actually arrived. Navigation and interactions
   have finite timeouts; browser.run has a 100-second **active-work** deadline
   that pauses during each serialized user approval. In managed agent runs the
-  outer active-work deadline replaces Playwright\x27s independent wall-clock navigation
+  outer active-work deadline replaces Playwright's independent wall-clock navigation
   and action timers, so a consent prompt cannot trigger an unrelated timeout.
   The browser has one active
   human approval prompt at a time. Captures contain
