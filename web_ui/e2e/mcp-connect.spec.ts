@@ -11,9 +11,13 @@ const fixturePath = fileURLToPath(new URL("../../tests_e2e/fixture_mcp_server.py
 test("MCP Connect discovers a tool, reviews inputs and saves a table with provenance", async ({ page }, testInfo) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await gotoApp(page);
-  await page.evaluate(() => document.documentElement.setAttribute("data-theme", "dark"));
   await page.locator('[data-overlay-trigger="settings"]').click();
   const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "General", exact: true }).click();
+  const theme = settings.getByRole("radiogroup", { name: "Theme", exact: true });
+  const initialTheme = await theme.getByRole("radio", { checked: true }).innerText();
+  await theme.getByRole("radio", { name: "Dark", exact: true }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await settings.getByRole("button", { name: "Plugins", exact: true }).click();
   const grant = settings.getByRole("switch", { name: "Granted: MCP Connect", exact: true });
   await expect(grant).toBeVisible();
@@ -43,6 +47,7 @@ test("MCP Connect discovers a tool, reviews inputs and saves a table with proven
   await serverRows.getByRole("button", { name: "Test connection and discover tools", exact: true }).click();
   await expect(serverRows.getByRole("checkbox", { name: "Look up records", exact: true })).toBeChecked();
   await serverRows.scrollIntoViewIfNeeded();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   const settingsImage = testInfo.outputPath("mcp-settings-dark.png");
   await page.screenshot({ path: settingsImage, animations: "disabled" });
   await testInfo.attach("MCP server settings", { path: settingsImage, contentType: "image/png" });
@@ -79,6 +84,7 @@ test("MCP Connect discovers a tool, reviews inputs and saves a table with proven
   await expect(result.getByRole("table", { name: "Tool output" })).toContainText("Graphlink 1");
   await expect(result).toContainText("Version 1");
   await result.scrollIntoViewIfNeeded();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   const dark = testInfo.outputPath("mcp-result-dark.png");
   await page.screenshot({ path: dark, animations: "disabled" });
   await testInfo.attach("MCP tool table in dark theme", { path: dark, contentType: "image/png" });
@@ -88,9 +94,14 @@ test("MCP Connect discovers a tool, reviews inputs and saves a table with proven
   await result.getByRole("tab", { name: "JSON", exact: true }).focus();
   await page.keyboard.press("Enter");
   await expect(result).toContainText('"summary"');
-  // Tokens support data-theme overrides; this exercises the actual rendered
-  // surface in both themes without changing any saved user preference.
-  await page.evaluate(() => document.documentElement.setAttribute("data-theme", "light"));
+  // Apply the real preference: every settings snapshot reapplies it, so a
+  // direct DOM override would silently revert during the journey.
+  await page.locator('[data-overlay-trigger="settings"]').click();
+  await settings.getByRole("button", { name: "General", exact: true }).click();
+  await theme.getByRole("radio", { name: "Light", exact: true }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.keyboard.press("Escape");
+  await expect(settings).toBeHidden();
   await result.scrollIntoViewIfNeeded();
   const light = testInfo.outputPath("mcp-result-light.png");
   await page.screenshot({ path: light, animations: "disabled" });
@@ -98,4 +109,10 @@ test("MCP Connect discovers a tool, reviews inputs and saves a table with proven
   await page.reload();
   await expect(page.locator('.app-shell[data-connection-status="open"]')).toBeAttached();
   await expect(page.locator(".mcp-tool-node").getByRole("region", { name: "Saved tool result" })).toContainText("Version 1");
+  await page.locator('[data-overlay-trigger="settings"]').click();
+  await settings.getByRole("button", { name: "General", exact: true }).click();
+  await theme.getByRole("radio", { name: initialTheme, exact: true }).click();
+  await expect(theme.getByRole("radio", { name: initialTheme, exact: true })).toBeChecked();
+  await page.keyboard.press("Escape");
+  await expect(settings).toBeHidden();
 });
