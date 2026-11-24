@@ -330,6 +330,74 @@ def test_slow_adapter_cancelled_without_replay(tmp_path):
     asyncio.run(scenario())
 
 
+def test_slow_adapter_deadline_without_wall_clock_sleep(tmp_path, monkeypatch):
+    async def scenario():
+        path = tmp_path / "chats.db"
+        loop = asyncio.get_running_loop()
+        original_time = loop.time
+        offset = 0
+        monkeypatch.setattr(loop, "time", lambda: original_time() + offset)
+        entered = threading.Event()
+        engine = _engine(path, limits=RunLimits(wall_time_seconds=60), entered=entered)
+        ws = get_default_workspace_id(path)
+        run_id = _start(engine, ws, _chain(engine.registry, tail=True, slow=True))
+        assert await asyncio.to_thread(entered.wait, 10)
+        before = engine.store.read(ws, run_id)
+        # Advance the scheduler's monotonic deadline only once dispatch is
+        # durably checkpointed; no race against a short real-time sleep.
+        offset = 61
+        record = await _wait(engine, ws, run_id)
+        assert record["status"] == "failed" and "duration limit" in record["error"]
+        assert record["steps"]["fault"]["status"] == "cancelled"
+        assert record["steps"]["never"]["status"] == "blocked"
+        assert engine.registry.resolve("cloud", "1").cancelled == ["fault"]
+        assert _assert_assurance(_engine(path), ws, run_id, PREFIX + ["fault"], before=before) == record
+
+    asyncio.run(scenario())
+
+
+def test_stale_canvas_preview_cannot_repeat_finished_external_model(tmp_path, monkeypatch):
+    from backend import chat_library
+    from backend.api import intents_graph_model
+    from backend.events import IntentValidationError
+    from backend.tests.test_graph_runner_intents import open_session
+    from graphlink_task_config import LOCAL_PROVIDER_OLLAMA
+
+    monkeypatch.setenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+    calls = []
+
+    def complete(**kwargs):
+        calls.append(kwargs["prompt"])
+        return {"message": {"content": "finished first result"}, "prompt_eval_count": 2, "eval_count": 3}
+
+    monkeypatch.setattr(intents_graph_model, "local_ollama_complete", complete)
+
+    async def scenario():
+        path = tmp_path / "graphs.db"
+        _, doc, send = open_session(path)
+        source = doc.add_note(0, 0)
+        doc.set_note_content(source.id, "first prompt")
+        first = doc.add_model_node(source.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
+        preview = await send("previewGraphRun", [])
+        record = await send("executeGraphRun", [], preview["previewToken"], "finished-operation", 1)
+        assert record["status"] == "completed"
+        before = chat_library.load_workflow_run(path, doc.current_chat_id, "finished-operation")
+        assert before["steps"][0]["attempt_phase"] == "completed"
+        other = doc.add_note(0, 400)
+        doc.set_note_content(other.id, "new prompt")
+        doc.add_model_node(other.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
+        stale = await send("previewGraphRun", [other.id])
+        doc.set_note_content(other.id, "changed prompt")
+        for _ in range(2):
+            with pytest.raises(IntentValidationError, match="changed"):
+                await send("executeGraphRun", [other.id], stale["previewToken"], "stale-operation", 1)
+        assert calls == ["first prompt"]
+        assert doc.nodes[first.id].content == "finished first result"
+        assert chat_library.load_workflow_run(path, doc.current_chat_id, "finished-operation") == before
+
+    asyncio.run(scenario())
+
+
 def test_corrupt_active_record_fails_closed_without_erasing_finished_steps(tmp_path):
     async def scenario():
         path = tmp_path / "chats.db"
