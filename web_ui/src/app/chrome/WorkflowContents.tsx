@@ -1,3 +1,4 @@
+/* eslint-disable jsx-a11y/no-noninteractive-tabindex -- the full input and output regions are scrollable, read-only content that must be keyboard focusable (WCAG 2.1.1), not a button or link stand-in. */
 import { useId, useRef, useState } from "react";
 import { Button } from "../ui/Button";
 import { InlineAlert } from "../ui/InlineAlert";
