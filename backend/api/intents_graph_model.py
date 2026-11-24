@@ -140,6 +140,16 @@ def _response_text(payload: Any) -> str:
     return text
 
 
+def _record_model_usage(step: dict[str, Any], payload: Any) -> None:
+    """Only measured provider counters; local loopback has no API charge."""
+    step["costUsd"] = 0.0
+    if isinstance(payload, dict):
+        for source, target in (("prompt_eval_count", "inputTokens"), ("eval_count", "outputTokens")):
+            value = payload.get(source)
+            if type(value) is int and 0 <= value <= 2147483647:
+                step[target] = value
+
+
 def register_graph_model_runner(
     bus: SessionBus,
     document: SceneDocument,
@@ -225,6 +235,7 @@ def register_graph_model_runner(
             )
 
         async def apply_result(payload: Any) -> str:
+            _record_model_usage(step, payload)
             text = _response_text(payload)
             # Other canvas intents can edit notes while an Ollama request
             # awaits its answer. Never silently replace work the user wrote
@@ -270,6 +281,7 @@ def register_graph_model_runner(
                 checkpoint=checkpoint, invoke=invoke, apply_result=apply_result,
             )
             run["status"] = "completed"
+            run["finishedAt"] = datetime.now(timezone.utc).isoformat()
             await checkpoint()
             return _public_run(run)
         except BaseException:
