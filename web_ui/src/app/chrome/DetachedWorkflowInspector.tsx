@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { subscribeApprovalTarget, takeApprovalTarget, type ApprovalTarget } from "./WorkflowApprovalNotifications";
 import { authHeaders } from "../../lib/auth/token";
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
@@ -68,9 +69,10 @@ function PreviewDetails({ preview }: { preview: Preview }) {
   </section>;
 }
 
-function WorkspaceRuns({ workspace, initialSource }: { workspace: number; initialSource?: string }) {
+function WorkspaceRuns({ workspace, initialSource, initialRun }: { workspace: number; initialSource?: string; initialRun?: string }) {
   const [runs, setRuns] = useState<Run[]>([]);
-  const [selected, setSelected] = useState("");
+  const [selected, setSelected] = useState(initialRun ?? "");
+  const statusRef = useRef<HTMLParagraphElement>(null);
   const [source, setSource] = useState(initialSource ?? "");
   const [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false);
@@ -118,6 +120,7 @@ function WorkspaceRuns({ workspace, initialSource }: { workspace: number; initia
     finally { setBusy(false); }
   }
   async function decide(run: Run, step: Step, approved: boolean) {
+    statusRef.current?.focus();
     setBusy(true); setError("");
     try {
       await request(runPath(workspace, run.run_id) + "/step-approval", {
@@ -136,6 +139,7 @@ function WorkspaceRuns({ workspace, initialSource }: { workspace: number; initia
     finally { setBusy(false); }
   }
   const run = runs.find(item => item.run_id === selected);
+  const pending = run?.status === "running" ? Object.values(run.steps).filter(step => step.approval?.status === "pending") : [];
   return <>
     <Disclosure title="Preview and start a typed workflow" defaultOpen={!!initialSource}>
       <TextArea label="Workflow request JSON (spec and parameters)" value={source} disabled={busy}
@@ -151,7 +155,7 @@ function WorkspaceRuns({ workspace, initialSource }: { workspace: number; initia
       options={[{ value: "", label: "Select a run" }, ...runs.map(item => ({
         value: item.run_id, label: item.spec.name + " · " + item.status + " · " + item.run_id,
       }))]} />
-    {!runs.length && <p>No detached workflow runs in this workspace.</p>}
+    <p ref={statusRef} tabIndex={-1} role="status">{busy ? "Submitting workflow request…" : run ? `${run.spec.name}: ${pending.length ? "Waiting for approval: " + pending.map(step => step.step_id).join(", ") : run.status}` : selected ? "Loading selected run…" : `${runs.length} detached runs in this workspace.`}</p>
     {run && <section aria-label="Detached workflow inspector">
       <Card title={run.spec.name}>
         <Badge>{Object.values(run.steps).some(step => step.approval?.status === "pending") && run.status === "running"
@@ -179,7 +183,7 @@ function WorkspaceRuns({ workspace, initialSource }: { workspace: number; initia
   </>;
 }
 
-function Inspector({ initialSource }: { initialSource?: string }) {
+function Inspector({ initialSource, target }: { initialSource?: string; target?: ApprovalTarget | null }) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspace, setWorkspace] = useState("");
   const [error, setError] = useState("");
@@ -187,22 +191,33 @@ function Inspector({ initialSource }: { initialSource?: string }) {
     const controller = new AbortController();
     void request<Workspace[]>(root + "/workspaces", { signal: controller.signal }).then(rows => {
       if (!controller.signal.aborted && Array.isArray(rows)) {
-        setWorkspaces(rows); setWorkspace(rows.length ? String(rows[0].id) : "");
+        setWorkspaces(rows); setWorkspace(rows.some(row => row.id === target?.workspaceId) ? String(target?.workspaceId) : rows.length ? String(rows[0].id) : "");
       }
     }).catch(err => { if (!controller.signal.aborted) setError(message(err)); });
     return () => controller.abort();
-  }, []);
+  }, [target]);
   return <>
     {error && <InlineAlert title="Could not load workspaces" body={error} variant="error" />}
     <Select label="Workspace" value={workspace} onChange={setWorkspace}
       options={workspaces.map(item => ({ value: String(item.id), label: item.name }))} />
-    {workspace && <WorkspaceRuns key={workspace} workspace={Number(workspace)} initialSource={initialSource} />}
+    {workspace && <WorkspaceRuns key={workspace} workspace={Number(workspace)} initialSource={initialSource} initialRun={Number(workspace) === target?.workspaceId ? target?.runId : undefined} />}
   </>;
 }
 
-export function DetachedWorkflowInspector({ initialSource }: { initialSource?: string } = {}) {
+export function DetachedWorkflowInspector({ initialSource, followApproval = false }: { initialSource?: string; followApproval?: boolean } = {}) {
   const [open, setOpen] = useState(!!initialSource);
+  const [target, setTarget] = useState<ApprovalTarget | null>(null);
+  useEffect(() => {
+    if (!followApproval) return;
+    function selectTarget() {
+      const next = takeApprovalTarget();
+      if (next) { setTarget(next); setOpen(true); }
+    }
+    const unsubscribe = subscribeApprovalTarget(selectTarget);
+    selectTarget();
+    return unsubscribe;
+  }, [followApproval]);
   return <Disclosure title="Detached workflow runs" variant="section" open={open} onOpenChange={setOpen}>
-    {open && <Inspector initialSource={initialSource} />}
+    {open && <Inspector key={target ? `${target.workspaceId}:${target.runId}` : "default"} initialSource={initialSource} target={target} />}
   </Disclosure>;
 }
