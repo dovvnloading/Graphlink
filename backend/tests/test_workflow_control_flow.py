@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import asdict
+from types import SimpleNamespace
 
 import pytest
 
@@ -226,8 +227,19 @@ def test_assert_block_reason_or_fail_route(tmp_path, route):
 
 
 @pytest.mark.parametrize("approved", [True, False])
-def test_human_gate_pauses_without_duration_timeout(tmp_path, approved):
+def test_human_gate_pauses_without_duration_timeout(tmp_path, monkeypatch, approved):
     async def scenario():
+        # Control the scheduler's clock so slow journal writes on Windows CI
+        # cannot consume the execution budget. Keep real asyncio timers and
+        # wait longer than the cap to exercise the human gate's timeout exemption.
+        clock = SimpleNamespace(now=0.0)
+        loop = asyncio.get_running_loop()
+        scheduler_loop = SimpleNamespace(
+            time=lambda: clock.now, create_task=loop.create_task, create_future=loop.create_future,
+        )
+        scheduler_asyncio = SimpleNamespace(**vars(asyncio))
+        scheduler_asyncio.get_running_loop = lambda: scheduler_loop
+        monkeypatch.setattr("backend.workflow.engine.asyncio", scheduler_asyncio)
         engine, ws, local, _ = _engine(tmp_path / "chats.db", RunLimits(wall_time_seconds=0.5))
         r = engine.registry
         root = WorkflowInputSource("input")
@@ -242,6 +254,7 @@ def test_human_gate_pauses_without_duration_timeout(tmp_path, approved):
             {"workspace_id": ws, "run_id": run_id, "workflow": "Control flow",
              "step_id": "gate", "message": "Review the report"},
         ]
+        clock.now += 0.7
         await asyncio.sleep(0.7)
         snapshot = engine.store.read(ws, run_id)
         assert snapshot["status"] == "running" and not local.started
@@ -251,7 +264,7 @@ def test_human_gate_pauses_without_duration_timeout(tmp_path, approved):
         assert engine.decide_step(ws, run_id, "gate", approved)
         assert not engine.decide_step(ws, run_id, "gate", approved)
         record = await engine.wait(ws, run_id)
-        assert record["status"] == ("completed" if approved else "failed")
+        assert record["status"] == ("completed" if approved else "failed"), record["error"]
         assert record["steps"]["gate"]["approval"]["status"] == ("approved" if approved else "rejected")
         assert len(local.started) == (2 if approved else 0)
         assert not engine.pending_approvals()
