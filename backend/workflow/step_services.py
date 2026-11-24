@@ -242,8 +242,11 @@ class WorkflowRunHost:
         cfg = prepared.config()
         provider, model = cfg["provider"], cfg["model_id"]
         ref = ModelRef(provider, model)
-        if not any(d.provider == provider and d.model_id == model and d.available and d.ready
-                   for d in unified_catalog(self.settings)):
+        if not any(
+            descriptor.provider == provider and descriptor.model_id == model
+            and descriptor.available and descriptor.ready
+            for descriptor in unified_catalog(self.settings)
+        ):
             raise ValueError("Select an available model from the unified catalog")
         messages = model_messages(cfg, prepared.inputs())
         if provider == LOCAL_PROVIDER_OLLAMA:
