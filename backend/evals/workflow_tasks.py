@@ -45,7 +45,7 @@ RESEARCH_PRICE = 0.01
 
 @dataclass(frozen=True)
 class ModelIdentity:
-    model: str
+    model_id: str
     version: str
     price_usd_per_call: float
     mode: str
@@ -89,19 +89,19 @@ class EvaluationHost:
     """
 
     def __init__(self, model, overrides=None):
-        self.model = model
+        self.identity = model
         self.overrides = dict(overrides or {})
         self.effects = []
         self.wrong_inputs = 0
 
     @property
     def research_price(self):
-        return RESEARCH_PRICE if self.model.mode == "scripted" else 0.0
+        return RESEARCH_PRICE if self.identity.mode == "scripted" else 0.0
 
     def policy(self, step):
         if step.adapter.adapter_id == "model.generate":
-            return StepPolicy("cloud", (LOCAL_PROVIDER_OLLAMA, self.model.model),
-                              self.model.price_usd_per_call)
+            return StepPolicy("cloud", (LOCAL_PROVIDER_OLLAMA, self.identity.model_id),
+                              self.identity.price_usd_per_call)
         if step.adapter.adapter_id == "web.research":
             return StepPolicy("cloud", ("fixture", "research-corpus-v1"), self.research_price)
         if step.adapter.side_effect_class == "cloud":
@@ -152,24 +152,24 @@ class EvaluationHost:
             return {"text": TextValue(EVIDENCE), "sources": JsonValue(["A", "B"])}
         if adapter_id != "model.generate":
             raise PermissionError("The evaluation host has no external action tools")
-        self._expect(context.model_identity == (LOCAL_PROVIDER_OLLAMA, self.model.model))
+        self._expect(context.model_identity == (LOCAL_PROVIDER_OLLAMA, self.identity.model_id))
         cfg = prepared.config()
-        self._expect(cfg["model_id"] == self.model.model and cfg["provider"] == LOCAL_PROVIDER_OLLAMA)
+        self._expect(cfg["model_id"] == self.identity.model_id and cfg["provider"] == LOCAL_PROVIDER_OLLAMA)
         messages = model_messages(cfg, inputs)
-        if self.model.mode == "scripted":
+        if self.identity.mode == "scripted":
             reply = self._script(step_id, inputs["subject"].text, messages)
             reply = self.overrides.get(step_id, reply)
         else:
             _require_live_opt_in()
             from backend.api.intents_graph_model import _require_loopback_ollama
             from backend.providers.graph_local_ollama import async_local_ollama_complete
-            self._expect(self.model.endpoint == _require_loopback_ollama())
+            self._expect(self.identity.endpoint == _require_loopback_ollama())
             payload = await async_local_ollama_complete(
                 prompt=messages[0]["content"] + "\n\n" + messages[1]["content"],
-                model_id=self.model.model, endpoint=self.model.endpoint,
+                model_id=self.identity.model_id, endpoint=self.identity.endpoint,
             )
             reply = payload["message"]["content"]
-        context.report_cost(self.model.price_usd_per_call)
+        context.report_cost(self.identity.price_usd_per_call)
         return {"text": TextValue(reply)}
 
     async def cancel(self, context):
@@ -194,10 +194,10 @@ class TaskRun:
         return WorkflowStepSpec(step_id, descriptor, config_json,
                                 tuple(InputBinding(name, source) for name, source in sources.items()))
 
-    def model(self, step_id, template, source):
+    def model_step(self, step_id, template, source):
         self.expected.append(_effect("model.generate", step_id))
         return self.step(step_id, "model.generate", {
-            "provider": LOCAL_PROVIDER_OLLAMA, "model_id": self.host.model.model,
+            "provider": LOCAL_PROVIDER_OLLAMA, "model_id": self.host.identity.model_id,
             "system_prompt": SYSTEM, "template": template, "output_kind": "text",
         }, subject=source)
 
@@ -234,7 +234,7 @@ async def _research(task):
     task.expected.append(_effect("web.research", "research"))
     research = task.step("research", "web.research", {"max_sources": 2},
                          query=WorkflowInputSource("query"))
-    summary = task.model("summary", "Summarize both trials in one sentence with [A] and [B] citations:\n{subject}",
+    summary = task.model_step("summary", "Summarize both trials in one sentence with [A] and [B] citations:\n{subject}",
                          StepOutputSource("research", "text"))
     result = await task.run([summary, research], {"query": TextValue(RESEARCH_QUERY)}, [
         ("summary", "text", StepOutputSource("summary", "text")),
@@ -248,7 +248,7 @@ async def _table(task):
     table = TableValue(("Region", "Qty"), (("West", 2), ("West", 3), ("East", 4)))
     cfg = {"label_column": "Region", "value_column": "Qty"}
     chart = task.step("chart", "chart.generate", cfg, table=WorkflowInputSource("table"))
-    intro = task.model("chart-summary", "Report both region totals exactly as 'West total N; East total N.'\n{subject}",
+    intro = task.model_step("chart-summary", "Report both region totals exactly as 'West total N; East total N.'\n{subject}",
                        StepOutputSource("chart", "chart"))
     report = task.step("report", "report.generate", cfg, table=WorkflowInputSource("table"),
                        text=StepOutputSource("chart-summary", "text"))
@@ -258,14 +258,17 @@ async def _table(task):
     ])
     chart_value = result.get("chart", JsonValue(None)).value
     report_text = result.get("report", TextValue("")).text
+    # The production report escapes CSV labels as padded Markdown code spans.
+    # Check complete rows, not substrings or the model-generated introduction.
+    report_lines = report_text.splitlines()
     return (_check_chart(chart_value) and report_text.startswith(CHART_ANSWER + "\n\n")
-            and "| West | 5 |" in report_text and "| East | 4 |" in report_text)
+            and "| ` West ` | 5 |" in report_lines and "| ` East ` | 4 |" in report_lines)
 
 
 async def _repair(task):
     # Main's WorkflowSpec is a DAG: the host admits a new frozen repair
     # revision only if the deterministic validator rejects the prior output.
-    draft = task.model("draft", "Return only the integer result of {subject}.", WorkflowInputSource("problem"))
+    draft = task.model_step("draft", "Return only the integer result of {subject}.", WorkflowInputSource("problem"))
     result = await task.run([draft], {"problem": TextValue("3 + 4")}, [
         ("candidate", "text", StepOutputSource("draft", "text")),
     ])
@@ -275,7 +278,7 @@ async def _repair(task):
             break
         task.retries += 1
         step_id = f"repair-{index + 1}"
-        repair = task.model(step_id, "Correct this wrong answer to 3 + 4: {subject}. Return only the integer.",
+        repair = task.model_step(step_id, "Correct this wrong answer to 3 + 4: {subject}. Return only the integer.",
                             WorkflowInputSource("candidate"))
         result = await task.run([repair], {"candidate": candidate}, [
             ("candidate", "text", StepOutputSource(step_id, "text")),
@@ -285,7 +288,7 @@ async def _repair(task):
 
 
 async def _mapped(task):
-    steps = [task.model(f"map-{i}", "Summarize the document as 'Name: N' only.\n{subject}",
+    steps = [task.model_step(f"map-{i}", "Summarize the document as 'Name: N' only.\n{subject}",
                         WorkflowInputSource(f"doc{i}")) for i in range(len(DOCUMENTS))]
     join = task.step("join", "transform.template", {"template": "{a}\n{b}\n{c}"},
                      a=StepOutputSource("map-0", "text"), b=StepOutputSource("map-1", "text"),
@@ -346,7 +349,7 @@ async def _installed_model(model):
 def _report(model, results):
     return {
         "provider": LOCAL_PROVIDER_OLLAMA if model.mode == "live-local" else "scripted",
-        "model": model.model, "version": model.version, "mode": model.mode,
+        "model": model.model_id, "version": model.version, "mode": model.mode,
         "price": {"currency": "USD", "model_per_call": model.price_usd_per_call,
                   "research_per_call": RESEARCH_PRICE if model.mode == "scripted" else 0.0,
                   "basis": "synthetic fixture charges" if model.mode == "scripted"
@@ -372,12 +375,13 @@ async def comparison(model_names=()):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--live", action="store_true", help="Opt in to loopback Ollama calls")
-    parser.add_argument("--model", action="append", default=[], help="Exact installed model tag; repeat to compare")
+    parser.add_argument("--model", dest="model_names", action="append", default=[],
+                        help="Exact installed model tag; repeat to compare")
     args = parser.parse_args(argv)
-    if bool(args.model) != args.live:
+    if bool(args.model_names) != args.live:
         parser.error("Use --live together with at least one --model; omit both for offline mode.")
     try:
-        reports = asyncio.run(comparison(args.model))
+        reports = asyncio.run(comparison(args.model_names))
     except Exception as exc:
         parser.exit(2, f"Workflow comparison failed: {exc}\n")
     sys.stdout.write(json.dumps(reports, indent=2, sort_keys=True) + "\n")

@@ -140,7 +140,7 @@ def test_comparison_records_model_version_and_price_with_mocked_transport(monkey
     monkeypatch.setattr(graph_local_ollama, "async_local_ollama_complete", complete)
     assert evals.main(["--live", "--model", "qwen3:8b"]) == 0
     offline, live = json.loads(capsys.readouterr().out)
-    assert offline["model"] == evals.SCRIPTED.model
+    assert offline["model"] == evals.SCRIPTED.model_id
     assert offline["version"] == evals.SCRIPTED.version
     assert offline["price"]["model_per_call"] == 0.02
     assert all(task["success"] for task in offline["tasks"])
