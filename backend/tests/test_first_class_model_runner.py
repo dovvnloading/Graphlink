@@ -12,6 +12,8 @@ import threading
 
 import pytest
 
+from backend.tests.graph_runner_golden import assert_golden, step_fields
+
 from backend.api import intents_graph_model as local_model
 from backend.canvas import SceneDocument
 from backend.chat_library import load_chat_row
@@ -116,6 +118,10 @@ def test_two_model_steps_then_transform_commit_in_dependency_order(tmp_path, mon
         assert doc.nodes[target.id].content == "Add note..."
         preview = await send("previewGraphRun", [])
         assert [x["status"] for x in preview["steps"]] == ["ready", "waiting", "waiting"]
+        assert_golden("model_chain_preview", [
+            {**fields, "deferred": not step["inputHash"]}
+            for fields, step in zip(step_fields(preview["steps"], "kind", "operation", "status"), preview["steps"], strict=True)
+        ])
         assert not path.exists() or not doc.graph_runs
         observed = []
 
@@ -134,6 +140,7 @@ def test_two_model_steps_then_transform_commit_in_dependency_order(tmp_path, mon
         result = await send("executeGraphRun", [], preview["previewToken"], "first-class-graph-run")
         assert result["status"] == "completed"
         assert [row["status"] for row in result["steps"]] == ["completed", "completed", "completed"]
+        assert_golden("model_chain_result", step_fields(result["steps"], "kind", "operation", "status", "detail"))
         assert len(observed) == 2
         assert observed[0][0] == source.content
         assert observed[1][0] == "First model reply"

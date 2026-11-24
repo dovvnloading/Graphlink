@@ -10,6 +10,8 @@ import threading
 
 import pytest
 
+from backend.tests.graph_runner_golden import assert_golden, fence, step_fields
+
 from backend import chat_library, mcp_connect_runtime
 from backend.canvas import SceneDocument
 from backend.events import IntentValidationError, SessionBus
@@ -251,6 +253,14 @@ def test_runner_approves_actual_deferred_arguments_and_propagates_output(tmp_pat
         doc.bind_note_text_input(second, note.id)
         preview = await scene("previewGraphRun", [])
         assert [step["status"] for step in preview["steps"]] == ["ready", "waiting", "waiting"]
+        assert_golden("mcp_preview", step_fields(preview["steps"], "kind", "operation", "status", "detail"))
+
+        def observe_fence(_name, _arguments):
+            saved = chat_library.load_chat_row(tmp_path / "graphs.db", doc.current_chat_id)["data"]["graph_runs"][-1]
+            active, = [step for step in saved["steps"] if step["status"] == "running"]
+            assert_golden("mcp_dispatch_fence", fence(active))
+
+        server.on_call = observe_fence
         appeared = asyncio.Event()
         publish = bus.publish
 
@@ -273,6 +283,12 @@ def test_runner_approves_actual_deferred_arguments_and_propagates_output(tmp_pat
         result = await asyncio.wait_for(task, 10)
         assert result["status"] == "completed", result
         assert [step["status"] for step in result["steps"]] == ["completed"] * 3
+        assert_golden("mcp_chain_result", step_fields(result["steps"], "kind", "operation", "status", "detail"))
+        for step in result["steps"][:2]:
+            assert_golden("mcp_completed_fence", fence(step))
+        saved = chat_library.load_chat_row(tmp_path / "graphs.db", doc.current_chat_id)["data"]["graph_runs"][-1]
+        for step in saved["steps"][:2]:
+            assert_golden("mcp_completed_fence", fence(step))
         assert note.content == "from upstream" and len(server.calls) == 2
         assert (await scene("previewGraphRun", []))["steps"][0]["status"] == "current"
 
@@ -328,6 +344,9 @@ def test_remote_failure_is_uncertain_never_replayed_and_explicitly_reconciled(tm
         server.on_call = uncertain
         result, preview = await run_tool(scene, node_id)
         assert result["status"] == "reconciliation-required", result
+        assert_golden("mcp_uncertain_fence", fence(result["steps"][0]))
+        saved = chat_library.load_chat_row(path, doc.current_chat_id)["data"]["graph_runs"][-1]
+        assert_golden("mcp_uncertain_fence", fence(saved["steps"][0]))
         assert doc.nodes[node_id].state.data["status"] == "reconciliation-required"
         assert "private-server-credential" not in json.dumps(doc.scene_payload())
         assert (await scene("resumeGraphRun", result["runId"]))["status"] == "reconciliation-required"

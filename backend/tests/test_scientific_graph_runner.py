@@ -5,6 +5,8 @@ import asyncio
 
 import pytest
 
+from backend.tests.graph_runner_golden import assert_golden, step_fields
+
 from backend import chat_library
 from backend.api import intents_graph_model as local_model
 from backend.canvas import SceneDocument
@@ -119,6 +121,7 @@ def test_ready_order_typed_fan_in_and_receipts_without_sleep(tmp_path, monkeypat
         preview = await scene("previewGraphRun", [])
         assert [step["nodeId"] for step in preview["steps"]] == [first, second, target]
         assert [step["status"] for step in preview["steps"]] == ["ready", "ready", "waiting"]
+        assert_golden("science_preview", step_fields(preview["steps"], "kind", "operation", "status", "detail"))
         assert preview["steps"][2]["sourceIds"] == [first, second]
         assert len(calls) == 2  # Explicit manual source setup, not the preview.
         waiting = True
@@ -134,6 +137,10 @@ def test_ready_order_typed_fan_in_and_receipts_without_sleep(tmp_path, monkeypat
         assert [row[1] for row in calls][-1] == "linear_regression"
         fitted = run["steps"][2]
         assert fitted["scientificResult"]["inputs"] == {"x": [2, 4, 6], "y": [5, 8, 11]}
+        assert_golden("science_result", {
+            "steps": step_fields(run["steps"], "kind", "operation", "status", "detail"),
+            "inputs": fitted["scientificResult"]["inputs"],
+        })
         assert fitted["scientificResult"]["values"]["slope"] == pytest.approx(1.5)
         assert fitted["scientificResult"]["provenance"]["sources"]["x"]["sourceKey"] == document.nodes[first].state.data["nodeKey"]
         assert isinstance(fitted["elapsedMs"], int) and fitted["elapsedMs"] >= 0
