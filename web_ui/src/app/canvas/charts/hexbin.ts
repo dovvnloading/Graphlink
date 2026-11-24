@@ -49,7 +49,7 @@ export function hexbinPoints(
 
 export function hexagonVertices(cx: number, cy: number, radius: number): string {
   return Array.from({ length: 6 }, (_, i) => {
-    const theta = (60 * i - 30) * Math.PI / 180;
+    const theta = (60 * i - 90) * Math.PI / 180;
     return (cx + radius * Math.cos(theta)) + "," + (cy + radius * Math.sin(theta));
   }).join(" ");
 }
