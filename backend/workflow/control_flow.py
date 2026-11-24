@@ -5,7 +5,6 @@ import json
 import math
 import operator
 from dataclasses import asdict
-from typing import Any
 
 import regex
 

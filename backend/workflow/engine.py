@@ -280,8 +280,10 @@ class WorkflowEngine:
         step.update(status=status, finished_at=utc_now(), error=error, cost_usd=cost)
         if outputs is not None:
             step["outputs"] = outputs
-            adapter_id = next(s.adapter.adapter_id for s in run.plan.spec.steps if s.step_id == step_id)
-            skipped = [port for port in BRANCHES.get(adapter_id, ()) if port not in outputs]
+            spec = next(s for s in run.plan.spec.steps if s.step_id == step_id)
+            branches = BRANCHES.get(spec.adapter.adapter_id, ())
+            skipped = [port.name for port in spec.adapter.ports.outputs
+                       if port.name in branches and port.name not in outputs]
             if skipped:
                 step["skipped_outputs"] = skipped
         if step.get("approval", {}).get("status") == "pending":
@@ -420,7 +422,11 @@ class WorkflowEngine:
                     done, _ = await asyncio.wait(active, return_when=asyncio.FIRST_COMPLETED)
                     for task in sorted(done, key=lambda task: active[task]):
                         index = active.pop(task)
-                        result = task.result()
+                        try:
+                            result = task.result()
+                        except Exception:
+                            result = {"index": index, "status": "failed", "outputs": {},
+                                      "error": "Map item execution failed.", "cost_usd": 0.0}
                         results[index] = result
                         if result["status"] != "completed" and on_error == "stop":
                             raise ControlBlocked(f"Map item {index + 1} failed; stopped remaining items.")
@@ -429,8 +435,11 @@ class WorkflowEngine:
                     task.cancel()
                 if active:
                     await asyncio.gather(*active, return_exceptions=True)
-        cost = float(sum((Decimal(str(item["cost_usd"])) for item in results), Decimal(0)))
-        attempt.context.report_cost(cost)
+                # Charge actual or conservatively reserved costs of dispatched
+                # children, not the estimates of items never started.
+                receipts = run.record["steps"][step_id].get("map_items", {})
+                attempt.cost = float(sum((Decimal(str(item["cost_usd"])) for item in receipts.values()), Decimal(0)))
+        attempt.context.report_cost(attempt.cost or 0.0)
         return results
 
     def _charge(self, run: _Run, attempt: _Attempt) -> float:
@@ -504,13 +513,13 @@ class WorkflowEngine:
                 return True
             if pending:
                 return False
-        if failed:
-            self._finish_step(run, spec.step_id, "blocked", "A dependency did not complete.")
-            return False
         if not merge and "skipped" in states:
             self._finish_step(run, spec.step_id, "skipped", "An input path was skipped.")
             return False
         if pending:
+            return False
+        if failed:
+            self._finish_step(run, spec.step_id, "blocked", "A dependency did not complete.")
             return False
         if merge and "completed" not in states:
             self._finish_step(run, spec.step_id, "skipped", "No input path was taken.")
@@ -534,6 +543,10 @@ class WorkflowEngine:
             if not self._ready(run, spec):
                 continue
             orchestrates = spec.adapter.adapter_id in (MAP, APPROVAL)
+            if spec.adapter.adapter_id == APPROVAL and active:
+                # Drain already-dispatched work before entering a human gate.
+                # No other step (including a Map's children) runs during it.
+                break
             attempts = 1
             if spec.adapter.adapter_id == MAP:
                 attempts += (run.plan.preview.control_flow[step_id]["item_count"]

@@ -199,9 +199,9 @@ def build_plan(spec: WorkflowSpec, parameters: Mapping[str, PortValue],
         policies[step.step_id] = StepPolicy(cost_usd=total)
         controls[step.step_id].update(
             item_count=count, estimated_cost_usd=total, child_fingerprint=child.preview.fingerprint,
-            child_steps=child.preview.steps and [
+            child_steps=[
                 [key, effect, asdict(policy)] for key, effect, policy in child.preview.steps
-            ] or [],
+            ],
         )
 
     workflow_hash = digest(asdict(spec))
