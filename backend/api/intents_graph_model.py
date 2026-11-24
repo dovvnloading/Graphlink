@@ -192,6 +192,7 @@ def register_graph_model_runner(
                 checkpoint=checkpoint, complete=local_ollama_complete, response_text=_response_text, record=record_note,
             )
             run["status"] = "completed"
+            run["finishedAt"] = datetime.now(timezone.utc).isoformat()
             await checkpoint()
             return _public_run(run)
         except BaseException:

@@ -63,6 +63,16 @@ def model_step_preview(
     return token, step, source_text
 
 
+def _record_model_usage(step: dict[str, Any], payload: Any) -> None:
+    """Only measured provider counters; local loopback has no API charge."""
+    step["costUsd"] = 0.0
+    if isinstance(payload, dict):
+        for source, target in (("prompt_eval_count", "inputTokens"), ("eval_count", "outputTokens")):
+            value = payload.get(source)
+            if type(value) is int and 0 <= value <= 2147483647:
+                step[target] = value
+
+
 async def run_model_note(
     document: SceneDocument, selection: Any, step: dict[str, Any], prompt: str,
     endpoint: str, pinned_binding_id: str,
@@ -81,6 +91,7 @@ async def run_model_note(
         )
 
     async def apply_result(payload: Any) -> str:
+        _record_model_usage(step, payload)
         text = response_text(payload)
         # Other canvas intents can edit notes while an Ollama request
         # awaits its answer. Never silently replace work the user wrote

@@ -244,7 +244,8 @@ def test_json_text_binding_and_authoritative_currentness(tmp_path, monkeypatch):
 def test_runner_approves_actual_deferred_arguments_and_propagates_output(tmp_path, monkeypatch):
     async def scenario():
         settings, server = setup(tmp_path, monkeypatch)
-        doc, bus, scene = open_session(tmp_path / "graphs.db", settings)
+        path = tmp_path / "graphs.db"
+        doc, bus, scene = open_session(path, settings)
         first = await add_tool(bus, scene, "from upstream")
         second = await add_tool(bus, scene, "unused", parent=first, bindings={
             "message": {"sourceId": first, "output": "json", "pointer": "/message"},
@@ -256,28 +257,40 @@ def test_runner_approves_actual_deferred_arguments_and_propagates_output(tmp_pat
         assert_golden("mcp_preview", step_fields(preview["steps"], "kind", "operation", "status", "detail"))
 
         def observe_fence(_name, _arguments):
-            saved = chat_library.load_chat_row(tmp_path / "graphs.db", doc.current_chat_id)["data"]["graph_runs"][-1]
+            saved = chat_library.load_chat_row(path, doc.current_chat_id)["data"]["graph_runs"][-1]
             active, = [step for step in saved["steps"] if step["status"] == "running"]
             assert_golden("mcp_dispatch_fence", fence(active))
 
         server.on_call = observe_fence
-        appeared = asyncio.Event()
+        appeared = asyncio.Queue()
+        seen_approvals = set()
         publish = bus.publish
 
         async def observed(topic):
             result = await publish(topic)
-            if bus.mcp_connect_runtime.approvals:
-                appeared.set()
+            # The durable approval checkpoint also publishes library updates.
+            # Observe each live approval once, not every publication while it
+            # remains in the runtime's map (including resolved futures).
+            if topic == "scene":
+                for approval_id, (_row, future) in bus.mcp_connect_runtime.approvals.items():
+                    if not future.done() and approval_id not in seen_approvals:
+                        seen_approvals.add(approval_id)
+                        appeared.put_nowait(approval_id)
             return result
 
         monkeypatch.setattr(bus, "publish", observed)
         task = asyncio.create_task(scene("executeGraphRun", [], preview["previewToken"], "mcp-chain-run"))
-        for node_id in (first, second):
-            await asyncio.wait_for(appeared.wait(), 10)
-            appeared.clear()
+        for index, node_id in enumerate((first, second)):
+            approval_id = await asyncio.wait_for(appeared.get(), 10)
             pending, = await scene("getMcpToolApprovals")
+            assert pending["id"] == approval_id
             assert pending["nodeId"] == node_id
             assert pending["arguments"] == {"message": "from upstream"}
+            assert server.calls == [("echo", {"message": "from upstream"})] * index
+            receipt = chat_library.load_workflow_run(path, doc.current_chat_id, "mcp-chain-run")
+            assert receipt["steps"][index]["approval"] == "pending"
+            assert receipt["steps"][index]["approval_id"] == approval_id
+            assert receipt["steps"][index]["request_id"] is None
             assert await scene("approveMcpTool", "stale-approval", True) == {"ok": False}
             assert await scene("approveMcpTool", pending["id"], True) == {"ok": True}
         result = await asyncio.wait_for(task, 10)
@@ -286,7 +299,7 @@ def test_runner_approves_actual_deferred_arguments_and_propagates_output(tmp_pat
         assert_golden("mcp_chain_result", step_fields(result["steps"], "kind", "operation", "status", "detail"))
         for step in result["steps"][:2]:
             assert_golden("mcp_completed_fence", fence(step))
-        saved = chat_library.load_chat_row(tmp_path / "graphs.db", doc.current_chat_id)["data"]["graph_runs"][-1]
+        saved = chat_library.load_chat_row(path, doc.current_chat_id)["data"]["graph_runs"][-1]
         for step in saved["steps"][:2]:
             assert_golden("mcp_completed_fence", fence(step))
         assert note.content == "from upstream" and len(server.calls) == 2

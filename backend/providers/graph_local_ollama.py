@@ -50,4 +50,11 @@ def local_ollama_complete(*, prompt: str, model_id: str, endpoint: str) -> dict[
     answer = message.get("content") if isinstance(message, dict) else None
     if not isinstance(answer, str):
         raise ValueError("The local model returned an invalid chat response.")
-    return {"message": {"role": "assistant", "content": answer}}
+    payload: dict[str, Any] = {"message": {"role": "assistant", "content": answer}}
+    # Ollama reports usage counts, not API billing. Preserve only bounded
+    # numeric counters; do not retain the raw provider response.
+    for key in ("prompt_eval_count", "eval_count"):
+        value = result.get(key)
+        if type(value) is int and 0 <= value <= 2147483647:
+            payload[key] = value
+    return payload

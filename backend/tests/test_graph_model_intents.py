@@ -56,7 +56,8 @@ def test_model_preview_is_read_only_and_dispatch_checkpoints_before_request(tmp_
             assert saved_step["externalAttempt"]["model"] == "qwen3:8b"
             assert saved_step["status"] == "running"
             observed.append(saved_step["externalAttempt"]["requestId"])
-            return {"message": {"role": "assistant", "content": "Ship safely with clear results."}}
+            return {"message": {"role": "assistant", "content": "Ship safely with clear results."},
+                    "prompt_eval_count": 12, "eval_count": 7}
 
         monkeypatch.setattr(graph_model, "local_ollama_complete", fake_chat)
         args = [*selected, preview["previewToken"], "local-model-run"]
@@ -68,6 +69,12 @@ def test_model_preview_is_read_only_and_dispatch_checkpoints_before_request(tmp_
         saved = chat_library.load_chat_row(path, doc.current_chat_id)["data"]["graph_runs"][0]
         assert saved["status"] == "completed" and saved["steps"][0]["status"] == "completed"
         assert saved["steps"][0]["externalAttempt"]["phase"] == "completed"
+        receipt = chat_library.load_workflow_run(path, doc.current_chat_id, "local-model-run")
+        assert receipt["status"] == "completed" and receipt["finished_at"] == saved["finishedAt"]
+        assert receipt["steps"][0]["approval"] == "reviewed"
+        assert receipt["steps"][0]["input_tokens"] == 12
+        assert receipt["steps"][0]["output_tokens"] == 7
+        assert receipt["steps"][0]["cost_usd"] == 0.0
         assert_golden("model_note_result", {
             "status": saved["steps"][0]["status"], "detail": saved["steps"][0]["detail"],
             "outputHash": saved["steps"][0]["outputHash"], "content": target.content,

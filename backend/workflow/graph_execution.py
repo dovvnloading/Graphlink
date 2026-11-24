@@ -25,7 +25,7 @@ from graphlink_plugins.scientific.graph_run_adapter import prepare as prepare_sc
 from graphlink_plugins.scientific.workbench import _run_token
 
 from .graph_steps import _inspect, _matching_node, _output_digest, pin_output_version
-from .model_note_adapter import _digest
+from .model_note_adapter import _digest, _record_model_usage
 
 
 def _state_data(node: SceneNode) -> dict[str, Any]:
@@ -111,6 +111,7 @@ async def _run_model_step(
         )
 
     async def apply_result(payload: Any) -> str:
+        _record_model_usage(step, payload)
         text = local._response_text(payload)
         current = _matching_node(document, step)
         if not isinstance(current.state, ModelState):
