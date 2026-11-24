@@ -5,6 +5,7 @@ import { toast } from "../ui/Toast";
 
 type Gate = {
   workspace_id: number; run_id: string; workflow: string; step_id: string; message: string;
+  kind?: "gate" | "unattended";
 };
 export type ApprovalTarget = { workspaceId: number; runId: string };
 let target: ApprovalTarget | null = null;
@@ -47,9 +48,9 @@ export function WorkflowApprovalNotifications({ connected }: { connected: boolea
           pending.add(key);
           if (!shown.has(key)) {
             shown.set(key, toast.show({
-              variant: "warning", title: "Workflow waiting for approval: " + gate.workflow,
+              variant: "warning", title: gate.workflow + " is waiting for you",
               details: gate.message, action: {
-                label: "Open run history", onClick: () => { openApprovalTarget(gate); open("run-history", "dialog"); },
+                label: "Review run", onClick: () => { openApprovalTarget(gate); open("workflow-library", "dialog"); },
               },
             }));
           }

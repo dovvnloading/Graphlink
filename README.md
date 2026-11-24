@@ -116,13 +116,13 @@ node in another graph, bind its inputs, preview and run it.
 ![Animated schematic: capture connected text operations, pin a library revision, insert and execute a reusable Workflow node.](assets/gifs/workflow-library.gif)
 
 For a detached run, import a **Built-in starter** (including table-to-report,
-model comparison, mapped summaries and quality gates), or open **Run history
-→ Detached workflow runs** and enter a typed workflow request. Inspect the
+model comparison, mapped summaries and quality gates), or open **Runs → Run from JSON**
+in the Workflow library and enter a typed workflow request. Inspect the
 preview and explicitly start it. Named ports, side-effect classes, human
 approval gates, conditions, assertions, merges, bounded Maps and run budgets
 make execution inspectable. Results and step receipts are retained by workspace.
 
-In **Workflow Library → Run presets and runs**, review an exact revision and
+In **Workflow library → Presets**, choose a workflow and its
 inputs, choose permitted unattended effects and a cost cap, then save a
 preset. Start it manually, through the scoped CLI or MCP server, or on an
 interval, daily schedule or folder change while Graphlink is running. Code

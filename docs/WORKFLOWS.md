@@ -19,9 +19,9 @@ calls or other effects only after reviewing their inputs, permissions and costs.
 | Surface | Use it for | Execution and persistence |
 | --- | --- | --- |
 | **Plugins → Graph Runner** | Connected notes, table/chart/report, local Model, scientific and MCP Connect nodes | Preview the selected branch or whole graph; run against the live scene and checkpoint graph results. |
-| **Workflows → Workflow Library** | Capture connected text operations and reuse them in other graphs | A pinned Workflow node runs a pure child workflow as one Graph Runner step. |
-| **Run history → Detached workflow runs** (also available from built-in starters in the library) | Typed specifications, service steps, branching, mapping and human gates | Backend-owned workspace run with its own immutable spec, inputs and journal; no live canvas traversal. |
-| **Workflow Library → Run presets and runs** | Repeat an exact approved request, manually or on a trigger | Detached execution under a pinned unattended policy and budget. |
+| **Workflows → Workflow library → Workflows** | Capture connected text operations and reuse them in other graphs | A pinned Workflow node runs a pure child workflow as one Graph Runner step. |
+| **Workflow library → Workflows → a workflow → Run it**, or **Runs → Run from JSON** | Typed specifications, service steps, branching, mapping and human gates | Backend-owned workspace run with its own immutable spec, inputs and journal; no live canvas traversal. |
+| **Workflow library → Presets** | Repeat an exact approved request, manually or on a trigger | Detached execution under a pinned unattended policy and budget. |
 
 Canvas Graph Runner and the detached engine share adapter infrastructure, but
 are not interchangeable. Canvas edges and node journals are not automatically
@@ -45,9 +45,9 @@ model or tool. Reopen the runner or Run history to inspect the results.
 
 1. On the canvas, connect plain notes using Copy text or Word count operations.
    Select the connected operations you want to reuse.
-2. Open **Workflows** in the app bar, choose **Make workflow from selection**,
-   give the workflow a name, select the outputs to expose, and optionally
-   promote operation choices to parameters. External sources become named
+2. Open **Workflows** in the app bar, choose **Make from selection**, give
+   the workflow a name, choose what it returns, and optionally keep operation
+   choices adjustable as settings. External sources become named
    inputs, not embedded source text.
 3. Save as a new workflow or append a revision to an existing library entry.
    Open it via **Open / version history** and select the revision.
@@ -80,8 +80,8 @@ as a grant to execute code or make external requests.
 
 ### Built-in starters
 
-In **Workflow Library → Built-in starters**, import an independent copy and
-open it. Each ships a synthetic request for the detached inspector:
+Under **Starters** in the Workflows tab, choose **Add to library**. The
+workflow opens with a sample filled into its **Run it** form:
 
 | Starter | Example task |
 | --- | --- |
@@ -103,13 +103,14 @@ approval or become a reusable effectful canvas node.
 
 ## Build a detached workflow
 
-Use **Run history → Detached workflow runs**, choose a workspace, expand
-**Preview and start a typed workflow**, and paste a request into
-**Workflow request JSON (spec and parameters)**. Alternatively open a starter
-to load its example. Choose **Preview workflow**, inspect the fingerprint,
-effects, identities, estimated cost and control flow, then choose **Start
-reviewed workflow** (or **Approve preview and start** when required).
-Inspect the returned run in the same workspace.
+Open a workflow in the **Workflows** tab and fill its **Run it** form: one
+field per input (text, a JSON value, or comma-separated values for a table).
+Turn on **Edit as JSON** to change model IDs or supply file inputs. For a
+spec you wrote yourself, use **Runs → Run from JSON** and paste a request
+into **Workflow request JSON (spec and parameters)**. Choose **Preview
+workflow**, review each step's effect, model and estimated cost, then choose
+**Approve preview and start** (or **Start reviewed workflow** when no approval
+is needed). The run opens in the **Runs** tab.
 
 A version-one spec is an immutable directed acyclic graph (DAG). It declares
 a workflow ID and revision, named input/output ports, stable step IDs,
@@ -335,8 +336,8 @@ other producers or hide their failures. No available input means skipped
 if there was no failure.
 
 A human Approval gate drains already-admitted work, then stops admission.
-Review the notification and **Run history → Detached workflow runs**;
-choose **Approve step** or **Reject step**. Reject blocks the run. The
+Choose **Review run** in the notification, or open the run in the **Runs**
+tab, and choose **Approve step** or **Reject step**. Reject blocks the run. The
 manual run's duration clock pauses during this wait (no automatic approval
 or gate timeout); a preset's duration cap includes waiting, including
 explicit gates. Backend restart interrupts the run, not silently resumes it.
@@ -365,9 +366,10 @@ preview. See [Graph Run Inspector](GRAPH_RUN_INSPECTOR.md). Do not retry a
 remote request with an uncertain outcome: check the service and explicitly
 reconcile the receipt first. Undo changes the local canvas, not the service.
 
-**Detached workflow runs** is workspace-scoped rather than tied to the open
-graph. Select a run to inspect its frozen spec, reviewed preview, recorded
-cost, outputs, errors, skipped branches, pending approvals and Map receipts.
+The **Runs** tab is workspace-scoped rather than tied to the open graph.
+Open a run to see its result, each step's status, outputs and errors, skipped
+branches, pending approvals, Map progress, the reviewed preview and the event
+log. **Save result as graph** copies a completed run into the chat library.
 The run ID is returned before execution. Cancel prevents further admission
 and requests cancellation of active work; completed results survive. Restart
 marks unfinished runs interrupted and does not replay uncertain external
@@ -384,21 +386,20 @@ a guarantee of remote exactly-once execution.
 
 ## Presets and triggers
 
-For a pure reusable workflow, open a revision in **Workflow Library**.
-Under **Run presets and runs**:
+Open **Workflow library → Presets** and choose **New preset** (or **More →
+Save as a preset…** on a workflow's page):
 
-1. Choose **Run workspace** and **Selected library revision** as Workflow
-   source. Enter a preset name, the named **Inputs (JSON object)** and promoted
-   **Parameters (JSON object)** (omit unchanged parameters).
-2. For a local typed spec (including a starter), instead choose **Local
-   detached workflow spec** and paste the reviewed request containing spec
-   and typed parameters. Presets currently accept text/JSON/table inputs only.
-3. Select allowed unattended side effects and a maximum USD cost. Start with
-   pure only and zero cost for the template example.
-4. Choose a trigger, **Preview preset**, review the exact request, policy,
-   trigger and cost, then **Approve and save preset**.
-5. Select **Run saved preset** for an immediate run, or leave Graphlink running
-   for the trigger. Inspect **Detached runs** in the same panel.
+1. Choose the workflow, name the preset and fill its inputs. Settings you
+   leave empty keep the version's saved values. Presets accept text, JSON and
+   table inputs.
+2. Under **What it may do without you**, tick the effects that may run
+   unattended and set the **Cost cap per run**. Start with pure only and
+   $0 for the template example.
+3. Under **When it runs**, choose **When I run it**, **On an interval**,
+   **Daily** or **When a folder changes**, then **Preview preset**, review
+   each step and **Approve and save preset**.
+4. Choose **Run now** for an immediate run, or leave Graphlink running
+   for the trigger. Its runs appear in the **Runs** tab.
 
 ![Animated diagram of reviewing a preset, firing a trigger and inspecting an approval and receipt.](../assets/gifs/workflow-presets.gif)
 

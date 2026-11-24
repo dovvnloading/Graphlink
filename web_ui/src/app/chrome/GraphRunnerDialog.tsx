@@ -357,7 +357,7 @@ function Runner({ store }: { store: SceneStore }) {
           ...(requestedScope === "failed" ? [{ value: "failed", label: "Run failed steps only" }] : []),
         ]} />
       <Button variant="secondary" disabled={!!busy} onClick={previewRun}>Preview run</Button>
-      <Button disabled={!!busy} onClick={() => overlays.open("workflow-library", "dialog")}>Workflow Library</Button>
+      <Button disabled={!!busy} onClick={() => overlays.open("workflow-library", "dialog")}>Workflow library</Button>
     </div>
     {scope === "selection" && <p className="runner-note">Includes downstream outputs and the inputs they depend on.</p>}
     {scope === "through" && <p className="runner-note">Runs only the selected destination and its prerequisites. No downstream steps.</p>}

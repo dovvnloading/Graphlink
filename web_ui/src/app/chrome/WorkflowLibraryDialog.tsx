@@ -1,236 +1,351 @@
-import { useEffect, useRef, useState } from "react";
-import { useReactFlow } from "@xyflow/react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useReactFlow, useStore } from "@xyflow/react";
 import type { SceneStore } from "../canvas/sceneStore";
 import type { WorkflowDocument, WorkflowEntry, WorkflowParameter, WorkflowStarter, WorkflowVersion } from "../canvas/workflowLibrary";
 import { workflowPin } from "../canvas/workflowLibrary";
 import { downloadTextFile } from "../canvas/downloadTextFile";
 import { Dialog } from "../overlays/overlays";
+import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { Checkbox } from "../ui/Checkbox";
-import { TextField } from "../ui/TextField";
-import { Select } from "../ui/Select";
-import { InlineAlert } from "../ui/InlineAlert";
 import { useConfirm } from "../ui/ConfirmDialog";
-import { WorkflowSpecView } from "./WorkflowSpecView";
-import { DetachedWorkflowInspector } from "./DetachedWorkflowInspector";
-import { WorkflowAutomationPanel } from "./WorkflowAutomationPanel";
-import "./GraphRunnerDialog.css";
+import { EmptyState } from "../ui/EmptyState";
+import { FieldGroup } from "../ui/Field";
+import { Icon } from "../ui/icons/Icon";
+import { InlineAlert } from "../ui/InlineAlert";
+import { MenuButton, MenuItem } from "../ui/Menu";
+import { Select } from "../ui/Select";
+import { Tabs } from "../ui/Tabs";
+import { TextField } from "../ui/TextField";
+import { subscribeApprovalTarget, takeApprovalTarget } from "./WorkflowApprovalNotifications";
+import { WorkflowPresetsPanel, type PresetStart } from "./WorkflowPresetsPanel";
+import { stepName } from "./WorkflowPreviewSummary";
+import { WorkflowDefinition } from "./WorkflowSpecView";
+import { WorkflowRunLauncher } from "./WorkflowRunLauncher";
+import { WorkflowRunsPanel } from "./WorkflowRunsPanel";
+import {
+  errorText, plural, runWaiting, workflowRequest, workspacePath,
+  type DetachedRun, type Preset, type Workspace,
+} from "./workflowApi";
+import "./workflow-library.css";
+
+type View =
+  | { kind: "list" }
+  | { kind: "detail"; entry: WorkflowEntry; doc: WorkflowDocument; versions: WorkflowVersion[] }
+  | { kind: "capture"; ids: string[]; doc: WorkflowDocument };
+type Tab = "workflows" | "runs" | "presets";
+
+function savedOn(value: string) {
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? new Date(date).toLocaleDateString(undefined, { dateStyle: "medium" }) : "an unknown date";
+}
 
 function Library({ store }: { store: SceneStore }) {
   const rf = useReactFlow();
+  const selectedCount = useStore(state => state.nodes.reduce((count, node) => count + (node.selected ? 1 : 0), 0));
   const askConfirm = useConfirm();
+  const [tab, setTab] = useState<Tab>("workflows");
   const [rows, setRows] = useState<WorkflowEntry[]>([]);
   const [starters, setStarters] = useState<WorkflowStarter[]>([]);
-  const [query, setQuery] = useState("");
-  const [name, setName] = useState("");
-  const [captureName, setCaptureName] = useState("");
   const [loading, setLoading] = useState(true);
-  const entryHeading = useRef<HTMLHeadingElement>(null);
-  const captureHeading = useRef<HTMLHeadingElement>(null);
-  const focusEntry = useRef(false);
-  const [entry, setEntry] = useState<WorkflowEntry | null>(null);
-  const [versions, setVersions] = useState<WorkflowVersion[]>([]);
-  const [view, setView] = useState<WorkflowDocument | null>(null);
-  const [capture, setCapture] = useState<{ ids: string[]; doc: WorkflowDocument } | null>(null);
-  const [outputs, setOutputs] = useState<string[]>([]);
-  const [params, setParams] = useState<WorkflowParameter[]>([]);
-  const [append, setAppend] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  async function refresh() {
+  const [query, setQuery] = useState("");
+  const [view, setView] = useState<View>({ kind: "list" });
+  const [editing, setEditing] = useState<null | "rename" | "duplicate">(null);
+  const [nameDraft, setNameDraft] = useState("");
+  const [capture, setCapture] = useState({ name: "", appendTo: "", outputs: [] as string[], params: [] as WorkflowParameter[] });
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [workspace, setWorkspace] = useState<number | null>(null);
+  const [runs, setRuns] = useState<DetachedRun[]>([]);
+  const [presets, setPresets] = useState<Preset[]>([]);
+  const [runsLoaded, setRunsLoaded] = useState(false);
+  const [selectedRun, setSelectedRun] = useState("");
+  const [presetStart, setPresetStart] = useState<PresetStart | null>(null);
+  const [poke, setPoke] = useState(0);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const focusHeading = useRef(false);
+
+  const refreshRows = useCallback(async () => {
     const entries = await store.workflowLibrary<WorkflowEntry[]>("list");
     setRows(entries);
     return entries;
-  }
-  useEffect(() => {
-    let cancelled = false;
-    void Promise.all([
-      store.workflowLibrary<WorkflowEntry[]>("list"),
-      store.workflowLibrary<WorkflowStarter[]>("starters"),
-    ])
-      .then(([entries, catalog]) => {
-        if (!cancelled) { setRows(entries); setStarters(catalog); }
-      })
-      .catch(e => {
-        if (!cancelled) setError(String(e));
-      })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
   }, [store]);
+  useEffect(() => {
+    let live = true;
+    Promise.all([store.workflowLibrary<WorkflowEntry[]>("list"), store.workflowLibrary<WorkflowStarter[]>("starters")])
+      .then(([entries, catalog]) => { if (live) { setRows(entries); setStarters(catalog); } })
+      .catch(err => { if (live) setError(errorText(err)); })
+      .finally(() => { if (live) setLoading(false); });
+    workflowRequest<Workspace[]>("/api/workflows/workspaces")
+      .then(list => { if (live) { setWorkspaces(list); setWorkspace(current => current ?? list[0]?.id ?? null); } })
+      .catch(err => { if (live) setError(errorText(err)); });
+    return () => { live = false; };
+  }, [store]);
+  // Runs and presets refresh while the dialog is open, so approvals and progress stay current.
+  useEffect(() => {
+    if (workspace === null) return;
+    const controller = new AbortController();
+    let timer: number | undefined;
+    async function load() {
+      try {
+        const [nextRuns, nextPresets] = await Promise.all([
+          workflowRequest<DetachedRun[]>(workspacePath(workspace!) + "/runs", { signal: controller.signal }),
+          workflowRequest<Preset[]>(workspacePath(workspace!) + "/presets", { signal: controller.signal }),
+        ]);
+        if (controller.signal.aborted) return;
+        setRuns(Array.isArray(nextRuns) ? nextRuns : []);
+        setPresets(Array.isArray(nextPresets) ? nextPresets : []);
+        setRunsLoaded(true);
+      } catch (err) { if (!controller.signal.aborted) setError(errorText(err)); }
+      finally { if (!controller.signal.aborted) timer = window.setTimeout(() => void load(), 2000); }
+    }
+    void load();
+    return () => { controller.abort(); window.clearTimeout(timer); };
+  }, [workspace, poke]);
+  // A "waiting for approval" notification opens this dialog on that run.
+  useEffect(() => {
+    function follow() {
+      const target = takeApprovalTarget();
+      if (!target) return;
+      setWorkspace(target.workspaceId); setTab("runs"); setSelectedRun(target.runId);
+    }
+    follow();
+    return subscribeApprovalTarget(follow);
+  }, []);
+  useEffect(() => {
+    if (focusHeading.current) { focusHeading.current = false; heading.current?.focus(); }
+  }, [view]);
+
   async function act(fn: () => Promise<unknown>) {
-    setBusy(true);
-    setError("");
-    try { await fn(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    setBusy(true); setError("");
+    try { await fn(); } catch (err) { setError(errorText(err)); }
     finally { setBusy(false); }
   }
-  useEffect(() => {
-    if (focusEntry.current && view) {
-      focusEntry.current = false;
-      entryHeading.current?.focus();
-    }
-  }, [view]);
-  useEffect(() => { if (capture) captureHeading.current?.focus(); }, [capture]);
-
-  async function open(row: WorkflowEntry, revision = row.revision, moveFocus = true) {
-    // Commit the entry and the pinned revision together. A failed history/get
-    // must not pair a different workflow's document with rename/delete/export.
-    const [history, document] = await Promise.all([
-      store.workflowLibrary<WorkflowVersion[]>("history", { workflow_id: row.workflow_id }),
-      store.workflowLibrary<WorkflowDocument>("get", { workflow_id: row.workflow_id, revision }),
+  function go(next: View) { focusHeading.current = true; setEditing(null); setView(next); }
+  async function open(entry: WorkflowEntry, revision = entry.revision) {
+    const [versions, doc] = await Promise.all([
+      store.workflowLibrary<WorkflowVersion[]>("history", { workflow_id: entry.workflow_id }),
+      store.workflowLibrary<WorkflowDocument>("get", { workflow_id: entry.workflow_id, revision }),
     ]);
-    focusEntry.current = moveFocus;
-    setEntry(row);
-    setName(row.name);
-    setVersions(history);
-    setView(document);
-  }
-  function make() {
-    void act(async () => {
-      const ids = rf.getNodes().filter(n => n.selected).map(n => n.id).sort();
-      const doc = await store.workflowLibrary<WorkflowDocument>("preview", { ids });
-      setCapture({ ids, doc });
-      setOutputs(doc.spec.outputs.map(o => o.port.name));
-      setParams([]);
-      setCaptureName("");
-      setAppend("");
-    });
+    if (view.kind === "detail" && view.entry.workflow_id === entry.workflow_id) setView({ kind: "detail", entry, doc, versions });
+    else go({ kind: "detail", entry, doc, versions });
   }
   function importStarter(starter: WorkflowStarter) {
     void act(async () => {
-      const pin = await store.workflowLibrary<{ workflow_id: string; revision: string }>(
-        "importStarter", { starter_id: starter.id },
-      );
-      const entries = await refresh();
-      const row = entries.find(item => item.workflow_id === pin.workflow_id);
-      if (row) await open(row, pin.revision);
+      const pin = await store.workflowLibrary<{ workflow_id: string; revision: string }>("importStarter", { starter_id: starter.id });
+      const entry = (await refreshRows()).find(row => row.workflow_id === pin.workflow_id);
+      if (entry) await open(entry, pin.revision);
     });
   }
   function importFile() {
-    const fileInput = document.createElement("input");
-    fileInput.type = "file";
-    fileInput.accept = ".graphlink-workflow";
-    fileInput.onchange = () => {
-      const file = fileInput.files?.[0];
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".graphlink-workflow";
+    input.onchange = () => {
+      const file = input.files?.[0];
       if (!file) return;
       void act(async () => {
-        if (file.size > 1_000_000) throw new Error("Workflow files must be at most 1 MB.");
+        if (file.size > 1_000_000) throw new Error("That file is over 1 MB. Workflow files must be at most 1 MB.");
         await store.workflowLibrary("import", { text: await file.text() });
-        await refresh();
+        await refreshRows();
       });
     };
-    fileInput.click();
+    input.click();
   }
-  const position = () => rf.screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
-  const filtered = rows.filter(row => row.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
-  return <>
-    <div role="status">{loading ? "Loading workflows…" : busy ? "Updating workflow library…" : ""}</div>
-    <p className="runner-intro">Workflows are global, immutable versioned definitions. Capture connected text operations, import a built-in starter, or import a portable workflow file. Canvas nodes keep their pinned versions even after a library entry is deleted.</p>
-    {error && <InlineAlert variant="error" title="Workflow Library" body={error} />}
-    <div className="runner-commit">
-      <Button variant="primary" disabled={busy || loading || !!capture} onClick={make}>Make workflow from selection</Button>
-      <Button disabled={busy || loading || !!capture} onClick={importFile}>Import .graphlink-workflow</Button>
-      <Button disabled={busy || loading || !!capture} onClick={() => void act(refresh)}>Refresh</Button>
-    </div>
-    {capture && <section>
-      <h3 ref={captureHeading} tabIndex={-1}>Make workflow</h3>
-      <TextField label="Workflow name" value={captureName} onValueChange={setCaptureName} disabled={busy} />
-      <Select label="Save as" value={append} disabled={busy} onChange={value => {
-        setAppend(value); setCaptureName(rows.find(row => row.workflow_id === value)?.name ?? "");
-      }} options={[{ value: "", label: "New workflow" }, ...rows.map(row => ({ value: row.workflow_id, label: row.name + " · next version" }))]} />
-      <p>Unbound inputs: {capture.doc.spec.inputs.map(p => p.name + " (" + p.kind + ")").join(", ") || "None"}</p>
-      <h4>Expose outputs</h4>
-      {capture.doc.spec.outputs.map(o => <Checkbox key={o.port.name} label={o.port.name + " from " + (o.source.kind === "step" ? o.source.step_id : o.source.port)}
-        disabled={busy} checked={outputs.includes(o.port.name)} onChange={event => { const checked = event.currentTarget.checked; setOutputs(old => checked ? [...old, o.port.name] : old.filter(n => n !== o.port.name)); }} />)}
-      <h4>Promote settings to parameters</h4>
-      {capture.doc.spec.steps.map(step => {
-        const parameterName = step.step_id + "_operation";
-        return <Checkbox key={parameterName} label={step.step_id + " · operation (choice)"}
-          disabled={busy} checked={params.some(p => p.name === parameterName)} onChange={event => {
-            const checked = event.currentTarget.checked;
-            setParams(old => checked ? [...old, { name: parameterName, step_id: step.step_id, setting: "operation", kind: "choice", choices: ["copy", "word_count"] }] : old.filter(p => p.name !== parameterName));
-          }} />;
-      })}
-      <WorkflowSpecView value={capture.doc} />
-      <div className="runner-commit">
-        <Button variant="primary" disabled={busy || !captureName.trim() || !outputs.length} onClick={() => void act(async () => {
-          const previous = rows.find(row => row.workflow_id === append);
-          await store.workflowLibrary("make", { ids: capture.ids, name: captureName, outputs, parameters: params, expected_spec: capture.doc.spec,
-            ...(previous ? { workflow_id: previous.workflow_id, expected_revision: previous.revision } : {}) });
-          setCapture(null); setCaptureName(""); await refresh();
-        })}>Save workflow version</Button>
-        <Button disabled={busy} onClick={() => setCapture(null)}>Cancel</Button>
+  function startCapture() {
+    void act(async () => {
+      const ids = rf.getNodes().filter(node => node.selected).map(node => node.id).sort();
+      const doc = await store.workflowLibrary<WorkflowDocument>("preview", { ids });
+      setCapture({ name: "", appendTo: "", outputs: doc.spec.outputs.map(output => output.port.name), params: [] });
+      go({ kind: "capture", ids, doc });
+    });
+  }
+  const center = () => rf.screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+  const showRun = (runId: string) => { setSelectedRun(runId); setTab("runs"); setPoke(n => n + 1); };
+  const workspaceControl = workspaces.length > 1
+    ? <Select ariaLabel="Workspace" value={workspace === null ? "" : String(workspace)} className="workflow-workspace"
+        onChange={value => { setRuns([]); setPresets([]); setRunsLoaded(false); setSelectedRun(""); setWorkspace(Number(value)); }}
+        options={workspaces.map(item => ({ value: String(item.id), label: item.name }))} />
+    : null;
+  const waiting = runs.filter(runWaiting).length;
+  const filtered = rows.filter(row => row.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+
+  let workflowsPanel;
+  if (view.kind === "capture") {
+    const { doc } = view;
+    const toggle = (list: string[], item: string, on: boolean) => on ? [...list, item] : list.filter(value => value !== item);
+    workflowsPanel = <div className="workflow-panel">
+      <Button variant="ghost" iconStart="chevron-left" className="workflow-back" onClick={() => go({ kind: "list" })}>All workflows</Button>
+      <h3 ref={heading} tabIndex={-1}>Make a workflow from {plural(view.ids.length, "selected node")}</h3>
+      <p className="workflow-muted">Unconnected inputs become the workflow's inputs. Choose what it returns and which settings stay adjustable.</p>
+      <div className="workflow-form">
+        <div className="workflow-form-grid">
+          <TextField label="Workflow name" value={capture.name} disabled={busy} onValueChange={name => setCapture(c => ({ ...c, name }))} />
+          <Select label="Save as" value={capture.appendTo} disabled={busy}
+            onChange={appendTo => setCapture(c => ({ ...c, appendTo, name: rows.find(row => row.workflow_id === appendTo)?.name ?? c.name }))}
+            options={[{ value: "", label: "A new workflow" }, ...rows.map(row => ({ value: row.workflow_id, label: "Next version of " + row.name }))]} />
+        </div>
+        <FieldGroup title="What it returns" description="Pick at least one output.">
+          {doc.spec.outputs.map(output => <Checkbox key={output.port.name} disabled={busy}
+            label={stepName(output.port.name)}
+            description={"From " + (output.source.kind === "step" ? stepName(output.source.step_id) : "input " + stepName(output.source.port))}
+            checked={capture.outputs.includes(output.port.name)}
+            onChange={event => { const on = event.currentTarget.checked; setCapture(c => ({ ...c, outputs: toggle(c.outputs, output.port.name, on) })); }} />)}
+        </FieldGroup>
+        <FieldGroup title="Settings to keep adjustable" description="Each becomes a choice you can change per run or preset.">
+          {doc.spec.steps.map(step => {
+            const name = step.step_id + "_operation";
+            return <Checkbox key={name} disabled={busy} label={stepName(step.step_id) + " operation"}
+              description="Copy the text or count its words"
+              checked={capture.params.some(param => param.name === name)}
+              onChange={event => {
+                const on = event.currentTarget.checked;
+                setCapture(c => ({ ...c, params: on
+                  ? [...c.params, { name, step_id: step.step_id, setting: "operation", kind: "choice", choices: ["copy", "word_count"] }]
+                  : c.params.filter(param => param.name !== name) }));
+              }} />;
+          })}
+        </FieldGroup>
+        <WorkflowDefinition doc={doc} />
+        <div className="workflow-actions">
+          <Button variant="primary" loading={busy} disabled={!capture.name.trim() || !capture.outputs.length}
+            disabledReason={!capture.name.trim() ? "Name the workflow first." : !capture.outputs.length ? "Pick at least one output." : undefined}
+            onClick={() => void act(async () => {
+              const previous = rows.find(row => row.workflow_id === capture.appendTo);
+              await store.workflowLibrary("make", { ids: view.ids, name: capture.name.trim(), outputs: capture.outputs,
+                parameters: capture.params, expected_spec: doc.spec,
+                ...(previous ? { workflow_id: previous.workflow_id, expected_revision: previous.revision } : {}) });
+              await refreshRows();
+              go({ kind: "list" });
+            })}>Save workflow</Button>
+          <Button variant="ghost" disabled={busy} onClick={() => go({ kind: "list" })}>Cancel</Button>
+        </div>
       </div>
-    </section>}
-    <section aria-label="Built-in starter workflows">
-      <h3>Built-in starters</h3>
-      <p>Import an independent copy with sample inputs. Model steps use local Ollama and require a reviewed run.</p>
-      <ul className="runner-steps">
-        {starters.map(starter => <li key={starter.id}>
-          <div className="runner-step-heading"><strong>{starter.name}</strong></div>
-          <p>{starter.description}</p>
-          <Button size="sm" disabled={busy || !!capture} onClick={() => importStarter(starter)}>Import {starter.name}</Button>
-        </li>)}
-      </ul>
-    </section>
-    <TextField label="Search workflows" type="search" value={query} onValueChange={setQuery} />
-    <ul className="runner-steps">
-      {filtered.map(row => <li key={row.workflow_id}>
-        <div className="runner-step-heading"><strong>{row.name}</strong><span>Version {row.version}</span></div>
-        <Button size="sm" disabled={busy || !!capture} aria-label={"Open / version history: " + row.name} onClick={() => void act(() => open(row))}>Open / version history</Button>
-      </li>)}
-    </ul>
-    {!loading && !rows.length && !error && <p>No workflows saved yet.</p>}
-    {!!rows.length && <p role="status">{filtered.length ? `${filtered.length} matching workflows` : "No workflows match your search."}</p>}
-    {entry && view && !capture && <section>
-      <h3 ref={entryHeading} tabIndex={-1}>{entry.name}</h3>
-      <Select label="Version history" value={view.spec.revision} disabled={busy}
-        options={versions.map(v => ({ value: v.revision, label: "Version " + v.version + " · " + new Date(v.created_at).toLocaleDateString() }))}
-        onChange={revision => void act(() => open(entry, revision, false))} />
-      <WorkflowSpecView value={view} />
-      <TextField label="Library name / duplicate name" value={name} onValueChange={setName} disabled={busy} />
-      <div className="runner-commit">
-        <Button disabled={busy || !name.trim()} onClick={() => void act(async () => {
-          await store.workflowLibrary("rename", { workflow_id: entry.workflow_id, name });
-          setEntry({ ...entry, name }); await refresh();
-        })}>Rename</Button>
-        <Button disabled={busy || !name.trim()} onClick={() => void act(async () => {
-          await store.workflowLibrary("duplicate", { ...workflowPin(view), name });
-          await refresh();
-        })}>Duplicate version</Button>
-        <Button disabled={busy} onClick={() => void act(async () => {
-          if (!await askConfirm({ title: "Delete workflow?", body: "Existing pinned nodes keep their versions. The entry will disappear from the library.", confirmLabel: "Delete", destructive: true })) return;
-          await store.workflowLibrary("delete", { workflow_id: entry.workflow_id });
-          setEntry(null); setView(null); await refresh();
-        })}>Delete</Button>
+    </div>;
+  } else if (view.kind === "detail") {
+    const { entry, doc, versions } = view;
+    const starter = doc.format === "graphlink-starter-workflow";
+    workflowsPanel = <div className="workflow-panel">
+      <Button variant="ghost" iconStart="chevron-left" className="workflow-back" onClick={() => go({ kind: "list" })}>All workflows</Button>
+      <header className="workflow-detail-header">
+        <div className="workflow-detail-title">
+          <h3 ref={heading} tabIndex={-1}>{entry.name}</h3>
+          {starter && <Badge>Starter</Badge>}
+        </div>
+        <div className="workflow-actions">
+          <Select label="Version history" value={doc.spec.revision} disabled={busy} className="workflow-version"
+            options={versions.map(version => ({ value: version.revision, label: "Version " + version.version + " · " + savedOn(version.created_at) }))}
+            onChange={revision => void act(() => open(entry, revision))} />
+          {!starter && <Button variant="primary" iconStart="plus" disabled={busy}
+            onClick={() => void act(() => store.mutateWorkflowNode("insert", { ...workflowPin(doc), ...center() }))}>Add to canvas</Button>}
+          <MenuButton label="More" menuLabel={"More actions for " + entry.name} disabled={busy}>
+            {!starter && <MenuItem label="Unpack as editable nodes" icon="layers"
+              onSelect={() => void act(() => store.mutateWorkflowNode("unpack", { ...workflowPin(doc), ...center() }))} />}
+            <MenuItem label="Save as a preset…" icon="clock" onSelect={() => { setPresetStart({ workflowId: entry.workflow_id }); setTab("presets"); }} />
+            <MenuItem label="Rename…" icon="edit" onSelect={() => { setNameDraft(entry.name); setEditing("rename"); }} />
+            <MenuItem label="Duplicate…" icon="copy" onSelect={() => { setNameDraft(entry.name + " copy"); setEditing("duplicate"); }} />
+            <MenuItem label="Export file" icon="download" onSelect={() => void act(async () => {
+              const contents = await store.workflowLibrary<string>("export", workflowPin(doc));
+              downloadTextFile(contents, entry.name.replace(/[^a-zA-Z0-9_-]/g, "_") + ".graphlink-workflow");
+            })} />
+            <MenuItem label="Delete…" icon="trash" destructive onSelect={() => void act(async () => {
+              if (!await askConfirm({ title: "Delete " + entry.name + "?", body: "Workflow nodes already on a canvas keep their pinned version.", confirmLabel: "Delete", destructive: true })) return;
+              await store.workflowLibrary("delete", { workflow_id: entry.workflow_id });
+              await refreshRows();
+              go({ kind: "list" });
+            })} />
+          </MenuButton>
+        </div>
+      </header>
+      {editing && <div className="workflow-inline-editor">
+        <TextField label={editing === "rename" ? "New name" : "Name for the copy"} value={nameDraft} disabled={busy} onValueChange={setNameDraft} />
+        <Button variant="primary" disabled={busy || !nameDraft.trim()} onClick={() => void act(async () => {
+          if (editing === "rename") {
+            await store.workflowLibrary("rename", { workflow_id: entry.workflow_id, name: nameDraft.trim() });
+            setView({ ...view, entry: { ...entry, name: nameDraft.trim() } });
+          } else {
+            await store.workflowLibrary("duplicate", { ...workflowPin(doc), name: nameDraft.trim() });
+          }
+          setEditing(null);
+          await refreshRows();
+        })}>{editing === "rename" ? "Rename" : "Duplicate"}</Button>
+        <Button variant="ghost" disabled={busy} onClick={() => setEditing(null)}>Cancel</Button>
+      </div>}
+      <p className="workflow-detail-meta">
+        {plural(doc.spec.steps.length, "step")} · {plural(doc.spec.inputs.length, "input")} · {plural(doc.spec.outputs.length, "output")} · version {entry.version} · saved {savedOn(entry.created_at)}
+      </p>
+      <div className="workflow-detail-body">
+        <WorkflowDefinition doc={doc} />
+        <section className="workflow-card workflow-run-card" aria-label="Run this workflow">
+          <WorkflowRunLauncher key={doc.spec.revision} title="Run it" spec={doc.spec} workspace={workspace}
+            note={starter ? <p className="workflow-muted">Filled with a sample. Model steps use the local Ollama model named in each step.</p>
+              : doc.parameters.length > 0 ? <p className="workflow-muted">Runs use the saved settings of this version. Change them in a preset.</p> : null}
+            examples={starter ? doc.example_inputs : undefined} onStarted={showRun} />
+        </section>
       </div>
-      {view.format === "graphlink-starter-workflow" && <>
-        <p>Review or edit the synthetic example inputs and model IDs in the request before running.
-          Install the pinned local models or select installed IDs; the endpoint must match your loopback Ollama configuration.</p>
-        <p>To create a run preset for a starter, use the local detached workflow spec option below with the reviewed typed request.</p>
-        <DetachedWorkflowInspector key={view.spec.revision}
-          initialSource={JSON.stringify({ spec: view.spec, parameters: view.example_inputs }, null, 2)} />
-      </>}
-      <div className="runner-commit">
-        {view.format === "graphlink-workflow" && <>
-          <Button variant="primary" disabled={busy} onClick={() => void act(async () => {
-            await store.mutateWorkflowNode("insert", { ...workflowPin(view), ...position() });
-          })}>Add pinned Workflow node</Button>
-          <Button disabled={busy} onClick={() => void act(async () => {
-            await store.mutateWorkflowNode("unpack", { ...workflowPin(view), ...position() });
-          })}>Unpack editable nodes</Button>
-        </>}
-        <Button disabled={busy} onClick={() => void act(async () => {
-          const contents = await store.workflowLibrary<string>("export", workflowPin(view));
-          downloadTextFile(contents, entry.name.replace(/[^a-zA-Z0-9_-]/g, "_") + ".graphlink-workflow");
-        })}>Export version</Button>
+    </div>;
+  } else {
+    workflowsPanel = <div className="workflow-panel">
+      <div className="workflow-toolbar">
+        <TextField label="Search workflows" type="search" size="sm" prefixIcon="search" suffix={{ type: "clear" }}
+          placeholder="Search workflows…" value={query} onValueChange={setQuery} autoComplete="off" />
+        <span className="workflow-toolbar-end">
+          <Button variant="secondary" iconStart="plus" disabled={busy || loading || !selectedCount}
+            disabledReason={!selectedCount ? "Select connected nodes on the canvas first." : undefined} onClick={startCapture}>
+            Make from selection</Button>
+          <Button variant="secondary" iconStart="upload" disabled={busy || loading} onClick={importFile}>Import file</Button>
+        </span>
       </div>
-    </section>}
-    <WorkflowAutomationPanel view={!capture && view?.format === "graphlink-workflow" ? view : null} />
-  </>;
+      {!loading && rows.length > 0 && <section className="workflow-group" aria-label="Your workflows">
+        <h3 className="workflow-overline">Your workflows</h3>
+        {filtered.length
+          ? <ul className="workflow-list">{filtered.map(row => <li key={row.workflow_id} className="workflow-row">
+              <button type="button" className="workflow-row-main" disabled={busy} onClick={() => void act(() => open(row))}
+                aria-label={"Open " + row.name}>
+                <Icon name="node-runner" size="md" className="workflow-row-icon" />
+                <span className="workflow-row-copy">
+                  <span className="workflow-row-title">{row.name}</span>
+                  <span className="workflow-row-meta">Version {row.version} · saved {savedOn(row.created_at)}</span>
+                </span>
+                <Icon name="chevron-right" size="sm" className="workflow-row-icon" />
+              </button>
+            </li>)}</ul>
+          : <p className="workflow-muted">No workflows match “{query.trim()}”.</p>}
+        <p className="visually-hidden" role="status">{filtered.length ? plural(filtered.length, "matching workflow") : "No workflows match your search."}</p>
+      </section>}
+      {!loading && !rows.length && <EmptyState icon="node-runner" title="No workflows yet"
+        body="Add a starter below, select connected nodes and choose Make from selection, or import a .graphlink-workflow file." />}
+      <section className="workflow-group" aria-label="Built-in starter workflows">
+        <h3 className="workflow-overline">Starters</h3>
+        <ul className="workflow-starters">{starters.map(starter => <li key={starter.id} className="workflow-starter">
+          <span className="workflow-row-title">{starter.name}</span>
+          <span className="workflow-starter-body">{starter.description}</span>
+          <Button size="sm" variant="secondary" iconStart="plus" disabled={busy} aria-label={"Add " + starter.name + " to the library"}
+            onClick={() => importStarter(starter)}>Add to library</Button>
+        </li>)}</ul>
+      </section>
+    </div>;
+  }
+
+  return <div className="workflow-library">
+    <p className="visually-hidden" role="status">{loading ? "Loading workflows…" : busy ? "Updating the workflow library…" : ""}</p>
+    {error && <InlineAlert variant="error" title="Something in the workflow library failed" body={error} />}
+    <Tabs label="Workflow library sections" value={tab} onValueChange={value => setTab(value as Tab)} items={[
+      { id: "workflows", label: `Workflows (${rows.length})`, content: workflowsPanel },
+      { id: "runs", label: waiting ? `Runs (${waiting} waiting)` : `Runs (${runs.length})`, content:
+        <WorkflowRunsPanel workspace={workspace} runs={runs} loaded={runsLoaded || workspace === null} presets={presets}
+          selected={selectedRun} onSelect={setSelectedRun} onChanged={() => setPoke(n => n + 1)} toolbar={workspaceControl} /> },
+      { id: "presets", label: `Presets (${presets.length})`, content:
+        <WorkflowPresetsPanel store={store} workspace={workspace} presets={presets} loaded={runsLoaded || workspace === null} rows={rows}
+          startWith={presetStart} onChanged={() => setPoke(n => n + 1)}
+          onRunStarted={showRun} toolbar={workspaceControl} /> },
+    ]} />
+  </div>;
 }
 
 export function WorkflowLibraryDialog({ store }: { store: SceneStore }) {
-  return <Dialog name="workflow-library" title="Workflow Library" size="lg" className="graph-runner-dialog">
+  return <Dialog name="workflow-library" title="Workflow library" size="xl" className="workflow-library-dialog">
     <Library store={store} />
   </Dialog>;
 }

@@ -8,14 +8,15 @@ import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
 import { Disclosure } from "./RunnerDisclosure";
 import { EmptyState } from "../ui/EmptyState";
+import { Icon } from "../ui/icons/Icon";
 import { InlineAlert } from "../ui/InlineAlert";
 import { Select } from "../ui/Select";
 import { Spinner } from "../ui/Spinner";
 import { formatCount, formatDuration } from "../ui/format";
 import { FullWorkflowContents } from "./WorkflowContents";
-import { DetachedWorkflowInspector } from "./DetachedWorkflowInspector";
 import "./GraphRunnerDialog.css";
 import "./WorkflowHistoryDialog.css";
+import "./workflow-library.css";
 
 const labels: Record<string, string> = {
   pending: "Queued", current: "Skipped (already current)", completed: "Completed",
@@ -49,28 +50,36 @@ function Receipt({ run, step, names, store, onRetry }: {
   onRetry?: () => void;
 }) {
   const name = step.nodeId && names.get(step.nodeId);
+  const sources = step.sourceIds.map(id => names.get(id) || id).filter(Boolean);
+  const numbers = [step.duration_ms !== null ? duration(step.duration_ms) : null,
+    step.cost_usd ? cost(step.cost_usd) : null,
+    step.total_tokens !== null ? formatCount(step.total_tokens) + " tokens" : null].filter(Boolean);
   return <div className="workflow-receipt">
-    <div className="runner-step-heading">
-      <strong>Step {step.step_index + 1}: {name || step.nodeId || step.input_ref.destinationNodeId || step.operation}</strong>
+    <div className="workflow-step-heading">
       <StepStatus step={step} />
+      <strong>Step {step.step_index + 1}: {name || step.nodeId || step.input_ref.destinationNodeId || step.operation}</strong>
+      <span className="workflow-muted">{step.kind} · {step.operation}</span>
+      {numbers.length > 0 && <span className="workflow-step-numbers">{numbers.join(" · ")}</span>}
     </div>
-    <div>{step.kind} · {step.operation} · {statusLabel(step.status)}</div>
-    <div>Inputs: {step.sourceIds.map(id => names.get(id) || id).filter(Boolean).join(", ") || "No recorded source"}</div>
-    <div>Provider: {step.provider ?? "Not recorded"} · Model: {step.model ?? "Not recorded"}</div>
-    <div>Tokens: {count(step.input_tokens)} input · {count(step.output_tokens)} output · {count(step.total_tokens)} total</div>
-    <div>Cost (USD): {cost(step.cost_usd)} · Retries: {formatCount(step.retry_count)}</div>
-    <div>Approval: {step.approval ?? "Not recorded"} {step.approval_id && <code>{step.approval_id}</code>}</div>
-    <div>Started: {time(step.started_at)} · Finished: {time(step.finished_at)} · Duration: {duration(step.duration_ms)}</div>
-    <Disclosure label="Input and output references">
-      <div>Input fingerprint: <code>{step.input_ref.sha256 ?? "Not recorded"}</code></div>
-      <div>Configuration: <code>{step.input_ref.configuration ?? "Not recorded"}</code></div>
-      <div>Output fingerprint: <code>{step.output_ref?.sha256 ?? "Not recorded"}</code></div>
-      <div>Output version: {step.output_ref?.version ?? "Not recorded"}</div>
-      {step.request_id && <div>Request: <code>{step.request_id}</code> · {step.attempt_phase ?? "Not recorded"}</div>}
+    {sources.length > 0 && <p className="workflow-muted">Uses {sources.join(", ")}</p>}
+    {(step.provider || step.model) && <p className="workflow-muted">Model: {[step.provider, step.model].filter(Boolean).join(" · ")}</p>}
+    {step.approval && <p className="workflow-muted">Approval: {step.approval}</p>}
+    <Disclosure label="Details">
+      <ul className="workflow-facts">
+        <li><span>Started</span><span className="workflow-muted">{time(step.started_at)}</span></li>
+        <li><span>Finished</span><span className="workflow-muted">{time(step.finished_at)}</span></li>
+        <li><span>Tokens</span><span className="workflow-muted">{count(step.input_tokens)} in · {count(step.output_tokens)} out</span></li>
+        <li><span>Cost</span><span className="workflow-muted">{cost(step.cost_usd)}</span></li>
+        <li><span>Retries</span><span className="workflow-muted">{formatCount(step.retry_count)}</span></li>
+        <li><span>Input fingerprint</span><code>{step.input_ref.sha256 ?? "Not recorded"}</code></li>
+        <li><span>Output fingerprint</span><code>{step.output_ref?.sha256 ?? "Not recorded"}</code></li>
+        {step.request_id && <li><span>Request</span><code>{step.request_id} · {step.attempt_phase ?? "Not recorded"}</code></li>}
+        {step.approval_id && <li><span>Approval ID</span><code>{step.approval_id}</code></li>}
+      </ul>
     </Disclosure>
     <FullWorkflowContents key={run.run_id + ":" + step.step_index + ":" + step.input_ref.sha256 + ":" + step.output_ref?.sha256}
       load={() => store.showWorkflowStep(run.graph_id, run.run_id, step.step_index)} />
-    {onRetry && step.retryable && <Button size="sm" onClick={onRetry}>Re-run from this step</Button>}
+    {onRetry && step.retryable && <Button size="sm" variant="secondary" iconStart="rerun" onClick={onRetry}>Re-run from this step</Button>}
   </div>;
 }
 
@@ -102,9 +111,9 @@ function RunDetail({ run, other, store, names, retry }: {
             </div>
           </Card>
         </li>)}</ol>
-    </section> : <ol className="workflow-timeline runner-timeline">{run.steps.map(step => <li key={step.step_index}>
-      <Card><Receipt run={run} step={step} names={names} store={store}
-        onRetry={step.nodeId ? () => retry([step.nodeId!], "from", run.run_id) : undefined} /></Card>
+    </section> : <ol className="workflow-receipts">{run.steps.map(step => <li key={step.step_index}>
+      <Receipt run={run} step={step} names={names} store={store}
+        onRetry={step.nodeId ? () => retry([step.nodeId!], "from", run.run_id) : undefined} />
     </li>)}</ol>}
     <Disclosure label={"Recorded events (" + run.events.length + ")"}>
       <ol className="runner-steps">{run.events.map(event => <li key={event.event_id}>
@@ -218,18 +227,21 @@ function History({ store }: { store: SceneStore }) {
     {history && !history.runs.length && <EmptyState icon="play" title="No saved runs"
       body="Run a reviewed workflow in this graph to record its steps here." />}
     {history && !runId && !!history.runs.length && <>
-      <p>Durable runs in the open graph. Prompt and result contents are hidden by default.</p>
-      <ol className="workflow-timeline">{history.runs.map(run => <li key={run.run_id}>
-        <Card title={time(run.started_at)} actions={<Button size="sm" disabled={graphId == null}
-          aria-label={"View run " + run.run_id}
-          onClick={() => { if (graphId != null) { moveFocus.current = true; setSelection({ graphId, runId: run.run_id }); setCompare(""); } }}>View run</Button>}>
-          <Badge>{statusLabel(run.status)}</Badge>
-          <div><code>{run.run_id}</code></div>
-          <div>{formatCount(run.step_count)} steps · {formatCount(run.failed_count)} failed · {duration(run.duration_ms)}</div>
-          <div>Recorded tokens: {count(run.total_tokens)} · Recorded cost: {cost(run.cost_usd)}
-            {run.priced_steps < run.step_count && " (incomplete cost data)"}</div>
-        </Card>
-      </li>)}</ol>
+      <p className="workflow-muted">Runs of this graph. Prompts and results stay hidden until you open a step.</p>
+      <ul className="workflow-list">{history.runs.map(run => <li key={run.run_id} className="workflow-row">
+        <button type="button" className="workflow-row-main" disabled={graphId == null} aria-label={"View run " + run.run_id}
+          onClick={() => { if (graphId != null) { moveFocus.current = true; setSelection({ graphId, runId: run.run_id }); setCompare(""); } }}>
+          <span className="workflow-row-status"><Badge>{statusLabel(run.status)}</Badge></span>
+          <span className="workflow-row-copy">
+            <span className="workflow-row-title">{time(run.started_at)}</span>
+            <span className="workflow-row-meta">
+              {formatCount(run.step_count)} steps{run.failed_count ? " · " + formatCount(run.failed_count) + " failed" : ""} · {duration(run.duration_ms)}
+              {run.total_tokens !== null && " · " + formatCount(run.total_tokens) + " tokens"} · {cost(run.cost_usd)}{run.priced_steps < run.step_count && " (partial cost data)"}
+            </span>
+          </span>
+          <Icon name="chevron-right" size="sm" className="workflow-row-icon" />
+        </button>
+      </li>)}</ul>
     </>}
     {history?.hasMore && <Button onClick={() => setPages(value => value + 1)}>Load older runs</Button>}
     {history && runId && <>
@@ -244,7 +256,6 @@ function History({ store }: { store: SceneStore }) {
 
 export function WorkflowHistoryDialog({ store }: { store: SceneStore }) {
   return <Dialog name="run-history" title="Run history" size="lg" className="graph-runner-dialog">
-    <DetachedWorkflowInspector followApproval />
     <History store={store} />
   </Dialog>;
 }
