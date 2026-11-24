@@ -728,7 +728,8 @@ def _composite_chart(data, result):
         for field, values in source.items():
             if not isinstance(field, str) or _clean_text(field, field_limit) != field:
                 raise ChartDataError(f"Invalid {field_limit} column name")
-            if field in cleaned_numbers or field in cleaned_categories or len(field) > 80:
+            if (field in cleaned_numbers or field in cleaned_categories or len(field) > 80
+                    or field in {"__proto__", "constructor", "prototype"}):
                 raise ChartDataError(f"Duplicate or oversized composite column: {field}")
             if not isinstance(values, list):
                 raise ChartDataError(f"Composite column {field} must contain an array")

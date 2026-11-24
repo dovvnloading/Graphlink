@@ -116,8 +116,11 @@ export function CompositeChartMarks({ chartData, theme, width, height, onHover, 
           </g>
         </g>;
       })}
-      {!compact && keys.length > 0 && <g aria-label="Shared series palette">
-        {keys.slice(0, 8).map((key, i) => <title key={i}>{key + " · " + colorFor(key, i)}</title>)}
+      {!compact && keys.length > 0 && <g className="chart-composite-legend" aria-label="Shared series palette">
+        {keys.slice(0, 8).map((key, i) => <g key={key} transform={`translate(${8 + (i % 4) * (width - 16) / 4} ${10 + Math.floor(i / 4) * 15})`}>
+          <circle cx={0} cy={0} r={3} fill={colorFor(key, i)} />
+          <text x={8} y={3} fontSize={9} fill={theme.text}>{key}</text>
+        </g>)}
       </g>}
     </g>
   );

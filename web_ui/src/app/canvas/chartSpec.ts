@@ -525,7 +525,8 @@ function canonicalizeComposite(raw: Record<string, unknown>, result: ChartDataRo
   ] as const) {
     for (const [key, values] of Object.entries(source)) {
       if (key !== key.trim().replace(/\s+/g, " ") || !key || key.length > 80
-          || Object.hasOwn(numbers, key) || Object.hasOwn(categories, key)) {
+          || Object.hasOwn(numbers, key) || Object.hasOwn(categories, key)
+          || ["__proto__", "constructor", "prototype"].includes(key)) {
         throw new ChartSpecError("Duplicate or invalid composite column: " + key);
       }
       if (!Array.isArray(values)) throw new ChartSpecError("Composite columns must contain arrays");

@@ -56,7 +56,7 @@ def test_v2_generation_schema_describes_composable_marks():
 
 
 @pytest.mark.parametrize("fmt,signature", [
-    ("svg", b"<svg"), ("pdf", b"%PDF"), ("png", b"\\x89PNG"),
+    ("svg", b"<svg"), ("pdf", b"%PDF"), ("png", b"\x89PNG"),
 ])
 def test_composite_figures_export_all_original_data_in_multiple_facets(fmt, signature):
     spec = canonicalize_chart_data(RAW)
@@ -92,7 +92,8 @@ def test_composite_figures_export_all_original_data_in_multiple_facets(fmt, sign
     {"composite": {"numbers": {"x": [0, 1], "low": [2, 3], "upper": [1, 2]},
                    "layers": [{"mark": "band", "x": "x", "y": "low", "y2": "upper"}]}},
     {"xScale": "log10"},
-    {"yScale": "log10"},
+    {"yScale": "log10", "composite": {"numbers": {"x": [1, 2], "y": [-1, 2]},
+                                      "layers": [{"mark": "point", "x": "x", "y": "y"}]}},
     {"composite": {"numbers": {"x": list(range(2001)), "y": list(range(2001))},
                    "layers": [{"mark": "point", "x": "x", "y": "y"}]}},
 ])
