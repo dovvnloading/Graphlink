@@ -31,6 +31,7 @@ import { Composer } from "./chrome/Composer";
 import { ComposerStore } from "./chrome/composerStore";
 import { ModelCapabilityProvider } from "./context/ModelCapabilityContext";
 import { NotificationToaster } from "./chrome/NotificationBanner";
+import { WorkflowApprovalNotifications } from "./chrome/WorkflowApprovalNotifications";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 import { OnboardingDialog } from "./chrome/OnboardingDialog";
 import { OverlayProvider, useOverlays } from "./overlays/overlays";
@@ -466,6 +467,7 @@ function AppShell() {
                       <PluginPicker transport={transport} store={sceneStore} />
                     </LazySurface>
                     <NotificationToaster store={composerStore} />
+                    <WorkflowApprovalNotifications connected={status === "open"} />
                     <ConfirmDialog />
                   </div>
                   {/* The canvas HUD slot sits beside the composer footer, not
