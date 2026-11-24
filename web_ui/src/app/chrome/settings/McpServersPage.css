@@ -1,0 +1,2 @@
+.mcp-settings-server { display: flex; flex-direction: column; gap: var(--gl-space-3); border-bottom: 1px solid var(--gl-surface-border); padding-bottom: var(--gl-space-4); }
+.mcp-settings-tools { display: flex; flex-direction: column; gap: var(--gl-space-3); max-height: 320px; overflow: auto; padding: var(--gl-space-2) 0; }

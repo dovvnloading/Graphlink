@@ -35,6 +35,7 @@ const FILTER_KIND_LABELS: Record<string, string> = {
   chart: "Chart",
   harness: "Agent",
   scientific: "Scientific workbench",
+  "mcp_connect.tool": "MCP tool",
 };
 
 // ADR-012 stage 12.5: mirrors backend/domain/branches.py's own

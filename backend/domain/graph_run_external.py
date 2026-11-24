@@ -24,7 +24,7 @@ _REQUEST_ID = re.compile(r"graph-[a-f0-9]{32}")
 _ATTEMPT_FIELDS = frozenset(
     {"requestId", "kind", "provider", "model", "tool", "inputRef", "inputHash", "phase"}
 )
-_PHASES = {"dispatched", "completed", "reconciliation-required"}
+_PHASES = {"dispatched", "completed", "reconciliation-required", "reconciled"}
 
 RECONCILIATION_DETAIL = (
     "The external request may have run or incurred a charge. "
@@ -73,6 +73,14 @@ class ExternalCall:
         }
 
 
+@dataclass(frozen=True)
+class ExternalResult:
+    """A received tool error is a known outcome, not an uncertain transport."""
+
+    output_hash: str
+    is_error: bool = False
+
+
 def restore_external_attempt(raw: Any) -> dict[str, str] | None:
     """Read only the version-one journal fields; malformed records fail closed."""
     if not isinstance(raw, dict) or set(raw) != _ATTEMPT_FIELDS:
@@ -95,13 +103,28 @@ def restore_external_attempt(raw: Any) -> dict[str, str] | None:
     return {key: raw[key] for key in _ATTEMPT_FIELDS}
 
 
+async def drain_cancelled_task(task: asyncio.Future) -> None:
+    """Finish an in-flight worker even when cancellation is requested again."""
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            continue
+        except Exception:
+            break
+    try:
+        task.result()
+    except (asyncio.CancelledError, Exception):
+        pass
+
+
 async def _drain_checkpoint(checkpoint: Callable[[], Awaitable[bool]]) -> None:
     """Require a confirmed durable write and drain it on cancellation."""
     task = asyncio.ensure_future(checkpoint())
     try:
         saved = await asyncio.shield(task)
     except asyncio.CancelledError:
-        await task
+        await drain_cancelled_task(task)
         raise
     if saved is not True:
         raise SceneError("The external request checkpoint was not confirmed.")
@@ -113,7 +136,7 @@ async def dispatch_external_attempt(
     *,
     checkpoint: Callable[[], Awaitable[bool]],
     invoke: Callable[[str], Awaitable[Any]],
-    apply_result: Callable[[Any], Awaitable[str]],
+    apply_result: Callable[[Any], Awaitable[str | ExternalResult]],
 ) -> str:
     """Persist the request fence, invoke once, then checkpoint output + receipt.
 
@@ -163,7 +186,9 @@ async def dispatch_external_attempt(
 
     try:
         response = await invoke(attempt["requestId"])
-        output_hash = await apply_result(response)
+        outcome = await apply_result(response)
+        output_hash = outcome.output_hash if isinstance(outcome, ExternalResult) else outcome
+        tool_error = isinstance(outcome, ExternalResult) and outcome.is_error
         if not isinstance(output_hash, str) or not _SHA256.fullmatch(output_hash):
             raise SceneError("External output must produce a SHA-256 artifact fingerprint.")
     except BaseException:
@@ -182,9 +207,13 @@ async def dispatch_external_attempt(
 
     attempt["phase"] = "completed"
     step.update(
-        status="completed", detail="External output checkpointed.", outputHash=output_hash,
+        status="failed" if tool_error else "completed",
+        detail="The tool returned an error. Review the saved result." if tool_error else "External output checkpointed.",
+        outputHash=output_hash,
         finishedAt=datetime.now(timezone.utc).isoformat(),
     )
+    if tool_error:
+        step["errorType"] = "tool_error"
     try:
         # The adapter's output and the completion receipt must be atomic.
         await _drain_checkpoint(checkpoint)

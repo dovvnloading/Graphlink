@@ -6,6 +6,8 @@ Primary goal: give future work a reliable, current map of where behavior actuall
 
 Last refreshed: 2026-08-25 (file/test counts, CI job list, and the attachments/domain-file claims below re-verified against the current repo; the rest of the document has not been re-audited past 2026-07-27 and may carry further drift not yet caught)
 
+MCP Connect sections and concrete paths added on 2026-11-23. This targeted update does not re-audit the older counts or unrelated architecture descriptions below. See `docs/MCP_CONNECT.md` for the current tool workflow and limits.
+
 ## Repo Snapshot
 
 - Product name in the UI: `Graphlink`
@@ -257,6 +259,8 @@ This is the live registration order in `backend/plugins.py::_PLUGINS` / `_CATEGO
 ### Workflow & Drafting
 
 - `Artifact / Drafter` - creates an `artifact` node.
+- `MCP Connect` - creates a persistent `mcp_connect.tool` node after the `mcp_connect` plugin grant. Discovers configured server tools, saves explicit input bindings, and runs through the durable external-call journal.
+- `Graph Runner` - opens the connected-workflow runner, including explicit MCP tool steps and their approvals.
 
 ### Validation & Delivery
 
@@ -282,6 +286,23 @@ This is the practical lookup map for where code actually lives today.
 - `crash_recovery.py` - sentinel file, rotating log, exception handlers, crash notice.
 - `response_parsing.py` - `parse_response()`, the thinking/text/code splitter.
 - `plugins.py` - `app-plugins` topic, plugin catalog + `executePlugin`.
+- `mcp_client.py` - bounded stdio MCP client, shared tool metadata/structured results, paginated discovery, and Builder registration.
+- `mcp_http.py` - Streamable HTTP initialization, negotiated session headers, JSON/SSE replies, endpoint/auth validation, and bounded transport reads.
+- `mcp_connect_runtime.py` - session-owned discovery, connection and tool-capability pins, approvals, cancellation, secret redaction and journal-backed execution.
+- `api/intents_mcp_connect.py` - MCP tool discovery/configuration/source/preview/run/cancel/approval and uncertainty-reconciliation intents. Registered with chat-library checkpoint and mutation-guard wiring.
+- `api/intents_graph_runner.py` - asynchronous execution adapters for connected Model, scientific and MCP tool steps.
+- `domain/graph_runner.py` - pure explicit-binding plans, fan-in prerequisites, freshness checks and bounded scheduling.
+- `domain/graph_run_external.py` - durable external dispatch/completion/reconciliation fences; no implicit retry.
+- `domain/graph_run_history.py` - saved-run validation/remapping and `can_prune_run`, which preserves unresolved external requests.
+- `domain/graph_run_inspector.py` - dependency-ordered, privacy-preserving saved-run trace projection.
+- `domain/nodes_content.py` - text output/input bindings, including freshness checks on MCP text sources.
+- `domain/table_workflows.py` - native table projections and MCP structured-table sources.
+- `tests/test_mcp_connect_domain.py` - MCP bindings, receipt integrity, history, native consumers and persistence/remapping tests.
+- `tests/test_mcp_connect_schema.py` - bounded JSON Schema/Pointer validation tests.
+- `tests/test_mcp_connect_intents.py` - discovery, approvals, explicit execution and durable SQLite integration.
+- `tests/test_mcp_connect_safety.py` - uncertainty, cancellation, freshness and replay regression coverage.
+- `tests/test_mcp_http.py` - HTTP/SSE session, header, bounded-read and failure handling tests.
+- `tests/test_mcp_settings.py` - server identity and write-only secret-preservation tests.
 - `about.py`, `notifications.py`, `token_counter.py` - their respective small, focused topics.
 - `assets.py` - `GET /api/assets/{id}`, the image-node byte-serving route.
 - `events.py` - `EventBus`/`SessionBus`, the pub/sub primitive every topic module registers onto.
@@ -294,6 +315,14 @@ This is the practical lookup map for where code actually lives today.
 - `main.tsx` - the React root/entry point.
 - `canvas/` - `SceneCanvas.tsx` (the React Flow surface), `sceneStore.ts` (the `scene` topic client), one `*NodeView.tsx` per node kind (see Taxonomy table), `smartGuides.ts`, `treeNavigation.ts`, `exportCanvasPng.ts`, `downloadTextFile.ts`.
 - `chrome/` - `AppBar.tsx`, `Composer.tsx` + `composerStore.ts`, `ViewPopover.tsx`, `CommandPalette.tsx` + `commands.ts`, `SearchOverlay.tsx`, `PinOverlay.tsx`, `PluginPicker.tsx`, `SettingsDialog.tsx`, `ChatLibraryDialog.tsx`, `AboutDialog.tsx`, `HelpDialog.tsx` (+ `help-data/sections.ts`), `NotificationBanner.tsx`, `TokenCounter.tsx`, `shortcuts.ts`.
+- `canvas/McpToolNodeView.tsx` - MCP tool browser, saved configuration, request preview and explicit run controls.
+- `canvas/McpArgumentEditor.tsx` - schema-generated form and JSON editor with incoming-source bindings.
+- `canvas/McpResultView.tsx` - text/JSON/table results, history and provenance views.
+- `canvas/McpApprovalPanel.tsx` - pending MCP request approval UI shared by the node and Graph Runner.
+- `canvas/McpReconciliation.tsx` - explicit acknowledgement of checked external outcomes.
+- `canvas/mcpConnect.ts` - plugin payload types, runtime guards and schema/result helpers.
+- `canvas/mcpScene.ts` - MCP scene intent facade.
+- `chrome/settings/McpServersPage.tsx` - stdio/HTTP setup, write-only credentials, discovery, tool allowlists and approval settings.
 - `overlays/overlays.tsx` - the `OverlayProvider` coordinator only (no dialogs live here).
 
 ### `web_ui/src/lib/`
@@ -316,7 +345,32 @@ This is the practical lookup map for where code actually lives today.
 - `web_research/` - `domain.py`, `ports.py`, `fetch_policy.py`, `providers.py`, `service.py` (no `worker.py` - that was the Qt-coupled file deleted at the cutover).
 - `gitlink/` - `agent.py`, `repository.py`.
 - `code_sandbox/` - `domain.py`.
+- `mcp_connect/core.py` - pure tool state, configuration identity, connected input preparation, receipts and bounded history.
+- `mcp_connect/schema.py` - bounded JSON Schema assertions and RFC 6901 selectors, without remote reference fetching.
+- `mcp_connect/plugin.py` - node factory, immutable live-wire cache and saved-state hooks.
 - `common/` - `github_client.py`, `llm_json.py`, `python_repl.py` (`PythonREPL`/`CodeAnalysisAgent`, relocated here from the retired Py-Coder plugin) (shared helpers).
+
+### `plugins/mcp_connect/`
+
+- `plugin.toml` - first-party manifest, graph grants and passive saved node kind.
+- `plugin.py` - bundled entry point delegating to the MCP Connect package.
+
+### `settings_store/`
+
+- `mcp.py` - persisted MCP server identities, transport options and write-only environment/header secrets.
+
+### `web_ui/e2e/`
+
+- `mcp-connect.spec.ts` - real production SPA/backend journey with a subprocess MCP fixture, input review, saved table/provenance, keyboard interaction and dark/light screenshots.
+
+### `tests_e2e/`
+
+- `fixture_mcp_server.py` - deterministic stdio MCP server used by the browser journey.
+- `run_backend.py` - isolated real backend serving the production SPA for Playwright.
+
+### `.github/workflows/`
+
+- `mcp-connect.yml` - path-filtered MCP browser integration check with zero retries and retained review artifacts.
 
 ### Loose top-level modules that matter most
 
@@ -329,6 +383,7 @@ This is the practical lookup map for where code actually lives today.
 - `graphlink_chart_data.py` - canonical chart-data validation/schemas + the shared respond_json prompt (ADR-013 stage 13.3); `graphlink_chart_rendering.py` - chart rendering to PNG.
 - `graphlink_artifact_agent.py`, `graphlink_chat_agent.py` - LLM-facing agent logic `backend/agents.py`/`backend/canvas.py` call into.
 - `graphlink_wire_schema.py` - dataclass -> JSON Schema generation + payload validation (ADR-003 stage 3.2). Shared by `contracts/codegen.py` (dev-time TS generation) and `backend/events.py` (runtime intent-arg validation) - lives at the repo root, not inside `contracts/`, specifically so the runtime backend can import it (`contracts/` is excluded from the shipped wheel).
+- `docs/MCP_CONNECT.md` - MCP Connect user setup, bindings/results, approvals/reconciliation, supported schemas, shipped limits and implementation map.
 - `docs/DESIGN_SYSTEM.md` - Graphlink web UI design tokens, icon catalog, component kit, copy style, UI ratchets and review checklist.
 
 ## Where To Edit When...
@@ -373,6 +428,15 @@ This is the practical lookup map for where code actually lives today.
 - Registration + node-creation wiring: `backend/plugins.py`
 - Picker UI: `web_ui/src/app/chrome/PluginPicker.tsx` (usually needs no change - it renders whatever `app-plugins` returns)
 - New node kind (if the plugin creates one): see "add or modify a node kind" above
+
+### You want to change MCP Connect
+
+- Tool-node data and validation: `graphlink_plugins/mcp_connect/core.py` and `schema.py`; creation/persistence hooks: `plugin.py` in the same package.
+- Transport and server settings: `backend/mcp_client.py`, `backend/mcp_http.py`, `settings_store/mcp.py` and `backend/settings.py`.
+- Permission/connection rechecks and approvals: `backend/mcp_connect_runtime.py`; scene intents: `backend/api/intents_mcp_connect.py`.
+- Keep dispatch behind `backend/domain/graph_run_external.py` checkpoints. Preserve unresolved fences when changing run retention, cancellation, resume or undo behavior.
+- Node/forms/results: `web_ui/src/app/canvas/McpToolNodeView.tsx`, `McpArgumentEditor.tsx`, `McpResultView.tsx`; server settings: `web_ui/src/app/chrome/settings/McpServersPage.tsx`.
+- Run the focused MCP tests plus the full repository gates in `AGENTS.md`; the path-filtered browser workflow exercises the production SPA/backend with the local fixture.
 
 ### You want to change save/load compatibility with `~/.graphlink/chats.db`
 

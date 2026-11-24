@@ -133,7 +133,8 @@ def test_false_checkpoint_does_not_send_a_request():
     asyncio.run(scenario())
 
 
-def test_cancelled_pre_dispatch_save_retains_the_fence_and_never_calls_provider():
+@pytest.mark.parametrize("cancellations", [1, 3])
+def test_cancelled_pre_dispatch_save_retains_the_fence_and_never_calls_provider(cancellations):
     async def scenario():
         step = sample_step()
         entered = asyncio.Event()
@@ -160,7 +161,10 @@ def test_cancelled_pre_dispatch_save_retains_the_fence_and_never_calls_provider(
             )
         )
         await asyncio.wait_for(entered.wait(), timeout=2)
-        task.cancel()
+        for _ in range(cancellations):
+            task.cancel()
+            await asyncio.sleep(0)
+        assert not task.done(), "Cancellation released an in-flight checkpoint"
         release.set()
         with pytest.raises(asyncio.CancelledError):
             await task
@@ -172,6 +176,38 @@ def test_cancelled_pre_dispatch_save_retains_the_fence_and_never_calls_provider(
         restored, = restore_graph_runs([saved_run(snapshots[0])], {"n1": "n1", "n2": "n2"})
         assert restored["status"] == "reconciliation-required"
         assert restored["steps"][0]["externalAttempt"]["requestId"] == step["externalAttempt"]["requestId"]
+
+    asyncio.run(scenario())
+
+
+def test_repeated_cancellation_keeps_the_save_guard_until_the_worker_finishes():
+    from backend.api.intents_graph_runner import _make_graph_checkpoint
+
+    async def scenario():
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = []
+
+        async def save():
+            calls.append("start")
+            entered.set()
+            await release.wait()
+            calls.append("finish")
+            return True
+
+        checkpoint = _make_graph_checkpoint(save)
+        first = asyncio.create_task(checkpoint())
+        await asyncio.wait_for(entered.wait(), 2)
+        for _ in range(3):
+            first.cancel()
+            await asyncio.sleep(0)
+        second = asyncio.create_task(checkpoint())
+        await asyncio.sleep(0)
+        assert calls == ["start"] and not first.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        await asyncio.wait_for(second, 2)
+        assert calls == ["start", "finish", "start", "finish"]
 
     asyncio.run(scenario())
 

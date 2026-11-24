@@ -28,7 +28,7 @@ import {
   ArtifactNodeView, ChartNodeView, ChatNodeView, CodeNodeView, CodeReviewNodeView,
   CodeSandboxNodeView, ConversationNodeView, DocumentNodeView, GitlinkNodeView,
   GroupNodeView, HarnessNodeView, HtmlNodeView, ImageNodeView, FalMediaNodeView, NoteNodeView, ScientificNodeView,
-  PlaceholderNodeView, PlanNodeView, ThinkingNodeView, WebResearchNodeView, ModelNodeView,
+  PlaceholderNodeView, PlanNodeView, ThinkingNodeView, WebResearchNodeView, ModelNodeView, McpToolNodeView,
 } from "./lazyNodeViews";
 import type { ArtifactFlowNode } from "./ArtifactNodeView";
 import type { ChartFlowNode } from "./ChartNodeView";
@@ -49,6 +49,8 @@ import type { NoteFlowNode } from "./NoteNodeView";
 import { ScientificWorkspace, type ScienceEditorProps } from "./ScientificWorkspace";
 import type { ScientificFlowNode } from "./ScientificNodeView";
 import { scientificFlowNode, isScienceKind } from "./scientificScene";
+import type { McpToolFlowNode } from "./McpToolNodeView";
+import { mcpFlowNode } from "./mcpScene";
 import type { ModelFlowNode } from "./ModelNodeView";
 import { availableTextSources, isPlainNote, textSourceLabel, TEXT_INPUT_HANDLE, TEXT_OUTPUT_HANDLE, type TextInputOperation } from "./textInputs";
 import type { ConnectionRole } from "./connections/connectionAppearance";
@@ -111,6 +113,7 @@ export type SceneFlowNode =
   | NoteFlowNode
   | ModelFlowNode
   | ScientificFlowNode
+  | McpToolFlowNode
   | GroupFlowNode
   | ChartFlowNode
   | PlanFlowNode
@@ -139,6 +142,7 @@ const NODE_TYPES = {
   note: NoteNodeView,
   model: ModelNodeView,
   scientific: ScientificNodeView,
+  mcp_tool: McpToolNodeView,
   // R6.1: one shared component backs both "frame" and "container" NODE_TYPES
   // entries - see GroupNodeView.tsx's own module doc for why a single
   // data.groupKind-parameterized component was chosen over two near-
@@ -493,6 +497,7 @@ export const FILTERABLE_NODE_KINDS = [
   "chart",
   "harness",
   "scientific",
+  "mcp_connect.tool",
 ] as const;
 
 /**
@@ -2176,6 +2181,10 @@ export function toFlowNodes(
       flowNodes.push(scientificFlowNode(n, edgesByTarget.get(n.id) ?? [], nodesById, store, cache, isDimmed(n.id) ? BRANCH_DIM_OPACITY : 1));
       continue;
     }
+    if (n.kind === "mcp_connect.tool") {
+      flowNodes.push(mcpFlowNode(n, edgesByTarget.get(n.id) ?? [], nodesById, store, cache, isDimmed(n.id) ? BRANCH_DIM_OPACITY : 1));
+      continue;
+    }
     // Fallback placeholder - unreachable in practice given the exhaustive
     // kind list above, kept for forward-compat with a future kind this
     // switch hasn't been taught yet. No callbacks at all, so no dispatcher
@@ -2206,7 +2215,7 @@ export function toFlowNodes(
     // Only a typed bound output may hand off to Graph Runner. A stale
     // script/plugin/agent node has no automatic run affordance.
     const isBoundForRunner = !!row && (
-      row.kind === "model" || isScienceKind(row.kind) ||
+      row.kind === "model" || isScienceKind(row.kind) || row.kind === "mcp_connect.tool" ||
       !!row.textInputSourceId || !!row.tableInputSourceId
     );
     const updated = { ...flow, data: { ...flow.data, staleness, isBoundForRunner } } as SceneFlowNode;

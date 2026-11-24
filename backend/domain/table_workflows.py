@@ -100,7 +100,11 @@ class TableReadCache:
         key = (source.id, label, value)
         if key not in self.hashes:
             if source.id not in self.tables:
-                self.tables[source.id] = parse_table(source.content)
+                if source.kind == "mcp_connect.tool":
+                    from graphlink_plugins.mcp_connect.core import table_csv
+                    self.tables[source.id] = parse_table(table_csv(source))
+                else:
+                    self.tables[source.id] = parse_table(source.content)
             try:
                 self.hashes[key] = self.tables[source.id].fingerprint(label, value)
             except SceneError:
@@ -255,6 +259,11 @@ class TableOps(SceneDocumentParts):
 
     def _read_table(self, source_id: str) -> _Table:
         node = self.nodes.get(source_id)
+        if node is not None and node.kind == "mcp_connect.tool":
+            from graphlink_plugins.mcp_connect.core import prepare, table_csv
+            if not prepare(self, node).current:
+                raise SceneError("Run the upstream MCP tool first; its table output is not current.")
+            return parse_table(table_csv(node))
         if node is None or not isinstance(node.state, NoteState) or not node.state.is_table_source:
             raise SceneError("The table source is unavailable.")
         return parse_table(node.content)
@@ -368,6 +377,17 @@ class TableOps(SceneDocumentParts):
             wire["tableOutputEdited"] = True
         source = self.nodes.get(output.source_id)
         if source is not None:
+            if source.kind == "mcp_connect.tool":
+                from graphlink_plugins.mcp_connect.core import prepare
+                try:
+                    if not prepare(self, source).current:
+                        raise SceneError("The MCP table is stale.")
+                    digest = (cache or TableReadCache()).digest(source, output.label_column, output.value_column)
+                except SceneError:
+                    digest = ""
+                wire["tableInputSourceId"] = source.id
+                wire["tableInputStatus"] = "current" if digest == output.current.source_hash else "stale"
+                return wire
             digest = (cache or TableReadCache()).digest(source, output.label_column, output.value_column)
             wire["tableInputSourceId"] = source.id
             wire["tableInputStatus"] = "current" if digest == output.current.source_hash else "stale"
@@ -444,7 +464,9 @@ def restore_table_data(nodes: dict[str, SceneNode], ids: dict[str, str], sources
         if previous is not None and previous.version >= current.version:
             previous = None
         source = nodes.get(ids.get(source_id, "")) if isinstance(source_id, str) else None
-        live_source = source.id if source is not None and isinstance(source.state, NoteState) and source.state.is_table_source else ""
+        live_source = source.id if source is not None and (
+            isinstance(source.state, NoteState) and source.state.is_table_source or source.kind == "mcp_connect.tool"
+        ) else ""
         if isinstance(node.state, NoteState):
             node.title = "Grouped table"
         node.state.table_output = TableOutput(live_source, label, value, current, previous)

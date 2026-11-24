@@ -1,34 +1,21 @@
-"""McpSettingsOps - MCP (Model Context Protocol) server configuration for
-SettingsManager (ADR-007 stage 7.5): the persisted counterpart of
-backend/mcp_client.py's McpServerConfig, including per-server env var
-encryption at rest.
+"""Persisted MCP connections, with stable identities and write-only credentials.
 
-A MIXIN, not a standalone class: every method operates on the composing
-class's own state (self.state) - it is composed exactly once, by
-graphlink_settings_store.py's `class SettingsManager(PersistenceOps, ...,
-McpSettingsOps, ...)`.
-
-_normalize_mcp_env is a module-level helper, not a method, since it's only
-ever called from within this module's own get/set methods.
-
-Method bodies are relocated VERBATIM from graphlink_settings_store.py; only
-the class wrapper is new.
+Both stdio environment values and HTTP header values use the application's
+existing secret-at-rest protection. A wire edit which omits credentials
+preserves them by server ID, never by display name or list position.
 """
 
 from __future__ import annotations
 
-from settings_store._composed import SettingsManagerParts
-
+import math
 import uuid
+from urllib.parse import urlsplit
 
 import graphlink_secrets
+from settings_store._composed import SettingsManagerParts
 
 
 def _normalize_mcp_env(raw):
-    """One MCP server's `env` as a clean str->str dict - tolerant of the
-    shapes a hand-edited session.dat or an older payload can carry (missing,
-    null, non-dict, non-string values, blank names). Malformed degrades to
-    "no extra variables", never to a dropped server entry."""
     if not isinstance(raw, dict):
         return {}
     return {
@@ -38,59 +25,70 @@ def _normalize_mcp_env(raw):
     }
 
 
-class McpSettingsOps(SettingsManagerParts):
+def _string_list(raw) -> list[str]:
+    return [str(value) for value in raw] if isinstance(raw, (list, tuple, set, frozenset)) else []
 
+
+def _connection_fields(entry: dict) -> dict | None:
+    name = str(entry.get("name") or "").strip()
+    transport = str(entry.get("transport") or "stdio").strip()
+    command = str(entry.get("command") or "").strip()
+    url = str(entry.get("url") or "").strip()
+    if not name or transport not in {"stdio", "streamable_http"}:
+        return None
+    if transport == "stdio" and not command or transport == "streamable_http" and not url:
+        return None
+    try:
+        timeout = float(entry.get("timeout", 30.0) or 30.0)
+    except (ValueError, TypeError):
+        timeout = 30.0
+    if not math.isfinite(timeout) or not 1 <= timeout <= 300:
+        timeout = 30.0
+    approval = str(entry.get("approval") or "always")
+    if approval not in {"always", "once", "auto"}:
+        approval = "always"
+    return {
+        "name": name, "transport": transport, "command": command, "url": url,
+        "args": _string_list(entry.get("args")),
+        "scopes": sorted(set(_string_list(entry.get("scopes")))),
+        "approval": approval,
+        "enabled_tools": sorted(set(_string_list(entry.get("enabled_tools")))),
+        "enabled": bool(entry.get("enabled", True)), "timeout": timeout,
+    }
+
+
+def _origin(url: str) -> tuple | None:
+    try:
+        parsed = urlsplit(url)
+        return parsed.scheme, parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        return None
+
+
+class McpSettingsOps(SettingsManagerParts):
     def get_mcp_servers(self) -> list:
-        """ADR-007 stage 7.5: configured MCP servers - the persisted
-        counterpart of backend/mcp_client.py's McpServerConfig (plain JSON-
-        safe dicts here; that module owns converting to/from its own
-        dataclass via to_dict/from_dict, keeping this store agnostic of
-        that module's types, same posture as get_llama_cpp_settings'
-        plain-dict return). Malformed/legacy entries are dropped rather
-        than raised on - a corrupted single entry must never break every
-        other configured server, or settings loading itself."""
         raw_servers = self.state.get("mcp_servers", [])
         if not isinstance(raw_servers, list):
             return []
         servers = []
+        seen: set[str] = set()
         backfilled = False
         for entry in raw_servers:
             if not isinstance(entry, dict):
                 continue
-            name = str(entry.get("name", "")).strip()
-            command = str(entry.get("command", "")).strip()
-            if not name or not command:
+            fields = _connection_fields(entry)
+            if fields is None:
                 continue
-            # REVIEW-FIX: every entry needs a stable identity distinct from
-            # `name` (two servers can share a name - nothing has ever
-            # enforced uniqueness). Entries persisted before this field
-            # existed get one backfilled here, in place, on the raw stored
-            # dict - so it is written back below and never regenerated on a
-            # later read, which would make it useless as a join key.
-            entry_id = str(entry.get("id", "")).strip()
-            if not entry_id:
+            entry_id = str(entry.get("id") or "").strip()
+            if not entry_id or entry_id in seen:
                 entry_id = uuid.uuid4().hex
                 entry["id"] = entry_id
                 backfilled = True
+            seen.add(entry_id)
             servers.append({
-                "id": entry_id,
-                "name": name,
-                "command": command,
-                "args": [str(a) for a in (entry.get("args") or [])],
-                "scopes": sorted({str(s) for s in (entry.get("scopes") or [])}),
-                "approval": str(entry.get("approval") or "always"),
-                "enabled_tools": sorted({str(t) for t in (entry.get("enabled_tools") or [])}),
-                "enabled": bool(entry.get("enabled", True)),
-                "timeout": float(entry.get("timeout", 30.0) or 30.0),
-                # Absent on every entry persisted before the field existed -
-                # reads back as "no extra variables", the same default the
-                # write side stores. Decrypted here (values are encrypted at
-                # rest by _protect_mcp_env) so the ONLY consumer that needs
-                # the real values - the MCP server spawn in backend/agents.py
-                # - gets them, while the settings wire payload never carries
-                # them at all. Legacy plaintext entries pass through
-                # unchanged.
+                "id": entry_id, **fields,
                 "env": self._unprotect_mcp_env(_normalize_mcp_env(entry.get("env"))),
+                "headers": self._unprotect_mcp_env(_normalize_mcp_env(entry.get("headers"))),
             })
         if backfilled:
             self.state["mcp_servers"] = raw_servers
@@ -98,111 +96,50 @@ class McpSettingsOps(SettingsManagerParts):
         return servers
 
     def set_mcp_servers(self, servers: list) -> None:
-        """Replaces the WHOLE configured-server list, same "replace the
-        collection" posture as set_ollama_model_assignments - this is a
-        small, user-managed list edited as a unit (add/remove/edit one
-        server via a settings panel - ADR-012's own future surface, see
-        backend/mcp_client.py's module docstring), not an incrementally-
-        patched map. Validates the same way get_mcp_servers reads back
-        (name/command required, everything else normalized/defaulted) so
-        a round trip through set then get is always well-formed."""
-        # What is already stored, keyed by id (REVIEW-FIX: was keyed by
-        # name), so an entry that arrives without an "env" key keeps its
-        # configured variables rather than losing them - see the "env"
-        # handling below. Keying by name meant two servers sharing a name
-        # (nothing has ever enforced uniqueness) could silently swap or
-        # merge each other's secrets the moment either was edited without
-        # sending "env". A stored entry with no id yet (persisted before
-        # this field existed) simply has nothing to preserve under - it
-        # gets a fresh id below, same as a brand-new entry.
-        preserved_env: dict[str, dict] = {}
-        for stored in (self.state.get("mcp_servers") or []):
-            if isinstance(stored, dict):
-                stored_id = str(stored.get("id", "")).strip()
-                if stored_id:
-                    preserved_env[stored_id] = _normalize_mcp_env(stored.get("env"))
+        """Replace the connection list, preserving omitted credentials by ID.
+
+        An HTTP origin change clears omitted headers: a bearer token for one
+        service must not silently be carried to a different service. Explicit
+        replacement headers are always the user's new credential choice.
+        """
+        stored_servers = self.state.get("mcp_servers")
+        if not isinstance(stored_servers, list):
+            stored_servers = []
+        existing = {
+            str(entry["id"]): entry for entry in stored_servers
+            if isinstance(entry, dict) and entry.get("id")
+        }
         normalized = []
-        for entry in (servers or []):
+        seen: set[str] = set()
+        for entry in servers if isinstance(servers, list) else []:
             if not isinstance(entry, dict):
                 continue
-            name = str(entry.get("name", "")).strip()
-            command = str(entry.get("command", "")).strip()
-            if not name or not command:
+            fields = _connection_fields(entry)
+            if fields is None:
                 continue
-            # An incoming entry echoes back whatever id an existing server
-            # already has (round-tripped through the wire unchanged); one
-            # with no id - a brand-new "Add Server" entry, or a legacy
-            # stored entry that never had one - gets a fresh one assigned
-            # here, server-side, never client-supplied.
-            entry_id = str(entry.get("id", "")).strip() or uuid.uuid4().hex
-            # REVIEW-FIX: this method's own docstring above promises "name/
-            # command required, everything else normalized/defaulted" - but
-            # "args" and "timeout" were previously built with no guard at
-            # all: a non-iterable "args" (e.g. an int) raised TypeError out
-            # of the list comprehension, and a non-numeric truthy "timeout"
-            # (e.g. a string) raised ValueError out of float(). Either
-            # exception propagated straight out of set_mcp_servers, aborting
-            # the WHOLE bulk-replace and discarding every OTHER server's
-            # valid edit in the same call - not just the one malformed
-            # field on this one entry. Falling back to the same defaults
-            # get_mcp_servers/this method already use for a missing value
-            # keeps this entry (and every entry after it) instead.
-            try:
-                entry_args = [str(a) for a in (entry.get("args") or [])]
-            except TypeError:
-                entry_args = []
-            try:
-                entry_timeout = float(entry.get("timeout", 30.0) or 30.0)
-            except (TypeError, ValueError):
-                entry_timeout = 30.0
-            normalized.append({
-                "id": entry_id,
-                "name": name,
-                "command": command,
-                "args": entry_args,
-                "scopes": sorted({str(s) for s in (entry.get("scopes") or [])}),
-                "approval": str(entry.get("approval") or "always"),
-                "enabled_tools": sorted({str(t) for t in (entry.get("enabled_tools") or [])}),
-                "enabled": bool(entry.get("enabled", True)),
-                "timeout": entry_timeout,
-                # Per-server environment variables - the only channel by
-                # which a server process receives anything beyond the safe
-                # allowlist base (see McpStdioClient.connect). These are real
-                # user secrets (a GITHUB_TOKEN, a BRAVE_API_KEY), so each
-                # VALUE is encrypted at rest exactly like the API keys this
-                # store already holds - an earlier version of this comment
-                # claimed the "same posture as the API keys" while in fact
-                # writing them as plaintext JSON. Names stay in the clear:
-                # the Settings page lists them, and a variable name is not
-                # the secret.
-                #
-                # An entry that carries no "env" key at all means "leave
-                # whatever is stored for this server alone" - the wire
-                # deliberately never sends these values back (see
-                # backend/settings.py's _mcp_servers_for_wire), so a
-                # bulk-replace triggered by toggling one server's checkbox
-                # would otherwise wipe every configured variable it could
-                # not see.
-                **(
-                    {"env": self._protect_mcp_env(_normalize_mcp_env(entry.get("env")))}
-                    if "env" in entry
-                    else {"env": preserved_env.get(entry_id, {})}
-                ),
-            })
+            entry_id = str(entry.get("id") or "").strip()
+            if not entry_id or entry_id in seen:
+                entry_id = uuid.uuid4().hex
+            seen.add(entry_id)
+            prior = existing.get(entry_id, {})
+            saved = {"id": entry_id, **fields}
+            for secret_field in ("env", "headers"):
+                if secret_field in entry:
+                    saved[secret_field] = self._protect_mcp_env(_normalize_mcp_env(entry[secret_field]))
+                elif secret_field == "headers" and (
+                    fields["transport"] != "streamable_http"
+                    or _origin(fields["url"]) != _origin(str(prior.get("url") or ""))
+                ):
+                    saved[secret_field] = {}
+                else:
+                    saved[secret_field] = _normalize_mcp_env(prior.get(secret_field))
+            normalized.append(saved)
         self.state["mcp_servers"] = normalized
         self._save_state()
 
     def _protect_mcp_env(self, env: dict) -> dict:
-        """Encrypt each env VALUE at rest, leaving names readable. Mirrors
-        _protect_and_track's use of graphlink_secrets.protect for the
-        top-level API keys, including its plaintext fallback when DPAPI is
-        unavailable (see graphlink_secrets' own docstring - refusing to save
-        would be worse than saving what this platform can protect)."""
+        """Protect values using DPAPI where available, the existing OS fallback elsewhere."""
         return {str(key): graphlink_secrets.protect(str(value)) for key, value in (env or {}).items()}
 
     def _unprotect_mcp_env(self, env: dict) -> dict:
-        """The read side of _protect_mcp_env. Legacy plaintext values (written
-        before env was encrypted) come back unchanged - graphlink_secrets.
-        unprotect passes through anything without the "dpapi:" prefix, the
-        same way the top-level secrets migrated."""
         return {str(key): graphlink_secrets.unprotect(str(value)) for key, value in (env or {}).items()}

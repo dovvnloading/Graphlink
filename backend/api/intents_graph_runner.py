@@ -13,8 +13,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from backend.domain.graph import SceneDocument
-from backend.domain.graph_run_external import RECONCILIATION_DETAIL, ExternalCall, dispatch_external_attempt
-from backend.domain.graph_run_history import RUN_HISTORY_LIMIT, RUN_ID
+from backend.domain.graph_run_external import (
+    RECONCILIATION_DETAIL, ExternalCall, dispatch_external_attempt, drain_cancelled_task,
+)
+from backend.domain.graph_run_history import RUN_HISTORY_LIMIT, RUN_ID, can_prune_run
 from backend.domain.graph_run_inspector import build_graph_run_trace
 from backend.domain.graph_runner import (
     _inspect, _matching_node, _output_digest, execute_graph_step, plan_graph_run, schedule_graph_steps,
@@ -82,9 +84,14 @@ def _find_run(document: SceneDocument, run_id: str) -> dict[str, Any] | None:
     return next((run for run in document.graph_runs if run["runId"] == run_id), None)
 
 
-def _plan(document: SceneDocument, node_ids: list[str]) -> tuple[str, list[dict[str, str]]]:
+def _plan(document: SceneDocument, node_ids: list[str], mcp_runtime: Any = None) -> tuple[str, list[dict[str, str]]]:
     try:
         steps = plan_graph_run(document, node_ids)
+        for step in steps:
+            if step["kind"] == "tool" and step["status"] in {"ready", "waiting"}:
+                if mcp_runtime is None:
+                    raise SceneError("MCP Connect is unavailable in this session. Reopen the graph.")
+                mcp_runtime.pin_step(document.nodes[step["nodeId"]], step)
         model_steps = [s for s in steps if s["kind"] == "model" and s["status"] in {"ready", "waiting"}]
         if len(model_steps) > 8:
             raise SceneError("A graph run can issue at most eight local model calls.")
@@ -285,6 +292,31 @@ async def _run_scientific_step(
     ):
         raise SceneError("The scientific result or its input changed during execution.")
 
+async def _run_mcp_tool_step(document, bus, checkpoint, run, step, by_node_id):
+    """The same MCP adapter serves a direct card run and Graph Runner."""
+    from graphlink_plugins.mcp_connect import core
+
+    runtime = getattr(bus, "mcp_connect_runtime", None)
+    if runtime is None:
+        raise SceneError("MCP Connect is unavailable in this session. Reopen the graph.")
+    validate_graph_run_ancestors(document, step, by_node_id)
+
+    def apply_result(payload, request_id, prepared, started_at):
+        validate_graph_run_ancestors(document, step, by_node_id)
+        node = _matching_node(document, step)
+        document.record_command(
+            "runGraphStep", "user", lambda: core.commit_result(
+                node, payload, request_id=request_id, input_hash=prepared.input_hash,
+                sources=prepared.sources, started_at=started_at,
+                finished_at=datetime.now(timezone.utc).isoformat(),
+            ), node_ids=(node.id,), run_id=run["runId"],
+        )
+        step["outputVersion"] = core.state_data(node)["latest"]["version"]
+        return core.output_hash(node)
+
+    await runtime.execute(step, checkpoint, apply_result)
+
+
 def _make_graph_checkpoint(save_checkpoint: Callable[[], Awaitable[bool]]) -> Callable[[], Awaitable[None]]:
     """Serialize and shield all graph/journal SQLite checkpoint writes."""
     checkpoint_guard = asyncio.Lock()
@@ -300,7 +332,7 @@ def _make_graph_checkpoint(save_checkpoint: Callable[[], Awaitable[bool]]) -> Ca
             try:
                 ok = await asyncio.shield(write)
             except asyncio.CancelledError:
-                await write
+                await drain_cancelled_task(write)
                 raise
             if not ok:
                 raise IntentValidationError(["Could not save the run checkpoint. Reopen Graph Runner to inspect or resume."])
@@ -317,7 +349,7 @@ def register_graph_runner(
     cancel_requested = False
     def visible_run(run: dict[str, Any]) -> dict[str, Any]:
         result = _public_run(run)
-        if run["runId"] in {active_run_id, getattr(bus, "graph_model_active_run_id", None)}:
+        if run["runId"] in {active_run_id, getattr(bus, "graph_model_active_run_id", None), getattr(bus, "mcp_active_run_id", None)}:
             # The terminal SQLite write may still be in flight. A concurrent
             # reader must not receive a success receipt before it commits,
             # including an opt-in model step handled by the sibling intents.
@@ -326,7 +358,7 @@ def register_graph_runner(
         return result
 
     async def preview_graph_run(node_ids: list[str]):
-        token, steps = _plan(document, node_ids)
+        token, steps = _plan(document, node_ids, getattr(bus, "mcp_connect_runtime", None))
         return {"previewToken": token, "steps": [_public_step(step) for step in steps]}
 
     async def get_graph_run():
@@ -397,7 +429,18 @@ def register_graph_runner(
                                     errorType="worker_error",
                                     elapsedMs=max(0, int((time.monotonic() - started_clock) * 1000)))
                 elif step["kind"] == "tool":
-                    step.update(status="blocked", detail="No Graph Runner tool adapter is authorized.")
+                    try:
+                        await _run_mcp_tool_step(document, bus, confirmed_checkpoint, run, step, by_node_id)
+                    except asyncio.CancelledError:
+                        raise
+                    except SceneError as exc:
+                        if "externalAttempt" not in step:
+                            step.update(status="blocked", detail=str(exc))
+                    except Exception:
+                        if "externalAttempt" not in step:
+                            step.update(status="blocked", detail="The MCP tool could not start. Check its server settings.")
+                        else:
+                            step.update(status="reconciliation-required", detail=RECONCILIATION_DETAIL)
                 else:
                     try:
                         validate_graph_run_ancestors(document, step, by_node_id)
@@ -485,7 +528,9 @@ def register_graph_runner(
                         errorType="cancelled", elapsedMs=0,
                         finishedAt=datetime.now(timezone.utc).isoformat(),
                     )
-            run["status"] = "cancelled"
+            run["status"] = ("reconciliation-required" if any(
+                step["status"] == "reconciliation-required" for step in run["steps"]
+            ) else "cancelled")
             run["finishedAt"] = datetime.now(timezone.utc).isoformat()
             await checkpoint()
             terminal_saved = True
@@ -502,7 +547,7 @@ def register_graph_runner(
 
     @serialize_mutation
     async def start_run(node_ids: list[str], preview_token: str, run_id: str, max_concurrency: int):
-        token, steps = _plan(document, node_ids)
+        token, steps = _plan(document, node_ids, getattr(bus, "mcp_connect_runtime", None))
         if token != preview_token:
             raise IntentValidationError(["The graph or selection changed. Preview the run again."])
         if not any(step["status"] == "ready" for step in steps):
@@ -521,7 +566,7 @@ def register_graph_runner(
             "maxConcurrency": max_concurrency,
         }
         if len(document.graph_runs) >= RUN_HISTORY_LIMIT:
-            oldest_finished = next((item for item in document.graph_runs if item["status"] in {"completed", "partial", "cancelled"}), None)
+            oldest_finished = next((item for item in document.graph_runs if can_prune_run(item, document.graph_runs)), None)
             if oldest_finished is None:
                 raise IntentValidationError(["Resume an interrupted run before starting another."])
             document.graph_runs.remove(oldest_finished)

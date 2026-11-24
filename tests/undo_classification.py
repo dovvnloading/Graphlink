@@ -145,6 +145,19 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("scene", "previewGraphModel", "B", "read-only: previews a local model request and pinned input"),
     Classified("scene", "executeGraphModel", "A", "content: saves a local model reply with its durable request and run IDs"),
 
+    # MCP Connect: undo affects graph configuration/results, never remote effects.
+    Classified("scene", "listMcpTools", "B", "read-only: explicit server discovery, without a tool invocation"),
+    Classified("scene", "configureMcpTool", "A", "content: save the chosen tool and its explicit input bindings"),
+    Classified("scene", "getMcpToolSources", "B", "read-only: list connected typed input sources"),
+    Classified("scene", "getMcpToolStatus", "B", "read-only: validate output freshness against current graph bindings"),
+    Classified("scene", "previewMcpTool", "B", "read-only: resolve and fingerprint one request without dispatch"),
+    Classified("scene", "runMcpTool", "A", "content: save a tool output and provenance; undo cannot reverse remote side effects"),
+    Classified("scene", "cancelMcpTool", "B", "run-lifecycle: cancel one MCP request and retain any uncertainty fence"),
+    Classified("scene", "getMcpToolApprovals", "B", "read-only: inspect pending session-local MCP approval prompts"),
+    Classified("scene", "approveMcpTool", "B", "security: approve or deny the displayed immutable tool request"),
+    Classified("scene", "getMcpToolAttempts", "B", "read-only: inspect saved MCP request identities and outcomes"),
+    Classified("scene", "reconcileMcpTool", "B", "security: persist acknowledgement of a checked external outcome; never retry or undo remote effects"),
+
     # -- backend/api/intents_undo.py (scene) - the machinery itself ---------
     Classified("scene", "undo", "B", "undo-machinery: pops command_log itself, self-referential"),
     Classified("scene", "redo", "B", "undo-machinery: pops redo_stack itself, self-referential"),

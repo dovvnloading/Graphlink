@@ -867,6 +867,9 @@ def create_app(
                     # extension an abandoned tab's in-flight approval would hang
                     # forever, permanently locking node.pending_request_id.
                     agent_dispatcher.cancel_all_pending_approvals()
+                mcp_runtime = getattr(session, "mcp_connect_runtime", None)
+                if mcp_runtime is not None:
+                    mcp_runtime.disconnect()
 
     resolved_spa = SPA_DIST_DIR if spa_dir is None else spa_dir
     if resolved_spa.is_dir():

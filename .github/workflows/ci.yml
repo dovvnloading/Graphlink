@@ -255,7 +255,7 @@ jobs:
           from backend.plugin_sdk import discover_plugins
 
           expected = {"artifact", "code_sandbox", "conversation_node", "gitlink",
-                      "html_renderer", "review_lens", "system_prompt", "web_research"}
+                      "html_renderer", "mcp_connect", "review_lens", "system_prompt", "web_research"}
           distribution = importlib.metadata.distribution("graphlink")
           assert any(e.group == "gui_scripts" and e.name == "graphlink" for e in distribution.entry_points)
           spa = resolve_spa_dir()
@@ -275,7 +275,7 @@ jobs:
                   chat_db_path=Path(workdir) / "chats.db",
               )
               assert app.state.auth_token == "wheel-smoke-isolated-test-token"
-          print("OK: installed wheel contains SPA, icon, eight built-in plugins and GUI entry point")
+          print("OK: installed wheel contains SPA, icon, nine required built-in plugins and GUI entry point")
           PY
 
   frontend-checks:

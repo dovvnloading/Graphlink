@@ -38,6 +38,7 @@ const NODE_KIND_ICONS: readonly [string, IconName][] = [
   ["note-node", "node-note"],
   ["model-node", "node-model"],
   ["scientific-node", "node-science"],
+  ["mcp-tool-node", "hub"],
   ["chart-node", "node-chart"],
   ["plan-node", "node-plan"],
   ["harness-node", "node-agent"],

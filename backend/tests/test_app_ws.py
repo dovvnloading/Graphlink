@@ -508,6 +508,18 @@ def test_args_schema_is_scoped_to_the_known_intents():
             ("scene", "addModelNode"),
             ("scene", "configureModelNode"),
             ("scene", "connectModelInput"),
+            # MCP Connect validates every discovery, review and execution request.
+            ("scene", "listMcpTools"),
+            ("scene", "configureMcpTool"),
+            ("scene", "getMcpToolSources"),
+            ("scene", "getMcpToolStatus"),
+            ("scene", "previewMcpTool"),
+            ("scene", "runMcpTool"),
+            ("scene", "cancelMcpTool"),
+            ("scene", "getMcpToolApprovals"),
+            ("scene", "approveMcpTool"),
+            ("scene", "getMcpToolAttempts"),
+            ("scene", "reconcileMcpTool"),
         }
 
 

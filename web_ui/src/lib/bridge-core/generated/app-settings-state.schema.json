@@ -350,6 +350,12 @@
             },
             "type": "array"
           },
+          "headerKeys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "id": {
             "type": "string"
           },
@@ -364,6 +370,12 @@
           },
           "timeout": {
             "type": "number"
+          },
+          "transport": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
           }
         },
         "required": [
@@ -376,7 +388,10 @@
           "enabledTools",
           "enabled",
           "timeout",
-          "envKeys"
+          "envKeys",
+          "transport",
+          "url",
+          "headerKeys"
         ],
         "type": "object"
       },

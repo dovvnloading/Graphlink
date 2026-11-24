@@ -1,0 +1,16 @@
+[plugin]
+id = "mcp_connect"
+name = "MCP Connect"
+description = "Use configured MCP tools as connected graph nodes with validated inputs, structured results and durable run receipts."
+version = "1.0.0"
+sdk_api_version = 1
+entry_point = "plugin:register"
+
+[scopes]
+grants = ["graph.read", "graph.mutate"]
+
+[frontend]
+view = "generic"
+
+[persistence]
+passive_node_kinds = ["tool"]

@@ -32,6 +32,7 @@ const CATEGORY_BY_KIND: Record<string, MinimapCategory> = {
   code_review: "tool",
   code_sandbox: "tool",
   fal_media: "tool",
+  "mcp_connect.tool": "tool",
   frame: "group",
   container: "group",
 };
