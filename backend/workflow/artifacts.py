@@ -11,7 +11,7 @@ from typing import Any
 
 from backend.asset_store import AssetStore, content_ref
 from .contracts import AssetRef, FileValue, ImageValue, JsonValue, PortValue, TableValue, TextValue
-from .ports import coerce_port
+from .ports import _check_table, coerce_port
 from .contracts import PortSpec
 
 INLINE_LIMIT = 64 * 1024
@@ -45,6 +45,10 @@ class WorkflowArtifacts:
 
     def pack(self, value: PortValue, *, persist: bool = True) -> dict[str, Any]:
         coerce_port(value, PortSpec("value", value.kind, True))
+        if isinstance(value, TextValue) and not isinstance(value.text, str):
+            raise ValueError("Workflow text must be a string.")
+        if isinstance(value, TableValue):
+            _check_table(value)
         payload = asdict(value)
         if isinstance(value, (FileValue, ImageValue)):
             self.bytes_for(value.asset)

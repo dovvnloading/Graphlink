@@ -179,3 +179,16 @@ run table beside the legacy graph receipts. Retention keeps the newest 50
 runs per workspace for up to 90 days (active runs are exempt until terminal).
 Offline asset GC marks kept run records, saved graph attachments and retained
 backups before sweeping; retention itself never unlinks a blob.
+
+
+The application exposes these operations under the existing authenticated
+/api/workflows/{workspace_id} prefix: POST preview, POST approve (requires
+approved: true and the issued fingerprint), POST/GET runs, GET runs/{run_id},
+POST runs/{run_id}/cancel, POST runs/{run_id}/save-as-graph, POST files
+(raw bounded binary upload returning a typed file/image parameter), and
+GET runs/{run_id}/assets/{hash} or graphs/{graph_id}/assets/{hash}
+(attachment-only downloads scoped to a retained reference). Send the
+existing v1 WorkflowSpec and PortValue records as JSON using spec and
+parameters fields; admission additionally accepts approval_token. The app
+owns one lazy service and cancels it at shutdown. Existing read-only/MCP
+control capabilities do not authorize workflow execution.

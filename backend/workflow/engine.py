@@ -160,6 +160,14 @@ class WorkflowEngine:
         self._approvals[token] = (preview.fingerprint, workspace_id, time.monotonic() + 900)
         return token
 
+    def approve_fingerprint(self, workspace_id: int, fingerprint: str) -> str:
+        """Approve an issued preview by its exact fingerprint."""
+        self._expire_approvals()
+        issued = self._previews.get(fingerprint)
+        if issued is None:
+            raise ValueError("Preview the workflow again before approving it.")
+        return self.approve(workspace_id, issued[0])
+
     def start(self, workspace_id: int, spec: WorkflowSpec, parameters: Mapping[str, PortValue],
               *, approval_token: str | None = None) -> str:
         """Admit a frozen run, then schedule it; caller receives its cancel ID."""
@@ -248,7 +256,7 @@ class WorkflowEngine:
                 raise ValueError("Reported workflow cost must be finite and cumulative.")
             attempt.cost = cost
             if cost > policy.cost_usd:
-                run.stop("Run stopped: a step exceeded its approved cost estimate.", "failed")
+                run.stop("Run stopped: a step exceeded its approved cost estimate (cost limit).", "failed")
 
         context = StepContext(
             run.record["run_id"], spec.step_id, 1, scratch_document=run.scratch,

@@ -1,0 +1,155 @@
+"""Authenticated detached workflow host routes.
+
+The app's existing /api capability, origin and host checks cover every route.
+No active SessionBus or SceneDocument is resolved or mutated.
+"""
+from __future__ import annotations
+
+import sqlite3
+from collections.abc import Callable
+from dataclasses import asdict
+from pathlib import Path
+from typing import Any
+
+from fastapi import FastAPI, HTTPException, Request, Response
+
+from backend.asset_store import ALLOWED_IMAGE_MIME_TYPES
+from backend.domain.model import SceneError
+from backend.workspace_archive import _collect_asset_refs
+from .engine import RunLimits, WorkflowEngine
+from .planning import PolicyResolver
+from .registry import StepAdapterRegistry
+from .wire import decode_request
+
+_MAX_FILE_BYTES = 64 * 1024 * 1024
+
+
+class WorkflowService:
+    """Lazy so unrelated app instances do not open or migrate a chat database."""
+
+    def __init__(self, db_path: Path, *, limits: RunLimits | None = None,
+                 registry: StepAdapterRegistry | None = None, policy_for: PolicyResolver | None = None):
+        self.db_path = db_path
+        self.limits = limits
+        self.registry = registry
+        self.policy_for = policy_for
+        self._engine: WorkflowEngine | None = None
+
+    def engine(self) -> WorkflowEngine:
+        if self._engine is None:
+            self._engine = WorkflowEngine(self.db_path, limits=self.limits, registry=self.registry,
+                                          policy_for=self.policy_for)
+        return self._engine
+
+    async def shutdown(self) -> None:
+        if self._engine is not None:
+            await self._engine.shutdown()
+
+
+def _checked(operation: Callable):
+    try:
+        return operation()
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from None
+    except (ValueError, KeyError, TypeError, SceneError) as exc:
+        raise HTTPException(400, str(exc)) from None
+    except sqlite3.IntegrityError:
+        raise HTTPException(400, "The workflow workspace does not exist.") from None
+
+
+def _require_run(engine: WorkflowEngine, workspace_id: int, run_id: str):
+    record = engine.store.read(workspace_id, run_id)
+    if record is None:
+        raise HTTPException(404, "Workflow run not found.")
+    return record
+
+
+def _download(engine: WorkflowEngine, ref: str, payload: Any) -> Response:
+    refs: set[str] = set()
+    _collect_asset_refs(payload, refs)
+    if ref not in refs:
+        raise HTTPException(404, "Workflow asset not found.")
+    data = engine.artifacts.store.get(ref)
+    if data is None:
+        raise HTTPException(404, "Workflow asset not found.")
+    return Response(data, media_type="application/octet-stream", headers={
+        "Content-Disposition": f'attachment; filename="{ref}"',
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "no-store",
+    })
+
+
+def register_workflow_api(app: FastAPI, service: WorkflowService) -> None:
+    prefix = "/api/workflows/{workspace_id}"
+
+    @app.post(prefix + "/preview")
+    async def preview(workspace_id: int, body: dict[str, Any]):
+        return _checked(lambda: asdict(service.engine().preview(*decode_request(body))))
+
+    @app.post(prefix + "/approve")
+    async def approve(workspace_id: int, body: dict[str, Any]):
+        if body.get("approved") is not True or not isinstance(body.get("fingerprint"), str):
+            raise HTTPException(400, "Explicit approval of a workflow preview is required.")
+        return _checked(lambda: {"approval_token": service.engine().approve_fingerprint(
+            workspace_id, body["fingerprint"],
+        )})
+
+    @app.post(prefix + "/runs", status_code=202)
+    async def start(workspace_id: int, body: dict[str, Any]):
+        return _checked(lambda: {"run_id": service.engine().start(
+            workspace_id, *decode_request(body), approval_token=body.get("approval_token"),
+        )})
+
+    @app.get(prefix + "/runs")
+    async def list_runs(workspace_id: int):
+        return service.engine().store.list(workspace_id)
+
+    @app.get(prefix + "/runs/{run_id}")
+    async def get_run(workspace_id: int, run_id: str):
+        return _require_run(service.engine(), workspace_id, run_id)
+
+    @app.post(prefix + "/runs/{run_id}/cancel")
+    async def cancel(workspace_id: int, run_id: str):
+        engine = service.engine()
+        _require_run(engine, workspace_id, run_id)
+        if not engine.cancel(workspace_id, run_id):
+            raise HTTPException(409, "This workflow is not running.")
+        return {"cancel_requested": True}
+
+    @app.post(prefix + "/runs/{run_id}/save-as-graph", status_code=201)
+    async def save_as_graph(workspace_id: int, run_id: str, body: dict[str, Any] | None = None):
+        engine = service.engine()
+        _require_run(engine, workspace_id, run_id)
+        title = (body or {}).get("title")
+        if title is not None and not isinstance(title, str):
+            raise HTTPException(400, "Graph title must be text.")
+        return _checked(lambda: {"graph_id": engine.save_result_as_graph(workspace_id, run_id, title=title)})
+
+    @app.post(prefix + "/files", status_code=201)
+    async def file_parameter(workspace_id: int, request: Request, filename: str,
+                             media_type: str = "application/octet-stream", image: bool = False):
+        if not filename or len(filename) > 255 or len(media_type) > 255:
+            raise HTTPException(400, "Invalid workflow file metadata.")
+        if image and media_type not in ALLOWED_IMAGE_MIME_TYPES:
+            raise HTTPException(400, "Choose a supported image media type.")
+        data = bytearray()
+        async for chunk in request.stream():
+            if len(data) + len(chunk) > _MAX_FILE_BYTES:
+                raise HTTPException(413, "Workflow file exceeds the 64 MiB import limit.")
+            data.extend(chunk)
+        value = service.engine().artifacts.file(bytes(data), filename, media_type, image=image)
+        return asdict(value)
+
+    @app.get(prefix + "/runs/{run_id}/assets/{ref}")
+    async def run_asset(workspace_id: int, run_id: str, ref: str):
+        engine = service.engine()
+        return _download(engine, ref, _require_run(engine, workspace_id, run_id))
+
+    @app.get(prefix + "/graphs/{graph_id}/assets/{ref}")
+    async def graph_asset(workspace_id: int, graph_id: int, ref: str):
+        from backend.chat_library import load_chat_row
+        engine = service.engine()
+        graph = load_chat_row(service.db_path, graph_id)
+        if graph is None or graph.get("workspace_id") != workspace_id:
+            raise HTTPException(404, "Graph not found.")
+        return _download(engine, ref, graph["data"])
