@@ -26,8 +26,8 @@ _SENSITIVE_IDENTIFIER = re.compile(
 _TIMESTAMP = re.compile(
     r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})"
 )
-_KINDS = {"note", "chart", "artifact", "table", "model", "tool", "scientific"}
-_OPERATIONS = {"copy", "word_count", "group_sum", "model", "tool"}
+_KINDS = {"note", "chart", "artifact", "table", "model", "tool", "scientific", "workflow"}
+_OPERATIONS = {"copy", "word_count", "group_sum", "model", "tool", "workflow"}
 _STATUSES = {
     "ready", "waiting", "current", "blocked", "failed", "pending",
     "completed", "partial", "interrupted", "running", "cancelled", "reconciliation-required",
@@ -106,7 +106,7 @@ def _ordered_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     children: list[list[int]] = [[] for _ in steps]
     degrees = [0] * len(steps)
     for index, step in enumerate(steps):
-        sources = step.get("sourceIds") if step.get("kind") in {"scientific", "tool"} else None
+        sources = step.get("sourceIds") if step.get("kind") in {"scientific", "tool", "workflow"} else None
         if not isinstance(sources, list):
             sources = [step.get("sourceId")]
         for source_id in dict.fromkeys(_node_id(source) for source in sources):
@@ -179,7 +179,7 @@ def build_graph_run_trace(run: dict[str, Any]) -> dict[str, Any]:
             error_type = None
         result = step.get("scientificResult") if scientific else None
         receipt = result.get("provenance") if isinstance(result, dict) else None
-        source_ids = step.get("sourceIds") if step.get("kind") in {"scientific", "tool"} else None
+        source_ids = step.get("sourceIds") if step.get("kind") in {"scientific", "tool", "workflow"} else None
         trace_steps.append({
             "index": index,
             "sourceNodeId": _node_id(step.get("sourceId")),

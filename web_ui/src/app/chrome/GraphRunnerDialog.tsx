@@ -27,7 +27,7 @@ const statuses: Record<string, string> = {
 const operations: Record<string, string> = {
   copy: "Copy text", word_count: "Word count", group_sum: "Group and sum",
   model: "Local model reply",
-  tool: "MCP tool",
+  tool: "MCP tool", workflow: "Pinned workflow",
 };
 
 function RunSteps({ steps, names }: { steps: GraphRunStep[]; names: Map<string, string> }) {
@@ -48,6 +48,10 @@ function RunSteps({ steps, names }: { steps: GraphRunStep[]; names: Map<string, 
         {step.scientificResult && <p>Result: {formatScienceSummary(step.scientificResult.summary)}</p>}
       </div>}
       {step.detail && <p>{step.detail}</p>}
+      {step.childRun && <Disclosure label={"Child run · " + step.childRun.status}>
+        <p><code>{step.childRun.runId}</code></p>
+        <ol>{step.childRun.steps.map((child, index) => <li key={child.stepId}>Step {index + 1}: {child.status}</li>)}</ol>
+      </Disclosure>}
       {step.externalAttempt && <Disclosure label="External request" className="runner-fingerprints">
         <div>Provider <code>{step.externalAttempt.provider}</code></div>
         <div>{step.externalAttempt.kind === "model" ? "Model" : "Tool"} <code>{step.externalAttempt.model || step.externalAttempt.tool}</code></div>
@@ -84,6 +88,7 @@ function RunInspector({ run, names, onSelect }: {
 }
 
 function Runner({ store }: { store: SceneStore }) {
+  const overlays = useOverlays();
   const rf = useReactFlow();
   const rfStore = useStoreApi();
   function selectInspectorNode(nodeId: string) {
@@ -309,6 +314,7 @@ function Runner({ store }: { store: SceneStore }) {
           { value: "selection", label: `Selected nodes (${selectedIds.length})`, disabled: !selectedIds.length },
         ]} />
       <Button variant="secondary" disabled={!!busy} onClick={previewRun}>Preview run</Button>
+      <Button disabled={!!busy} onClick={() => overlays.open("workflow-library", "dialog")}>Workflow Library</Button>
     </div>
     {scope === "selection" && <p className="runner-note">Includes downstream outputs and the inputs they depend on.</p>}
     {modelNoteHandoff && <p className="runner-note">The selected note has a saved local-model

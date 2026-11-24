@@ -370,4 +370,8 @@ def read_run(conn: sqlite3.Connection, graph_id: int, run_id: str) -> dict[str, 
     result = runs[0]
     result["steps"] = rows("SELECT * FROM workflow_steps WHERE graph_id = ? AND run_id = ? ORDER BY step_index")
     result["events"] = rows("SELECT * FROM workflow_events WHERE graph_id = ? AND run_id = ? ORDER BY event_id")
+    if any(step["kind"] == "workflow" for step in result["steps"]):
+        result["child_runs"] = [json.loads(row["receipt_json"]) for row in rows(
+            "SELECT receipt_json FROM workflow_child_runs WHERE graph_id = ? AND run_id = ? ORDER BY step_index"
+        )]
     return result

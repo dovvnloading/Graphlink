@@ -256,6 +256,7 @@ export interface GraphRunExternalAttempt {
 }
 
 export interface GraphRunStep {
+  childRun?: import("./workflowLibrary").WorkflowChildRun;
   nodeId: string;
   sourceId: string;
   sourceIds?: string[];
@@ -2004,6 +2005,14 @@ export class SceneStore {
   /** Change an edge's ancestry semantics without deleting its connection. */
   async setEdgeRole(edgeId: string, role: EdgeRole): Promise<void> {
     await this.transport.request("scene", "setEdgeRole", [edgeId, role]);
+  }
+
+  workflowLibrary<T = unknown>(action: string, payload: Record<string, unknown> = {}): Promise<T> {
+    return this.transport.request("scene", "workflowLibrary", [action, payload]) as Promise<T>;
+  }
+
+  mutateWorkflowNode<T = unknown>(action: string, payload: Record<string, unknown>): Promise<T> {
+    return this.transport.request("scene", "mutateWorkflowNode", [action, payload]) as Promise<T>;
   }
 
   previewGraphRun(nodeIds: string[]): Promise<GraphRunPreview> {

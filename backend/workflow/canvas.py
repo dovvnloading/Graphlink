@@ -5,7 +5,7 @@ import hashlib
 import json
 
 from backend.domain.model import SceneError
-from backend.domain.node_states import NoteState, PluginStateSnapshot, PersistedPluginState
+from backend.domain.node_states import PluginStateSnapshot, PersistedPluginState
 from backend.workflow.contracts import (
     InputBinding, PortSpec, StepOutputSource, WorkflowInputSource, WorkflowOutput,
     WorkflowSpec, WorkflowStepSpec, freeze_config,

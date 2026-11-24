@@ -58,6 +58,8 @@ export function AppBar({ store }: { store: SceneStore }) {
         <Button variant="ghost" size="sm" data-overlay-trigger="library"
           aria-pressed={overlays.isOpen("library")}
           onClick={() => overlays.toggle("library", "dialog")}>Library</Button>
+        <Button variant="ghost" size="sm" data-overlay-trigger="workflow-library" aria-pressed={overlays.isOpen("workflow-library")}
+          onClick={() => overlays.toggle("workflow-library", "dialog")}>Workflows</Button>
         <Button variant="ghost" size="sm" onClick={() => store.saveChat()}>Save</Button>
       </div>
 
