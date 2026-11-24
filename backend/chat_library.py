@@ -59,6 +59,7 @@ from backend import workflow_run_store, workflow_library_store
 from backend.canvas import SceneDocument
 from backend.domain.node_states import ChatState
 from backend.api.intents_graph_runner import register_graph_runner
+from backend.api.intents_workflow_library import register_workflow_library
 from backend.api.intents_graph_model import register_graph_model_runner
 from backend.api.intents_mcp_connect import register_mcp_connect
 from backend.events import SessionBus
@@ -3698,9 +3699,10 @@ def register_chat_library(
             bus, canvas_document, settings_manager,
             lambda: save_chat(checkpoint=True), _serialize_mutating_intent,
         )
+        workflow_resolver = register_workflow_library(bus, canvas_document, lambda: _connect(resolved_path))
         register_graph_runner(
             bus, canvas_document, lambda: save_chat(checkpoint=True), _serialize_mutating_intent,
-            settings_manager=settings_manager,
+            settings_manager=settings_manager, workflow_resolver=workflow_resolver,
         )
         register_graph_model_runner(
             bus, canvas_document, lambda: save_chat(checkpoint=True), _serialize_mutating_intent,

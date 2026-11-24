@@ -76,7 +76,7 @@ def _restore_step(raw: Any, ids: dict[str, str]) -> dict[str, Any] | None:
     keys = ("nodeId", "sourceId", "operation", "kind", "status", "label", "detail", "inputHash", "configHash", "targetHash")
     if not all(isinstance(raw.get(key), str) for key in keys):
         return None
-    if raw["status"] not in _STEP_STATUSES or raw["kind"] not in {"note", "chart", "artifact", "table", "model", "tool", "scientific"}:
+    if raw["status"] not in _STEP_STATUSES or raw["kind"] not in {"note", "chart", "artifact", "table", "model", "tool", "scientific", "workflow"}:
         return None
     step = {key: raw[key] for key in keys}
     for key in ("inputHash", "configHash", "targetHash"):
@@ -160,6 +160,17 @@ def _restore_step(raw: Any, ids: dict[str, str]) -> dict[str, Any] | None:
                 return None
             step["scientificResult"] = result
 
+    if step["kind"] == "workflow":
+        from backend.workflow.child_runs import validate_child
+        if raw.get("sourceIds") != []:
+            return None
+        step["sourceIds"] = []
+        child = validate_child(raw.get("childRun"))
+        if child:
+            step["childRun"] = child
+        if step["status"] == "running":
+            step.update(status="pending", detail="Interrupted pure workflow; preview inputs again.")
+
     for key in ("nodeId", "sourceId"):
         # Never leave an unmapped saved id pointing at an unrelated new n0/n1.
         step[key] = ids.get(step[key], "")
@@ -193,7 +204,7 @@ def _restore_step(raw: Any, ids: dict[str, str]) -> dict[str, Any] | None:
     elif step["status"] in {"running", "reconciliation-required"}:
         # An in-flight remote step with no durable identity is unsafe to replay.
         step.update(status="reconciliation-required", detail="External request identity is missing; do not retry.")
-    if step["status"] == "pending" and not (step["nodeId"] and (step["sourceId"] or step["kind"] in {"scientific", "tool"})):
+    if step["status"] == "pending" and not (step["nodeId"] and (step["sourceId"] or step["kind"] in {"scientific", "tool", "workflow"})):
         step.update(status="blocked", detail="The saved input or output no longer exists.")
     return step
 

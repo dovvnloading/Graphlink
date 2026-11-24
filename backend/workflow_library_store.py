@@ -33,6 +33,19 @@ def migrate(conn: sqlite3.Connection) -> None:
         )
     """)
 
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS workflow_child_runs (
+            graph_id INTEGER NOT NULL,
+            run_id TEXT NOT NULL,
+            step_index INTEGER NOT NULL,
+            child_run_id TEXT NOT NULL,
+            receipt_json TEXT NOT NULL,
+            PRIMARY KEY (graph_id, run_id, step_index, child_run_id),
+            FOREIGN KEY (graph_id, run_id, step_index)
+                REFERENCES workflow_steps(graph_id, run_id, step_index) ON DELETE CASCADE
+        )
+    """)
+
 
 def _name(name):
     if not isinstance(name, str) or not name.strip() or len(name.strip()) > 200 or scrub(name) != name:

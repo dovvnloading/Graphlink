@@ -23,7 +23,7 @@ from backend.domain.graph_run_inspector import _digest, _duration_ms, _identifie
 _RUN_STATUSES = {"running", "interrupted", "completed", "partial", "cancelled", "reconciliation-required"}
 _STEP_STATUSES = {"pending", "running", "current", "completed", "blocked", "failed", "cancelled",
                   "reconciliation-required"}
-_KINDS = {"note", "chart", "artifact", "table", "model", "tool", "scientific"}
+_KINDS = {"note", "chart", "artifact", "table", "model", "tool", "scientific", "workflow"}
 _APPROVALS = {"pending", "reviewed", "auto", "cached", "approved", "denied", "expired", "cancelled"}
 _APPROVAL_ID = re.compile(r"mcp-[a-f0-9]{32}")
 
@@ -257,6 +257,14 @@ def checkpoint(conn: sqlite3.Connection, graph_id: int, runs: Any) -> None:
             step_record = _step_record(step)
             if _write(conn, "workflow_steps", {**key, "step_index": index}, step_record):
                 _event(conn, graph_id, run_id, index, "step_state", step_record)
+            if step["kind"] == "workflow":
+                from backend.workflow.child_runs import validate_child
+                child = validate_child(step.get("childRun"))
+                if child is not None:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO workflow_child_runs VALUES (?, ?, ?, ?, ?)",
+                        (graph_id, run_id, index, child["runId"], _json(child)),
+                    )
         if changed and record["status"] != "running":
             _event(conn, graph_id, run_id, None, "run_state", record)
     # A stale or incomplete graph write must not make an unresolved fence

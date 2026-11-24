@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from backend.domain.model import SceneError, SceneNode
+from backend.workflow import canvas as reusable
 from backend.domain.node_states import ModelState, NoteState
 from backend.domain.graph_model_binding import validate_local_model_identity
 from backend.domain.nodes_content import _text_digest
@@ -29,6 +30,8 @@ if TYPE_CHECKING:
 
 
 def _kind(node: SceneNode) -> str:
+    if node.kind == reusable.KIND:
+        return "workflow"
     if mcp_configured(node):
         return "tool"
     if science_configured(node):
@@ -54,7 +57,7 @@ def is_bound_node(node: SceneNode) -> bool:
     not its ordinary deterministic graph-plan endpoint.
     """
     return (
-        science_configured(node) or mcp_configured(node)
+        node.kind == reusable.KIND or science_configured(node) or mcp_configured(node)
         or _binding(node) is not None
         or isinstance(node.state, NoteState) and node.state.model_text_input is not None
     )
@@ -116,7 +119,10 @@ def _closure(seeds: set[str], neighbors: dict[str, list[str]]) -> set[str]:
 def _config_and_target(document: SceneDocument, step: dict[str, str]) -> None:
     """Pin output and configuration without requiring a future model reply."""
     node = document.nodes[step["nodeId"]]
-    if step["kind"] == "tool":
+    if step["kind"] == "workflow":
+        step["configHash"] = reusable.config_hash(node)
+        step["targetHash"] = reusable.output_hash(node)
+    elif step["kind"] == "tool":
         config = mcp_configuration(node)
         step["configHash"] = mcp_config_hash(node)
         step["targetHash"] = mcp_output_hash(node)
@@ -165,6 +171,12 @@ def _inspect(document: SceneDocument, step: dict[str, str]) -> None:
     node_id, source_id = step["nodeId"], step["sourceId"]
     node = document.nodes[node_id]
     _config_and_target(document, step)
+    if step["kind"] == "workflow":
+        _, _, digest = reusable.prepare(node)
+        current = reusable.data(node)["lastInputHash"] == digest
+        step["inputHash"] = digest
+        step.update(status="current" if current else "ready", detail="Pinned workflow inputs are ready.")
+        return
     if step["kind"] == "tool":
         prepared = prepare_mcp(document, node)
         step["inputHash"] = prepared.input_hash
@@ -230,7 +242,7 @@ def _inspect(document: SceneDocument, step: dict[str, str]) -> None:
 def _evaluate(document: SceneDocument, step: dict[str, str]) -> None:
     if step["kind"] == "note":
         document.run_note_text_input(step["nodeId"])
-    elif step["kind"] in {"model", "scientific", "tool"}:
+    elif step["kind"] in {"model", "scientific", "tool", "workflow"}:
         raise SceneError("This step requires its explicit asynchronous execution adapter.")
     else:
         document.run_table_output(step["nodeId"])
@@ -251,7 +263,10 @@ def plan_graph_run(document: SceneDocument, selected_ids: list[str]) -> list[dic
     sources: dict[str, tuple[str, ...]] = {}
     invalid_mcp: dict[str, str] = {}
     for node in document.nodes.values():
-        if mcp_configured(node):
+        if node.kind == reusable.KIND:
+            bindings[node.id] = ("", "workflow")
+            sources[node.id] = ()
+        elif mcp_configured(node):
             try:
                 parents = mcp_dependencies(document, node)
             except SceneError as exc:
@@ -293,7 +308,7 @@ def plan_graph_run(document: SceneDocument, selected_ids: list[str]) -> list[dic
                 "status": "blocked", "detail": "", "inputHash": "",
                 "configHash": "", "targetHash": "",
             }
-            if science_configured(node) or mcp_configured(node):
+            if node.kind == reusable.KIND or science_configured(node) or mcp_configured(node):
                 step["sourceIds"] = list(sources[target_id])
             steps[target_id] = step
 
@@ -313,7 +328,7 @@ def plan_graph_run(document: SceneDocument, selected_ids: list[str]) -> list[dic
             step["detail"] = "The upstream step is blocked."
         elif any(
             parent["status"] == "waiting"
-            or (parent["kind"] in {"model", "scientific", "tool"} and parent["status"] == "ready")
+            or (parent["kind"] in {"model", "scientific", "tool", "workflow"} and parent["status"] == "ready")
             for parent in parent_steps
         ):
             # Neither a Model reply nor an isolated scientific calculation
@@ -326,7 +341,7 @@ def plan_graph_run(document: SceneDocument, selected_ids: list[str]) -> list[dic
         else:
             try:
                 _inspect(projected, step)
-                if step["status"] == "ready" and step["kind"] not in {"model", "scientific", "tool"}:
+                if step["status"] == "ready" and step["kind"] not in {"model", "scientific", "tool", "workflow"}:
                     projected.nodes[target] = copy.deepcopy(projected.nodes[target])
                     _evaluate(projected, step)
             except SceneError as exc:
@@ -348,7 +363,10 @@ def _matching_node(document: SceneDocument, step: dict[str, Any]) -> SceneNode:
     node = document.nodes.get(step["nodeId"])
     if node is None or _kind(node) != step["kind"]:
         raise SceneError("The connection changed since the preview. Preview the branch again.")
-    if step["kind"] == "tool":
+    if step["kind"] == "workflow":
+        if step["operation"] != "workflow" or step_sources(step):
+            raise SceneError("Workflow configuration changed since preview.")
+    elif step["kind"] == "tool":
         if (not mcp_configured(node) or step["operation"] != "tool"
                 or mcp_dependencies(document, node) != step_sources(step)):
             raise SceneError("The MCP inputs changed since preview. Preview the branch again.")
@@ -363,6 +381,8 @@ def _matching_node(document: SceneDocument, step: dict[str, Any]) -> SceneNode:
 
 
 def _output_digest(node: SceneNode) -> str:
+    if node.kind == reusable.KIND:
+        return reusable.output_hash(node)
     if mcp_configured(node):
         return mcp_output_hash(node)
     if science_configured(node):
@@ -419,7 +439,7 @@ def execute_graph_step(document: SceneDocument, step: dict[str, str]) -> str:
     """Apply one approved ready step and return the committed output digest."""
     if step["status"] not in ("ready", "pending"):
         raise SceneError("This step is not ready to run.")
-    if step["kind"] in {"scientific", "tool"}:
+    if step["kind"] in {"scientific", "tool", "workflow"}:
         raise SceneError("This step requires its explicit asynchronous execution adapter.")
     node = _matching_node(document, step)
     live = step.copy()
