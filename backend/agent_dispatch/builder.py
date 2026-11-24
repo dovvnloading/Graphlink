@@ -65,6 +65,10 @@ class BuilderDispatchOps(DispatcherParts):
             # primitive for prompt-injected content.
             register_knowledge_tools(registry, document=document, settings_manager=self._settings_manager)
             register_builder_control_tools(registry)
+            from backend.tools_workflow import register_workflow_tools
+            db_path = getattr(self, "_workflow_db_path", None)
+            if db_path is not None:
+                register_workflow_tools(registry, document, db_path)
             self._register_configured_mcp_tools(registry)
             register_fal_tools(registry, self._settings_manager)
             self._register_plugin_tools(registry, document)

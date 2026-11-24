@@ -335,6 +335,7 @@ def _configure_session(
         settings_manager=settings_manager, agent_dispatcher=agent_dispatcher,
         knowledge_db_path=watch_service.db_path if watch_service is not None else None,
     )
+    agent_dispatcher._workflow_db_path = bus.chat_db_path
 
 
 def _evict_idle_session(bus: SessionBus) -> bool:
