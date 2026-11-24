@@ -149,7 +149,8 @@ function SelectControl({
     if (!trigger) return;
     const scope = trigger.closest<HTMLElement>('[role="dialog"][aria-modal="true"]') ?? document.body;
     const controls = [...scope.querySelectorAll<HTMLElement>(FOCUSABLE)]
-      .filter((element) => !panelRef.current?.contains(element));
+      .filter((element) => element.tabIndex >= 0 && !element.closest("[hidden], [inert], [aria-hidden=true]")
+        && !panelRef.current?.contains(element));
     const index = controls.indexOf(trigger);
     const next = controls[(index + (reverse ? -1 : 1) + controls.length) % controls.length];
     closeList();
