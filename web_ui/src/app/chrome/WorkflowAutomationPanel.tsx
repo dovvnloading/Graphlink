@@ -19,8 +19,9 @@ type Run = { run_id: string; preset_id?: string; status: string; error?: string;
   steps: Record<string, unknown>; awaiting_approval?: Pending | null; preview: Preview };
 
 async function request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
-  const res = await fetch(path, { method, headers: { ...authHeaders(), "Content-Type": "application/json" },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const init: RequestInit = { method, headers: { ...authHeaders(), "Content-Type": "application/json" } };
+  if (body !== undefined) init.body = JSON.stringify(body);
+  const res = await fetch(path, init);
   const data = await res.json();
   if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Workflow request failed.");
   return data as T;
