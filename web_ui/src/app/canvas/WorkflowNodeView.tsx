@@ -46,7 +46,15 @@ function Editor({ id, state, store, x, y }: { id: string; state: WorkflowNodeSta
     setLatest(history[0] && history[0].version > state.version ? history[0] : null);
   }
   useEffect(() => {
-    void checkVersion().catch(e => setError(String(e)));
+    let cancelled = false;
+    void store.workflowLibrary<WorkflowVersion[]>("history", { workflow_id: spec.workflow_id })
+      .then(history => {
+        if (!cancelled) setLatest(history[0] && history[0].version > state.version ? history[0] : null);
+      })
+      .catch(e => {
+        if (!cancelled) setError(String(e));
+      });
+    return () => { cancelled = true; };
   }, [store, spec.workflow_id, spec.revision, state.version]);
   async function act(fn: () => Promise<void>) {
     setBusy(true); setError("");

@@ -33,7 +33,15 @@ function Library({ store }: { store: SceneStore }) {
     setRows(await store.workflowLibrary<WorkflowEntry[]>("list"));
   }
   useEffect(() => {
-    void refresh().catch(e => setError(String(e)));
+    let cancelled = false;
+    void store.workflowLibrary<WorkflowEntry[]>("list")
+      .then(entries => {
+        if (!cancelled) setRows(entries);
+      })
+      .catch(e => {
+        if (!cancelled) setError(String(e));
+      });
+    return () => { cancelled = true; };
   }, [store]);
   async function act(fn: () => Promise<void>) {
     setBusy(true);
