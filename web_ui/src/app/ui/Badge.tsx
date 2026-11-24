@@ -15,6 +15,7 @@ export function Badge({ children, size = "2xs", className }: BadgeProps) {
 }
 
 const statusIcons = {
+  "Queued": "status-pending",
   "Running": "status-running",
   "Done": "status-success",
   "Failed": "status-error",

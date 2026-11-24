@@ -45,7 +45,9 @@ describe("Graph Runner", () => {
     request.mockResolvedValueOnce(scientific);
     await user.click(screen.getByRole("button", { name: "Open runner" }));
     const latest = await screen.findByRole("region", { name: "Latest run" });
-    expect(latest).toHaveTextContent("kcat/Km=1,000,000 M⁻¹ s⁻¹");
+    expect(within(latest).getByText(/kcat\/Km=1,000,000/)).not.toBeVisible();
+    await user.click(within(latest).getByRole("button", { name: "Show full" }));
+    expect(within(latest).getByText(/kcat\/Km=1,000,000/)).toBeVisible();
     expect(scientific.steps[0].scientificResult?.summary).toBe(summary);
   });
 

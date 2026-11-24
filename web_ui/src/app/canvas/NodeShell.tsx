@@ -8,6 +8,8 @@ import { TEXT_INPUT_HANDLE, TEXT_OUTPUT_HANDLE } from "./textInputs";
 import "./NodeCards.css";
 import { StalenessBadge } from "./StalenessBadge";
 import { RunBoundNodesContext } from "./RunBoundNodesContext";
+import { WorkflowNodeStatus } from "./WorkflowCanvasContext";
+import { Button } from "../ui/Button";
 import { useCanvasSearchMatchIds, useCanvasSearchQuery } from "./CanvasSearchContext";
 
 // Size-reporting alone misses a port when a lazy node view replaces an
@@ -156,12 +158,15 @@ export function NodeShell({
           <Icon name={icon} size="sm" className="node-card-kind-icon" />
           <div className="node-card-title-slot">{header}</div>
           <div className="node-card-status">
+            <WorkflowNodeStatus nodeId={nodeId} stale={visibleStaleness === "out_of_date" || visibleStaleness === "upstream_changed"} />
             <StalenessBadge status={visibleStaleness} manualRerun={manualRerun}
               nodeKind={kindClassName === "thinking-node" ? "thinking" : undefined}
               onRunBoundNodes={isBoundForRunner && nodeId && openBoundNodes
                 ? () => openBoundNodes([nodeId]) : undefined} />
           </div>
           <span className="node-card-spacer" aria-hidden="true" />
+          {isBoundForRunner && nodeId && openBoundNodes && <Button size="sm" variant="ghost"
+            className="nodrag" iconStart="play" onClick={() => openBoundNodes([nodeId], "through")}>Run to here</Button>}
           {onMenuChange && (
             <Tooltip label="Node actions">
               <button ref={menuTriggerRef} type="button"

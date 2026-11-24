@@ -20,6 +20,8 @@ import { Tooltip } from "../ui/Tooltip";
 import { OverlayProviderIfMissing, useOverlays } from "../overlays/overlays";
 import { ChatRerunDialog } from "./ChatRerunDialog";
 import { RunBoundNodesContext } from "./RunBoundNodesContext";
+import { WorkflowCanvasProvider, WorkflowCanvasProgress } from "./WorkflowCanvasContext";
+import type { WorkflowScope } from "./workflowRunTypes";
 // ADR-019: the node views are lazily imported, one chunk per kind - see
 // lazyNodeViews.tsx for why the Suspense boundary is per node rather than
 // one around the whole canvas. Their TYPES stay statically imported below:
@@ -2211,13 +2213,15 @@ export function toFlowNodes(
     const flow = flowNodes[i];
     const row = nodesById.get(flow.id);
     const staleness = row?.staleness ?? "current";
-    if (staleness === "current" || (flow.data as Record<string, unknown>).staleness === staleness) continue;
     // Only a typed bound output may hand off to Graph Runner. A stale
     // script/plugin/agent node has no automatic run affordance.
     const isBoundForRunner = !!row && (
       row.kind === "model" || isScienceKind(row.kind) || row.kind === "mcp_connect.tool" ||
       !!row.textInputSourceId || !!row.tableInputSourceId
     );
+    const oldData = flow.data as Record<string, unknown>;
+    if (staleness === "current" && !isBoundForRunner && oldData.staleness === undefined) continue;
+    if (oldData.staleness === staleness && oldData.isBoundForRunner === isBoundForRunner) continue;
     const updated = { ...flow, data: { ...flow.data, staleness, isBoundForRunner } } as SceneFlowNode;
     flowNodes[i] = updated;
     if (row) {
@@ -2779,9 +2783,10 @@ function CanvasInner({
     setRerunNodeId(id);
     overlays.open("chat-rerun", "dialog");
   }, [overlays]);
-  const openBoundNodes = useCallback((ids: string[]) => {
+  const openBoundNodes = useCallback((ids: string[], scope?: WorkflowScope) => {
     if (ids.length === 0) return;
-    store.requestGraphRunnerNodes(ids);
+    if (scope) store.requestGraphRunnerNodes(ids, scope);
+    else store.requestGraphRunnerNodes(ids);
     // The existing Graph Runner dialog still requires Preview run and
     // explicit approval. Switching overlays NEVER executes a node.
     overlays.open("graph-runner", "dialog");
@@ -3217,6 +3222,10 @@ function CanvasInner({
       data-testid="scene-canvas"
     >
       <RunBoundNodesContext.Provider value={openBoundNodes}>
+      <WorkflowCanvasProvider store={store} enabled={scene.nodes.some(node =>
+        !!node.textInputSourceId || !!node.tableInputSourceId || node.kind === "model" ||
+        node.kind === "mcp_connect.tool" || isScienceKind(node.kind))}>
+      <WorkflowCanvasProgress />
       <ScientificWorkspace Editor={CanvasScientificEditor}>
       <ReactFlow
         /* Uncontrolled node state, deliberately. With a controlled `nodes`
@@ -3392,6 +3401,7 @@ function CanvasInner({
       {scene.nodes.length === 0 && <EmptyGraph store={store} />}
       <ChatRerunDialog store={store} nodeId={rerunNodeId} onRunBoundNodes={openBoundNodes} />
       </ScientificWorkspace>
+      </WorkflowCanvasProvider>
       </RunBoundNodesContext.Provider>
     </div>
   );

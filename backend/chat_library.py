@@ -1703,6 +1703,12 @@ def load_chat_snapshot(
     return row, notes_rows, pins_rows
 
 
+def list_workflow_runs(db_path: Path, chat_id: int, offset: int = 0, limit: int = 50) -> list[dict[str, Any]]:
+    """List durable receipts belonging to exactly one saved graph."""
+    with contextlib.closing(_connect(db_path)) as conn:
+        return workflow_run_store.list_runs(conn, chat_id, offset, limit)
+
+
 def load_workflow_run(db_path: Path, chat_id: int, run_id: str) -> dict[str, Any] | None:
     """Read one run and its ordered events from a single SQLite snapshot."""
     with contextlib.closing(_connect(db_path)) as conn, conn:

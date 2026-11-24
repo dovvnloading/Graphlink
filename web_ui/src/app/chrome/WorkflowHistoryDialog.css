@@ -1,0 +1,29 @@
+@layer surfaces {
+.workflow-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gl-space-3);
+  list-style: none;
+  margin: var(--gl-space-3) 0;
+  padding-inline-start: 0;
+}
+.workflow-timeline.runner-timeline { padding-inline-start: var(--gl-space-4); }
+.workflow-receipt { display: flex; flex-direction: column; gap: var(--gl-space-2); overflow-wrap: anywhere; }
+.workflow-receipt > .gl-button { align-self: flex-start; }
+.workflow-compare {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--gl-space-3);
+}
+.workflow-compare > div { min-width: 0; overflow-wrap: anywhere; }
+.workflow-content {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-block-size: 18rem;
+  overflow: auto;
+  background: var(--gl-surface-inset);
+  color: var(--gl-surface-text-primary);
+  padding: var(--gl-space-2);
+  border-radius: var(--gl-radius-sm);
+}
+}
