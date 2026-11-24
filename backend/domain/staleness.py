@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 from backend.domain.node_states import ChatState
@@ -102,15 +103,19 @@ def _immutable_message_signature(node) -> tuple[Any, ...] | None:
     return (False, node.content)
 
 
-def _lineage(document: SceneDocument) -> tuple[dict[str, bytes], dict[str, str]]:
+def _lineage(
+    document: SceneDocument, starts: Iterable[str] | None = None,
+) -> tuple[dict[str, bytes], dict[str, str]]:
     parents = _parents(document)
     hashes: dict[str, bytes] = {}
     statuses: dict[str, str] = {}
     affected: dict[str, bool] = {}
 
     # Iterative parent-first resolution handles very deep chains without
-    # recursion limits. Each node is hashed at most once per publish.
-    for node_id in document.nodes:
+    # recursion limits. Each visited node is hashed at most once per pass.
+    # Fingerprint callers need every hash; publishing only needs the paths
+    # ending at nodes that can display a staleness badge.
+    for node_id in document.nodes if starts is None else starts:
         if node_id in hashes:
             continue
         trail: list[str] = []
@@ -121,6 +126,10 @@ def _lineage(document: SceneDocument) -> tuple[dict[str, bytes], dict[str, str]]
             trail.append(cursor)
             cursor = parents.get(cursor)
         if cursor in seen:
+            if starts is not None:
+                # A malformed cycle's handling depends on the full traversal's
+                # original insertion order. Preserve that legacy behavior.
+                return _lineage(document)
             # Old malformed saved graphs may contain cycles. Do not invent
             # provenance or loop forever: such a chain stays unbadged.
             for item in trail:
@@ -223,7 +232,19 @@ def scene_staleness(document: SceneDocument) -> dict[str, str]:
         for node in document.nodes.values()
     ):
         return {}
-    _, statuses = _lineage(document)
+    # Only a stamped reply or a non-passive non-chat node can emit a
+    # badge. Resolve their ancestry (including unstamped chats and Thinking
+    # intermediates), but don't visit unrelated, untracked chat branches.
+    # All non-chat badge candidates are included even without their own
+    # baseline: an upstream stale reply can invalidate them as well.
+    targets = (
+        node_id for node_id, node in document.nodes.items()
+        if node.kind not in ("chat", "thinking") or (
+            isinstance(node.state, ChatState) and not node.state.is_user
+            and node.state.reply_history_fingerprint
+        )
+    )
+    _, statuses = _lineage(document, targets)
     return statuses
 
 
