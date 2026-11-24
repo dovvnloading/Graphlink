@@ -321,6 +321,7 @@ def test_pinned_transport_rejects_redirect_before_chromium_and_closes_connection
 
 def test_oversize_and_download_responses_are_rejected(monkeypatch):
     class FakeConnection:
+        status = 200
         def __init__(self, *args):
             pass
         def request(self, *args, **kwargs):
@@ -337,3 +338,19 @@ def test_oversize_and_download_responses_are_rejected(monkeypatch):
     monkeypatch.setattr(network, "_PinnedConnection", FakeConnection)
     with pytest.raises(network.BrowserPolicyError, match="larger"):
         network._fetch_verified("https://example.com/", "93.184.216.34", {})
+
+
+def test_redirect_refusal_is_recorded_when_pinned_transport_rejects(monkeypatch):
+    def reject(url, ip, headers):
+        raise network.BrowserPolicyError("HTTP redirects are blocked.")
+
+    monkeypatch.setattr(network, "_fetch_verified", reject)
+
+    async def approve(host, url):
+        return True
+
+    gate = network.BrowserNetworkGate("https://example.com/", approve, policy=_policy())
+    with pytest.raises(network.BrowserPolicyError, match="redirect"):
+        asyncio.run(gate.fetch("https://example.com/", method="GET", navigation=True, headers={}))
+    assert any("redirect" in event.lower() for event in gate.blocked)
+    assert gate._reserved_bytes == 0

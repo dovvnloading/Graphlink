@@ -158,7 +158,7 @@ def test_real_chromium_redirect_to_private_ip_is_blocked_before_a_second_request
     async def action(*args):
         pytest.fail("No action should be requested when initial navigation redirects.")
 
-    with pytest.raises(Exception):
+    with pytest.raises(network.BrowserPolicyError, match="redirect"):
         asyncio.run(run_browser(
             "https://example.com/", [], approve, action,
             playwright_factory=playwright.async_playwright,

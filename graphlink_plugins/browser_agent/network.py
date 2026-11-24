@@ -213,9 +213,17 @@ class BrowserNetworkGate:
             except URLPolicyError as exc:
                 self._block("Blocked private/non-public network destination.")
                 raise BrowserPolicyError(str(exc)) from exc
-            response = await asyncio.to_thread(
-                _fetch_verified, target.canonical_url, target.pinned_ip, headers,
-            )
+            try:
+                response = await asyncio.to_thread(
+                    _fetch_verified, target.canonical_url, target.pinned_ip, headers,
+                )
+            except BrowserPolicyError as exc:
+                # The interceptor cannot inspect a failed request. Record
+                # transport-level redirect denials so navigation surfaces a
+                # precise, actionable refusal instead of a generic site error.
+                if "redirect" in str(exc).lower():
+                    self._block("Blocked HTTP redirect from " + host)
+                raise
             # Defense in depth: even injected/test transports must not return
             # redirect responses to Chromium's route.fulfill() path.
             if 300 <= response.status < 400:
