@@ -1,4 +1,4 @@
-"""Structural interface for future workflow step adapters; no implementations."""
+"""Structural interface for workflow step adapters."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol, TypeVar
 
-from .contracts import PortSet, PortValue, SideEffectClass, WorkflowStepSpec
+from .contracts import JsonData, PortSet, PortValue, SideEffectClass, WorkflowStepSpec
 
 PreparedT = TypeVar("PreparedT")
 
@@ -23,11 +23,13 @@ class StepContext:
 class StepAdapter(Protocol[PreparedT]):
     """An adapter supplies ports and a declared class, not execution policy.
 
-    ports, prepare and fingerprint must be pure. Prepare validates a frozen
+    ports, prepare, fingerprint and preview must be pure. Prepare validates a frozen
     configuration and already-resolved typed inputs without effects.
     Fingerprints must be deterministic over the pinned adapter identity,
     configuration and input content, not mutable state or object identity.
-    Only run performs the declared operation. Cancel is best effort for the
+    Preview describes the output shape without calling run or performing any
+    external effects; pure adapters may compute the shape locally. Only run
+    may perform declared external effects. Cancel is best effort for the
     specified attempt; it does not imply that effects were rolled back.
     """
 
@@ -39,6 +41,8 @@ class StepAdapter(Protocol[PreparedT]):
     def prepare(self, spec: WorkflowStepSpec, inputs: Mapping[str, PortValue]) -> PreparedT: ...
 
     def fingerprint(self, prepared: PreparedT) -> str: ...
+
+    def preview(self, prepared: PreparedT) -> Mapping[str, JsonData]: ...
 
     async def run(self, prepared: PreparedT, context: StepContext) -> Mapping[str, PortValue]: ...
 
