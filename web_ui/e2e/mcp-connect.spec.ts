@@ -19,7 +19,7 @@ test("MCP Connect discovers a tool, reviews inputs and saves a table with proven
   await expect(grant).toBeVisible();
   if (await grant.getAttribute("aria-checked") !== "true") await grant.click();
   await expect(grant).toHaveAttribute("aria-checked", "true");
-  await settings.getByRole("button", { name: "MCP servers", exact: true }).click();
+  await settings.getByRole("button", { name: "MCP Servers", exact: true }).click();
   await expect(settings.getByRole("heading", { name: "MCP servers", exact: true })).toBeVisible();
   // New chat resets the scene, but settings survive retries and reuse of a
   // local backend. Remove only entries owned by this browser journey.
