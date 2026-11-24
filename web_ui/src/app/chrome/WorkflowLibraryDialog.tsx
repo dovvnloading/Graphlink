@@ -12,6 +12,7 @@ import { Select } from "../ui/Select";
 import { InlineAlert } from "../ui/InlineAlert";
 import { useConfirm } from "../ui/ConfirmDialog";
 import { WorkflowSpecView } from "./WorkflowSpecView";
+import { WorkflowAutomationPanel } from "./WorkflowAutomationPanel";
 import "./GraphRunnerDialog.css";
 
 function Library({ store }: { store: SceneStore }) {
@@ -163,6 +164,7 @@ function Library({ store }: { store: SceneStore }) {
         })}>Export version</Button>
       </div>
     </section>}
+    <WorkflowAutomationPanel view={view} />
   </>;
 }
 
