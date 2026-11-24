@@ -325,20 +325,24 @@ def test_runner_denial_or_disconnect_sends_nothing(tmp_path, monkeypatch, deny):
 
         async def observed(topic):
             result = await publish(topic)
-            if bus.mcp_connect_runtime.approvals:
+            if topic == "scene" and any(
+                not future.done() for _row, future in bus.mcp_connect_runtime.approvals.values()
+            ):
                 appeared.set()
             return result
 
         monkeypatch.setattr(bus, "publish", observed)
         task = asyncio.create_task(scene("executeGraphRun", [], preview["previewToken"], "mcp-denied-run"))
-        await asyncio.wait_for(appeared.wait(), 10)
+        await asyncio.wait_for(appeared.wait(), MCP_HANDOFF_TIMEOUT)
+        pending, = await scene("getMcpToolApprovals")
+        assert pending["nodeId"] == node_id
+        assert not server.calls
         if deny:
-            pending, = await scene("getMcpToolApprovals")
-            await scene("approveMcpTool", pending["id"], False)
+            assert await scene("approveMcpTool", pending["id"], False) == {"ok": True}
         else:
             bus.mcp_connect_runtime.disconnect()
         try:
-            await task
+            await asyncio.wait_for(task, MCP_HANDOFF_TIMEOUT)
         except asyncio.CancelledError:
             pass
         assert not server.calls

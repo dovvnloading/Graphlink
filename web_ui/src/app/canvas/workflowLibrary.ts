@@ -7,10 +7,18 @@ export interface WorkflowParameter {
   kind: "text" | "number" | "choice";
   choices: string[];
 }
-export interface WorkflowDocument {
-  format: "graphlink-workflow";
+interface WorkflowDefinition {
   spec: WorkflowSpec;
   parameters: WorkflowParameter[];
+}
+export type WorkflowDocument = WorkflowDefinition & (
+  | { format: "graphlink-workflow" }
+  | { format: "graphlink-starter-workflow"; starter_id: string; example_inputs: Record<string, PortValue> }
+);
+export interface WorkflowStarter {
+  id: string;
+  name: string;
+  description: string;
 }
 export interface WorkflowVersion {
   revision: string;
