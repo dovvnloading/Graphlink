@@ -392,15 +392,33 @@ def _render_scientific_cartesian(ax, data: dict[str, Any], theme: dict[str, Any]
     styles = ("-", "--", "-.", ":")
     density = data.get("analysis", {}).get("density") == "hexbin"
     if density:
-        cmap = LinearSegmentedColormap.from_list(
-            "graphlink-hexbin", [theme["surface"], theme["cycle"][0]]
-        )
-        cloud = ax.hexbin(x_values, rows[0]["values"], gridsize=26, mincnt=1,
-                          cmap=cmap, linewidths=0.25, edgecolors=theme["surface"],
-                          zorder=2)
-        colorbar = ax.figure.colorbar(cloud, ax=ax, fraction=0.046, pad=0.04)
-        colorbar.ax.tick_params(colors=theme["muted"], labelsize=8)
-        colorbar.set_label("Observations per bin", color=theme["muted"], fontsize=8)
+        # A saved locked viewport is the only user viewport persisted into
+        # publication export. Match the interactive hexbin's X/Y inclusion
+        # filter exactly; offscreen observations must not contribute counts
+        # or expand the export's tessellation.
+        analysis = data.get("analysis", {})
+        xrange = analysis.get("xRange") if analysis.get("lockX") else None
+        yrange = analysis.get("yRange") if analysis.get("lockY") else None
+        visible = [
+            (x, y) for x, y in zip(x_values, rows[0]["values"])
+            if (xrange is None or xrange[0] <= x <= xrange[1])
+            and (yrange is None or yrange[0] <= y <= yrange[1])
+        ]
+        if visible:
+            hx, hy = zip(*visible)
+            cmap = LinearSegmentedColormap.from_list(
+                "graphlink-hexbin", [theme["surface"], theme["cycle"][0]]
+            )
+            cloud = ax.hexbin(hx, hy, gridsize=26, mincnt=1,
+                              cmap=cmap, linewidths=0.25,
+                              edgecolors=theme["surface"], zorder=2)
+            colorbar = ax.figure.colorbar(cloud, ax=ax, fraction=0.046, pad=0.04)
+            colorbar.ax.tick_params(colors=theme["muted"], labelsize=8)
+            colorbar.set_label("Observations per bin", color=theme["muted"], fontsize=8)
+        else:
+            ax.text(0.5, 0.5, "No observations in selected range",
+                    transform=ax.transAxes, ha="center", va="center",
+                    color=theme["muted"], fontsize=9)
         ax.set_title("Hexbin density (count per visible cell)", fontsize=8,
                      color=theme["text"], loc="left")
     fits = chart_regression_fits(data) if data.get("analysis", {}).get("regression") == "ols95" else None

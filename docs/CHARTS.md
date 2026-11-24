@@ -417,3 +417,8 @@ pointy-top axial hexagon assignment; the publication exporter uses
 Matplotlib's optimized hexbin implementation, with a count colorbar.
 The bin tessellation and resolution may differ between interactive
 and printed figures, but both count the unmodified original observations.
+
+For a persisted axis lock, the publication hexbin counts only observations
+inside that X/Y range, matching the interactive viewport's inclusion rule.
+A range containing zero observations renders a clear empty state rather
+than suggesting that offscreen points are present.

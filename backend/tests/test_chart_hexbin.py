@@ -48,3 +48,40 @@ def test_hexbin_publication_formats(fmt, signature):
         labels = " ".join("".join(item.itertext()) for item in root.iter() if item.tag.endswith("}text"))
         assert "Hexbin density" in labels
         assert "Observations per bin" in labels
+
+
+def test_locked_hexbin_export_filters_out_offscreen_observations(monkeypatch):
+    from matplotlib.axes import Axes
+
+    captured = []
+    original_hexbin = Axes.hexbin
+
+    def recording_hexbin(self, xs, ys, *args, **kwargs):
+        captured.append((list(xs), list(ys)))
+        return original_hexbin(self, xs, ys, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "hexbin", recording_hexbin)
+    raw = {**SOURCE, "analysis": {
+        "density": "hexbin", "lockX": True, "xRange": [1.5, 3.5],
+        "lockY": True, "yRange": [1.5, 2.5],
+    }}
+    rendered = render_chart_publication("scatter", canonicalize_chart_data(raw),
+                                        width_mm=180, height_mm=100, fmt="svg")
+    assert b"Chart rendering issue" not in rendered
+    assert captured == [([2.0], [2.0])]
+
+
+def test_locked_hexbin_empty_viewport_is_a_valid_empty_render(monkeypatch):
+    from matplotlib.axes import Axes
+
+    def fail_if_called(self, *args, **kwargs):
+        raise AssertionError("No invisible observations may be counted")
+
+    monkeypatch.setattr(Axes, "hexbin", fail_if_called)
+    raw = {**SOURCE, "analysis": {
+        "density": "hexbin", "lockX": True, "xRange": [10, 20],
+    }}
+    rendered = render_chart_publication("scatter", canonicalize_chart_data(raw),
+                                        width_mm=180, height_mm=100, fmt="svg")
+    assert b"No observations in selected range" in rendered
+    assert b"Chart rendering issue" not in rendered
