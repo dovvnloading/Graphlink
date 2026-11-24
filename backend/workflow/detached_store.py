@@ -198,6 +198,10 @@ class DetachedRunStore:
                                         nested.update(status="interrupted", finished_at=now, error=reason)
                                 child["cost_usd"] = float(sum(Decimal(str(s["cost_usd"]))
                                                               for s in child["steps"].values()))
+                        if step.get("map_items"):
+                            observed = sum((Decimal(str(child["cost_usd"]))
+                                            for child in step["map_items"].values()), Decimal(0))
+                            step["cost_usd"] = max(step["cost_usd"], float(observed))
                         run["events"].append({
                             "schema_version": 1, "run_id": run["run_id"], "sequence": len(run["events"]),
                             "timestamp": now, "kind": "step-interrupted", "step_id": step["step_id"],

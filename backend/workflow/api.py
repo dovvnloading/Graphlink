@@ -109,7 +109,7 @@ def register_workflow_api(app: FastAPI, service: WorkflowService) -> None:
 
     @app.post(prefix + "/preview")
     async def preview(workspace_id: int, body: dict[str, Any]):
-        return _checked(lambda: asdict(service.engine().preview(*decode_request(body))))
+        return _checked(lambda: asdict(service.engine().preview(*decode_request(body), workspace_id=workspace_id)))
 
     @app.post(prefix + "/approve")
     async def approve(workspace_id: int, body: dict[str, Any]):

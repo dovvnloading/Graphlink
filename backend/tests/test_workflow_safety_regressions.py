@@ -179,3 +179,13 @@ def test_preset_approval_nonce_not_retained_in_event_history(tmp_path):
         assert pending["nonce"] not in json.dumps(record)
 
     asyncio.run(scenario())
+
+
+def test_fingerprint_approval_requires_preview_in_same_workspace(tmp_path):
+    engine, ws, *_ = _engine(tmp_path / "chats.db")
+    spec = _spec(engine.registry, [_entry("paid", "cloud")])
+    params = {"text": TextValue("seed")}
+    preview = engine.preview(spec, params, workspace_id=ws)
+    with pytest.raises(ValueError, match="Preview"):
+        engine.approve_fingerprint(ws + 1, preview.fingerprint)
+    assert engine.approve_fingerprint(ws, preview.fingerprint)

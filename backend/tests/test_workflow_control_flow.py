@@ -365,3 +365,47 @@ def test_unattended_map_respects_child_effect_policy_and_cost_cap(tmp_path):
         assert record["cost_usd"] == 0.2
         assert len(cloud.started) == 2
     asyncio.run(scenario())
+
+
+def test_cancelled_map_never_dispatches_queued_siblings(tmp_path, monkeypatch):
+    async def scenario():
+        engine, ws, _, cloud = _engine(tmp_path / "chats.db", RunLimits(cloud_concurrency=2))
+        spec = _map_spec(engine.registry, concurrency=2)
+        params = {"input": JsonValue([0, 1])}
+        calls = []
+
+        async def run(prepared, context):
+            _, value = prepared
+            calls.append(value.value)
+            if value.value == 0:
+                assert engine.cancel(ws, run_id)
+            return {"result": value}
+
+        monkeypatch.setattr(cloud, "run", run)
+        preview = engine.preview(spec, params)
+        run_id = engine.start(ws, spec, params, approval_token=engine.approve(ws, preview))
+        record = await engine.wait(ws, run_id)
+        assert record["status"] == "cancelled"
+        assert calls == [0]
+
+    asyncio.run(scenario())
+
+
+def test_map_cancellation_preserves_reported_overrun(tmp_path, monkeypatch):
+    async def scenario():
+        engine, ws, _, cloud = _engine(tmp_path / "chats.db", RunLimits(cloud_concurrency=2))
+        spec = _map_spec(engine.registry, concurrency=2)
+        params = {"input": JsonValue([0, 1])}
+
+        async def run(prepared, context):
+            context.report_cost(5.0)
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(cloud, "run", run)
+        preview = engine.preview(spec, params)
+        run_id = engine.start(ws, spec, params, approval_token=engine.approve(ws, preview))
+        record = await engine.wait(ws, run_id)
+        assert record["status"] == "failed"
+        assert record["cost_usd"] >= 5.0
+
+    asyncio.run(scenario())

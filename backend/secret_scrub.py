@@ -33,6 +33,7 @@ own that.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 from urllib.parse import unquote_plus
@@ -105,7 +106,7 @@ _QUERY_TRAILING_PUNCTUATION = ".,;!?)]}"
 
 
 def _key_is_secret(key: str) -> bool:
-    lowered = key.lower()
+    lowered = key.lower().replace('-', '_').replace('.', '_')
     return any(lowered.endswith(suffix) for suffix in _SECRET_KEY_SUFFIXES)
 
 
@@ -160,12 +161,25 @@ def scrub(value: Any) -> Any:
     if isinstance(value, dict):
         scrubbed: dict[Any, Any] = {}
         for key, item in value.items():
+            clean_key = scrub_text(key) if isinstance(key, str) else key
             if isinstance(key, str) and _key_is_secret(key):
                 # Preserve "was set" vs "was empty" - useful in a bug
                 # report, and it leaks nothing.
-                scrubbed[key] = REDACTED if item else item
+                scrubbed[clean_key] = REDACTED if item else item
+            elif key in ("config_json", "parameters_json") and isinstance(item, str):
+                # Workflow definitions embed structured JSON as strings, even
+                # recursively inside Map definitions. Inspect the actual keys.
+                try:
+                    decoded = json.loads(item)
+                except (ValueError, RecursionError):
+                    scrubbed[clean_key] = scrub_text(item)
+                else:
+                    cleaned = scrub(decoded)
+                    scrubbed[clean_key] = (item if cleaned == decoded else
+                                           json.dumps(cleaned, sort_keys=True, separators=(",", ":"),
+                                                      ensure_ascii=False))
             else:
-                scrubbed[key] = scrub(item)
+                scrubbed[clean_key] = scrub(item)
         return scrubbed
     if isinstance(value, list):
         return [scrub(item) for item in value]

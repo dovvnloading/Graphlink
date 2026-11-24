@@ -242,3 +242,21 @@ def test_no_fixture_secret_or_path_survives_a_realistic_export_payload():
     for path in ALL_PATHS:
         assert path not in serialized, f"leaked path: {path}"
     assert "ada" not in serialized, "leaked the operator's account name"
+
+
+def test_workflow_embedded_json_and_credential_keys_are_scrubbed():
+    payload = {
+        "config_json": json.dumps({"workflow": {"steps": [
+            {"config_json": json.dumps({"api-key": "short-config"})},
+        ]}}),
+        "parameters_json": json.dumps({"token": "short-param"}),
+        "sk-" + "a" * 48: "ordinary value",
+    }
+    result = scrub(payload)
+    serialized = json.dumps(result)
+    assert "short-config" not in serialized
+    assert "short-param" not in serialized
+    assert "sk-" + "a" * 48 not in serialized
+    nested = json.loads(result["config_json"])["workflow"]["steps"][0]["config_json"]
+    assert json.loads(nested)["api-key"] == REDACTED
+    assert result == scrub(result)

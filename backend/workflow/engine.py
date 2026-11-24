@@ -183,7 +183,7 @@ class WorkflowEngine:
         # Cancelled adapters can still be draining non-abortable work. Do
         # not admit another run of that workflow until they actually settle.
         self._draining: dict[str, set[asyncio.Task]] = {}
-        self._previews: dict[str, tuple[RunPreview, float]] = {}
+        self._previews: dict[tuple[int | None, str], tuple[RunPreview, float]] = {}
         self._approvals: dict[str, tuple[str, int, float]] = {}
         if recover:
             self.store.interrupt_unfinished()
@@ -193,16 +193,18 @@ class WorkflowEngine:
         self._previews = {key: entry for key, entry in self._previews.items() if entry[1] > now}
         self._approvals = {key: entry for key, entry in self._approvals.items() if entry[2] > now}
 
-    def preview(self, spec: WorkflowSpec, parameters: Mapping[str, PortValue]) -> RunPreview:
+    def preview(self, spec: WorkflowSpec, parameters: Mapping[str, PortValue], *,
+                workspace_id: int | None = None) -> RunPreview:
         plan = build_plan(spec, parameters, self.registry, self.artifacts, self.policy_for)
         self._expire_approvals()
-        self._previews[plan.preview.fingerprint] = (copy.deepcopy(plan.preview), time.monotonic() + 900)
+        self._previews[(workspace_id, plan.preview.fingerprint)] = (copy.deepcopy(plan.preview), time.monotonic() + 900)
         return plan.preview
 
     def approve(self, workspace_id: int, preview: RunPreview) -> str:
         """Trusted host consent boundary. Call only after explicit user review."""
         self._expire_approvals()
-        issued = self._previews.get(preview.fingerprint)
+        issued = (self._previews.get((workspace_id, preview.fingerprint))
+                  or self._previews.get((None, preview.fingerprint)))
         if issued is None or issued[0] != preview:
             raise ValueError("Preview the workflow again before approving it.")
         token = secrets.token_urlsafe(32)
@@ -212,7 +214,7 @@ class WorkflowEngine:
     def approve_fingerprint(self, workspace_id: int, fingerprint: str) -> str:
         """Approve an issued preview by its exact fingerprint."""
         self._expire_approvals()
-        issued = self._previews.get(fingerprint)
+        issued = self._previews.get((workspace_id, fingerprint))
         if issued is None:
             raise ValueError("Preview the workflow again before approving it.")
         return self.approve(workspace_id, issued[0])
@@ -486,8 +488,11 @@ class WorkflowEngine:
             if (run.unattended is not None and step_id not in run.approved_steps
                     and not run.unattended.permits(spec.adapter.side_effect_class, policy)):
                 raise PermissionError("This unattended step has no operator approval.")
-            if run.stop_reason is not None:
-                raise asyncio.CancelledError
+            ancestor = run
+            while ancestor is not None:
+                if ancestor.stop_reason is not None:
+                    raise asyncio.CancelledError
+                ancestor = ancestor.parent
             prepared = adapter.prepare(spec, self._inputs(run, spec))
             fingerprint = adapter.fingerprint(prepared)
             # Persist dispatch before an effect; no replay after restart.
@@ -499,8 +504,11 @@ class WorkflowEngine:
             self._checkpoint(run)
             attempt.dispatched = True
             values = await adapter.run(prepared, attempt.context)
-            if run.stop_reason is not None:
-                raise asyncio.CancelledError
+            ancestor = run
+            while ancestor is not None:
+                if ancestor.stop_reason is not None:
+                    raise asyncio.CancelledError
+                ancestor = ancestor.parent
             return self._outputs(spec, values)
 
     async def _run_map(self, run: _Run, attempt: _Attempt, config: dict, items: list) -> list:
@@ -539,6 +547,8 @@ class WorkflowEngine:
         # a stop-mode error. Within a batch, cancel outstanding items on
         # the first observed failure, retaining already checkpointed receipts.
         for start in range(0, len(items), concurrency):
+            if run.stop_reason is not None:
+                raise asyncio.CancelledError
             active = {asyncio.create_task(execute_item(index)): index
                       for index in range(start, min(start + concurrency, len(items)))}
             try:
@@ -570,9 +580,16 @@ class WorkflowEngine:
         if not attempt.dispatched:
             return 0.0
         bound = run.plan.policies[attempt.step.step_id].cost_usd
-        if attempt.step.adapter.adapter_id == MAP and attempt.task.done() and attempt.cost is not None:
-            # A settled Map accounts for the receipts of dispatched children.
-            return attempt.cost
+        if attempt.step.adapter.adapter_id == MAP:
+            if attempt.task.done() and attempt.cost is not None:
+                # A settled Map accounts for the receipts of dispatched children.
+                return attempt.cost
+            # Cancellation can race the child's final cost aggregation. Do not
+            # discard an already checkpointed overrun in a running child.
+            receipts = run.record["steps"][attempt.step.step_id].get("map_items", {})
+            observed = sum((Decimal(str(s["cost_usd"])) for item in receipts.values()
+                            for s in item["steps"].values()), Decimal(0))
+            return max(bound, float(observed), attempt.cost or 0.0)
         if not attempt.task.done() or attempt.task.cancelled() or attempt.task.exception() is not None:
             # Partial usage is not a final bill. A failed or cancelled call
             # may have incurred the rest of its reservation.
