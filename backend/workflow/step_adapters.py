@@ -98,6 +98,8 @@ def check_json_result(value, schema):
 
     if _validate_against_schema(value, schema):
         raise ValueError("Model output does not match the configured JSON schema")
+    if "enum" in schema and not any(digest(value) == digest(item) for item in schema["enum"]):
+        raise ValueError("Value does not match JSON schema enum")
     if schema["type"] == "null" and value is not None:
         raise ValueError("Expected JSON null")
     if isinstance(value, dict) and schema["type"] == "object":
@@ -130,7 +132,8 @@ def _config(adapter_id, config_json):
     if not required <= set(cfg) <= required | optional:
         raise ValueError(f"Invalid configuration keys for {adapter_id}")
     if adapter_id == MODEL_ID:
-        if cfg["provider"] not in LOCAL_PROVIDERS and cfg["provider"] not in CLOUD_PROVIDERS:
+        if (not isinstance(cfg["provider"], str) or
+                (cfg["provider"] not in LOCAL_PROVIDERS and cfg["provider"] not in CLOUD_PROVIDERS)):
             raise ValueError("Select a configured provider")
         _string(cfg["model_id"], "Model ID", limit=192)
         _string(cfg["system_prompt"], "System prompt", empty=True)

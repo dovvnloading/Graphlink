@@ -547,6 +547,7 @@ async def _execute_tool_calls(
     index = 0
     while index < len(calls):
         if (before_call is not None or after_call is not None
+                or getattr(ctx, "workflow_ask_every_action", False)
                 or not registry.parallel_safe_for(calls[index].name)):
             call = calls[index]
             result, elapsed_ms = await invoke_timed(call)
@@ -750,7 +751,8 @@ async def run_harness(
         # The independent permission-mode gate forces fresh consent for
         # commands like git status; never promise an inert "Always allow".
         can_save_shell_rules = (
-            not network_offered
+            not require_user_workspace
+            and not network_offered
             and not call.id.startswith("hook-")
             and not requires_explicit_workspace_approval(call, ctx)
             and bool(shell_rules)
@@ -1075,6 +1077,7 @@ async def run_harness(
         if require_user_workspace and not is_user_dir:
             await _land("failed", "The selected workspace folder is no longer trusted.")
             return
+        ctx.workflow_ask_every_action = require_user_workspace
         ctx.harness_workspace_dir = root
         ctx.harness_workspace_is_user_dir = is_user_dir
         if allow_session_grants:

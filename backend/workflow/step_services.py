@@ -11,7 +11,6 @@ import concurrent.futures
 import json
 import math
 import mimetypes
-import re
 import sqlite3
 import threading
 import time
@@ -141,7 +140,7 @@ class WorkflowRunHost:
         self.document = document
         self.bus = bus
         self.notifications_state = notifications_state
-        self.pricing = dict(settings_manager.get_pricing_overrides() or {})
+        self.pricing = dict(settings_manager.get_pricing_overrides() or {}) if settings_manager else {}
         self.steps = {step.step_id: step for step in spec.steps}
         if len(self.steps) != len(spec.steps):
             raise ValueError("Duplicate workflow step ID")
@@ -281,6 +280,8 @@ class WorkflowRunHost:
                 finally:
                     if client is not None and callable(getattr(client, "close", None)):
                         client.close()
+            if isinstance(reply, str):
+                _, reply = api_provider.split_reasoning_and_content(reply)
             if not isinstance(reply, str) or not reply.strip():
                 raise ValueError("Model returned no text")
             if cfg["output_kind"] == "text":
@@ -517,6 +518,7 @@ class WorkflowRunHost:
 
     async def _image(self, adapter, prepared, context, event):
         from backend.fal_integration import FalClient
+        from backend.api._settings_shared import run_locked
         from backend.fal_media_controller import _quote_cost
         from backend.fal_media_preview import safe_media_host, _image_bytes
         from backend.fal_results import result_assets
@@ -545,7 +547,7 @@ class WorkflowRunHost:
             request = client.submit(model, {"prompt": prompt}, options={"store_io": False})
             request_id = request["request_id"]
             try:
-                self.settings.upsert_fal_job(model, request_id, "IN_QUEUE")
+                run_locked(self.settings.upsert_fal_job, model, request_id, "IN_QUEUE")
                 deadline = time.monotonic() + 240
                 while not event.is_set() and time.monotonic() < deadline:
                     status = client.status(model, request_id)
@@ -553,7 +555,7 @@ class WorkflowRunHost:
                         if status.get("error"):
                             raise RuntimeError("Fal generation failed")
                         payload = client.result(model, request_id)
-                        self.settings.upsert_fal_job(model, request_id, "COMPLETED")
+                        run_locked(self.settings.upsert_fal_job, model, request_id, "COMPLETED", payload)
                         for asset in result_assets(payload):
                             if asset.get("kind") == "image" and safe_media_host(asset.get("url")):
                                 data, media_type = _image_bytes(asset["url"])
@@ -586,7 +588,7 @@ class WorkflowRunHost:
             "task": task, "permissionMode": "ask",
         })
         # Ensure the active workspace model has consent before task start.
-        self._research_runtime()
+        runtime = self._research_runtime()
         if self.dispatcher._runs.is_busy("harness"):
             raise RuntimeError("A workspace agent is already running")
 
@@ -602,7 +604,7 @@ class WorkflowRunHost:
         request_id = await self.dispatcher.start_harness_run(
             bus=self.bus, notifications_state=self.notifications_state, document=self.document,
             harness_node_id=node.id, user_text=task, allow_session_grants=False,
-            require_user_workspace=True,
+            require_user_workspace=True, workflow_runtime=runtime,
         )
         if not request_id:
             raise RuntimeError("Could not start workspace agent")
@@ -617,6 +619,7 @@ class WorkflowRunHost:
                 if state.harness_status in ("failed", "stopped", "cancelled"):
                     raise RuntimeError("Workspace agent did not complete")
                 await asyncio.sleep(0.15)
-        finally:
-            if event.is_set():
-                self.dispatcher.cancel_harness(request_id)
+        except asyncio.CancelledError:
+            event.set()
+            self.dispatcher.cancel_harness(request_id)
+            raise

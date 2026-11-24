@@ -395,12 +395,13 @@ class ToolRegistry:
             may_skip_workspace_approval, requires_explicit_workspace_approval,
         )
 
-        if registration.approval != "auto" and not may_skip_workspace_approval(call, ctx):
+        workflow_ask = getattr(ctx, "workflow_ask_every_action", False)
+        if workflow_ask or (registration.approval != "auto" and not may_skip_workspace_approval(call, ctx)):
             fingerprint = _tool_call_fingerprint(call) if registration.approval == "always" else None
             # §2.4's dangerous-command rule: a predicate that says "always
             # ask" wins over the memo AND declines to write a new memo entry
             # below, so a second identical dangerous call asks again too.
-            sensitive = requires_explicit_workspace_approval(call, ctx)
+            sensitive = workflow_ask or requires_explicit_workspace_approval(call, ctx)
             forced = sensitive
             reprompt_failed = False
             if registration.always_reprompt is not None:
