@@ -249,6 +249,9 @@ _KNOWN_NON_NODE_FIELD_ACCESS_SHAPES = {
         {"root": "s", "file": "canvas.py"},
         {"root": "descriptor", "file": "intents_settings_api_provider.py"},
         {"root": "descriptor", "file": "test_model_routing.py"},
+        # WorkflowRunHost._model iterates unified_catalog() ModelDescriptors,
+        # not SceneNodes; keep this exemption scoped to the adapter module.
+        {"root": "descriptor", "file": "step_services.py"},
         # ADR-018 stage 18.5: _thread_on_fallback's own `fallback_ref` param
         # (backend/agent_dispatch/core.py, inside AgentDispatcher._dispatch -
         # relocated there from backend/agents.py by the god-file
