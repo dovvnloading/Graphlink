@@ -246,13 +246,16 @@ class McpConnectRuntime:
         if step.get("endpointHash") != endpoint_hash:
             raise SceneError("The MCP server or permissions changed since preview. Preview the tool again.")
 
+        def validate_authority() -> None:
+            require_plugin(self.settings)
+            if connection_hash(require_server(self.settings, config.id, saved["toolName"])) != endpoint_hash:
+                raise SceneError("MCP permissions or connection settings changed. Preview the tool again.")
+
         def validate_live() -> Any:
             current = self.document.nodes.get(node.id)
             if current is not node or core.config_hash(node) != step["configHash"] or core.output_hash(node) != step["targetHash"]:
                 raise SceneError("The MCP configuration or output changed. Preview the tool again.")
-            require_plugin(self.settings)
-            if connection_hash(require_server(self.settings, config.id, saved["toolName"])) != endpoint_hash:
-                raise SceneError("MCP permissions or connection settings changed. Preview the tool again.")
+            validate_authority()
             prepared = core.prepare(self.document, node, active_request_id=step.get("externalAttempt", {}).get("requestId", ""))
             if step["inputHash"] and prepared.input_hash != step["inputHash"]:
                 raise SceneError("The MCP input changed since preview. Preview the tool again.")
@@ -288,11 +291,18 @@ class McpConnectRuntime:
             core.set_status(node, "running")
             await self.bus.publish("scene")
 
+            def send_tool():
+                # Executor admission can itself suspend dispatch after the
+                # event-loop validation. Re-read live authority in the worker
+                # immediately before sending; never rely on the saved config.
+                validate_authority()
+                return client.call_tool(saved["toolName"], prepared.arguments)
+
             async def invoke(_request_id: str) -> dict[str, Any]:
                 # Permission and input edits can arrive while SQLite commits
-                # the fence. Recheck at the actual dispatch boundary too.
+                # the fence. Keep graph validation on the event-loop thread.
                 validate_live()
-                result = await _thread_call(client, client.call_tool, saved["toolName"], prepared.arguments)
+                result = await _thread_call(client, send_tool)
                 if getattr(result, "truncated", False):
                     raise SceneError("The MCP response exceeded the result limit; inspect the remote request before retrying.")
                 return _redact({

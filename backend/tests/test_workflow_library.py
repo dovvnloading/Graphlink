@@ -7,6 +7,8 @@ from dataclasses import asdict, replace
 import pytest
 
 from backend import chat_library, workflow_library_store as store
+from backend.workflow import detached_store
+from graphlink_migrations import run_sqlite_migrations
 from backend.workflow.contracts import (
     InputBinding, PortSpec, StepOutputSource, WorkflowInputSource,
     WorkflowOutput, WorkflowSpec, WorkflowStepSpec, freeze_config,
@@ -50,6 +52,26 @@ def test_version_pin_rename_duplicate_delete_and_migration(tmp_path):
         assert len(store.history(conn, first["workflow_id"])) == 2
         assert store.get(conn, first["workflow_id"], first["revision"])
     with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+@pytest.mark.parametrize("version_seven", ["detached", "library"])
+def test_upgrade_from_either_version_seven_schema(tmp_path, version_seven):
+    path = tmp_path / "chats.db"
+    migrations = dict(chat_library._MIGRATIONS)
+    migrations[7] = detached_store.migrate if version_seven == "detached" else store.migrate
+    with closing(sqlite3.connect(path)) as conn:
+        run_sqlite_migrations(conn, 7, migrations)
+        if version_seven == "library":
+            with conn:
+                original = store.save(conn, example(), name="Original")
+    with closing(chat_library._connect(path)) as conn, conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        assert {"detached_workflow_runs", "workflow_library", "workflow_library_versions",
+                "workflow_child_runs"} <= tables
+        if version_seven == "library":
+            assert store.get(conn, original["workflow_id"], original["revision"])["spec"]["name"] == "Original"
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 

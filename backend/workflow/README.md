@@ -3,9 +3,9 @@
 This package contains the versioned workflow contracts and step-adapter
 registry. Graph Runner's scene/journal execution is hosted here by
 compatibility adapters, without changing canvas, plugin execution, persistence
-or WebSocket behavior for existing step kinds. The typed WorkflowSpec also
-pins pure reusable library definitions; the existing scheduler admits them
-as single Workflow steps.
+or WebSocket behavior for existing step kinds. The typed WorkflowSpec has
+its own detached execution engine and also pins pure reusable library
+definitions; the legacy canvas scheduler admits them as single Workflow steps.
 
 - **Ports:** text, JSON (any JSON value), table (ordered unique columns and
   rectangular JSON-scalar rows), file and image (content-addressed asset
@@ -23,8 +23,9 @@ as single Workflow steps.
   (`freeze_config`), and explicit source/target bindings. Tuples and frozen
   nested records prevent mutation of a correctly constructed spec. JSON
   serialization uses arrays for tuples; there is no implicit graph traversal.
-  Reusable library definitions validate graph structure (duplicate IDs, port
-  references, missing required inputs, cycles) before execution.
+  The detached engine and reusable library definitions validate graph
+  structure (duplicate IDs, port references, missing required inputs, cycles),
+  port compatibility and exact adapter versions before execution.
 - **Records:** a run pins the spec and its fingerprint; step records are keyed
   by run/step/attempt and carry class, status, fingerprint, timing, results and
   errors. Events are ordered by sequence within a run and can identify the
@@ -126,7 +127,7 @@ Cancellation is a no-op because these adapters retain no external work.
 
 ## Reusable workflow library
 
-Workflow Library is global to the local chats database (migration 7). A saved
+Workflow Library is global to the local chats database (migration 8). A saved
 version pins the version-one workflow contract and adapter descriptors, and
 has no source canvas node IDs or input contents. Editing a library definition
 appends an immutable revision; deleting a library entry archives its label
@@ -217,3 +218,74 @@ Fal requires a current price estimate and a fresh approval of the exact
 prompt/model/price before submitting. The Agent uses a chosen trusted folder
 and fresh approvals, not saved session/shell grants. This is the typed
 execution adapter boundary, not a new workflow scheduler or canvas UI.
+
+## Detached workflow engine
+
+Instantiate one backend-owned WorkflowEngine per chats.db, on the application's
+event loop. Its public Python service API is:
+
+- preview(spec, parameters): validates the immutable DAG, pins its canonical
+  hash, the canonical parameters (file/image values pin content hashes),
+  adapter versions, side-effect classes, concrete provider/model identities
+  and the trusted cost estimate. Preview never dispatches a step.
+- approve(workspace_id, preview): trusted host consent boundary after the
+  user has reviewed that preview; returns an expiring, single-use token.
+  It is not a permission grant to arbitrary adapters or a reusable credential.
+- start(workspace_id, spec, parameters, approval_token=...): revalidates every
+  pin, persists the frozen run and returns its ID before any step executes.
+  Cloud, executes and writes steps require approval; all tokens are consumed
+  on admission, including for writes on subsequent identical runs.
+- cancel(workspace_id, run_id), await wait(workspace_id, run_id),
+  store.read/list: stop and inspect the detached journal. Completed steps
+  retain their outputs, blocked steps never dispatch. On shutdown await
+  shutdown(); on a new engine startup unfinished records are interrupted
+  without replaying an uncertain external effect.
+- artifacts.file(bytes, filename, media_type, image=False) imports file
+  parameters or adapter-produced binary values into the existing asset store.
+  artifacts.unpack(recorded_value) explicitly reads a retained result.
+- save_result_as_graph(workspace_id, run_id): explicit action creating a
+  new graph in that workspace from retained outputs (or finished intermediate
+  results if no declared output finished); it does not replace the active
+  graph. Image and file output attachments preserve their content hash.
+
+RunLimits defaults to cloud 4, local 1 (independent shared semaphores), $2,
+1800 seconds and 500 attempts. Cost reservations precede dispatch; the
+trusted StepPolicy supplies a maximum charge, and StepContext exposes that
+bound plus a cumulative report_cost callback. Adapters must enforce their
+own provider-side bound; a reported overrun stops the run rather than
+pretending an already-incurred external charge can be rolled back. Missing
+usage is accounted at the reserved maximum. A cloud adapter without trusted
+policy metadata is rejected. Use policy_for to pin cloud provider/model
+identities and pricing; never derive authorization from untrusted JSON.
+
+The typed registry includes transforms, graph.note (copy/word count),
+graph.group_sum (table/chart/report) and graph.local_model (explicit
+loopback Ollama). They use the existing Graph Runner adapters on a private
+SceneDocument. Local inference requires approval and pins its endpoint and
+model identity; the async transport preserves the existing loopback-only
+no-credential policy. Scientific and MCP scene-based adapters retain their existing
+authorization and external-request fences; they are not implicitly
+converted into typed detached adapters. Additional typed adapters use the
+same StepAdapter protocol, with the scratch document and asset store supplied
+in StepContext, and must honor asynchronous cancellation.
+
+Values are stored inline or as content references above 64 KiB; file/image
+ports always refer to immutable binary assets. Typed values hydrate only at
+the adapter/read boundary. The migration adds a workspace-scoped detached
+run table beside the legacy graph receipts. Retention keeps the newest 50
+runs per workspace for up to 90 days (active runs are exempt until terminal).
+Offline asset GC marks kept run records, saved graph attachments and retained
+backups before sweeping; retention itself never unlinks a blob.
+
+
+The application exposes these operations under the existing authenticated
+/api/workflows/{workspace_id} prefix: POST preview, POST approve (requires
+approved: true and the issued fingerprint), POST/GET runs, GET runs/{run_id},
+POST runs/{run_id}/cancel, POST runs/{run_id}/save-as-graph, POST files
+(raw bounded binary upload returning a typed file/image parameter), and
+GET runs/{run_id}/assets/{hash} or graphs/{graph_id}/assets/{hash}
+(attachment-only downloads scoped to a retained reference). Send the
+existing v1 WorkflowSpec and PortValue records as JSON using spec and
+parameters fields; admission additionally accepts approval_token. The app
+owns one lazy service and cancels it at shutdown. Existing read-only/MCP
+control capabilities do not authorize workflow execution.

@@ -87,6 +87,7 @@ from backend.session_context import (
 )
 from backend.settings import register_settings
 from backend.token_counter import register_token_counter
+from backend.workflow.engine import RunLimits
 
 logger = logging.getLogger(__name__)
 
@@ -425,6 +426,7 @@ def create_app(
     control_write_token: str | None = None,
     allow_unauthenticated_for_tests: bool = False,
     knowledge_db_path: Path | None = None,
+    workflow_limits: RunLimits | None = None,
 ) -> FastAPI:
     # Explicit custom chats.db paths (especially isolated test instances)
     # keep their knowledge DB beside them; the shipped default retains the
@@ -435,6 +437,8 @@ def create_app(
         else DEFAULT_KNOWLEDGE_DB_PATH
     )
     watch_service = WatchedFolderService(effective_knowledge_path)
+    from backend.workflow.api import WorkflowService, register_workflow_api
+    workflow_service = WorkflowService(chat_db_path or DEFAULT_CHAT_DB_PATH, limits=workflow_limits)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -444,10 +448,12 @@ def create_app(
         try:
             yield
         finally:
+            await workflow_service.shutdown()
             await watch_service.stop()
 
     app = FastAPI(title="Graphlink backend", version=BACKEND_VERSION, lifespan=lifespan)
     app.state.watched_folders = watch_service
+    app.state.workflows = workflow_service
     # ADR-004 stage 4.1: the per-launch capability token gating /api/* and
     # /ws - see backend/auth.py's own docstring for the threat (audit C5) and
     # why a token rather than accounts. Missing credentials now FAIL CLOSED.
@@ -674,6 +680,7 @@ def create_app(
     from backend.control import register_control_api
 
     register_control_api(app, bus, chat_db_path if chat_db_path is not None else DEFAULT_DB_PATH)
+    register_workflow_api(app, workflow_service)
     if control_write_token is not None:
         from backend.control_writes import register_control_write_api
 
