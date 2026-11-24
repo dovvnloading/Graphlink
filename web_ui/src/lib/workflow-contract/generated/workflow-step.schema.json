@@ -1,0 +1,302 @@
+{
+  "$defs": {
+    "AssetRef": {
+      "additionalProperties": false,
+      "properties": {
+        "asset_id": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "asset_id",
+        "sha256",
+        "media_type",
+        "filename",
+        "size_bytes"
+      ],
+      "type": "object"
+    },
+    "FileValue": {
+      "additionalProperties": false,
+      "properties": {
+        "asset": {
+          "$ref": "#/$defs/AssetRef"
+        },
+        "kind": {
+          "enum": [
+            "file"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "asset"
+      ],
+      "type": "object"
+    },
+    "ImageValue": {
+      "additionalProperties": false,
+      "properties": {
+        "asset": {
+          "$ref": "#/$defs/AssetRef"
+        },
+        "kind": {
+          "enum": [
+            "image"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "asset"
+      ],
+      "type": "object"
+    },
+    "JsonData": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonScalar"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/JsonData"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonData"
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "JsonScalar": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "JsonValue": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "json"
+          ]
+        },
+        "value": {
+          "$ref": "#/$defs/JsonData"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object"
+    },
+    "PortValue": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TextValue"
+        },
+        {
+          "$ref": "#/$defs/JsonValue"
+        },
+        {
+          "$ref": "#/$defs/TableValue"
+        },
+        {
+          "$ref": "#/$defs/FileValue"
+        },
+        {
+          "$ref": "#/$defs/ImageValue"
+        }
+      ]
+    },
+    "SideEffectClass": {
+      "enum": [
+        "pure",
+        "local-read",
+        "cloud",
+        "executes",
+        "writes"
+      ]
+    },
+    "StepStatus": {
+      "enum": [
+        "pending",
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+        "blocked",
+        "cached",
+        "skipped",
+        "interrupted"
+      ]
+    },
+    "TableValue": {
+      "additionalProperties": false,
+      "properties": {
+        "columns": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "enum": [
+            "table"
+          ]
+        },
+        "rows": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/JsonScalar"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "columns",
+        "rows"
+      ],
+      "type": "object"
+    },
+    "TextValue": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "text"
+          ]
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "text"
+      ],
+      "type": "object"
+    },
+    "WorkflowStepRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt": {
+          "type": "integer"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fingerprint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finished_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outputs": {
+          "additionalProperties": {
+            "$ref": "#/$defs/PortValue"
+          },
+          "type": "object"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "enum": [
+            1
+          ]
+        },
+        "side_effect_class": {
+          "$ref": "#/$defs/SideEffectClass"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/StepStatus"
+        },
+        "step_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "run_id",
+        "step_id",
+        "attempt",
+        "side_effect_class",
+        "status",
+        "fingerprint",
+        "started_at",
+        "finished_at",
+        "outputs",
+        "error"
+      ],
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/WorkflowStepRecord",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WorkflowStepRecord"
+}

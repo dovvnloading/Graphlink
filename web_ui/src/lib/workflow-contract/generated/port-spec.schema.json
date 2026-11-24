@@ -1,0 +1,36 @@
+{
+  "$defs": {
+    "PortKind": {
+      "enum": [
+        "text",
+        "json",
+        "table",
+        "file",
+        "image"
+      ]
+    },
+    "PortSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/PortKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "required"
+      ],
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/PortSpec",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PortSpec"
+}

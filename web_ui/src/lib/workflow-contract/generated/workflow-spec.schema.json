@@ -1,0 +1,247 @@
+{
+  "$defs": {
+    "AdapterDescriptor": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter_id": {
+          "type": "string"
+        },
+        "adapter_version": {
+          "type": "string"
+        },
+        "ports": {
+          "$ref": "#/$defs/PortSet"
+        },
+        "side_effect_class": {
+          "$ref": "#/$defs/SideEffectClass"
+        }
+      },
+      "required": [
+        "adapter_id",
+        "adapter_version",
+        "ports",
+        "side_effect_class"
+      ],
+      "type": "object"
+    },
+    "InputBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "port": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/InputSource"
+        }
+      },
+      "required": [
+        "port",
+        "source"
+      ],
+      "type": "object"
+    },
+    "InputSource": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WorkflowInputSource"
+        },
+        {
+          "$ref": "#/$defs/StepOutputSource"
+        }
+      ]
+    },
+    "PortKind": {
+      "enum": [
+        "text",
+        "json",
+        "table",
+        "file",
+        "image"
+      ]
+    },
+    "PortSet": {
+      "additionalProperties": false,
+      "properties": {
+        "inputs": {
+          "items": {
+            "$ref": "#/$defs/PortSpec"
+          },
+          "type": "array"
+        },
+        "outputs": {
+          "items": {
+            "$ref": "#/$defs/PortSpec"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "inputs",
+        "outputs"
+      ],
+      "type": "object"
+    },
+    "PortSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/PortKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "required"
+      ],
+      "type": "object"
+    },
+    "SideEffectClass": {
+      "enum": [
+        "pure",
+        "local-read",
+        "cloud",
+        "executes",
+        "writes"
+      ]
+    },
+    "StepOutputSource": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "step"
+          ]
+        },
+        "port": {
+          "type": "string"
+        },
+        "step_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "step_id",
+        "port"
+      ],
+      "type": "object"
+    },
+    "WorkflowInputSource": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "input"
+          ]
+        },
+        "port": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "port"
+      ],
+      "type": "object"
+    },
+    "WorkflowOutput": {
+      "additionalProperties": false,
+      "properties": {
+        "port": {
+          "$ref": "#/$defs/PortSpec"
+        },
+        "source": {
+          "$ref": "#/$defs/InputSource"
+        }
+      },
+      "required": [
+        "port",
+        "source"
+      ],
+      "type": "object"
+    },
+    "WorkflowSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "inputs": {
+          "items": {
+            "$ref": "#/$defs/PortSpec"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "outputs": {
+          "items": {
+            "$ref": "#/$defs/WorkflowOutput"
+          },
+          "type": "array"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "schema_version": {
+          "enum": [
+            1
+          ]
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/WorkflowStepSpec"
+          },
+          "type": "array"
+        },
+        "workflow_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "workflow_id",
+        "revision",
+        "name",
+        "inputs",
+        "steps",
+        "outputs"
+      ],
+      "type": "object"
+    },
+    "WorkflowStepSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "$ref": "#/$defs/AdapterDescriptor"
+        },
+        "bindings": {
+          "items": {
+            "$ref": "#/$defs/InputBinding"
+          },
+          "type": "array"
+        },
+        "config_json": {
+          "type": "string"
+        },
+        "step_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "step_id",
+        "adapter",
+        "config_json",
+        "bindings"
+      ],
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/WorkflowSpec",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WorkflowSpec"
+}

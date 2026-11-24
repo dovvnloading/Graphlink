@@ -42,6 +42,7 @@ from typing import Any, TypedDict
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from graphlink_wire_schema import NO_DEFAULT, json_schema_for, omits_defaults, wire_default
+from contracts.workflow_codegen import generated_workflow_artifacts
 
 __all__ = ["schema_json_for", "typescript_for", "GENERATED_ARTIFACTS"]
 
@@ -656,12 +657,24 @@ def _main(argv: list[str]) -> int:
             if checked_in != fresh:
                 stale.append(f"{path} does not match regenerating it from {entry['source']}")
 
+    # Workflow formats are standalone contracts, never live WebSocket topics.
+    workflow_artifacts = generated_workflow_artifacts()
+    for path, fresh in workflow_artifacts.items():
+        if mode == "--write":
+            if not path.is_file() or path.read_text(encoding="utf-8") != fresh:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(fresh, encoding="utf-8", newline="\n")
+        elif not path.is_file():
+            stale.append(f"{path} is missing")
+        elif path.read_text(encoding="utf-8") != fresh:
+            stale.append(f"{path} does not match regenerating the workflow contracts")
+
     fresh_contract = api_contract_ts()
     if mode == "--write":
         if not _API_CONTRACT_PATH.is_file() or _API_CONTRACT_PATH.read_text(encoding="utf-8") != fresh_contract:
             _API_CONTRACT_PATH.parent.mkdir(parents=True, exist_ok=True)
             _API_CONTRACT_PATH.write_text(fresh_contract, encoding="utf-8", newline="\n")
-        print(f"wrote {len(GENERATED_ARTIFACTS) * 2 + 1} generated file(s)")
+        print(f"wrote {len(GENERATED_ARTIFACTS) * 2 + 1 + len(workflow_artifacts)} generated file(s)")
         return 0
 
     if not _API_CONTRACT_PATH.is_file():

@@ -1,0 +1,195 @@
+{
+  "$defs": {
+    "AssetRef": {
+      "additionalProperties": false,
+      "properties": {
+        "asset_id": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "asset_id",
+        "sha256",
+        "media_type",
+        "filename",
+        "size_bytes"
+      ],
+      "type": "object"
+    },
+    "FileValue": {
+      "additionalProperties": false,
+      "properties": {
+        "asset": {
+          "$ref": "#/$defs/AssetRef"
+        },
+        "kind": {
+          "enum": [
+            "file"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "asset"
+      ],
+      "type": "object"
+    },
+    "ImageValue": {
+      "additionalProperties": false,
+      "properties": {
+        "asset": {
+          "$ref": "#/$defs/AssetRef"
+        },
+        "kind": {
+          "enum": [
+            "image"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "asset"
+      ],
+      "type": "object"
+    },
+    "JsonData": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JsonScalar"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/JsonData"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonData"
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "JsonScalar": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "JsonValue": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "json"
+          ]
+        },
+        "value": {
+          "$ref": "#/$defs/JsonData"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object"
+    },
+    "PortValue": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TextValue"
+        },
+        {
+          "$ref": "#/$defs/JsonValue"
+        },
+        {
+          "$ref": "#/$defs/TableValue"
+        },
+        {
+          "$ref": "#/$defs/FileValue"
+        },
+        {
+          "$ref": "#/$defs/ImageValue"
+        }
+      ]
+    },
+    "TableValue": {
+      "additionalProperties": false,
+      "properties": {
+        "columns": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "enum": [
+            "table"
+          ]
+        },
+        "rows": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/JsonScalar"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "columns",
+        "rows"
+      ],
+      "type": "object"
+    },
+    "TextValue": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "text"
+          ]
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "text"
+      ],
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/PortValue",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PortValue"
+}
