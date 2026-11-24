@@ -66,10 +66,10 @@ def test_upgrade_from_either_version_seven_schema(tmp_path, version_seven):
             with conn:
                 original = store.save(conn, example(), name="Original")
     with closing(chat_library._connect(path)) as conn, conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         assert {"detached_workflow_runs", "workflow_library", "workflow_library_versions",
-                "workflow_child_runs"} <= tables
+                "workflow_child_runs", "workflow_presets"} <= tables
         if version_seven == "library":
             assert store.get(conn, original["workflow_id"], original["revision"])["spec"]["name"] == "Original"
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []

@@ -123,7 +123,7 @@ class ConcurrentSaveConflict(RuntimeError):
 # The note-edge fix adds version "5": the notes table gains a note_id
 # column so note-endpoint edges survive a save/load round-trip - see
 # _migration_005_note_ids's own docstring.
-CHATS_DB_SCHEMA_VERSION = 8
+CHATS_DB_SCHEMA_VERSION = 9
 
 
 # ADR-009 stage 9.2: `created_at` and historical `updated_at` values use
@@ -1130,6 +1130,7 @@ _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     6: workflow_run_store.migrate,
     7: detached_store.migrate,
     8: _migration_008_workflow_library,
+    9: detached_store.migrate_presets,
 }
 
 
