@@ -792,11 +792,96 @@ CHART_ANALYSIS_TYPES = frozenset({"line", "scatter", "histogram", "boxplot"})
 MAX_CHART_ANNOTATIONS = 60
 
 
-def canonicalize_chart_analysis(analysis, chart_type, *, x_scale="linear", y_scale="linear"):
+# Pointwise 95% Student-t critical values for df 1..30; the asymptotic
+# expansion below is accurate to < 1e-6 for df > 30 at this quantile.
+_T95 = (
+    12.706204736, 4.302652730, 3.182446305, 2.776445105, 2.570581836, 2.446911851,
+    2.364624252, 2.306004135, 2.262157163, 2.228138852, 2.200985160, 2.178812830,
+    2.160368656, 2.144786688, 2.131449546, 2.119905299, 2.109815578, 2.100922040,
+    2.093024054, 2.085963447, 2.079613845, 2.073873068, 2.068657610, 2.063898562,
+    2.059538553, 2.055529439, 2.051830516, 2.048407142, 2.045229642, 2.042272456,
+)
+
+
+def _t95(df):
+    if df <= len(_T95):
+        return _T95[df - 1]
+    z = 1.959963984540054
+    return (z + (z**3 + z) / (4 * df)
+            + (5 * z**5 + 16 * z**3 + 3 * z) / (96 * df**2)
+            + (3 * z**7 + 19 * z**5 + 17 * z**3 - 15 * z) / (384 * df**3))
+
+
+def chart_regression_fits(data):
+    """Unweighted OLS and pointwise mean-response CI from canonical samples.
+
+    Normalize both axes before computing moments to avoid squaring huge or
+    tiny physical coordinates. Never modify observations, extrapolate, or
+    treat measurement-error bars as sampling confidence intervals. Return
+    None for unsupported/degenerate data or nonrepresentable output.
+    """
+    xs = data.get("xValues")
+    if (not xs or len(xs) < 3 or data.get("xScale", "linear") != "linear"
+            or data.get("yScale", "linear") != "linear"):
+        return None
+    xmin, xmax = min(xs), max(xs)
+    span = xmax - xmin
+    if not math.isfinite(span) or span <= 0:
+        return None
+    n = len(xs)
+    u = [(x - xmin) / span for x in xs]
+    umean = sum(u) / n
+    suu = sum((x - umean)**2 for x in u)
+    if suu <= 0:
+        return None
+    rows = data.get("series") or [{"name": "", "values": data.get("values", []),
+                                    "yError": data.get("yError")}]
+    fits = []
+    all_y = []
+    for row in rows:
+        ys = row["values"]
+        if len(ys) != n:
+            return None
+        ymin, ymax = min(ys), max(ys)
+        yspan = ymax - ymin
+        if not math.isfinite(yspan):
+            return None
+        yscale = yspan or 1.0
+        v = [(y - ymin) / yscale for y in ys]
+        vmean = sum(v) / n
+        beta = sum((x - umean) * (y - vmean) for x, y in zip(u, v)) / suu
+        sse = sum((y - (vmean + beta * (x - umean)))**2 for x, y in zip(u, v))
+        sst = sum((y - vmean)**2 for y in v)
+        r2 = max(0.0, min(1.0, 1.0 - sse / sst)) if sst else None
+        sigma = math.sqrt(sse / (n - 2))
+        samples = []
+        # The line and confidence band are sampled over the observed X span.
+        # The same fixed 65 positions are used by the SVG renderer.
+        for i in range(65):
+            p = i / 64
+            x = xmin + p * span
+            mean = vmean + beta * (p - umean)
+            half = _t95(n - 2) * sigma * math.sqrt(1 / n + (p - umean)**2 / suu)
+            point = (x, ymin + mean * yscale,
+                     ymin + (mean - half) * yscale, ymin + (mean + half) * yscale)
+            if not all(math.isfinite(value) for value in point):
+                return None
+            samples.append(point)
+            all_y.extend(point[2:])
+        for i, value in enumerate(ys):
+            minus, plus = row["yError"][i] if row.get("yError") else (0, 0)
+            all_y.extend((value - minus, value + plus))
+        fits.append({"n": n, "r2": r2, "points": samples})
+    if not math.isfinite(max(all_y) - min(all_y)):
+        return None
+    return fits
+
+
+def canonicalize_chart_analysis(analysis, chart_type, *, x_scale="linear", y_scale="linear", chart_data=None):
     """Bounded document-state annotations and frozen axes; no data mutation."""
     if not isinstance(analysis, dict):
         raise ChartDataError("Chart analysis must be an object")
-    allowed = {"lockX", "lockY", "xRange", "yRange", "annotations"}
+    allowed = {"lockX", "lockY", "xRange", "yRange", "annotations", "regression"}
     if set(analysis) - allowed:
         raise ChartDataError("Unknown chart analysis field")
     if chart_type not in CHART_ANALYSIS_TYPES:
@@ -822,6 +907,13 @@ def canonicalize_chart_analysis(analysis, chart_type, *, x_scale="linear", y_sca
             result[field] = [lo, hi]
         if value and field not in result:
             raise ChartDataError(locked + " requires " + field)
+    if "regression" in analysis:
+        if (analysis["regression"] != "ols95" or chart_type not in ("line", "scatter")
+                or x_scale != "linear" or y_scale != "linear" or chart_data is None
+                or chart_regression_fits(chart_data) is None):
+            raise ChartDataError("Linear regression requires at least three numeric observations, "
+                                 "varying X, linear axes and finite confidence bounds")
+        result["regression"] = "ols95"
     annotations = analysis.get("annotations", [])
     if not isinstance(annotations, list) or len(annotations) > MAX_CHART_ANNOTATIONS:
         raise ChartDataError("Chart annotations must be a list of at most 60 items")
@@ -871,6 +963,7 @@ def canonicalize_chart_data(data, chart_type=None):
             data["analysis"], canonical["type"],
             x_scale=canonical.get("xScale", "linear"),
             y_scale=canonical.get("yScale", "linear"),
+            chart_data=canonical,
         )
     return canonical
 

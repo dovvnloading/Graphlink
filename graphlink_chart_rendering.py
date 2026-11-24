@@ -47,7 +47,7 @@ from matplotlib.colors import Colormap, LinearSegmentedColormap, Normalize, TwoS
 from matplotlib.patches import FancyBboxPatch, PathPatch
 from matplotlib.path import Path as MplPath
 
-from graphlink_chart_data import SUPPORTED_CHART_TYPES, canonicalize_chart_data
+from graphlink_chart_data import SUPPORTED_CHART_TYPES, canonicalize_chart_data, chart_regression_fits
 
 # -- dark-theme hex palette --------------------------------------------------
 # Copied verbatim from graphlink_config.py's THEME_TOKENS["dark"] (the app's
@@ -389,9 +389,18 @@ def _render_scientific_cartesian(ax, data: dict[str, Any], theme: dict[str, Any]
     # palette entries have very similar RGB values.
     markers = ("o", "s", "^", "D", "v", "P", "X", "*")
     styles = ("-", "--", "-.", ":")
+    fits = chart_regression_fits(data) if data.get("analysis", {}).get("regression") == "ols95" else None
     for index, row in enumerate(rows):
         color = theme["cycle"][index % len(theme["cycle"])]
         label = row.get("name")
+        if fits:
+            fit = fits[index]
+            fx, fy, lower, upper = zip(*fit["points"])
+            summary = f"R²={fit['r2']:.3f}" if fit["r2"] is not None else "R² undefined"
+            fit_label = f"{label + ': ' if label else ''}OLS ({summary}, n={fit['n']})"
+            ax.fill_between(fx, lower, upper, color=color, alpha=0.18, zorder=1,
+                            label="95% mean CI" if index == 0 else "_nolegend_")
+            ax.plot(fx, fy, color=color, linestyle="--", linewidth=1.5, zorder=3, label=fit_label)
         ax.errorbar(
             x_values,
             row["values"],
@@ -412,7 +421,7 @@ def _render_scientific_cartesian(ax, data: dict[str, Any], theme: dict[str, Any]
             label=label,
             zorder=4 + index,
         )
-    if data.get("series"):
+    if data.get("series") or fits:
         legend = ax.legend(frameon=False, loc="best", fontsize=8)
         for text in legend.get_texts():
             text.set_color(theme["text"])

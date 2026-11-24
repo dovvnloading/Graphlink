@@ -337,6 +337,7 @@ export interface ChartAnalysisRow {
   annotations: ChartAnnotationRow[];
   xRange?: number[] | null;
   yRange?: number[] | null;
+  regression?: "ols95" | null;
 }
 
 export interface ChartAnnotationRow {
@@ -565,6 +566,7 @@ const CHART_ANALYSIS_ROW_FIELDS: WireFields = [
   ["annotations", { a: { o: CHART_ANNOTATION_ROW_FIELDS } }, 0],
   ["xRange", { a: "n" }, 1],
   ["yRange", { a: "n" }, 1],
+  ["regression", { e: ["ols95"] }, 1],
 ];
 
 const CHART_DATA_ROW_FIELDS: WireFields = [

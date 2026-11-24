@@ -171,3 +171,23 @@ describe("analysis interactions on numerical charts", () => {
     expect(svgFor(container).querySelector(".chart-scientific-point circle")?.getAttribute("cx")).toBe(before);
   });
 });
+
+it("shows and removes a persisted OLS confidence layer without changing observations", () => {
+  const input: ChartDataRow = { ...scatter, xScale: "linear", xValues: [0, 1, 2, 3, 4],
+    values: [1, 3, 2, 5, 4] };
+  const original = JSON.stringify(input);
+  const save = vi.fn();
+  const { container } = render(<ChartRenderer chartType="scatter" chartData={input} onAnalysisChange={save} />);
+  openTools();
+  const toggle = screen.getByRole("button", { name: "Linear fit (95% CI)" });
+  fireEvent.click(toggle);
+  expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ regression: "ols95" }));
+  expect(container.querySelectorAll(".chart-regression-band")).toHaveLength(1);
+  expect(container.querySelectorAll(".chart-regression-line")).toHaveLength(1);
+  expect(container.querySelectorAll(".chart-scientific-point")).toHaveLength(5);
+  expect(screen.getByText(/R²=0.640/)).toBeInTheDocument();
+  fireEvent.click(toggle);
+  expect(save).toHaveBeenLastCalledWith({ lockX: false, lockY: false, annotations: [] });
+  expect(container.querySelector(".chart-regression-band")).toBeNull();
+  expect(JSON.stringify(input)).toBe(original);
+});

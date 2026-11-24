@@ -12,6 +12,7 @@
  * checked before it reaches the renderer.
  */
 
+import { linearFits } from "./charts/linearFit";
 import type { ChartBoxplotGroupRow, ChartDataRow, ChartFlowRow, ChartScientificSeriesRow } from "../../lib/bridge-core/generated/scene-state";
 
 export const CHART_SPEC_VERSION = 1;
@@ -136,6 +137,7 @@ export interface ChartAnalysis {
   xRange?: [number, number];
   yRange?: [number, number];
   annotations: ChartAnnotation[];
+  regression?: "ols95";
 }
 
 export const EMPTY_CHART_ANALYSIS: ChartAnalysis = { lockX: false, lockY: false, annotations: [] };
@@ -148,6 +150,7 @@ export function chartAnalysisOf(data: ChartDataRow): ChartAnalysis {
  * drop malformed annotations or reinterpret real data as view coordinates. */
 export function canonicalizeChartAnalysis(
   value: unknown, type: string, xScale: AxisScale = "linear", yScale: AxisScale = "linear",
+  data?: ChartDataRow,
 ): ChartAnalysis {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new ChartSpecError("Chart analysis must be an object");
@@ -156,7 +159,7 @@ export function canonicalizeChartAnalysis(
     throw new ChartSpecError("Chart analysis is only supported on cartesian analysis charts");
   }
   const raw = value as Record<string, unknown>;
-  if (Object.keys(raw).some((key) => !["lockX", "lockY", "xRange", "yRange", "annotations"].includes(key))) {
+  if (Object.keys(raw).some((key) => !["lockX", "lockY", "xRange", "yRange", "annotations", "regression"].includes(key))) {
     throw new ChartSpecError("Unknown chart analysis field");
   }
   const result: ChartAnalysis = { lockX: false, lockY: false, annotations: [] };
@@ -182,6 +185,13 @@ export function canonicalizeChartAnalysis(
       result[range] = [low, high];
     }
     if (locked && !result[range]) throw new ChartSpecError(lock + " requires " + range);
+  }
+  if ("regression" in raw) {
+    if (raw.regression !== "ols95" || !["line", "scatter"].includes(type) || xScale !== "linear"
+        || yScale !== "linear" || !data || !linearFits(data)) {
+      throw new ChartSpecError("Linear regression requires at least three numeric observations, varying X, linear axes and finite confidence bounds");
+    }
+    result.regression = "ols95";
   }
   if (raw.annotations !== undefined && (!Array.isArray(raw.annotations) || raw.annotations.length > 60)) {
     throw new ChartSpecError("Chart annotations must be a list of at most 60 items");
@@ -681,7 +691,7 @@ export function canonicalizeChartSpec(data: unknown, chartType?: string | null):
     if (raw.analysis != null) {
       canonical.analysis = canonicalizeChartAnalysis(
         raw.analysis, canonical.type ?? chartType ?? "",
-        canonical.xScale ?? "linear", canonical.yScale ?? "linear",
+        canonical.xScale ?? "linear", canonical.yScale ?? "linear", canonical,
       );
     }
   }

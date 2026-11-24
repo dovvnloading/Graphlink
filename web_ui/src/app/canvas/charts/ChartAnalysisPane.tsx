@@ -2,7 +2,7 @@
  * pane so bar/pie/heatmap/sankey retain their historic pan/zoom behavior.
  * Every committed annotation is expressed in original data units.
  */
-import { useId, useRef, useState, type PointerEvent, type RefObject, type KeyboardEvent, type WheelEvent } from "react";
+import { useId, useMemo, useRef, useState, type PointerEvent, type RefObject, type KeyboardEvent, type WheelEvent } from "react";
 import { Button } from "../../ui/Button";
 import { IconButton } from "../../ui/IconButton";
 import { ToggleButton } from "../../ui/ToggleButton";
@@ -18,6 +18,7 @@ import { ScientificChartMarks } from "./ScientificChartMarks";
 import { HistogramChartMarks } from "./HistogramChartMarks";
 import { BoxplotChartMarks } from "./BoxplotChartMarks";
 import { ChartTooltip, type TooltipContent } from "./ChartTooltip";
+import { linearFits } from "./linearFit";
 import {
   chartFrame, datumAt, domainFromPixels, panDomain, scaleFor, zoomDomain,
   type ViewDomains,
@@ -50,13 +51,15 @@ export function ChartAnalysisPane({
 }: ChartAnalysisPaneProps) {
   const [toolsOpen, setToolsOpen] = useState(false);
   const plotHeight = Math.max(80, height - (toolsOpen ? 200 : 32));
-  const frame = chartFrame(chartData, chartType, width, plotHeight);
   const persisted = chartAnalysisOf(chartData);
   // Optimistic edits are valid only for the exact scene snapshot they edit.
   // On save, reload or undo a new chartData object automatically wins, so
   // there is no synchronous setState-in-effect update (or stale overlay).
   const [pending, setPending] = useState<{ source: ChartDataRow; value: ChartAnalysis } | null>(null);
   const analysis = pending?.source === chartData ? pending.value : persisted;
+  const fits = useMemo(() => (chartType === "line" || chartType === "scatter") ? linearFits(chartData) : null, [chartData, chartType]);
+  const displayData = analysis === persisted ? chartData : { ...chartData, analysis };
+  const frame = chartFrame(displayData, chartType, width, plotHeight);
   const [view, setView] = useState<ViewDomains | null>(null);
   const current: ViewDomains = {
     x: analysis.lockX && analysis.xRange ? analysis.xRange : view?.x ?? frame.base.x,
@@ -76,7 +79,7 @@ export function ChartAnalysisPane({
   function commit(next: ChartAnalysis): void {
     try {
       const normalized = canonicalizeChartAnalysis(
-        next, chartType, frame.xKind, frame.yKind,
+        next, chartType, frame.xKind, frame.yKind, chartData,
       );
       setError("");
       setPending({ source: chartData, value: normalized });
@@ -295,6 +298,11 @@ export function ChartAnalysisPane({
             {cursor ? "X: " + exact(cursor.x, chartData.xUnit) + " · Y: " + exact(cursor.y, chartData.yUnit) : ""}
           </div>
         </div>
+        {analysis.regression === "ols95" && fits && <div className="chart-analysis-status">
+          Unweighted OLS · 95% pointwise mean CI · {fits.map((fit, i) =>
+            (chartData.series?.[i].name ? chartData.series[i].name + ": " : "")
+            + "n=" + fit.n + ", R²=" + (fit.r2 === null ? "undefined" : fit.r2.toFixed(3))).join(" · ")}
+        </div>}
         {toolsOpen && (
           <div id={toolsId} role="group" aria-label="Chart analysis tools" className="chart-analysis-tools-panel">
             <div className="chart-analysis-tool-modes">
@@ -310,6 +318,15 @@ export function ChartAnalysisPane({
               <ToggleButton size="sm" icon="lock" pressed={analysis.lockY}
                 label={analysis.lockY ? "Unlock Y" : "Lock Y range"} onPressedChange={() => toggleLock("y")} />
               <Button size="sm" onClick={() => setView(null)}>Reset zoom</Button>
+              {fits && <ToggleButton size="sm" icon="crosshair"
+                pressed={analysis.regression === "ols95"} label="Linear fit (95% CI)"
+                onPressedChange={() => {
+                  const next = { ...analysis };
+                  if (next.regression) delete next.regression;
+                  else next.regression = "ols95";
+                  commit(next);
+                }} />}
+
             </div>
             <form aria-label="Set exact visible axis ranges" onSubmit={(event) => {
               event.preventDefault(); applyPreciseRanges(event.currentTarget);
@@ -373,11 +390,11 @@ export function ChartAnalysisPane({
         style={{ cursor: mode === "pan" ? "grab" : "crosshair" }}
       >
         {chartType === "line" && (usesScientificMarks(chartData, chartType)
-          ? <ScientificChartMarks chartType={chartType} chartData={chartData} theme={theme} width={width} height={plotHeight}
+          ? <ScientificChartMarks chartType={chartType} chartData={displayData} theme={theme} width={width} height={plotHeight}
               onHover={setHover} wrapperRef={wrapperRef} viewport={activeViewport} />
           : <LineChartMarks chartData={chartData} theme={theme} width={width} height={plotHeight}
               onHover={setHover} wrapperRef={wrapperRef} viewport={activeViewport} />)}
-        {chartType === "scatter" && <ScientificChartMarks chartType={chartType} chartData={chartData} theme={theme}
+        {chartType === "scatter" && <ScientificChartMarks chartType={chartType} chartData={displayData} theme={theme}
           width={width} height={plotHeight} onHover={setHover} wrapperRef={wrapperRef} viewport={activeViewport} />}
         {chartType === "histogram" && <HistogramChartMarks chartData={chartData} theme={theme}
           width={width} height={plotHeight} onHover={setHover} wrapperRef={wrapperRef} viewport={activeViewport} />}

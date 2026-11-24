@@ -319,3 +319,29 @@ the same validated chart data. Exported locked ranges match the saved axis
 limits. SVG text stays selectable; the PDF keeps embedded text, and neither
 export path mutates the stored data. Unsaved, local pan and zoom are not
 exported unless their bounds are locked.
+
+
+### Scientific regression layer
+
+For scatter and line charts with numeric X values on linear axes, open
+**Chart tools → Linear fit (95% CI)**. The opt-in layer is an unweighted
+ordinary least-squares line per series, drawn only over the observed X
+range, with a translucent pointwise 95% confidence interval for the fitted
+mean response (Student-t; an asymptotic quantile approximation is used above
+30 residual degrees of freedom). At least three observations and varying X
+are required. Constant Y is supported with undefined R². Nonrepresentable
+bounds, categorical X and logarithmic axes are rejected.
+
+The interval assumes independent, homoscedastic errors and a correctly
+specified linear model; it is **not** a prediction interval or an uncertainty
+estimate from supplied measurement error bars. Error bars remain visible
+and unchanged, and are not used as regression weights. Fit summaries include
+sample count and R². The original observations and axes' units are preserved;
+the natural Y domain includes the confidence bounds, while locked bounds
+are honored. SVG/PDF/PNG publication exports include the same fitted layer.
+
+Only the method choice (`analysis.regression: "ols95"`) is persisted via
+the existing undoable chart-analysis intent; numerical results are derived
+deterministically from the original samples at render time. Unedited charts
+retain their existing behavior and shape. This is a first composable
+statistical layer, not a replacement for the existing visualization engine.

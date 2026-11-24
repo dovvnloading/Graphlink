@@ -2,6 +2,7 @@
  * coordinates/error magnitudes checked by both canonicalizers are mapped to
  * SVG; only the scale (linear/log10) changes, never the numeric data. */
 import { useId } from "react";
+import { linearFits, regressionYExtent } from "./linearFit";
 import type { AxisScale, ErrorPair } from "../chartSpec";
 import type { ViewDomains } from "./chartViewport";
 import type { ChartMarksProps } from "./BarChartMarks";
@@ -91,7 +92,8 @@ export function ScientificChartMarks({
   const yScaleType = data.yScale ?? "linear";
   const extents = scientificExtents(xValues, series);
   const xDomain = viewport?.x ?? scientificDomain(...extents.x, xScaleType);
-  const yDomain = viewport?.y ?? scientificDomain(...extents.y, yScaleType);
+  const yDomain = viewport?.y ?? scientificDomain(...regressionYExtent(data, extents.y), yScaleType);
+  const fits = data.analysis?.regression === "ols95" ? linearFits(data) : null;
 
   const legendColumns = Math.min(4, named?.length ?? 0);
   const legendRows = named ? Math.ceil(named.length / legendColumns) : 0;
@@ -160,6 +162,22 @@ export function ScientificChartMarks({
         ).join(" ");
         return (
           <g key={name} className="chart-scientific-series" data-series={name}>
+            {fits && (() => {
+              const fit = fits[seriesIndex];
+              const upper = fit.points.map(p => x(p[0]) + "," + y(p[3]));
+              const lower = [...fit.points].reverse().map(p => x(p[0]) + "," + y(p[2]));
+              const center = fit.points.map(p => x(p[0]) + "," + y(p[1]));
+              return (
+                <g className="chart-regression-layer" pointerEvents="none">
+                  <title>{name + ": unweighted OLS; pointwise 95% mean confidence interval; n=" + fit.n
+                    + "; R²=" + (fit.r2 === null ? "undefined" : fit.r2.toFixed(3))}</title>
+                  <polygon className="chart-regression-band" points={[...upper, ...lower].join(" ")}
+                    fill={color} fillOpacity={0.18} />
+                  <polyline className="chart-regression-line" points={center.join(" ")}
+                    fill="none" stroke={color} strokeWidth={1.8} strokeDasharray="5 3" />
+                </g>
+              );
+            })()}
             {chartType === "line" && (
               <path className="chart-series-line" d={path} fill="none"
                 stroke={color} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />

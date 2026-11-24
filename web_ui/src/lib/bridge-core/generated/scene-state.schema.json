@@ -239,6 +239,12 @@
                   "lockY": {
                     "type": "boolean"
                   },
+                  "regression": {
+                    "enum": [
+                      "ols95"
+                    ],
+                    "type": "string"
+                  },
                   "xRange": {
                     "items": {
                       "type": "number"

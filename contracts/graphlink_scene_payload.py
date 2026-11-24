@@ -495,6 +495,7 @@ class ChartAnalysisRow:
     annotations: list[ChartAnnotationRow]
     xRange: list[float] | None = None
     yRange: list[float] | None = None
+    regression: Literal["ols95"] | None = None
 
 
 @dataclass

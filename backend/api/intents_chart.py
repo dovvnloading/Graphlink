@@ -142,6 +142,7 @@ def register_chart_edit_intents(bus: SessionBus, document: SceneDocument, publis
             analysis, node.state.chart_type,
             x_scale=canonical.get("xScale", "linear"),
             y_scale=canonical.get("yScale", "linear"),
+            chart_data=canonical,
         )
         if current.get("analysis") == clean:
             return clean

@@ -4,6 +4,7 @@
  */
 import type { ChartDataRow } from "../../../lib/bridge-core/generated/scene-state";
 import { usesScientificMarks } from "../chartSpec";
+import { regressionYExtent } from "./linearFit";
 import {
   computeHistogramBins, createLinearScale, createLog10Scale, niceTicks,
   pickCategoricalTicks, scientificDomain, type Scale,
@@ -90,7 +91,7 @@ export function chartFrame(chart: ChartDataRow, type: string, width: number, hei
     xKind = chart.xScale ?? "linear";
     yKind = chart.yScale ?? "linear";
     x = scientificDomain(xMin, xMax, xKind);
-    y = scientificDomain(yMin, yMax, yKind);
+    y = scientificDomain(...regressionYExtent(chart, [yMin, yMax]), yKind);
     const legendRows = chart.series ? Math.ceil(chart.series.length / Math.min(4, chart.series.length)) : 0;
     top = 16 + legendRows * 22;
     left = 74;
