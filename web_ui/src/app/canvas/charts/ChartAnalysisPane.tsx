@@ -57,7 +57,7 @@ export function ChartAnalysisPane({
   const [pending, setPending] = useState<{ source: ChartDataRow; value: ChartAnalysis } | null>(null);
   const analysis = pending?.source === chartData ? pending.value : persisted;
   const plotHeight = Math.max(80, height - (toolsOpen ? 200 : 32)
-    - (analysis.regression || analysis.distribution ? 18 : 0));
+    - (analysis.regression || analysis.distribution || analysis.density ? 18 : 0));
   const fits = useMemo(() => (chartType === "line" || chartType === "scatter") ? linearFits(chartData) : null, [chartData, chartType]);
   const displayData = analysis === persisted ? chartData : { ...chartData, analysis };
   const scientificObservations = chartType === "scatter" || chartType === "line"
@@ -307,9 +307,12 @@ export function ChartAnalysisPane({
             (chartData.series?.[i].name ? chartData.series[i].name + ": " : "")
             + "n=" + fit.n + ", R²=" + (fit.r2 === null ? "undefined" : fit.r2.toFixed(3))).join(" · ")}
         </div>}
-        {scientificObservations > 1200 && <div className="chart-analysis-status">
+        {scientificObservations > 1200 && !analysis.density && <div className="chart-analysis-status">
           {scientificObservations.toLocaleString("en-US")} original observations retained ·
           viewport-aware SVG sampling · export uses all observations
+        </div>}
+        {analysis.density === "hexbin" && <div className="chart-analysis-status">
+          Hexagonal bin counts · {scientificObservations.toLocaleString("en-US")} original observations retained
         </div>}
         {analysis.distribution === "raincloud" && <div className="chart-analysis-status">
           Gaussian density (relative peak) · quartiles · individual observations
@@ -337,6 +340,16 @@ export function ChartAnalysisPane({
                   else next.regression = "ols95";
                   commit(next);
                 }} />}
+              {chartType === "scatter" && (!chartData.series || chartData.series.length === 1)
+                && (chartData.xScale ?? "linear") === "linear" && (chartData.yScale ?? "linear") === "linear"
+                && <ToggleButton size="sm" icon="filter"
+                  pressed={analysis.density === "hexbin"} label="Hexbin density"
+                  onPressedChange={() => {
+                    const next = { ...analysis };
+                    if (next.density) delete next.density;
+                    else next.density = "hexbin";
+                    commit(next);
+                  }} />}
               {chartType === "boxplot" && <ToggleButton size="sm" icon="crosshair"
                 pressed={analysis.distribution === "raincloud"} label="Raincloud distribution"
                 onPressedChange={() => {

@@ -996,7 +996,7 @@ def canonicalize_chart_analysis(analysis, chart_type, *, x_scale="linear", y_sca
     """Bounded document-state annotations and frozen axes; no data mutation."""
     if not isinstance(analysis, dict):
         raise ChartDataError("Chart analysis must be an object")
-    allowed = {"lockX", "lockY", "xRange", "yRange", "annotations", "regression", "distribution", "clustering"}
+    allowed = {"lockX", "lockY", "xRange", "yRange", "annotations", "regression", "distribution", "clustering", "density"}
     if set(analysis) - allowed:
         raise ChartDataError("Unknown chart analysis field")
     if chart_type not in CHART_ANALYSIS_TYPES:
@@ -1037,6 +1037,12 @@ def canonicalize_chart_analysis(analysis, chart_type, *, x_scale="linear", y_sca
         if chart_type != "heatmap" or analysis["clustering"] not in ("rows", "columns", "both"):
             raise ChartDataError("Heatmap clustering requires a heatmap and rows, columns, or both")
         result["clustering"] = analysis["clustering"]
+    if "density" in analysis:
+        if (chart_type != "scatter" or analysis["density"] != "hexbin"
+                or chart_data is None or len(chart_data.get("series") or [1]) != 1
+                or x_scale != "linear" or y_scale != "linear"):
+            raise ChartDataError("Hexbin density requires single-series scatter with linear axes")
+        result["density"] = "hexbin"
     annotations = analysis.get("annotations", [])
     if not isinstance(annotations, list) or len(annotations) > MAX_CHART_ANNOTATIONS:
         raise ChartDataError("Chart annotations must be a list of at most 60 items")

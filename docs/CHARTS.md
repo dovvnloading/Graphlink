@@ -402,3 +402,21 @@ calculations. The chart status indicates when sampling is active.
 The publication exporter and numerical fit use all measurements.
 This does not yet implement external Arrow datasets or unrestricted
 million-point visualizations.
+
+
+### Hexbin density for large scatter plots
+
+A **Hexbin density** control is available on single-series scatter plots
+with linear axes. It aggregates every observation in the current visible
+X/Y viewport into hexagonal cells; opacity encodes bin count and tooltips
+report the number of observations per cell. Unlike the representative
+scatter marks used for large datasets, bins communicate local point
+concentration. Toggle the control off to inspect point coordinates.
+Regression bands can be used with the density view.
+
+The mode persists as `analysis.density: "hexbin"` and never edits the
+input measurements. Its interactive implementation uses deterministic
+pointy-top axial hexagon assignment; the publication exporter uses
+Matplotlib's optimized hexbin implementation, with a count colorbar.
+The bin tessellation and resolution may differ between interactive
+and printed figures, but both count the unmodified original observations.

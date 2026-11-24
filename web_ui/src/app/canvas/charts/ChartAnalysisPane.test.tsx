@@ -206,3 +206,19 @@ it("renders a raincloud density and every original observation, and restores the
   expect(container.querySelector(".chart-raincloud-density")).toBeNull();
   expect(container.querySelector(".chart-raincloud-observation")).toBeNull();
 });
+
+it("toggles the full-resolution single-series hexbin density renderer", () => {
+  const original = JSON.stringify(scatter);
+  const spec: ChartDataRow = { ...scatter, xScale: "linear" };
+  const save = vi.fn();
+  const { container } = render(<ChartRenderer chartType="scatter" chartData={spec} onAnalysisChange={save} />);
+  openTools();
+  fireEvent.click(screen.getByRole("button", { name: "Hexbin density" }));
+  expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ density: "hexbin" }));
+  expect(container.querySelectorAll(".chart-hexbin-cell").length).toBeGreaterThan(0);
+  expect(container.querySelectorAll(".chart-scientific-point")).toHaveLength(0);
+  fireEvent.click(screen.getByRole("button", { name: "Hexbin density" }));
+  expect(container.querySelector(".chart-hexbin-cell")).toBeNull();
+  expect(container.querySelectorAll(".chart-scientific-point")).toHaveLength(3);
+  expect(JSON.stringify(scatter)).toBe(original);
+});

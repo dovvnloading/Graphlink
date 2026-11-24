@@ -141,6 +141,7 @@ export interface ChartAnalysis {
   regression?: "ols95";
   distribution?: "raincloud";
   clustering?: "rows" | "columns" | "both";
+  density?: "hexbin";
 }
 
 export const EMPTY_CHART_ANALYSIS: ChartAnalysis = { lockX: false, lockY: false, annotations: [] };
@@ -162,7 +163,7 @@ export function canonicalizeChartAnalysis(
     throw new ChartSpecError("Chart analysis is only supported on cartesian analysis charts");
   }
   const raw = value as Record<string, unknown>;
-  if (Object.keys(raw).some((key) => !["lockX", "lockY", "xRange", "yRange", "annotations", "regression", "distribution", "clustering"].includes(key))) {
+  if (Object.keys(raw).some((key) => !["lockX", "lockY", "xRange", "yRange", "annotations", "regression", "distribution", "clustering", "density"].includes(key))) {
     throw new ChartSpecError("Unknown chart analysis field");
   }
   const result: ChartAnalysis = { lockX: false, lockY: false, annotations: [] };
@@ -207,6 +208,13 @@ export function canonicalizeChartAnalysis(
       throw new ChartSpecError("Heatmap clustering requires a heatmap and rows, columns, or both");
     }
     result.clustering = raw.clustering as "rows" | "columns" | "both";
+  }
+  if ("density" in raw) {
+    if (type !== "scatter" || raw.density !== "hexbin" || !data
+        || (data.series?.length ?? 1) !== 1 || xScale !== "linear" || yScale !== "linear") {
+      throw new ChartSpecError("Hexbin density requires single-series scatter with linear axes");
+    }
+    result.density = "hexbin";
   }
   if (raw.annotations !== undefined && (!Array.isArray(raw.annotations) || raw.annotations.length > 60)) {
     throw new ChartSpecError("Chart annotations must be a list of at most 60 items");

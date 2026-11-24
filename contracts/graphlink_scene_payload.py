@@ -498,6 +498,7 @@ class ChartAnalysisRow:
     regression: Literal["ols95"] | None = None
     distribution: Literal["raincloud"] | None = None
     clustering: Literal["rows", "columns", "both"] | None = None
+    density: Literal["hexbin"] | None = None
 
 
 @dataclass

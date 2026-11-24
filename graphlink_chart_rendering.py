@@ -390,6 +390,19 @@ def _render_scientific_cartesian(ax, data: dict[str, Any], theme: dict[str, Any]
     # palette entries have very similar RGB values.
     markers = ("o", "s", "^", "D", "v", "P", "X", "*")
     styles = ("-", "--", "-.", ":")
+    density = data.get("analysis", {}).get("density") == "hexbin"
+    if density:
+        cmap = LinearSegmentedColormap.from_list(
+            "graphlink-hexbin", [theme["surface"], theme["cycle"][0]]
+        )
+        cloud = ax.hexbin(x_values, rows[0]["values"], gridsize=26, mincnt=1,
+                          cmap=cmap, linewidths=0.25, edgecolors=theme["surface"],
+                          zorder=2)
+        colorbar = ax.figure.colorbar(cloud, ax=ax, fraction=0.046, pad=0.04)
+        colorbar.ax.tick_params(colors=theme["muted"], labelsize=8)
+        colorbar.set_label("Observations per bin", color=theme["muted"], fontsize=8)
+        ax.set_title("Hexbin density (count per visible cell)", fontsize=8,
+                     color=theme["text"], loc="left")
     fits = chart_regression_fits(data) if data.get("analysis", {}).get("regression") == "ols95" else None
     for index, row in enumerate(rows):
         color = theme["cycle"][index % len(theme["cycle"])]
@@ -402,6 +415,8 @@ def _render_scientific_cartesian(ax, data: dict[str, Any], theme: dict[str, Any]
             ax.fill_between(fx, lower, upper, color=color, alpha=0.18, zorder=1,
                             label="95% mean CI" if index == 0 else "_nolegend_")
             ax.plot(fx, fy, color=color, linestyle="--", linewidth=1.5, zorder=3, label=fit_label)
+        if density:
+            continue
         ax.errorbar(
             x_values,
             row["values"],
@@ -422,7 +437,7 @@ def _render_scientific_cartesian(ax, data: dict[str, Any], theme: dict[str, Any]
             label=label,
             zorder=4 + index,
         )
-    if data.get("series") or fits:
+    if (data.get("series") and not density) or fits:
         legend = ax.legend(frameon=False, loc="best", fontsize=8)
         for text in legend.get_texts():
             text.set_color(theme["text"])

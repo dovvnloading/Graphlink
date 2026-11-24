@@ -10,6 +10,7 @@ import { linearFits, regressionYExtent } from "./linearFit";
 import { raincloudDensity, raincloudJitter } from "./raincloud";
 import { clusterHeatmap } from "./heatmapClustering";
 import { scientificMarkIndices } from "./scientificSampling";
+import { hexbinPoints, hexagonVertices } from "./hexbin";
 
 const WIDTH = 240;
 const HEIGHT = 116;
@@ -96,13 +97,22 @@ function overviewMarks(spec: ChartDataRow, chartType: string) {
     const xDomain = scientificDomain(...extents.x, data.xScale ?? "linear");
     const yDomain = scientificDomain(...regressionYExtent(data, extents.y), data.yScale ?? "linear");
     const fits = data.analysis?.regression === "ols95" ? linearFits(data) : null;
+    const bins = data.analysis?.density === "hexbin"
+      ? hexbinPoints(xs, series[0].values, xDomain, yDomain, WIDTH - 16, HEIGHT - 18, 8) : null;
+    const maxBin = bins?.reduce((v, cell) => Math.max(v, cell.count), 0) ?? 0;
     const x = data.xScale === "log10"
       ? createLog10Scale(xDomain, [8, WIDTH - 8])
       : createLinearScale(xDomain, [8, WIDTH - 8]);
     const y = data.yScale === "log10"
       ? createLog10Scale(yDomain, [HEIGHT - 10, 8])
       : createLinearScale(yDomain, [HEIGHT - 10, 8]);
-    return series.map((row, seriesIndex) => {
+    return <>
+      {bins && <g transform="translate(8 8)">
+        {bins.map(cell => <polygon key={cell.q + ":" + cell.r}
+          points={hexagonVertices(cell.cx, cell.cy, 7.8)} fill={PALETTE[0]}
+          fillOpacity={0.18 + 0.78 * Math.sqrt(cell.count / maxBin)} />)}
+      </g>}
+      {series.map((row, seriesIndex) => {
       const indices = scientificMarkIndices(xs, row.values, undefined, Math.floor(400 / series.length),
         chartType === "line" ? "line" : "scatter", row.yError);
       return <g key={seriesIndex} className="chart-overview-scientific-series">
@@ -119,7 +129,7 @@ function overviewMarks(spec: ChartDataRow, chartType: string) {
           <polyline fill="none" stroke={PALETTE[seriesIndex % PALETTE.length]}
             strokeWidth="2" points={indices.map(i => x(xs[i]) + "," + y(row.values[i])).join(" ")} />
         )}
-        {indices.map((index) => {
+        {!bins && indices.map((index) => {
           const xValue = xs[index];
           const cx = x(xValue);
           const cy = y(row.values[index]);
@@ -135,7 +145,8 @@ function overviewMarks(spec: ChartDataRow, chartType: string) {
           );
         })}
       </g>;
-    });
+    })}
+    </>;
   }
 
   const values = spec.values ?? [];

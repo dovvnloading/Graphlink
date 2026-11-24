@@ -4,6 +4,7 @@
 import { useId } from "react";
 import { linearFits, regressionYExtent } from "./linearFit";
 import { scientificMarkBudget, scientificMarkIndices } from "./scientificSampling";
+import { hexbinPoints, hexagonVertices } from "./hexbin";
 import type { AxisScale, ErrorPair } from "../chartSpec";
 import type { ViewDomains } from "./chartViewport";
 import type { ChartMarksProps } from "./BarChartMarks";
@@ -121,6 +122,9 @@ export function ScientificChartMarks({
         lines: [xScaleType === "log10" ? formatLogTick(value) : formatScientificTick(value)],
       }));
   const palette = theme.categorical.length ? theme.categorical : [theme.text];
+  const bins = data.analysis?.density === "hexbin" && chartType === "scatter"
+    ? hexbinPoints(xValues, series[0].values, xDomain, yDomain, innerWidth, innerHeight) : null;
+  const maxBin = bins?.reduce((v, cell) => Math.max(v, cell.count), 0) ?? 0;
 
   return (
     <g className="chart-scientific-marks" transform={"translate(" + marginLeft + " " + marginTop + ")"}>
@@ -137,7 +141,7 @@ export function ScientificChartMarks({
         rotateXTicks={rotate}
         zeroLineY={yDomain[0] < 0 && yDomain[1] > 0 && yScaleType === "linear" ? y(0) : null}
       />
-      {viewport && <defs><clipPath id={clipId}><rect x={0} y={0} width={innerWidth} height={innerHeight} /></clipPath></defs>}
+      {(viewport || bins) && <defs><clipPath id={clipId}><rect x={0} y={0} width={innerWidth} height={innerHeight} /></clipPath></defs>}
       {named && (
         <g className="chart-series-legend" aria-label="Series legend">
           {named.map((row, index) => {
@@ -154,7 +158,20 @@ export function ScientificChartMarks({
           })}
         </g>
       )}
-      <g clipPath={viewport ? "url(#" + clipId + ")" : undefined}>
+      <g clipPath={viewport || bins ? "url(#" + clipId + ")" : undefined}>
+      {bins && <g className="chart-hexbin-cells">
+        {bins.map((cell) => <polygon key={cell.q + ":" + cell.r} className="chart-hexbin-cell"
+          data-count={cell.count} points={hexagonVertices(cell.cx, cell.cy, 13.5)}
+          fill={palette[0]} fillOpacity={0.18 + 0.78 * Math.sqrt(cell.count / maxBin)}
+          stroke={theme.surface} strokeWidth={0.7}
+          onPointerMove={(event) => onHover({
+            title: "Hexagonal density",
+            rows: [{ label: "Observations", value: String(cell.count) },
+              { label: "Aggregation", value: "Visible X/Y viewport" }],
+            ...tooltipPositionFromEvent(event, wrapperRef),
+          })}
+          onPointerLeave={() => onHover(null)} />)}
+      </g>}
       {series.map((row, seriesIndex) => {
         const color = palette[seriesIndex % palette.length];
         const name = row.name || data.title || "Series";
@@ -185,7 +202,7 @@ export function ScientificChartMarks({
               <path className="chart-series-line" d={path} fill="none"
                 stroke={color} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
             )}
-            {indices.map((index) => {
+            {!bins && indices.map((index) => {
               const xValue = xValues[index];
               const value = row.values[index];
               const centerX = x(xValue);

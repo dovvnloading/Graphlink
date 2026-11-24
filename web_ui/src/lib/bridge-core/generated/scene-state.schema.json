@@ -241,6 +241,12 @@
                     ],
                     "type": "string"
                   },
+                  "density": {
+                    "enum": [
+                      "hexbin"
+                    ],
+                    "type": "string"
+                  },
                   "distribution": {
                     "enum": [
                       "raincloud"

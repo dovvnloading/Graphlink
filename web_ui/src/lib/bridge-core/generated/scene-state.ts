@@ -340,6 +340,7 @@ export interface ChartAnalysisRow {
   regression?: "ols95" | null;
   distribution?: "raincloud" | null;
   clustering?: "rows" | "columns" | "both" | null;
+  density?: "hexbin" | null;
 }
 
 export interface ChartAnnotationRow {
@@ -571,6 +572,7 @@ const CHART_ANALYSIS_ROW_FIELDS: WireFields = [
   ["regression", { e: ["ols95"] }, 1],
   ["distribution", { e: ["raincloud"] }, 1],
   ["clustering", { e: ["rows", "columns", "both"] }, 1],
+  ["density", { e: ["hexbin"] }, 1],
 ];
 
 const CHART_DATA_ROW_FIELDS: WireFields = [
