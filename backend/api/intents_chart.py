@@ -379,6 +379,12 @@ def register_chart_intents(
                         "type": "heatmap", "rowLabels": ["No valid data"],
                         "columnLabels": ["Value"], "matrix": [[0]],
                     }, "heatmap")
+                elif normalized_chart_type == "composite":
+                    chart_data = canonicalize_chart_data({
+                        "type": "composite", "version": 2,
+                        "composite": {"numbers": {"x": [0, 1], "y": [0, 0]},
+                                      "layers": [{"mark": "point", "x": "x", "y": "y"}]},
+                    }, "composite")
                 else:
                     chart_data = _placeholder_chart_data(normalized_chart_type)
                 chart_error = f"The generated chart data could not be validated: {exc}"

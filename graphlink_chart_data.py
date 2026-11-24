@@ -7,7 +7,7 @@ import re
 from decimal import Decimal, localcontext
 
 
-SUPPORTED_CHART_TYPES = frozenset({"bar", "line", "pie", "histogram", "sankey", "scatter", "boxplot", "heatmap"})
+SUPPORTED_CHART_TYPES = frozenset({"bar", "line", "pie", "histogram", "sankey", "scatter", "boxplot", "heatmap", "composite"})
 MAX_SERIES_POINTS = 300
 # Scientific line/scatter arrays retain all finite observations, while the
 # SVG renderer uses bounded, viewport-aware samples. Other chart types keep
@@ -234,6 +234,38 @@ CHART_JSON_SCHEMAS: dict[str, dict] = {
         },
         "required": ["type", "rowLabels", "columnLabels", "matrix"],
     },
+    "composite": {
+        "type": "object",
+        "properties": {
+            "type": {"type": "string", "enum": ["composite"]},
+            "version": {"type": "integer", "enum": [2]},
+            "title": {"type": "string"},
+            "xAxis": {"type": "string"}, "yAxis": {"type": "string"},
+            "xScale": {"type": "string", "enum": ["linear", "log10"]},
+            "yScale": {"type": "string", "enum": ["linear", "log10"]},
+            "xUnit": {"type": "string"}, "yUnit": {"type": "string"},
+            "composite": {
+                "type": "object",
+                "properties": {
+                    "numbers": {"type": "object", "additionalProperties": {
+                        "type": "array", "items": {"type": "number"},
+                    }},
+                    "categories": {"type": "object", "additionalProperties": {
+                        "type": "array", "items": {"type": "string"},
+                    }},
+                    "facetBy": {"type": "string"},
+                    "layers": {"type": "array", "items": {"type": "object", "properties": {
+                        "mark": {"type": "string", "enum": ["point", "line", "band", "area"]},
+                        "x": {"type": "string"}, "y": {"type": "string"},
+                        "y2": {"type": "string"}, "colorBy": {"type": "string"},
+                        "label": {"type": "string"},
+                    }, "required": ["mark", "x", "y"]}},
+                },
+                "required": ["numbers", "layers"],
+            },
+        },
+        "required": ["type", "composite"],
+    },
     "sankey": {
         "type": "object",
         "properties": {
@@ -283,7 +315,16 @@ def chart_generation_messages(source_text: str, chart_type: str) -> list[dict]:
         {"role": "system", "content": CHART_GENERATION_SYSTEM_PROMPT},
         {
             "role": "user",
-            "content": f"Chart type: {chart_type}\n\n--- SOURCE TEXT ---\n{source_text}",
+            "content": (
+                f"Chart type: {chart_type}\n\n"
+                + ("For composite figures: use numeric column arrays in composite.numbers; "
+                   "optional grouping columns in composite.categories; connect each "
+                   "layer to existing numeric columns by name. Layer marks are point, "
+                   "line, band (with y2 upper-bound column), or area. Optional facetBy "
+                   "names a categorical column. Never fabricate observations or "
+                   "uncertainty intervals.\n\n" if chart_type == "composite" else "")
+                + f"--- SOURCE TEXT ---\n{source_text}"
+            ),
         },
     ]
 
@@ -651,6 +692,133 @@ def _heatmap_chart(data, result):
     return result
 
 
+# V2 is deliberately a *data-bound* graphics grammar: every mark refers to
+# a checked original column, never to model-supplied expressions or scripts.
+MAX_COMPOSITE_ROWS = 2_000
+MAX_COMPOSITE_LAYERS = 8
+
+
+def _composite_chart(data, result):
+    """Validate a small, composable, faceted grammar without changing V1 charts."""
+    if data.get("version", 2) != 2:
+        raise ChartDataError("Composite figures require ChartSpec version 2")
+    allowed = {"version", "type", "title", "composite", "xAxis", "yAxis",
+               "xScale", "yScale", "xUnit", "yUnit", "scienceReceipt"}
+    if set(data) - allowed:
+        raise ChartDataError("Unsupported composite figure field")
+    raw = data.get("composite")
+    if not isinstance(raw, dict) or set(raw) - {"numbers", "categories", "layers", "facetBy"}:
+        raise ChartDataError("Composite data must contain only numbers, categories, layers, facetBy")
+    numbers = raw.get("numbers")
+    categories = raw.get("categories", {})
+    layers = raw.get("layers")
+    if not isinstance(numbers, dict) or not 2 <= len(numbers) <= 12:
+        raise ChartDataError("Composite figures require 2-12 numeric columns")
+    if not isinstance(categories, dict) or len(categories) > 4:
+        raise ChartDataError("Composite figures support at most four categorical columns")
+    if not isinstance(layers, list) or not 1 <= len(layers) <= MAX_COMPOSITE_LAYERS:
+        raise ChartDataError("Composite figures require 1-8 mark layers")
+
+    cleaned_numbers, cleaned_categories = {}, {}
+    count = None
+    for source, destination, field_limit in (
+        (numbers, cleaned_numbers, "numeric"),
+        (categories, cleaned_categories, "categorical"),
+    ):
+        for field, values in source.items():
+            if not isinstance(field, str) or _clean_text(field, field_limit) != field:
+                raise ChartDataError(f"Invalid {field_limit} column name")
+            if field in cleaned_numbers or field in cleaned_categories or len(field) > 80:
+                raise ChartDataError(f"Duplicate or oversized composite column: {field}")
+            if not isinstance(values, list):
+                raise ChartDataError(f"Composite column {field} must contain an array")
+            if count is None:
+                count = len(values)
+            if len(values) != count or not 2 <= count <= MAX_COMPOSITE_ROWS:
+                raise ChartDataError("Composite columns must have 2-2000 aligned observations")
+            if field_limit == "numeric":
+                numbers_clean = [_finite_number(value, f"Composite {field}[{i}]")
+                                 for i, value in enumerate(values)]
+                if not math.isfinite(max(numbers_clean) - min(numbers_clean)):
+                    raise ChartDataError(f"Composite {field} range must be finite")
+                destination[field] = numbers_clean
+            else:
+                labels = [_clean_text(value, f"Composite {field}[{i}]")
+                          for i, value in enumerate(values)]
+                if len(set(labels)) > 30:
+                    raise ChartDataError("Composite categorical columns support at most 30 categories")
+                destination[field] = labels
+
+    facet = raw.get("facetBy")
+    if facet is not None:
+        if not isinstance(facet, str) or facet not in cleaned_categories:
+            raise ChartDataError("Composite facetBy must name a categorical column")
+        if len(set(cleaned_categories[facet])) > 6:
+            raise ChartDataError("Composite figures support at most six facets")
+
+    xs, ys = [], []
+    result_layers = []
+    for index, layer in enumerate(layers):
+        if not isinstance(layer, dict) or set(layer) - {"mark", "x", "y", "y2", "colorBy", "label"}:
+            raise ChartDataError(f"Composite layer {index} has unknown fields")
+        mark = layer.get("mark")
+        if mark not in ("point", "line", "band", "area"):
+            raise ChartDataError(f"Unsupported composite mark in layer {index}")
+        x, y, y2 = layer.get("x"), layer.get("y"), layer.get("y2")
+        if not isinstance(x, str) or x not in cleaned_numbers or not isinstance(y, str) or y not in cleaned_numbers:
+            raise ChartDataError(f"Composite layer {index} must reference numeric x/y columns")
+        if (mark == "band") != (y2 is not None):
+            raise ChartDataError("Composite band requires y2; other marks forbid y2")
+        if mark == "band":
+            if not isinstance(y2, str) or y2 not in cleaned_numbers:
+                raise ChartDataError("Composite y2 must reference a numeric column")
+            if any(low > high for low, high in zip(cleaned_numbers[y], cleaned_numbers[y2])):
+                raise ChartDataError("Composite band lower bounds must not exceed upper bounds")
+        color = layer.get("colorBy")
+        if color is not None:
+            if not isinstance(color, str) or color not in cleaned_categories:
+                raise ChartDataError("Composite colorBy must name a categorical column")
+            if len(set(cleaned_categories[color])) > 8:
+                raise ChartDataError("Composite colorBy supports at most eight groups")
+        clean = {"mark": mark, "x": x, "y": y}
+        if y2 is not None:
+            clean["y2"] = y2
+        if color is not None:
+            clean["colorBy"] = color
+        if layer.get("label") is not None:
+            clean["label"] = _clean_text(layer["label"], f"Composite layer {index} label")
+        result_layers.append(clean)
+        xs.extend(cleaned_numbers[x])
+        ys.extend(cleaned_numbers[y])
+        if y2 is not None:
+            ys.extend(cleaned_numbers[y2])
+        if mark == "area":
+            ys.append(0.0)
+
+    for axis, values in (("x", xs), ("y", ys)):
+        scale = data.get(axis + "Scale", "linear")
+        if scale not in ("linear", "log10"):
+            raise ChartDataError(f"Composite {axis}Scale must be linear or log10")
+        if scale == "log10" and any(value <= 0 for value in values):
+            raise ChartDataError(f"Composite {axis}Scale requires positive observations")
+        if not math.isfinite(max(values) - min(values)):
+            raise ChartDataError(f"Composite {axis} domain is not finite")
+        result[axis + "Scale"] = scale
+        result[axis + "Axis"] = _clean_text(data.get(axis + "Axis"), f"Composite {axis}Axis",
+                                           default=axis.upper())
+        if data.get(axis + "Unit") is not None:
+            result[axis + "Unit"] = _clean_text(data[axis + "Unit"], f"Composite {axis}Unit")
+
+    result["version"] = 2
+    result["composite"] = {
+        "numbers": cleaned_numbers, "categories": cleaned_categories,
+        "layers": result_layers,
+    }
+    if facet is not None:
+        result["composite"]["facetBy"] = facet
+    return result
+
+
 def _canonicalize_chart_data_base(data, chart_type=None):
     """Return a new, bounded chart payload or raise :class:`ChartDataError`.
 
@@ -692,6 +860,9 @@ def _canonicalize_chart_data_base(data, chart_type=None):
                        for field in ("resultHash", "receiptHash"))):
             raise ChartDataError("Invalid scientific chart receipt")
         result["scienceReceipt"] = dict(receipt)
+
+    if expected_type == "composite":
+        return _composite_chart(data, result)
 
     if expected_type in {"boxplot", "heatmap"}:
         return (_boxplot_chart(data, result) if expected_type == "boxplot"

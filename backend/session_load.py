@@ -1636,6 +1636,12 @@ def _restore_charts(
                         {"rowLabels": ["No valid data"], "columnLabels": ["Value"],
                          "matrix": [[0]]}, "heatmap",
                     )
+                elif chart_type == "composite":
+                    chart_data = canonicalize_chart_data({
+                        "type": "composite", "version": 2,
+                        "composite": {"numbers": {"x": [0, 1], "y": [0, 0]},
+                                      "layers": [{"mark": "point", "x": "x", "y": "y"}]},
+                    }, "composite")
                 else:
                     chart_data = _placeholder_chart_data(chart_type)
                 chart_error = f"This chart's saved data could not be validated: {exc}"
