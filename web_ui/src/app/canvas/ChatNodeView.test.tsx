@@ -482,7 +482,7 @@ describe("ChatNodeView", () => {
     expect(screen.queryByRole("menuitem", { name: "Bar" })).toBeNull();
   });
 
-  it("clicking Generate Chart exposes all 8 supported chart types", async () => {
+  it("clicking Generate Chart exposes all 9 supported chart types", async () => {
     const user = userEvent.setup();
     renderChatNode({ isUser: true });
     fireEvent.contextMenu(screen.getByText("You"));
@@ -493,13 +493,14 @@ describe("ChatNodeView", () => {
 
     const submenu = screen.getByRole("menu", { name: "Chart" });
     const optionNames = Array.from(submenu.querySelectorAll('[role="menuitem"]')).map((el) => el.textContent);
-    expect(optionNames).toEqual(["Bar", "Line", "Scatter", "Histogram", "Box plot", "Heatmap", "Pie", "Sankey"]);
+    expect(optionNames).toEqual(["Bar", "Line", "Scatter", "Histogram", "Box plot", "Heatmap", "Composite figure", "Pie", "Sankey"]);
   });
 
   it.each([
     ["Scatter", "scatter"],
     ["Box plot", "boxplot"],
     ["Heatmap", "heatmap"],
+    ["Composite figure", "composite"],
   ])("new %s chart option dispatches backend type %s", async (label, type) => {
     const user = userEvent.setup();
     const { onGenerateChart } = renderChatNode({ isUser: true });

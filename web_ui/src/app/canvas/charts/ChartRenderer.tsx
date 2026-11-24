@@ -30,6 +30,7 @@ import { LineChartMarks } from "./LineChartMarks";
 import { ScientificChartMarks } from "./ScientificChartMarks";
 import { BoxplotChartMarks } from "./BoxplotChartMarks";
 import { HeatmapChartMarks } from "./HeatmapChartMarks";
+import { CompositeChartMarks } from "./CompositeChartMarks";
 import { PieChartMarks } from "./PieChartMarks";
 import { HistogramChartMarks } from "./HistogramChartMarks";
 import { SankeyChartMarks } from "./SankeyChartMarks";
@@ -171,6 +172,7 @@ function ChartRenderer({ chartType, chartData, onAnalysisChange }: ChartRenderer
             {chartType === "sankey" && <SankeyChartMarks {...marksProps} />}
             {chartType === "boxplot" && <BoxplotChartMarks {...marksProps} />}
             {chartType === "heatmap" && <HeatmapChartMarks {...marksProps} />}
+            {chartType === "composite" && <CompositeChartMarks {...marksProps} />}
           </g>
         </svg>
       )}

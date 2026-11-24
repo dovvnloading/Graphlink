@@ -9,6 +9,7 @@ import { scientificExtents } from "./ScientificChartMarks";
 import { linearFits, regressionYExtent } from "./linearFit";
 import { raincloudDensity, raincloudJitter } from "./raincloud";
 import { clusterHeatmap } from "./heatmapClustering";
+import { CompositeChartMarks } from "./CompositeChartMarks";
 import { scientificMarkIndices } from "./scientificSampling";
 import { hexbinPoints, hexagonVertices } from "./hexbin";
 
@@ -17,6 +18,10 @@ const HEIGHT = 116;
 const PALETTE = FALLBACK_CHART_THEME.categorical;
 
 function overviewMarks(spec: ChartDataRow, chartType: string) {
+  if (chartType === "composite") {
+    return <CompositeChartMarks chartData={spec} theme={FALLBACK_CHART_THEME} width={WIDTH}
+      height={HEIGHT} onHover={() => {}} wrapperRef={{ current: null }} compact />;
+  }
   if (spec.type === "sankey") {
     const { nodes, flows } = computeSankeyLayout(spec.flows ?? []);
     return (

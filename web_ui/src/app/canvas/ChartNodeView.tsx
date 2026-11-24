@@ -104,6 +104,7 @@ export type ChartFlowNode = Node<ChartNodeData, "chart">;
 function chartTypeBadgeLabel(chartType: string): string {
   if (chartType === "boxplot") return "Box plot";
   if (chartType === "heatmap") return "Heatmap";
+  if (chartType === "composite") return "Composite figure";
   return chartType ? chartType.charAt(0).toUpperCase() + chartType.slice(1) : "Chart";
 }
 

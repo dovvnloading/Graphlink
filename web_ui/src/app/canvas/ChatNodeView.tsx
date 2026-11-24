@@ -48,8 +48,8 @@ import { formatTokens } from "../ui/format";
  * already existed - matches legacy's own unconditional enablement (the
  * empty-content case is caught server-side with a warning banner instead).
  * "Generate Chart" is likewise no longer deferred as of R6.2: it now opens a
- * real click-to-expand submenu (CHART_TYPE_OPTIONS below) offering all 8
- * supported chart types, including scientific scatter, box plot and heatmap,
+ * real click-to-expand submenu (CHART_TYPE_OPTIONS below) offering the supported
+ * chart types, including scientific scatter, box plot and heatmap,
  * each dispatching the real generateChart intent with this node as the
  * parent. "Generate Key Takeaway" and "Generate Explainer Note" are
  * likewise no longer deferred as of R8a: their agents were lost with the
@@ -218,7 +218,7 @@ export interface ToolInvocationData {
 
 export type ChatFlowNode = Node<ChatNodeData, "chat">;
 
-// The Generate Chart menu exposes all 8 types supported by the backend.
+// The Generate Chart menu exposes all chart types supported by the backend.
 // `value` is the exact lowercase chart_type string expected by the
 // generateChart intent (and
 // graphlink_chart_data.py's SUPPORTED_CHART_TYPES) expects.
@@ -229,6 +229,7 @@ const CHART_TYPE_OPTIONS: { value: string; label: string }[] = [
   { value: "histogram", label: "Histogram" },
   { value: "boxplot", label: "Box plot" },
   { value: "heatmap", label: "Heatmap" },
+  { value: "composite", label: "Composite figure" },
   { value: "pie", label: "Pie" },
   { value: "sankey", label: "Sankey" },
 ];
