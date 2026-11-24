@@ -232,7 +232,12 @@ def _bomless_utf16_encoding(data: bytes) -> str | None:
 
 
 def _read_text(path: Path) -> str:
-    """Decode text without retaining a BOM or misreading UTF-16 as NULs."""
+    """Decode BOM-marked Unicode, detected UTF-16, then UTF-8 or legacy text.
+
+    Ambiguous BOM-less bytes fall back to Windows-1252, then Latin-1 if
+    Windows-1252 has undefined bytes. These encodings cannot always be
+    distinguished automatically; prefer printable Windows punctuation.
+    """
     raw_bytes = _read_bounded_file(path)
     if raw_bytes.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
         return raw_bytes.decode("utf-32")
@@ -243,12 +248,14 @@ def _read_text(path: Path) -> str:
     detected = _bomless_utf16_encoding(raw_bytes)
     if detected is not None:
         return raw_bytes.decode(detected)
-    for encoding in ("utf-8", "utf-16", "utf-16-le", "utf-16-be", "latin-1"):
+    # Without a BOM or the alternating-NUL signature, a UTF-16 decoder
+    # can accept unrelated single-byte text as plausible Unicode gibberish.
+    for encoding in ("utf-8", "cp1252"):
         try:
             return raw_bytes.decode(encoding)
         except UnicodeDecodeError:
             continue
-    return raw_bytes.decode("utf-8", errors="ignore")
+    return raw_bytes.decode("latin-1")
 
 
 def _extract_pdf_page_text(page) -> str:

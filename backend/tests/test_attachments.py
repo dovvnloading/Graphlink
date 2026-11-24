@@ -531,6 +531,26 @@ def test_utf8_bom_is_stripped_before_token_counting(tmp_file):
     assert staged.extracted_text == "Hello world"
 
 
+@pytest.mark.parametrize(("raw", "expected"), [
+    pytest.param(b"caf\xe9", "café", id="latin1-even"),
+    pytest.param(b"caf\xe9!", "café!", id="latin1-odd"),
+    pytest.param("“café”".encode("cp1252"), "“café”", id="cp1252-even"),
+    pytest.param("“café”!".encode("cp1252"), "“café”!", id="cp1252-odd"),
+    pytest.param(b"caf\xe9\x81!", "café\x81!", id="latin1-undefined-cp1252"),
+    pytest.param("résumé — 日本語 😀".encode("utf-8"), "résumé — 日本語 😀", id="utf8"),
+    pytest.param(b"\xff\xfe" + "日本語 😀".encode("utf-16-le"), "日本語 😀", id="utf16le-bom"),
+    pytest.param(b"\xfe\xff" + "日本語 😀".encode("utf-16-be"), "日本語 😀", id="utf16be-bom"),
+    pytest.param(b"\xff\xfe\x00\x00" + "日本語 😀".encode("utf-32-le"), "日本語 😀", id="utf32le-bom"),
+    pytest.param(b"\x00\x00\xfe\xff" + "日本語 😀".encode("utf-32-be"), "日本語 😀", id="utf32be-bom"),
+    pytest.param(b"one\r\ntwo\n", "one\r\ntwo\n", id="line-endings"),
+])
+def test_text_decoding_preserves_exact_attachment_text(tmp_file, raw, expected):
+    path = tmp_file("source.txt", raw)
+    staged = stage_file(path)
+    assert staged.kind == "document"
+    assert staged.extracted_text == expected
+
+
 def test_docx_xml_size_is_checked_before_python_docx_parser(tmp_file, monkeypatch):
     import zipfile
     import backend.attachments as attachments_module

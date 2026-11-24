@@ -43,15 +43,34 @@ from backend.providers.base import (
 
 
 def _usage_from_metadata(usage_metadata) -> dict | None:
-    """ADR-006 stage 6.8: usageMetadata's promptTokenCount/
-    candidatesTokenCount, normalized. Present on the blocking payload and on
-    the trailing SSE frame(s) - last non-empty wins on the stream."""
+    """Normalize Gemini's disjoint input/output token counters.
+
+    Google's UsageMetadata counts tool-use prompts separately from the
+    original prompt and thoughts separately from response candidates. Cached
+    content is already included in promptTokenCount; totalTokenCount is a
+    cross-check, not an extra counter. The existing two-rate cost estimate
+    uses these effective input/output totals, not cache discounts or separate
+    tool service fees. See https://ai.google.dev/api/generate-content.
+    """
     if not isinstance(usage_metadata, dict):
         return None
-    return normalize_usage(
+    primary = normalize_usage(
         usage_metadata.get("promptTokenCount"),
         usage_metadata.get("candidatesTokenCount"),
-    )
+    ) or {}
+    additional = normalize_usage(
+        usage_metadata.get("toolUsePromptTokenCount"),
+        usage_metadata.get("thoughtsTokenCount"),
+    ) or {}
+
+    def combined(key: str) -> int | None:
+        # Coerce each field before adding: malformed/negative counters must
+        # neither discard a valid companion nor turn absent usage into zero.
+        counts = [count for count in (primary.get(key), additional.get(key))
+                  if count is not None and count >= 0]
+        return sum(counts) if counts else None
+
+    return normalize_usage(combined("prompt_tokens"), combined("completion_tokens"))
 
 
 class GeminiProvider:
