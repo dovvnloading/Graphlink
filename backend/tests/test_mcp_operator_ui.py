@@ -26,6 +26,9 @@ from backend import headless
 from graphlink_process_env import safe_subprocess_env
 
 
+_WAIT_TIMEOUT = 60  # Allow slow Windows CI; successful waits return immediately.
+
+
 def _mcp_tool(port: int, read_file: Path, write_file: Path, name: str, args: dict):
     messages = [
         {
@@ -42,7 +45,7 @@ def _mcp_tool(port: int, read_file: Path, write_file: Path, name: str, args: dic
             "--token-file", str(read_file), "--write-token-file", str(write_file),
         ],
         input="\n".join(json.dumps(item) for item in messages) + "\n",
-        text=True, capture_output=True, encoding="utf-8", timeout=20,
+        text=True, capture_output=True, encoding="utf-8", timeout=_WAIT_TIMEOUT,
         cwd=Path(__file__).resolve().parents[2], env=safe_subprocess_env(),
         check=False,
     )
@@ -59,8 +62,11 @@ def _operator_intent(ws, request_id: int, intent: str, args: list):
         "kind": "intent", "topic": "harness", "intent": intent,
         "args": args, "id": request_id,
     }))
+    deadline = time.monotonic() + _WAIT_TIMEOUT
     while True:
-        packet = json.loads(ws.recv(timeout=10))
+        remaining = deadline - time.monotonic()
+        assert remaining > 0, f"operator intent {intent} did not return before the deadline"
+        packet = json.loads(ws.recv(timeout=remaining))
         if packet.get("id") == request_id and packet["kind"] in ("result", "error"):
             assert packet["kind"] == "result", packet
             return packet["value"]
@@ -82,6 +88,7 @@ def test_real_headless_mcp_start_and_operator_approval_round_trip(tmp_path, monk
     browser_urls: queue.Queue[str] = queue.Queue()
     servers: queue.Queue[uvicorn.Server] = queue.Queue()
     outcomes = []
+    first_run_finished = threading.Event()
 
     # Real browser navigation would load this fragment into token.ts; capture
     # it so this smoke test can exercise the same authenticated WS connection
@@ -105,8 +112,10 @@ def test_real_headless_mcp_start_and_operator_approval_round_trip(tmp_path, monk
     ):
         node = document.nodes[harness_node_id]
         if user_text == "Create operator Agent":
-            # The normal app's harness/start intent creates the node; its
-            # first (test-only) run finishes before MCP begins another.
+            # The node can be visible before the dispatcher's finally block
+            # releases its harness slot. Signal only when the entire task
+            # (including registry release) has finished, not on scene publish.
+            asyncio.current_task().add_done_callback(lambda _task: first_run_finished.set())
             node.state.harness_status = "done"
             node.pending_request_id = None
             await bus.publish("scene")
@@ -121,7 +130,7 @@ def test_real_headless_mcp_start_and_operator_approval_round_trip(tmp_path, monk
         node.state.harness_approval_tool_name = "fs.write"
         node.state.harness_approval_summary = "Overwrite a report (simulated)"
         await bus.publish("scene")
-        approved = await asyncio.wait_for(handle.approval_future, timeout=10)
+        approved = await asyncio.wait_for(handle.approval_future, timeout=_WAIT_TIMEOUT)
         node.state.harness_awaiting_approval = False
         node.state.harness_approval_id = ""
         node.state.harness_status = "done"
@@ -149,8 +158,8 @@ def test_real_headless_mcp_start_and_operator_approval_round_trip(tmp_path, monk
     thread.start()
     server = None
     try:
-        server = servers.get(timeout=15)
-        operator_url = urlsplit(browser_urls.get(timeout=15))
+        server = servers.get(timeout=_WAIT_TIMEOUT)
+        operator_url = urlsplit(browser_urls.get(timeout=_WAIT_TIMEOUT))
         port = operator_url.port
         admin_token = parse_qs(operator_url.fragment)["token"][0]
         assert operator_url.scheme == "http"
@@ -160,7 +169,7 @@ def test_real_headless_mcp_start_and_operator_approval_round_trip(tmp_path, monk
         # The token-bearing browser URL must resolve to a real SPA page.
         import urllib.request
 
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as page:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=_WAIT_TIMEOUT) as page:
             assert page.status == 200
             assert b"operator smoke test" in page.read()
         assert read_file.read_text(encoding="utf-8").strip() != admin_token
@@ -176,24 +185,19 @@ def test_real_headless_mcp_start_and_operator_approval_round_trip(tmp_path, monk
             ) as denied:
                 denied.recv(timeout=3)
 
-        with connect(f"ws://127.0.0.1:{port}/ws?token={admin_token}", open_timeout=5) as ws:
+        with connect(f"ws://127.0.0.1:{port}/ws?token={admin_token}", open_timeout=_WAIT_TIMEOUT) as ws:
             ws.send(json.dumps({"kind": "subscribe", "topics": ["scene"], "id": 10}))
-            initial = json.loads(ws.recv(timeout=5))
+            initial = json.loads(ws.recv(timeout=_WAIT_TIMEOUT))
             assert initial["kind"] == "state" and initial["topic"] == "scene"
 
             node_id = _operator_intent(ws, 11, "start", ["Create operator Agent"])
             assert isinstance(node_id, str) and node_id
 
-            # The first run has finished and released its registry slot.
-            # The MCP adapter is a distinct process: it cannot seed a node.
-            deadline = time.monotonic() + 10
-            while True:
-                listing = _mcp_tool(port, read_file, write_file, "graphlink_list_nodes", {})
-                if any(node["id"] == node_id for node in listing["nodes"]):
-                    break
-                assert time.monotonic() < deadline
-                time.sleep(0.05)
-            time.sleep(0.1)
+            # Wait for actual task cleanup before taking the live revision
+            # and starting a second run through the distinct MCP process.
+            assert first_run_finished.wait(_WAIT_TIMEOUT), "initial Agent task did not finish"
+            listing = _mcp_tool(port, read_file, write_file, "graphlink_list_nodes", {})
+            assert any(node["id"] == node_id for node in listing["nodes"])
 
             started = _mcp_tool(port, read_file, write_file, "graphlink_start_agent_task", {
                 "node_id": node_id, "text": "Needs human approval",
@@ -205,11 +209,12 @@ def test_real_headless_mcp_start_and_operator_approval_round_trip(tmp_path, monk
 
             # Read the approval ID from the same scene data the real browser
             # renders. The MCP status intentionally excludes this secret.
-            deadline = time.monotonic() + 10
+            deadline = time.monotonic() + _WAIT_TIMEOUT
             approval_id = None
             while approval_id is None:
-                assert time.monotonic() < deadline
-                packet = json.loads(ws.recv(timeout=5))
+                remaining = deadline - time.monotonic()
+                assert remaining > 0, "Agent did not request approval before the deadline"
+                packet = json.loads(ws.recv(timeout=remaining))
                 if packet.get("topic") != "scene":
                     continue
                 if packet["kind"] == "state":
@@ -232,21 +237,21 @@ def test_real_headless_mcp_start_and_operator_approval_round_trip(tmp_path, monk
             assert approval_id not in json.dumps(pending)
 
             _operator_intent(ws, 12, "approveTool", [run_id, approval_id])
-            deadline = time.monotonic() + 10
+            deadline = time.monotonic() + _WAIT_TIMEOUT
             while True:
                 status = _mcp_tool(port, read_file, write_file, "graphlink_get_agent_task", {
                     "node_id": node_id, "run_id": run_id,
                 })
                 if status["status"] == "done":
                     break
-                assert time.monotonic() < deadline
+                assert time.monotonic() < deadline, f"Agent did not finish: {status}"
                 time.sleep(0.05)
             assert status["reply"] == "Approved by the operator"
             assert status["awaiting_app_approval"] is False
     finally:
         if server is not None:
             server.should_exit = True
-        thread.join(timeout=10)
+        thread.join(timeout=_WAIT_TIMEOUT)
         assert not thread.is_alive(), "headless launch did not shut down"
         assert outcomes == [0], outcomes
         assert not read_file.exists() and not write_file.exists()
