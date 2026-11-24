@@ -27,12 +27,12 @@ const statusIcons = {
 
 export type StatusWord = keyof typeof statusIcons;
 export type StatusPillStatus = StatusWord | Lowercase<StatusWord>;
-export type StatusPillProps = { status: StatusPillStatus; className?: string };
+export type StatusPillProps = { status: StatusPillStatus; className?: string; announce?: boolean };
 
-export function StatusPill({ status, className }: StatusPillProps) {
+export function StatusPill({ status, className, announce = true }: StatusPillProps) {
   const label = (status.charAt(0).toUpperCase() + status.slice(1)) as StatusWord;
   return (
-    <span className={["gl-status-pill", className].filter(Boolean).join(" ")} role="status" aria-label={label}>
+    <span className={["gl-status-pill", className].filter(Boolean).join(" ")} role={announce ? "status" : undefined} aria-label={announce ? label : undefined}>
       {label === "Running" ? <Spinner size={12} decorative /> : <Icon name={statusIcons[label]} size="sm" />}
       <span>{label}</span>
     </span>

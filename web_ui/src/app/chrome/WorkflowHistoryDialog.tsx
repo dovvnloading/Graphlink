@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { SceneStore } from "../canvas/sceneStore";
 import { alignWorkflowSteps, changedWorkflowFields, type WorkflowHistoryPage,
   type WorkflowRunDetail, type WorkflowStepReceipt } from "../canvas/workflowRunTypes";
@@ -6,7 +6,7 @@ import { Dialog, useOverlays } from "../overlays/overlays";
 import { Badge, StatusPill, type StatusWord } from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
-import { Disclosure } from "../ui/Disclosure";
+import { Disclosure } from "./RunnerDisclosure";
 import { EmptyState } from "../ui/EmptyState";
 import { InlineAlert } from "../ui/InlineAlert";
 import { Select } from "../ui/Select";
@@ -41,7 +41,7 @@ function cost(value: number | null) {
 function StepStatus({ step }: { step: WorkflowStepReceipt }) {
   const status = step.approval === "pending" && (step.status === "pending" || step.status === "running")
     ? "Waiting for approval" : statusWords[step.status];
-  return status ? <StatusPill status={status} /> : <Badge>{statusLabel(step.status)}</Badge>;
+  return status ? <StatusPill status={status} announce={false} /> : <Badge>{statusLabel(step.status)}</Badge>;
 }
 
 function Receipt({ run, step, names, store, onRetry }: {
@@ -61,7 +61,7 @@ function Receipt({ run, step, names, store, onRetry }: {
     <div>Cost (USD): {cost(step.cost_usd)} · Retries: {formatCount(step.retry_count)}</div>
     <div>Approval: {step.approval ?? "Not recorded"} {step.approval_id && <code>{step.approval_id}</code>}</div>
     <div>Started: {time(step.started_at)} · Finished: {time(step.finished_at)} · Duration: {duration(step.duration_ms)}</div>
-    <Disclosure title="Input and output references">
+    <Disclosure label="Input and output references">
       <div>Input fingerprint: <code>{step.input_ref.sha256 ?? "Not recorded"}</code></div>
       <div>Configuration: <code>{step.input_ref.configuration ?? "Not recorded"}</code></div>
       <div>Output fingerprint: <code>{step.output_ref?.sha256 ?? "Not recorded"}</code></div>
@@ -106,7 +106,7 @@ function RunDetail({ run, other, store, names, retry }: {
       <Card><Receipt run={run} step={step} names={names} store={store}
         onRetry={step.nodeId ? () => retry([step.nodeId!], "from", run.run_id) : undefined} /></Card>
     </li>)}</ol>}
-    <Disclosure title={"Recorded events (" + run.events.length + ")"}>
+    <Disclosure label={"Recorded events (" + run.events.length + ")"}>
       <ol className="runner-steps">{run.events.map(event => <li key={event.event_id}>
         {time(event.recorded_at)} · {event.step_index === null ? "Run" : "Step " + (event.step_index + 1)}
         {" · "}{statusLabel(event.status)}
@@ -128,47 +128,78 @@ function History({ store }: { store: SceneStore }) {
   const [compare, setCompare] = useState("");
   const [details, setDetails] = useState<{ run: WorkflowRunDetail; other: WorkflowRunDetail | null } | null>(null);
   const [error, setError] = useState("");
+  const navigationHeading = useRef<HTMLHeadingElement>(null);
+  const moveFocus = useRef(false);
   const graphId = history?.graphId;
   const runId = selection && selection.graphId === graphId ? selection.runId : "";
-  const running = history?.runs.some(run => run.status === "running");
+  useEffect(() => {
+    if (moveFocus.current) {
+      moveFocus.current = false;
+      navigationHeading.current?.focus();
+    }
+  }, [runId]);
 
   useEffect(() => {
     let active = true;
+    let loading = false;
+    let dirty = false;
+    let running = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let revision = store.getScene().revision;
+
+    // Coalesce scene changes while a request is in flight. A 100-step run
+    // can publish much faster than the journal is read; restarting the
+    // effect for every revision discards useful replies and floods the bus.
+    function schedule() {
+      if (active && !loading && timer === undefined) {
+        timer = setTimeout(() => { timer = undefined; void load(); }, 1200);
+      }
+    }
     async function load() {
+      if (!active || loading) return;
+      loading = true;
+      dirty = false;
       try {
         const first = await store.getWorkflowHistory(0);
         let page = first;
         const runs = [...first.runs];
-        for (let i = 1; i < pages && page.hasMore; i++) {
+        for (let i = 1; active && i < pages && page.hasMore; i++) {
           page = await store.getWorkflowHistory(i * 50);
           if (page.graphId !== first.graphId) throw new Error("The open graph changed. Refresh history.");
           runs.push(...page.runs);
         }
-        if (active) { setHistory({ ...first, runs, hasMore: page.hasMore }); setError(""); }
-      } catch (err) { if (active) setError(err instanceof Error ? err.message : String(err)); }
+        if (!active) return;
+        running = runs.some(run => run.status === "running");
+        setHistory({ ...first, runs, hasMore: page.hasMore });
+        if (first.graphId != null && selection?.graphId === first.graphId) {
+          const [run, other] = await Promise.all([
+            store.getWorkflowRunDetail(first.graphId, selection.runId),
+            compare ? store.getWorkflowRunDetail(first.graphId, compare) : Promise.resolve(null),
+          ]);
+          if (active) setDetails({ run, other });
+        } else if (active) {
+          setDetails(null);
+        }
+        if (active) setError("");
+      } catch (err) {
+        if (active) setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        loading = false;
+        if (dirty || running) schedule();
+      }
     }
+    const unsubscribe = store.subscribe(() => {
+      const next = store.getScene().revision;
+      if (next === revision) return;
+      revision = next;
+      dirty = true;
+      schedule();
+    });
     void load();
-    return () => { active = false; };
-  }, [store, pages, refresh, scene.revision]);
+    return () => { active = false; clearTimeout(timer); unsubscribe(); };
+  }, [store, pages, refresh, selection, compare]);
 
-  useEffect(() => {
-    if (!running) return;
-    const timer = setTimeout(() => setRefresh(value => value + 1), 1200);
-    return () => clearTimeout(timer);
-  }, [running, refresh]);
-
-  useEffect(() => {
-    if (!runId || graphId === null || graphId === undefined) return;
-    let active = true;
-    void Promise.all([
-      store.getWorkflowRunDetail(graphId, runId),
-      compare ? store.getWorkflowRunDetail(graphId, compare) : Promise.resolve(null),
-    ]).then(([run, other]) => { if (active) setDetails({ run, other }); })
-      .catch((err: unknown) => { if (active) setError(err instanceof Error ? err.message : String(err)); });
-    return () => { active = false; };
-  }, [store, graphId, runId, compare, refresh, scene.revision]);
-
-  const names = new Map(scene.nodes.map(node => [node.id, node.title]));
+  const names = useMemo(() => new Map(scene.nodes.map(node => [node.id, node.title])), [scene.nodes]);
   const detail = details?.run.graph_id === graphId && details?.run.run_id === runId &&
     (details.other?.run_id ?? "") === compare ? details : null;
   function retry(ids: string[], mode: "from" | "failed", sourceRunId: string) {
@@ -177,18 +208,21 @@ function History({ store }: { store: SceneStore }) {
   }
   return <>
     <div className="runner-controls">
-      {runId && <Button onClick={() => { setSelection(null); setCompare(""); setDetails(null); }}>Back to run history</Button>}
+      {runId && <Button onClick={() => { moveFocus.current = true; setSelection(null); setCompare(""); setDetails(null); }}>Back to run history</Button>}
       <Button variant="secondary" iconStart="refresh" onClick={() => setRefresh(value => value + 1)}>Refresh</Button>
     </div>
+    <h2 ref={navigationHeading} tabIndex={-1}>{runId ? "Selected run" : "Saved runs"}</h2>
+    <div className="visually-hidden" role="status">{detail ? `Selected run: ${statusLabel(detail.run.status)}. ${detail.run.steps.length} steps.` : runId ? "Loading run detail" : history ? `${history.runs.length} saved runs loaded` : "Loading run history"}</div>
     {error && <InlineAlert title="Could not read run history" variant="error" body={error} />}
-    {!history && !error && <Spinner />}
+    {!history && !error && <Spinner label="Loading run history" />}
     {history && !history.runs.length && <EmptyState icon="play" title="No saved runs"
       body="Run a reviewed workflow in this graph to record its steps here." />}
     {history && !runId && !!history.runs.length && <>
       <p>Durable runs in the open graph. Prompt and result contents are hidden by default.</p>
       <ol className="workflow-timeline">{history.runs.map(run => <li key={run.run_id}>
         <Card title={time(run.started_at)} actions={<Button size="sm" disabled={graphId == null}
-          onClick={() => { if (graphId != null) { setSelection({ graphId, runId: run.run_id }); setCompare(""); } }}>View run</Button>}>
+          aria-label={"View run " + run.run_id}
+          onClick={() => { if (graphId != null) { moveFocus.current = true; setSelection({ graphId, runId: run.run_id }); setCompare(""); } }}>View run</Button>}>
           <Badge>{statusLabel(run.status)}</Badge>
           <div><code>{run.run_id}</code></div>
           <div>{formatCount(run.step_count)} steps · {formatCount(run.failed_count)} failed · {duration(run.duration_ms)}</div>
@@ -203,14 +237,14 @@ function History({ store }: { store: SceneStore }) {
         options={[{ value: "", label: "No comparison" }, ...history.runs.filter(run => run.run_id !== runId)
           .map(run => ({ value: run.run_id, label: time(run.started_at) + " · " + statusLabel(run.status) + " · " + run.run_id }))]} />
       {detail ? <RunDetail key={runId + ":" + compare} run={detail.run} other={detail.other} names={names} store={store} retry={retry} />
-        : !error && <Spinner />}
+        : !error && <Spinner label="Loading run detail" />}
     </>}
   </>;
 }
 
 export function WorkflowHistoryDialog({ store }: { store: SceneStore }) {
   return <Dialog name="run-history" title="Run history" size="lg" className="graph-runner-dialog">
-    <DetachedWorkflowInspector />
+    <DetachedWorkflowInspector followApproval />
     <History store={store} />
   </Dialog>;
 }

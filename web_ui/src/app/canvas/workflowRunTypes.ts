@@ -89,15 +89,28 @@ export interface WorkflowContents {
  * trustworthy remapped node identity: compare by operation and index only. */
 export function alignWorkflowSteps(first: WorkflowRunDetail, second: WorkflowRunDetail) {
   const remaining = new Set(second.steps);
+  const byIdentity = new Map<string, { steps: WorkflowStepReceipt[]; next: number }>();
+  function key(step: WorkflowStepReceipt) {
+    if (first.retained && second.retained && !step.nodeId) return null;
+    return JSON.stringify([step.kind, step.operation, first.retained && second.retained ? step.nodeId : step.step_index]);
+  }
+  for (const step of second.steps) {
+    const id = key(step);
+    if (id === null) continue;
+    let bucket = byIdentity.get(id);
+    if (!bucket) {
+      bucket = { steps: [], next: 0 };
+      byIdentity.set(id, bucket);
+    }
+    bucket.steps.push(step);
+  }
   const pairs: Array<{ first: WorkflowStepReceipt | null; second: WorkflowStepReceipt | null }> = [];
   for (const step of first.steps) {
-    const match = [...remaining].find(candidate =>
-      candidate.kind === step.kind && candidate.operation === step.operation &&
-      (first.retained && second.retained
-        ? !!step.nodeId && step.nodeId === candidate.nodeId
-        : step.step_index === candidate.step_index));
+    const id = key(step);
+    const bucket = id === null ? undefined : byIdentity.get(id);
+    const match = bucket && bucket.next < bucket.steps.length ? bucket.steps[bucket.next++] : null;
     if (match) remaining.delete(match);
-    pairs.push({ first: step, second: match ?? null });
+    pairs.push({ first: step, second: match });
   }
   for (const step of remaining) pairs.push({ first: null, second: step });
   return pairs;

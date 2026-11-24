@@ -1,4 +1,5 @@
-import { useState } from "react";
+/* eslint-disable jsx-a11y/no-noninteractive-tabindex -- the full input and output regions are scrollable, read-only content that must be keyboard focusable (WCAG 2.1.1), not a button or link stand-in. */
+import { useId, useRef, useState } from "react";
 import { Button } from "../ui/Button";
 import { InlineAlert } from "../ui/InlineAlert";
 import type { WorkflowContents } from "../canvas/workflowRunTypes";
@@ -13,25 +14,33 @@ function bodyText(value: unknown): string {
 export function FullWorkflowContents({ load, preview = false }: {
   load: () => Promise<WorkflowContents>; preview?: boolean;
 }) {
+  const contentId = useId();
+  const loading = useRef(false);
   const [body, setBody] = useState<WorkflowContents | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   async function toggle() {
+    if (loading.current) return;
     if (body) { setBody(null); return; }
+    loading.current = true;
     setBusy(true);
     setError("");
     try { setBody(await load()); }
     catch (err) { setError(err instanceof Error ? err.message : String(err)); }
-    finally { setBusy(false); }
+    finally { loading.current = false; setBusy(false); }
   }
   return <div className="runner-fingerprints">
-    <Button size="sm" variant="secondary" loading={busy} aria-expanded={!!body} onClick={() => void toggle()}>
+    <Button size="sm" variant="secondary" aria-disabled={busy || undefined} aria-busy={busy || undefined}
+      aria-controls={contentId} aria-expanded={!!body} onClick={() => void toggle()}>
       {body ? "Hide full" : "Show full"}
     </Button>
     {error && <InlineAlert variant="error" title="Could not reveal contents" body={error} />}
-    {body && <>
-      <div>Input</div><pre className="workflow-content">{bodyText(body.input)}</pre>
-      {!preview && <><div>Output</div><pre className="workflow-content">{bodyText(body.output)}</pre></>}
-    </>}
+    <div role="status">{busy ? "Loading full contents…" : ""}</div>
+    <div id={contentId} hidden={!body}>
+      {body && <>
+        <div>Input</div><pre className="workflow-content" tabIndex={0} role="region" aria-label="Full input">{bodyText(body.input)}</pre>
+        {!preview && <><div>Output</div><pre className="workflow-content" tabIndex={0} role="region" aria-label="Full output">{bodyText(body.output)}</pre></>}
+      </>}
+    </div>
   </div>;
 }

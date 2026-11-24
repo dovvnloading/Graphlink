@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useReactFlow } from "@xyflow/react";
 import type { SceneStore } from "../canvas/sceneStore";
 import type { WorkflowDocument, WorkflowEntry, WorkflowParameter, WorkflowStarter, WorkflowVersion } from "../canvas/workflowLibrary";
@@ -23,6 +23,11 @@ function Library({ store }: { store: SceneStore }) {
   const [starters, setStarters] = useState<WorkflowStarter[]>([]);
   const [query, setQuery] = useState("");
   const [name, setName] = useState("");
+  const [captureName, setCaptureName] = useState("");
+  const [loading, setLoading] = useState(true);
+  const entryHeading = useRef<HTMLHeadingElement>(null);
+  const captureHeading = useRef<HTMLHeadingElement>(null);
+  const focusEntry = useRef(false);
   const [entry, setEntry] = useState<WorkflowEntry | null>(null);
   const [versions, setVersions] = useState<WorkflowVersion[]>([]);
   const [view, setView] = useState<WorkflowDocument | null>(null);
@@ -48,7 +53,8 @@ function Library({ store }: { store: SceneStore }) {
       })
       .catch(e => {
         if (!cancelled) setError(String(e));
-      });
+      })
+      .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [store]);
   async function act(fn: () => Promise<unknown>) {
@@ -57,11 +63,26 @@ function Library({ store }: { store: SceneStore }) {
     try { await fn(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   }
-  async function open(row: WorkflowEntry, revision = row.revision) {
+  useEffect(() => {
+    if (focusEntry.current && view) {
+      focusEntry.current = false;
+      entryHeading.current?.focus();
+    }
+  }, [view]);
+  useEffect(() => { if (capture) captureHeading.current?.focus(); }, [capture]);
+
+  async function open(row: WorkflowEntry, revision = row.revision, moveFocus = true) {
+    // Commit the entry and the pinned revision together. A failed history/get
+    // must not pair a different workflow's document with rename/delete/export.
+    const [history, document] = await Promise.all([
+      store.workflowLibrary<WorkflowVersion[]>("history", { workflow_id: row.workflow_id }),
+      store.workflowLibrary<WorkflowDocument>("get", { workflow_id: row.workflow_id, revision }),
+    ]);
+    focusEntry.current = moveFocus;
     setEntry(row);
     setName(row.name);
-    setVersions(await store.workflowLibrary<WorkflowVersion[]>("history", { workflow_id: row.workflow_id }));
-    setView(await store.workflowLibrary<WorkflowDocument>("get", { workflow_id: row.workflow_id, revision }));
+    setVersions(history);
+    setView(document);
   }
   function make() {
     void act(async () => {
@@ -70,7 +91,7 @@ function Library({ store }: { store: SceneStore }) {
       setCapture({ ids, doc });
       setOutputs(doc.spec.outputs.map(o => o.port.name));
       setParams([]);
-      setName("");
+      setCaptureName("");
       setAppend("");
     });
   }
@@ -100,42 +121,44 @@ function Library({ store }: { store: SceneStore }) {
     fileInput.click();
   }
   const position = () => rf.screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+  const filtered = rows.filter(row => row.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
   return <>
+    <div role="status">{loading ? "Loading workflows…" : busy ? "Updating workflow library…" : ""}</div>
     <p className="runner-intro">Workflows are global, immutable versioned definitions. Capture connected text operations, import a built-in starter, or import a portable workflow file. Canvas nodes keep their pinned versions even after a library entry is deleted.</p>
     {error && <InlineAlert variant="error" title="Workflow Library" body={error} />}
     <div className="runner-commit">
-      <Button variant="primary" disabled={busy} onClick={make}>Make workflow from selection</Button>
-      <Button disabled={busy} onClick={importFile}>Import .graphlink-workflow</Button>
-      <Button disabled={busy} onClick={() => void act(refresh)}>Refresh</Button>
+      <Button variant="primary" disabled={busy || loading || !!capture} onClick={make}>Make workflow from selection</Button>
+      <Button disabled={busy || loading || !!capture} onClick={importFile}>Import .graphlink-workflow</Button>
+      <Button disabled={busy || loading || !!capture} onClick={() => void act(refresh)}>Refresh</Button>
     </div>
     {capture && <section>
-      <h3>Make workflow</h3>
-      <TextField label="Workflow name" value={name} onValueChange={setName} disabled={busy} />
-      <Select label="Save as" value={append} onChange={value => {
-        setAppend(value); setName(rows.find(row => row.workflow_id === value)?.name ?? "");
+      <h3 ref={captureHeading} tabIndex={-1}>Make workflow</h3>
+      <TextField label="Workflow name" value={captureName} onValueChange={setCaptureName} disabled={busy} />
+      <Select label="Save as" value={append} disabled={busy} onChange={value => {
+        setAppend(value); setCaptureName(rows.find(row => row.workflow_id === value)?.name ?? "");
       }} options={[{ value: "", label: "New workflow" }, ...rows.map(row => ({ value: row.workflow_id, label: row.name + " · next version" }))]} />
       <p>Unbound inputs: {capture.doc.spec.inputs.map(p => p.name + " (" + p.kind + ")").join(", ") || "None"}</p>
       <h4>Expose outputs</h4>
       {capture.doc.spec.outputs.map(o => <Checkbox key={o.port.name} label={o.port.name + " from " + (o.source.kind === "step" ? o.source.step_id : o.source.port)}
-        checked={outputs.includes(o.port.name)} onChange={event => { const checked = event.currentTarget.checked; setOutputs(old => checked ? [...old, o.port.name] : old.filter(n => n !== o.port.name)); }} />)}
+        disabled={busy} checked={outputs.includes(o.port.name)} onChange={event => { const checked = event.currentTarget.checked; setOutputs(old => checked ? [...old, o.port.name] : old.filter(n => n !== o.port.name)); }} />)}
       <h4>Promote settings to parameters</h4>
       {capture.doc.spec.steps.map(step => {
         const parameterName = step.step_id + "_operation";
         return <Checkbox key={parameterName} label={step.step_id + " · operation (choice)"}
-          checked={params.some(p => p.name === parameterName)} onChange={event => {
+          disabled={busy} checked={params.some(p => p.name === parameterName)} onChange={event => {
             const checked = event.currentTarget.checked;
             setParams(old => checked ? [...old, { name: parameterName, step_id: step.step_id, setting: "operation", kind: "choice", choices: ["copy", "word_count"] }] : old.filter(p => p.name !== parameterName));
           }} />;
       })}
       <WorkflowSpecView value={capture.doc} />
       <div className="runner-commit">
-        <Button variant="primary" disabled={busy || !name.trim() || !outputs.length} onClick={() => void act(async () => {
+        <Button variant="primary" disabled={busy || !captureName.trim() || !outputs.length} onClick={() => void act(async () => {
           const previous = rows.find(row => row.workflow_id === append);
-          await store.workflowLibrary("make", { ids: capture.ids, name, outputs, parameters: params, expected_spec: capture.doc.spec,
+          await store.workflowLibrary("make", { ids: capture.ids, name: captureName, outputs, parameters: params, expected_spec: capture.doc.spec,
             ...(previous ? { workflow_id: previous.workflow_id, expected_revision: previous.revision } : {}) });
-          setCapture(null); setName(""); await refresh();
+          setCapture(null); setCaptureName(""); await refresh();
         })}>Save workflow version</Button>
-        <Button onClick={() => setCapture(null)}>Cancel</Button>
+        <Button disabled={busy} onClick={() => setCapture(null)}>Cancel</Button>
       </div>
     </section>}
     <section aria-label="Built-in starter workflows">
@@ -151,19 +174,20 @@ function Library({ store }: { store: SceneStore }) {
     </section>
     <TextField label="Search workflows" type="search" value={query} onValueChange={setQuery} />
     <ul className="runner-steps">
-      {rows.filter(row => row.name.toLocaleLowerCase().includes(query.toLocaleLowerCase())).map(row => <li key={row.workflow_id}>
+      {filtered.map(row => <li key={row.workflow_id}>
         <div className="runner-step-heading"><strong>{row.name}</strong><span>Version {row.version}</span></div>
-        <Button size="sm" disabled={busy || !!capture} onClick={() => void act(() => open(row))}>Open / version history</Button>
+        <Button size="sm" disabled={busy || !!capture} aria-label={"Open / version history: " + row.name} onClick={() => void act(() => open(row))}>Open / version history</Button>
       </li>)}
     </ul>
-    {!rows.length && <p>No workflows saved yet.</p>}
+    {!loading && !rows.length && !error && <p>No workflows saved yet.</p>}
+    {!!rows.length && <p role="status">{filtered.length ? `${filtered.length} matching workflows` : "No workflows match your search."}</p>}
     {entry && view && !capture && <section>
-      <h3>{entry.name}</h3>
+      <h3 ref={entryHeading} tabIndex={-1}>{entry.name}</h3>
       <Select label="Version history" value={view.spec.revision} disabled={busy}
         options={versions.map(v => ({ value: v.revision, label: "Version " + v.version + " · " + new Date(v.created_at).toLocaleDateString() }))}
-        onChange={revision => void act(() => open(entry, revision))} />
+        onChange={revision => void act(() => open(entry, revision, false))} />
       <WorkflowSpecView value={view} />
-      <TextField label="Library name / duplicate name" value={name} onValueChange={setName} />
+      <TextField label="Library name / duplicate name" value={name} onValueChange={setName} disabled={busy} />
       <div className="runner-commit">
         <Button disabled={busy || !name.trim()} onClick={() => void act(async () => {
           await store.workflowLibrary("rename", { workflow_id: entry.workflow_id, name });
@@ -201,7 +225,7 @@ function Library({ store }: { store: SceneStore }) {
         })}>Export version</Button>
       </div>
     </section>}
-    <WorkflowAutomationPanel view={view?.format === "graphlink-workflow" ? view : null} />
+    <WorkflowAutomationPanel view={!capture && view?.format === "graphlink-workflow" ? view : null} />
   </>;
 }
 
