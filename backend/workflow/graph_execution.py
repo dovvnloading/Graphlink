@@ -248,7 +248,7 @@ class GraphRunExecution:
     def elapsed(self) -> int:
         return max(0, int((time.monotonic() - self.started_clock) * 1000))
 
-    async def model(self, step: dict[str, Any]) -> None:
+    async def run_model(self, step: dict[str, Any]) -> None:
         try:
             await _run_model_step(self.document, self.checkpoint, step, self.by_node_id, self.record)
         except asyncio.CancelledError:

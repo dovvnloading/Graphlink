@@ -38,7 +38,7 @@ Step = dict[str, Any]
 class GraphExecutionContext(Protocol):
     """Host-owned services for the approved legacy run."""
 
-    async def model(self, step: Step) -> None: ...
+    async def run_model(self, step: Step) -> None: ...
     async def scientific(self, step: Step) -> None: ...
     async def tool(self, step: Step) -> None: ...
     async def deterministic(self, step: Step) -> None: ...
@@ -303,7 +303,7 @@ _NOTE = GraphStepAdapter(
 )
 _MODEL = GraphStepAdapter(
     _pin_model, _inspect_model, _evaluate_async, _ordinary_digest,
-    _match_ordinary, _ordinary_binding, lambda context, step: context.model(step),
+    _match_ordinary, _ordinary_binding, lambda context, step: context.run_model(step),
     sync_entry=True, local_model=True,
 )
 _SCIENCE = GraphStepAdapter(
