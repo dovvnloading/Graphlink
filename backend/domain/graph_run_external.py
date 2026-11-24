@@ -156,6 +156,8 @@ async def dispatch_external_attempt(
     step.setdefault("startedAt", datetime.now(timezone.utc).isoformat())
     attempt = call.journal_record()
     step["externalAttempt"] = attempt
+    if call.kind == "model":
+        step.setdefault("approval", "reviewed")
     step.update(status="running", detail="External request reserved; awaiting its outcome.")
     try:
         # No invoke call of any kind is allowed before this durable fence.

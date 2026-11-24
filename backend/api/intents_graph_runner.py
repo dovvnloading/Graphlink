@@ -193,6 +193,7 @@ async def _run_model_step(
         )
 
     async def apply_result(payload: Any) -> str:
+        local._record_model_usage(step, payload)
         text = local._response_text(payload)
         current = _matching_node(document, step)
         if not isinstance(current.state, ModelState):
@@ -393,6 +394,8 @@ def register_graph_runner(
         async def run_step(step: dict[str, Any]) -> None:
             # Record when this task actually starts, not when it entered the
             # preview queue. On resume a pending step gets a new real start.
+            if step.get("startedAt"):
+                step["retryCount"] = step.get("retryCount", 0) + 1
             step["startedAt"] = datetime.now(timezone.utc).isoformat()
             step.pop("finishedAt", None)
             started_clock = time.monotonic()

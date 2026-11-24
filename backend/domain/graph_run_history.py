@@ -97,6 +97,21 @@ def _restore_step(raw: Any, ids: dict[str, str]) -> dict[str, Any] | None:
         timestamp = _timestamp(raw.get(key))
         if timestamp is not None:
             step[key] = timestamp
+    # Execution metadata survives remapping, but is never permission to
+    # skip the adapter's live approval and input checks.
+    for key in ("retryCount", "inputTokens", "outputTokens"):
+        value = raw.get(key)
+        if type(value) is int and 0 <= value <= 2147483647:
+            step[key] = value
+    cost = raw.get("costUsd")
+    if type(cost) in (int, float) and 0 <= cost <= 1_000_000:
+        step["costUsd"] = cost
+    approval = raw.get("approval")
+    if isinstance(approval, str) and approval in {"pending", "reviewed", "auto", "cached", "approved", "denied", "expired", "cancelled"}:
+        step["approval"] = approval
+    approval_id = raw.get("approvalId")
+    if isinstance(approval_id, str) and re.fullmatch(r"mcp-[a-f0-9]{32}", approval_id):
+        step["approvalId"] = approval_id
     if step["kind"] == "model":
         for key in ("provider", "modelId"):
             identifier = _identifier(raw.get(key))

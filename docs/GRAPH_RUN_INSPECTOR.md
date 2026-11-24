@@ -19,9 +19,36 @@ projection of the saved run journal.
 
 ## History and fidelity
 
-The source of truth is `SceneDocument.graph_runs`, already persisted with
-the graph in the same SQLite checkpoint. The inspector never reads prompts,
-output bodies, provider APIs, or live execution logs to reconstruct history.
+The saved graph's `graph_runs` remains the approved plan and compatibility
+snapshot. Chat database schema 6 adds the durable execution journal:
+`workflow_runs`, `workflow_steps`, and `workflow_events`. The engine writes
+these in the same SQLite transaction as the saved graph, notes and pins,
+through its existing shielded worker-thread checkpoint. On load, committed
+receipts overlay the matching plan before node IDs are remapped and interrupted
+runs are classified. The inspector never reads prompts, output bodies or
+provider APIs to reconstruct history.
+
+Step rows store input and output references (node IDs, SHA-256 fingerprints,
+and output version when available), status, times/duration, provider/model,
+measured input/output/total tokens, cost, approval state/ID, retry count and
+external request ID/phase. Unknown metrics remain NULL; local Ollama has no
+API charge and its reported token counts are retained. Approval metadata
+records decisions, never grants future authority or contains tool arguments.
+Events are append-only, ordered by SQLite event ID, and unchanged saves do
+not append duplicate states. Migration seeds the latest state of legacy
+snapshots, not invented prior events. Pruning the bounded canvas history
+does not delete durable receipts; deleting the owning graph cascades to
+its runs, steps and events. An unresolved external fence cannot be dropped
+or replaced by a stale checkpoint.
+
+The database uses WAL with FULL synchronous commits. The existing online
+SQLite backup/restore covers all three tables, and the journal inherits the
+chat DB, WAL/SHM and backup files' owner-only POSIX permissions.
+`backend.chat_library.load_workflow_run(db_path, graph_id, run_id)` reads
+a consistent receipt and ordered event snapshot, including pruned plans.
+A crash after the pre-dispatch fence but before a completion transaction
+leaves an uncertain request, not a retry candidate. A committed completion
+is never sent again by Resume.
 
 - The saved steps are stably topologically ordered using their persisted
   `sourceId` and `nodeId`. Cyclic legacy/corrupt entries are retained at
@@ -83,7 +110,7 @@ provider request, or mutation.
 Backend:
 
 ```sh
-pytest -q backend/tests/test_graph_run_inspector.py backend/tests/test_graph_runner_intents.py backend/tests/test_graph_run_external.py
+pytest -q backend/tests/test_graph_run_inspector.py backend/tests/test_graph_runner_intents.py backend/tests/test_graph_run_external.py backend/tests/test_workflow_run_store.py
 ```
 
 Web UI:

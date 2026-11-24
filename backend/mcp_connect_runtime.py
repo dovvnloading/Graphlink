@@ -168,11 +168,14 @@ class McpConnectRuntime:
         step.update(endpointHash=connection_hash(config), provider="mcp:" + config.id,
                     tool=saved["toolName"])
 
-    async def _approve(self, node: Any, config: McpServerConfig, arguments: dict[str, Any], *, reviewed: bool) -> None:
+    async def _approve(self, node: Any, config: McpServerConfig, arguments: dict[str, Any], *,
+                       reviewed: bool, step: dict[str, Any], checkpoint: Callable[[], Awaitable[bool]]) -> None:
         saved = core.state_data(node)["config"]
         capability_hash = _digest([saved.get(field) for field in ("inputSchema", "outputSchema", "annotations")])
         key = (connection_hash(config), saved["toolName"], capability_hash)
         if reviewed or config.approval == "auto" or (config.approval == "once" and key in self.approved_tools):
+            step["approval"] = "reviewed" if reviewed else "auto" if config.approval == "auto" else "cached"
+            step.pop("approvalId", None)
             if reviewed and config.approval == "once":
                 self.approved_tools.add(key)
             return
@@ -182,14 +185,25 @@ class McpConnectRuntime:
                "arguments": _redact(copy.deepcopy(arguments), config), "scopes": sorted(config.scopes)}
         self.approvals[approval_id] = (row, future)
         core.set_status(node, "awaiting-approval")
+        step.update(approval="pending", approvalId=approval_id)
         try:
+            # Journal the approval identity, never its arguments. A crash
+            # here is pre-dispatch; a resumed run must obtain fresh approval.
+            if not await checkpoint():
+                raise SceneError("Could not save the MCP approval checkpoint.")
             await self.bus.publish("scene")
             approved = await asyncio.wait_for(future, timeout=600)
             if not approved:
+                step["approval"] = "denied"
                 raise SceneError("The MCP tool request was denied. No tool call was sent.")
+            step["approval"] = "approved"
             if config.approval == "once":
                 self.approved_tools.add(key)
+        except asyncio.CancelledError:
+            step["approval"] = "cancelled"
+            raise
         except TimeoutError as exc:
+            step["approval"] = "expired"
             raise SceneError("MCP approval expired. Preview the tool again when you are ready.") from exc
         finally:
             self.approvals.pop(approval_id, None)
@@ -269,7 +283,7 @@ class McpConnectRuntime:
             if any(live_tool.get(key) != saved.get(key) for key in ("inputSchema", "outputSchema", "annotations")):
                 raise SceneError("The MCP tool schema or capabilities changed. Refresh and configure the node again.")
             prepared = validate_live()
-            await self._approve(node, config, prepared.arguments, reviewed=reviewed)
+            await self._approve(node, config, prepared.arguments, reviewed=reviewed, step=step, checkpoint=checkpoint)
             prepared = validate_live()
             core.set_status(node, "running")
             await self.bus.publish("scene")
