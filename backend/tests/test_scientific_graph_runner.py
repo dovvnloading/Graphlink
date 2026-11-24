@@ -337,10 +337,14 @@ def test_runner_retains_unit_aware_inputs_and_receipt(tmp_path, monkeypatch):
 
 def test_table_backed_science_commits_and_adopts_an_uncheckpointed_receipt(tmp_path, monkeypatch):
     """TableState is a real scientific state; recovery must not replay its result."""
+    import copy
+
     from graphlink_plugins.scientific.data_table import TableState
 
     async def scenario():
-        document, bus, scene = open_session(tmp_path / "table-graph.db", settings_for(tmp_path))
+        path = tmp_path / "table-graph.db"
+        settings = settings_for(tmp_path)
+        document, bus, scene = open_session(path, settings)
         target = await node(bus, "Scientific Core")
         imported = await intent(bus, "core", "import_table", node_id=target, text="x\n1\n2\n", format="csv")
         assert imported == {"ok": True}
@@ -357,24 +361,62 @@ def test_table_backed_science_commits_and_adopts_an_uncheckpointed_receipt(tmp_p
             return calculate_result(pack, operation, inputs, sources, input_units=input_units)
 
         monkeypatch.setattr(workbench, "execute_in_process", controlled)
+        original = chat_library.save_chat_atomically_row
+
+        def crash_before_receipt(db_path, chat_id, title, chat_data, notes_data, pins_data, **kwargs):
+            run = chat_data["graph_runs"][-1]
+            if run["status"] == "running" and run["steps"][0]["status"] == "completed":
+                # Simulate the historical crash gap at the first completion
+                # checkpoint: the table result survives, but neither the
+                # graph snapshot nor the durable journal has a finished step.
+                # Do not rewind a receipt that SQLite already committed.
+                persisted = copy.deepcopy(chat_data)
+                step = persisted["graph_runs"][-1]["steps"][0]
+                step.update(status="pending", detail="Waiting to run.")
+                for key in ("scientificResult", "outputHash", "finishedAt", "elapsedMs"):
+                    step.pop(key, None)
+                original(db_path, chat_id, title, persisted, notes_data, pins_data, **kwargs)
+                raise OSError("crash between table result and graph receipt")
+            return original(db_path, chat_id, title, chat_data, notes_data, pins_data, **kwargs)
+
+        monkeypatch.setattr(chat_library, "save_chat_atomically_row", crash_before_receipt)
         preview = await scene("previewGraphRun", [])
-        completed = await scene("executeGraphRun", [], preview["previewToken"], "science-table-receipt")
-        assert completed["status"] == "completed"
-        assert completed["steps"][0]["scientificResult"]["values"]["value (cm)"] == 200
+        with pytest.raises(IntentValidationError, match="checkpoint"):
+            await scene("executeGraphRun", [], preview["previewToken"], "science-table-receipt")
+        assert calls == 1
+        completed_step = document.graph_runs[-1]["steps"][0]
+        assert completed_step["status"] == "completed"
+        assert completed_step["scientificResult"]["values"]["value (cm)"] == 200
         assert isinstance(document.nodes[target].state, TableState)
 
-        # Reproduce a durable result with an interrupted/pending graph receipt,
-        # as can happen when the calculation commits before a checkpoint.
-        stored = document.graph_runs[-1]
-        stored["status"] = "interrupted"
-        stored["steps"][0]["status"] = "pending"
-        stored["steps"][0].pop("scientificResult", None)
-        stored["steps"][0].pop("outputHash", None)
-        resumed = await scene("resumeGraphRun", "science-table-receipt")
+        chat_id = document.current_chat_id
+        assert chat_id is not None
+        saved = chat_library.load_chat_row(path, chat_id)["data"]["graph_runs"][-1]
+        assert saved["steps"][0]["status"] == "pending"
+        assert "scientificResult" not in saved["steps"][0]
+        receipt = chat_library.load_workflow_run(path, chat_id, "science-table-receipt")
+        assert receipt["steps"][0]["status"] == "pending"
+        assert receipt["steps"][0]["output_ref"] is None
+
+        monkeypatch.setattr(chat_library, "save_chat_atomically_row", original)
+        reopened, new_bus, new_scene = open_session(path, settings)
+        await new_bus.dispatch_intent("app-chat-library", "loadChat", [chat_id])
+        interrupted = await new_scene("getGraphRun")
+        assert interrupted["status"] == "interrupted"
+        assert interrupted["steps"][0]["status"] == "pending"
+        restored_target = interrupted["steps"][0]["nodeId"]
+        assert isinstance(reopened.nodes[restored_target].state, TableState)
+
+        resumed = await new_scene("resumeGraphRun", "science-table-receipt")
         assert resumed["status"] == "completed"
         assert resumed["steps"][0]["scientificResult"]["values"]["value (cm)"] == 200
         assert "not replayed" in resumed["steps"][0]["detail"]
+        assert isinstance(reopened.nodes[restored_target].state, TableState)
         assert calls == 1
+        finished = chat_library.load_workflow_run(path, chat_id, "science-table-receipt")
+        assert finished["status"] == "completed"
+        assert finished["steps"][0]["status"] == "completed"
+        assert finished["steps"][0]["output_ref"] is not None
 
     asyncio.run(scenario())
 
