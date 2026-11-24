@@ -43,6 +43,31 @@ def local_ollama_complete(*, prompt: str, model_id: str, endpoint: str, system_p
                     raise ValueError("The local model response exceeded the 2 MiB limit.")
                 content.extend(chunk)
 
+    return _decode_response(content)
+
+
+async def async_local_ollama_complete(*, prompt: str, model_id: str, endpoint: str) -> dict[str, Any]:
+    """Cancellable transport for a detached, durably admitted local model step.
+
+    Identical credential, redirect, proxy and response-size policy to the
+    legacy synchronous transport. Task cancellation closes the HTTP stream.
+    """
+    request = {"model": model_id, "messages": [{"role": "user", "content": prompt}], "stream": False}
+    async with httpx.AsyncClient(
+        base_url=endpoint, trust_env=False, follow_redirects=False, timeout=120.0,
+        headers={"Accept": "application/json"},
+    ) as client:
+        async with client.stream("POST", "/api/chat", json=request) as response:
+            response.raise_for_status()
+            content = bytearray()
+            async for chunk in response.aiter_bytes():
+                if len(content) + len(chunk) > _MAX_RESPONSE_BYTES:
+                    raise ValueError("The local model response exceeded the 2 MiB limit.")
+                content.extend(chunk)
+    return _decode_response(content)
+
+
+def _decode_response(content: bytes | bytearray) -> dict[str, Any]:
     try:
         result = json.loads(content)
     except (TypeError, ValueError) as exc:

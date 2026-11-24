@@ -145,13 +145,22 @@ def _safe_member_name(name: str) -> str:
     return normalized
 
 
+def _document_asset_ref(value: dict[str, Any]) -> str | None:
+    """Workflow result attachments retain their reference across graph saves."""
+    path = value.get("file_path")
+    if value.get("node_type") != "document" or not isinstance(path, str) or not path.startswith("asset://"):
+        return None
+    ref = path[len("asset://"):]
+    return ref if len(ref) == 64 and all(c in "0123456789abcdef" for c in ref) else None
+
+
 def _collect_asset_refs(value: Any, found: set[str]) -> None:
     """Walks a chat payload for asset references written by stage 9.5's
     externalized form ({"asset_ref": ..., "mime_type": ...}). A payload
     still carrying inline bytes simply yields nothing here - export works
     on both shapes, which is what lets 9.5's migration be gradual."""
     if isinstance(value, dict):
-        ref = value.get("asset_ref")
+        ref = value.get("asset_ref") or _document_asset_ref(value)
         if isinstance(ref, str) and ref:
             found.add(ref)
         for item in value.values():
@@ -163,7 +172,7 @@ def _collect_asset_refs(value: Any, found: set[str]) -> None:
 
 def _mime_by_ref(value: Any, mapping: dict[str, str]) -> None:
     if isinstance(value, dict):
-        ref = value.get("asset_ref")
+        ref = value.get("asset_ref") or _document_asset_ref(value)
         if isinstance(ref, str) and ref:
             mapping[ref] = str(value.get("mime_type") or "")
         for item in value.values():

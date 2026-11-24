@@ -23,6 +23,11 @@ from graphlink_plugins.mcp_connect import core
 from graphlink_settings_store import SettingsManager
 
 
+# A watchdog for real SQLite/thread handoffs, not a latency requirement.
+# Windows CI runs these tests under parallel coverage and can be slow.
+MCP_HANDOFF_TIMEOUT = 60
+
+
 class Server:
     def __init__(self):
         self.specs = (McpToolSpec(
@@ -281,7 +286,7 @@ def test_runner_approves_actual_deferred_arguments_and_propagates_output(tmp_pat
         monkeypatch.setattr(bus, "publish", observed)
         task = asyncio.create_task(scene("executeGraphRun", [], preview["previewToken"], "mcp-chain-run"))
         for index, node_id in enumerate((first, second)):
-            approval_id = await asyncio.wait_for(appeared.get(), 10)
+            approval_id = await asyncio.wait_for(appeared.get(), MCP_HANDOFF_TIMEOUT)
             pending, = await scene("getMcpToolApprovals")
             assert pending["id"] == approval_id
             assert pending["nodeId"] == node_id
@@ -293,7 +298,7 @@ def test_runner_approves_actual_deferred_arguments_and_propagates_output(tmp_pat
             assert receipt["steps"][index]["request_id"] is None
             assert await scene("approveMcpTool", "stale-approval", True) == {"ok": False}
             assert await scene("approveMcpTool", pending["id"], True) == {"ok": True}
-        result = await asyncio.wait_for(task, 10)
+        result = await asyncio.wait_for(task, MCP_HANDOFF_TIMEOUT)
         assert result["status"] == "completed", result
         assert [step["status"] for step in result["steps"]] == ["completed"] * 3
         assert_golden("mcp_chain_result", step_fields(result["steps"], "kind", "operation", "status", "detail"))
@@ -439,24 +444,25 @@ def test_terminal_receipt_stays_running_until_its_save_commits(tmp_path, monkeyp
         document, bus, scene = open_session(tmp_path / "graphs.db", settings)
         node_id = await add_tool(bus, scene)
         original = chat_library.save_chat_atomically_row
-        entered, release = threading.Event(), threading.Event()
+        loop = asyncio.get_running_loop()
+        entered, release = asyncio.Event(), threading.Event()
 
         def hold_terminal(*args, **kwargs):
-            if document.graph_runs[-1]["status"] == "completed":
-                entered.set()
-                assert release.wait(10)
+            if args[3]["graph_runs"][-1]["status"] == "completed":
+                loop.call_soon_threadsafe(entered.set)
+                assert release.wait(MCP_HANDOFF_TIMEOUT)
             return original(*args, **kwargs)
 
         monkeypatch.setattr(chat_library, "save_chat_atomically_row", hold_terminal)
         task = asyncio.create_task(run_tool(scene, node_id))
         try:
-            assert await asyncio.to_thread(entered.wait, 10)
+            await asyncio.wait_for(entered.wait(), MCP_HANDOFF_TIMEOUT)
             visible = await scene("getGraphRun")
             assert visible["status"] == "running" and visible["trace"]["status"] == "running"
             assert bus.chat_mutation_guard["active"] and len(server.calls) == 1
         finally:
             release.set()
-        result, _ = await asyncio.wait_for(task, 10)
+        result, _ = await asyncio.wait_for(task, MCP_HANDOFF_TIMEOUT)
         assert result["status"] == "completed"
         assert (await scene("getGraphRun"))["status"] == "completed"
 
