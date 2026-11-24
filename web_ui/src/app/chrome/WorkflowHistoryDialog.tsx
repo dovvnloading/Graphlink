@@ -244,7 +244,7 @@ function History({ store }: { store: SceneStore }) {
 
 export function WorkflowHistoryDialog({ store }: { store: SceneStore }) {
   return <Dialog name="run-history" title="Run history" size="lg" className="graph-runner-dialog">
-    <DetachedWorkflowInspector />
+    <DetachedWorkflowInspector followApproval />
     <History store={store} />
   </Dialog>;
 }
