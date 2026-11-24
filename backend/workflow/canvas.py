@@ -75,7 +75,9 @@ def data(node):
     if node.kind != KIND or not isinstance(node.state, (PluginStateSnapshot, PersistedPluginState)):
         raise SceneError("Select a Workflow node.")
     value = node.state.data
-    if not isinstance(value.get("document"), dict):
+    if (not isinstance(value.get("document"), dict) or not isinstance(value.get("parameters"), dict)
+            or not isinstance(value.get("inputs"), dict) or not isinstance(value.get("outputs"), dict)
+            or not isinstance(value.get("lastInputHash"), str)):
         raise SceneError("The Workflow node has no pinned version.")
     return value
 
@@ -131,6 +133,8 @@ def configure(document, node, inputs, parameters, sources):
     if not sources.keys() <= text_ports:
         raise ValueError("Only text inputs can bind to a canvas text source.")
     for source in sources.values():
+        if not isinstance(source, str):
+            raise ValueError("Choose a valid workflow source.")
         document._text_output(source)
         if contains_dependency(document, source, node.id):
             raise ValueError("A workflow connection cannot form a cycle.")
@@ -200,13 +204,16 @@ def remap_sources(document, ids):
             continue
 
 
-def unpack(document, frozen, inputs, parameters, x, y):
+def unpack(document, frozen, inputs, parameters, x, y, connected=None):
     """Expand supported captured text adapters back into ordinary editable notes."""
     spec = configured_spec(frozen, parameters)
     if any(s.adapter.adapter_id != "note.text" for s in spec.steps):
         raise ValueError("This workflow contains adapters without editable canvas equivalents.")
     if any(p.kind != "text" for p in spec.inputs):
         raise ValueError("Only text inputs can be unpacked onto the canvas.")
+    connected = connected or {}
+    if not isinstance(connected, dict) or not connected.keys() <= {p.name for p in spec.inputs}:
+        raise ValueError("Unknown connected workflow input.")
     sources, steps = {}, {}
     width, height = document.kind_fallback_footprint("note")
 
@@ -220,7 +227,10 @@ def unpack(document, frozen, inputs, parameters, x, y):
         value = inputs.get(port.name, "")
         if not isinstance(value, str):
             raise ValueError("A text input must be text.")
-        sources[port.name] = add(value).id
+        input_node = add(value)
+        if port.name in connected:
+            document.bind_note_text_input(connected[port.name], input_node.id, "copy")
+        sources[port.name] = input_node.id
     for step in ordered_steps(spec):
         source = step.bindings[0].source
         source_id = sources[source.port] if isinstance(source, WorkflowInputSource) else steps[source.step_id]

@@ -352,6 +352,8 @@ async def _run_reusable_step(document, run, step, by_node_id, resolver):
             raise SceneError("Workflow Library is unavailable.")
         validate_graph_run_ancestors(document, step, by_node_id)
         _matching_node(document, step)
+        for source in canvas.dependencies(node):
+            document.require_current_model_source(source, check_text_inputs=True)
         spec, inputs, digest = canvas.prepare(document, node)
         old = canvas.data(node)
         if (step["configHash"] != canvas.config_hash(node) or step["targetHash"] != canvas.output_hash(node)

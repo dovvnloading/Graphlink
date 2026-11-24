@@ -91,7 +91,7 @@ def register_workflow_library(bus, document, connect, serialize_mutation):
             elif action == "unpack":
                 x, y = finite_float(payload["x"], "x"), finite_float(payload["y"], "y")
                 mutate = lambda: canvas.unpack(document, frozen, payload.get("inputs", {}),
-                                                payload.get("parameters", {}), x, y)
+                                                payload.get("parameters", {}), x, y, payload.get("sources", {}))
             elif action == "configure":
                 if node is None:
                     raise ValueError("Workflow node no longer exists.")

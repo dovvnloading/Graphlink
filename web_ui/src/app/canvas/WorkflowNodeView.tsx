@@ -16,6 +16,7 @@ import { availableTextSources, textSourceLabel } from "./textInputs";
 import { WorkflowSpecView } from "../chrome/WorkflowSpecView";
 import type { SceneStore } from "./sceneStore";
 import { readWorkflowNode, workflowPin, type WorkflowDocument, type WorkflowNodeState, type WorkflowVersion } from "./workflowLibrary";
+import "./McpToolNodeView.css";
 
 export interface WorkflowNodeData extends Record<string, unknown> {
   title: string;
@@ -54,8 +55,9 @@ function Editor({ id, state, store, x, y }: { id: string; state: WorkflowNodeSta
   }
   const values = () => Object.fromEntries(spec.inputs.filter(p => !sources[p.name]).map(p => [p.name, p.kind === "text" ? inputs[p.name] : JSON.parse(inputs[p.name])]));
   async function save() {
-    await store.mutateWorkflowNode("configure", { node_id: id, expected_revision: spec.revision, inputs: values(), parameters,
+    const saved = await store.mutateWorkflowNode("configure", { node_id: id, expected_revision: spec.revision, inputs: values(), parameters,
       sources: Object.fromEntries(Object.entries(sources).filter(([, source]) => !!source)) });
+    if (!saved) throw new Error("Another graph operation is in progress. Try again.");
   }
   return <>
     <p>Workflow · pinned version {state.version}</p>
@@ -100,11 +102,8 @@ function Editor({ id, state, store, x, y }: { id: string; state: WorkflowNodeSta
         await save(); store.requestGraphRunnerNodes([id]); overlays.open("graph-runner", "dialog");
       })}>Preview run</Button>
       <Button size="sm" disabled={busy} onClick={() => void act(async () => {
-        const unpackInputs = { ...values() };
-        for (const [name, source] of Object.entries(sources)) {
-          if (source) unpackInputs[name] = "";
-        }
-        await store.mutateWorkflowNode("unpack", { ...workflowPin(state.document), inputs: unpackInputs, parameters, x: x + 360, y });
+        await store.mutateWorkflowNode("unpack", { ...workflowPin(state.document), inputs: values(), parameters,
+          sources: Object.fromEntries(Object.entries(sources).filter(([, source]) => !!source)), x: x + 360, y });
       })}>Unpack editable nodes</Button>
     </div>
     {Object.entries(state.outputs).map(([name, output]) => <TextArea key={name} label={name + " · result"}

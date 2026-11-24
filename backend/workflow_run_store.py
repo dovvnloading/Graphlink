@@ -355,6 +355,16 @@ def overlay_receipts(conn: sqlite3.Connection, graph_id: int, runs: Any) -> None
                     step.pop(name, None)
             if retries:
                 step["retryCount"] = retries
+            if step["kind"] == "workflow":
+                from backend.workflow.child_runs import validate_child
+                receipt = conn.execute(
+                    "SELECT receipt_json FROM workflow_child_runs WHERE graph_id = ? AND run_id = ? AND step_index = ? ORDER BY rowid DESC LIMIT 1",
+                    (*key, index),
+                ).fetchone()
+                if receipt:
+                    child = validate_child(json.loads(receipt[0]))
+                    if child:
+                        step["childRun"] = child
 
 
 def read_run(conn: sqlite3.Connection, graph_id: int, run_id: str) -> dict[str, Any] | None:
