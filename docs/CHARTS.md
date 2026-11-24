@@ -77,8 +77,9 @@ Example:
 * All coordinates, values, and error magnitudes must be finite numbers.
   NaN, positive/negative infinity, and numeric overflow are rejected.
 * Series must be nonempty and named. Every series, coordinate array, and
-  error array must have the same number of points, within the existing
-  300-point chart limit. The validator never truncates or drops points.
+  error array must have the same number of points, within the
+  10,000-total-observation scientific chart limit. Other chart types retain
+  their legacy capacity limits. The validator never truncates or drops points.
 * Error magnitudes must be nonnegative. The two magnitudes of an
   asymmetric error must both be present and valid.
 * A log10 axis requires **strictly positive** coordinates, including the
@@ -226,15 +227,11 @@ The existing `scene.generateChart` intent accepts `"boxplot"` and
 `[sourceNodeId, "heatmap"]`). The model extraction schemas require the
 fields described above and do not invent missing observations. Invalid
 model output still creates a valid error-state chart node, just as with
-scatter in PR #586. The existing chart-creation submenu is defined outside
-this change's permitted file scope and does not yet expose these two
-choices. Programmatic intent calls and live scene chart nodes are supported.
-The legacy session-save/load path is also outside this scope: it serializes
-only the canonical nested chart data, while its loader looks for `data.type`.
-Because the version-1 wire format omits that nested discriminator for these
-new types (as for scatter in PR #586), legacy session reload currently drops
-them. Persisted-session round trips require a separate scoped migration to
-carry the enclosing `chartType` through save/load.
+scatter in PR #586. The chat node's Generate → Chart submenu now exposes all
+eight supported chart types. Programmatic intent calls and live scene chart
+nodes are also supported. Saved sessions load these types using the nested
+`data.type` where present, or the backward-compatible unambiguous shape
+recovery in `backend/session_load.py::_saved_chart_type` for older payloads.
 
 Regression fixtures live under `backend/evals/fixtures/chart/`, with
 Python canonicalizer/export tests in `backend/tests/` and TypeScript
