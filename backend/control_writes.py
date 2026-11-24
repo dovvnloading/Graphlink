@@ -5,7 +5,7 @@ save are exposed. No arbitrary SessionBus intent dispatch, deletion, code
 execution, workspace switching, or automatic approval of harness actions.
 
 The write token is provisioned separately by headless.main() and is accepted
-ONLY for two explicit POST routes by backend/app.py's auth middleware.
+ONLY for the explicit route allowlist below by backend/app.py's auth middleware.
 
 Each mutation requires an exact SHA-256 snapshot revision from the existing
 read-only graphlink_list_nodes result. The revision covers the actual scene

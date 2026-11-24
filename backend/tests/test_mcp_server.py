@@ -804,3 +804,35 @@ def test_mcp_task_status_does_not_promote_hostile_agent_text_to_instructions():
     }))
     assert rejected["error"]["code"] == -32602
     assert control.writes == []
+
+
+def test_workflow_tools_are_opt_in_and_route_only_to_scoped_control():
+    class WorkflowControl:
+        can_write = True
+
+        def read(self, path, params, *, write_capability=False):
+            assert write_capability
+            return {"path": path, "params": params}
+
+        def write(self, path, payload):
+            return {"path": path, "params": payload}
+
+    disabled = StdioMcpServer(StubControl())
+    assert disabled.handle(request(1, "tools/call", modern_params(
+        name="graphlink_list_workflows", arguments={"workspace_id": 1},
+    )))["error"]["code"] == -32602
+    server = StdioMcpServer(WorkflowControl())
+    for name, args, path in (
+        ("graphlink_list_workflows", {"workspace_id": 1}, "/api/control/workflows"),
+        ("graphlink_run_workflow", {"workspace_id": 1, "preset_id": "preset", "operation_id": "test-0001"},
+         "/api/control/workflows/run"),
+        ("graphlink_get_workflow_run", {"workspace_id": 1, "run_id": "run"}, "/api/control/workflows/run"),
+    ):
+        reply = server.handle(request(2, "tools/call", modern_params(name=name, arguments=args)))
+        assert reply["result"]["structuredContent"] == {"path": path, "params": args}
+    bad = server.handle(request(3, "tools/call", modern_params(
+        name="graphlink_run_workflow", arguments={
+            "workspace_id": 1, "preset_id": "preset", "operation_id": "test-0001", "approved": True,
+        },
+    )))
+    assert bad["error"]["code"] == -32602

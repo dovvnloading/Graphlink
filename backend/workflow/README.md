@@ -289,3 +289,70 @@ existing v1 WorkflowSpec and PortValue records as JSON using spec and
 parameters fields; admission additionally accepts approval_token. The app
 owns one lazy service and cancels it at shutdown. Existing read-only/MCP
 control capabilities do not authorize workflow execution.
+
+
+## Run presets and automation
+
+Open **Workflow Library → Run presets and runs**, choose the run workspace
+and a pinned library revision, provide JSON inputs and promoted parameters,
+then review and approve a preset. The operator chooses its unattended effect
+classes (pure, local-read, cloud) and maximum USD cost, and can run it manually
+or choose a local-time daily schedule, interval (10 seconds minimum), or
+existing watched directory (recursive metadata changes, no file contents read,
+no symlink traversal, at most 10,000 entries). The scheduler polls only during
+the application lifespan. Each preset establishes a fresh baseline after
+startup or creation; missed intervals and busy-workflow triggers are skipped.
+There is no catch-up queue. Folder changes are a trigger, not automatic file
+imports or runtime parameter overrides. Delete a preset to stop future
+triggers; this does not cancel an admitted run.
+
+The preset stores the exact request, resolved preview fingerprint, approved
+effects and cost cap in the existing chats database. Re-resolve and compare
+on admission; changed parameters, adapter/provider policies or unavailable
+library definitions require a new operator-reviewed preset. The effective
+cost limit is the lesser of the preset and host cap. Only one detached run
+per workflow ID (including pinned revisions and paused runs) may be active.
+Disallowed effects, including every executes/writes step, park before dispatch
+and notify the operator; the UI shows the run's frozen spec and inputs and
+allows one decision against the specific step nonce. Denial stops the run.
+The duration cap includes approval waiting; shutdown interrupts rather than
+replaying pending or running steps. The normal run store retains the receipt.
+The portable library remains pure-only; the operator preset API also accepts
+a local typed detached spec plus its typed parameters (currently text, JSON,
+and table only). This does not enable adapters without a live host or expand
+their existing capabilities.
+
+### CLI and MCP
+
+Start Graphlink's headless backend with its existing opt-in write credential.
+The CLI connects to that backend, never opens a second database or launches an
+engine. For example (substitute the workspace/preset/run IDs and token path):
+
+```sh
+python -m backend.workflow.cli --write-token-file ~/.graphlink/headless.write.token --workspace-id 1 list
+python -m backend.workflow.cli --write-token-file ~/.graphlink/headless.write.token --workspace-id 1 run PRESET_ID
+python -m backend.workflow.cli --write-token-file ~/.graphlink/headless.write.token --workspace-id 1 read RUN_ID
+```
+
+Use `--request-json '{"workflow_id":"...","revision":"...","inputs":{"input_1":"hello"},"parameters":{}}'`
+on run to verify an exact approved request. The preset already saves those
+parameters; arbitrary overrides are rejected and must be reviewed in the UI.
+Reuse the printed `--operation-id` on a retry; it resolves to the prior run
+while the receipt is retained. No retry guarantees exist after retention.
+MCP offers `graphlink_list_workflows`, `graphlink_run_workflow`,
+and `graphlink_get_workflow_run` only when the separate write token is opted in.
+Read and write control credentials cannot create presets, approve run previews,
+or approve a paused step. Results are data, not instructions.
+
+### Builder
+
+`workflow.list` discovers library IDs and revisions.
+`workflow.preview_edit` produces an exact review object; supply that object to
+`workflow.instantiate`, `workflow.wire_inputs`, `workflow.create_step` or
+`workflow.create_control`. Every mutating call requires fresh approval
+(including Autopilot), checks the preview again after approval, and records
+an undoable canvas command. The supported step nodes are bound text
+copy/word-count notes; control nodes are literal input and bound output
+boundaries using existing canvas kinds (not new conditional/loop adapters).
+No Builder workflow edit starts a run. Use Graph Runner's normal run
+preview/approval to execute the resulting canvas graph.

@@ -400,3 +400,74 @@ def test_authenticated_detached_file_run_and_save(tmp_path):
         assert client.get(url, headers=auth).content == b"binary-data"
         assert client.get(url.replace(prefix, f"/api/workflows/{ws + 1}"),
                           headers=auth).status_code == 404
+
+
+def test_unattended_effects_pause_and_require_one_time_operator_decisions(tmp_path):
+    from backend.workflow.engine import UnattendedPolicy
+
+    async def scenario():
+        engine, ws, local, cloud, writes, executes = _engine(tmp_path / "chats.db")
+        notifications = []
+        engine.on_pause = lambda *args: notifications.append(args)
+        spec = _spec(engine.registry, [
+            _entry("root", suffix="!"),
+            _entry("code", "executes", source=StepOutputSource("root", "text")),
+            _entry("write", "writes", source=StepOutputSource("code", "text")),
+            _entry("remote", "cloud", source=StepOutputSource("write", "text")),
+        ])
+        params = {"text": TextValue("hello")}
+        preview = engine.preview(spec, params)
+        policy = UnattendedPolicy(preview.fingerprint, frozenset({"pure", "cloud"}), 0.25)
+        with pytest.raises(ValueError, match="Code execution"):
+            UnattendedPolicy(preview.fingerprint, frozenset({"writes"}), 1)
+        with pytest.raises(PermissionError, match="preview changed"):
+            engine.start(ws, spec, {"text": TextValue("different")}, unattended=policy)
+        run = engine.start(ws, spec, params, unattended=policy, preset_id="test")
+        def pending():
+            return engine.store.read(ws, run)["awaiting_approval"]
+        await _until(lambda: pending() is not None)
+        first = pending()
+        assert first["step_id"] == "code"
+        assert local.finished == ["root"] and not executes.started and not writes.started
+        assert notifications == [(ws, run, "code")]
+        with pytest.raises(ValueError, match="active run"):
+            engine.start(ws, spec, params, unattended=policy)
+        with pytest.raises(ValueError, match="no longer awaiting"):
+            engine.decide_step(ws + 1, run, "code", first["nonce"], approved=True)
+        with pytest.raises(ValueError, match="no longer awaiting"):
+            engine.decide_step(ws, run, "code", "forged", approved=True)
+        engine.decide_step(ws, run, "code", first["nonce"], approved=True)
+        await _until(lambda: pending() is not None and pending()["step_id"] == "write")
+        second = pending()
+        assert executes.finished == ["code"] and not writes.started and not cloud.started
+        with pytest.raises(ValueError, match="no longer awaiting"):
+            engine.decide_step(ws, run, "code", first["nonce"], approved=True)
+        engine.decide_step(ws, run, "write", second["nonce"], approved=False)
+        record = await engine.wait(ws, run)
+        assert record["status"] == "cancelled" and record["awaiting_approval"] is None
+        assert not writes.started and not cloud.started
+        assert len(notifications) == 2
+        # Each run requires fresh decisions even after identical parameters.
+        again = engine.start(ws, spec, params, unattended=policy)
+        await _until(lambda: engine.store.read(ws, again)["awaiting_approval"] is not None)
+        await engine.shutdown()
+        assert engine.store.read(ws, again)["status"] == "interrupted"
+
+    asyncio.run(scenario())
+
+
+def test_unattended_cost_cap_is_per_run_and_never_dispatches_over_cap(tmp_path):
+    from backend.workflow.engine import UnattendedPolicy
+
+    async def scenario():
+        engine, ws, _, cloud, *_ = _engine(tmp_path / "chats.db")
+        spec = _spec(engine.registry, [_entry("cloud", "cloud")])
+        params = {"text": TextValue("hello")}
+        preview = engine.preview(spec, params)
+        run = engine.start(ws, spec, params, unattended=UnattendedPolicy(
+            preview.fingerprint, frozenset({"cloud"}), 0.1,
+        ))
+        record = await engine.wait(ws, run)
+        assert record["status"] == "failed" and "cost limit" in record["error"]
+        assert not cloud.started and record["cost_usd"] == 0
+    asyncio.run(scenario())

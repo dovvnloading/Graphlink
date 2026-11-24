@@ -35,6 +35,8 @@ export function WorkflowAutomationPanel({ view }: { view: WorkflowDocument | nul
   const [presets, setPresets] = useState<Preset[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
   const [name, setName] = useState("");
+  const [presetSource, setPresetSource] = useState("library");
+  const [detachedRequest, setDetachedRequest] = useState('{"spec": {}, "parameters": {}}');
   const [inputs, setInputs] = useState("{}");
   const [parameters, setParameters] = useState("{}");
   const [allowed, setAllowed] = useState(["pure"]);
@@ -49,7 +51,7 @@ export function WorkflowAutomationPanel({ view }: { view: WorkflowDocument | nul
   const [refresh, setRefresh] = useState(0);
   const prefix = "/api/workflows/" + encodeURIComponent(workspace);
   const draftKey = JSON.stringify([workspace, view?.spec.workflow_id, view?.spec.revision,
-    name, inputs, parameters, allowed, cap, trigger, interval, daily, folder]);
+    name, inputs, parameters, allowed, cap, trigger, interval, daily, folder, presetSource, detachedRequest]);
   const reviewed = review?.key === draftKey ? review : null;
 
   useEffect(() => {
@@ -86,10 +88,10 @@ export function WorkflowAutomationPanel({ view }: { view: WorkflowDocument | nul
   }
 
   function makeDraft() {
-    if (!view) throw new Error("Open a library workflow first.");
+    if (presetSource === "library" && !view) throw new Error("Open a library workflow first.");
     if (!cap.trim() || !Number.isFinite(Number(cap)) || Number(cap) < 0) throw new Error("Enter a nonnegative cost cap.");
-    const value = { workflow_id: view.spec.workflow_id, revision: view.spec.revision,
-      inputs: JSON.parse(inputs), parameters: JSON.parse(parameters) };
+    const value = presetSource === "library" && view ? { workflow_id: view.spec.workflow_id, revision: view.spec.revision,
+      inputs: JSON.parse(inputs), parameters: JSON.parse(parameters) } : JSON.parse(detachedRequest);
     return { request: value, name, allowed_effects: allowed, cost_usd: Number(cap),
       trigger: trigger === "interval" ? { kind: trigger, seconds: Number(interval) } :
         trigger === "daily" ? { kind: trigger, time: daily } :
@@ -105,11 +107,16 @@ export function WorkflowAutomationPanel({ view }: { view: WorkflowDocument | nul
       setPresets([]); setRuns([]); setWorkspace(value);
     }} options={[{ value: "", label: "Choose a workspace" }, ...workspaces.map(w =>
       ({ value: String(w.id), label: w.name + (w.archived ? " (archived)" : "") }))]} />
-    {workspace && view && <>
-      <h4>New preset for {view.spec.name}</h4>
+    {workspace && <>
+      <h4>New run preset</h4>
+      <Select label="Workflow source" value={presetSource} onChange={setPresetSource} disabled={busy}
+        options={[{value:"library",label:"Selected library revision"}, {value:"detached",label:"Local detached workflow spec"}]} />
+      {presetSource === "library" && <p>{view ? view.spec.name : "Open a library workflow above."}</p>}
       <TextField label="Preset name" value={name} onValueChange={setName} disabled={busy} />
+      {presetSource === "library" ? <>
       <TextArea label="Inputs (JSON object)" description="Use the input names in the workflow definition above." value={inputs} onValueChange={setInputs} disabled={busy} />
       <TextArea label="Parameters (JSON object)" description="Use the promoted parameter names; omit unchanged parameters." value={parameters} onValueChange={setParameters} disabled={busy} />
+      </> : <TextArea label="Detached request (JSON object)" description="Include a frozen spec and typed parameters. Only use a trusted local spec." value={detachedRequest} onValueChange={setDetachedRequest} disabled={busy} />}
       <h4>Allowed unattended side effects</h4>
       {effects.map(effect => <Checkbox key={effect} label={effect} disabled={busy} checked={allowed.includes(effect)}
         onChange={e => { const checked = e.currentTarget.checked; setAllowed(old => checked ? [...old, effect] : old.filter(v => v !== effect)); }} />)}
@@ -120,7 +127,7 @@ export function WorkflowAutomationPanel({ view }: { view: WorkflowDocument | nul
       {trigger === "interval" && <TextField label="Interval in seconds (minimum 10)" value={interval} onValueChange={setIntervalText} disabled={busy} />}
       {trigger === "daily" && <TextField label="Daily local time (HH:MM)" value={daily} onValueChange={setDaily} disabled={busy} />}
       {trigger === "folder" && <TextField label="Existing folder path" value={folder} onValueChange={setFolder} disabled={busy} />}
-      <Button disabled={busy || !name.trim()} onClick={() => void act(async () => {
+      <Button disabled={busy || !name.trim() || (presetSource === "library" && !view)} onClick={() => void act(async () => {
         const body = makeDraft();
         const preview = await request<Preview>(prefix + "/presets/preview", "POST", body.request);
         setReview({ key: draftKey, body, preview });

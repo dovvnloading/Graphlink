@@ -542,10 +542,11 @@ def create_app(
     async def notify_paused(workspace_id: int, run_id: str, step_id: str):
         for session in list(bus._sessions.values()):
             try:
-                if get_session_context(session).canvas_document.current_workspace_id == workspace_id:
-                    await session.dispatch_intent("notification", "showInfo", [
-                        "Workflow run is waiting for operator approval. Open Workflow Library → Run presets and runs.",
-                    ])
+                get_session_context(session)
+                await session.dispatch_intent("notification", "showInfo", [
+                    f"Workflow run in workspace {workspace_id} is waiting for operator approval. "
+                    "Open Workflow Library → Run presets and runs.",
+                ])
             except SessionNotConfiguredError:
                 continue
 

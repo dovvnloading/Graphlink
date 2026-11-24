@@ -160,3 +160,72 @@ def test_capture_unpack_and_run_as_one_step(tmp_path):
     assert doc.nodes[ids[2]].content == "2"
     with pytest.raises(ValueError, match="cycle"):
         canvas.configure(doc, node, {}, {}, {"input_1": node_id})
+
+
+def test_presets_pin_parameters_and_triggers_never_backfill(tmp_path):
+    from datetime import datetime
+    from backend.workflow.api import WorkflowService
+
+    async def scenario():
+        path = tmp_path / "chats.db"
+        workspace = chat_library.get_default_workspace_id(path)
+        with closing(chat_library._connect(path)) as conn, conn:
+            pin = store.save(conn, example(), name="Automation")
+        service = WorkflowService(path)
+        automation = service.automation
+        request = {"workflow_id": pin["workflow_id"], "revision": pin["revision"],
+                   "inputs": {"input": "one two three"}, "parameters": {"operation": "word_count"}}
+        preview = automation.preview(request)
+        body = {"request": request, "name": "Count", "allowed_effects": ["pure"],
+                "cost_usd": 0, "fingerprint": preview["fingerprint"], "approved": True,
+                "trigger": {"kind": "interval", "seconds": 10}}
+        with pytest.raises(PermissionError):
+            automation.save(workspace, {**body, "approved": False})
+        preset = automation.save(workspace, body)
+        pid = preset["preset_id"]
+        with pytest.raises(PermissionError):
+            automation.run(workspace, pid, request={**request, "inputs": {"input": "changed"}})
+        assert automation.list(workspace + 1) == []
+        await automation.tick(monotonic=0)
+        assert service.engine().store.list(workspace) == []
+        await automation.tick(monotonic=10)
+        rows = service.engine().store.list(workspace)
+        assert len(rows) == 1
+        assert (await service.engine().wait(workspace, rows[0]["run_id"]))["outputs"]["output"]["text"] == "3"
+        await automation.tick(monotonic=1000)
+        assert len(service.engine().store.list(workspace)) == 1
+        first = automation.run(workspace, pid, operation_id="repeat-0001")
+        await service.engine().wait(workspace, first)
+        assert automation.run(workspace, pid, operation_id="repeat-0001") == first
+        await service.shutdown()
+
+        # Fresh process baseline: a missed interval is not admitted.
+        restarted = WorkflowService(path)
+        await restarted.automation.tick(monotonic=9999)
+        assert len(restarted.engine().store.list(workspace)) == 2
+        assert restarted.automation.delete(workspace, pid)
+        daily = restarted.automation.save(workspace, {
+            **body, "trigger": {"kind": "daily", "time": "09:00"},
+        })
+        await restarted.automation.tick(now=datetime(2026, 1, 1, 9, 1))
+        assert len(restarted.engine().store.list(workspace)) == 2
+        await restarted.automation.tick(now=datetime(2026, 1, 2, 9, 0))
+        rows = restarted.engine().store.list(workspace)
+        assert len(rows) == 3
+        await restarted.engine().wait(workspace, rows[0]["run_id"])
+        assert restarted.automation.delete(workspace, daily["preset_id"])
+
+        folder = tmp_path / "watched"
+        folder.mkdir()
+        restarted.automation.save(workspace, {**body, "trigger": {"kind": "folder", "path": str(folder)}})
+        await restarted.automation.tick()
+        assert len(restarted.engine().store.list(workspace)) == 3
+        (folder / "new.txt").write_text("new")
+        await restarted.automation.tick()
+        rows = restarted.engine().store.list(workspace)
+        assert len(rows) == 4
+        await restarted.engine().wait(workspace, rows[0]["run_id"])
+        await restarted.automation.tick()
+        assert len(restarted.engine().store.list(workspace)) == 4
+        await restarted.shutdown()
+    asyncio.run(scenario())
